@@ -106,7 +106,34 @@ noVNC) and `deploy_preview` tools, real network-egress enforcement under
 `process`, the file-encrypted `SecretsStore`, and the MCP catalogue. One contract
 ambiguity flagged: §2's `needs: frozenset[Requirement]` references NETWORK/
 FILESYSTEM, which aren't in the router's model-`Requirement` enum — resolved here
-with a distinct `Capability` enum; the contract should be patched to match.
+with a distinct `Capability` enum (patched into the contract at v1.1).
+
+**Retrieval & Grounding** (`retrieval-grounding-contract.md`) — the `retrieval`
+package (a sibling of `tools`); the Research surface's engine. Implements the
+router's `NLIVerifier`; the `search`/`extract` tools back onto it via the
+capability seam.
+
+| Module | Contract | What it is |
+|---|---|---|
+| `retrieval/models.py` | §2/§3/§5 | `SearchHit`, `ExtractedDoc`, `Passage` (provenance unit), `Retrieval{Request,Result}`, `Claim`/`VerifiedClaim`/`GroundedAnswer` |
+| `retrieval/providers.py` | §2 | `SearchProvider`/`ExtractionProvider` protocols (SearXNG/Firecrawl defaults deferred) + explicit-failure status |
+| `retrieval/ranking.py` | §3 | RRF, `Reranker`/`Embedder`/`QueryRewriter` protocols + `LexicalReranker`/`HashingEmbedder`/`RouterQueryRewriter` |
+| `retrieval/engine.py` | §3 | `DefaultRetrievalEngine`: transform→discover→RRF→extract→rerank, provenance + `all_hits` |
+| `retrieval/vectorstore.py` | §4 | `InMemoryVectorStore` (namespace-isolated) + `DefaultCorpusService` (Space silos, ownership) |
+| `retrieval/nli.py` | §5.1 | `CrossEncoderNLIVerifier` (implements the router's `NLIVerifier`) |
+| `retrieval/grounding.py` | §5 | `GroundingPipeline`: constrained gen → claim extraction → NLI verify → self-correct → honest surfacing |
+
+The §8.5 **acceptance gate** composes four contracts: a Research-scope loop calls
+`search`/`extract` (tools) whose capability handlers back onto the engine, then
+grounding produces a verified `GroundedAnswer` — with the provider key never in
+any observation or the answer. The headline guarantees are mutation-checked:
+namespace isolation (a Space query never pulls another corpus) and the
+snippet-is-never-cited rule (citations come only from extracted passages).
+
+Deferred ([VERIFY]/external): live SearXNG/Firecrawl HTTP providers + owned
+endpoints, the real `bge-m3`/`bge-reranker-v2-m3`/DeBERTa-NLI checkpoints (the
+shipped reranker/embedder/NLI are deterministic stubs), and the answer UI
+(BoD §13.3, the next thing built).
 
 ## Layout
 

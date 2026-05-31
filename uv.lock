@@ -7,6 +7,7 @@ members = [
     "perpleximanus-agent-server",
     "perpleximanus-app-server",
     "perpleximanus-core",
+    "perpleximanus-retrieval",
     "perpleximanus-tools",
     "perpleximanus-workspace",
 ]
@@ -176,6 +177,17 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "pydantic", specifier = ">=2.7" }]
+
+[[package]]
+name = "perpleximanus-retrieval"
+version = "0.1.0"
+source = { editable = "packages/retrieval" }
+dependencies = [
+    { name = "perpleximanus-core" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "perpleximanus-core", editable = "packages/core" }]
 
 [[package]]
 name = "perpleximanus-tools"
