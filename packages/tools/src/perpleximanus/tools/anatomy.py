@@ -27,10 +27,14 @@ from pydantic import BaseModel, ConfigDict, Field
 class Capability(str, Enum):
     """Execution-environment capabilities a tool requires (distinct from the
     router's model `Requirement`). Drives scoping (§8) and the sandbox spec
-    (§5/§7) — anything a tool doesn't declare, its instance is denied."""
+    (§5/§7) — anything a tool doesn't declare, its instance is denied.
+
+    Members match tool-sandbox-contract.md v1.1 §2."""
 
     NETWORK = "network"  # raw egress (browser to arbitrary sites, deploy preview)
     FILESYSTEM = "filesystem"  # workspace file access
+    CODE_EXEC = "code_exec"  # runs arbitrary code
+    SHELL = "shell"  # runs shell commands
     DISPLAY = "display"  # a GUI/display (browser noVNC view)
 
 

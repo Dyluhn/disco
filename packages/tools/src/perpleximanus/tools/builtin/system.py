@@ -13,7 +13,7 @@ from typing import Literal
 from perpleximanus.core import SecurityRisk
 from pydantic import BaseModel, Field
 
-from ..anatomy import ToolContext, ToolDef, ToolOutcome
+from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 
 
 class ShellArgs(BaseModel):
@@ -25,6 +25,7 @@ class ShellTool:
         name="shell",
         description="Run a shell command inside the sandbox and return its output.",
         args_model=ShellArgs,
+        needs=frozenset({Capability.SHELL}),
         base_risk=SecurityRisk.MEDIUM,  # inherently riskier than read-only tools
         runs_in="sandbox",
     )
@@ -52,6 +53,7 @@ class CodeExecTool:
         name="code_exec",
         description="Execute a Python or Node snippet in the sandbox (CodeAct).",
         args_model=CodeExecArgs,
+        needs=frozenset({Capability.CODE_EXEC}),
         base_risk=SecurityRisk.MEDIUM,
         runs_in="sandbox",
     )

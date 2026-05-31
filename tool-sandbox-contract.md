@@ -2,16 +2,19 @@
 
 **Document type:** Detailed Technical Design (Contract Spec)
 **Subsystem:** Tool System & Secure Execution — BoD §10 (tools) + §11 (sandbox)
-**Status:** v1.0 — authoritative contract
+**Status:** v1.1 — authoritative contract (Capability/Requirement split; patched after Phase 3 build)
+
+> **v1.1 changelog (post-Phase-3-build).** Two clarifications surfaced by the build, no behavioral change: (1) tool `needs` and `SandboxSpec.permitted` now use a distinct `Capability` enum (NETWORK/FILESYSTEM/CODE_EXEC/SHELL/DISPLAY) — *execution-environment* capabilities — instead of the router's `Requirement` enum, which is a *model-routing* concept (vision/long-context) and does not contain NETWORK/FILESYSTEM. The two were wrongly conflated in v1.0; they are separate types. (2) `Tool.run(args, ctx)` types `args` as `Any` (narrowed per-tool to the tool's `args_model`) rather than `BaseModel`, to allow ergonomic per-tool argument typing without violating Python's parameter contravariance — the executor still validates against `args_model` before calling `run` (§3/§4), so type safety is preserved at the validation boundary.
+
 **Depends on:**
 - Event & State contract (v1.2) — `ToolCall`, `ToolResult` (the loop's action/observation correlation), `SecurityRisk`.
-- LLM Router contract (v1.1) — `ToolSpec` (the provider-neutral tool description the model sees), `Requirement`.
+- LLM Router contract (v1.1) — `ToolSpec` (the provider-neutral tool description the model sees). *(Note: tool execution `needs` use a distinct `Capability` enum defined here, NOT the router's model-routing `Requirement` — see §2.)*
 - Agent Loop contract (v1.1) — the `ToolExecutor` boundary this document **fulfills** (`execute(ToolCall)->ToolResult`, `available_tools()->[ToolSpec]`), and the `SecurityAnalyzer` boundary this document **feeds** (it scores `ActionEvent`s whose tool calls originate here).
 **Consumed by:** the agent loop (via `ToolExecutor`), the Research/Agent surfaces (which select tool scopes), the security subsystem (which scores tool actions), and the retrieval subsystem (whose search/extract tools are registered here).
 **Builds on the OpenHands lessons (re-implemented):** the spec-vs-instance sandbox split, secrets-outside-the-sandbox, dedicated file tools over shell redirection, and CodeAct as the preferred action representation. Cited inline as `[OH]`.
 
 > **Implementation note (perpleximanus build).** This subsystem is implemented in the `tools` package and fulfills the loop's `ToolExecutor`. Two deviations were made and are flagged in-code for a contract patch:
-> 1. **§2 `ToolDef.needs`** is typed `frozenset[Requirement]` and references NETWORK/FILESYSTEM, but the router's `Requirement` enum holds only model capabilities. These are execution-environment capabilities — a distinct concept — so the build introduces a `Capability` enum (NETWORK/FILESYSTEM/DISPLAY). **This contract should be patched to reference `Capability`.**
+> 1. **§2 `ToolDef.needs`** was originally typed against the router's `Requirement` and references NETWORK/FILESYSTEM, but that enum holds only model capabilities. These are execution-environment capabilities — a distinct concept — so the build introduces a `Capability` enum (NETWORK/FILESYSTEM/CODE_EXEC/SHELL/DISPLAY). **Patched in v1.1 — see the changelog and §2.**
 > 2. **§2 `Tool.run(args: BaseModel, ...)`** is typed `args: Any` in the build so concrete tools can narrow `args` to their specific `args_model` without tripping Python's contravariant-parameter rule; the executor guarantees a validated instance. Conceptually still a validated `args_model`.
 > Deferred (need external infra): the `e2b`/Firecracker + `gvisor` backends, the `browser` and `deploy_preview` tools, real egress enforcement under the `process` backend, the file-encrypted `SecretsStore`, and the MCP catalogue.
 
@@ -43,6 +46,25 @@
 ## 2. Tool anatomy [CONTRACT]
 
 Every tool is three separable things (BoD §10.1): a **schema** (what the model sees and how arguments are validated), a **validator/repair** wrapper, and an **executor** (what actually runs). This separation is what lets the same tool run in different sandbox backends and lets validation be uniform across all tools. See `tools/anatomy.py`.
+
+```python
+# from core.events import ToolCall, ToolResult, SecurityRisk
+# from core.llm import ToolSpec   # NOTE: do NOT import Requirement here — see Capability below
+
+class Capability(str, Enum):
+    """[CONTRACT] An EXECUTION-ENVIRONMENT capability a tool needs. This is a
+    DISTINCT concept from the router's `Requirement` (which describes MODEL
+    capabilities like vision/long-context). Do not conflate them: `Requirement`
+    constrains model selection; `Capability` constrains what a sandbox instance
+    is permitted and how a surface scopes tools."""
+    NETWORK = "network"            # tool reaches the network (browser/search/deploy)
+    FILESYSTEM = "filesystem"      # tool reads/writes the workspace
+    CODE_EXEC = "code_exec"        # tool runs arbitrary code
+    SHELL = "shell"                # tool runs shell commands
+    DISPLAY = "display"            # tool needs a graphical display (noVNC)
+```
+
+`ToolDef.needs` and `SandboxSpec.permitted` are `frozenset[Capability]` (NOT the router's `Requirement`).
 
 ## 3. Validation & auto-repair [CONTRACT]
 
