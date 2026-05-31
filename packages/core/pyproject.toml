@@ -1,0 +1,23 @@
+# The `core` package — "the brain": no server, no UI, importable library
+# (basis-of-design.md §5). Phase 0 implements only the Event & State spine
+# defined by event-state-contract.md; later subsystems (loop, memory condenser,
+# LLM router, security) land here in subsequent phases.
+[project]
+name = "perpleximanus-core"
+version = "0.1.0"
+description = "Event & State spine + agent core for the perpleximanus platform."
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.7",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# src-layout PEP 420 namespace package: `perpleximanus` is a shared namespace
+# (no __init__.py) so sibling packages — perpleximanus.tools, .agent_server,
+# .app_server — can join it later without a rename. Point the wheel at the
+# namespace dir and hatch packages everything beneath it.
+[tool.hatch.build.targets.wheel]
+packages = ["src/perpleximanus"]

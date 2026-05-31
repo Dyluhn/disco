@@ -1,0 +1,294 @@
+"""The Event type hierarchy — event-state-contract.md §2.
+
+Events are the atomic unit of all conversation and agent state. The log of
+events is append-only and the single source of truth (BoD Principle 3); State
+(state.py) and the LLM View (view.py) are *pure functions* of the ordered log.
+
+Field names, types, and method signatures here are **normative** (the contract
+marks them [CONTRACT]); other subsystems deserialize and compare these shapes
+without further coordination. Method *bodies* are implementation.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+from enum import Enum
+from typing import Annotated, Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+
+# Bump on a *breaking* change to any event shape. Adding an optional field with
+# a default is backward-compatible and does NOT require a bump (§4 rule 2).
+SCHEMA_VERSION = 1
+
+
+class EventSource(str, Enum):
+    """Who/what produced an event. Security and UI both depend on this (§1.6)."""
+
+    USER = "user"
+    AGENT = "agent"
+    ENVIRONMENT = "environment"  # tool results, injected feedback, hooks
+    SYSTEM = "system"  # lifecycle/status, condensation, errors
+
+
+class EventKind(str, Enum):
+    """Discriminator for the Event union. Serialized by value (§4 rule 4)."""
+
+    MESSAGE = "message"
+    ACTION = "action"
+    OBSERVATION = "observation"
+    AGENT_ERROR = "agent_error"
+    CONDENSATION = "condensation"
+    STATUS = "status"
+    ERROR = "error"  # conversation-level error (distinct from agent_error)
+
+
+def _new_id() -> str:
+    return f"evt_{uuid.uuid4().hex}"
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+class BaseEvent(BaseModel):
+    """Common envelope for every event. Subtypes add a typed payload.
+
+    [CONTRACT] These fields exist on every event and never change meaning.
+
+    `frozen=True` makes events immutable at the type level (invariant #1):
+    accidental mutation becomes a runtime error, not a silent bug. The only
+    field "filled in later" is `seq`, set by the store via `model_copy` (a new
+    instance), never by in-place mutation.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str = Field(default_factory=_new_id)
+    kind: EventKind  # discriminator
+    source: EventSource
+    timestamp: datetime = Field(default_factory=_now)  # VOLATILE (§6.3)
+    schema_version: int = Field(default=SCHEMA_VERSION)
+
+    # Assigned by the EventStore at append time. None before persistence.
+    # [CONTRACT] Monotonic, gap-free, per-conversation. Do NOT set manually.
+    seq: int | None = Field(default=None)
+
+    # Free-form, non-semantic metadata (tracing ids, UI hints). VOLATILE.
+    # Never load-bearing for reconstruction or equality.
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class LLMConvertible:
+    """Marker mixin. Events that subclass this can be rendered into an LLM
+    message via `to_llm_message()`. The View (§5) only ever materializes
+    LLMConvertible events. [CONTRACT]
+
+    Deliberately a plain class with no fields so it composes with the frozen
+    Pydantic BaseEvent without disturbing the model.
+    """
+
+    def to_llm_message(self) -> LLMMessage:
+        raise NotImplementedError
+
+
+# ---- payload value objects --------------------------------------------------
+
+
+class LLMMessage(BaseModel):
+    """Provider-neutral message shape. The LLM router (separate subsystem) maps
+    this to/from provider formats. [CONTRACT at the router boundary.]"""
+
+    model_config = ConfigDict(frozen=True)
+    role: Literal["system", "user", "assistant", "tool"]
+    content: str
+    # Optional structured content (tool calls/results) carried opaquely; the
+    # router owns provider-specific shaping.
+    tool_calls: list[dict[str, Any]] | None = None
+    tool_call_id: str | None = None  # VOLATILE
+
+
+class ToolCall(BaseModel):
+    """A request to execute one tool. Produced by the agent, consumed by the
+    tool subsystem (separate contract)."""
+
+    model_config = ConfigDict(frozen=True)
+    tool_name: str
+    arguments: dict[str, Any]
+    call_id: str = Field(default_factory=lambda: f"call_{uuid.uuid4().hex}")  # VOLATILE
+
+
+class ToolResult(BaseModel):
+    """The outcome of executing a ToolCall. Produced by the tool subsystem."""
+
+    model_config = ConfigDict(frozen=True)
+    call_id: str  # VOLATILE (correlates to ToolCall)
+    tool_name: str
+    success: bool
+    content: str  # human/LLM-readable result text
+    structured: dict[str, Any] | None = None  # optional machine payload
+    error: str | None = None  # populated iff success is False
+
+
+class SecurityRisk(str, Enum):
+    """Mirrors §17 / the security contract. UNKNOWN is non-comparable."""
+
+    UNKNOWN = "UNKNOWN"
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+
+class ConversationStatus(str, Enum):
+    """The loop's explicit execution state machine (BoD §12.1)."""
+
+    IDLE = "IDLE"
+    RUNNING = "RUNNING"
+    PAUSED = "PAUSED"
+    STUCK = "STUCK"
+    WAITING_FOR_CONFIRMATION = "WAITING_FOR_CONFIRMATION"
+    FINISHED = "FINISHED"
+    ERROR = "ERROR"
+
+
+# ---- concrete event types ---------------------------------------------------
+
+
+class MessageEvent(BaseEvent, LLMConvertible):
+    """A message from user, agent, or environment."""
+
+    kind: Literal[EventKind.MESSAGE] = EventKind.MESSAGE
+    message: LLMMessage
+
+    def to_llm_message(self) -> LLMMessage:
+        return self.message
+
+
+class ActionEvent(BaseEvent, LLMConvertible):
+    """The agent chose to take one tool action. One action per event
+    (Principle 6). Carries the agent's reasoning and self-assessed risk."""
+
+    kind: Literal[EventKind.ACTION] = EventKind.ACTION
+    source: EventSource = EventSource.AGENT
+    thought: str  # the agent's reasoning for this action
+    tool_call: ToolCall
+    # Agent's self-assessed risk; the independent analyzer may override
+    # downstream (security contract). Part of the event for audit.
+    self_assessed_risk: SecurityRisk = SecurityRisk.UNKNOWN
+    # VOLATILE: correlates to the model completion that produced this action.
+    llm_response_id: str | None = None
+
+    def to_llm_message(self) -> LLMMessage:
+        return LLMMessage(
+            role="assistant",
+            content=self.thought,
+            tool_calls=[
+                {
+                    "id": self.tool_call.call_id,
+                    "name": self.tool_call.tool_name,
+                    "arguments": self.tool_call.arguments,
+                }
+            ],
+        )
+
+
+class ObservationEvent(BaseEvent, LLMConvertible):
+    """The result of an ActionEvent's tool call (success path)."""
+
+    kind: Literal[EventKind.OBSERVATION] = EventKind.OBSERVATION
+    source: EventSource = EventSource.ENVIRONMENT
+    tool_result: ToolResult
+    # Correlates this observation to its action. NOT volatile for
+    # reconstruction (needed to pair action/observation) but IS ignored by
+    # stuck-equality (§6.3) since the action content is what matters.
+    action_id: str
+
+    def to_llm_message(self) -> LLMMessage:
+        return LLMMessage(
+            role="tool",
+            content=self.tool_result.content,
+            tool_call_id=self.tool_result.call_id,
+        )
+
+
+class AgentErrorEvent(BaseEvent, LLMConvertible):
+    """An error observation — tool failed, action invalid, execution raised.
+    Distinct from ErrorEvent (which is conversation-fatal)."""
+
+    kind: Literal[EventKind.AGENT_ERROR] = EventKind.AGENT_ERROR
+    source: EventSource = EventSource.ENVIRONMENT
+    error: str
+    action_id: str | None = None  # the action that failed, if any
+
+    def to_llm_message(self) -> LLMMessage:
+        return LLMMessage(role="tool", content=f"ERROR: {self.error}", tool_call_id=None)
+
+
+class CondensationEvent(BaseEvent):
+    """A TOMBSTONE. Marks a span of prior events as forgotten and records the
+    summary that replaces them. NOT LLMConvertible — the View applies it (§5).
+    [CONTRACT: this is how forgetting is represented.]"""
+
+    kind: Literal[EventKind.CONDENSATION] = EventKind.CONDENSATION
+    source: EventSource = EventSource.SYSTEM
+    # The seq range [start, end] (inclusive) this condensation forgets. The View
+    # drops events whose seq falls in any active range.
+    forgotten_start_seq: int
+    forgotten_end_seq: int
+    # The summary inserted in place of the span (inline, for atomicity).
+    summary: str
+    summary_role: Literal["system", "user"] = "user"
+    reason: Literal["request", "tokens", "events", "hard_reset"] = "tokens"
+
+
+class StatusEvent(BaseEvent):
+    """A lifecycle/status transition. NOT LLMConvertible. Drives the UI and the
+    loop's state machine reconstruction (§3)."""
+
+    kind: Literal[EventKind.STATUS] = EventKind.STATUS
+    source: EventSource = EventSource.SYSTEM
+    status: ConversationStatus
+    detail: str | None = None
+
+
+class ErrorEvent(BaseEvent):
+    """A conversation-level (fatal-ish) error, e.g. MaxIterationsReached.
+    NOT LLMConvertible."""
+
+    kind: Literal[EventKind.ERROR] = EventKind.ERROR
+    source: EventSource = EventSource.SYSTEM
+    code: str
+    detail: str
+
+
+# ---- the discriminated union the store/serde use ----------------------------
+
+Event = Annotated[
+    MessageEvent
+    | ActionEvent
+    | ObservationEvent
+    | AgentErrorEvent
+    | CondensationEvent
+    | StatusEvent
+    | ErrorEvent,
+    Field(discriminator="kind"),
+]
+
+# Single shared validator/serializer for the union. Consumers parse arbitrary
+# event dicts (post-migration) through this; the `kind` field selects the
+# concrete type. (§4 serialization contract.)
+EventAdapter: TypeAdapter[Event] = TypeAdapter(Event)
+
+
+def event_to_json_dict(event: Event) -> dict[str, Any]:
+    """Serialize one event to a JSON-safe dict (§4 rule 1): ISO datetimes,
+    enums by value. The inverse is `event_from_json_dict`."""
+    return event.model_dump(mode="json")
+
+
+def event_from_json_dict(raw: dict[str, Any]) -> Event:
+    """Deserialize a (already-migrated) JSON dict back into the concrete event
+    type via the discriminated union. Callers should run `migrate_event` first
+    (see migration.py) so old persisted events stay readable forever."""
+    return EventAdapter.validate_python(raw)

@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
+
+# uv / virtualenv
+.venv/
+
+# SQLite event stores / scratch DBs
+*.db
+*.db-wal
+*.db-shm
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

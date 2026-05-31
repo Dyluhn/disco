@@ -1,0 +1,46 @@
+# Workspace root for the Platform (codename: perpleximanus).
+#
+# This is a *virtual* uv project: it is never built or installed itself
+# (`tool.uv.package = false`). It exists to (a) declare the workspace members
+# and (b) hold the shared dev toolchain so a single `uv sync` provisions the
+# whole monorepo. Each real package lives under packages/* and is its own
+# separately-versioned distribution, mirroring the four-layer topology in
+# basis-of-design.md §5 (core -> tools -> agent-server -> app-server).
+[project]
+name = "perpleximanus-workspace"
+version = "0"
+description = "Self-hosted Research & Agent platform — workspace root (not a distributable)."
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[dependency-groups]
+# Shared dev toolchain for every member package.
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+]
+
+[tool.pytest.ini_options]
+# Async tests (the EventStore is async) run without per-test decorators.
+asyncio_mode = "auto"
+testpaths = ["packages"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# Sensible defaults: pyflakes, pycodestyle, isort, bugbear, pyupgrade.
+select = ["E", "F", "I", "B", "UP"]
+# UP042 (prefer enum.StrEnum) is intentionally disabled: the event-state
+# contract's normative code defines enums as `(str, Enum)`, and we mirror it
+# verbatim so the source stays a faithful transcription of the spec.
+ignore = ["UP042"]
