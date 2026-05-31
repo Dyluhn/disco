@@ -31,6 +31,29 @@ Deferred to the server package / later phases: the WebSocket + REST wire layer
 (§7, contract steps 7–8), the real `LLMSummarizingCondenser` (Phase 1), the
 agent loop, tools, retrieval, and UI (BoD §22).
 
+**LLM Router boundary** (`llm-router-contract.md`) — the Phase-1 subsystem the
+loop and condenser depend on. Capability-based, provider-neutral model access;
+it *implements* the two functions the spine left waiting on
+(`is_context_window_exceeded`, the `Summarizer`). Fully headless-testable behind
+a faked provider.
+
+| Module | Contract | What it is |
+|---|---|---|
+| `llm/types.py` | §2/§4 | CapabilityProfile, CompletionRequest/Response, RoutingDecision, StreamChunk |
+| `llm/errors.py` | §6 | typed `LLMError` hierarchy + `is_context_window_exceeded` |
+| `llm/provider.py` | §3 | `ModelProvider` protocol (live HTTP adapters deferred — see below) |
+| `llm/config.py` | §7 | `RouterConfig` + the §7 starting role assignments (placeholder ids) |
+| `llm/policy.py` | §5 | `ThresholdOverflowPolicy` — the five overflow rules + local-only roles |
+| `llm/routing.py` | §4 | `DefaultLLMRouter`: resolution, prompt injection, retry/escalation, cost governance, decision emission |
+| `llm/prompts.py` | §8 | `PromptProvider` + family×mode selection |
+| `llm/summarizer.py` | §9.1 | `RouterSummarizer` (satisfies the spine's `Summarizer`) |
+| `llm/nli.py` | §9.2 | `NLIVerifier` protocol + stub (real cross-encoder built with grounding) |
+
+Deferred: the live `ollama`/`llamacpp`/`openrouter` HTTP adapters (network +
+the operator's real model ids/keys, all `[VERIFY]`); the whole router is proven
+headless against a faked provider, so adding an adapter is purely implementing
+`ModelProvider` + classifying that provider's context-window error.
+
 ## Layout
 
 ```

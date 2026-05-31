@@ -1,0 +1,170 @@
+"""Provider-neutral request/response types — llm-router-contract.md §2 (+ §4
+RoutingDecision, §3 StreamChunk).
+
+These extend the event/state contract's `LLMMessage` (the wire-level message
+shape, imported, never redefined). Callers speak only these types; all
+provider-specific shaping lives inside provider adapters (provider.py).
+
+Field names, types, and signatures are **normative**.
+"""
+
+from __future__ import annotations
+
+from enum import Enum
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from ..events import LLMMessage  # the wire-level message shape (event contract)
+
+# ---- capability vocabulary --------------------------------------------------
+
+
+class ModelRole(str, Enum):
+    """The four roles from BoD §15.2, plus the summarizer (§7.3). A caller
+    declares the ROLE it needs; the router maps role -> model via config."""
+
+    AGENT_DRIVER = "agent_driver"  # the loop's tool-calling/planning brain
+    RAG_ANSWERER = "rag_answerer"  # grounded answer synthesis
+    QUERY_REWRITER = "query_rewriter"  # query expansion/decomposition
+    SUMMARIZER = "summarizer"  # condensation (cheap, separate model)
+    NLI_VERIFIER = "nli_verifier"  # citation entailment (a cross-encoder, §9)
+
+
+class Difficulty(str, Enum):
+    """A caller's hint about how hard THIS call is. Feeds the overflow policy."""
+
+    ROUTINE = "routine"
+    HARD = "hard"
+
+
+class Requirement(str, Enum):
+    """Hard capability requirements that constrain model selection."""
+
+    VISION = "vision"  # must accept images
+    LONG_CONTEXT = "long_context"  # must handle large inputs (>~64k)
+    TOOL_CALLING = "tool_calling"  # must support structured tool calls
+    JSON_MODE = "json_mode"  # must support constrained/JSON output
+
+
+class OperatingMode(str, Enum):
+    """Drives prompt-variant selection (§8). Mirrors the surfaces in BoD §8."""
+
+    INTERACTIVE = "interactive"
+    PLANNING = "planning"
+    LONG_HORIZON = "long_horizon"
+
+
+class CapabilityProfile(BaseModel):
+    """[CONTRACT] What a caller asks for. Never a model name."""
+
+    model_config = ConfigDict(frozen=True)
+    role: ModelRole
+    difficulty: Difficulty = Difficulty.ROUTINE
+    requirements: frozenset[Requirement] = frozenset()
+    mode: OperatingMode | None = None  # informs prompt selection if set
+
+
+# ---- tool specs (the loop hands these in; adapters shape them) --------------
+
+
+class ToolSpec(BaseModel):
+    """Provider-neutral description of a callable tool, as the model sees it.
+    The agent loop builds these from the tool registry; adapters translate to
+    each provider's tool/function schema."""
+
+    model_config = ConfigDict(frozen=True)
+    name: str
+    description: str
+    parameters_schema: dict[str, Any]  # JSON Schema for arguments
+
+
+# ---- the request ------------------------------------------------------------
+
+
+class CompletionRequest(BaseModel):
+    """[CONTRACT] The provider-neutral request. Callers build this; the router
+    routes it; adapters execute it."""
+
+    model_config = ConfigDict(frozen=True)
+    profile: CapabilityProfile
+    messages: list[LLMMessage]
+    tools: list[ToolSpec] | None = None
+    # temperature defaults to 0 for determinism where the role implies
+    # structured output; callers may override (BoD §10.3).
+    temperature: float = 0.0
+    max_tokens: int | None = None
+    response_format: Literal["text", "json"] = "text"
+    # Opaque per-call correlation id, surfaced back on the response and carried
+    # into ActionEvent.llm_response_id (event contract). VOLATILE.
+    request_id: str | None = None
+    # If True, caller wants token streaming (use stream_complete, §3.2).
+    stream: bool = False
+
+
+# ---- the response -----------------------------------------------------------
+
+
+class TokenUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    input_tokens: int
+    output_tokens: int
+    # Cost in USD if known (OpenRouter reports it; local = 0.0).
+    cost_usd: float = 0.0
+
+
+class ProposedToolCall(BaseModel):
+    """A tool call the model wants to make. The loop converts this into the
+    event contract's ToolCall/ActionEvent. Provider-neutral."""
+
+    model_config = ConfigDict(frozen=True)
+    tool_name: str
+    arguments: dict[str, Any]
+    provider_call_id: str | None = None  # VOLATILE
+
+
+class RoutingDecision(BaseModel):
+    """[CONTRACT] Emitted for every call; attached to CompletionResponse and
+    logged for observability/audit (BoD §18/§20)."""
+
+    model_config = ConfigDict(frozen=True)
+    profile: CapabilityProfile
+    chosen_model: str  # concrete id [VERIFY-valued]
+    provider: str  # "ollama"|"llamacpp"|"openrouter"
+    path: Literal["local", "overflow"]
+    reason: str  # human-readable: why this route
+    overflow_triggers: list[str] = Field(default_factory=list)  # which rules fired
+    attempt: int = 1  # >1 if this was a retry/escalation
+
+
+class CompletionResponse(BaseModel):
+    """[CONTRACT] What every completion returns, regardless of provider or
+    local/overflow path. The loop reads .text / .tool_calls; the condenser
+    reads .text; observability reads .usage and .routing.
+
+    NOTE on `routing`: the contract describes it as "always present, populated
+    by the router". Providers cannot know the routing decision (it is the
+    router's), so the field is typed Optional to make the provider boundary
+    implementable; the **router guarantees** it is non-None on every response it
+    returns to a caller (RT1). Providers return it as None.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    text: str = ""  # assistant text / thought
+    tool_calls: list[ProposedToolCall] = Field(default_factory=list)
+    usage: TokenUsage
+    finish_reason: Literal["stop", "length", "tool_calls", "content_filter", "error"]
+    model_used: str  # concrete model id actually used [VERIFY-valued]
+    request_id: str | None = None
+    routing: RoutingDecision | None = None
+
+
+class StreamChunk(BaseModel):
+    """[CONTRACT] An incremental piece of a streamed completion. The agent
+    server maps these to WSServerFrame(type='token') (event contract §7.2). The
+    terminal chunk carries the assembled CompletionResponse."""
+
+    model_config = ConfigDict(frozen=True)
+    delta_text: str = ""
+    done: bool = False
+    final: CompletionResponse | None = None  # present iff done is True

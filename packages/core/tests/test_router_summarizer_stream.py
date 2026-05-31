@@ -1,0 +1,86 @@
+"""Summarizer + streaming — llm-router-contract.md §10.5.
+
+RouterSummarizer routes a SUMMARIZER-role call and returns the model's text
+(cross-tested against the event contract's condenser, which must accept it).
+stream_complete yields deltas then a terminal chunk whose final equals the
+non-streamed result for the same input.
+"""
+
+from __future__ import annotations
+
+from llm_fakes import FakeModelProvider, build_router, simple_config
+from perpleximanus.core import LLMMessage, NoOpCondenser, View
+from perpleximanus.core.llm import (
+    CapabilityProfile,
+    CompletionRequest,
+    DefaultLLMRouter,
+    ModelRole,
+    RouterSummarizer,
+)
+
+
+def test_summarizer_routes_summarizer_role_and_returns_text():
+    """Sync `summarize()` (no running loop) routes a SUMMARIZER call."""
+    summ_provider = FakeModelProvider("ollama", text="THE SUMMARY")
+    providers = {"ollama": summ_provider, "openrouter": FakeModelProvider("openrouter")}
+    router = DefaultLLMRouter(simple_config(), providers)
+    summarizer = RouterSummarizer(router)
+
+    out = summarizer.summarize([LLMMessage(role="user", content="lots of history")])
+    assert out == "THE SUMMARY"
+    # It routed as the SUMMARIZER role (local-only, cheap model).
+    assert summ_provider.seen_requests[0].profile.role == ModelRole.SUMMARIZER
+
+
+def test_summarizer_satisfies_the_event_contracts_summarizer_protocol():
+    """Structural conformance: the condenser seam accepts RouterSummarizer."""
+    router, _sink, _ = build_router()
+    summarizer = RouterSummarizer(router)
+    # NoOpCondenser.condense takes a Summarizer; this must type/wire cleanly.
+    cond = NoOpCondenser()
+    view = View.of([])
+    assert cond.condense([], view, summarizer=summarizer) is None  # no-op, but accepts it
+
+
+async def test_summarizer_asummarize_in_running_loop():
+    summ_provider = FakeModelProvider("ollama", text="ASYNC SUMMARY")
+    providers = {"ollama": summ_provider, "openrouter": FakeModelProvider("openrouter")}
+    router = DefaultLLMRouter(simple_config(), providers)
+    out = await RouterSummarizer(router).asummarize([LLMMessage(role="user", content="h")])
+    assert out == "ASYNC SUMMARY"
+
+
+async def test_stream_deltas_reassemble_and_final_matches_complete():
+    text = "the quick brown fox jumps"
+    local = FakeModelProvider("ollama", text=text, cost_usd=0.0)
+    providers = {"ollama": local, "openrouter": FakeModelProvider("openrouter")}
+    router = DefaultLLMRouter(simple_config(), providers)
+    req = CompletionRequest(
+        profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER),
+        messages=[LLMMessage(role="user", content="go")],
+        stream=True,
+    )
+
+    deltas: list[str] = []
+    final = None
+    async for chunk in router.stream_complete(req):
+        if chunk.done:
+            final = chunk.final
+        else:
+            deltas.append(chunk.delta_text)
+
+    assert "".join(deltas) == text
+    assert final is not None
+    assert final.text == text
+    assert final.routing is not None  # router attached the decision (RT1)
+
+    # Final equals a non-streamed complete() for the same input (content-wise).
+    nonstream = await router.complete(
+        CompletionRequest(
+            profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER),
+            messages=[LLMMessage(role="user", content="go")],
+        )
+    )
+    assert final.text == nonstream.text
+    assert final.usage == nonstream.usage
+    assert final.model_used == nonstream.model_used
