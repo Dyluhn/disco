@@ -11,6 +11,15 @@ via the orchestrator-mediated CapabilitySet.
 from __future__ import annotations
 
 from .engine import DefaultRetrievalEngine, RetrievalEngine
+from .evaluation import (
+    FrontierJudge,
+    GroundingEvalMetrics,
+    RetrievalEvalMetrics,
+    cited_passage_rerank_positions,
+    grounding_metrics,
+    retrieval_metrics,
+    select_for_judging,
+)
 from .grounding import GroundingPipeline, extract_claims
 from .models import (
     Claim,
@@ -39,6 +48,7 @@ from .vectorstore import (
     InMemoryVectorStore,
     VectorStore,
 )
+from .wiring import research_answer, retrieval_capability_handlers
 
 __all__ = [
     "Claim",
@@ -49,7 +59,9 @@ __all__ = [
     "Embedder",
     "ExtractedDoc",
     "ExtractionProvider",
+    "FrontierJudge",
     "GroundedAnswer",
+    "GroundingEvalMetrics",
     "GroundingPipeline",
     "HashingEmbedder",
     "InMemoryVectorStore",
@@ -58,6 +70,7 @@ __all__ = [
     "QueryRewriter",
     "Reranker",
     "RetrievalEngine",
+    "RetrievalEvalMetrics",
     "RetrievalRequest",
     "RetrievalResult",
     "RouterQueryRewriter",
@@ -65,6 +78,12 @@ __all__ = [
     "SearchProvider",
     "VectorStore",
     "VerifiedClaim",
+    "cited_passage_rerank_positions",
     "extract_claims",
+    "grounding_metrics",
+    "research_answer",
+    "retrieval_capability_handlers",
+    "retrieval_metrics",
     "reciprocal_rank_fusion",
+    "select_for_judging",
 ]
