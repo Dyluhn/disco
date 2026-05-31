@@ -1,7 +1,7 @@
 """Coverage for shipped-but-initially-untested router pieces.
 
-default_config (§7 starting assignments), the NLI stub (§9.2), the summarizer's
-running-loop guard, and the escalation-blocked-by-hard-cap edge (§5.2/§5.3).
+default_config (§7 starting assignments), the NLI stub (§9.2), per-conversation
+cost tracking, and the escalation-blocked-by-hard-cap edge (§5.2/§5.3).
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ from perpleximanus.core.llm import (
     ModelRole,
     RoleRouting,
     RouterConfig,
-    RouterSummarizer,
     StubNLIVerifier,
     default_config,
 )
@@ -52,17 +51,6 @@ def test_stub_nli_entailment_buckets():
     assert v.score("the cat sat on the mat", "cat sat mat") == pytest.approx(1.0)
     assert v.entail("totally unrelated premise", "xyz qqq zzz") == "contradict"  # ~0 overlap
     assert v.score("alpha beta gamma delta", "") == 0.0  # empty hypothesis
-
-
-# ---- summarizer running-loop guard ------------------------------------------
-
-
-async def test_summarize_sync_inside_running_loop_raises():
-    """The sync shim refuses to run inside an already-running event loop; callers
-    there must use asummarize()."""
-    router, _sink, _ = build_router()
-    with pytest.raises(RuntimeError):
-        RouterSummarizer(router).summarize([LLMMessage(role="user", content="x")])
 
 
 # ---- escalation blocked by a hard budget cap (§5.2 + §5.3) ------------------

@@ -2,7 +2,9 @@
 
 **Document type:** Detailed Technical Design (Contract Spec)
 **Subsystem:** LLM Router & Model Boundary — BoD §15 (with §12.6, §10-principle "prompt is part of the model abstraction")
-**Status:** v1.0 — authoritative contract
+**Status:** v1.1 — authoritative contract (§9.1 async-seam resolved after Phase 1 audit)
+
+> **v1.1 changelog.** §9.1's previously hand-waved sync/async summarizer seam is now pinned: the `Summarizer`/`Condenser`/`complete` path is async end-to-end (aligned with event contract v1.2). No other changes.
 **Depends on:** the Event & State contract (`event-state-contract.md`) — specifically `LLMMessage`, the `Summarizer` protocol, and `is_context_window_exceeded()`, all of which this document now *implements*.
 **Consumed by:** the agent loop (§12), the memory condenser (§7.3/§5 of the event contract), the citation/grounding verifier (§14), and anything that talks to a model.
 **Decision in force:** OpenRouter is wired from the start (not stubbed). The overflow policy and its threshold are real and tested in v1, not placeholders.
@@ -416,7 +418,7 @@ class RouterSummarizer:
         )
         return (await self._router.complete(req)).text
 ```
-(The condenser is async-aware; if the event contract's `Summarizer` is sync at the call site, the loop awaits the summary before invoking `condense` — an [INTERIOR] wiring detail, but the contract is: summarization is a SUMMARIZER-role router call.)
+**[CONTRACT] the async seam (resolved; was the Phase 1 audit's open ambiguity).** `RouterSummarizer.summarize` is `async` and the event contract (v1.2) makes both `Summarizer.summarize` and `Condenser.condense` `async` to match. The end-to-end path is fully async: the agent loop's `_materialize_view` (agent-loop contract §8) `await`s `condenser.condense(...)`, which `await`s `summarizer.summarize(...)`, which `await`s `router.complete(...)`. There is no sync→async boundary anywhere on this path, so it composes cleanly inside the loop's running event loop — no `asyncio.run()`-inside-a-loop, no thread offload, no deadlock. (Earlier drafts left this as "[INTERIOR] wiring"; it is now pinned because a sync `summarize`/`condense` could not drive the async `complete` from within the loop.)
 
 ### 9.2 NLI verifier [CONTRACT boundary, distinct mechanism]
 The `NLI_VERIFIER` role is special: per BoD §14/§15.2 it is **a ~300M cross-encoder, not an LLM**. It does not go through `complete()` (it is not a chat model). It is exposed as its own narrow interface, registered as a role for *config and routing-eligibility symmetry* only:

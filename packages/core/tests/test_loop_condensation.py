@@ -65,16 +65,17 @@ async def test_unrecoverable_hard_reset_goes_to_error():
 
 
 async def test_summarizer_is_wired_into_condensation():
-    """The loop hands its (SUMMARIZER-routing) summarizer to condense(). That the
-    summarizer routes the SUMMARIZER role specifically is verified in the router
-    tests (sync RouterSummarizer cannot run inside this async loop, by design)."""
+    """The loop hands its summarizer to condense() and awaits both (async seam,
+    event-state-contract v1.2 §5.2). That the summarizer routes the SUMMARIZER
+    role specifically is verified in the router tests; here we confirm the loop
+    awaits an async summarize during condensation."""
 
     summ = FakeSummarizer()
 
     class SummarizingCondenser(FakeCondenser):
-        def condense(self, events, view, *, summarizer):
-            summarizer.summarize(view.messages)  # exercise the wired summarizer
-            return super().condense(events, view, summarizer=summarizer)
+        async def condense(self, events, view, *, summarizer):
+            await summarizer.summarize(view.messages)  # exercise the (async) summarizer
+            return await super().condense(events, view, summarizer=summarizer)
 
     cond = SummarizingCondenser(request=None, tombstone=_tombstone())
     agent = ScriptedAgent([LLMContextWindowExceeded("big"), finish_step()])

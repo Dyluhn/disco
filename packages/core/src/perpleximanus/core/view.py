@@ -105,20 +105,24 @@ class Summarizer(Protocol):
     boundary] — implemented by the LLM router using a CHEAP model, separate
     from the agent model (BoD §7.3, §15)."""
 
-    def summarize(self, messages: list[LLMMessage]) -> str: ...
+    async def summarize(self, messages: list[LLMMessage]) -> str: ...
 
 
 class Condenser(Protocol):
-    """Decides whether/how to condense. The loop calls should_condense() then
-    condense(); the strategy is [INTERIOR] and swappable. condense() returns at
-    most one CondensationEvent to append, or None (no-op). No event is ever
-    deleted."""
+    """Decides whether/how to condense. The loop calls should_condense() (sync,
+    pure over the View) then awaits condense() (async); the strategy is
+    [INTERIOR] and swappable. condense() returns at most one CondensationEvent to
+    append, or None (no-op). No event is ever deleted.
+
+    Async rationale (event-state-contract v1.2 §5.2): condense() must be async
+    because the only correct summarizer makes an async router call, invoked from
+    the loop's running asyncio loop. should_condense stays sync (pure)."""
 
     def should_condense(
         self, view: View, *, token_count: int | None
     ) -> CondensationRequest | None: ...
 
-    def condense(
+    async def condense(
         self, events: list[Event], view: View, *, summarizer: Summarizer
     ) -> CondensationEvent | None: ...
 
@@ -134,7 +138,7 @@ class NoOpCondenser:
     def should_condense(self, view: View, *, token_count: int | None) -> CondensationRequest | None:
         return None
 
-    def condense(
+    async def condense(
         self, events: list[Event], view: View, *, summarizer: Summarizer
     ) -> CondensationEvent | None:
         return None

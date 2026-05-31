@@ -19,35 +19,27 @@ from perpleximanus.core.llm import (
 )
 
 
-def test_summarizer_routes_summarizer_role_and_returns_text():
-    """Sync `summarize()` (no running loop) routes a SUMMARIZER call."""
+async def test_summarizer_routes_summarizer_role_and_returns_text():
+    """Async `summarize()` (v1.2 §5.2) routes a SUMMARIZER call."""
     summ_provider = FakeModelProvider("ollama", text="THE SUMMARY")
     providers = {"ollama": summ_provider, "openrouter": FakeModelProvider("openrouter")}
     router = DefaultLLMRouter(simple_config(), providers)
     summarizer = RouterSummarizer(router)
 
-    out = summarizer.summarize([LLMMessage(role="user", content="lots of history")])
+    out = await summarizer.summarize([LLMMessage(role="user", content="lots of history")])
     assert out == "THE SUMMARY"
     # It routed as the SUMMARIZER role (local-only, cheap model).
     assert summ_provider.seen_requests[0].profile.role == ModelRole.SUMMARIZER
 
 
-def test_summarizer_satisfies_the_event_contracts_summarizer_protocol():
-    """Structural conformance: the condenser seam accepts RouterSummarizer."""
+async def test_summarizer_satisfies_the_event_contracts_summarizer_protocol():
+    """Structural conformance: the (async) condenser seam accepts RouterSummarizer."""
     router, _sink, _ = build_router()
     summarizer = RouterSummarizer(router)
-    # NoOpCondenser.condense takes a Summarizer; this must type/wire cleanly.
+    # NoOpCondenser.condense (async) takes a Summarizer; this must wire cleanly.
     cond = NoOpCondenser()
     view = View.of([])
-    assert cond.condense([], view, summarizer=summarizer) is None  # no-op, but accepts it
-
-
-async def test_summarizer_asummarize_in_running_loop():
-    summ_provider = FakeModelProvider("ollama", text="ASYNC SUMMARY")
-    providers = {"ollama": summ_provider, "openrouter": FakeModelProvider("openrouter")}
-    router = DefaultLLMRouter(simple_config(), providers)
-    out = await RouterSummarizer(router).asummarize([LLMMessage(role="user", content="h")])
-    assert out == "ASYNC SUMMARY"
+    assert await cond.condense([], view, summarizer=summarizer) is None  # no-op, accepts it
 
 
 async def test_stream_deltas_reassemble_and_final_matches_complete():

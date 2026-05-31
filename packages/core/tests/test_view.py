@@ -103,17 +103,18 @@ def test_back_half_is_preserved_byte_identical_after_condensation():
 # ---- the no-op condenser (real one deferred to Phase 1) ---------------------
 
 
-def test_noop_condenser_never_condenses():
+async def test_noop_condenser_never_condenses():
     events = with_seqs([user_msg()] + [agent_msg(f"m{i}") for i in range(300)])
     view = View.of(events)
     cond = NoOpCondenser()
-    assert cond.should_condense(view, token_count=10_000_000) is None
-    assert cond.condense(events, view, summarizer=_FakeSummarizer()) is None
+    assert cond.should_condense(view, token_count=10_000_000) is None  # sync (v1.2)
+    assert await cond.condense(events, view, summarizer=_FakeSummarizer()) is None  # async
 
 
 class _FakeSummarizer:
     """Stand-in Summarizer (no real LLM) — the Phase 1 condenser tests will use
-    a fake like this to assert the tombstone summary equals its output (§8.3)."""
+    a fake like this to assert the tombstone summary equals its output (§8.3).
+    Async per event-state-contract v1.2 §5.2."""
 
-    def summarize(self, messages):
+    async def summarize(self, messages):
         return "[fake summary]"

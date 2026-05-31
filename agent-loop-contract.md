@@ -2,7 +2,9 @@
 
 **Document type:** Detailed Technical Design (Contract Spec)
 **Subsystem:** Agent Loop & Orchestration — BoD §12 (the core)
-**Status:** v1.0 — authoritative contract
+**Status:** v1.1 — authoritative contract (§8 awaits async condense after Phase 1 audit)
+
+> **v1.1 changelog.** §8 `_materialize_view` now `await`s `condenser.condense(...)` (event contract v1.2 made it async); `should_condense` remains a sync call. No other changes.
 **Depends on:**
 - Event & State contract (`event-state-contract.md`) — `Event` types, `ConversationState`/`reconstruct()`, `View.of()`, `event_content_eq()`, the `Condenser`/`Summarizer` protocols, `EventStore`, `ConversationStatus`, the wire frames.
 - LLM Router contract (`llm-router-contract.md`) — `LLMRouter`, `CompletionRequest`/`CompletionResponse`, `CapabilityProfile`, `ToolSpec`, `ProposedToolCall`, `OverflowSignal`.
@@ -327,9 +329,9 @@ async def _materialize_view(self) -> View:
     [CONTRACT] returns a View; may append at most one CondensationEvent."""
     events = await self.store.get_events(self.conversation_id)
     view = View.of(events)
-    req = self.condenser.should_condense(view, token_count=self._estimate_tokens(view))
+    req = self.condenser.should_condense(view, token_count=self._estimate_tokens(view))  # sync (pure)
     if req is not None:
-        tombstone = self.condenser.condense(events, view, summarizer=self.summarizer)
+        tombstone = await self.condenser.condense(events, view, summarizer=self.summarizer)  # async (event contract v1.2)
         if tombstone is not None:
             await self._emit(tombstone)                      # append-only
             view = View.of(await self.store.get_events(self.conversation_id))

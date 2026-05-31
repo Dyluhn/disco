@@ -126,7 +126,7 @@ class FakeCondenser:
         self.should_calls += 1
         return self._request
 
-    def condense(self, events, view, *, summarizer):
+    async def condense(self, events, view, *, summarizer):
         self.condense_calls += 1
         return self._tombstone
 
@@ -135,7 +135,7 @@ class FakeSummarizer:
     def __init__(self):
         self.calls = 0
 
-    def summarize(self, messages):
+    async def summarize(self, messages):
         self.calls += 1
         return "[summary]"
 

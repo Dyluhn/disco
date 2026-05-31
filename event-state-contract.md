@@ -2,7 +2,7 @@
 
 **Document type:** Detailed Technical Design (Contract Spec)
 **Subsystem:** Event & State Model (the spine) — BoD §7
-**Status:** v1.0 — authoritative contract
+**Status:** v1.2 — authoritative contract (async condensation seam; patched after Phase 1 audit)
 **Consumed by:** every other subsystem. This document defines the shared vocabulary the rest of the build cites. Changes here ripple everywhere; treat the schemas and interfaces below as the stable contract and the rationale/notes as guidance.
 
 ---
@@ -15,6 +15,10 @@
 
 **Conventions:**
 - Code is illustrative Python 3.12 + Pydantic v2. Field names, types, and method signatures are **normative**; bodies are illustrative.
+
+> **v1.2 changelog (post-Phase-1-audit).** One structural fix: **§5.2 `Condenser.condense` and `Summarizer.summarize` are now `async`** (`should_condense` stays sync). The Phase 1 audit correctly flagged that the only conforming summarizer makes an async router call invoked from the loop's running asyncio loop, where a sync call would block/deadlock. Behavior (View, tombstones, condensation strategy) is unchanged; only the call shape is corrected. The router contract's §9.1 `RouterSummarizer` and the agent-loop contract's §8 `_materialize_view` are aligned to `await`.
+
+> **v1.1 changelog (post-Phase-0-calibration).** Four illustrative-body/transport clarifications, no contract-semantic changes: (1) **§5.1 `View.of`** rewritten so summaries are emitted at the *forgotten span's* chronological position, not the tombstone's append position — the prior body contradicted §7.3's normative text and would place old summaries after recent turns; (2) **§3 `reconstruct`** body now shows `pending_action_id` being *set* (to the most recent action) on `WAITING_FOR_CONFIRMATION`, matching the §3 text; (3) **§7.3a** pins connect-time `last_seq` delivery as a URL query parameter; (4) **§6** pins the `subscribe()` await-then-iterate idiom. All four were surfaced by the Phase 0 build as ambiguities; the seams and guarantees are unchanged.
 - **[CONTRACT]** marks a guarantee other subsystems may rely on.
 - **[INTERIOR]** marks something the builder may implement freely as long as the contract holds.
 - **[VERIFY]** marks a fast-moving detail (library version, etc.) to confirm at build.
@@ -294,14 +298,22 @@ class ConversationState(BaseModel):
                     max_iterations: int = 500) -> "ConversationState":
         st = cls(conversation_id=conversation_id, max_iterations=max_iterations)
         run_iteration = 0
+        last_action_id: str | None = None
         for e in events:
             st.last_seq = e.seq or st.last_seq
             if isinstance(e, StatusEvent):
                 st.execution_status = e.status
-                if e.status != ConversationStatus.WAITING_FOR_CONFIRMATION:
+                if e.status == ConversationStatus.WAITING_FOR_CONFIRMATION:
+                    # the action awaiting confirmation is the most recent one;
+                    # the StatusEvent.detail also carries it (see §2.3), and an
+                    # implementation may prefer reading detail over tracking
+                    # last_action_id — both must agree.
+                    st.pending_action_id = last_action_id
+                else:
                     st.pending_action_id = None
             elif isinstance(e, ActionEvent):
                 run_iteration += 1
+                last_action_id = e.id
                 # a fresh user message resets the run counter (see below)
             elif isinstance(e, MessageEvent) and e.source == EventSource.USER:
                 run_iteration = 0
@@ -373,28 +385,43 @@ class View(BaseModel):
 
     @classmethod
     def of(cls, events: list[Event]) -> "View":
-        # 1. Collect active forgotten ranges from condensation tombstones.
-        forgotten: list[tuple[int, int]] = [
-            (e.forgotten_start_seq, e.forgotten_end_seq)
-            for e in events if isinstance(e, CondensationEvent)
-        ]
+        # 1. Collect active forgotten ranges from condensation tombstones, and
+        #    index each summary by the START of the span it replaces. The
+        #    summary must appear at the FORGOTTEN SPAN's chronological position
+        #    (where the old turns were), NOT at the tombstone's append position.
+        #    The tombstone is appended AFTER the events it forgets, so emitting
+        #    at the tombstone's position would place old summaries AFTER recent
+        #    turns — wrong. See §7.3 normative text ("replace the first half,
+        #    leave the back half untouched").
+        forgotten: list[tuple[int, int]] = []
+        summary_at_start: dict[int, LLMMessage] = {}   # start_seq -> summary msg
+        for e in events:
+            if isinstance(e, CondensationEvent):
+                forgotten.append((e.forgotten_start_seq, e.forgotten_end_seq))
+                # last writer wins if two tombstones share a start (re-summary)
+                summary_at_start[e.forgotten_start_seq] = LLMMessage(
+                    role=e.summary_role, content=e.summary)
+
         def is_forgotten(seq: int | None) -> bool:
             return seq is not None and any(a <= seq <= b for a, b in forgotten)
 
-        # 2. Walk events in order. Emit summaries where tombstones sit; drop
-        #    forgotten LLMConvertible events; keep the rest.
+        # 2. Walk events in CHRONOLOGICAL (seq) order. When we reach the first
+        #    event of a forgotten span, emit that span's summary in its place;
+        #    then skip the forgotten events. Tombstones themselves are never
+        #    emitted at their own position.
         msgs: list[LLMMessage] = []
         visible: list[int] = []
         emitted_summary_for: set[int] = set()
         for e in events:
             if isinstance(e, CondensationEvent):
-                key = e.forgotten_start_seq
-                if key not in emitted_summary_for:
-                    msgs.append(LLMMessage(role=e.summary_role, content=e.summary))
-                    emitted_summary_for.add(key)
-                continue
+                continue                      # tombstone is bookkeeping, not shown here
             if not isinstance(e, LLMConvertible):
                 continue                      # status/error: not shown to LLM
+            # If this event begins a forgotten span, emit the span's summary
+            # (once) at this position before skipping the span's events.
+            if e.seq in summary_at_start and e.seq not in emitted_summary_for:
+                msgs.append(summary_at_start[e.seq])
+                emitted_summary_for.add(e.seq)
             if is_forgotten(e.seq):
                 continue                      # forgotten by a tombstone
             msgs.append(e.to_llm_message())
@@ -407,9 +434,11 @@ class View(BaseModel):
 ```
 
 **[CONTRACT] guarantees:**
-- The View never shows a forgotten event; it shows the summary in its place, exactly once per tombstone span.
-- Non-`LLMConvertible` events (status, error, the tombstone itself) are never in `messages`.
+- The View never shows a forgotten event; it shows the summary **at the forgotten span's chronological position** (where the old turns were), exactly once per span. A summary therefore appears *before* the kept recent turns — never after them — matching §7.3's "replace the first half, leave the back half untouched."
+- The tombstone (`CondensationEvent`) is itself never emitted into `messages`; only its `summary` is, and only at the span position.
+- Non-`LLMConvertible` events (status, error) are never in `messages`.
 - The View is read-only and derived; computing it has no side effects and never appends.
+- **Note for implementers:** earlier drafts of this body emitted the summary at the tombstone's append position. That was a defect — because tombstones are appended after the span they forget, it placed old summaries after recent turns. The body above is correct; do not "simplify" it back.
 
 ### 5.2 The Condenser interface [CONTRACT] + default [INTERIOR]
 
@@ -420,17 +449,26 @@ class CondensationRequest(BaseModel):
 
 class Condenser(Protocol):
     """Decides whether/how to condense. Returns a CondensationEvent to append,
-    or None (no-op). [CONTRACT] the loop calls should_condense()/condense();
-    the strategy itself is INTERIOR and swappable."""
+    or None (no-op). [CONTRACT] the loop calls should_condense() (sync) and
+    awaits condense() (async); the strategy itself is INTERIOR and swappable.
+
+    Async rationale: should_condense is pure computation over the View and stays
+    sync. condense() must be async because the only correct summarizer makes an
+    async LLM-router call (§9.1 / router contract), and the loop runs inside an
+    asyncio event loop — a sync summarizer call from there would block or
+    deadlock the running loop. See v1.1 note below."""
     def should_condense(self, view: View, *, token_count: int | None) -> CondensationRequest | None: ...
-    def condense(self, events: list[Event], view: View, *, summarizer: "Summarizer") -> CondensationEvent | None: ...
+    async def condense(self, events: list[Event], view: View, *, summarizer: "Summarizer") -> CondensationEvent | None: ...
 
 class Summarizer(Protocol):
     """Produces summary text for a span of messages. [CONTRACT at the LLM
     boundary] — implemented by the LLM router using a CHEAP model, separate
-    from the agent model (BoD §7.3, §15)."""
-    def summarize(self, messages: list[LLMMessage]) -> str: ...
+    from the agent model (BoD §7.3, §15). ASYNC: the implementation routes an
+    async completion (router contract §9.1); the loop and the Condenser await it."""
+    async def summarize(self, messages: list[LLMMessage]) -> str: ...
 ```
+
+> **v1.1 async-seam note (post-Phase-1-audit).** `condense()` and `summarize()` are **async**; `should_condense()` remains **sync**. Earlier drafts typed all three sync, which the Phase 1 audit correctly flagged: the only conforming `Summarizer` (`RouterSummarizer`) must make an async router call, and it is invoked from inside the loop's running asyncio loop, where a sync call cannot drive async work without blocking/deadlocking. The agent-loop contract's `_materialize_view` (§8 there) `await`s `condense()` accordingly. No other semantics change — the View, tombstone, and condensation *behavior* are identical; only the call shape is corrected.
 
 **Default `LLMSummarizingCondenser` [INTERIOR] — behavior specified, implementation free:**
 - Config: `max_size=240` (event count), `max_tokens: int | None`, `keep_first=2`, `minimum_progress=0.1`, `hard_reset_max_retries=5`, `hard_reset_context_scaling=0.8`.
@@ -498,6 +536,9 @@ class EventStore(Protocol):
     async def get_state(self, conversation_id: str) -> ConversationState: ...
     async def subscribe(self, conversation_id: str,
                         after_seq: int | None = None) -> AsyncIterator[Event]: ...
+    # [CONTRACT] usage idiom: `async for ev in await store.subscribe(cid, after_seq=k):`
+    # i.e. subscribe() is awaited to obtain the async iterator, then async-iterated.
+    # On connect it first drains history after `after_seq`, then yields live events.
     async def conversation_exists(self, conversation_id: str) -> bool: ...
     async def list_conversations(self, *, owner_id: str,
                                  limit: int = 50, cursor: str | None = None) -> list[str]: ...
@@ -588,8 +629,10 @@ class WSClientFrame(BaseModel):
     # steer: redirect a running agent without losing context (BoD §13.4).
     # Becomes a MessageEvent(source=user) injected at the next loop checkpoint.
     steer_text: str | None = None
-    last_seq: int | None = None       # sent on (re)connect to request replay
+    last_seq: int | None = None       # see §7.3a for how this reaches the server on connect
 ```
+
+**§7.3a — connect-time `last_seq` delivery [CONTRACT].** The server needs `last_seq` *before* the client can send a WS frame (it must emit the initial `state` frame and replay missed events immediately on connect). Therefore the connect-time value is passed as a **query parameter** on the WebSocket URL: `…/ws/conversations/{id}?last_seq={k}` (omit, or `?last_seq=0`/none, for a fresh connect = full replay from the start). The `last_seq` field on `WSClientFrame` is retained for an explicit mid-session resync request, but the connect path uses the query parameter. [INTERIOR] a client may instead send a first `{type:"resync", last_seq:k}` frame, but the server MUST support the query-parameter form as the canonical connect mechanism.
 
 **[CONTRACT] mapping to the loop (the agent-loop subsystem consumes this):**
 - `send_message` / `steer` → append `MessageEvent(source=USER)`; if the loop is mid-run, it is picked up at the next iteration's checkpoint (the "don't drop concurrent messages" guarantee, BoD §12.3). `steer` and `send_message` differ only in UI intent; both are user messages to the log.

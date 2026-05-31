@@ -131,7 +131,7 @@ class AgentLoop:
         view = View.of(events)
         req = self.condenser.should_condense(view, token_count=self._estimate_tokens(view))
         if req is not None:
-            tombstone = self.condenser.condense(events, view, summarizer=self.summarizer)
+            tombstone = await self.condenser.condense(events, view, summarizer=self.summarizer)
             if tombstone is not None:
                 await self._emit(tombstone)
                 view = View.of(await self._events())
@@ -142,7 +142,9 @@ class AgentLoop:
     async def _hard_reset(self, events: list[Event]) -> bool:
         """Forget-and-summarize after a context-window error (§8). Returns True
         if a tombstone was appended (progress made)."""
-        tombstone = self.condenser.condense(events, View.of(events), summarizer=self.summarizer)
+        tombstone = await self.condenser.condense(
+            events, View.of(events), summarizer=self.summarizer
+        )
         if tombstone is not None:
             await self._emit(tombstone)
             return True
