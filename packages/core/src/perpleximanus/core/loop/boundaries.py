@@ -1,0 +1,91 @@
+"""The loop's collaborator boundaries — agent-loop-contract.md §3.
+
+The loop is the orchestrator; it invokes four collaborators across clean
+boundaries. Three (`SecurityAnalyzer`, `ConfirmationPolicy`, `ToolExecutor`) are
+*defined elsewhere* — the Security design and the Tool/Sandbox contract — and
+appear here only as the Protocols the loop binds to. `Agent` is the brain that
+wraps the LLM router (concrete impl in agent.py). `StopHook` is the completion
+gate (§7.4).
+
+Field names/types/signatures are normative; the loop neither knows nor cares
+about the interiors behind these seams.
+"""
+
+from __future__ import annotations
+
+from typing import Protocol, runtime_checkable
+
+from pydantic import BaseModel, ConfigDict
+
+from ..events import ActionEvent, Event, SecurityRisk, ToolCall, ToolResult
+from ..llm import OperatingMode, OverflowSignal, ToolSpec
+from ..state import ConversationState
+from ..view import View
+
+
+class AgentStep(BaseModel):
+    """The product of one `Agent.step()`. The loop converts this into events.
+
+    [CONTRACT] Exactly ONE proposed action (or a finish/no-op). The loop enforces
+    one-action-per-iteration; the Agent must not return multiple tool calls to be
+    run without observation (the single `tool_call` field makes that structural).
+    """
+
+    model_config = ConfigDict(frozen=True)
+    thought: str = ""
+    tool_call: ToolCall | None = None  # None => no action this step
+    self_assessed_risk: SecurityRisk = SecurityRisk.UNKNOWN
+    finished: bool = False  # agent declares the goal complete
+    llm_response_id: str | None = None  # carried into ActionEvent
+
+
+@runtime_checkable
+class Agent(Protocol):
+    """[CONTRACT] The 'brain': given the current View (model-facing messages) and
+    the available tools, produce the next step — text and/or one tool call, with
+    a self-assessed risk. Wraps the LLMRouter; does NOT execute tools."""
+
+    async def step(
+        self,
+        view: View,
+        tools: list[ToolSpec],
+        *,
+        mode: OperatingMode,
+        overflow_signal: OverflowSignal,
+    ) -> AgentStep: ...
+
+
+@runtime_checkable
+class ToolExecutor(Protocol):
+    """[CONTRACT BOUNDARY — defined in the Tool/Sandbox contract, next doc]
+    Executes one ToolCall (often in the sandbox) and returns a ToolResult. The
+    loop neither knows nor cares whether execution is local or sandboxed."""
+
+    async def execute(self, call: ToolCall) -> ToolResult: ...
+
+    def available_tools(self) -> list[ToolSpec]: ...  # what the model may call
+
+
+@runtime_checkable
+class SecurityAnalyzer(Protocol):
+    """[CONTRACT BOUNDARY — defined in the Security design, BoD §17] Scores a
+    proposed action's risk BEFORE execution. May override the agent's
+    self-assessment."""
+
+    def assess(self, action: ActionEvent) -> SecurityRisk: ...
+
+
+@runtime_checkable
+class ConfirmationPolicy(Protocol):
+    """[CONTRACT BOUNDARY — Security design] Decides whether a given risk requires
+    human confirmation."""
+
+    def should_confirm(self, risk: SecurityRisk) -> bool: ...
+
+
+@runtime_checkable
+class StopHook(Protocol):
+    """[CONTRACT] Consulted when the agent declares finished. Returning False
+    VETOES completion and the loop continues (with injected feedback)."""
+
+    async def allow_stop(self, state: ConversationState, events: list[Event]) -> bool: ...

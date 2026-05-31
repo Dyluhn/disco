@@ -54,6 +54,26 @@ the operator's real model ids/keys, all `[VERIFY]`); the whole router is proven
 headless against a faked provider, so adding an adapter is purely implementing
 `ModelProvider` + classifying that provider's context-window error.
 
+**Agent loop & orchestration** (`agent-loop-contract.md`) — the core control
+loop, and the first subsystem requiring *both* prior contracts. Headless and
+transport-agnostic: an explicit status state machine over one-action-per-
+iteration steps, with the event log as the only source of truth.
+
+| Module | Contract | What it is |
+|---|---|---|
+| `loop/boundaries.py` | §3 | `Agent`/`ToolExecutor`/`SecurityAnalyzer`/`ConfirmationPolicy`/`StopHook` protocols + `AgentStep` |
+| `loop/engine.py` | §2,§4,§5,§7,§8 | `AgentLoop`: state machine, FIFO lock, two-phase confirmation, condensation/hard-reset wiring, steering, control ops |
+| `loop/stuck.py` | §6 | `StuckDetector` (four patterns via `event_content_eq`) |
+| `loop/agent.py` | §3 | `RouterAgent` — the concrete `Agent` wrapping the router |
+| `loop/policies.py` | §5 | `NeverConfirm`/`AlwaysConfirm`/`ConfirmRisky` + provisional analyzers (pending the Security contract) |
+
+The §10.9 **acceptance gate** composes all three contracts end-to-end with
+fakes (loop + event-state + router), asserting the log replays to the same
+`ConversationState` and `request_id` flows into `ActionEvent.llm_response_id`.
+
+Deferred: the real `ToolExecutor` (the next contract — Tool/Sandbox), the real
+`SecurityAnalyzer` (Security design), and the critic stop-hook (BoD §24-D3).
+
 ## Layout
 
 ```
