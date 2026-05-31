@@ -1,0 +1,22 @@
+# The `agent-server` package — per-conversation runtime (BoD §5). In Phase 0 it
+# exposes the §7 wire layer (WebSocket event/state streaming + reconnect/replay)
+# and the §7.5 REST surface over the core EventStore. No agent loop yet.
+[project]
+name = "perpleximanus-agent-server"
+version = "0.1.0"
+description = "Per-conversation runtime: WebSocket + REST over the core event log."
+requires-python = ">=3.12"
+dependencies = [
+    "perpleximanus-core",
+    "fastapi>=0.110",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/perpleximanus"]
+
+[tool.uv.sources]
+perpleximanus-core = { workspace = true }

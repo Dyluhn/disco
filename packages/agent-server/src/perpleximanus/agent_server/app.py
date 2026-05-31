@@ -1,0 +1,162 @@
+"""The agent-server wire + REST surface — event-state-contract.md §7.
+
+A thin adapter over the core `EventStore`: no business logic in the request
+path (BoD §5.2/§7.6). Side effects, when they exist, are event-stream callbacks
+— Phase 0 has none, so the handlers only append events and read history. There
+is no agent loop here yet; control frames that drive a loop (confirm/reject/
+pause/resume/cancel) are accepted but have no loop to act on in Phase 0.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import uuid
+
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from perpleximanus.core import (
+    DEFAULT_OWNER_ID,
+    EventSource,
+    LLMMessage,
+    MessageEvent,
+    WSClientFrame,
+    WSServerFrame,
+)
+from perpleximanus.core.store.sqlite import SqliteEventStore
+from pydantic import BaseModel, ValidationError
+
+
+class CreateConversationBody(BaseModel):
+    owner_id: str = DEFAULT_OWNER_ID
+    space_id: str | None = None
+    title: str | None = None
+
+
+class SendMessageBody(BaseModel):
+    content: str
+
+
+def _user_message(content: str, *, steer: bool = False) -> MessageEvent:
+    return MessageEvent(
+        source=EventSource.USER,
+        message=LLMMessage(role="user", content=content),
+        meta={"steer": True} if steer else {},
+    )
+
+
+def create_app(store: SqliteEventStore) -> FastAPI:
+    """Build the FastAPI app over a given store. The store is injected so tests
+    drive it headlessly (no external services)."""
+    app = FastAPI(title="perpleximanus agent-server", version="0.1.0")
+
+    # ---- REST surface (§7.5) ------------------------------------------------
+
+    @app.post("/conversations")
+    async def create_conversation(body: CreateConversationBody) -> dict:
+        conversation_id = f"conv_{uuid.uuid4().hex}"
+        store.create_conversation(
+            conversation_id, owner_id=body.owner_id, space_id=body.space_id, title=body.title
+        )
+        return {
+            "conversation_id": conversation_id,
+            "conversation_url": f"/ws/conversations/{conversation_id}",
+        }
+
+    @app.post("/conversations/{conversation_id}/messages")
+    async def post_message(conversation_id: str, body: SendMessageBody) -> dict:
+        # Thin proxy: append a USER message. No business logic in the path.
+        stored = await store.append(conversation_id, _user_message(body.content))
+        return {"event_id": stored.id, "seq": stored.seq}
+
+    @app.get("/conversations/{conversation_id}/events")
+    async def get_events(
+        conversation_id: str,
+        after_seq: int | None = Query(default=None),
+        limit: int = Query(default=100),
+    ) -> dict:
+        page = await store.paginate(conversation_id, after_seq=after_seq, limit=limit)
+        return page.model_dump(mode="json")
+
+    @app.get("/conversations/{conversation_id}/state")
+    async def get_state(conversation_id: str) -> dict:
+        state = await store.get_state(conversation_id)
+        return state.model_dump(mode="json")
+
+    @app.get("/conversations")
+    async def list_conversations(
+        owner_id: str = Query(default=DEFAULT_OWNER_ID),
+        cursor: str | None = Query(default=None),
+        limit: int = Query(default=50),
+    ) -> dict:
+        ids = await store.list_conversations(owner_id=owner_id, limit=limit, cursor=cursor)
+        return {"conversation_ids": ids}
+
+    # ---- WebSocket (§7.1–7.4) -----------------------------------------------
+
+    @app.websocket("/ws/conversations/{conversation_id}")
+    async def conversation_ws(
+        websocket: WebSocket,
+        conversation_id: str,
+        last_seq: int = Query(default=0),
+    ) -> None:
+        await websocket.accept()
+
+        # (1) On connect: one state snapshot, then replay events after last_seq,
+        #     then live — all via the store's subscribe (history-then-live).
+        state = await store.get_state(conversation_id)
+        await websocket.send_json(WSServerFrame(type="state", state=state).model_dump(mode="json"))
+        stream = await store.subscribe(conversation_id, after_seq=last_seq)
+
+        async def pump_events() -> None:
+            async for event in stream:
+                await websocket.send_json(
+                    WSServerFrame(type="event", event=event).model_dump(mode="json")
+                )
+
+        sender = asyncio.create_task(pump_events())
+        try:
+            while True:
+                try:
+                    raw = await websocket.receive_json()
+                except WebSocketDisconnect:
+                    break
+                except Exception:  # noqa: BLE001 — non-JSON text frame
+                    await websocket.send_json(
+                        WSServerFrame(
+                            type="error", error={"detail": "malformed frame (not JSON)"}
+                        ).model_dump(mode="json")
+                    )
+                    continue
+                try:
+                    frame = WSClientFrame.model_validate(raw)
+                except ValidationError:
+                    await websocket.send_json(
+                        WSServerFrame(
+                            type="error", error={"detail": "invalid client frame"}
+                        ).model_dump(mode="json")
+                    )
+                    continue
+                await _handle_frame(store, websocket, conversation_id, frame)
+        finally:
+            sender.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await sender
+
+    return app
+
+
+async def _handle_frame(
+    store: SqliteEventStore,
+    websocket: WebSocket,
+    conversation_id: str,
+    frame: WSClientFrame,
+) -> None:
+    """Map a client frame to the event log. Appended messages are echoed back to
+    every subscriber (incl. this socket) as `event` frames — the log is truth."""
+    if frame.type == "ping":
+        await websocket.send_json(WSServerFrame(type="pong").model_dump(mode="json"))
+    elif frame.type == "send_message" and frame.content is not None:
+        await store.append(conversation_id, _user_message(frame.content))
+    elif frame.type == "steer" and frame.steer_text is not None:
+        await store.append(conversation_id, _user_message(frame.steer_text, steer=True))
+    # confirm/reject/pause/resume/cancel: no loop in Phase 0 — accepted, no-op.

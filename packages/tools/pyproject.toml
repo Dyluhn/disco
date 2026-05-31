@@ -1,0 +1,18 @@
+# The `tools` package — the action space (BoD §5). Empty placeholder in Phase 0;
+# the Tool/Sandbox contract fills it in a later phase.
+[project]
+name = "perpleximanus-tools"
+version = "0.1.0"
+description = "Tool/action space for the perpleximanus platform (placeholder)."
+requires-python = ">=3.12"
+dependencies = ["perpleximanus-core"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/perpleximanus"]
+
+[tool.uv.sources]
+perpleximanus-core = { workspace = true }

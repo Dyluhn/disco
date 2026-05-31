@@ -41,6 +41,7 @@ from .view import (
     Summarizer,
     View,
 )
+from .wire import WSClientFrame, WSServerFrame
 
 __all__ = [
     "SCHEMA_VERSION",
@@ -74,6 +75,8 @@ __all__ = [
     "ToolCall",
     "ToolResult",
     "View",
+    "WSClientFrame",
+    "WSServerFrame",
     "event_content_eq",
     "event_from_json_dict",
     "event_to_json_dict",

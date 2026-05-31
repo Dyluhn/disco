@@ -27,8 +27,15 @@ Implemented (event-state-contract §10, steps 1–6):
 | `equality.py` | §6.3 | `event_content_eq` — semantic equality ignoring volatile fields |
 | `store/` | §6 | `EventStore` protocol + dependency-free `SqliteEventStore` |
 
-Deferred to the server package / later phases: the WebSocket + REST wire layer
-(§7, contract steps 7–8), the real `LLMSummarizingCondenser` (Phase 1), the
+The **wire layer** (event-state-contract §7, checklist items 7–8) lives in the
+`agent-server` package: a FastAPI WebSocket endpoint (`state` + `event` frames,
+reconnect/replay via `last_seq`, the pending-message path) and the §7.5 REST
+surface (create / send / history / state / list), both thin adapters over the
+core `EventStore` — `core` itself stays server-free. `WSServerFrame`/
+`WSClientFrame` are core data types (`core/wire.py`). This completes the Phase 0
+"walking skeleton" for the event/state spine.
+
+Deferred to later phases: the real `LLMSummarizingCondenser` (Phase 1), the
 agent loop, tools, retrieval, and UI (BoD §22).
 
 **LLM Router boundary** (`llm-router-contract.md`) — the Phase-1 subsystem the
@@ -81,10 +88,13 @@ Deferred: the real `ToolExecutor` (the next contract — Tool/Sandbox), the real
 ├── basis-of-design.md          # cornerstone design document
 ├── event-state-contract.md     # the spine's binding contract
 ├── pyproject.toml              # uv workspace root (virtual; dev toolchain)
-└── packages/
-    └── core/                   # "the brain": no server, no UI, importable
-        ├── src/perpleximanus/core/
-        └── tests/              # the contract's §8 correctness suite
+└── packages/                   # uv workspace (BoD §5, four-layer topology)
+    ├── core/                   # "the brain": no server, no UI, importable
+    │   ├── src/perpleximanus/core/
+    │   └── tests/              # the contract's §8 correctness suite
+    ├── agent-server/           # per-conversation runtime: WebSocket + REST (§7)
+    ├── tools/                  # the action space (placeholder until Tool/Sandbox)
+    └── app-server/             # user-facing orchestrator (placeholder)
 ```
 
 `perpleximanus` is a PEP 420 namespace package, so future workspace members
