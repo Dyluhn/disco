@@ -78,8 +78,35 @@ The §10.9 **acceptance gate** composes all three contracts end-to-end with
 fakes (loop + event-state + router), asserting the log replays to the same
 `ConversationState` and `request_id` flows into `ActionEvent.llm_response_id`.
 
-Deferred: the real `ToolExecutor` (the next contract — Tool/Sandbox), the real
-`SecurityAnalyzer` (Security design), and the critic stop-hook (BoD §24-D3).
+Deferred: the real `SecurityAnalyzer` (Security design) and the critic stop-hook
+(BoD §24-D3). The `ToolExecutor` is now fulfilled (below).
+
+**Tool System & Sandbox** (`tool-sandbox-contract.md`) — the `tools` package;
+**fulfills the loop's `ToolExecutor` boundary** (the last unfulfilled dependency
+of the core). Headless-testable against the `process` backend.
+
+| Module | Contract | What it is |
+|---|---|---|
+| `tools/anatomy.py` | §2/§3 | `ToolDef` (single-source schema), `Tool`, `ToolOutcome`, `ToolContext`, `Capability` |
+| `tools/executor.py` | §4 | `DefaultToolExecutor`: validate→repair, always-returns-`ToolResult`, scope boundary, timeout, kill switch |
+| `tools/sandbox/` | §5/§7 | `SandboxSpec`/`SandboxInstance`/`SandboxService` + the `process` backend (clean env, workspace jail) + deny-by-default egress policy |
+| `tools/secrets.py` | §6 | `SecretsStore`, `CapabilitySet`, `CapabilityBroker` — secrets stay orchestrator-side; tools get mediated capabilities, never credentials |
+| `tools/registry.py` | §8 | `ToolRegistry` + research/agent `ToolScope` presets |
+| `tools/builtin/` | §9 | file_read/write/edit, shell, code_exec, search/extract (capability-mediated) |
+
+The §11.7 **acceptance gate** drives the real executor + `process` sandbox from
+the loop: file_write→file_read round-trips, observations pair by `call_id`, and a
+search resolves via a fake capability with the provider key never in context.
+The headline security test asserts an injected secret is absent from the
+sandbox's env, filesystem, and process list.
+
+Deferred (need external infra / a contract patch): the `e2b`/Firecracker +
+`gvisor` backends (need `/dev/kvm`/E2B), the `browser` (Playwright + dual-LLM +
+noVNC) and `deploy_preview` tools, real network-egress enforcement under
+`process`, the file-encrypted `SecretsStore`, and the MCP catalogue. One contract
+ambiguity flagged: §2's `needs: frozenset[Requirement]` references NETWORK/
+FILESYSTEM, which aren't in the router's model-`Requirement` enum — resolved here
+with a distinct `Capability` enum; the contract should be patched to match.
 
 ## Layout
 
