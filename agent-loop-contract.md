@@ -2,8 +2,10 @@
 
 **Document type:** Detailed Technical Design (Contract Spec)
 **Subsystem:** Agent Loop & Orchestration — BoD §12 (the core)
-**Status:** v1.1 — authoritative contract (§8 awaits async condense after Phase 1 audit)
+**Status:** v1.2 — authoritative contract (reactive model-error surfacing in the driver step)
 
+> **v1.2 changelog (reactive error surfacing).** The run loop now catches a non-context-window `LLMError` from `Agent.step()` (the driver model's call failing — provider rejection, content filter, auth, transient exhausted, or a bad assignment) and emits a terminal `ErrorEvent(code="model_error", detail=…)` whose `detail` carries the provider's **real message** (+ typed class), transitioning to `ERROR`. Previously only `LLMContextWindowExceeded` was handled and other model errors escaped `run()` uncaught. This pairs with llm-router-contract v1.3 (reactive surfacing; no pre-call capability check). Amended: §2 (`RUNNING → ERROR`) and §8 (a sibling to the hard-trigger bullet). The provider's error is never swallowed or flattened.
+>
 > **v1.1 changelog.** §8 `_materialize_view` now `await`s `condenser.condense(...)` (event contract v1.2 made it async); `should_condense` remains a sync call. No other changes.
 **Depends on:**
 - Event & State contract (`event-state-contract.md`) — `Event` types, `ConversationState`/`reconstruct()`, `View.of()`, `event_content_eq()`, the `Condenser`/`Summarizer` protocols, `EventStore`, `ConversationStatus`, the wire frames.
@@ -66,7 +68,7 @@ States are the event contract's `ConversationStatus`: `IDLE, RUNNING, PAUSED, ST
 - `WAITING_FOR_CONFIRMATION → RUNNING`: on `confirm` (executes the pending action) or `reject` (records denial, does not execute).
 - `RUNNING → STUCK`: stuck detector fires (§6); loop stops. A subsequent user message (`send_message`/`steer`) flips to `IDLE` and re-enters `RUNNING` `[OH: don't-drop + reset-after-user-message]`.
 - `RUNNING → FINISHED`: the agent emits a finish signal **and** no stop-hook vetoes it (§7).
-- `RUNNING → ERROR`: `max_iterations` reached (an `ErrorEvent(code="max_iterations")`) or an unrecoverable error.
+- `RUNNING → ERROR`: `max_iterations` reached (`ErrorEvent(code="max_iterations")`), an unrecoverable hard-reset, or a **driver model-call error** — a non-context-window `LLMError` from `Agent.step()` surfaces as `ErrorEvent(code="model_error", detail=<provider's real message>)` (§8, v1.2 reactive surfacing).
 - `RUNNING ↔ PAUSED`: `pause`/`resume`; pause takes effect *between* steps (§4), never mid-action.
 - `FINISHED → IDLE`: a new user message reopens the conversation (the loop does **not** terminate the conversation on FINISHED — it idles).
 
@@ -341,6 +343,7 @@ async def _materialize_view(self) -> View:
 **[CONTRACT] behavior:**
 - **Soft trigger:** if the condenser returns a request but produces no tombstone this step (not structurally possible), proceed with the uncondensed View and retry next iteration (event contract §5.2). Non-fatal.
 - **Hard trigger (context-window-exceeded):** if `Agent.step()` raises `LLMContextWindowExceeded` (router contract §6 / `is_context_window_exceeded`), the loop issues a **hard** condensation request (forget-and-summarize-all-but-keep_first, with retries) before retrying the step. This is the loop's handling of the one stuck-pattern detection can't catch (§6 note). If the hard reset itself cannot make progress, emit a fatal `ErrorEvent` and go to `ERROR`.
+- **Any other driver model error (reactive surfacing, v1.2):** if `Agent.step()` raises a non-context-window `LLMError` (provider rejection/content-filter/auth/transient-exhausted, or a bad assignment — router contract §6/§4.1), the loop emits a terminal `ErrorEvent(code="model_error", detail=…)` and goes to `ERROR`. `detail` carries the provider's **real message** plus the typed class (e.g. `LLMContentFiltered [ollama / model-x]: <reason>`) — never swallowed, never flattened to a generic failure. The agent server streams the `ErrorEvent` to the UI, so the user sees the actual reason. This is conversation-fatal (the brain failed; there is no observation to feed back); a new user message reopens the conversation.
 - **Summarization model:** always the cheap `SUMMARIZER`-role model via the router (router contract §9.1) — never the agent model (BoD §7.3).
 - **Cadence:** the condenser condenses regularly in moderate amounts (prompt-cache-aware); the loop simply asks every iteration and the condenser's `should_condense` enforces the policy.
 

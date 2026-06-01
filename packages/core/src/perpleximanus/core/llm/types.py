@@ -131,10 +131,13 @@ class RoutingDecision(BaseModel):
     profile: CapabilityProfile
     chosen_model: str  # concrete id [VERIFY-valued]
     provider: str  # "ollama"|"llamacpp"|"openrouter"
-    path: Literal["local", "overflow"]
-    reason: str  # human-readable: why this route
-    overflow_triggers: list[str] = Field(default_factory=list)  # which rules fired
-    attempt: int = 1  # >1 if this was a retry/escalation
+    # v1.2: deterministic routing uses "pinned" (settings assignment) / "manual"
+    # (per-conversation model-pill override). "local"/"overflow" are retained for
+    # the DORMANT intelligent-routing revival path (see config.py / policy.py).
+    path: Literal["local", "overflow", "pinned", "manual"]
+    reason: str  # human-readable: why this route (e.g. "config")
+    overflow_triggers: list[str] = Field(default_factory=list)  # DORMANT: rules fired
+    attempt: int = 1  # >1 if this was a transient same-model retry
 
 
 class CompletionResponse(BaseModel):

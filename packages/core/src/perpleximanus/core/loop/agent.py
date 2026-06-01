@@ -7,8 +7,16 @@ consulted for action selection. It returns exactly one AgentStep (one-action-
 per-iteration). It does NOT execute tools.
 
 Typed against `DefaultLLMRouter` (not the bare `LLMRouter` protocol) because it
-uses that router's `CallContext` extension to thread the loop's overflow
-signals (router contract §5).
+uses that router's `CallContext` extension to thread the conversation id, the
+(now-advisory) runtime signals, and the per-conversation `model_override` — the
+backend hook for the main-screen model pill (router contract §4, v1.2).
+
+v1.2 note: under the deterministic router these `overflow_signal` fields
+(difficulty, tool-error streak, confidence) no longer steer model selection; they
+are carried as advisory metadata only. The seam is unchanged — the agent still
+asks for the AGENT_DRIVER role and gets back the assigned model — so the loop did
+NOT need to change. The one addition is `model_override`, which lets the operator
+pin the driver model for THIS conversation from the UI.
 
 v1 finish convention [INTERIOR]: if the model returns no tool call, the agent is
 treated as finished (it stopped acting). A dedicated `finish` tool is the likely
@@ -48,10 +56,15 @@ class RouterAgent:
         *,
         conversation_id: str | None = None,
         requirements: frozenset[Requirement] = frozenset({Requirement.TOOL_CALLING}),
+        model_override: str | None = None,
     ) -> None:
         self._router = router
         self._cid = conversation_id
         self._requirements = requirements
+        # v1.2 model-pill hook: the driver model key chosen for THIS conversation,
+        # overriding the settings assignment. None → follow settings. Set by the
+        # app/agent server from the per-conversation pill selection.
+        self._model_override = model_override
 
     async def step(
         self,
@@ -76,6 +89,7 @@ class RouterAgent:
             conversation_id=self._cid,
             consecutive_tool_errors=overflow_signal.consecutive_tool_errors,
             last_local_confidence=overflow_signal.last_local_confidence,
+            model_override=self._model_override,
         )
         resp = await self._router.complete(req, context=ctx)
 

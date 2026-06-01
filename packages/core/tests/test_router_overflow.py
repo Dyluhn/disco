@@ -1,12 +1,24 @@
 """Overflow policy tests — llm-router-contract.md §10.2.
 
-Table-driven over the five default rules (§5.1), local-only roles, stuck
-recovery through the router, cost caps (§5.2), and escalation (§5.3).
+DORMANT (v1.2 router lobotomy). Table-driven over the five default rules (§5.1),
+local-only roles, stuck recovery through the router, cost caps (§5.2), and
+escalation (§5.3) — ALL of which the deterministic router no longer does. The
+policy and escalation paths are commented out in policy.py / routing.py / config.py;
+these tests are kept (skipped) as the revival harness. Un-skip them, restore the
+dormant code, and they should pass again. See llm-router-contract.md v1.2 appendix.
 """
 
 from __future__ import annotations
 
+# ruff: noqa: E402  (module-level skip must precede the now-dormant imports)
 import pytest
+
+pytest.skip(
+    "DORMANT (v1.2): overflow policy + escalation + cost-driven routing are "
+    "commented out; revive alongside the policy. See contract v1.2 appendix.",
+    allow_module_level=True,
+)
+
 from llm_fakes import FakeModelProvider, build_router, simple_config
 from perpleximanus.core import LLMMessage
 from perpleximanus.core.llm import (

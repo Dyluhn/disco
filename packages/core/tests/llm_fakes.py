@@ -16,7 +16,6 @@ from perpleximanus.core.llm import (
     ModelRole,
     ProposedToolCall,
     Requirement,
-    RoleRouting,
     RouterConfig,
     StreamChunk,
     TokenUsage,
@@ -98,8 +97,10 @@ class FakeModelProvider:
 
 
 def simple_config() -> RouterConfig:
-    """A small two-model config: a local driver (no vision) + a frontier overflow
-    (vision). AGENT_DRIVER is overflow-eligible; RAG/SUMMARIZER are local-only."""
+    """A small two-model config (v1.2 deterministic): a local driver (no vision,
+    free) + an assignable frontier model (vision, paid). `default_model` is the
+    local driver, so AGENT_DRIVER/RAG/SUMMARIZER all resolve to "local"; "frontier"
+    sits in the catalogue as an assignable target for override/cost tests."""
     models = {
         "local": ModelEntry(
             model_id="local-driver-q4",
@@ -120,16 +121,11 @@ def simple_config() -> RouterConfig:
             price_out_per_m=15.0,
         ),
     }
-    roles = {
-        ModelRole.AGENT_DRIVER: RoleRouting(
-            primary="local", overflow="frontier", overflow_eligible=True
-        ),
-        ModelRole.RAG_ANSWERER: RoleRouting(
-            primary="local", overflow="frontier", overflow_eligible=False
-        ),
-        ModelRole.SUMMARIZER: RoleRouting(primary="local", overflow_eligible=False),
+    assignments = {
+        ModelRole.RAG_ANSWERER: "local",
+        ModelRole.SUMMARIZER: "local",
     }
-    return RouterConfig(models=models, roles=roles)
+    return RouterConfig(models=models, default_model="local", assignments=assignments)
 
 
 def build_router(

@@ -1,10 +1,12 @@
 """perpleximanus.core.llm — the LLM Router boundary (llm-router-contract.md).
 
-Capability-based, provider-neutral access to language models: callers declare a
-CapabilityProfile (role + difficulty + requirements), never a model name; the
-router maps that to a concrete model via config, applies the local/overflow
-policy and cost governance, injects the per-family/per-mode prompt, and returns
-a provider-neutral CompletionResponse with a RoutingDecision attached.
+Provider-neutral access to language models: callers declare a CapabilityProfile
+(role + difficulty + requirements), never a model name; the router maps the ROLE
+to a concrete model by DETERMINISTIC config assignment (v1.2 — settings
+assignment / per-conversation model pill), injects the per-family/per-mode
+prompt, and returns a provider-neutral CompletionResponse with a RoutingDecision
+attached. The intelligent overflow policy is dormant (see policy.py); only
+`OverflowSignal` stays live as advisory metadata.
 
 Also delivers the two functions the event/state contract was waiting on:
 `is_context_window_exceeded` (errors) and the `Summarizer` (RouterSummarizer).
@@ -24,7 +26,10 @@ from .errors import (
     is_context_window_exceeded,
 )
 from .nli import Entailment, NLIVerifier, StubNLIVerifier
-from .policy import OverflowPolicy, OverflowSignal, ThresholdOverflowPolicy
+
+# v1.2: OverflowPolicy / ThresholdOverflowPolicy are DORMANT (policy.py). Only
+# OverflowSignal stays live (advisory metadata carried by the loop).
+from .policy import OverflowSignal
 from .prompts import (
     PromptProvider,
     StaticPromptProvider,
@@ -81,7 +86,6 @@ __all__ = [
     "NoEligibleModel",
     "NullRoutingSink",
     "OperatingMode",
-    "OverflowPolicy",
     "OverflowSignal",
     "PromptProvider",
     "ProposedToolCall",
@@ -94,7 +98,6 @@ __all__ = [
     "StaticPromptProvider",
     "StreamChunk",
     "StubNLIVerifier",
-    "ThresholdOverflowPolicy",
     "TokenUsage",
     "ToolSpec",
     "default_config",

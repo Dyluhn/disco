@@ -29,7 +29,14 @@ from ..events import (
     ObservationEvent,
     StatusEvent,
 )
-from ..llm import Difficulty, LLMContextWindowExceeded, LLMRouter, OperatingMode, OverflowSignal
+from ..llm import (
+    Difficulty,
+    LLMContextWindowExceeded,
+    LLMError,
+    LLMRouter,
+    OperatingMode,
+    OverflowSignal,
+)
 from ..state import ConversationState
 from ..store.base import EventStore
 from ..view import Condenser, Summarizer, View
@@ -37,6 +44,20 @@ from .boundaries import Agent, ConfirmationPolicy, SecurityAnalyzer, StopHook, T
 from .stuck import StuckDetector, StuckThresholds
 
 _DEFAULT_VETO_FEEDBACK = "The goal does not appear complete yet. Continue working toward it."
+
+
+def _describe_llm_error(e: LLMError) -> str:
+    """Render a model/provider error for the user WITHOUT flattening its reason.
+
+    Reactive error surfacing: when the assigned model rejects the input or the
+    provider fails, the user must see the ACTUAL provider message — not a generic
+    "model call failed". We keep the typed classification (the exception class the
+    adapter mapped to) AND the real reason (its message), plus provider/model
+    context when the typed error carries it."""
+    reason = str(e) or "(provider returned no message)"
+    loc = " / ".join(p for p in (getattr(e, "provider", ""), getattr(e, "model", "")) if p)
+    head = f"{type(e).__name__} [{loc}]" if loc else type(e).__name__
+    return f"{head}: {reason}"
 
 # Statuses at which the loop yields control back to the caller at a checkpoint.
 _TERMINAL_FOR_NOW = frozenset(
@@ -249,6 +270,17 @@ class AgentLoop:
                     await self._emit(
                         ErrorEvent(code="context_window", detail="hard reset made no progress")
                     )
+                    return await self.get_state()
+                except LLMError as e:
+                    # REACTIVE error surfacing: the driver model's call failed (the
+                    # provider rejected the input, refused, auth/transient exhausted,
+                    # or the assignment was bad). Do NOT swallow it or flatten it into
+                    # a generic failure — surface the provider's real content to the
+                    # UI via ErrorEvent.detail (the agent server streams every event
+                    # to the client). This is conversation-fatal: the brain itself
+                    # failed, so there is no observation to feed back. The typed
+                    # classification (the exception class) is preserved in the detail.
+                    await self._emit(ErrorEvent(code="model_error", detail=_describe_llm_error(e)))
                     return await self.get_state()
 
                 # (f) finish path — subject to stop-hook veto (§7.4)
