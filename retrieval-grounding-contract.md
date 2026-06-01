@@ -2,7 +2,10 @@
 
 **Document type:** Detailed Technical Design (Contract Spec)
 **Subsystem:** Retrieval Engine + Citation/Grounding — BoD §9 (retrieval) + §14 (grounding)
-**Status:** v1.0 — authoritative contract
+**Status:** v1.1 — authoritative contract (clarifications after Phase 2 build)
+
+> **v1.1 changelog (post-Phase-2-build).** Five clarifications surfaced by the build, no behavioral change: (1) **packaging** — retrieval is its **own package** (`packages/retrieval`), not under `core`; (2) **tool granularity** — the `search` tool performs *discovery only* (returns `SearchHit`s) and `extract` performs *extraction only*; the full retrieve→rerank→ground pipeline is the **`research_answer` composition** (§6), not a single tool call; (3) **NLI verdict mapping** is pinned: `entail`→supported, `contradict`→unsupported, `neutral`→**weak** (the prior prose conflated "unentailed" with "contradicted"); (4) **claim-extraction format** — the shipped parser reads inline `text [id1, id2].` claims; the two-stage "emit a JSON Claim list first" remains `[INTERIOR]`, not required; (5) **self-correction** ships **drop-unsupported**; "regenerate-from-supported" remains `[INTERIOR]`, not required.
+
 **Depends on:**
 - Event & State contract (v1.2) — `ToolResult` (search/extract observations flow through it), the event log (indexing runs as a §7.6 callback).
 - LLM Router contract (v1.1) — `NLIVerifier` (the citation-entailment cross-encoder, defined there, *implemented* here), `CapabilityProfile`/`ModelRole` (`RAG_ANSWERER`, `QUERY_REWRITER` route here), `LLMRouter`.
@@ -19,6 +22,8 @@
 **Is not:** the tool *registration*/scoping (tool contract owns that — this owns what the tools *do*), the LLM router (this consumes it for the RAG-answerer and query-rewriter roles), or the answer-rendering UI (BoD §13.3 — this produces the provenance the UI renders). Interior choices below the contract line (which embedding model build, exact reranker checkpoint, HTTP client) are the builder's, subject to the `[VERIFY]` notes.
 
 **Conventions** (identical to prior contracts): illustrative Python 3.12 + Pydantic v2; field names/types/signatures **normative**, bodies illustrative. **[CONTRACT]** = relied-upon guarantee; **[INTERIOR]** = builder's free choice; **[VERIFY]** = confirm at build (model/checkpoint names, provider availability, versions).
+
+**Packaging note (v1.1).** Retrieval is its **own package** (`packages/retrieval`, importable as `perpleximanus.retrieval`), depending only on `core` — **not** under `core`. The `search`/`extract` *tools* live in `tools` (`perpleximanus.tools.builtin`); the capability *handlers* that back those tools onto this engine live in `perpleximanus.retrieval.wiring` (registered with the tool contract's `CapabilityBroker`), so retrieval stays a `core`-only-dependent sibling and never imports `tools`.
 
 ---
 
@@ -230,9 +235,9 @@ class VerifiedClaim(BaseModel):
 
 **[CONTRACT] the pipeline** (BoD §14.1), in order:
 1. **Retrieve with provenance** (§3) → ranked `Passage`s.
-2. **Constrained generation.** The `RAG_ANSWERER` (router; a local **8–14B**) is given numbered passages and must end each factual claim with its `[passage_ids]`. Temperature low. Optionally emit a JSON `Claim` list first, then render prose from it (two-stage). Citations are **forced by the prompt/format**, but that is not the guarantee — verification is.
-3. **Verification.** Split the answer into atomic `Claim`s; for each, run **NLI entailment** (premise = cited passage(s); hypothesis = claim) via the `NLIVerifier`. Produce a `verdict` per claim.
-4. **Self-correction.** Drop or regenerate claims that fail entailment (regenerate from the supported subset). [INTERIOR] strictness knob: drop-unsupported vs. regenerate (BoD §14, tuned empirically).
+2. **Constrained generation.** The `RAG_ANSWERER` (router; a local **8–14B**) is given numbered passages and must end each factual claim with its `[passage_ids]`. Temperature low. Citations are **forced by the prompt/format**, but that is not the guarantee — verification is. (The two-stage "emit a JSON `Claim` list first, then render prose" is `[INTERIOR]`; the shipped default parses inline `text [ids].` claims from the generated prose.)
+3. **Verification.** Split the answer into atomic `Claim`s; for each, run **NLI entailment** (premise = cited passage(s); hypothesis = claim) via the `NLIVerifier`. Produce a `verdict` per claim with this pinned mapping (v1.1): `entail` → **supported**; `contradict` → **unsupported**; `neutral` (unentailed) → **weak**. Unentailed is distinct from contradicted: a claim the evidence neither supports nor refutes is `weak`, not `unsupported`.
+4. **Self-correction.** The **shipped default is drop-unsupported** (`strictness="drop"`): claims that fail entailment are dropped from the rendered answer (and still surfaced in `claims`, step 5). **Regenerate-from-supported** is the `[INTERIOR]` alternative, not required (BoD §14, tuned empirically).
 5. **Surface honestly** (BoD §13.3): `unsupported`/`weak` claims and failed sources are marked in the `GroundedAnswer` for the UI — never hidden.
 
 ### 5.1 The NLIVerifier — implementing the router's interface [CONTRACT]
@@ -306,7 +311,7 @@ Headless. Providers (SearXNG/Firecrawl/APIs), the reranker, the embedder, and th
 
 ### 8.4 Grounding & NLI (the faithfulness tests)
 - **Constrained generation:** the fake `RAG_ANSWERER` output is split into atomic `Claim`s with their cited passage ids.
-- **NLI verdicts:** with a fake `NLIVerifier`, a claim entailed by its cited passage → `supported`; a claim contradicted/unentailed → `unsupported`; borderline → `weak`. Table-driven.
+- **NLI verdicts:** with a fake `NLIVerifier`, the pinned mapping (v1.1) holds — `entail` → `supported`; `contradict` → `unsupported`; `neutral` (unentailed) → `weak` (unentailed is distinct from contradicted). Table-driven.
 - **Self-correction:** unsupported claims are dropped/regenerated per the strictness knob; `unsupported_count` reflects what failed.
 - **Honest surfacing (§13.3):** `weak`/`unsupported` claims and failed sources appear in the `GroundedAnswer` (not hidden) — assert they're present and flagged.
 - **NLIVerifier is not the LLM path:** assert verification does **not** call the router's `complete()` (it uses the cross-encoder side-car, router §9.2).
@@ -318,7 +323,8 @@ Headless. Providers (SearXNG/Firecrawl/APIs), the reranker, the embedder, and th
 
 ## 9. What this contract hands to / expects from each subsystem
 
-- **Tool/Sandbox (tool contract):** the `search`/`extract` tools **back onto** this subsystem's `SearchProvider`/`ExtractionProvider` via `RetrievalEngine`; they reach key-bearing providers through the `CapabilitySet` (keys out of the sandbox). This contract owns what the tools *do*; the tool contract owns their registration/scoping.
+- **Tool/Sandbox (tool contract):** the `search`/`extract` tools **back onto** this subsystem's `SearchProvider`/`ExtractionProvider`; they reach key-bearing providers through the `CapabilitySet` (keys out of the sandbox). This contract owns what the tools *do*; the tool contract owns their registration/scoping.
+  - **[CONTRACT] tool granularity (v1.1):** the `search` tool performs **discovery only** (returns `SearchHit`s); the `extract` tool performs **extraction only** (returns `ExtractedDoc`s). The full retrieve→rerank→ground pipeline is the **`research_answer` composition** (§6), invoked by the Research-surface flow — **not** a single tool call. An agent on the Agent surface may call `search`/`extract` individually; the Research surface composes them via `research_answer`. (The `search` tool surfaces snippets for the agent's judgment, but per §1.4 a snippet is never cited as content — citations come only from extracted `Passage`s.)
 - **LLM Router (router contract):** this **implements** `NLIVerifier` (the cross-encoder), and **consumes** the `RAG_ANSWERER` and `QUERY_REWRITER` roles via `LLMRouter`. Frontier-judge eval uses `NLI_VERIFIER` overflow (router §9.2).
 - **Agent loop (loop contract):** the loop drives *when* to retrieve/answer (via the tools); `depth` and surface scope are set per surface; the loop is unaware of pipeline internals.
 - **UI (BoD §13.3):** renders `GroundedAnswer` — inline citations, the source panel (hover cards with the corroborating `Passage` span), All/Cited tabs (from `all_hits` vs cited `passages`), explicit failure states (§2.2), and re-scope controls (filter domains / drop weak sources / force re-synthesis — which re-invoke `retrieve` with adjusted `RetrievalRequest`).
