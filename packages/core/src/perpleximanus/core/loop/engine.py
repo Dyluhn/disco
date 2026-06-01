@@ -314,8 +314,23 @@ class AgentLoop:
                     llm_response_id=step.llm_response_id,
                 )
 
-                # (i) RISK GATE — assess, then maybe require confirmation (§5)
-                risk = self.analyzer.assess(action)
+                # (i) RISK GATE — assess, then maybe require confirmation (§5).
+                # Audit (security §7): when the analyzer exposes the detailed
+                # assessment, stamp it into the action's meta so the security
+                # posture (final risk, rationale, contributing analyzers, the
+                # self-assessment) is reconstructable from the log. Analyzers that
+                # implement only assess() are unaffected.
+                detailed = getattr(self.analyzer, "assess_detailed", None)
+                if callable(detailed):
+                    assessment = detailed(action)
+                    risk = assessment.risk
+                    audited_meta = {
+                        **action.meta,
+                        "risk_assessment": assessment.model_dump(mode="json"),
+                    }
+                    action = action.model_copy(update={"meta": audited_meta})
+                else:
+                    risk = self.analyzer.assess(action)
                 if self.policy.should_confirm(risk):
                     await self._emit(action)  # record the PROPOSED action
                     await self._emit(

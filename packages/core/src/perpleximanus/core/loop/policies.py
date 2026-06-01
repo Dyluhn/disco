@@ -15,20 +15,15 @@ this module ships concrete, minimal versions:
 from __future__ import annotations
 
 from ..events import ActionEvent, SecurityRisk
+from ..security import at_or_above  # the safe threshold comparator (security §2)
 
-# Ordered comparable risks; UNKNOWN is intentionally absent (non-comparable, §17).
-_RISK_RANK: dict[SecurityRisk, int] = {
-    SecurityRisk.LOW: 1,
-    SecurityRisk.MEDIUM: 2,
-    SecurityRisk.HIGH: 3,
-}
-
-
-# ---- confirmation policies (BoD §17.2) --------------------------------------
+# ---- confirmation policies (security-analyzer-contract.md §5) ---------------
 
 
 class NeverConfirm:
     """Never gate — the Research surface default (read-only scope, §8)."""
+
+    name = "never_confirm"
 
     def should_confirm(self, risk: SecurityRisk) -> bool:
         return False
@@ -37,13 +32,18 @@ class NeverConfirm:
 class AlwaysConfirm:
     """Gate every action (maximally cautious)."""
 
+    name = "always_confirm"
+
     def should_confirm(self, risk: SecurityRisk) -> bool:
         return True
 
 
 class ConfirmRisky:
-    """Gate when risk >= threshold, and (by default) on UNKNOWN — the Agent
-    surface default. Confirm-on-UNKNOWN is the safe default (BoD §17.2)."""
+    """Gate when risk is at/above a threshold, and (by default) on UNKNOWN — the
+    Agent surface default. Confirm-on-UNKNOWN is the safe default (§5 / principle
+    4); UNKNOWN is never ranked, it is handled explicitly."""
+
+    name = "confirm_risky"
 
     def __init__(
         self, threshold: SecurityRisk = SecurityRisk.HIGH, *, confirm_unknown: bool = True
@@ -54,7 +54,7 @@ class ConfirmRisky:
     def should_confirm(self, risk: SecurityRisk) -> bool:
         if risk == SecurityRisk.UNKNOWN:
             return self._confirm_unknown
-        return _RISK_RANK.get(risk, 0) >= _RISK_RANK.get(self._threshold, 99)
+        return at_or_above(risk, self._threshold)
 
 
 # ---- provisional analyzers (the Security contract will supersede these) ------
