@@ -1,0 +1,155 @@
+import * as Dialog from "@radix-ui/react-dialog";
+import { Check, ChevronDown, Cpu, Globe } from "lucide-react";
+import { useMemo, useState } from "react";
+import { cn } from "@/lib/cn";
+import { costLabel, costTag } from "@/lib/cost";
+import { findModel, useAssignments, useModels } from "@/hooks/useModels";
+import { isFree, type ModelInfo, type ModelProvider } from "@/types/models";
+import { CapabilityBadges } from "./CapabilityBadges";
+
+/**
+ * The model "leader" pill (Prompt 3C). Selects, by hand, the model that LEADS
+ * this conversation — overriding the Settings default for this conversation only.
+ * The picker is cost-legible (Free vs $/Mtok), grouped local vs. overflow, and the
+ * selection is ABSOLUTE (no automatic routing). `value === null` means "use the
+ * Settings default"; otherwise it pins a specific model for the conversation.
+ */
+interface Props {
+  value: string | null; // leader model id, or null → settings default
+  onChange: (id: string | null) => void;
+}
+
+const GROUP_LABEL: Record<ModelProvider, string> = {
+  local: "Local — free",
+  openrouter: "Overflow — paid",
+};
+
+export function ModelLeaderPill({ value, onChange }: Props) {
+  const [open, setOpen] = useState(false);
+  const { data: models } = useModels();
+  const { data: assignments } = useAssignments();
+
+  const defaultModel = findModel(models, assignments?.default_model ?? null);
+  const selected = findModel(models, value);
+  // What actually leads: the explicit pick, else the settings default.
+  const effective = selected ?? defaultModel;
+
+  const groups = useMemo(() => {
+    const by: Record<ModelProvider, ModelInfo[]> = { local: [], openrouter: [] };
+    for (const m of models ?? []) by[m.provider].push(m);
+    return by;
+  }, [models]);
+
+  const pick = (id: string | null) => {
+    onChange(id);
+    setOpen(false);
+  };
+
+  return (
+    <Dialog.Root open={open} onOpenChange={setOpen}>
+      <Dialog.Trigger asChild>
+        <button
+          type="button"
+          aria-label="Choose the model that leads this conversation"
+          className="flex max-w-[14rem] items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text"
+        >
+          {effective && isFree(effective) ? (
+            <Cpu className="size-3.5 shrink-0 text-text-faint" aria-hidden />
+          ) : (
+            <Globe className="size-3.5 shrink-0 text-accent" aria-hidden />
+          )}
+          <span className="truncate">{effective?.label ?? "Default model"}</span>
+          {effective && (
+            <span className="shrink-0 text-text-faint">· {costTag(effective)}</span>
+          )}
+          <ChevronDown className="size-3 shrink-0 text-text-faint" aria-hidden />
+        </button>
+      </Dialog.Trigger>
+
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/45" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[80vh] w-[min(34rem,92vw)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-card border border-hairline bg-bg pmx-rise">
+          <div className="flex items-start justify-between gap-inline border-b border-hairline px-body py-inline">
+            <div>
+              <Dialog.Title className="font-ui text-[0.95rem] font-semibold text-text">
+                Conversation lead model
+              </Dialog.Title>
+              <Dialog.Description className="font-ui text-[0.8rem] text-text-muted">
+                Pins the model that leads this conversation. Absolute — no automatic routing.
+              </Dialog.Description>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-body py-inline">
+            {/* Use-the-default option */}
+            <button
+              type="button"
+              onClick={() => pick(null)}
+              className={cn(
+                "flex w-full items-center justify-between gap-inline rounded-control border px-inline py-inline text-left transition-colors",
+                value === null
+                  ? "border-accent/50 bg-surface-1"
+                  : "border-transparent hover:bg-surface-1",
+              )}
+            >
+              <span className="font-ui text-[0.84rem] text-text">
+                Use Settings default
+                {defaultModel && (
+                  <span className="text-text-faint"> · {defaultModel.label}</span>
+                )}
+              </span>
+              {value === null && <Check className="size-4 shrink-0 text-accent" aria-hidden />}
+            </button>
+
+            {(["local", "openrouter"] as ModelProvider[]).map((prov) =>
+              groups[prov].length === 0 ? null : (
+                <div key={prov} className="mt-section">
+                  <div className="px-inline pb-hair font-ui text-[0.68rem] font-semibold uppercase tracking-wide text-text-faint">
+                    {GROUP_LABEL[prov]}
+                  </div>
+                  <ul className="flex flex-col gap-hair">
+                    {groups[prov].map((m) => {
+                      const active = value === m.id;
+                      return (
+                        <li key={m.id}>
+                          <button
+                            type="button"
+                            onClick={() => pick(m.id)}
+                            className={cn(
+                              "flex w-full flex-col gap-hair rounded-control border px-inline py-inline text-left transition-colors",
+                              active
+                                ? "border-accent/50 bg-surface-1"
+                                : "border-transparent hover:bg-surface-1",
+                            )}
+                          >
+                            <span className="flex items-center justify-between gap-inline">
+                              <span className="flex items-center gap-hair font-ui text-[0.84rem] text-text">
+                                {m.label}
+                                {active && (
+                                  <Check className="size-4 shrink-0 text-accent" aria-hidden />
+                                )}
+                              </span>
+                              <span
+                                className={cn(
+                                  "shrink-0 font-ui text-[0.74rem]",
+                                  isFree(m) ? "text-text-muted" : "text-accent",
+                                )}
+                              >
+                                {costLabel(m)}
+                              </span>
+                            </span>
+                            <CapabilityBadges capabilities={m.capabilities} />
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              ),
+            )}
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
