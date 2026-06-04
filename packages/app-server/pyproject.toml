@@ -1,11 +1,16 @@
-# The `app-server` package — the user-facing orchestrator (BoD §5.2). Empty
-# placeholder in Phase 0; manages many conversations, library, spaces, settings.
+# The `app-server` package — the user-facing orchestrator (BoD §5.2): the
+# settings (model-assignment matrix, skills, MCP) + library (conversation list/
+# delete) gateway the frontend calls.
 [project]
 name = "perpleximanus-app-server"
 version = "0.1.0"
-description = "User-facing orchestrator for the perpleximanus platform (placeholder)."
+description = "User-facing orchestrator: settings + library API over the core event store."
 requires-python = ">=3.12"
-dependencies = ["perpleximanus-core"]
+dependencies = [
+    "perpleximanus-core",
+    "fastapi>=0.110",
+    "uvicorn>=0.30",
+]
 
 [build-system]
 requires = ["hatchling"]

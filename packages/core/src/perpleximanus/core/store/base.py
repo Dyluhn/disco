@@ -37,6 +37,17 @@ class Page(BaseModel):
     next_cursor: int | None
 
 
+class ConversationSummary(BaseModel):
+    """A conversation's library-row metadata — what the History surface lists
+    (owner-scoped, §6.1). Distinct from the event log; read from the
+    conversations table, not reconstructed from events."""
+
+    conversation_id: str
+    owner_id: str
+    title: str | None = None
+    created_at: str  # ISO-8601
+
+
 @runtime_checkable
 class EventStore(Protocol):
     """[CONTRACT] The persistence boundary for events.

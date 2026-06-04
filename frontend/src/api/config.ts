@@ -1,29 +1,32 @@
 import { MCP_CONNECTIONS, SKILLS } from "@/fixtures/config";
 import type { McpConnection, Skill } from "@/types/config";
+import { apiGet, apiSend, fixtureDelay, isLive } from "./client";
 
 /**
- * Data-access for the (wiring-pending) skills + MCP surfaces. Components reach
- * these only through hooks. Session-scoped in-memory state (no browser storage);
- * swap for the live skills registry + MCP client when those subsystems land.
+ * Data-access for the skills + MCP surfaces (wiring-pending scaffolds). Components
+ * reach these only through hooks. Live (VITE_API_BASE set) → the app-server
+ * GET /api/skills, PUT /api/skills/{id}, GET /api/mcp; otherwise → the in-repo
+ * fixture (session-scoped, no browser storage). DTO shapes match the types.
  */
 
-const delay = () => new Promise((r) => setTimeout(r, 20));
-
-let skills: Skill[] = SKILLS.map((s) => ({ ...s }));
-const mcp: McpConnection[] = MCP_CONNECTIONS.map((c) => ({ ...c }));
+let fixtureSkills: Skill[] = SKILLS.map((s) => ({ ...s }));
+const fixtureMcp: McpConnection[] = MCP_CONNECTIONS.map((c) => ({ ...c }));
 
 export async function listSkills(): Promise<Skill[]> {
-  await delay();
-  return skills.map((s) => ({ ...s }));
+  if (isLive()) return apiGet<Skill[]>("/api/skills");
+  await fixtureDelay();
+  return fixtureSkills.map((s) => ({ ...s }));
 }
 
 export async function setSkillEnabled(id: string, enabled: boolean): Promise<Skill[]> {
-  await delay();
-  skills = skills.map((s) => (s.id === id ? { ...s, enabled } : s));
-  return skills.map((s) => ({ ...s }));
+  if (isLive()) return apiSend<Skill[]>("PUT", `/api/skills/${encodeURIComponent(id)}`, { enabled });
+  await fixtureDelay();
+  fixtureSkills = fixtureSkills.map((s) => (s.id === id ? { ...s, enabled } : s));
+  return fixtureSkills.map((s) => ({ ...s }));
 }
 
 export async function listMcpConnections(): Promise<McpConnection[]> {
-  await delay();
-  return mcp.map((c) => ({ ...c }));
+  if (isLive()) return apiGet<McpConnection[]>("/api/mcp");
+  await fixtureDelay();
+  return fixtureMcp.map((c) => ({ ...c }));
 }

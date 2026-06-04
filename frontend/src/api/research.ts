@@ -1,8 +1,13 @@
 /*
  * The DATA-ACCESS LAYER (BoD §13.8) — the ONE place that talks to "the API".
  * Components never import this; only query/mutation hooks do. Today it replays a
- * fixture as a frame stream shaped exactly like the event-state §7 WS frames;
- * swapping to a real WebSocket is a change confined to this file.
+ * fixture as a frame stream shaped like the grounded-answer contract.
+ *
+ * PLANNED (see ../../api-endpoints.md): research-answer streaming is the only
+ * surface that stays fixture-backed — it needs the Phase-1 agent loop + a model +
+ * retrieval/grounding to emit token→block→final frames. The other resources
+ * (models, assignments, skills, MCP, conversations) are wired live behind
+ * VITE_API_BASE via ./client; this one will follow when the loop lands.
  */
 import { rrfAnswer } from "@/fixtures/answers";
 import type { AnswerBlock, GroundedAnswer, ReScope, StreamFrame } from "@/types/grounded";

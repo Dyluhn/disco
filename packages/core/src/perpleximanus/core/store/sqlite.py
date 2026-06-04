@@ -25,7 +25,7 @@ from pathlib import Path
 from ..events import Event, EventAdapter, event_to_json_dict
 from ..migration import migrate_event
 from ..state import ConversationState
-from .base import EventFilter, Page
+from .base import ConversationSummary, EventFilter, Page
 
 # v1 single-user: every conversation carries an owner_id from day one (§6.1).
 # It is a constant until the auth module is enabled (BoD §4.1).
@@ -253,6 +253,45 @@ class SqliteEventStore:
             (owner_id, limit, offset),
         ).fetchall()
         return [r["conversation_id"] for r in rows]
+
+    async def list_conversation_summaries(
+        self, *, owner_id: str, limit: int = 50, cursor: str | None = None
+    ) -> list[ConversationSummary]:
+        """Owner-scoped library rows (id/title/created_at), newest first — what the
+        History surface lists (§6.1). Same ownership filter as `list_conversations`;
+        no cross-owner data, ever."""
+        offset = int(cursor) if cursor else 0
+        rows = self._conn.execute(
+            "SELECT conversation_id, owner_id, title, created_at FROM conversations "
+            "WHERE owner_id = ? ORDER BY created_at DESC, conversation_id DESC LIMIT ? OFFSET ?",
+            (owner_id, limit, offset),
+        ).fetchall()
+        return [
+            ConversationSummary(
+                conversation_id=r["conversation_id"],
+                owner_id=r["owner_id"],
+                title=r["title"],
+                created_at=r["created_at"],
+            )
+            for r in rows
+        ]
+
+    async def delete_conversation(self, conversation_id: str, *, owner_id: str) -> bool:
+        """Delete a conversation and all its events — OWNER-SCOPED (a caller can
+        only delete its own, §6.1). Returns True if a row was removed. Destructive
+        and irreversible; the gate is the UI confirm."""
+        async with self._write_lock:
+            cur = self._conn.execute(
+                "DELETE FROM conversations WHERE conversation_id = ? AND owner_id = ?",
+                (conversation_id, owner_id),
+            )
+            if cur.rowcount == 0:
+                return False  # not found OR not owned — no cross-owner deletes
+            self._conn.execute(
+                "DELETE FROM events WHERE conversation_id = ?", (conversation_id,)
+            )
+            self._conn.commit()
+        return True
 
     # ---- live subscription (§7 reconnect/replay path) ------------------------
 
