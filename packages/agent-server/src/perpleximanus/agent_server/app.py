@@ -187,6 +187,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         # drop-weak and domain-deny.
         model_override = body.get("model_override") or None
         drop_weak = bool(body.get("drop_weak"))
+        think = bool(body.get("think"))
         domains = body.get("domains_deny") or []
         domains_deny = frozenset(str(d).strip().lower() for d in domains if str(d).strip())
         try:
@@ -195,6 +196,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
                 model_override=str(model_override) if model_override else None,
                 drop_weak=drop_weak,
                 domains_deny=domains_deny,
+                think=think,
             ):
                 await websocket.send_json(frame)
         except WebSocketDisconnect:

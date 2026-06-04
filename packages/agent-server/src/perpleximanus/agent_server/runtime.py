@@ -97,11 +97,14 @@ class ConversationRuntime:
         self._loops: dict[str, AgentLoop] = {}
         self._tasks: dict[str, asyncio.Task] = {}
 
-    def _router_now(self, answerer_override: str | None = None) -> DefaultLLMRouter:
+    def _router_now(
+        self, answerer_override: str | None = None, *, enable_thinking: bool | None = None
+    ) -> DefaultLLMRouter:
         """The router for the CURRENT assignments. Cheap to rebuild (providers are
         plain objects; the HTTP client is created per call), so we reload the config
         each request rather than cache a stale router. `answerer_override` (the
-        research pill) reassigns RAG_ANSWERER for this request only."""
+        research pill) reassigns RAG_ANSWERER for this request only; `enable_thinking`
+        overrides the default reasoning mode for this request (the Think toggle)."""
         if self._injected_router is not None:
             return self._injected_router
         cfg = self._config_store.load()
@@ -122,7 +125,8 @@ class ConversationRuntime:
         or_key = self._secret_store.get_openrouter_key()
         if or_key:
             env[OPENROUTER_API_KEY_ENV] = or_key
-        providers = build_providers(cfg, env=env, enable_thinking=self._enable_thinking)
+        thinking = self._enable_thinking if enable_thinking is None else enable_thinking
+        providers = build_providers(cfg, env=env, enable_thinking=thinking)
         return DefaultLLMRouter(cfg, providers)
 
     def _loop_for(self, conversation_id: str) -> AgentLoop:
@@ -164,23 +168,27 @@ class ConversationRuntime:
         model_override: str | None = None,
         drop_weak: bool = False,
         domains_deny: frozenset[str] = frozenset(),
+        think: bool = False,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream a live grounded answer as the UI's research frames (state →
         token… → final). Composes the shared router with the live retrieval
         providers, honoring the re-scope controls: the pill picks the answerer
-        model, `domains_deny` filters discovery, `drop_weak` prunes the answer."""
+        model, `domains_deny` filters discovery, `drop_weak` prunes the answer, and
+        `think` runs the answerer in reasoning mode (it thinks, then the answer
+        streams; the reasoning is never emitted as answer tokens)."""
         from perpleximanus.retrieval.streaming import stream_research_answer
 
         deps = self._research()
         return stream_research_answer(
             query,
-            router=self._router_now(answerer_override=model_override),
+            router=self._router_now(answerer_override=model_override, enable_thinking=think),
             search=deps["search"],
             extraction=deps["extraction"],
             reranker=deps["reranker"],
             nli=deps["nli"],
             domains_deny=domains_deny,
             drop_weak=drop_weak,
+            think=think,
         )
 
     def kick(self, conversation_id: str) -> None:

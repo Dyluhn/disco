@@ -76,8 +76,8 @@ export interface ReScope {
   /** Per-conversation lead-model override (the main-screen pill → CallContext
    *  .model_override). null/undefined → use the Settings default. */
   model_override?: string | null;
-  /** Per-conversation reasoning-effort flag (the Think toggle). Passed to the
-   *  backend; full handling is deferred (depends on the chosen model). */
+  /** The Think toggle: run the answerer in reasoning mode (it thinks first, then
+   *  the answer streams). Honored by the live backend for reasoning models. */
   think?: boolean;
 }
 

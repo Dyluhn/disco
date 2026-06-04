@@ -272,13 +272,16 @@ async def stream_research_answer(
     nli: _NLILike,
     domains_deny: frozenset[str] = frozenset(),
     drop_weak: bool = False,
+    think: bool = False,
     discover_limit: int = 10,
     extract_cap: int = 6,
     top_k: int = 6,
 ) -> AsyncIterator[dict[str, Any]]:
     """Yield the frontend's research frames for a live, grounded answer. The
     re-scope controls apply here: `domains_deny` filters discovery; `drop_weak`
-    prunes the final answer to its supported claims."""
+    prunes the final answer to its supported claims; `think` raises the token
+    budget so a reasoning model has room to think AND still emit the answer (with
+    a small budget, reasoning eats it all and the content comes back empty)."""
     yield {"type": "state", "status": "running"}
     try:
         # 1. discovery (honoring the denied domains from re-scope)
@@ -321,7 +324,8 @@ async def stream_research_answer(
                 profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
                 messages=_answer_prompt(query, top),
                 temperature=0.0,
-                max_tokens=1200,
+                # reasoning needs headroom beyond the answer itself (see docstring)
+                max_tokens=4096 if think else 1200,
                 stream=True,
             )
         ):

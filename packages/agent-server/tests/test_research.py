@@ -13,9 +13,12 @@ from perpleximanus.agent_server import ConversationRuntime, create_app
 from perpleximanus.core import SqliteEventStore
 from perpleximanus.core.llm import (
     CompletionResponse,
+    ConfigStore,
     DefaultLLMRouter,
     ModelEntry,
     RouterConfig,
+    SecretBox,
+    SecretStore,
     StreamChunk,
     TokenUsage,
 )
@@ -166,6 +169,21 @@ def test_research_passes_domain_deny_to_search():
                 break
     # the re-scope's denied domains reached the search provider (normalized)
     assert search.last_domains_deny == frozenset({"reddit.com"})
+
+
+def test_think_toggles_reasoning_on_the_answerer_provider(tmp_path):
+    # The Think toggle threads through to the per-request provider build: the
+    # answerer's endpoint provider runs in reasoning mode (or not) accordingly.
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(
+        store,
+        config_store=ConfigStore(tmp_path / "config.json"),
+        secret_store=SecretStore(tmp_path / "secrets.json", box=SecretBox(None)),
+    )
+    on = rt._router_now(enable_thinking=True)._providers["qwen"]
+    off = rt._router_now(enable_thinking=False)._providers["qwen"]
+    assert on._enable_thinking is True
+    assert off._enable_thinking is False
 
 
 def test_research_rejects_empty_query():

@@ -116,7 +116,7 @@ function subscribeLive(
         drop_weak: scope.drop_weak ?? false,
         domains_deny: scope.domains_deny ?? [],
         model_override: scope.model_override ?? null, // the leader pill → answerer
-        think: scope.think ?? false, // forwarded; full handling deferred (model-dependent)
+        think: scope.think ?? false, // reasoning mode for the answerer (Think toggle)
       }),
     );
   };
