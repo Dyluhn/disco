@@ -49,6 +49,48 @@ def test_assignments_default_and_per_role(client):
     assert set(a["roles"]) == {"rag_answerer", "query_rewriter", "summarizer", "nli_verifier"}
 
 
+def test_model_crud_add_edit_remove(client):
+    new = {
+        "id": "my-llama",
+        "model_id": "llama-3.3-70b.gguf",
+        "base_url": "http://192.168.1.50:8080/v1",
+        "context_window": 32768,
+        "quantization": "Q4_K_M",
+        "capabilities": ["tool_calling", "long_context"],
+    }
+    # add
+    r = client.post("/api/models", json=new)
+    assert r.status_code == 201
+    by_id = {m["id"]: m for m in r.json()}
+    assert by_id["my-llama"]["model_id"] == "llama-3.3-70b.gguf"
+    assert by_id["my-llama"]["base_url"] == "http://192.168.1.50:8080/v1"
+    assert by_id["my-llama"]["provider"] == "local"  # free -> local view
+    assert set(by_id["my-llama"]["capabilities"]) == {"tool_calling", "long_context"}
+    # duplicate id is rejected
+    assert client.post("/api/models", json=new).status_code == 400
+    # the new model is assignable, and the assignment sticks
+    client.put("/api/models/assignments", json={"roles": {"rag_answerer": "my-llama"}})
+    assert client.get("/api/models/assignments").json()["roles"]["rag_answerer"] == "my-llama"
+    # edit
+    edited = {**new, "context_window": 8192}
+    r = client.put("/api/models/my-llama", json=edited)
+    assert r.status_code == 200
+    assert {m["id"]: m for m in r.json()}["my-llama"]["context_window"] == 8192
+    # cannot remove while assigned
+    assert client.delete("/api/models/my-llama").status_code == 400
+    # reassign away, then remove
+    client.put("/api/models/assignments", json={"roles": {"rag_answerer": "rag-local"}})
+    r = client.delete("/api/models/my-llama")
+    assert r.status_code == 200
+    assert "my-llama" not in {m["id"] for m in r.json()}
+
+
+def test_edit_and_delete_unknown_model_400(client):
+    body = {"id": "ghost", "model_id": "x"}
+    assert client.put("/api/models/ghost", json=body).status_code == 400
+    assert client.delete("/api/models/ghost").status_code == 400
+
+
 def test_assignment_update_is_absolute(client):
     body = {"roles": {"rag_answerer": "driver-overflow"}}
     resp = client.put("/api/models/assignments", json=body)

@@ -1,8 +1,9 @@
-"""ConfigStore — the persisted assignment overlay that makes Settings real.
+"""ConfigStore — the persisted config (catalogue + assignments) that makes Settings
+real: add/edit/remove a model and reassign a role, and the running system honors it.
 
-The catalogue stays code-defined; only the per-role assignment is persisted, and a
-missing/corrupt/stale overlay must fail SAFE to the base config (never crash the
-router). save() validates keys against the catalogue.
+`default_config()` seeds it; thereafter the file is authoritative. A missing/corrupt
+file falls back to the seed (never crashes the router); an older assignment-only
+overlay is still honored. CRUD validates keys and refuses to remove a model in use.
 """
 
 from __future__ import annotations
@@ -11,6 +12,17 @@ import json
 
 import pytest
 from perpleximanus.core.llm import ConfigStore, ModelRole, default_config
+from perpleximanus.core.llm.config import ModelEntry
+
+
+def _entry(**kw) -> ModelEntry:
+    base = {
+        "model_id": "x.gguf",
+        "provider": "x",
+        "context_window": 8192,
+        "base_url": "http://x/v1",
+    }
+    return ModelEntry(**{**base, **kw})
 
 
 def _store(tmp_path) -> ConfigStore:
@@ -26,17 +38,19 @@ def test_load_with_no_file_is_the_base_config(tmp_path):
 
 def test_save_then_load_round_trips_and_drives_model_for(tmp_path):
     store = _store(tmp_path)
-    # reassign RAG to a different EXISTING key
-    store.save_assignments("driver-local", {ModelRole.RAG_ANSWERER: "summarizer-local"})
+    base = default_config()
+    # save_assignments REPLACES the set (the app-server merges a patch first); pass
+    # the full set with RAG reassigned to a different existing key.
+    full = dict(base.assignments)
+    full[ModelRole.RAG_ANSWERER] = "summarizer-local"
+    store.save_assignments(base.default_model, full)
     cfg = store.load()
     assert cfg.model_for(ModelRole.RAG_ANSWERER) == "summarizer-local"
-    # untouched roles keep their base assignment
-    assert cfg.model_for(ModelRole.QUERY_REWRITER) == default_config().model_for(
-        ModelRole.QUERY_REWRITER
-    )
-    # the overlay file is real JSON on disk
+    assert cfg.model_for(ModelRole.QUERY_REWRITER) == base.model_for(ModelRole.QUERY_REWRITER)
+    # the full config is real JSON on disk
     written = json.loads((tmp_path / "config.json").read_text())
     assert written["assignments"]["rag_answerer"] == "summarizer-local"
+    assert "models" in written  # full catalogue persisted, not just an overlay
 
 
 def test_save_rejects_unknown_model_key(tmp_path):
@@ -53,6 +67,50 @@ def test_corrupt_overlay_falls_back_to_base(tmp_path):
     assert cfg.model_for(ModelRole.RAG_ANSWERER) == default_config().model_for(
         ModelRole.RAG_ANSWERER
     )
+
+
+def test_add_update_remove_model_round_trips(tmp_path):
+    store = _store(tmp_path)
+    # add
+    store.add_model("my-llama", _entry(model_id="llama-3.3.gguf", provider="my-llama"))
+    assert "my-llama" in store.load().models
+    # adding a duplicate key fails
+    with pytest.raises(ValueError, match="already exists"):
+        store.add_model("my-llama", _entry(provider="my-llama"))
+    # update an existing model
+    store.update_model(
+        "my-llama", _entry(model_id="llama-3.4.gguf", provider="my-llama", context_window=4096)
+    )
+    assert store.load().models["my-llama"].context_window == 4096
+    # updating a missing model fails
+    with pytest.raises(ValueError, match="unknown model"):
+        store.update_model("ghost", _entry(provider="ghost"))
+    # remove
+    store.remove_model("my-llama")
+    assert "my-llama" not in store.load().models
+
+
+def test_remove_rejects_a_model_in_use(tmp_path):
+    store = _store(tmp_path)
+    base = default_config()
+    # the default model can't be removed
+    with pytest.raises(ValueError, match="default model"):
+        store.remove_model(base.default_model)
+    # an assigned model can't be removed (rag-local is assigned to rag_answerer)
+    with pytest.raises(ValueError, match="assigned to rag_answerer"):
+        store.remove_model("rag-local")
+
+
+def test_added_model_becomes_assignable_and_routes(tmp_path):
+    # the whole point: an added model can be assigned and the assignment resolves.
+    store = _store(tmp_path)
+    store.add_model("my-llama", _entry(model_id="llama.gguf", provider="my-llama"))
+    full = dict(default_config().assignments)
+    full[ModelRole.RAG_ANSWERER] = "my-llama"
+    store.save_assignments(default_config().default_model, full)
+    cfg = store.load()
+    assert cfg.model_for(ModelRole.RAG_ANSWERER) == "my-llama"
+    assert cfg.entry_for("my-llama").base_url == "http://x/v1"
 
 
 def test_stale_keys_in_overlay_are_dropped_not_crashed(tmp_path):

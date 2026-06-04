@@ -13,6 +13,8 @@ mirror the frontend's `src/types/models.ts` + `src/types/config.ts`.
 from __future__ import annotations
 
 from perpleximanus.core.llm import ConfigStore, ModelRole, RouterConfig
+from perpleximanus.core.llm.config import ModelEntry
+from perpleximanus.core.llm.types import Requirement
 from pydantic import BaseModel
 
 # ---- wire DTOs (mirror the frontend types) ----------------------------------
@@ -21,11 +23,33 @@ from pydantic import BaseModel
 class ModelDTO(BaseModel):
     id: str
     label: str
-    provider: str  # "local" | "openrouter"
+    provider: str  # derived view: "local" (free) | "openrouter" (paid)
     price_in_per_m: float
     price_out_per_m: float
     capabilities: list[str]
     note: str | None = None
+    # raw editable fields (so the edit form prefills the real config, not a view):
+    model_id: str
+    base_url: str | None = None
+    api_key_env: str | None = None
+    context_window: int
+    quantization: str | None = None
+
+
+class ModelUpsert(BaseModel):
+    """Create/edit a catalogue model. `id` is the catalogue key (immutable on
+    edit). The endpoint key is derived (= id for new models), so the user only
+    thinks in terms of a model + its endpoint, never an internal provider key."""
+
+    id: str
+    model_id: str
+    base_url: str | None = None
+    api_key_env: str | None = None
+    context_window: int = 8192
+    quantization: str | None = None
+    capabilities: list[str] = []
+    price_in_per_m: float = 0.0
+    price_out_per_m: float = 0.0
 
 
 class AssignmentsDTO(BaseModel):
@@ -63,9 +87,10 @@ def _humanize(key: str) -> str:
     return key.replace("-", " ").title()
 
 
-def _provider_of(raw: str) -> str:
-    # The frontend distinguishes only local (free) vs openrouter (paid overflow).
-    return "openrouter" if raw == "openrouter" else "local"
+def _provider_view(entry: ModelEntry) -> str:
+    # The frontend distinguishes only local (free) vs paid; derive it from price so
+    # a user-added paid model reads correctly regardless of its endpoint key.
+    return "openrouter" if (entry.price_in_per_m > 0 or entry.price_out_per_m > 0) else "local"
 
 
 def _model_name(model_id: str) -> str:
@@ -105,14 +130,48 @@ def _models_from(config: RouterConfig) -> list[ModelDTO]:
             ModelDTO(
                 id=key,
                 label=f"{_humanize(key)} — {_model_name(entry.model_id)}",
-                provider=_provider_of(entry.provider),
+                provider=_provider_view(entry),
                 price_in_per_m=entry.price_in_per_m,
                 price_out_per_m=entry.price_out_per_m,
                 capabilities=sorted(r.value for r in entry.capabilities),
                 note=_note(entry),
+                model_id=entry.model_id,
+                base_url=entry.base_url,
+                api_key_env=entry.api_key_env,
+                context_window=entry.context_window,
+                quantization=entry.quantization,
             )
         )
     return out
+
+
+def _capabilities(values: list[str]) -> frozenset[Requirement]:
+    """Map capability strings to the typed Requirement set, ignoring unknowns
+    (advisory metadata — a bad value shouldn't reject the model)."""
+    out: set[Requirement] = set()
+    for v in values:
+        try:
+            out.add(Requirement(v))
+        except ValueError:
+            continue
+    return frozenset(out)
+
+
+def _entry_from(upsert: ModelUpsert, *, provider: str) -> ModelEntry:
+    """Build a ModelEntry from an upsert. `provider` is the endpoint key — the
+    model's own id for a new model, or the existing entry's key on edit (so the
+    endpoint grouping of seeded models is preserved)."""
+    return ModelEntry(
+        model_id=upsert.model_id,
+        provider=provider,
+        context_window=upsert.context_window,
+        capabilities=_capabilities(upsert.capabilities),
+        quantization=upsert.quantization,
+        price_in_per_m=upsert.price_in_per_m,
+        price_out_per_m=upsert.price_out_per_m,
+        base_url=upsert.base_url,
+        api_key_env=upsert.api_key_env,
+    )
 
 
 def _assignments_from(config: RouterConfig) -> AssignmentsDTO:
@@ -128,13 +187,13 @@ def _assignments_from(config: RouterConfig) -> AssignmentsDTO:
 
 
 class ConfigState:
-    """Holds the live config the settings surface reads/writes. Model catalogue
-    is read-only (the assignable models); assignments are mutable (the absolute,
-    manual model story) and PERSISTED via a shared ConfigStore so the agent-server
-    runtime actually honors them. Skills/MCP are wiring-pending scaffolds.
+    """Holds the live config the settings surface reads/writes. The catalogue
+    (add/edit/remove a model) AND the per-role assignments are mutable and PERSISTED
+    via a shared ConfigStore so the agent-server runtime actually honors them.
+    Skills/MCP are wiring-pending scaffolds.
 
-    `store` is the shared assignment store (defaults to PMX_CONFIG). `config` only
-    seeds the read-only catalogue when no store is supplied (test convenience)."""
+    `store` is the shared config store (defaults to PMX_CONFIG). `config` only seeds
+    the catalogue when no store is supplied (test convenience)."""
 
     def __init__(
         self, config: RouterConfig | None = None, *, store: ConfigStore | None = None
@@ -145,7 +204,6 @@ class ConfigState:
             self._store = ConfigStore(base_factory=lambda: config)
         else:
             self._store = ConfigStore()
-        self._models = _models_from(self._store.load())
         self._skills: list[SkillDTO] = [
             SkillDTO(
                 id="web-research",
@@ -178,7 +236,26 @@ class ConfigState:
     # models + assignments (the absolute manual model story) ------------------
 
     def models(self) -> list[ModelDTO]:
-        return self._models
+        return _models_from(self._store.load())
+
+    def add_model(self, upsert: ModelUpsert) -> list[ModelDTO]:
+        """Add a model to the catalogue. New models are their own endpoint (the
+        endpoint key = the catalogue id). Raises ValueError on a duplicate id."""
+        entry = _entry_from(upsert, provider=upsert.id)
+        return _models_from(self._store.add_model(upsert.id, entry))
+
+    def update_model(self, model_id: str, upsert: ModelUpsert) -> list[ModelDTO]:
+        """Edit an existing model. Preserves its endpoint key so a seeded model
+        sharing a backend isn't silently split off. Raises ValueError if missing."""
+        existing = self._store.load().models.get(model_id)
+        provider = existing.provider if existing is not None else model_id
+        entry = _entry_from(upsert, provider=provider)
+        return _models_from(self._store.update_model(model_id, entry))
+
+    def remove_model(self, model_id: str) -> list[ModelDTO]:
+        """Remove a model. Raises ValueError if it's the default or assigned to a
+        role (the user must reassign first — we never silently break routing)."""
+        return _models_from(self._store.remove_model(model_id))
 
     def assignments(self) -> AssignmentsDTO:
         return _assignments_from(self._store.load())

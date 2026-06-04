@@ -23,6 +23,7 @@ from .config_state import (
     ConfigState,
     McpConnectionDTO,
     ModelDTO,
+    ModelUpsert,
     SkillDTO,
     SkillPatch,
 )
@@ -61,6 +62,13 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
     async def get_models() -> list[ModelDTO]:
         return state.models()
 
+    @app.post("/api/models", status_code=201)
+    async def add_model(upsert: ModelUpsert) -> list[ModelDTO]:
+        try:
+            return state.add_model(upsert)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get("/api/models/assignments")
     async def get_assignments() -> AssignmentsDTO:
         return state.assignments()
@@ -72,6 +80,21 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
         # the model KEY must exist in the catalogue (else routing can't resolve it).
         try:
             return state.update_assignments(patch)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Declared AFTER /assignments so that literal path wins over {model_id}.
+    @app.put("/api/models/{model_id}")
+    async def put_model(model_id: str, upsert: ModelUpsert) -> list[ModelDTO]:
+        try:
+            return state.update_model(model_id, upsert)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/models/{model_id}")
+    async def delete_model(model_id: str) -> list[ModelDTO]:
+        try:
+            return state.remove_model(model_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
