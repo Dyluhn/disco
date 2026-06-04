@@ -12,7 +12,7 @@ mirror the frontend's `src/types/models.ts` + `src/types/config.ts`.
 
 from __future__ import annotations
 
-from perpleximanus.core.llm import ModelRole, RouterConfig, default_config
+from perpleximanus.core.llm import ConfigStore, ModelRole, RouterConfig
 from pydantic import BaseModel
 
 # ---- wire DTOs (mirror the frontend types) ----------------------------------
@@ -130,12 +130,22 @@ def _assignments_from(config: RouterConfig) -> AssignmentsDTO:
 class ConfigState:
     """Holds the live config the settings surface reads/writes. Model catalogue
     is read-only (the assignable models); assignments are mutable (the absolute,
-    manual model story). Skills/MCP are wiring-pending scaffolds."""
+    manual model story) and PERSISTED via a shared ConfigStore so the agent-server
+    runtime actually honors them. Skills/MCP are wiring-pending scaffolds.
 
-    def __init__(self, config: RouterConfig | None = None) -> None:
-        cfg = config or default_config()
-        self._models = _models_from(cfg)
-        self._assignments = _assignments_from(cfg)
+    `store` is the shared assignment store (defaults to PMX_CONFIG). `config` only
+    seeds the read-only catalogue when no store is supplied (test convenience)."""
+
+    def __init__(
+        self, config: RouterConfig | None = None, *, store: ConfigStore | None = None
+    ) -> None:
+        if store is not None:
+            self._store = store
+        elif config is not None:
+            self._store = ConfigStore(base_factory=lambda: config)
+        else:
+            self._store = ConfigStore()
+        self._models = _models_from(self._store.load())
         self._skills: list[SkillDTO] = [
             SkillDTO(
                 id="web-research",
@@ -171,17 +181,19 @@ class ConfigState:
         return self._models
 
     def assignments(self) -> AssignmentsDTO:
-        return self._assignments.model_copy(deep=True)
+        return _assignments_from(self._store.load())
 
     def update_assignments(self, patch: AssignmentsPatch) -> AssignmentsDTO:
-        roles = dict(self._assignments.roles)
+        """Persist the patch over the current assignments. Raises ValueError on an
+        unknown model key (the wire layer maps that to 400)."""
+        cfg = self._store.load()
+        default_model = patch.default_model or cfg.default_model
+        assignments = dict(cfg.assignments)
         if patch.roles:
-            roles.update(patch.roles)
-        self._assignments = AssignmentsDTO(
-            default_model=patch.default_model or self._assignments.default_model,
-            roles=roles,
-        )
-        return self.assignments()
+            for role_str, key in patch.roles.items():
+                assignments[ModelRole(role_str)] = key  # ValueError on a bad role
+        new_cfg = self._store.save_assignments(default_model, assignments)
+        return _assignments_from(new_cfg)
 
     # skills (wiring-pending) -------------------------------------------------
 

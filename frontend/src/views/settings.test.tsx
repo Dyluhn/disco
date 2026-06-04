@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 import { SettingsView } from "./SettingsView";
@@ -27,17 +28,26 @@ describe("Settings — model-assignment matrix", () => {
     expect(screen.getAllByText("Free").length).toBeGreaterThan(0);
   });
 
-  it("disables the assignment pickers and flags in red that they are not wired", async () => {
-    // Honesty over polish: the runtime doesn't consume saved assignments yet, so
-    // the pickers must NOT look operable. They are disabled and the gap is flagged.
+  it("changes a role assignment (the picker is enabled and the row reflects it)", async () => {
+    // Assignments are now wired end-to-end (ConfigStore -> agent-server routing),
+    // so the picker is operable, not a flagged dead control.
+    const user = userEvent.setup();
     withQuery(<SettingsView />);
     const ragTrigger = await screen.findByRole("button", {
       name: /Choose model for RAG answerer/i,
     });
-    expect(ragTrigger).toBeDisabled();
-    // The red NotWired banner states the specific gap (no silent dead control).
-    expect(screen.getAllByText(/not functional yet/i).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText(/does not read these assignments/i)).toBeInTheDocument();
+    expect(ragTrigger).toBeEnabled();
+    expect(ragTrigger).toHaveTextContent(/Local RAG/i);
+
+    await user.click(ragTrigger);
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByText(/Local Summarizer/i));
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /Choose model for RAG answerer/i }),
+      ).toHaveTextContent(/Local Summarizer/i),
+    );
   });
 });
 

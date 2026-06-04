@@ -3,16 +3,7 @@ import { cn } from "@/lib/cn";
 import { costLabel } from "@/lib/cost";
 import { findModel, useAssignments, useModels, useUpdateAssignments } from "@/hooks/useModels";
 import { isFree, type ModelInfo, ROLES } from "@/types/models";
-import { NotWired } from "./NotWired";
-import { PendingBadge } from "./PendingBadge";
 import { RoleModelPicker } from "./RoleModelPicker";
-
-// The catalogue + assignments are read live from the app-server, but the
-// agent-server runs a fixed default_config() and does NOT read these assignments
-// yet — so changing a row would not change which model actually runs. Until that
-// path exists, the pickers are disabled and the gap is flagged in red. Flip to
-// false once the runtime consumes the saved assignments.
-const ASSIGNMENTS_WIRED = false;
 
 /**
  * The model-assignment matrix (Prompt 4, the core). Model selection here is
@@ -52,7 +43,6 @@ function MatrixRow({
           onSelect={row.onSelect}
           ariaLabel={`Choose model for ${row.label}`}
           busy={busy}
-          disabled={!ASSIGNMENTS_WIRED}
         />
         <div className="flex flex-wrap items-center gap-inline sm:justify-end">
           {model && (
@@ -79,21 +69,15 @@ export function ModelMatrix() {
 
   return (
     <section aria-labelledby="models-heading" className="flex flex-col gap-inline">
-      <div className="flex flex-col gap-inline">
-        <div className="flex items-center gap-inline">
-          <h2 id="models-heading" className="font-ui text-[1.05rem] font-semibold text-text">
-            Models
-          </h2>
-          {!ASSIGNMENTS_WIRED && <PendingBadge>Assignments not wired</PendingBadge>}
-        </div>
+      <div>
+        <h2 id="models-heading" className="font-ui text-[1.05rem] font-semibold text-text">
+          Models
+        </h2>
         <p className="font-ui text-[0.84rem] text-text-muted">
-          The catalogue below is read live from the configured deployment. Assignment is meant to be
-          absolute and manual (no automatic routing), with capabilities advisory and fail-loud at
-          runtime.
+          Read live from the configured deployment. Assignments are absolute and manual — the system
+          uses exactly what you set, applied on the next request (no automatic routing). Capabilities
+          are advisory; a mis-assignment fails loudly at runtime.
         </p>
-        {!ASSIGNMENTS_WIRED && (
-          <NotWired detail="The agent-server runs a fixed config and does not read these assignments yet, so changing a model here would NOT change which model actually runs. The pickers are disabled until that path is built. (Needs: the runtime reading the saved assignments instead of default_config().)" />
-        )}
       </div>
 
       <div className="rounded-card border border-hairline bg-surface-1 px-body">

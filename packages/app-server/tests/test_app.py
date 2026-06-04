@@ -9,7 +9,9 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 from perpleximanus.app_server import create_app
+from perpleximanus.app_server.config_state import ConfigState
 from perpleximanus.core import SqliteEventStore
+from perpleximanus.core.llm import ConfigStore
 
 
 @pytest.fixture
@@ -18,8 +20,10 @@ def store() -> SqliteEventStore:
 
 
 @pytest.fixture
-def client(store: SqliteEventStore) -> TestClient:
-    return TestClient(create_app(store))
+def client(store: SqliteEventStore, tmp_path) -> TestClient:
+    # Isolated assignment overlay per test (PUTs persist here, not the repo).
+    cfg_state = ConfigState(store=ConfigStore(tmp_path / "config.json"))
+    return TestClient(create_app(store, cfg_state))
 
 
 # ---- models + assignments (the absolute, manual model story) ----------------

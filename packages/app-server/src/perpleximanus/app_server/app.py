@@ -11,7 +11,7 @@ cookie) so the dev frontend on another origin can call it.
 
 from __future__ import annotations
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from perpleximanus.core import DEFAULT_OWNER_ID
 from perpleximanus.core.store.sqlite import SqliteEventStore
@@ -67,9 +67,13 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
 
     @app.put("/api/models/assignments")
     async def put_assignments(patch: AssignmentsPatch) -> AssignmentsDTO:
-        # Absolute: the system uses exactly what is set; no validation/prediction
-        # here (capabilities are advisory + fail-loud at runtime, not blocked).
-        return state.update_assignments(patch)
+        # Absolute: the system uses exactly what is set; capabilities are advisory
+        # + fail-loud at runtime, not blocked here. The one structural guard is that
+        # the model KEY must exist in the catalogue (else routing can't resolve it).
+        try:
+            return state.update_assignments(patch)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # ---- skills (wiring-pending scaffold) -----------------------------------
 

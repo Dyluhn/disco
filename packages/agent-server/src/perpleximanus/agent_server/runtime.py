@@ -19,7 +19,12 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from perpleximanus.core import NoOpCondenser, ToolResult
-from perpleximanus.core.llm import DefaultLLMRouter, OperatingMode, RouterSummarizer, default_config
+from perpleximanus.core.llm import (
+    ConfigStore,
+    DefaultLLMRouter,
+    OperatingMode,
+    RouterSummarizer,
+)
 from perpleximanus.core.llm.config import RouterConfig
 from perpleximanus.core.llm.wiring import build_providers
 from perpleximanus.core.loop import AgentLoop, NeverConfirm, RouterAgent
@@ -45,14 +50,19 @@ class _NoToolExecutor:
 
 
 class ConversationRuntime:
-    """Owns the shared router (built once) and one AgentLoop per conversation.
-    `kick(cid)` schedules the loop to run in the background if it isn't already."""
+    """Builds a router from the CURRENT persisted config per request, plus one
+    AgentLoop per conversation. `kick(cid)` schedules the loop in the background.
+
+    Model assignments live in a shared ConfigStore (PMX_CONFIG) that the Settings
+    UI writes; `_router_now()` reloads it each request, so reassigning a role takes
+    effect on the next research call / new conversation without a restart."""
 
     def __init__(
         self,
         store: SqliteEventStore,
         *,
         config: RouterConfig | None = None,
+        config_store: ConfigStore | None = None,
         router: DefaultLLMRouter | None = None,
         enable_thinking: bool = False,
         mode: OperatingMode = OperatingMode.INTERACTIVE,
@@ -63,33 +73,48 @@ class ConversationRuntime:
         # in tests (hermetic fakes); else lazily built from env on first use so
         # importing the runtime doesn't pull httpx until research is actually run.
         self._research_providers = research_providers
-        if router is not None:
-            self._router = router  # injected (tests use a fake-backed router)
+        # A statically-injected router (test seam) pins routing; otherwise the
+        # router is rebuilt per request from the shared, persisted config store so
+        # Settings assignments are actually honored.
+        self._injected_router = router
+        self._enable_thinking = enable_thinking
+        if config_store is not None:
+            self._config_store = config_store
+        elif config is not None:
+            self._config_store = ConfigStore(base_factory=lambda: config)
         else:
-            cfg = config or default_config()
-            # Live providers (one OpenAIProvider per endpoint). enable_thinking=False
-            # → Qwen answers directly (faster, streams immediately) rather than
-            # reasoning first; flip per-surface later if chain-of-thought is wanted.
-            providers = build_providers(cfg, enable_thinking=enable_thinking)
-            self._router = DefaultLLMRouter(cfg, providers)
+            self._config_store = ConfigStore()
         self._mode = mode
         self._loops: dict[str, AgentLoop] = {}
         self._tasks: dict[str, asyncio.Task] = {}
 
+    def _router_now(self) -> DefaultLLMRouter:
+        """The router for the CURRENT assignments. Cheap to rebuild (providers are
+        plain objects; the HTTP client is created per call), so we reload the config
+        each request rather than cache a stale router."""
+        if self._injected_router is not None:
+            return self._injected_router
+        cfg = self._config_store.load()
+        providers = build_providers(cfg, enable_thinking=self._enable_thinking)
+        return DefaultLLMRouter(cfg, providers)
+
     def _loop_for(self, conversation_id: str) -> AgentLoop:
         loop = self._loops.get(conversation_id)
         if loop is None:
-            agent = RouterAgent(self._router, conversation_id=conversation_id)
+            # A conversation pins the assignments it started with (consistency);
+            # new conversations pick up later reassignments via _router_now().
+            router = self._router_now()
+            agent = RouterAgent(router, conversation_id=conversation_id)
             loop = AgentLoop(
                 conversation_id,
                 self._store,
                 agent,
                 _NoToolExecutor(),
-                self._router,
+                router,
                 RuleBasedAnalyzer(),
                 NeverConfirm(),  # Research surface: no human gate
                 NoOpCondenser(),
-                RouterSummarizer(self._router),
+                RouterSummarizer(router),
                 mode=self._mode,
             )
             self._loops[conversation_id] = loop
@@ -114,7 +139,7 @@ class ConversationRuntime:
         deps = self._research()
         return stream_research_answer(
             query,
-            router=self._router,
+            router=self._router_now(),  # honor the CURRENT model assignments
             search=deps["search"],
             extraction=deps["extraction"],
             reranker=deps["reranker"],

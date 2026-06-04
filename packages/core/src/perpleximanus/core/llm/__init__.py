@@ -15,6 +15,7 @@ Also delivers the two functions the event/state contract was waiting on:
 from __future__ import annotations
 
 from .config import ModelEntry, RoleRouting, RouterConfig, default_config
+from .config_store import ConfigStore
 from .errors import (
     BudgetExceeded,
     LLMAuthError,
@@ -101,6 +102,7 @@ __all__ = [
     "TokenUsage",
     "ToolSpec",
     "default_config",
+    "ConfigStore",
     "default_mode_for_role",
     "derive_family",
     "is_context_window_exceeded",
