@@ -10,7 +10,7 @@ dependencies = [
     "perpleximanus-core",
     "perpleximanus-retrieval",
     "fastapi>=0.110",
-    "uvicorn>=0.30",
+    "uvicorn[standard]>=0.30",  # [standard] pulls the websockets impl the WS routes need
 ]
 
 [build-system]
