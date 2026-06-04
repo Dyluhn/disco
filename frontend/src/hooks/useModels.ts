@@ -1,6 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { getAssignments, listModels, updateAssignments } from "@/api/models";
-import type { AssignmentsPatch, ModelAssignments, ModelInfo } from "@/types/models";
+import {
+  createModel,
+  deleteModel,
+  getAssignments,
+  listModels,
+  updateAssignments,
+  updateModel,
+} from "@/api/models";
+import type {
+  AssignmentsPatch,
+  ModelAssignments,
+  ModelInfo,
+  ModelUpsert,
+} from "@/types/models";
 
 /**
  * Query/mutation hooks for the model catalogue + assignments. Components consume
@@ -28,6 +40,32 @@ export function useUpdateAssignments() {
       // Write the authoritative result straight into the cache (no refetch flash).
       qc.setQueryData(ASSIGNMENTS_KEY, next);
     },
+  });
+}
+
+/** Catalogue CRUD. Each mutation returns the new catalogue, written straight into
+ * the cache so the matrix + pickers update without a refetch flash. */
+export function useCreateModel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (upsert: ModelUpsert) => createModel(upsert),
+    onSuccess: (models) => qc.setQueryData(MODELS_KEY, models),
+  });
+}
+
+export function useUpdateModel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, upsert }: { id: string; upsert: ModelUpsert }) => updateModel(id, upsert),
+    onSuccess: (models) => qc.setQueryData(MODELS_KEY, models),
+  });
+}
+
+export function useDeleteModel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => deleteModel(id),
+    onSuccess: (models) => qc.setQueryData(MODELS_KEY, models),
   });
 }
 

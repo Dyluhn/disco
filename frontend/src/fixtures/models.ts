@@ -1,64 +1,90 @@
 import type { ModelAssignments, ModelInfo } from "@/types/models";
 
 /**
- * The assignable model catalogue + the starting assignments — placeholder values
- * mirroring the backend's `default_config()` (llm-router contract §7). The UI is
- * built against these first; swap for the live `/api/models` + router config when
- * wired. Local models are free; the one OpenRouter model is the paid overflow,
- * present in the catalogue as an *assignable* choice (nothing routes to it
- * automatically — the operator assigns it).
+ * The assignable model catalogue + starting assignments — mirrors the backend's
+ * `default_config()` (llm-router contract §7) so the OFFLINE/test catalogue looks
+ * like the real deployment, not placeholder seed data. When VITE_API_BASE is set,
+ * the live `/api/models` (read from the persisted config) replaces this entirely.
  */
+const QWEN = "http://192.168.1.231:18080/v1";
+const GEMMA = "http://192.168.1.81:8087/v1";
+
 export const MODEL_CATALOGUE: ModelInfo[] = [
   {
     id: "driver-local",
-    label: "Local Driver — Qwen 35B-A3B",
+    label: "Driver Local — Qwen3.6-27B-UD-Q5_K_XL",
     provider: "local",
     price_in_per_m: 0,
     price_out_per_m: 0,
     capabilities: ["tool_calling", "json_mode", "long_context"],
-    note: "Q4_K_M · the default lead",
-  },
-  {
-    id: "driver-overflow",
-    label: "Frontier — Claude (OpenRouter)",
-    provider: "openrouter",
-    price_in_per_m: 3,
-    price_out_per_m: 15,
-    capabilities: ["tool_calling", "json_mode", "long_context", "vision"],
-    note: "paid · assign deliberately",
+    note: "131K ctx · Q5_K_XL · 192.168.1.231:18080",
+    model_id: "Qwen3.6-27B-UD-Q5_K_XL.gguf",
+    base_url: QWEN,
+    context_window: 131072,
+    quantization: "Q5_K_XL",
   },
   {
     id: "rag-local",
-    label: "Local RAG — Llama 3.1 8B",
+    label: "Rag Local — Qwen3.6-27B-UD-Q5_K_XL",
+    provider: "local",
+    price_in_per_m: 0,
+    price_out_per_m: 0,
+    capabilities: ["json_mode", "long_context"],
+    note: "131K ctx · Q5_K_XL · 192.168.1.231:18080",
+    model_id: "Qwen3.6-27B-UD-Q5_K_XL.gguf",
+    base_url: QWEN,
+    context_window: 131072,
+    quantization: "Q5_K_XL",
+  },
+  {
+    id: "rewriter-local",
+    label: "Rewriter Local — gemma-4-e2b-mtp",
     provider: "local",
     price_in_per_m: 0,
     price_out_per_m: 0,
     capabilities: ["json_mode"],
-  },
-  {
-    id: "rewriter-local",
-    label: "Local Rewriter — Llama 3.2 3B",
-    provider: "local",
-    price_in_per_m: 0,
-    price_out_per_m: 0,
-    capabilities: [],
+    note: "32K ctx · 192.168.1.81:8087",
+    model_id: "gemma-4-e2b-mtp",
+    base_url: GEMMA,
+    api_key_env: "PMX_GEMMA_API_KEY",
+    context_window: 32768,
   },
   {
     id: "summarizer-local",
-    label: "Local Summarizer — Qwen 1.7B",
+    label: "Summarizer Local — gemma-4-e2b-mtp",
     provider: "local",
     price_in_per_m: 0,
     price_out_per_m: 0,
     capabilities: [],
+    note: "32K ctx · 192.168.1.81:8087",
+    model_id: "gemma-4-e2b-mtp",
+    base_url: GEMMA,
+    api_key_env: "PMX_GEMMA_API_KEY",
+    context_window: 32768,
   },
   {
     id: "nli-local",
-    label: "Local Cross-Encoder — DeBERTa",
+    label: "Nli Local — bge-reranker-v2-m3",
     provider: "local",
     price_in_per_m: 0,
     price_out_per_m: 0,
     capabilities: [],
-    note: "off the LLM path",
+    note: "512 ctx · off the LLM path",
+    model_id: "bge-reranker-v2-m3",
+    context_window: 512,
+  },
+  {
+    id: "driver-overflow",
+    label: "Driver Overflow — claude-3.5-sonnet",
+    provider: "openrouter",
+    price_in_per_m: 3,
+    price_out_per_m: 15,
+    capabilities: ["tool_calling", "json_mode", "long_context", "vision"],
+    note: "200K ctx · openrouter.ai · paid, assign deliberately",
+    model_id: "anthropic/claude-3.5-sonnet",
+    base_url: "https://openrouter.ai/api/v1",
+    api_key_env: "PMX_OPENROUTER_API_KEY",
+    context_window: 200000,
   },
 ];
 

@@ -37,16 +37,35 @@ describe("Settings — model-assignment matrix", () => {
       name: /Choose model for RAG answerer/i,
     });
     expect(ragTrigger).toBeEnabled();
-    expect(ragTrigger).toHaveTextContent(/Local RAG/i);
+    expect(ragTrigger).toHaveTextContent(/Rag Local/i);
 
     await user.click(ragTrigger);
     const dialog = screen.getByRole("dialog");
-    await user.click(within(dialog).getByText(/Local Summarizer/i));
+    await user.click(within(dialog).getByText(/Summarizer Local/i));
 
     await waitFor(() =>
       expect(
         screen.getByRole("button", { name: /Choose model for RAG answerer/i }),
-      ).toHaveTextContent(/Local Summarizer/i),
+      ).toHaveTextContent(/Summarizer Local/i),
+    );
+  });
+});
+
+describe("Settings — model catalogue (CRUD)", () => {
+  it("adds a new model via the form and it appears in the catalogue", async () => {
+    const user = userEvent.setup();
+    withQuery(<SettingsView />);
+    await screen.findByText("Catalogue");
+
+    await user.click(screen.getByRole("button", { name: /Add model/i }));
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByPlaceholderText("my-llama"), "test-model");
+    await user.type(within(dialog).getByPlaceholderText(/llama-3.3-70b/i), "test.gguf");
+    await user.click(within(dialog).getByRole("button", { name: /^Add model$/i }));
+
+    // the new model shows in the catalogue list (label derived like the backend)
+    await waitFor(() =>
+      expect(screen.getByText(/Test Model — test/i)).toBeInTheDocument(),
     );
   });
 });

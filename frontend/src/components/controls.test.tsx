@@ -18,7 +18,7 @@ describe("Model leader pill (model-only)", () => {
   it("shows the settings default on the pill face, cost-legible, with no mode options", async () => {
     const user = userEvent.setup();
     withQuery(<ModelLeaderPill value={null} onChange={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/Local Driver/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Driver Local/i)).toBeInTheDocument());
     expect(screen.getByText(/Free/i)).toBeInTheDocument();
 
     await user.click(
@@ -33,14 +33,14 @@ describe("Model leader pill (model-only)", () => {
     const onChange = vi.fn();
     const user = userEvent.setup();
     withQuery(<ModelLeaderPill value={null} onChange={onChange} />);
-    await waitFor(() => expect(screen.getByText(/Local Driver/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Driver Local/i)).toBeInTheDocument());
     await user.click(
       screen.getByRole("button", { name: /choose the model that leads this conversation/i }),
     );
     expect(screen.getByText(/Local — free/i)).toBeInTheDocument();
     expect(screen.getByText(/Overflow — paid/i)).toBeInTheDocument();
     expect(screen.getByText("$3 / $15 / Mtok")).toBeInTheDocument();
-    await user.click(screen.getByText(/Frontier — Claude/i));
+    await user.click(screen.getByText(/Driver Overflow — claude/i));
     expect(onChange).toHaveBeenCalledWith("driver-overflow");
   });
 });

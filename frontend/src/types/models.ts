@@ -26,6 +26,26 @@ export interface ModelInfo {
   capabilities: Capability[];
   /** optional provenance note (e.g. quantization) shown as a quiet caption. */
   note?: string;
+  // raw editable fields (mirror the backend ModelDTO) so an edit form prefills the
+  // real config, not the display view.
+  model_id: string;
+  base_url?: string | null;
+  api_key_env?: string | null;
+  context_window: number;
+  quantization?: string | null;
+}
+
+/** Create/edit payload for a catalogue model (mirrors the backend ModelUpsert). */
+export interface ModelUpsert {
+  id: string;
+  model_id: string;
+  base_url?: string | null;
+  api_key_env?: string | null;
+  context_window: number;
+  quantization?: string | null;
+  capabilities: Capability[];
+  price_in_per_m: number;
+  price_out_per_m: number;
 }
 
 /** True for free local models — drives the "free" vs "$/Mtok" cost legibility. */
