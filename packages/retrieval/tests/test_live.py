@@ -1,0 +1,187 @@
+"""Live HTTP retrieval providers — hermetic tests (httpx.MockTransport).
+
+No network: mock transports return canned backend responses so we test the
+mapping to the existing interfaces (SearchHit / ExtractedDoc / Passage / verdicts)
+and the graceful-degradation paths. (The live smoke against the real LAN endpoints
+is run separately.)
+"""
+
+from __future__ import annotations
+
+import httpx
+from perpleximanus.retrieval.live import (
+    Crawl4aiExtractionProvider,
+    OpenAIEmbedder,
+    SearxngSearchProvider,
+    SidecarNLIVerifier,
+    TeiReranker,
+)
+from perpleximanus.retrieval.models import Passage
+
+
+def _async(handler) -> httpx.MockTransport:
+    return httpx.MockTransport(handler)
+
+
+# ---- SearXNG ----------------------------------------------------------------
+
+
+async def test_searxng_maps_results_and_filters_domains():
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.url.params["format"] == "json"
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "url": "https://good.com/a",
+                        "title": "A",
+                        "content": "snip",
+                        "engine": "google",
+                    },
+                    {"url": "https://bad.com/b", "title": "B", "content": "x", "engine": "brave"},
+                ]
+            },
+        )
+
+    p = SearxngSearchProvider("http://x", transport=_async(handler))
+    hits = await p.search("q", domains_deny=frozenset({"bad.com"}))
+    assert [h.url for h in hits] == ["https://good.com/a"]  # bad.com filtered
+    assert hits[0].snippet == "snip" and hits[0].source_engine == "google" and hits[0].rank == 0
+
+
+async def test_searxng_failure_degrades_to_no_hits():
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(502, text="bad gateway")
+
+    assert await SearxngSearchProvider("http://x", transport=_async(handler)).search("q") == []
+
+
+# ---- Crawl4AI ---------------------------------------------------------------
+
+
+def _crawl(results: list[dict]):
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True, "results": results})
+
+    return handler
+
+
+async def test_crawl4ai_extracts_content_and_chunks_passages():
+    body = "Para one is long enough to be a passage here.\n\n" * 4
+    handler = _crawl(
+        [
+            {
+                "url": "https://en.wikipedia.org/wiki/X",
+                "success": True,
+                "status_code": 200,
+                "markdown": {"fit_markdown": body, "raw_markdown": body},
+                "metadata": {"title": "X — Wikipedia"},
+            }
+        ]
+    )
+    doc = await Crawl4aiExtractionProvider("http://x", transport=_async(handler)).extract(
+        "https://en.wikipedia.org/wiki/X"
+    )
+    assert doc.status == "ok" and doc.fetched_ok
+    assert doc.title == "X — Wikipedia"
+    assert len(doc.passages) >= 1
+    assert all(p.source_url == doc.url for p in doc.passages)
+
+
+async def test_crawl4ai_falls_back_to_raw_markdown_when_fit_is_empty():
+    handler = _crawl(
+        [
+            {
+                "url": "https://m.example/post",
+                "success": True,
+                "status_code": 200,
+                "markdown": {
+                    "fit_markdown": "",
+                    "raw_markdown": "Real content here, long enough to keep.",
+                },
+                "metadata": {"title": "Post"},
+            }
+        ]
+    )
+    doc = await Crawl4aiExtractionProvider("http://x", transport=_async(handler)).extract(
+        "https://m.example/post"
+    )
+    assert doc.fetched_ok and "Real content here" in doc.content
+
+
+async def test_crawl4ai_maps_failure_statuses_for_honest_rendering():
+    handler = _crawl(
+        [{"url": "https://blocked.example", "success": False, "status_code": 403, "markdown": {}}]
+    )
+    doc = await Crawl4aiExtractionProvider("http://x", transport=_async(handler)).extract(
+        "https://blocked.example"
+    )
+    assert doc.status == "blocked" and not doc.fetched_ok  # shown, not silently dropped
+
+
+# ---- reranker ---------------------------------------------------------------
+
+
+def _passages(*texts: str) -> list[Passage]:
+    return [
+        Passage(id=str(i), source_url="u", source_title="t", text=t) for i, t in enumerate(texts)
+    ]
+
+
+async def test_reranker_orders_by_score_and_keeps_top_k():
+    def handler(req: httpx.Request) -> httpx.Response:
+        # relevant passage (index 1) scores highest
+        return httpx.Response(200, json=[{"index": 0, "score": -5.0}, {"index": 1, "score": 8.0}])
+
+    ranked = await TeiReranker("http://x", transport=_async(handler)).rerank(
+        "q", _passages("irrelevant", "relevant"), top_k=1
+    )
+    assert [p.text for p in ranked] == ["relevant"]
+
+
+async def test_reranker_failure_degrades_to_input_order():
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="boom")
+
+    ps = _passages("a", "b", "c")
+    out = await TeiReranker("http://x", transport=_async(handler)).rerank("q", ps, top_k=2)
+    assert [p.text for p in out] == ["a", "b"]  # input order, not a crash
+
+
+# ---- embedder ---------------------------------------------------------------
+
+
+async def test_embedder_reads_openai_embeddings():
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"data": [{"embedding": [0.1, 0.2]}, {"embedding": [0.3, 0.4]}]}
+        )
+
+    vecs = await OpenAIEmbedder("http://x/v1", transport=_async(handler)).embed(["a", "b"])
+    assert vecs == [[0.1, 0.2], [0.3, 0.4]]
+
+
+# ---- NLI sidecar ------------------------------------------------------------
+
+
+async def test_nli_maps_label_to_verdict_and_caches():
+    calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, json={"entailment": 0.97, "label": "entailment"})
+
+    nli = SidecarNLIVerifier("http://x", transport=httpx.MockTransport(handler))
+    assert nli.entail("p", "h") == "entail"
+    assert nli.score("p", "h") == 0.97
+    assert calls["n"] == 1  # entail()+score() for the same pair = one HTTP call (cached)
+
+
+async def test_nli_failure_degrades_to_neutral():
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="down")
+
+    nli = SidecarNLIVerifier("http://x", transport=httpx.MockTransport(handler))
+    assert nli.entail("p", "h") == "neutral"  # weak, never a crash
+    assert nli.score("p", "h") == 0.0
