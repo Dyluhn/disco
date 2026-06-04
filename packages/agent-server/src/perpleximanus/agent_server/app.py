@@ -156,6 +156,46 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             with contextlib.suppress(asyncio.CancelledError):
                 await sender
 
+    # ---- research-answer stream (Stage 4) -----------------------------------
+
+    @app.websocket("/ws/research")
+    async def research_ws(websocket: WebSocket) -> None:
+        """Live grounded-answer stream. The client sends one `{query, ...}` frame;
+        the server streams the research pipeline's frames (state → token… → final
+        → state) in the UI's grounded-answer shape, then closes. Read-only: this is
+        the retrieval+grounding pipeline, never the agent loop."""
+        await websocket.accept()
+        if runtime is None:
+            await websocket.send_json(
+                {"type": "error", "message": "research is not available (no runtime configured)"}
+            )
+            await websocket.close()
+            return
+        try:
+            raw = await websocket.receive_json()
+        except (WebSocketDisconnect, Exception):  # noqa: BLE001 — disconnect/non-JSON
+            with contextlib.suppress(Exception):
+                await websocket.close()
+            return
+        query = str((raw or {}).get("query", "")).strip()
+        if not query:
+            await websocket.send_json({"type": "error", "message": "empty query"})
+            await websocket.close()
+            return
+        try:
+            async for frame in runtime.research_stream(query):
+                await websocket.send_json(frame)
+        except WebSocketDisconnect:
+            return  # client cancelled mid-stream
+        except Exception as exc:  # noqa: BLE001 — surface the real reason, then close
+            with contextlib.suppress(Exception):
+                await websocket.send_json(
+                    {"type": "error", "message": f"{type(exc).__name__}: {exc}"}
+                )
+        finally:
+            with contextlib.suppress(Exception):
+                await websocket.close()
+
     return app
 
 

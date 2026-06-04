@@ -1,0 +1,168 @@
+"""The research-answer stream (Stage 4) over the WebSocket, hermetic.
+
+A fake-backed router + fake retrieval providers are injected so this runs in CI
+with no network: a query over /ws/research drives search → extract → rerank →
+streamed generation → NLI-verify, and the server emits the UI's grounded-answer
+frames (state → token… → final → state) — the same contract the fixture replayed.
+"""
+
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+from perpleximanus.agent_server import ConversationRuntime, create_app
+from perpleximanus.core import SqliteEventStore
+from perpleximanus.core.llm import (
+    CompletionResponse,
+    DefaultLLMRouter,
+    ModelEntry,
+    RouterConfig,
+    StreamChunk,
+    TokenUsage,
+)
+from perpleximanus.retrieval.models import ExtractedDoc, Passage, SearchHit
+
+_ANSWER = "Paris is the capital of France. [[wiki_p0]]"
+
+
+class _FakeProvider:
+    name = "fake"
+
+    async def complete(self, req, *, model):
+        return CompletionResponse(
+            text=_ANSWER,
+            tool_calls=[],
+            usage=TokenUsage(input_tokens=1, output_tokens=1),
+            finish_reason="stop",
+            model_used=model,
+            request_id=req.request_id,
+            routing=None,
+        )
+
+    async def stream_complete(self, req, *, model):
+        # Stream in two deltas so the token-frame path is exercised.
+        yield StreamChunk(delta_text=_ANSWER[:18])
+        yield StreamChunk(delta_text=_ANSWER[18:])
+        yield StreamChunk(done=True, final=await self.complete(req, model=model))
+
+    def supports(self, requirement, *, model):
+        return True
+
+
+class _FakeSearch:
+    async def search(self, query, *, limit=10, domains_allow=None, domains_deny=None):
+        return [
+            SearchHit(
+                url="https://en.wikipedia.org/Paris",
+                title="Paris",
+                snippet="...",
+                source_engine="fake",
+                rank=1,
+            )
+        ]
+
+
+class _FakeExtraction:
+    async def extract(self, url):
+        return (await self.extract_many([url]))[0]
+
+    async def extract_many(self, urls):
+        return [
+            ExtractedDoc(
+                url=urls[0],
+                title="Paris",
+                content="Paris is the capital and most populous city of France.",
+                fetched_ok=True,
+                status="ok",
+                passages=[
+                    Passage(
+                        id="wiki_p0",
+                        source_url=urls[0],
+                        source_title="Paris",
+                        text="Paris is the capital and most populous city of France.",
+                    )
+                ],
+            )
+        ]
+
+
+class _FakeReranker:
+    async def rerank(self, query, passages, *, top_k):
+        return passages[:top_k]
+
+
+class _FakeNLI:
+    def entail(self, premise, hypothesis):
+        return "entail"
+
+    def score(self, premise, hypothesis):
+        return 0.97
+
+
+def _runtime(store: SqliteEventStore) -> ConversationRuntime:
+    cfg = RouterConfig(
+        models={"m": ModelEntry(model_id="m", provider="fake", context_window=8192)},
+        default_model="m",
+    )
+    router = DefaultLLMRouter(cfg, {"fake": _FakeProvider()})
+    return ConversationRuntime(
+        store,
+        router=router,
+        research_providers={
+            "search": _FakeSearch(),
+            "extraction": _FakeExtraction(),
+            "reranker": _FakeReranker(),
+            "embedder": None,
+            "nli": _FakeNLI(),
+        },
+    )
+
+
+def test_research_stream_emits_grounded_frames():
+    store = SqliteEventStore(":memory:")
+    app = create_app(store, runtime=_runtime(store))
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws/research") as ws:
+        ws.send_json({"query": "What is the capital of France?"})
+        frames = []
+        for _ in range(60):
+            f = ws.receive_json()
+            frames.append(f)
+            if f["type"] == "state" and f["status"] == "finished":
+                break
+
+    kinds = [f["type"] for f in frames]
+    assert kinds[0] == "state" and frames[0]["status"] == "running"
+    assert "token" in kinds  # the typewriter streamed
+    assert kinds[-1] == "state" and frames[-1]["status"] == "finished"
+
+    final = next(f for f in frames if f["type"] == "final")["answer"]
+    # real structure: a prose block carrying the citation marker
+    assert any(b["kind"] == "prose" and "wiki_p0" in b["text"] for b in final["blocks"])
+    # real grounding: the cited claim was NLI-verified as supported
+    claim = final["claims"][0]
+    assert claim["verdict"] == "supported"
+    assert claim["best_passage_id"] == "wiki_p0"
+    # provenance preserved end-to-end
+    assert final["passages"][0]["id"] == "wiki_p0"
+    assert final["all_hits"][0]["status"] == "ok"
+    assert final["unsupported_count"] == 0
+
+
+def test_research_rejects_empty_query():
+    store = SqliteEventStore(":memory:")
+    app = create_app(store, runtime=_runtime(store))
+    client = TestClient(app)
+    with client.websocket_connect("/ws/research") as ws:
+        ws.send_json({"query": "   "})
+        f = ws.receive_json()
+    assert f["type"] == "error" and "empty" in f["message"]
+
+
+def test_research_unavailable_without_runtime():
+    store = SqliteEventStore(":memory:")
+    client = TestClient(create_app(store))  # no runtime
+    with client.websocket_connect("/ws/research") as ws:
+        ws.send_json({"query": "anything"})
+        f = ws.receive_json()
+    assert f["type"] == "error" and "not available" in f["message"]

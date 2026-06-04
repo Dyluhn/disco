@@ -104,6 +104,26 @@ class SearxngSearchProvider:
 
 # ---- Crawl4AI: extraction (URL -> clean content + passages) -----------------
 
+# Crawl4AI's default `fit_markdown` is empty on many large pages (e.g. Wikipedia),
+# leaving only `raw_markdown` — which opens with kilobytes of nav/menu/language-link
+# chrome before any article prose. Asking for a PruningContentFilter makes the
+# server populate `fit_markdown` with the actual content (verified: on the WP
+# "Nineteen Eighty-Four" page this moves the body from char ~9k to char ~150).
+_CRAWL_CONFIG = {
+    "type": "CrawlerRunConfig",
+    "params": {
+        "markdown_generator": {
+            "type": "DefaultMarkdownGenerator",
+            "params": {
+                "content_filter": {
+                    "type": "PruningContentFilter",
+                    "params": {"threshold": 0.45, "threshold_type": "dynamic"},
+                }
+            },
+        }
+    },
+}
+
 
 class Crawl4aiExtractionProvider:
     """[ExtractionProvider] Crawl4AI synchronous /crawl. Maps the returned
@@ -140,7 +160,10 @@ class Crawl4aiExtractionProvider:
             async with httpx.AsyncClient(
                 timeout=self._timeout, transport=self._transport
             ) as client:
-                resp = await client.post(f"{self._base}/crawl", json={"urls": urls})
+                resp = await client.post(
+                    f"{self._base}/crawl",
+                    json={"urls": urls, "crawler_config": _CRAWL_CONFIG},
+                )
                 resp.raise_for_status()
                 results = resp.json().get("results", [])
         except (httpx.HTTPError, ValueError) as exc:

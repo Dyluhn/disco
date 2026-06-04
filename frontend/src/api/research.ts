@@ -1,14 +1,15 @@
 /*
  * The DATA-ACCESS LAYER (BoD §13.8) — the ONE place that talks to "the API".
- * Components never import this; only query/mutation hooks do. Today it replays a
- * fixture as a frame stream shaped like the grounded-answer contract.
+ * Components never import this; only query/mutation hooks do.
  *
- * PLANNED (see ../../api-endpoints.md): research-answer streaming is the only
- * surface that stays fixture-backed — it needs the Phase-1 agent loop + a model +
- * retrieval/grounding to emit token→block→final frames. The other resources
- * (models, assignments, skills, MCP, conversations) are wired live behind
- * VITE_API_BASE via ./client; this one will follow when the loop lands.
+ * Research-answer streaming is now LIVE: when VITE_AGENT_BASE is set,
+ * `subscribeResearch` opens a WebSocket to the agent-server's /ws/research and
+ * forwards the real rewrite→search→extract→rerank→generate→verify pipeline's
+ * frames (state→token→final) — the same StreamFrame contract the fixture used.
+ * Unset → it replays the in-repo fixture (offline / tests), so the UI and its
+ * tests run with no backend.
  */
+import { researchWsUrl } from "@/api/client";
 import { rrfAnswer } from "@/fixtures/answers";
 import type { AnswerBlock, GroundedAnswer, ReScope, StreamFrame } from "@/types/grounded";
 
@@ -95,7 +96,53 @@ function providerErrorFor(scope: ReScope): string | null {
   return null;
 }
 
+/**
+ * The LIVE path: open a WebSocket to the agent-server's research endpoint, send
+ * the scope as one query frame, and forward the server's frames verbatim — the
+ * backend emits the exact StreamFrame contract this hook reconciles. Closing the
+ * socket cancels the in-flight run (the server stops streaming on disconnect).
+ */
+function subscribeLive(
+  url: string,
+  scope: ReScope,
+  onFrame: (f: StreamFrame) => void,
+): StreamHandle {
+  let closed = false;
+  const ws = new WebSocket(url);
+  ws.onopen = () => {
+    ws.send(
+      JSON.stringify({
+        query: scope.query,
+        drop_weak: scope.drop_weak ?? false,
+        domains_deny: scope.domains_deny ?? [],
+      }),
+    );
+  };
+  ws.onmessage = (ev) => {
+    if (closed) return;
+    try {
+      onFrame(JSON.parse(ev.data) as StreamFrame);
+    } catch {
+      onFrame({ type: "error", message: "malformed frame from server" });
+    }
+  };
+  // A transport failure surfaces as the UI's clean error state (never silent).
+  ws.onerror = () => {
+    if (!closed) onFrame({ type: "error", message: "connection to the research server failed" });
+  };
+  return {
+    cancel: () => {
+      closed = true;
+      ws.close();
+    },
+  };
+}
+
 export function subscribeResearch(scope: ReScope, onFrame: (f: StreamFrame) => void): StreamHandle {
+  const live = researchWsUrl();
+  if (live) return subscribeLive(live, scope, onFrame);
+
+  // Offline / tests: replay the fixture as the same frame contract.
   const providerError = providerErrorFor(scope);
   const answer = applyScope(rrfAnswer, scope);
   const seq: { delay: number; frame: StreamFrame }[] = providerError

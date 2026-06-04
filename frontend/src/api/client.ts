@@ -10,12 +10,24 @@
 
 const BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/+$/, "");
 
+/** The agent-server base (the live WebSocket surface — loops + research). Distinct
+ * from VITE_API_BASE (the app-server: settings + library) because they are
+ * different services/ports. Unset → research stays fixture-backed (offline/tests). */
+const AGENT_BASE = (import.meta.env.VITE_AGENT_BASE ?? "").replace(/\/+$/, "");
+
 /** The owner whose conversations we read/write (no auth in v1; an explicit id). */
 export const OWNER_ID = import.meta.env.VITE_OWNER_ID ?? "local";
 
 /** True when a backend base URL is configured — the api modules call it live. */
 export function isLive(): boolean {
   return BASE.length > 0;
+}
+
+/** The agent-server research WebSocket URL (ws://… derived from VITE_AGENT_BASE),
+ * or null when unconfigured — callers fall back to the fixture stream. */
+export function researchWsUrl(): string | null {
+  if (!AGENT_BASE) return null;
+  return `${AGENT_BASE.replace(/^http/, "ws")}/ws/research`;
 }
 
 /** An API error that carries the real backend message (surfaced to the UI). */

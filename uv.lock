@@ -160,6 +160,7 @@ source = { editable = "packages/agent-server" }
 dependencies = [
     { name = "fastapi" },
     { name = "perpleximanus-core" },
+    { name = "perpleximanus-retrieval" },
     { name = "uvicorn" },
 ]
 
@@ -167,6 +168,7 @@ dependencies = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.110" },
     { name = "perpleximanus-core", editable = "packages/core" },
+    { name = "perpleximanus-retrieval", editable = "packages/retrieval" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
 

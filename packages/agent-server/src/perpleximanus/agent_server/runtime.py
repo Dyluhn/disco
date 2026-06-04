@@ -6,13 +6,17 @@ background, calls the model via the OpenAI adapter, and appends events — which
 store already publishes to the WebSocket the UI consumes (history-then-live).
 
 The Research surface defaults: `NeverConfirm` (no human gate) + no tools (the
-model answers directly). Tools (search/extract) + the grounded research pipeline
-arrive in Stages 3–4; the Build surface's `ConfirmRisky` stays dormant.
+model answers directly). The grounded research pipeline (Stage 4) is exposed
+separately via `research_stream()` — it is NOT the agent loop; it is the
+rewrite→search→extract→rerank→generate→verify pipeline streamed as the UI's
+grounded-answer frames. The Build surface's `ConfirmRisky` stays dormant.
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
+from typing import Any
 
 from perpleximanus.core import NoOpCondenser, ToolResult
 from perpleximanus.core.llm import DefaultLLMRouter, OperatingMode, RouterSummarizer, default_config
@@ -52,8 +56,13 @@ class ConversationRuntime:
         router: DefaultLLMRouter | None = None,
         enable_thinking: bool = False,
         mode: OperatingMode = OperatingMode.INTERACTIVE,
+        research_providers: dict[str, Any] | None = None,
     ) -> None:
         self._store = store
+        # The live retrieval/grounding providers for research_stream(). Injected
+        # in tests (hermetic fakes); else lazily built from env on first use so
+        # importing the runtime doesn't pull httpx until research is actually run.
+        self._research_providers = research_providers
         if router is not None:
             self._router = router  # injected (tests use a fake-backed router)
         else:
@@ -85,6 +94,32 @@ class ConversationRuntime:
             )
             self._loops[conversation_id] = loop
         return loop
+
+    # ---- research surface (Stage 4) -----------------------------------------
+
+    def _research(self) -> dict[str, Any]:
+        if self._research_providers is None:
+            # Lazy import: the live providers pull httpx; only do so on first use.
+            from perpleximanus.retrieval.live import build_live_retrieval
+
+            self._research_providers = build_live_retrieval()
+        return self._research_providers
+
+    def research_stream(self, query: str) -> AsyncIterator[dict[str, Any]]:
+        """Stream a live grounded answer as the UI's research frames (state →
+        token… → final). Composes the shared router with the live retrieval
+        providers; this is the Stage-4 pipeline, not the AgentLoop."""
+        from perpleximanus.retrieval.streaming import stream_research_answer
+
+        deps = self._research()
+        return stream_research_answer(
+            query,
+            router=self._router,
+            search=deps["search"],
+            extraction=deps["extraction"],
+            reranker=deps["reranker"],
+            nli=deps["nli"],
+        )
 
     def kick(self, conversation_id: str) -> None:
         """Schedule the loop to run (idempotent: a no-op if already running). The

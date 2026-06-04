@@ -8,6 +8,7 @@ description = "Per-conversation runtime: WebSocket + REST over the core event lo
 requires-python = ">=3.12"
 dependencies = [
     "perpleximanus-core",
+    "perpleximanus-retrieval",
     "fastapi>=0.110",
     "uvicorn>=0.30",
 ]
@@ -21,3 +22,4 @@ packages = ["src/perpleximanus"]
 
 [tool.uv.sources]
 perpleximanus-core = { workspace = true }
+perpleximanus-retrieval = { workspace = true }
