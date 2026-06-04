@@ -68,18 +68,48 @@ def _provider_of(raw: str) -> str:
     return "openrouter" if raw == "openrouter" else "local"
 
 
+def _model_name(model_id: str) -> str:
+    """The displayable model name: drop a path prefix ('anthropic/claude-x' ->
+    'claude-x') and a '.gguf' suffix ('Qwen3.6-27B...gguf' -> 'Qwen3.6-27B...')."""
+    return model_id.rsplit("/", 1)[-1].removesuffix(".gguf")
+
+
+def _endpoint_host(base_url: str | None) -> str | None:
+    """'http://192.168.1.231:18080/v1' -> '192.168.1.231:18080' (None if unset)."""
+    if not base_url:
+        return None
+    return base_url.split("://", 1)[-1].split("/", 1)[0]
+
+
+def _note(entry) -> str:
+    """A quiet provenance caption from REAL config: context window, quant, endpoint
+    — so the settings catalogue reflects what's actually deployed, not seed labels."""
+    bits: list[str] = []
+    ctx = entry.context_window
+    bits.append(f"{ctx // 1000}K ctx" if ctx >= 1000 else f"{ctx} ctx")
+    if entry.quantization:
+        bits.append(entry.quantization)
+    host = _endpoint_host(entry.base_url)
+    if host:
+        bits.append(host)
+    return " · ".join(bits)
+
+
 def _models_from(config: RouterConfig) -> list[ModelDTO]:
     out: list[ModelDTO] = []
     for key, entry in config.models.items():
+        # Label carries the REAL model behind the role slot (e.g. "Driver Local —
+        # Qwen3.6-27B-UD-Q5_K_XL") rather than just the humanized key, so the UI
+        # never looks like seed data.
         out.append(
             ModelDTO(
                 id=key,
-                label=_humanize(key),
+                label=f"{_humanize(key)} — {_model_name(entry.model_id)}",
                 provider=_provider_of(entry.provider),
                 price_in_per_m=entry.price_in_per_m,
                 price_out_per_m=entry.price_out_per_m,
                 capabilities=sorted(r.value for r in entry.capabilities),
-                note=entry.quantization,
+                note=_note(entry),
             )
         )
     return out
