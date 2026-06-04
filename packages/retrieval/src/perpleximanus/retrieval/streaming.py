@@ -210,6 +210,35 @@ def _verify_claims(text: str, by_id: dict[str, Passage], nli: _NLILike) -> list[
     return out
 
 
+def _drop_weak(answer: dict) -> dict:
+    """Re-scope 'drop weak': keep only supported claims and strip the citation
+    markers of passages cited by the dropped (weak/unsupported) claims, so the
+    prose no longer points at sources that didn't hold up. Mirrors the offline
+    fixture's applyScope so live and offline behave identically."""
+    drop_ids = {
+        pid
+        for c in answer["claims"]
+        if c["verdict"] != "supported"
+        for pid in c["claim"]["cited_passage_ids"]
+    }
+    if not drop_ids:
+        return answer
+    marker = re.compile(r"\s*\[\[(?:" + "|".join(re.escape(i) for i in drop_ids) + r")\]\]")
+    blocks = []
+    for b in answer["blocks"]:
+        if b.get("kind") == "prose":
+            kept = [i for i in b.get("cited_passage_ids", []) if i not in drop_ids]
+            blocks.append({**b, "text": marker.sub("", b["text"]), "cited_passage_ids": kept})
+        else:
+            blocks.append(b)
+    return {
+        **answer,
+        "blocks": blocks,
+        "claims": [c for c in answer["claims"] if c["verdict"] == "supported"],
+        "unsupported_count": 0,
+    }
+
+
 async def _follow_ups(router: LLMRouter, query: str, answer: str) -> list[str]:
     try:
         req = CompletionRequest(
@@ -241,15 +270,19 @@ async def stream_research_answer(
     extraction: ExtractionProvider,
     reranker: Reranker,
     nli: _NLILike,
+    domains_deny: frozenset[str] = frozenset(),
+    drop_weak: bool = False,
     discover_limit: int = 10,
     extract_cap: int = 6,
     top_k: int = 6,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Yield the frontend's research frames for a live, grounded answer."""
+    """Yield the frontend's research frames for a live, grounded answer. The
+    re-scope controls apply here: `domains_deny` filters discovery; `drop_weak`
+    prunes the final answer to its supported claims."""
     yield {"type": "state", "status": "running"}
     try:
-        # 1. discovery
-        hits = await search.search(query, limit=discover_limit)
+        # 1. discovery (honoring the denied domains from re-scope)
+        hits = await search.search(query, limit=discover_limit, domains_deny=domains_deny or None)
         if not hits:
             yield {"type": "error", "message": "No search results were found for this query."}
             return
@@ -312,6 +345,8 @@ async def stream_research_answer(
             "unsupported_count": sum(1 for c in claims if c["verdict"] == "unsupported"),
             "follow_ups": follow_ups,
         }
+        if drop_weak:
+            answer = _drop_weak(answer)
         yield {"type": "final", "answer": answer}
         yield {"type": "state", "status": "finished"}
     except Exception as exc:  # noqa: BLE001 — surface the real reason, don't swallow

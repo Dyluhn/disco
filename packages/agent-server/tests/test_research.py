@@ -49,7 +49,11 @@ class _FakeProvider:
 
 
 class _FakeSearch:
+    def __init__(self):
+        self.last_domains_deny = None
+
     async def search(self, query, *, limit=10, domains_allow=None, domains_deny=None):
+        self.last_domains_deny = domains_deny  # record what the re-scope passed
         return [
             SearchHit(
                 url="https://en.wikipedia.org/Paris",
@@ -98,7 +102,7 @@ class _FakeNLI:
         return 0.97
 
 
-def _runtime(store: SqliteEventStore) -> ConversationRuntime:
+def _runtime(store: SqliteEventStore, search: _FakeSearch | None = None) -> ConversationRuntime:
     cfg = RouterConfig(
         models={"m": ModelEntry(model_id="m", provider="fake", context_window=8192)},
         default_model="m",
@@ -108,7 +112,7 @@ def _runtime(store: SqliteEventStore) -> ConversationRuntime:
         store,
         router=router,
         research_providers={
-            "search": _FakeSearch(),
+            "search": search or _FakeSearch(),
             "extraction": _FakeExtraction(),
             "reranker": _FakeReranker(),
             "embedder": None,
@@ -147,6 +151,21 @@ def test_research_stream_emits_grounded_frames():
     assert final["passages"][0]["id"] == "wiki_p0"
     assert final["all_hits"][0]["status"] == "ok"
     assert final["unsupported_count"] == 0
+
+
+def test_research_passes_domain_deny_to_search():
+    store = SqliteEventStore(":memory:")
+    search = _FakeSearch()
+    app = create_app(store, runtime=_runtime(store, search=search))
+    client = TestClient(app)
+    with client.websocket_connect("/ws/research") as ws:
+        ws.send_json({"query": "capital of France?", "domains_deny": ["Reddit.com", " "]})
+        for _ in range(60):
+            f = ws.receive_json()
+            if f["type"] == "state" and f["status"] == "finished":
+                break
+    # the re-scope's denied domains reached the search provider (normalized)
+    assert search.last_domains_deny == frozenset({"reddit.com"})
 
 
 def test_research_rejects_empty_query():

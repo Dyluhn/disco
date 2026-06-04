@@ -177,13 +177,25 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             with contextlib.suppress(Exception):
                 await websocket.close()
             return
-        query = str((raw or {}).get("query", "")).strip()
+        body = raw or {}
+        query = str(body.get("query", "")).strip()
         if not query:
             await websocket.send_json({"type": "error", "message": "empty query"})
             await websocket.close()
             return
+        # Re-scope controls from the UI: the model pill picks the answerer, plus
+        # drop-weak and domain-deny.
+        model_override = body.get("model_override") or None
+        drop_weak = bool(body.get("drop_weak"))
+        domains = body.get("domains_deny") or []
+        domains_deny = frozenset(str(d).strip().lower() for d in domains if str(d).strip())
         try:
-            async for frame in runtime.research_stream(query):
+            async for frame in runtime.research_stream(
+                query,
+                model_override=str(model_override) if model_override else None,
+                drop_weak=drop_weak,
+                domains_deny=domains_deny,
+            ):
                 await websocket.send_json(frame)
         except WebSocketDisconnect:
             return  # client cancelled mid-stream

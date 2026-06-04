@@ -23,6 +23,7 @@ from perpleximanus.core import NoOpCondenser, ToolResult
 from perpleximanus.core.llm import (
     ConfigStore,
     DefaultLLMRouter,
+    ModelRole,
     OperatingMode,
     RouterSummarizer,
     SecretStore,
@@ -96,13 +97,24 @@ class ConversationRuntime:
         self._loops: dict[str, AgentLoop] = {}
         self._tasks: dict[str, asyncio.Task] = {}
 
-    def _router_now(self) -> DefaultLLMRouter:
+    def _router_now(self, answerer_override: str | None = None) -> DefaultLLMRouter:
         """The router for the CURRENT assignments. Cheap to rebuild (providers are
         plain objects; the HTTP client is created per call), so we reload the config
-        each request rather than cache a stale router."""
+        each request rather than cache a stale router. `answerer_override` (the
+        research pill) reassigns RAG_ANSWERER for this request only."""
         if self._injected_router is not None:
             return self._injected_router
         cfg = self._config_store.load()
+        # The research model pill picks the ANSWERER (not a chat driver), so apply
+        # it by reassigning RAG_ANSWERER for this request — the assignment path the
+        # router honors for that role — rather than the driver-only CallContext
+        # override. Unknown keys are ignored (fail safe to the saved assignment).
+        if answerer_override and answerer_override in cfg.models:
+            cfg = cfg.model_copy(
+                update={
+                    "assignments": {**cfg.assignments, ModelRole.RAG_ANSWERER: answerer_override}
+                }
+            )
         # Overlay the decrypted OpenRouter key into the env build_providers reads,
         # so OR models (api_key_env=PMX_OPENROUTER_API_KEY) authenticate without the
         # secret ever being on disk in plaintext.
@@ -145,20 +157,30 @@ class ConversationRuntime:
             self._research_providers = build_live_retrieval()
         return self._research_providers
 
-    def research_stream(self, query: str) -> AsyncIterator[dict[str, Any]]:
+    def research_stream(
+        self,
+        query: str,
+        *,
+        model_override: str | None = None,
+        drop_weak: bool = False,
+        domains_deny: frozenset[str] = frozenset(),
+    ) -> AsyncIterator[dict[str, Any]]:
         """Stream a live grounded answer as the UI's research frames (state →
         token… → final). Composes the shared router with the live retrieval
-        providers; this is the Stage-4 pipeline, not the AgentLoop."""
+        providers, honoring the re-scope controls: the pill picks the answerer
+        model, `domains_deny` filters discovery, `drop_weak` prunes the answer."""
         from perpleximanus.retrieval.streaming import stream_research_answer
 
         deps = self._research()
         return stream_research_answer(
             query,
-            router=self._router_now(),  # honor the CURRENT model assignments
+            router=self._router_now(answerer_override=model_override),
             search=deps["search"],
             extraction=deps["extraction"],
             reranker=deps["reranker"],
             nli=deps["nli"],
+            domains_deny=domains_deny,
+            drop_weak=drop_weak,
         )
 
     def kick(self, conversation_id: str) -> None:
