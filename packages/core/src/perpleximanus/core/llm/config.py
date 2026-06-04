@@ -27,7 +27,7 @@ from .types import ModelRole, Requirement
 
 class ModelEntry(BaseModel):
     model_id: str  # provider's id string [VERIFY]
-    provider: str  # "ollama"|"llamacpp"|"openrouter"
+    provider: str  # the endpoint key (one OpenAIProvider per distinct backend) [VERIFY]
     context_window: int  # [VERIFY]
     capabilities: frozenset[Requirement] = frozenset()
     quantization: str | None = None  # e.g. "Q4_K_M"; informational provenance
@@ -39,6 +39,11 @@ class ModelEntry(BaseModel):
     # derived from model_id (prompts.derive_family). Set it to pin a [VERIFY]
     # family tag explicitly.
     family: str | None = None
+    # [VERIFY] live wiring: the OpenAI-compatible base URL for this model's backend
+    # (None = no live adapter, e.g. the NLI cross-encoder or a dormant overflow
+    # slot). `api_key_env` names an env var holding the key, if the server needs one.
+    base_url: str | None = None
+    api_key_env: str | None = None
 
 
 class RoleRouting(BaseModel):
@@ -95,31 +100,76 @@ class RouterConfig(BaseModel):
 
 
 def default_config() -> RouterConfig:
-    """The v1.2 starting ASSIGNMENTS with PLACEHOLDER ids ([VERIFY] at build).
+    """The starting catalogue + assignments, wired to the real LAN endpoints
+    ([VERIFY] — discovered at build: see api-endpoints.md / the live-wiring build).
 
-    Every role maps to exactly one model. `default_model` ("driver-local") leads
-    the show for AGENT_DRIVER (and is the fallback for any unassigned role); the
-    other roles are pinned explicitly. "driver-overflow" stays in the catalogue
-    as an *assignable* frontier model — the operator may select it per role in
-    Settings or per conversation via the model pill — but nothing routes to it
-    automatically. Replace `model_id`/`provider`/prices/context windows with the
-    operator's real values when wiring the live adapters; nothing else changes.
+    Each `provider` is the endpoint KEY (one OpenAIProvider per distinct backend);
+    `base_url` is its OpenAI-compatible URL. Roles: AGENT_DRIVER + RAG_ANSWERER →
+    Qwen 27B (.231); QUERY_REWRITER + SUMMARIZER → Gemma E2B (.81, needs a key in
+    $PMX_GEMMA_API_KEY); NLI_VERIFIER → the cross-encoder sidecar (not a chat model,
+    handled by the grounding NLIVerifier, no base_url). "driver-overflow" stays as a
+    dormant, assignable OpenRouter slot (no key → fails loud if assigned).
     """
+    _QWEN = "http://192.168.1.231:18080/v1"
+    _GEMMA = "http://192.168.1.81:8087/v1"
     models = {
-        # AGENT_DRIVER: local 70B/35B-class + a frontier overflow.
+        # AGENT_DRIVER + RAG_ANSWERER → Qwen 27B (reasoning, 128K ctx).
         "driver-local": ModelEntry(
-            model_id="PLACEHOLDER-local-driver",
-            provider="ollama",
-            context_window=65_536,
+            model_id="Qwen3.6-27B-UD-Q5_K_XL.gguf",
+            provider="qwen",
+            base_url=_QWEN,
+            context_window=131_072,
             capabilities=frozenset(
                 {Requirement.TOOL_CALLING, Requirement.JSON_MODE, Requirement.LONG_CONTEXT}
             ),
-            quantization="Q4_K_M",
+            quantization="Q5_K_XL",
             family="qwen",
         ),
+        "rag-local": ModelEntry(
+            model_id="Qwen3.6-27B-UD-Q5_K_XL.gguf",
+            provider="qwen",
+            base_url=_QWEN,
+            context_window=131_072,
+            capabilities=frozenset(
+                {Requirement.TOOL_CALLING, Requirement.JSON_MODE, Requirement.LONG_CONTEXT}
+            ),
+            quantization="Q5_K_XL",
+            family="qwen",
+        ),
+        # QUERY_REWRITER + SUMMARIZER → Gemma E2B (cheap, fast, not a reasoning
+        # model). The server needs a key in $PMX_GEMMA_API_KEY (read at wiring time
+        # via api_key_env — never hardcoded).
+        "rewriter-local": ModelEntry(
+            model_id="gemma-4-e2b-mtp",
+            provider="gemma",
+            base_url=_GEMMA,
+            api_key_env="PMX_GEMMA_API_KEY",
+            context_window=32_768,
+            capabilities=frozenset({Requirement.JSON_MODE}),
+            family="gemma",
+        ),
+        "summarizer-local": ModelEntry(
+            model_id="gemma-4-e2b-mtp",
+            provider="gemma",
+            base_url=_GEMMA,
+            api_key_env="PMX_GEMMA_API_KEY",
+            context_window=32_768,
+            family="gemma",
+        ),
+        # NLI verifier — the cross-encoder sidecar, NOT a chat model (no base_url;
+        # the grounding NLIVerifier calls it directly, §9.2).
+        "nli-local": ModelEntry(
+            model_id="bge-reranker-v2-m3",
+            provider="local",
+            context_window=512,
+            family="deberta",
+        ),
+        # Dormant, assignable OpenRouter overflow (no key → fails loud if assigned).
         "driver-overflow": ModelEntry(
-            model_id="PLACEHOLDER-frontier-driver",
+            model_id="anthropic/claude-3.5-sonnet",
             provider="openrouter",
+            base_url="https://openrouter.ai/api/v1",
+            api_key_env="PMX_OPENROUTER_API_KEY",
             context_window=200_000,
             capabilities=frozenset(
                 {
@@ -132,31 +182,6 @@ def default_config() -> RouterConfig:
             family="anthropic",
             price_in_per_m=3.0,
             price_out_per_m=15.0,
-        ),
-        "rag-local": ModelEntry(
-            model_id="PLACEHOLDER-local-rag",
-            provider="ollama",
-            context_window=32_768,
-            capabilities=frozenset({Requirement.JSON_MODE}),
-            family="llama",
-        ),
-        "rewriter-local": ModelEntry(
-            model_id="PLACEHOLDER-local-rewriter",
-            provider="ollama",
-            context_window=8_192,
-            family="llama",
-        ),
-        "summarizer-local": ModelEntry(
-            model_id="PLACEHOLDER-local-summarizer",
-            provider="ollama",
-            context_window=16_384,
-            family="qwen",
-        ),
-        "nli-local": ModelEntry(
-            model_id="PLACEHOLDER-local-cross-encoder",
-            provider="local",
-            context_window=512,
-            family="deberta",
         ),
     }
     assignments = {

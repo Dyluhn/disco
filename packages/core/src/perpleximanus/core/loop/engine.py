@@ -286,6 +286,17 @@ class AgentLoop:
                 # (f) finish path — subject to stop-hook veto (§7.4)
                 if step.finished and step.tool_call is None:
                     if await self._stop_allowed(state, events):
+                        # Record the agent's final message (the answer) before
+                        # finishing — the deliverable text belongs on the log, not
+                        # discarded on the finish signal. (When the model just
+                        # answers a question, this IS the response the UI renders.)
+                        if step.thought.strip():
+                            await self._emit(
+                                MessageEvent(
+                                    source=EventSource.AGENT,
+                                    message=LLMMessage(role="assistant", content=step.thought),
+                                )
+                            )
                         await self._emit(StatusEvent(status=ConversationStatus.FINISHED))
                         return await self.get_state()
                     await self._emit(

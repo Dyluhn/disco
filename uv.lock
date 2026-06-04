@@ -160,12 +160,14 @@ source = { editable = "packages/agent-server" }
 dependencies = [
     { name = "fastapi" },
     { name = "perpleximanus-core" },
+    { name = "uvicorn" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.110" },
     { name = "perpleximanus-core", editable = "packages/core" },
+    { name = "uvicorn", specifier = ">=0.30" },
 ]
 
 [[package]]
@@ -190,11 +192,15 @@ name = "perpleximanus-core"
 version = "0.1.0"
 source = { editable = "packages/core" }
 dependencies = [
+    { name = "httpx" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pydantic", specifier = ">=2.7" }]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pydantic", specifier = ">=2.7" },
+]
 
 [[package]]
 name = "perpleximanus-retrieval"

@@ -9,6 +9,7 @@ requires-python = ">=3.12"
 dependencies = [
     "perpleximanus-core",
     "fastapi>=0.110",
+    "uvicorn>=0.30",
 ]
 
 [build-system]

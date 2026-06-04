@@ -45,7 +45,8 @@ def test_default_config_resolves_every_role_to_a_known_model():
     assert cfg.model_for(ModelRole.AGENT_DRIVER) == cfg.default_model == "driver-local"
     # An explicitly-assigned role resolves to its assignment, not the default.
     assert cfg.model_for(ModelRole.RAG_ANSWERER) == "rag-local"
-    assert cfg.entry_for("driver-local").provider == "ollama"
+    assert cfg.entry_for("driver-local").provider == "qwen"
+    assert cfg.entry_for("driver-local").base_url is not None  # wired to a live endpoint
 
 
 def test_unassigned_role_falls_back_to_default_model():

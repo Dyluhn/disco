@@ -14,6 +14,7 @@ import contextlib
 import uuid
 
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from perpleximanus.core import (
     DEFAULT_OWNER_ID,
     EventSource,
@@ -24,6 +25,8 @@ from perpleximanus.core import (
 )
 from perpleximanus.core.store.sqlite import SqliteEventStore
 from pydantic import BaseModel, ValidationError
+
+from .runtime import ConversationRuntime
 
 
 class CreateConversationBody(BaseModel):
@@ -44,10 +47,18 @@ def _user_message(content: str, *, steer: bool = False) -> MessageEvent:
     )
 
 
-def create_app(store: SqliteEventStore) -> FastAPI:
+def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None = None) -> FastAPI:
     """Build the FastAPI app over a given store. The store is injected so tests
-    drive it headlessly (no external services)."""
+    drive it headlessly. `runtime` runs the agent loop with real inference (Stage
+    2); pass None in tests that only exercise the wire layer (the loop won't run)."""
     app = FastAPI(title="perpleximanus agent-server", version="0.1.0")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],  # dev: open (ownership is an explicit param, not a cookie)
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     # ---- REST surface (§7.5) ------------------------------------------------
 
@@ -64,8 +75,11 @@ def create_app(store: SqliteEventStore) -> FastAPI:
 
     @app.post("/conversations/{conversation_id}/messages")
     async def post_message(conversation_id: str, body: SendMessageBody) -> dict:
-        # Thin proxy: append a USER message. No business logic in the path.
+        # Append a USER message, then KICK the loop (Stage 2): it runs in the
+        # background and streams its events over the conversation's WebSocket.
         stored = await store.append(conversation_id, _user_message(body.content))
+        if runtime is not None:
+            runtime.kick(conversation_id)
         return {"event_id": stored.id, "seq": stored.seq}
 
     @app.get("/conversations/{conversation_id}/events")
@@ -136,7 +150,7 @@ def create_app(store: SqliteEventStore) -> FastAPI:
                         ).model_dump(mode="json")
                     )
                     continue
-                await _handle_frame(store, websocket, conversation_id, frame)
+                await _handle_frame(store, websocket, conversation_id, frame, runtime)
         finally:
             sender.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -150,13 +164,20 @@ async def _handle_frame(
     websocket: WebSocket,
     conversation_id: str,
     frame: WSClientFrame,
+    runtime: ConversationRuntime | None = None,
 ) -> None:
     """Map a client frame to the event log. Appended messages are echoed back to
-    every subscriber (incl. this socket) as `event` frames — the log is truth."""
+    every subscriber (incl. this socket) as `event` frames — the log is truth.
+    A message KICKS the loop (Stage 2) so a real answer streams back."""
     if frame.type == "ping":
         await websocket.send_json(WSServerFrame(type="pong").model_dump(mode="json"))
     elif frame.type == "send_message" and frame.content is not None:
         await store.append(conversation_id, _user_message(frame.content))
+        if runtime is not None:
+            runtime.kick(conversation_id)
     elif frame.type == "steer" and frame.steer_text is not None:
         await store.append(conversation_id, _user_message(frame.steer_text, steer=True))
-    # confirm/reject/pause/resume/cancel: no loop in Phase 0 — accepted, no-op.
+        if runtime is not None:
+            runtime.kick(conversation_id)
+    # confirm/reject/pause/resume/cancel: handled by the loop's control ops [VERIFY]
+    # — wired further in later stages; accepted here.
