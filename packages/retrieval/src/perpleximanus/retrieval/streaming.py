@@ -13,6 +13,7 @@ cited answers from real sources.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import AsyncIterator, Sequence
 from typing import Any, Protocol
@@ -249,16 +250,30 @@ async def stream_research_answer(
     try:
         # 1. discovery
         hits = await search.search(query, limit=discover_limit)
-        # 2. extraction (with provenance + honest failure status)
-        docs = await extraction.extract_many([h.url for h in hits[:extract_cap]])
+        if not hits:
+            yield {"type": "error", "message": "No search results were found for this query."}
+            return
+        # 2. extraction (with provenance + honest failure status). Extraction
+        # failures cluster under load (Crawl4AI does real browser crawls), so a
+        # whole batch can blip to empty — retry once with a wider net (more hits)
+        # before giving up, since the next results are usually readable too.
+        urls = [h.url for h in hits[:extract_cap]]
+        docs = await extraction.extract_many(urls)
+        passages = [p for d in docs if d.fetched_ok for p in d.passages]
+        if not passages and len(hits) > extract_cap:
+            extra = await extraction.extract_many([h.url for h in hits[extract_cap:discover_limit]])
+            docs = docs + extra
+            passages = [p for d in docs if d.fetched_ok for p in d.passages]
         status_by_url = {d.url: d.status for d in docs}
         all_hits = [{**h.model_dump(), "status": status_by_url.get(h.url)} for h in hits]
-        passages = [p for d in docs if d.fetched_ok for p in d.passages]
         if not passages:
+            unreadable = sum(1 for d in docs if d.status in ("blocked", "paywalled", "not_found"))
             yield {
                 "type": "error",
                 "message": (
-                    "No readable sources were found for this query (all results failed to extract)."
+                    f"Found {len(hits)} sources but couldn't read any of them right now "
+                    f"({unreadable} blocked or paywalled, the rest failed to fetch). This is "
+                    "usually a temporary extraction hiccup — try the search again."
                 ),
             }
             return
@@ -281,9 +296,11 @@ async def stream_research_answer(
                 answer_text += chunk.delta_text
                 yield {"type": "token", "token": chunk.delta_text, "block_id": "answer"}
 
-        # 5. structure + verify (NLI, off the LLM path)
+        # 5. structure + verify. The NLI verifier is SYNC (blocking httpx), so run
+        # it in a thread — otherwise its many calls freeze the event loop and the
+        # WebSocket's keepalive pings time out, dropping the connection mid-answer.
         blocks = _to_blocks(answer_text)
-        claims = _verify_claims(answer_text, by_id, nli)
+        claims = await asyncio.to_thread(_verify_claims, answer_text, by_id, nli)
         follow_ups = await _follow_ups(router, query, answer_text)
 
         answer = {
