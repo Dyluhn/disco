@@ -1,14 +1,15 @@
-import { Clock } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 
 /**
- * An honest marker for scaffolded surfaces (Prompt 4): the surface is built and
- * looks complete, but its subsystem isn't wired yet. We say so plainly rather
- * than letting a control pretend to do more than it does.
+ * A LOUD marker for a scaffolded surface: built and looking complete, but its
+ * subsystem isn't wired, so its controls change nothing in the running system.
+ * Red and explicit — we never let a control quietly pretend to do more than it
+ * does (see also the NotWired banner with the specifics).
  */
-export function PendingBadge({ children = "Wiring pending" }: { children?: string }) {
+export function PendingBadge({ children = "Not wired" }: { children?: string }) {
   return (
-    <span className="inline-flex items-center gap-hair rounded-[0.25rem] border border-hairline px-1 py-px font-ui text-[0.62rem] uppercase tracking-wide text-text-faint">
-      <Clock className="size-3" aria-hidden />
+    <span className="inline-flex items-center gap-hair rounded-[0.25rem] border border-unsupported/60 px-1 py-px font-ui text-[0.62rem] font-semibold uppercase tracking-wide text-unsupported">
+      <AlertTriangle className="size-3" aria-hidden />
       {children}
     </span>
   );

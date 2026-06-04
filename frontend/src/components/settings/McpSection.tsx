@@ -2,6 +2,7 @@ import { Plus } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useMcpConnections } from "@/hooks/useConfig";
 import type { McpStatus } from "@/types/config";
+import { NotWired } from "./NotWired";
 import { PendingBadge } from "./PendingBadge";
 
 /**
@@ -27,9 +28,8 @@ export function McpSection() {
         </h2>
         <PendingBadge />
       </div>
-      <p className="font-ui text-[0.84rem] text-text-muted">
-        External tool servers. The MCP client that dials these lands in a later phase.
-      </p>
+      <p className="font-ui text-[0.84rem] text-text-muted">External tool servers.</p>
+      <NotWired detail="The rows below are static placeholders, not real connections — there is no MCP client dialing anything, and 'Add connection' is disabled. (Needs: an MCP client in the agent-server plus persisted connection config.)" />
 
       <ul className="overflow-hidden rounded-card border border-hairline bg-surface-1">
         {isLoading && (

@@ -1,5 +1,6 @@
 import { cn } from "@/lib/cn";
 import { useSkills, useToggleSkill } from "@/hooks/useConfig";
+import { NotWired } from "./NotWired";
 import { PendingBadge } from "./PendingBadge";
 
 /**
@@ -12,10 +13,12 @@ function Switch({
   checked,
   onChange,
   label,
+  disabled,
 }: {
   checked: boolean;
   onChange: (next: boolean) => void;
   label: string;
+  disabled?: boolean;
 }) {
   return (
     <button
@@ -23,9 +26,10 @@ function Switch({
       role="switch"
       aria-checked={checked}
       aria-label={label}
+      disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
-        "relative h-5 w-9 shrink-0 rounded-full border transition-colors",
+        "relative h-5 w-9 shrink-0 rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-50",
         checked ? "border-accent/50 bg-accent/30" : "border-hairline bg-surface-2",
       )}
     >
@@ -53,9 +57,9 @@ export function SkillsSection() {
         <PendingBadge />
       </div>
       <p className="font-ui text-[0.84rem] text-text-muted">
-        Reusable capability modules. You can toggle them here; the skills subsystem that runs them
-        lands in a later phase.
+        Reusable capability modules.
       </p>
+      <NotWired detail="There is no skills subsystem yet: these toggles change nothing. 'Web research' actually runs (it's hardwired into the research pipeline, not gated by this toggle); 'Code execution' is not implemented at all (the agent loop has no tool executor). Toggles and Configure are disabled until the subsystem exists." />
 
       <ul className="overflow-hidden rounded-card border border-hairline bg-surface-1">
         {isLoading && (
@@ -83,6 +87,7 @@ export function SkillsSection() {
                 checked={s.enabled}
                 onChange={(next) => toggle.mutate({ id: s.id, enabled: next })}
                 label={`Enable ${s.name}`}
+                disabled
               />
             </div>
           </li>

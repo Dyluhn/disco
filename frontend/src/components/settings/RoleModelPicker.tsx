@@ -21,6 +21,8 @@ interface Props {
   /** accessible label for the trigger, e.g. "Choose model for RAG answerer" */
   ariaLabel: string;
   busy?: boolean;
+  /** hard-disable: the assignment isn't consumed by the runtime yet (NotWired). */
+  disabled?: boolean;
 }
 
 const GROUP_LABEL: Record<ModelProvider, string> = {
@@ -28,7 +30,7 @@ const GROUP_LABEL: Record<ModelProvider, string> = {
   openrouter: "Overflow — paid",
 };
 
-export function RoleModelPicker({ value, onSelect, ariaLabel, busy }: Props) {
+export function RoleModelPicker({ value, onSelect, ariaLabel, busy, disabled }: Props) {
   const [open, setOpen] = useState(false);
   const { data: models } = useModels();
   const selected = findModel(models, value);
@@ -50,8 +52,8 @@ export function RoleModelPicker({ value, onSelect, ariaLabel, busy }: Props) {
         <button
           type="button"
           aria-label={ariaLabel}
-          disabled={busy}
-          className="flex w-full items-center justify-between gap-inline rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text transition-colors hover:border-hairline-strong disabled:opacity-60 sm:w-64"
+          disabled={busy || disabled}
+          className="flex w-full items-center justify-between gap-inline rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text transition-colors hover:border-hairline-strong disabled:cursor-not-allowed disabled:opacity-50 sm:w-64"
         >
           <span className="truncate">{selected?.label ?? value}</span>
           <ChevronDown className="size-3.5 shrink-0 text-text-faint" aria-hidden />

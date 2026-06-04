@@ -1,6 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 import { SettingsView } from "./SettingsView";
@@ -28,39 +27,29 @@ describe("Settings — model-assignment matrix", () => {
     expect(screen.getAllByText("Free").length).toBeGreaterThan(0);
   });
 
-  it("changes a role assignment absolutely (the row reflects exactly what was set)", async () => {
-    const user = userEvent.setup();
+  it("disables the assignment pickers and flags in red that they are not wired", async () => {
+    // Honesty over polish: the runtime doesn't consume saved assignments yet, so
+    // the pickers must NOT look operable. They are disabled and the gap is flagged.
     withQuery(<SettingsView />);
     const ragTrigger = await screen.findByRole("button", {
       name: /Choose model for RAG answerer/i,
     });
-    expect(ragTrigger).toHaveTextContent(/Local RAG/i);
-
-    await user.click(ragTrigger);
-    const dialog = screen.getByRole("dialog");
-    // Picker is cost-legible and exposes the paid overflow option too.
-    expect(within(dialog).getByText("$3 / $15 / Mtok")).toBeInTheDocument();
-    await user.click(within(dialog).getByText(/Local Summarizer/i));
-
-    // Absolute: the RAG row now shows exactly the chosen model.
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: /Choose model for RAG answerer/i }),
-      ).toHaveTextContent(/Local Summarizer/i),
-    );
+    expect(ragTrigger).toBeDisabled();
+    // The red NotWired banner states the specific gap (no silent dead control).
+    expect(screen.getAllByText(/not functional yet/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/does not read these assignments/i)).toBeInTheDocument();
   });
 });
 
 describe("Settings — skills + MCP scaffolds", () => {
-  it("lists skills with working toggles, honestly marked wiring-pending", async () => {
-    const user = userEvent.setup();
+  it("lists skills with disabled toggles, honestly flagged not wired", async () => {
     withQuery(<SettingsView />);
     const sw = await screen.findByRole("switch", { name: /Enable Web research/i });
-    expect(sw).toHaveAttribute("aria-checked", "true");
-    // Honest scaffolding marker present.
-    expect(screen.getAllByText(/wiring pending/i).length).toBeGreaterThanOrEqual(1);
-    await user.click(sw);
-    await waitFor(() => expect(sw).toHaveAttribute("aria-checked", "false"));
+    // The toggle does not control anything yet, so it must be disabled, not fake.
+    expect(sw).toBeDisabled();
+    // Red markers present (the badge + the specific NotWired explanation).
+    expect(screen.getAllByText(/not wired/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/not implemented at all/i)).toBeInTheDocument();
   });
 
   it("lists MCP connections with an inert (pending) add affordance", async () => {
