@@ -12,7 +12,7 @@ mirror the frontend's `src/types/models.ts` + `src/types/config.ts`.
 
 from __future__ import annotations
 
-from perpleximanus.core.llm import ConfigStore, ModelRole, RouterConfig
+from perpleximanus.core.llm import ConfigStore, ModelRole, RouterConfig, SecretStore
 from perpleximanus.core.llm.config import ModelEntry
 from perpleximanus.core.llm.types import Requirement
 from pydantic import BaseModel
@@ -50,6 +50,28 @@ class ModelUpsert(BaseModel):
     capabilities: list[str] = []
     price_in_per_m: float = 0.0
     price_out_per_m: float = 0.0
+
+
+class OpenRouterModelDTO(BaseModel):
+    """One model from the live OpenRouter catalogue, normalized to the fields the
+    Add flow needs (the slug `id` becomes the model's model_id; prices are /Mtok)."""
+
+    id: str  # slug, e.g. "anthropic/claude-3.5-sonnet"
+    name: str
+    context_length: int
+    price_in_per_m: float
+    price_out_per_m: float
+    capabilities: list[str]
+
+
+class OpenRouterKeyStatus(BaseModel):
+    configured: bool  # an encrypted key is stored
+    locked: bool  # stored but not decryptable (PMX_SECRET_KEY missing/wrong)
+    can_store: bool  # PMX_SECRET_KEY present, so a new key can be encrypted + saved
+
+
+class OpenRouterKeyBody(BaseModel):
+    key: str
 
 
 class AssignmentsDTO(BaseModel):
@@ -145,6 +167,44 @@ def _models_from(config: RouterConfig) -> list[ModelDTO]:
     return out
 
 
+def normalize_openrouter(data: list[dict]) -> list[OpenRouterModelDTO]:
+    """Map the raw OpenRouter /models payload to our DTO. Pricing is USD per token
+    → ×1e6 for per-Mtok; capabilities come from supported_parameters + modalities."""
+    out: list[OpenRouterModelDTO] = []
+    for m in data:
+        pricing = m.get("pricing") or {}
+        arch = m.get("architecture") or {}
+        params = m.get("supported_parameters") or []
+        ctx = int(m.get("context_length") or 0)
+        caps: list[str] = []
+        if "image" in (arch.get("input_modalities") or []):
+            caps.append("vision")
+        if "tools" in params:
+            caps.append("tool_calling")
+        if "response_format" in params:
+            caps.append("json_mode")
+        if ctx >= 32_000:
+            caps.append("long_context")
+
+        def _price(v: object) -> float:
+            try:
+                return float(str(v)) * 1_000_000  # OR prices are USD-per-token strings
+            except (TypeError, ValueError):
+                return 0.0
+
+        out.append(
+            OpenRouterModelDTO(
+                id=str(m.get("id")),
+                name=str(m.get("name") or m.get("id")),
+                context_length=ctx,
+                price_in_per_m=_price(pricing.get("prompt")),
+                price_out_per_m=_price(pricing.get("completion")),
+                capabilities=caps,
+            )
+        )
+    return out
+
+
 def _capabilities(values: list[str]) -> frozenset[Requirement]:
     """Map capability strings to the typed Requirement set, ignoring unknowns
     (advisory metadata — a bad value shouldn't reject the model)."""
@@ -196,7 +256,11 @@ class ConfigState:
     the catalogue when no store is supplied (test convenience)."""
 
     def __init__(
-        self, config: RouterConfig | None = None, *, store: ConfigStore | None = None
+        self,
+        config: RouterConfig | None = None,
+        *,
+        store: ConfigStore | None = None,
+        secrets: SecretStore | None = None,
     ) -> None:
         if store is not None:
             self._store = store
@@ -204,6 +268,7 @@ class ConfigState:
             self._store = ConfigStore(base_factory=lambda: config)
         else:
             self._store = ConfigStore()
+        self._secrets = secrets or SecretStore()
         self._skills: list[SkillDTO] = [
             SkillDTO(
                 id="web-research",
@@ -256,6 +321,30 @@ class ConfigState:
         """Remove a model. Raises ValueError if it's the default or assigned to a
         role (the user must reassign first — we never silently break routing)."""
         return _models_from(self._store.remove_model(model_id))
+
+    # openrouter key (encrypted at rest) -------------------------------------
+
+    def openrouter_key_status(self) -> OpenRouterKeyStatus:
+        return OpenRouterKeyStatus(
+            configured=self._secrets.has_openrouter_key(),
+            locked=self._secrets.locked,
+            can_store=self._secrets.can_store,
+        )
+
+    def set_openrouter_key(self, key: str) -> OpenRouterKeyStatus:
+        """Encrypt + persist. Raises ValueError if PMX_SECRET_KEY isn't set (no app
+        secret to encrypt with) or the key is blank — mapped to 400 by the wire."""
+        if not key.strip():
+            raise ValueError("key is empty")
+        try:
+            self._secrets.set_openrouter_key(key.strip())
+        except RuntimeError as exc:
+            raise ValueError(str(exc)) from exc
+        return self.openrouter_key_status()
+
+    def clear_openrouter_key(self) -> OpenRouterKeyStatus:
+        self._secrets.clear_openrouter_key()
+        return self.openrouter_key_status()
 
     def assignments(self) -> AssignmentsDTO:
         return _assignments_from(self._store.load())

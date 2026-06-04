@@ -11,6 +11,7 @@ cookie) so the dev frontend on another origin can call it.
 
 from __future__ import annotations
 
+import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from perpleximanus.core import DEFAULT_OWNER_ID
@@ -24,9 +25,15 @@ from .config_state import (
     McpConnectionDTO,
     ModelDTO,
     ModelUpsert,
+    OpenRouterKeyBody,
+    OpenRouterKeyStatus,
+    OpenRouterModelDTO,
     SkillDTO,
     SkillPatch,
+    normalize_openrouter,
 )
+
+_OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 
 
 class ConversationSummaryDTO(BaseModel):
@@ -97,6 +104,36 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
             return state.remove_model(model_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # ---- OpenRouter: live catalogue proxy + encrypted key -------------------
+
+    @app.get("/api/models/openrouter")
+    async def get_openrouter_models() -> list[OpenRouterModelDTO]:
+        # Public endpoint (no key needed to list). Proxied so the browser avoids
+        # CORS and gets a normalized shape. Adding a model reuses POST /api/models.
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.get(_OPENROUTER_MODELS_URL)
+                resp.raise_for_status()
+                data = resp.json().get("data", [])
+        except (httpx.HTTPError, ValueError) as exc:
+            raise HTTPException(status_code=502, detail=f"OpenRouter unreachable: {exc}") from exc
+        return normalize_openrouter(data)
+
+    @app.get("/api/openrouter/key")
+    async def get_openrouter_key() -> OpenRouterKeyStatus:
+        return state.openrouter_key_status()
+
+    @app.put("/api/openrouter/key")
+    async def put_openrouter_key(body: OpenRouterKeyBody) -> OpenRouterKeyStatus:
+        try:
+            return state.set_openrouter_key(body.key)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/openrouter/key")
+    async def delete_openrouter_key() -> OpenRouterKeyStatus:
+        return state.clear_openrouter_key()
 
     # ---- skills (wiring-pending scaffold) -----------------------------------
 

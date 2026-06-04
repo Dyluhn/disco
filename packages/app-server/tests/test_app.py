@@ -9,9 +9,9 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 from perpleximanus.app_server import create_app
-from perpleximanus.app_server.config_state import ConfigState
+from perpleximanus.app_server.config_state import ConfigState, normalize_openrouter
 from perpleximanus.core import SqliteEventStore
-from perpleximanus.core.llm import ConfigStore
+from perpleximanus.core.llm import ConfigStore, SecretBox, SecretStore
 
 
 @pytest.fixture
@@ -21,8 +21,12 @@ def store() -> SqliteEventStore:
 
 @pytest.fixture
 def client(store: SqliteEventStore, tmp_path) -> TestClient:
-    # Isolated assignment overlay per test (PUTs persist here, not the repo).
-    cfg_state = ConfigState(store=ConfigStore(tmp_path / "config.json"))
+    # Isolated config + secrets per test (PUTs persist here, not the repo). The
+    # secret box has a test app secret, so the encrypted-key path is exercised.
+    cfg_state = ConfigState(
+        store=ConfigStore(tmp_path / "config.json"),
+        secrets=SecretStore(tmp_path / "secrets.json", box=SecretBox("test-app-secret")),
+    )
     return TestClient(create_app(store, cfg_state))
 
 
@@ -89,6 +93,43 @@ def test_edit_and_delete_unknown_model_400(client):
     body = {"id": "ghost", "model_id": "x"}
     assert client.put("/api/models/ghost", json=body).status_code == 400
     assert client.delete("/api/models/ghost").status_code == 400
+
+
+# ---- OpenRouter: normalize + encrypted key ----------------------------------
+
+
+def test_normalize_openrouter_maps_pricing_and_capabilities():
+    raw = [
+        {
+            "id": "anthropic/claude-3.5-sonnet",
+            "name": "Anthropic: Claude 3.5 Sonnet",
+            "context_length": 200000,
+            "pricing": {"prompt": "0.000003", "completion": "0.000015"},
+            "architecture": {"input_modalities": ["text", "image"]},
+            "supported_parameters": ["tools", "response_format"],
+        },
+        {"id": "tiny/model", "context_length": 4096, "pricing": {"prompt": "0", "completion": "0"}},
+    ]
+    out = {m.id: m for m in normalize_openrouter(raw)}
+    sonnet = out["anthropic/claude-3.5-sonnet"]
+    assert sonnet.price_in_per_m == 3.0 and sonnet.price_out_per_m == 15.0  # /token -> /Mtok
+    assert set(sonnet.capabilities) == {"vision", "tool_calling", "json_mode", "long_context"}
+    assert out["tiny/model"].price_in_per_m == 0.0
+    assert out["tiny/model"].capabilities == []  # small ctx, no tools/vision
+
+
+def test_openrouter_key_lifecycle(client):
+    # not configured initially, but storable (test app secret present)
+    s = client.get("/api/openrouter/key").json()
+    assert s == {"configured": False, "locked": False, "can_store": True}
+    # set -> configured
+    s = client.put("/api/openrouter/key", json={"key": "sk-or-v1-abc"}).json()
+    assert s["configured"] is True and s["locked"] is False
+    # blank key rejected
+    assert client.put("/api/openrouter/key", json={"key": "  "}).status_code == 400
+    # clear -> gone
+    s = client.delete("/api/openrouter/key").json()
+    assert s["configured"] is False
 
 
 def test_assignment_update_is_absolute(client):

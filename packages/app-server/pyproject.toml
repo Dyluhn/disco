@@ -10,6 +10,7 @@ dependencies = [
     "perpleximanus-core",
     "fastapi>=0.110",
     "uvicorn>=0.30",
+    "httpx>=0.27",  # proxy the public OpenRouter model catalogue
 ]
 
 [build-system]

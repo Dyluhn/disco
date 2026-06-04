@@ -35,6 +35,23 @@ export interface ModelInfo {
   quantization?: string | null;
 }
 
+/** One model from the live OpenRouter catalogue (mirrors the backend DTO). */
+export interface OpenRouterModel {
+  id: string; // slug, becomes the model's model_id
+  name: string;
+  context_length: number;
+  price_in_per_m: number;
+  price_out_per_m: number;
+  capabilities: Capability[];
+}
+
+/** Status of the encrypted-at-rest OpenRouter API key. */
+export interface OpenRouterKeyStatus {
+  configured: boolean; // an encrypted key is stored
+  locked: boolean; // stored but not decryptable (PMX_SECRET_KEY missing/wrong)
+  can_store: boolean; // PMX_SECRET_KEY present, so a key can be saved
+}
+
 /** Create/edit payload for a catalogue model (mirrors the backend ModelUpsert). */
 export interface ModelUpsert {
   id: string;

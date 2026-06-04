@@ -15,6 +15,7 @@ grounded-answer frames. The Build surface's `ConfirmRisky` stays dormant.
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -24,8 +25,10 @@ from perpleximanus.core.llm import (
     DefaultLLMRouter,
     OperatingMode,
     RouterSummarizer,
+    SecretStore,
 )
 from perpleximanus.core.llm.config import RouterConfig
+from perpleximanus.core.llm.secrets import OPENROUTER_API_KEY_ENV
 from perpleximanus.core.llm.wiring import build_providers
 from perpleximanus.core.loop import AgentLoop, NeverConfirm, RouterAgent
 from perpleximanus.core.security import RuleBasedAnalyzer
@@ -63,12 +66,17 @@ class ConversationRuntime:
         *,
         config: RouterConfig | None = None,
         config_store: ConfigStore | None = None,
+        secret_store: SecretStore | None = None,
         router: DefaultLLMRouter | None = None,
         enable_thinking: bool = False,
         mode: OperatingMode = OperatingMode.INTERACTIVE,
         research_providers: dict[str, Any] | None = None,
     ) -> None:
         self._store = store
+        # The encrypted-at-rest secret store (OpenRouter key). Its decrypted key is
+        # overlaid into the provider env per request; if it's locked/empty the env
+        # value (if any) is used instead.
+        self._secret_store = secret_store or SecretStore()
         # The live retrieval/grounding providers for research_stream(). Injected
         # in tests (hermetic fakes); else lazily built from env on first use so
         # importing the runtime doesn't pull httpx until research is actually run.
@@ -95,7 +103,14 @@ class ConversationRuntime:
         if self._injected_router is not None:
             return self._injected_router
         cfg = self._config_store.load()
-        providers = build_providers(cfg, enable_thinking=self._enable_thinking)
+        # Overlay the decrypted OpenRouter key into the env build_providers reads,
+        # so OR models (api_key_env=PMX_OPENROUTER_API_KEY) authenticate without the
+        # secret ever being on disk in plaintext.
+        env = dict(os.environ)
+        or_key = self._secret_store.get_openrouter_key()
+        if or_key:
+            env[OPENROUTER_API_KEY_ENV] = or_key
+        providers = build_providers(cfg, env=env, enable_thinking=self._enable_thinking)
         return DefaultLLMRouter(cfg, providers)
 
     def _loop_for(self, conversation_id: str) -> AgentLoop:

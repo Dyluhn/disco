@@ -4,6 +4,7 @@ import { costLabel } from "@/lib/cost";
 import { findModel, useAssignments, useModels, useUpdateAssignments } from "@/hooks/useModels";
 import { isFree, type ModelInfo, ROLES } from "@/types/models";
 import { ModelCatalogue } from "./ModelCatalogue";
+import { OpenRouterSection } from "./OpenRouterSection";
 import { RoleModelPicker } from "./RoleModelPicker";
 
 /**
@@ -120,6 +121,7 @@ export function ModelMatrix() {
       </div>
 
       <ModelCatalogue />
+      <OpenRouterSection />
     </section>
   );
 }

@@ -70,6 +70,30 @@ describe("Settings — model catalogue (CRUD)", () => {
   });
 });
 
+describe("Settings — OpenRouter", () => {
+  it("saves the key and adds an OpenRouter model to the catalogue", async () => {
+    const user = userEvent.setup();
+    withQuery(<SettingsView />);
+    await screen.findByText("OpenRouter");
+
+    // save the (encrypted) key (the input appears once the key-status query resolves)
+    await user.type(await screen.findByLabelText(/OpenRouter API key/i), "sk-or-v1-test");
+    await user.click(screen.getByRole("button", { name: /Save key/i }));
+    await waitFor(() => expect(screen.getByText(/Key configured/i)).toBeInTheDocument());
+
+    // browse the catalogue and add a model
+    await user.click(screen.getByRole("button", { name: /Browse OpenRouter models/i }));
+    const dialog = await screen.findByRole("dialog");
+    // claude is already "Added" (the seed overflow model maps to it), so the first
+    // Add button is the next model (gpt-4o) — proving the added-detection works.
+    const adds = await within(dialog).findAllByRole("button", { name: /^Add$/i });
+    await user.click(adds[0]);
+
+    // it lands in our catalogue (namespaced id), assignable like any other model
+    await waitFor(() => expect(screen.getByText(/or-openai-gpt-4o/i)).toBeInTheDocument());
+  });
+});
+
 describe("Settings — skills + MCP scaffolds", () => {
   it("lists skills with disabled toggles, honestly flagged not wired", async () => {
     withQuery(<SettingsView />);

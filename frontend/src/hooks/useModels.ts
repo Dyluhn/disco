@@ -1,9 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  clearOpenRouterKey,
   createModel,
   deleteModel,
   getAssignments,
+  getOpenRouterKeyStatus,
   listModels,
+  listOpenRouterModels,
+  setOpenRouterKey,
   updateAssignments,
   updateModel,
 } from "@/api/models";
@@ -12,6 +16,8 @@ import type {
   ModelAssignments,
   ModelInfo,
   ModelUpsert,
+  OpenRouterKeyStatus,
+  OpenRouterModel,
 } from "@/types/models";
 
 /**
@@ -66,6 +72,42 @@ export function useDeleteModel() {
   return useMutation({
     mutationFn: (id: string) => deleteModel(id),
     onSuccess: (models) => qc.setQueryData(MODELS_KEY, models),
+  });
+}
+
+// ---- OpenRouter -----------------------------------------------------------
+
+const OR_MODELS_KEY = ["openrouter-models"] as const;
+const OR_KEY_KEY = ["openrouter-key"] as const;
+
+/** The live OpenRouter catalogue. `enabled` gates the fetch to when the browse
+ * dialog opens (don't pull hundreds of models on settings load). */
+export function useOpenRouterModels(enabled: boolean) {
+  return useQuery<OpenRouterModel[]>({
+    queryKey: OR_MODELS_KEY,
+    queryFn: listOpenRouterModels,
+    enabled,
+    staleTime: 10 * 60 * 1000, // the catalogue changes slowly; cache 10 min
+  });
+}
+
+export function useOpenRouterKey() {
+  return useQuery<OpenRouterKeyStatus>({ queryKey: OR_KEY_KEY, queryFn: getOpenRouterKeyStatus });
+}
+
+export function useSetOpenRouterKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (key: string) => setOpenRouterKey(key),
+    onSuccess: (status) => qc.setQueryData(OR_KEY_KEY, status),
+  });
+}
+
+export function useClearOpenRouterKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => clearOpenRouterKey(),
+    onSuccess: (status) => qc.setQueryData(OR_KEY_KEY, status),
   });
 }
 

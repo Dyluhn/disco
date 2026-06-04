@@ -1,6 +1,13 @@
 import { DEFAULT_ASSIGNMENTS, MODEL_CATALOGUE } from "@/fixtures/models";
 import { ApiError } from "./client";
-import type { AssignmentsPatch, ModelAssignments, ModelInfo, ModelUpsert } from "@/types/models";
+import type {
+  AssignmentsPatch,
+  ModelAssignments,
+  ModelInfo,
+  ModelUpsert,
+  OpenRouterKeyStatus,
+  OpenRouterModel,
+} from "@/types/models";
 import { apiGet, apiSend, fixtureDelay, isLive } from "./client";
 
 /**
@@ -109,5 +116,59 @@ export async function updateAssignments(patch: AssignmentsPatch): Promise<ModelA
   return {
     default_model: fixtureAssignments.default_model,
     roles: { ...fixtureAssignments.roles },
+  };
+}
+
+// ---- OpenRouter ------------------------------------------------------------
+
+// A tiny offline catalogue so the browse UI works without a backend (tests).
+const FIXTURE_OPENROUTER: OpenRouterModel[] = [
+  { id: "anthropic/claude-3.5-sonnet", name: "Anthropic: Claude 3.5 Sonnet", context_length: 200000, price_in_per_m: 3, price_out_per_m: 15, capabilities: ["tool_calling", "json_mode", "long_context", "vision"] },
+  { id: "openai/gpt-4o", name: "OpenAI: GPT-4o", context_length: 128000, price_in_per_m: 2.5, price_out_per_m: 10, capabilities: ["tool_calling", "json_mode", "long_context", "vision"] },
+  { id: "meta-llama/llama-3.3-70b-instruct", name: "Meta: Llama 3.3 70B Instruct", context_length: 131072, price_in_per_m: 0.12, price_out_per_m: 0.3, capabilities: ["tool_calling", "long_context"] },
+];
+let fixtureOrKey: OpenRouterKeyStatus = { configured: false, locked: false, can_store: true };
+
+/** The live OpenRouter catalogue (hundreds of models), proxied by the app-server. */
+export async function listOpenRouterModels(): Promise<OpenRouterModel[]> {
+  if (isLive()) return apiGet<OpenRouterModel[]>("/api/models/openrouter");
+  await fixtureDelay();
+  return FIXTURE_OPENROUTER;
+}
+
+export async function getOpenRouterKeyStatus(): Promise<OpenRouterKeyStatus> {
+  if (isLive()) return apiGet<OpenRouterKeyStatus>("/api/openrouter/key");
+  await fixtureDelay();
+  return { ...fixtureOrKey };
+}
+
+export async function setOpenRouterKey(key: string): Promise<OpenRouterKeyStatus> {
+  if (isLive()) return apiSend<OpenRouterKeyStatus>("PUT", "/api/openrouter/key", { key });
+  await fixtureDelay();
+  if (!key.trim()) throw new ApiError("key is empty", 400);
+  fixtureOrKey = { configured: true, locked: false, can_store: true };
+  return { ...fixtureOrKey };
+}
+
+export async function clearOpenRouterKey(): Promise<OpenRouterKeyStatus> {
+  if (isLive()) return apiSend<OpenRouterKeyStatus>("DELETE", "/api/openrouter/key");
+  await fixtureDelay();
+  fixtureOrKey = { configured: false, locked: false, can_store: true };
+  return { ...fixtureOrKey };
+}
+
+/** Turn an OpenRouter model into a catalogue upsert (shared key + endpoint). */
+export function openRouterUpsert(m: OpenRouterModel): ModelUpsert {
+  const id = "or-" + m.id.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase();
+  return {
+    id,
+    model_id: m.id,
+    base_url: "https://openrouter.ai/api/v1",
+    api_key_env: "PMX_OPENROUTER_API_KEY",
+    context_window: m.context_length,
+    quantization: null,
+    capabilities: [...m.capabilities],
+    price_in_per_m: m.price_in_per_m,
+    price_out_per_m: m.price_out_per_m,
   };
 }

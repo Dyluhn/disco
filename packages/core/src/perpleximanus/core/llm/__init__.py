@@ -47,6 +47,7 @@ from .routing import (
     NullRoutingSink,
     RoutingSink,
 )
+from .secrets import SecretBox, SecretStore
 from .summarizer import RouterSummarizer
 from .types import (
     CapabilityProfile,
@@ -103,6 +104,8 @@ __all__ = [
     "ToolSpec",
     "default_config",
     "ConfigStore",
+    "SecretBox",
+    "SecretStore",
     "default_mode_for_role",
     "derive_family",
     "is_context_window_exceeded",
