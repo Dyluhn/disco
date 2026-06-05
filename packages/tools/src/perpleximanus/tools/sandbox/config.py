@@ -20,14 +20,26 @@ class SandboxConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     # which backend the settings layer selected (positions on one interface).
-    backend: str = "gvisor"  # "process" | "gvisor" | "remote"
+    backend: str = "gvisor"  # "process" | "gvisor" | "podman" | "runc"
 
     # --- gVisor / Docker host (VM 201 contract) ---
     docker_socket: str = "unix:///var/run/docker.sock"  # local socket, no TCP/TLS
-    runtime: str = "runsc"  # gVisor; host default stays runc
+    runtime: str = "runsc"  # gVisor (runsc) / Podman (crun, server-side); a value, not a branch
     image: str = "pmx-sandbox:base"
-    workspace_root: str = "/opt/sandbox/workspaces"  # host dir bind-mounted to /workspace
+    workspace_root: str = "/opt/sandbox/workspaces"  # host dir bind-mounted to /workspace (gVisor)
     container_workspace: str = "/workspace"
+
+    # --- Podman native remote (VM 202 contract) ---
+    # The non-standard ROOTLESS socket path is exactly why we use Podman's native
+    # remote (not docker-py's ssh://, which assumes the default socket). The SSH leg
+    # uses the system ssh client, so tailnet keyless auth applies. Driving Podman
+    # through this socket means limits are enforced by the user@ systemd manager — a
+    # bare-SSH `podman run` would silently fall back to cgroupfs (limits don't apply).
+    podman_url: str = "http+ssh://sandbox@100.73.110.47/run/user/1000/podman/podman.sock"
+    # Podman has no auto-created bind source + rootless can't write under root-owned
+    # paths, so the workspace is a per-run NAMED VOLUME (auto-created, socket-mediated,
+    # persists across the container). This prefix names it.
+    workspace_volume_prefix: str = "pmx-ws"
 
     # default resource bounds applied on create (a SandboxSpec may tighten them).
     default_cpu: float = 1.0
@@ -38,5 +50,10 @@ class SandboxConfig(BaseModel):
 
 
 def default_sandbox_config() -> SandboxConfig:
-    """The starting config, wired to the VM 201 host contract."""
+    """The starting config, wired to the VM 201 host contract (gVisor/Docker)."""
     return SandboxConfig()
+
+
+def default_podman_config() -> SandboxConfig:
+    """The Podman-remote position, wired to the VM 202 contract (crun, rootless)."""
+    return SandboxConfig(backend="podman", runtime="crun")
