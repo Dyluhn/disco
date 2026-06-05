@@ -11,6 +11,7 @@ import { useBuildStream, type BuildSession } from "./useBuildStream";
 
 export function useBuild() {
   const [session, setSession] = useState<BuildSession | null>(null);
+  const [modelId, setModelId] = useState<string | null>(null); // null → server default
   const stream = useBuildStream(session);
 
   const create = useMutation({ mutationFn: createBuildConversation });
@@ -19,9 +20,9 @@ export function useBuild() {
     (task: string) => {
       const trimmed = task.trim();
       if (!trimmed) return;
-      create.mutate(undefined, { onSuccess: (cid) => setSession({ cid, task: trimmed }) });
+      create.mutate(modelId, { onSuccess: (cid) => setSession({ cid, task: trimmed }) });
     },
-    [create],
+    [create, modelId],
   );
 
   const kill = useCallback(async () => {
@@ -35,6 +36,8 @@ export function useBuild() {
     started: session !== null,
     task: session?.task ?? null,
     submitting: create.isPending,
+    modelId,
+    setModelId,
     submit,
     kill,
     reset,

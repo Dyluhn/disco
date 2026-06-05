@@ -113,7 +113,8 @@ export const traceAfterConfirm: AgentEvent[] = [
     seq: 8,
     message: {
       role: "agent",
-      content: "Done — fizzbuzz ran correctly (1, 2, Fizz, … FizzBuzz) and the file was removed.",
+      content:
+        "Done — **fizzbuzz ran correctly** and the file was removed. The output was:\n\n```\n1\n2\nFizz\n…\nFizzBuzz\n```\n\nThe script lives in `fizzbuzz.py`.",
     },
   },
 ];

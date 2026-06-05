@@ -34,6 +34,7 @@ class CreateConversationBody(BaseModel):
     space_id: str | None = None
     title: str | None = None
     surface: str = "research"  # "research" (read-only, ungated) | "build" (agent + gate)
+    model_override: str | None = None  # pin the driver model (catalogue key) for this convo
 
 
 class SendMessageBody(BaseModel):
@@ -69,14 +70,24 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         store.create_conversation(
             conversation_id, owner_id=body.owner_id, space_id=body.space_id, title=body.title
         )
-        # Select the surface (Build composes tools + sandbox + the ConfirmRisky gate).
+        # Select the surface (Build composes tools + sandbox + the ConfirmRisky gate) +
+        # pin the driver model if the picker chose one.
         if runtime is not None:
             runtime.set_surface(conversation_id, body.surface)
+            runtime.set_model_override(conversation_id, body.model_override)
         return {
             "conversation_id": conversation_id,
             "conversation_url": f"/ws/conversations/{conversation_id}",
             "surface": body.surface,
         }
+
+    @app.get("/models")
+    async def list_models() -> dict:
+        """The driver-eligible models for the Build chat model picker (+ the default).
+        Sourced from the live router config so it reflects Settings assignments."""
+        if runtime is None:
+            return {"models": [], "default": None}
+        return runtime.driver_models()
 
     @app.post("/conversations/{conversation_id}/messages")
     async def post_message(conversation_id: str, body: SendMessageBody) -> dict:

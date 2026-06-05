@@ -56,6 +56,14 @@ from perpleximanus.tools import (
 )
 
 
+def _model_label(model_id: str) -> str:
+    """A short human label from a model_id (drops the gguf/quant noise + provider path)."""
+    base = model_id.split("/")[-1].removesuffix(".gguf")
+    for suffix in ("-UD-Q5_K_XL", "-UD-Q4_K_XL", "-Q5_K_M", "-Q4_K_M", "-Q4_K_S", "-IQ4_XS"):
+        base = base.replace(suffix, "")
+    return base
+
+
 class _NoToolExecutor:
     """A read-only surface with no tools: the model answers directly. Any tool the
     model hallucinates fails loudly as an observation (it has none to call)."""
@@ -109,6 +117,9 @@ class ConversationRuntime:
         self._surface: dict[str, str] = {}
         self._executors: dict[str, DefaultToolExecutor] = {}
         self._cap_handlers: dict[str, Any] | None = None
+        # per-conversation driver model override (the Build chat model picker → the
+        # AGENT_DRIVER for that conversation; RouterAgent applies it).
+        self._model_override: dict[str, str] = {}
         # The encrypted-at-rest secret store (OpenRouter key). Its decrypted key is
         # overlaid into the provider env per request; if it's locked/empty the env
         # value (if any) is used instead.
@@ -170,6 +181,43 @@ class ConversationRuntime:
         read-only + ungated. Idempotent until the loop is built."""
         self._surface[conversation_id] = "build" if surface == "build" else "research"
 
+    def set_model_override(self, conversation_id: str, model_id: str | None) -> None:
+        """Pin the driver model for a conversation (the Build chat model picker). The id
+        is a catalogue KEY; RouterAgent reassigns AGENT_DRIVER to it. Must be set before
+        the loop is built (at create time)."""
+        if model_id:
+            self._model_override[conversation_id] = model_id
+
+    def driver_models(self) -> dict[str, Any]:
+        """The driver-eligible models (live + tool-calling), deduped by underlying model,
+        for the Build model picker — with the current default. Cost-legible: provider +
+        free flag. Sourced from the live router config (Settings assignments honored)."""
+        from perpleximanus.core.llm import ModelRole, Requirement
+
+        cfg = self._config_store.load()
+        seen: set[str] = set()
+        models: list[dict[str, Any]] = []
+        for key, m in cfg.models.items():
+            if m.base_url is None or Requirement.TOOL_CALLING not in m.capabilities:
+                continue
+            if m.model_id in seen:
+                continue
+            seen.add(m.model_id)
+            models.append(
+                {
+                    "id": key,
+                    "label": _model_label(m.model_id),
+                    "provider": "openrouter" if m.provider == "openrouter" else "local",
+                    "free": m.price_out_per_m == 0.0,
+                    "context_window": m.context_window,
+                }
+            )
+        try:
+            default = cfg.model_for(ModelRole.AGENT_DRIVER)
+        except Exception:  # noqa: BLE001 — no assignment → no default highlight
+            default = None
+        return {"models": models, "default": default}
+
     def _retrieval_handlers(self) -> dict[str, Any]:
         """Lazily build the search/extract capability handlers from the research
         providers — so the Build agent toolset's search/extract are REAL, not a false
@@ -201,7 +249,12 @@ class ConversationRuntime:
             # A conversation pins the assignments it started with (consistency);
             # new conversations pick up later reassignments via _router_now().
             router = self._router_now()
-            agent = RouterAgent(router, conversation_id=conversation_id)
+            # the model picker pins the driver model for this conversation (AGENT_DRIVER).
+            agent = RouterAgent(
+                router,
+                conversation_id=conversation_id,
+                model_override=self._model_override.get(conversation_id),
+            )
             if self._surface.get(conversation_id) == "build":
                 loop = self._compose_build_loop(conversation_id, router, agent)
             else:

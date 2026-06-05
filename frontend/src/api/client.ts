@@ -42,6 +42,11 @@ export function agentWsUrl(path: string): string | null {
   return `${AGENT_BASE.replace(/^http/, "ws")}${path}`;
 }
 
+/** A GET against the AGENT-server (e.g. the driver model catalogue). */
+export function agentGet<T>(path: string): Promise<T> {
+  return fetch(`${AGENT_BASE}${path}`, { headers: { accept: "application/json" } }).then(parse<T>);
+}
+
 /** A REST call against the AGENT-server (loops/kill) — distinct from apiSend, which
  * targets the app-server (settings/library). */
 export function agentSend<T>(

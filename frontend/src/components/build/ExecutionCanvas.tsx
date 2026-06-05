@@ -8,12 +8,12 @@
 
 import { useMemo, useState } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
-import { FileCode2, MonitorPlay, SquareTerminal, TvMinimal } from "lucide-react";
+import { FileCode2, MonitorPlay, SquareTerminal } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { deriveFiles, deriveTerminal } from "@/lib/buildTrace";
-import type { AgentEvent } from "@/types/agent";
+import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
-type TabId = "files" | "terminal" | "preview" | "live";
+type TabId = "files" | "terminal" | "preview";
 
 function FilesPane({ events }: { events: AgentEvent[] }) {
   const files = useMemo(() => deriveFiles(events), [events]);
@@ -82,11 +82,22 @@ function TerminalPane({ events }: { events: AgentEvent[] }) {
   );
 }
 
-function Pending({ title, line }: { title: string; line: string }) {
+/** One phase-aware pane (replacing the redundant Preview + Live tabs): while the agent
+ * BUILDS you'd see the in-progress preview; once it reaches a capstone / finishes, the
+ * same pane becomes the LIVE interactive view of the deliverable. Honestly flagged until
+ * the deploy/preview + display (noVNC) channels are wired. */
+function PreviewPane({ status }: { status: ConversationStatus }) {
+  const done = status === "FINISHED" || status === "IDLE";
   return (
     <div className="flex h-full flex-col items-center justify-center gap-inline px-body text-center">
-      <p className="font-ui text-[0.9rem] text-text-muted">{title}</p>
-      <p className="max-w-measure font-ui text-[0.8rem] text-text-faint">{line}</p>
+      <p className="font-ui text-[0.9rem] text-text-muted">
+        {done ? "Live view" : "Building preview"}
+      </p>
+      <p className="max-w-measure font-ui text-[0.8rem] text-text-faint">
+        {done
+          ? "When the agent reaches a capstone, the running deliverable — a live app preview, or its browser (noVNC) for GUI tasks — becomes interactive here."
+          : "While the agent builds, a live preview of the deliverable will render here, updating as it works."}
+      </p>
       <span className="rounded-full border border-hairline px-inline py-px font-ui text-[0.66rem] uppercase tracking-wide text-text-faint">
         not yet wired
       </span>
@@ -106,10 +117,15 @@ const TABS: { id: TabId; label: string; icon: typeof FileCode2; soon?: boolean }
   { id: "files", label: "Files", icon: FileCode2 },
   { id: "terminal", label: "Terminal", icon: SquareTerminal },
   { id: "preview", label: "Preview", icon: MonitorPlay, soon: true },
-  { id: "live", label: "Live view", icon: TvMinimal, soon: true },
 ];
 
-export function ExecutionCanvas({ events }: { events: AgentEvent[] }) {
+export function ExecutionCanvas({
+  events,
+  status,
+}: {
+  events: AgentEvent[];
+  status: ConversationStatus;
+}) {
   // sensible default: Terminal if anything ran, else Files.
   const initial: TabId = useMemo(
     () => (deriveTerminal(events).length > 0 ? "terminal" : "files"),
@@ -148,16 +164,7 @@ export function ExecutionCanvas({ events }: { events: AgentEvent[] }) {
           <TerminalPane events={events} />
         </Tabs.Content>
         <Tabs.Content value="preview" className="h-full focus:outline-none">
-          <Pending
-            title="Live app preview"
-            line="A live iframe of the site/app the agent builds will render here once the deploy/preview tool lands."
-          />
-        </Tabs.Content>
-        <Tabs.Content value="live" className="h-full focus:outline-none">
-          <Pending
-            title="Live browser view"
-            line="A streamed noVNC view of the agent's browser (for GUI/browser tasks) will appear here when the display channel is wired."
-          />
+          <PreviewPane status={status} />
         </Tabs.Content>
       </div>
     </Tabs.Root>

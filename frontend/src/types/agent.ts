@@ -123,3 +123,16 @@ export interface IsolationInfo {
   label: string;
   adversarialSafe: boolean;
 }
+
+/** A driver-eligible model for the Build chat picker (from the agent-server /models). */
+export interface DriverModel {
+  id: string; // catalogue key — the model_override
+  label: string;
+  provider: "local" | "openrouter";
+  free: boolean;
+  context_window: number;
+}
+export interface DriverModels {
+  models: DriverModel[];
+  default: string | null;
+}

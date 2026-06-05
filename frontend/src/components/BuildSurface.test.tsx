@@ -51,11 +51,26 @@ describe("Build surface (Sidecar: activity feed + canvas + gate)", () => {
     expect(screen.getByRole("button", { name: /kill the agent/i })).toBeEnabled();
   });
 
-  it("Approve resumes the loop to a finished answer", async () => {
+  it("Approve resumes the loop to a finished answer rendered as markdown", async () => {
     const user = await enterBuildAndSubmit();
     await waitFor(() => screen.getByRole("button", { name: /approve & run/i }), { timeout: 5000 });
     await user.click(screen.getByRole("button", { name: /approve & run/i }));
     await waitFor(() => expect(screen.getByText(/fizzbuzz ran correctly/i)).toBeInTheDocument(), {
+      timeout: 5000,
+    });
+    // markdown is RENDERED, not literal: **bold** → <strong>, `code` → <code>, no raw "**"
+    expect(screen.getByText("fizzbuzz ran correctly").tagName).toBe("STRONG");
+    expect(screen.getAllByText("fizzbuzz.py").some((el) => el.tagName === "CODE")).toBe(true);
+    expect(screen.queryByText(/\*\*fizzbuzz/)).not.toBeInTheDocument();
+  });
+
+  it("shows the model picker (which model runs the agent) on the empty state", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("radio", { name: "build" }));
+    // the picker trigger is present and shows the default model from the catalogue
+    expect(screen.getByRole("button", { name: /choose the model/i })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Qwen3.6-27B")).toBeInTheDocument(), {
       timeout: 5000,
     });
   });

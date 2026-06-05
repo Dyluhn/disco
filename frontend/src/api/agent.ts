@@ -14,8 +14,13 @@ import {
   traceBeforeGate,
   FIXTURE_CID,
 } from "@/fixtures/agentTrace";
-import type { ConversationState, WSClientFrame, WSServerFrame } from "@/types/agent";
-import { agentLive, agentSend, agentWsUrl, fixtureDelay } from "./client";
+import type {
+  ConversationState,
+  DriverModels,
+  WSClientFrame,
+  WSServerFrame,
+} from "@/types/agent";
+import { agentGet, agentLive, agentSend, agentWsUrl, fixtureDelay } from "./client";
 
 export interface AgentHandle {
   /** Send a client frame (send_message / confirm / reject / cancel). */
@@ -24,14 +29,30 @@ export interface AgentHandle {
   cancel: () => void;
 }
 
-/** Create a Build-surface conversation (the agent loop + the ConfirmRisky gate). */
-export async function createBuildConversation(): Promise<string> {
+/** Create a Build-surface conversation (the agent loop + the ConfirmRisky gate),
+ * optionally pinning the driver model for it (the chat model picker). */
+export async function createBuildConversation(modelOverride?: string | null): Promise<string> {
   if (!agentLive()) return FIXTURE_CID;
   const res = await agentSend<{ conversation_id: string }>("POST", "/conversations", {
     owner_id: import.meta.env.VITE_OWNER_ID ?? "local",
     surface: "build",
+    model_override: modelOverride ?? null,
   });
   return res.conversation_id;
+}
+
+/** The driver-eligible models for the Build chat picker (+ the default). Offline → a
+ * small fixture so the picker renders in tests/screenshots. */
+export async function listDriverModels(): Promise<DriverModels> {
+  if (!agentLive())
+    return {
+      models: [
+        { id: "driver-local", label: "Qwen3.6-27B", provider: "local", free: true, context_window: 131072 },
+        { id: "driver-overflow", label: "claude-3.5-sonnet", provider: "openrouter", free: false, context_window: 200000 },
+      ],
+      default: "driver-local",
+    };
+  return agentGet<DriverModels>("/models");
 }
 
 /** The kill switch (BoD §13.6): halt, tear down the sandbox, revoke capabilities. */

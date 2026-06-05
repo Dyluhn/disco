@@ -13,9 +13,11 @@ import { useBuild } from "@/hooks/useBuild";
 import { deriveActivity, latestAgentMessage } from "@/lib/buildTrace";
 import type { IsolationInfo } from "@/types/agent";
 import { EmptyState, ErrorState } from "@/components/states";
+import { Markdown } from "@/components/Markdown";
 import { QueryInput } from "@/components/QueryInput";
 import { ActivityFeed } from "@/components/build/ActivityFeed";
 import { AgentStatusBar } from "@/components/build/AgentStatusBar";
+import { BuildModelPicker } from "@/components/build/BuildModelPicker";
 import { ConfirmationPanel } from "@/components/build/ConfirmationPanel";
 import { ExecutionCanvas } from "@/components/build/ExecutionCanvas";
 import { SteerInput } from "@/components/build/SteerInput";
@@ -46,6 +48,10 @@ export function BuildSurface() {
         <main className="flex flex-1 flex-col items-center justify-center gap-major px-body pb-[12vh]">
           <EmptyState />
           <div className="w-full max-w-measure">
+            <div className="mb-inline flex items-center justify-between gap-inline">
+              <BuildModelPicker value={b.modelId} onChange={b.setModelId} />
+              <span className="font-ui text-[0.72rem] text-text-faint">runs the agent</span>
+            </div>
             <QueryInput
               onSubmit={b.submit}
               busy={b.submitting}
@@ -91,8 +97,8 @@ export function BuildSurface() {
               <ActivityFeed items={activity} />
             )}
             {finalMessage && b.status === "FINISHED" && (
-              <div className="mt-section rounded-card border border-hairline bg-surface-1 px-body py-inline font-serif text-[0.95rem] leading-relaxed text-text">
-                {finalMessage}
+              <div className="mt-section rounded-card border border-hairline bg-surface-1 px-body py-inline text-[0.95rem]">
+                <Markdown>{finalMessage}</Markdown>
               </div>
             )}
           </div>
@@ -107,7 +113,10 @@ export function BuildSurface() {
             <SteerInput onSteer={b.steer} disabled={b.status === "WAITING_FOR_CONFIRMATION"} />
           ) : (
             b.status !== "ERROR" && (
-              <QueryInput onSubmit={b.submit} busy={b.submitting} placeholder="Give the agent another task…" />
+              <div className="flex flex-col gap-hair">
+                <BuildModelPicker value={b.modelId} onChange={b.setModelId} />
+                <QueryInput onSubmit={b.submit} busy={b.submitting} placeholder="Give the agent another task…" />
+              </div>
             )
           )}
         </div>
@@ -115,7 +124,7 @@ export function BuildSurface() {
 
       {/* ── Execution canvas / Inspector ─────────────────────────────────── */}
       <section className="flex min-h-[55vh] flex-1 flex-col border-t border-hairline lg:min-h-0 lg:border-t-0">
-        <ExecutionCanvas events={b.events} />
+        <ExecutionCanvas events={b.events} status={b.status} />
       </section>
     </div>
   );
