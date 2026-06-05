@@ -5,15 +5,17 @@ socket, selecting the `runsc` (gVisor) runtime. The session model: `create` star
 a keepalive container, `exec_shell` runs commands in it across calls, `destroy`
 removes it (the workspace persists on the host via the bind mount).
 
-Co-location: the local Docker socket means this backend MUST run on the Docker host
-(VM 201) — the socket is local-only by deliberate design (no TCP/TLS). Running it
-elsewhere is a deployment mismatch, not something this client papers over.
+Transport: the Docker endpoint is config-driven (`docker_socket`). It works over the
+LOCAL socket when co-located on VM 201, AND over Docker-over-SSH (`ssh://user@host`,
+using the system ssh client — e.g. keyless Tailscale SSH) when the agent-server runs
+elsewhere on the tailnet. Both are real positions, not a papered-over mismatch.
 
-Transport-agnostic on purpose: the workspace is reached through `read_file` /
-`write_file` / `list_dir`, never as a path the caller shares. This impl takes the
-fast local-bind-mount shortcut UNDER those methods (it's co-located with the host
-dir), but the interface stays clean so the stubbed SSH sibling — which has no local
-path — implements the same methods over its transport.
+Transport-agnostic file ops: the workspace is reached through `read_file` /
+`write_file` / `list_dir`, implemented via `docker exec`/`cp` against the container
+— NOT a local host path. So they work whether the backend is co-located (local
+socket) or remote (Docker-over-SSH), and the stubbed SSH sibling implements the same
+methods. The host bind-mount still persists the workspace on the daemon host across
+the container's life; the backend just never touches that path directly.
 
 docker-py is synchronous; every Docker call is run via `asyncio.to_thread` so it
 never blocks the event loop.
@@ -22,8 +24,10 @@ never blocks the event loop.
 from __future__ import annotations
 
 import asyncio
+import io
+import posixpath
+import tarfile
 import uuid
-from pathlib import Path
 from typing import Any
 
 from ..anatomy import Capability
@@ -38,11 +42,6 @@ from .config import SandboxConfig, default_sandbox_config
 
 # Exit codes the `timeout` coreutil reports when it fires (SIGTERM / then SIGKILL).
 _TIMEOUT_EXIT_CODES = frozenset({124, 137})
-
-
-def _socket_to_base_url(socket: str) -> str:
-    # docker-py wants the unix socket as "unix://<path>"; accept the contract's form.
-    return socket
 
 
 def _sealed(spec: SandboxSpec) -> bool:
@@ -64,7 +63,7 @@ class GvisorSandboxInstance:
         conversation_id: str,
         spec: SandboxSpec,
         container: Any,
-        host_workspace: Path,
+        host_workspace: str,
         config: SandboxConfig,
     ) -> None:
         self.id = id
@@ -72,18 +71,22 @@ class GvisorSandboxInstance:
         self.conversation_id = conversation_id
         self.spec = spec
         self._container = container
-        self._host_workspace = host_workspace.resolve()
+        self._host_workspace = host_workspace  # a path on the DAEMON host (info only)
         self._cfg = config
+        self._ws = config.container_workspace  # the in-container workspace root
         self._destroyed = False
 
     def _alive(self) -> None:
         if self._destroyed:
             raise SandboxError(f"sandbox instance {self.id} has been destroyed")
 
-    def _resolve(self, path: str) -> Path:
-        """Resolve `path` within the workspace; reject escapes (../, absolute)."""
-        target = (self._host_workspace / path).resolve()
-        if target != self._host_workspace and self._host_workspace not in target.parents:
+    def _container_path(self, path: str) -> str:
+        """Resolve `path` to an absolute path INSIDE the container's workspace,
+        rejecting escapes (../, absolute). File ops go through the container (docker
+        exec / cp), never a host path — so this works over any Docker transport
+        (local socket or Docker-over-SSH), not just when co-located."""
+        target = posixpath.normpath(posixpath.join(self._ws, path))
+        if target != self._ws and not target.startswith(self._ws + "/"):
             raise SandboxError(f"path escapes workspace: {path!r}")
         return target
 
@@ -125,23 +128,55 @@ class GvisorSandboxInstance:
         )
 
     async def read_file(self, path: str) -> bytes:
+        """Read a workspace file via `docker exec cat` — binary-safe, transport-
+        agnostic. Missing/unreadable file → SandboxError."""
         self._alive()
-        return await asyncio.to_thread(self._resolve(path).read_bytes)
+        target = self._container_path(path)
+
+        def _read() -> bytes:
+            res = self._container.exec_run(["cat", "--", target], demux=True)
+            if res.exit_code != 0:
+                err = (res.output[1] if res.output else b"") or b""
+                raise SandboxError(f"read_file {path!r}: {err.decode('utf-8', 'replace').strip()}")
+            return (res.output[0] if res.output else b"") or b""
+
+        return await asyncio.to_thread(_read)
 
     async def write_file(self, path: str, data: bytes) -> None:
+        """Write a workspace file via `docker cp` (put_archive) — binary-safe. The
+        parent dir is created in the container first."""
         self._alive()
-        target = self._resolve(path)
+        target = self._container_path(path)
+        parent = posixpath.dirname(target) or self._ws
+        name = posixpath.basename(target)
 
         def _write() -> None:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
+            self._container.exec_run(["mkdir", "-p", "--", parent])
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode="w") as tar:
+                info = tarfile.TarInfo(name=name)
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+            buf.seek(0)
+            if not self._container.put_archive(parent, buf.getvalue()):
+                raise SandboxError(f"write_file {path!r} failed")
 
         await asyncio.to_thread(_write)
 
     async def list_dir(self, path: str) -> list[str]:
+        """List a workspace dir via `docker exec ls`."""
         self._alive()
-        target = self._resolve(path)
-        return await asyncio.to_thread(lambda: sorted(p.name for p in target.iterdir()))
+        target = self._container_path(path)
+
+        def _list() -> list[str]:
+            res = self._container.exec_run(["ls", "-1A", "--", target], demux=True)
+            if res.exit_code != 0:
+                err = (res.output[1] if res.output else b"") or b""
+                raise SandboxError(f"list_dir {path!r}: {err.decode('utf-8', 'replace').strip()}")
+            out = (res.output[0] if res.output else b"") or b""
+            return sorted(n for n in out.decode("utf-8", "replace").splitlines() if n)
+
+        return await asyncio.to_thread(_list)
 
     def display_url(self) -> str | None:
         return None  # no noVNC display on this backend (yet)
@@ -186,7 +221,13 @@ class GvisorSandboxService:
             try:
                 import docker
 
-                client = docker.DockerClient(base_url=_socket_to_base_url(self._cfg.docker_socket))
+                base_url = self._cfg.docker_socket
+                kwargs: dict[str, Any] = {"base_url": base_url}
+                if base_url.startswith("ssh://"):
+                    # Docker-over-SSH: use the SYSTEM ssh client so the host's auth
+                    # (e.g. keyless Tailscale SSH) applies, not docker-py's paramiko.
+                    kwargs["use_ssh_client"] = True
+                client = docker.DockerClient(**kwargs)
                 client.ping()
             except Exception as exc:  # noqa: BLE001 — map to a typed infra error
                 raise SandboxUnavailableError(
@@ -202,16 +243,19 @@ class GvisorSandboxService:
             raise SandboxUnavailableError(f"could not query Docker runtimes: {exc}") from exc
         return self._cfg.runtime in runtimes
 
-    def _start_container(self, spec: SandboxSpec, instance_id: str, host_workspace: Path) -> Any:
+    def _start_container(self, spec: SandboxSpec, instance_id: str, host_workspace: str) -> Any:
         """All the blocking Docker work for `create`, run in a thread. Maps infra
-        failures to typed errors with the real cause."""
+        failures to typed errors with the real cause. `host_workspace` is a path on
+        the DAEMON host (not necessarily local)."""
         client = self._client()
         if not self._runsc_available(client):
             raise SandboxUnavailableError(
                 f"the {self._cfg.runtime!r} runtime is not configured on the Docker host"
             )
 
-        host_workspace.mkdir(parents=True, exist_ok=True)
+        # NOTE: do NOT mkdir the workspace locally — the bind-mount source is a path
+        # on the Docker DAEMON host (VM 201), which Docker creates on demand. Making
+        # it here would (wrongly) create it on whatever host runs the backend.
         sealed = _sealed(spec)
         mem_mb = spec.memory_mb or self._cfg.default_memory_mb
         cpu = spec.cpu or self._cfg.default_cpu
@@ -227,9 +271,7 @@ class GvisorSandboxService:
                 network_mode="none" if sealed else "bridge",
                 mem_limit=f"{mem_mb}m",
                 nano_cpus=int(cpu * 1_000_000_000),
-                volumes={
-                    str(host_workspace): {"bind": self._cfg.container_workspace, "mode": "rw"}
-                },
+                volumes={host_workspace: {"bind": self._cfg.container_workspace, "mode": "rw"}},
                 # NO host env: nothing from the agent-server's environment leaks in.
                 # Only capability-granted values would be added here (none by default).
                 environment={},
@@ -248,7 +290,8 @@ class GvisorSandboxService:
         self, spec: SandboxSpec, *, owner_id: str, conversation_id: str
     ) -> SandboxInstance:
         instance_id = f"sbx_{uuid.uuid4().hex}"
-        host_workspace = Path(self._cfg.workspace_root) / instance_id
+        # A path on the DAEMON host (VM 201) — kept as a posix string, not a local Path.
+        host_workspace = posixpath.join(self._cfg.workspace_root, instance_id)
         container = await asyncio.to_thread(
             self._start_container, spec, instance_id, host_workspace
         )

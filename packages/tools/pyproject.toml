@@ -7,7 +7,10 @@ description = "Tool/action space for the perpleximanus platform (placeholder)."
 requires-python = ">=3.12"
 dependencies = [
     "perpleximanus-core",
-    "docker>=7",  # Docker SDK — the gVisor backend drives VM 201's daemon over the local socket
+    # Docker SDK — the gVisor backend drives the daemon over the local socket OR
+    # Docker-over-SSH (the [ssh] extra makes ssh:// importable; use_ssh_client=True
+    # still authenticates via the system ssh, e.g. keyless Tailscale SSH).
+    "docker[ssh]>=7",
 ]
 
 [build-system]

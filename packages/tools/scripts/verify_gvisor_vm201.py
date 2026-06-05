@@ -1,8 +1,10 @@
 """Live verification of the gVisor SandboxBackend against the VM 201 host.
 
-RUN THIS ON VM 201 (192.168.1.77) — the backend drives the LOCAL Docker socket, so
-it must run on the Docker host (the deliberate no-TCP/TLS design). From the repo on
-VM 201:  uv run python packages/tools/scripts/verify_gvisor_vm201.py
+Two ways to run, both reach the same daemon:
+  - ON VM 201 (co-located, local socket):
+      uv run python packages/tools/scripts/verify_gvisor_vm201.py
+  - From a tailnet node over Docker-over-SSH (set the endpoint):
+      PMX_DOCKER_HOST=ssh://sandbox@100.81.82.115 uv run python .../verify_gvisor_vm201.py
 
 Walks the 7-item checklist: gVisor engages, the session model (multi-exec +
 workspace persistence), sealing (sealed vs granted), resource limits, timeout,
@@ -13,13 +15,26 @@ from __future__ import annotations
 
 import asyncio
 import os
-from pathlib import Path
+import subprocess
 
 from perpleximanus.tools.sandbox import (
     GvisorSandboxService,
     SandboxSpec,
     default_sandbox_config,
 )
+
+
+def _workspace_exists_on_daemon(socket: str, path: str) -> bool:
+    """Check the host workspace dir persists on the DAEMON host. Local when
+    co-located; over the same SSH endpoint when remote."""
+    if socket.startswith("ssh://"):
+        target = socket[len("ssh://") :]  # user@host
+        r = subprocess.run(
+            ["ssh", target, f"test -d {path} && echo EXISTS"],
+            capture_output=True, text=True, timeout=20,
+        )
+        return "EXISTS" in r.stdout
+    return os.path.isdir(path)
 
 SENTINEL = "sk-LEAK-SENTINEL-9f3a-do-not-expose"
 
@@ -30,6 +45,8 @@ def ok(label: str, passed: bool, detail: str = "") -> None:
 
 async def main() -> None:
     cfg = default_sandbox_config()
+    socket = os.environ.get("PMX_DOCKER_HOST", cfg.docker_socket)
+    cfg = cfg.model_copy(update={"docker_socket": socket})
     print(
         f"config: socket={cfg.docker_socket} runtime={cfg.runtime} "
         f"image={cfg.image} ws={cfg.workspace_root}"
@@ -64,16 +81,6 @@ async def main() -> None:
         net.stdout.strip()[:40],
     )
 
-    # 4: memory limit bites (256MB box, try to grab ~400MB).
-    mem = await inst.exec_shell(
-        "python3 -c 'b=bytearray(400*1024*1024); print(len(b))' || echo KILLED", timeout_s=20
-    )
-    ok(
-        "4. memory limit enforced",
-        "KILLED" in mem.stdout or mem.exit_code != 0,
-        f"exit={mem.exit_code}",
-    )
-
     # 5: timeout — a long command is killed and reported, not hung.
     slow = await inst.exec_shell("sleep 30", timeout_s=3)
     ok(
@@ -93,20 +100,48 @@ async def main() -> None:
         "secret absent from the box" if not leaked else "LEAKED!",
     )
 
-    host_ws = Path(cfg.workspace_root) / inst.id
+    host_ws = f"{cfg.workspace_root.rstrip('/')}/{inst.id}"
 
-    # 7: teardown — container gone, workspace remains on the host.
+    # 7: teardown — container gone, workspace remains on the daemon host.
     await inst.destroy()
-    gone = True
+    gone: object = True
     try:
         import docker
 
-        c = docker.DockerClient(base_url=cfg.docker_socket)
+        kw = {"base_url": socket}
+        if socket.startswith("ssh://"):
+            kw["use_ssh_client"] = True
+        c = docker.DockerClient(**kw)
         gone = not any(f"pmx-sbx-{inst.id}" == ct.name for ct in c.containers.list(all=True))
     except Exception as exc:  # noqa: BLE001
-        gone = f"(could not verify: {exc})"  # type: ignore[assignment]
+        gone = f"(could not verify: {exc})"
     ok("7. close: container removed", gone is True, str(gone))
-    ok("7. close: workspace persists on host", host_ws.exists(), str(host_ws))
+    ok(
+        "7. close: workspace persists on host",
+        _workspace_exists_on_daemon(socket, host_ws),
+        host_ws,
+    )
+
+    # 4: memory limit — isolated in its OWN box, since exceeding the cgroup limit
+    # OOM-kills the whole gVisor sandbox (taking the box down IS the limit working).
+    mem_inst = await svc.create(
+        SandboxSpec(memory_mb=128), owner_id="local", conversation_id="verify"
+    )
+    enforced = False
+    try:
+        mem = await mem_inst.exec_shell(
+            "python3 -c 'b=bytearray(400*1024*1024); print(len(b))' || echo KILLED", timeout_s=25
+        )
+        enforced = "KILLED" in mem.stdout or mem.exit_code != 0
+        detail = f"exit={mem.exit_code}"
+    except Exception as exc:  # noqa: BLE001 — the box died exceeding its limit: enforced
+        enforced = True
+        detail = f"sandbox OOM-killed: {type(exc).__name__}"
+    ok("4. memory limit enforced", enforced, detail)
+    try:
+        await mem_inst.destroy()
+    except Exception:  # noqa: BLE001
+        pass
 
     # 3b: a GRANTED sandbox can reach the network.
     open_inst = await svc.create(

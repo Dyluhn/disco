@@ -32,16 +32,40 @@ class FakeContainer:
         self.stopped = False
         self.removed = False
         self.exec_calls: list[list[str]] = []
-        # queued (exit_code, stdout_bytes, stderr_bytes); default echoes success
+        # queued (exit_code, stdout_bytes, stderr_bytes) for shell execs; else echoes ok
         self.exec_results: list[tuple[int, bytes, bytes]] = []
+        self.fs: dict[str, bytes] = {}  # in-container files, by absolute path
 
     def exec_run(self, cmd, demux=False, workdir=None):
         self.exec_calls.append(cmd)
-        if self.exec_results:
+        # file ops the backend issues: cat / ls / mkdir against the tiny FS
+        if cmd[0] == "cat":
+            path = cmd[-1]
+            if path in self.fs:
+                code, out, err = 0, self.fs[path], b""
+            else:
+                code, out, err = 1, b"", b"cat: No such file"
+        elif cmd[0] == "ls":
+            prefix = cmd[-1].rstrip("/") + "/"
+            names = sorted({p[len(prefix):].split("/")[0] for p in self.fs if p.startswith(prefix)})
+            code, out, err = 0, ("\n".join(names) + "\n").encode() if names else b"", b""
+        elif cmd[0] == "mkdir":
+            code, out, err = 0, b"", b""
+        elif self.exec_results:
             code, out, err = self.exec_results.pop(0)
         else:
             code, out, err = 0, b"ok\n", b""
         return _Exec(code, (out, err) if demux else (out or b"") + (err or b""))
+
+    def put_archive(self, path, data):
+        import io
+        import tarfile
+
+        with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            for m in tar.getmembers():
+                f = tar.extractfile(m)
+                self.fs[path.rstrip("/") + "/" + m.name] = f.read() if f else b""
+        return True
 
     def stop(self, timeout=None):
         self.stopped = True
@@ -151,14 +175,16 @@ async def test_timeout_is_reported_not_raised(tmp_path):
     assert res.stdout == "partial\n"  # partial output survives (not lost to a raise)
 
 
-async def test_file_round_trip_and_escape_rejection_via_bind_mount(tmp_path):
+async def test_file_round_trip_and_escape_rejection_via_docker_exec(tmp_path):
+    # File ops go through the container (exec/cp), NOT a host path — so they work
+    # over Docker-over-SSH, not just when co-located.
     client = FakeDockerClient()
     svc = _svc(tmp_path, client)
     inst = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
     await inst.write_file("sub/a.txt", b"hello")
     assert await inst.read_file("sub/a.txt") == b"hello"
     assert "sub" in await inst.list_dir(".")
-    # workspace jail: escapes are rejected
+    # workspace jail: escapes (../, absolute) are rejected before any Docker call
     with pytest.raises(SandboxError):
         await inst.read_file("../../etc/passwd")
     with pytest.raises(SandboxError):
