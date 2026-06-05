@@ -42,6 +42,10 @@ from ._container import TIMEOUT_EXIT_CODES, ContainerInstance, sealed
 from .base import ExecResult, SandboxError, SandboxInstance, SandboxSpec, SandboxUnavailableError
 from .config import SandboxConfig, default_podman_config
 
+# `podman exec` stderr markers that mean the CONTAINER is gone (not the inner command
+# failing) — used to type a mid-session death as SandboxUnavailableError.
+_PODMAN_DEAD_MARKERS = ("no such container", "no container with", "is not running", "improper")
+
 _CPU_PERIOD = 100_000  # cgroup CPU period (100ms); quota/period = cpus
 
 # A CLI runner: argv -> (exit_code, stdout, stderr). Injectable for hermetic tests.
@@ -95,6 +99,18 @@ class PodmanSandboxInstance(ContainerInstance):
     def _exec(self, argv: list[str], timeout: float) -> tuple[int, bytes, bytes]:
         return self._runner(["podman", "--url", self._cli_url, "exec", self._name, *argv], timeout)
 
+    def _raise_if_dead(self, rc: int, err: bytes) -> None:
+        """`podman exec` against a gone/exited container fails at the container level
+        (rc 125 + a 'no such container'/'not running' marker), distinct from the inner
+        command's own nonzero exit. Type that as SandboxUnavailableError so the session
+        re-creates (carried lesson #1). NOTE: not live-re-verifiable (VM 202 destroyed);
+        best-effort, mirrors the docker-py path's `_classify_failure`."""
+        if rc == 0:
+            return
+        msg = err.decode("utf-8", "replace")
+        if any(m in msg.lower() for m in _PODMAN_DEAD_MARKERS):
+            raise SandboxUnavailableError(f"sandbox container died mid-session: {msg.strip()}")
+
     async def exec_shell(self, cmd: str, *, timeout_s: int) -> ExecResult:
         """Run `cmd` via the CLI native remote — the timeout is enforced in-container
         (`timeout` coreutil) with an outer subprocess backstop; a killed command is
@@ -102,6 +118,7 @@ class PodmanSandboxInstance(ContainerInstance):
         self._alive()
         argv = ["timeout", "-k", "5", str(timeout_s), "sh", "-c", cmd]
         rc, out, err = await asyncio.to_thread(self._exec, argv, timeout_s + 15)
+        self._raise_if_dead(rc, err)
         return ExecResult(
             exit_code=rc,
             stdout=out.decode("utf-8", "replace"),
@@ -114,6 +131,7 @@ class PodmanSandboxInstance(ContainerInstance):
         target = self._container_path(path)
         rc, out, err = await asyncio.to_thread(self._exec, ["cat", "--", target], 60)
         if rc != 0:
+            self._raise_if_dead(rc, err)
             raise SandboxError(f"read_file {path!r}: {err.decode('utf-8', 'replace').strip()}")
         return out
 
@@ -122,6 +140,7 @@ class PodmanSandboxInstance(ContainerInstance):
         target = self._container_path(path)
         rc, out, err = await asyncio.to_thread(self._exec, ["ls", "-1A", "--", target], 30)
         if rc != 0:
+            self._raise_if_dead(rc, err)
             raise SandboxError(f"list_dir {path!r}: {err.decode('utf-8', 'replace').strip()}")
         return sorted(n for n in out.decode("utf-8", "replace").splitlines() if n)
 

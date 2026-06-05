@@ -56,6 +56,29 @@ class FileWriteTool:
         )
 
 
+class FileListArgs(BaseModel):
+    path: str = Field(default=".", description="Workspace-relative directory to list.")
+
+
+class FileListTool:
+    definition = ToolDef(
+        name="file_list",
+        description="List the entries of a directory in the workspace.",
+        args_model=FileListArgs,
+        needs=_FS,
+        runs_in="sandbox",
+    )
+
+    async def run(self, args: FileListArgs, ctx: ToolContext) -> ToolOutcome:
+        assert ctx.sandbox is not None
+        entries = await ctx.sandbox.list_dir(args.path)
+        return ToolOutcome(
+            success=True,
+            content="\n".join(entries) if entries else "(empty)",
+            structured={"path": args.path, "entries": entries},
+        )
+
+
 class FileEditArgs(BaseModel):
     path: str = Field(description="Workspace-relative path to edit.")
     old: str = Field(description="Exact text to replace (first occurrence).")

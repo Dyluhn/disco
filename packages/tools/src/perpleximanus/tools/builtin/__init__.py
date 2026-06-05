@@ -9,7 +9,7 @@ GAPs): `browser` (Playwright + dual-LLM read/act split + noVNC) and
 from __future__ import annotations
 
 from ..registry import ToolRegistry
-from .files import FileEditTool, FileReadTool, FileWriteTool
+from .files import FileEditTool, FileListTool, FileReadTool, FileWriteTool
 from .retrieval import ExtractTool, SearchTool
 from .system import CodeExecTool, ShellTool
 
@@ -17,6 +17,7 @@ __all__ = [
     "CodeExecTool",
     "ExtractTool",
     "FileEditTool",
+    "FileListTool",
     "FileReadTool",
     "FileWriteTool",
     "SearchTool",
@@ -34,6 +35,7 @@ def build_default_registry() -> ToolRegistry:
         FileReadTool(),
         FileWriteTool(),
         FileEditTool(),
+        FileListTool(),
         ShellTool(),
         CodeExecTool(),
         SearchTool(),

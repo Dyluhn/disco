@@ -17,7 +17,7 @@ import tarfile
 from typing import Any
 
 from ..anatomy import Capability
-from .base import ExecResult, SandboxError, SandboxSpec
+from .base import ExecResult, SandboxError, SandboxSpec, SandboxUnavailableError
 
 # Exit codes the `timeout` coreutil reports when it fires (SIGTERM / then SIGKILL).
 TIMEOUT_EXIT_CODES = frozenset({124, 137})
@@ -62,6 +62,33 @@ class ContainerInstance:
         if self._destroyed:
             raise SandboxError(f"sandbox instance {self.id} has been destroyed")
 
+    def _classify_failure(self, exc: Exception) -> SandboxError:
+        """A container op threw. If the container is no longer running (OOM-killed,
+        exited, removed — the VM 202 'OOM kills the WHOLE box' finding), the box is
+        gone → SandboxUnavailableError, which the session layer catches to RE-CREATE.
+        Otherwise it's a generic per-op SandboxError. Typing death distinctly is what
+        lets a backend-agnostic session tell a dead box from a normal op error."""
+        alive = False
+        try:
+            self._container.reload()  # docker-py & podman-py both expose reload()/status
+            alive = getattr(self._container, "status", "") == "running"
+        except Exception:  # noqa: BLE001 — reload failing => the container is gone
+            alive = False
+        if not alive:
+            return SandboxUnavailableError(f"sandbox container died mid-session: {exc}")
+        return SandboxError(f"sandbox op failed in {self.id}: {exc}")
+
+    async def _guarded(self, fn: Any) -> Any:
+        """Run a blocking container op in a thread; let already-typed SandboxErrors
+        (file-not-found, path-escape) pass through, but classify a raw backend throw
+        (which usually means the box died) as available/unavailable."""
+        try:
+            return await asyncio.to_thread(fn)
+        except SandboxError:
+            raise  # explicit, correctly-typed already
+        except Exception as exc:  # noqa: BLE001
+            raise self._classify_failure(exc) from exc
+
     def _container_path(self, path: str) -> str:
         """Resolve `path` to an absolute path INSIDE the workspace, rejecting escapes
         (../, absolute). File ops go through the container, so this is the only jail."""
@@ -90,8 +117,8 @@ class ContainerInstance:
                 stderr=f"command exceeded its {timeout_s}s timeout",
                 timed_out=True,
             )
-        except Exception as exc:  # noqa: BLE001 — surface the real backend cause
-            raise SandboxError(f"exec failed in {self.id}: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 — classify: dead box vs per-op failure
+            raise self._classify_failure(exc) from exc
 
         exit_code = res[0] if res[0] is not None else -1
         out, err = res[1] if res[1] is not None else (None, None)
@@ -114,7 +141,7 @@ class ContainerInstance:
                 raise SandboxError(f"read_file {path!r}: {err.decode('utf-8', 'replace').strip()}")
             return (res[1][0] if res[1] else b"") or b""
 
-        return await asyncio.to_thread(_read)
+        return await self._guarded(_read)
 
     async def write_file(self, path: str, data: bytes) -> None:
         """Write a workspace file via `cp` (put_archive) — binary-safe."""
@@ -135,7 +162,7 @@ class ContainerInstance:
             if not self._container.put_archive(parent, buf.getvalue()):
                 raise SandboxError(f"write_file {path!r} failed")
 
-        await asyncio.to_thread(_write)
+        await self._guarded(_write)
 
     async def list_dir(self, path: str) -> list[str]:
         """List a workspace dir via `exec ls`."""
@@ -150,7 +177,7 @@ class ContainerInstance:
             out = (res[1][0] if res[1] else b"") or b""
             return sorted(n for n in out.decode("utf-8", "replace").splitlines() if n)
 
-        return await asyncio.to_thread(_list)
+        return await self._guarded(_list)
 
     def display_url(self) -> str | None:
         return None  # no noVNC display on these backends (yet)

@@ -48,7 +48,7 @@ class ToolRegistry:
 # Surface presets (BoD §8). Research excludes world-affecting tools; Agent gets
 # the full toolset. These name the tools; the actual registered set may be a
 # subset in v1 (browser/deploy deferred) — scoping intersects with what exists.
-RESEARCH_TOOLS = frozenset({"search", "extract", "file_read", "code_exec"})
+RESEARCH_TOOLS = frozenset({"search", "extract", "file_read", "file_list", "code_exec"})
 AGENT_TOOLS = frozenset(
     {
         "search",
@@ -56,6 +56,7 @@ AGENT_TOOLS = frozenset(
         "file_read",
         "file_write",
         "file_edit",
+        "file_list",
         "shell",
         "code_exec",
         "browser",

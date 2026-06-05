@@ -21,6 +21,7 @@ from .isolation import IsolationProfile, isolation_for
 from .local import LocalSandboxInstance, LocalSandboxService
 from .podman import PodmanSandboxInstance, PodmanSandboxService
 from .process import ProcessSandboxInstance, ProcessSandboxService
+from .session import SandboxSession
 
 __all__ = [
     "ExecResult",
@@ -37,6 +38,7 @@ __all__ = [
     "SandboxError",
     "SandboxInstance",
     "SandboxService",
+    "SandboxSession",
     "SandboxSpec",
     "SandboxUnavailableError",
     "default_local_config",
