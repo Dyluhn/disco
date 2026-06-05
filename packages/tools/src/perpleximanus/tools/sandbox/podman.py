@@ -76,6 +76,7 @@ class PodmanSandboxInstance(ContainerInstance):
         cli_url: str,
         container_name: str,
         cli_runner: CliRunner,
+        workspace_uid: int = 1000,
     ) -> None:
         super().__init__(
             id=id,
@@ -85,6 +86,7 @@ class PodmanSandboxInstance(ContainerInstance):
             container=container,
             container_workspace=container_workspace,
             stop_timeout_s=stop_timeout_s,
+            workspace_uid=workspace_uid,
         )
         self._cli_url = cli_url
         self._name = container_name
@@ -247,6 +249,7 @@ class PodmanSandboxService:
             container=container,
             container_workspace=self._cfg.container_workspace,
             stop_timeout_s=self._cfg.stop_timeout_s,
+            workspace_uid=self._cfg.workspace_uid,
             cli_url=self._cli_url,
             container_name=name,
             cli_runner=self._cli_runner,

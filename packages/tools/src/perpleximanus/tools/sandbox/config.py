@@ -20,7 +20,7 @@ class SandboxConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     # which backend the settings layer selected (positions on one interface).
-    backend: str = "gvisor"  # "process" | "gvisor" | "podman" | "runc"
+    backend: str = "gvisor"  # "process" | "gvisor" | "podman" | "local"
 
     # --- gVisor / Docker host (VM 201 contract) ---
     docker_socket: str = "unix:///var/run/docker.sock"  # local socket, no TCP/TLS
@@ -28,6 +28,9 @@ class SandboxConfig(BaseModel):
     image: str = "pmx-sandbox:base"
     workspace_root: str = "/opt/sandbox/workspaces"  # host dir bind-mounted to /workspace (gVisor)
     container_workspace: str = "/workspace"
+    # The image's run-user uid (contract: `agent` = 1000). Files written via the
+    # interface are owned by it so the sandbox user can edit them, not just read them.
+    workspace_uid: int = 1000
 
     # --- Podman native remote (VM 202 contract) ---
     # The non-standard ROOTLESS socket path is exactly why we use Podman's native
@@ -57,3 +60,12 @@ def default_sandbox_config() -> SandboxConfig:
 def default_podman_config() -> SandboxConfig:
     """The Podman-remote position, wired to the VM 202 contract (crun, rootless)."""
     return SandboxConfig(backend="podman", runtime="crun")
+
+
+def default_local_config() -> SandboxConfig:
+    """The local container position: the Docker/OCI backend on the LOCAL socket
+    (`docker_socket` default) with the standard `runc` runtime — no SSH, no remote.
+    The lowest-isolation tier (shared host kernel); see `isolation.py`. Workspace is a
+    per-run named volume (`workspace_volume_prefix`), portable across local Docker and
+    rootless Podman. The cross-platform target (Windows validation deferred)."""
+    return SandboxConfig(backend="local", runtime="runc")

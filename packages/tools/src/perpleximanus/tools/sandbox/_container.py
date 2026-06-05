@@ -43,6 +43,7 @@ class ContainerInstance:
         container: Any,
         container_workspace: str,
         stop_timeout_s: int,
+        workspace_uid: int = 1000,
     ) -> None:
         self.id = id
         self.owner_id = owner_id
@@ -51,6 +52,10 @@ class ContainerInstance:
         self._container = container
         self._ws = container_workspace
         self._stop_timeout_s = stop_timeout_s
+        # The image's run-user uid (contract: `agent` = 1000). Written files are owned
+        # by it so the sandbox user can EDIT them — put_archive defaults to uid 0 (root),
+        # which a non-root container user can read but not modify.
+        self._workspace_uid = workspace_uid
         self._destroyed = False
 
     def _alive(self) -> None:
@@ -124,6 +129,8 @@ class ContainerInstance:
             with tarfile.open(fileobj=buf, mode="w") as tar:
                 info = tarfile.TarInfo(name=name)
                 info.size = len(data)
+                # Own the file as the container's run-user (not root) so it's editable.
+                info.uid = info.gid = self._workspace_uid
                 tar.addfile(info, io.BytesIO(data))
             if not self._container.put_archive(parent, buf.getvalue()):
                 raise SandboxError(f"write_file {path!r} failed")

@@ -74,11 +74,30 @@ class FakeContainer:
         self.removed = True
 
 
+class _FakeImages:
+    """Stands in for client.images — the never-pull guard calls .get() before any run."""
+
+    def __init__(self, has: bool) -> None:
+        self._has = has
+
+    def get(self, tag):
+        if not self._has:
+            raise ImageNotFound(f"no such image: {tag}")
+        return object()  # an opaque image handle is enough
+
+
 class FakeDockerClient:
-    def __init__(self, *, runtimes=("runsc", "runc"), run_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        runtimes=("runsc", "runc"),
+        run_error: Exception | None = None,
+        has_image: bool = True,
+    ) -> None:
         self._runtimes = {r: {} for r in runtimes}
         self._run_error = run_error
         self.containers = self
+        self.images = _FakeImages(has_image)
         self.last: FakeContainer | None = None
 
     def ping(self):
@@ -199,9 +218,10 @@ async def test_runsc_missing_is_a_typed_error(tmp_path):
 
 
 async def test_image_missing_is_a_typed_error(tmp_path):
-    client = FakeDockerClient(run_error=ImageNotFound("no such image"))
+    # The never-pull guard: a missing image fails loud at images.get, before any run.
+    client = FakeDockerClient(has_image=False)
     svc = _svc(tmp_path, client)
-    with pytest.raises(SandboxUnavailableError, match="image"):
+    with pytest.raises(SandboxUnavailableError, match="never pulls"):
         await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
 
 
