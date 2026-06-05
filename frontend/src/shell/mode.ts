@@ -23,7 +23,7 @@ export interface ModeMeta {
 
 export const MODES: ModeMeta[] = [
   { id: "search", label: "search", dormant: false },
-  { id: "build", label: "build", dormant: true },
+  { id: "build", label: "build", dormant: false }, // woken: the live agent surface
 ];
 
 export function modeMeta(id: Mode): ModeMeta {

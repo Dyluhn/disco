@@ -46,7 +46,7 @@ describe("Model leader pill (model-only)", () => {
 });
 
 describe("Mode slider (the sole mode control)", () => {
-  it("holds exactly Search (active) and Build (dormant/SOON), nothing else", () => {
+  it("holds exactly Search (active) and Build (live, selectable), nothing else", () => {
     render(
       <ModeProvider>
         <ModeSlider />
@@ -57,8 +57,9 @@ describe("Mode slider (the sole mode control)", () => {
     const search = screen.getByRole("radio", { name: "search" });
     const build = screen.getByRole("radio", { name: "build" });
     expect(search).toHaveAttribute("aria-checked", "true");
-    expect(build).toBeDisabled();
-    expect(screen.getByText("soon")).toBeInTheDocument();
+    // Build is WOKEN — selectable, no "soon" badge.
+    expect(build).toBeEnabled();
+    expect(screen.queryByText("soon")).not.toBeInTheDocument();
     // Deep Research is NOT a top-level mode.
     expect(screen.queryByText(/Deep Research/i)).not.toBeInTheDocument();
   });

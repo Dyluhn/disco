@@ -30,6 +30,32 @@ export function researchWsUrl(): string | null {
   return `${AGENT_BASE.replace(/^http/, "ws")}/ws/research`;
 }
 
+/** True when the agent-server is configured — the Build surface runs live. */
+export function agentLive(): boolean {
+  return AGENT_BASE.length > 0;
+}
+
+/** An agent-server WebSocket URL for `path` (e.g. a conversation stream), or null
+ * when unconfigured (Build falls back to a fixture trace offline/in tests). */
+export function agentWsUrl(path: string): string | null {
+  if (!AGENT_BASE) return null;
+  return `${AGENT_BASE.replace(/^http/, "ws")}${path}`;
+}
+
+/** A REST call against the AGENT-server (loops/kill) — distinct from apiSend, which
+ * targets the app-server (settings/library). */
+export function agentSend<T>(
+  method: "POST" | "PUT" | "DELETE",
+  path: string,
+  body?: unknown,
+): Promise<T> {
+  return fetch(`${AGENT_BASE}${path}`, {
+    method,
+    headers: body === undefined ? {} : { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  }).then(parse<T>);
+}
+
 /** An API error that carries the real backend message (surfaced to the UI). */
 export class ApiError extends Error {
   constructor(

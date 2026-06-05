@@ -47,7 +47,8 @@ describe("Application shell", () => {
       "aria-checked",
       "true",
     );
-    expect(within(group).getByRole("radio", { name: "build" })).toBeDisabled();
+    // Build is now WOKEN — a live, selectable mode (no longer dormant/SOON).
+    expect(within(group).getByRole("radio", { name: "build" })).toBeEnabled();
     // No separate/duplicate mode indicator; Deep Research is not a top-level mode.
     expect(screen.queryByRole("status", { name: /mode/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/Deep Research/i)).not.toBeInTheDocument();
