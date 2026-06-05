@@ -21,11 +21,24 @@ class SandboxError(Exception):
     destroy). The executor maps it to a `sandbox_error` ToolResult."""
 
 
+class SandboxUnavailableError(SandboxError):
+    """The backend infrastructure itself is unusable — Docker unreachable, the
+    `runsc` runtime missing, the base image absent, the container failed to start.
+    Carries the real underlying cause (reactive-error rule); distinct from a
+    per-command failure so the caller can tell "the box is broken" from "the
+    command failed"."""
+
+
 class ExecResult(BaseModel):
     model_config = ConfigDict(frozen=True)
     exit_code: int
     stdout: str
     stderr: str
+    # [v1.1 adjustment, flagged] A command killed for exceeding its timeout is
+    # reported with this flag set (not raised), so partial stdout/stderr + the exit
+    # code survive and the caller can distinguish a timeout from a normal non-zero
+    # exit. Additive + defaulted, so existing callers are unaffected.
+    timed_out: bool = False
 
 
 class SandboxSpec(BaseModel):

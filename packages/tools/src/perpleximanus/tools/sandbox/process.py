@@ -69,10 +69,17 @@ class ProcessSandboxInstance:
         )
         try:
             out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
-        except TimeoutError as e:
+        except TimeoutError:
             proc.kill()
             await proc.wait()
-            raise SandboxError(f"shell command timed out after {timeout_s}s") from e
+            # Report timed-out (not raised), consistent with the gVisor sibling: the
+            # caller gets the flag + exit code rather than losing it to an exception.
+            return ExecResult(
+                exit_code=124,
+                stdout="",
+                stderr=f"command timed out after {timeout_s}s",
+                timed_out=True,
+            )
         return ExecResult(
             exit_code=proc.returncode if proc.returncode is not None else -1,
             stdout=out.decode("utf-8", errors="replace"),
