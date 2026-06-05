@@ -32,7 +32,11 @@ export const traceBeforeGate: AgentEvent[] = [
     thought: "I'll write fizzbuzz.py to the workspace.",
     tool_call: {
       tool_name: "file_write",
-      arguments: { path: "fizzbuzz.py", content: "for i in range(1,16):\n    ..." },
+      arguments: {
+        path: "fizzbuzz.py",
+        content:
+          'for i in range(1, 16):\n    if i % 15 == 0:\n        print("FizzBuzz")\n    elif i % 3 == 0:\n        print("Fizz")\n    elif i % 5 == 0:\n        print("Buzz")\n    else:\n        print(i)\n',
+      },
     },
   },
   {

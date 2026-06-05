@@ -36,11 +36,11 @@ try {
 
   // 1. Build, empty — the task input
   await page.getByRole("radio", { name: "build" }).click();
-  await page.getByPlaceholder(/describe a task/i).waitFor();
+  await page.getByPlaceholder(/describe what you want/i).waitFor();
   await shot(page, "build-empty");
 
   // 2. submit a task → the trace streams to the confirmation gate
-  await page.getByPlaceholder(/describe a task/i).fill("Write fizzbuzz, run it, then clean up.");
+  await page.getByPlaceholder(/describe what you want/i).fill("Write fizzbuzz, run it, then clean up.");
   await page.keyboard.press("Enter");
   await page.getByRole("alertdialog", { name: /approval/i }).waitFor({ timeout: 10000 });
   await page.waitForTimeout(200);

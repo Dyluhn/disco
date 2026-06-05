@@ -1,19 +1,24 @@
 /**
- * The Build (agent) surface — the live agentic loop made visible + controllable. The
- * Research template, with agent semantics: a task drives a plan→act→observe trace
- * (AgentTrace), risky actions pause at a confirmation gate (ConfirmationPanel) with the
- * risk rationale in view, and a prominent kill switch is always reachable during a run.
+ * The Build (Agent) surface — the split-pane "Sidecar" (BoD §13.4/§13.5/§8.2): a control
+ * pane (the Project-Manager view: plain-language Activity Feed + confidence gradient, the
+ * confirmation gate, the Steering Wheel, status + the kill switch) BESIDE a live execution
+ * canvas/Inspector (Files · Terminal · Preview · Live). The technical detail lives in the
+ * canvas; the left pane stays a readable narrative — never a black box, never a debug log.
  *
- * Data-flow discipline: this component reads only the useBuild() hook; it never fetches.
+ * Data-flow discipline: reads only the useBuild() hook; never fetches.
  */
 
+import { useMemo } from "react";
 import { useBuild } from "@/hooks/useBuild";
+import { deriveActivity, latestAgentMessage } from "@/lib/buildTrace";
 import type { IsolationInfo } from "@/types/agent";
 import { EmptyState, ErrorState } from "@/components/states";
 import { QueryInput } from "@/components/QueryInput";
+import { ActivityFeed } from "@/components/build/ActivityFeed";
 import { AgentStatusBar } from "@/components/build/AgentStatusBar";
-import { AgentTrace } from "@/components/build/AgentTrace";
 import { ConfirmationPanel } from "@/components/build/ConfirmationPanel";
+import { ExecutionCanvas } from "@/components/build/ExecutionCanvas";
+import { SteerInput } from "@/components/build/SteerInput";
 
 // The active isolation tier, surfaced honestly at the point of use (the local container
 // backend the Build surface runs on — shared host kernel, not for adversarial workloads).
@@ -28,6 +33,12 @@ const ISOLATION: IsolationInfo = {
 
 export function BuildSurface() {
   const b = useBuild();
+  const activity = useMemo(
+    () => deriveActivity(b.events, b.pendingActionId, b.status),
+    [b.events, b.pendingActionId, b.status],
+  );
+  const finalMessage = useMemo(() => latestAgentMessage(b.events), [b.events]);
+  const running = b.status === "RUNNING" || b.status === "WAITING_FOR_CONFIRMATION";
 
   if (!b.started) {
     return (
@@ -39,10 +50,10 @@ export function BuildSurface() {
               onSubmit={b.submit}
               busy={b.submitting}
               autoFocus
-              placeholder="Describe a task for the agent to build or do…"
+              placeholder="Describe what you want the agent to build or do…"
             />
             <p className="mt-inline text-center font-ui text-[0.78rem] text-text-faint">
-              The agent acts in a sandbox. Risky steps pause for your approval.
+              The agent works in a sandbox and shows its plan. Risky steps pause for your approval.
             </p>
           </div>
         </main>
@@ -50,37 +61,62 @@ export function BuildSurface() {
     );
   }
 
-  const running = b.status === "RUNNING" || b.status === "WAITING_FOR_CONFIRMATION";
-
   return (
-    <div className="flex min-h-full flex-col pt-section">
-      <main className="mx-auto flex w-full max-w-doc flex-1 flex-col gap-section px-body pb-major">
-        <AgentStatusBar status={b.status} isolation={ISOLATION} onKill={b.kill} />
+    <div className="flex min-h-0 flex-col lg:h-full lg:flex-row">
+      {/* ── Control pane (Project-Manager view) ───────────────────────────── */}
+      <aside className="flex min-h-0 flex-col border-hairline lg:w-[27rem] lg:shrink-0 lg:overflow-hidden lg:border-r">
+        <div className="flex flex-col gap-inline px-body pt-section">
+          <AgentStatusBar status={b.status} isolation={ISOLATION} onKill={b.kill} />
+          <h1 className="font-display text-[1.3rem] font-medium leading-tight tracking-tight text-text">
+            {b.task}
+          </h1>
+        </div>
 
-        <h1 className="font-display text-[1.5rem] font-medium leading-tight tracking-tight text-text">
-          {b.task}
-        </h1>
-
-        {b.status === "ERROR" ? (
-          <ErrorState message={b.error ?? "The agent run failed."} onRetry={b.reset} />
-        ) : (
-          <AgentTrace events={b.events} pendingActionId={b.pendingActionId} />
-        )}
-
-        {b.pendingAction && (
-          <ConfirmationPanel action={b.pendingAction} onApprove={b.confirm} onReject={b.reject} />
-        )}
-
-        {!running && b.status !== "ERROR" && (
-          <div className="border-t border-hairline pt-section">
-            <QueryInput
-              onSubmit={b.submit}
-              busy={b.submitting}
-              placeholder="Give the agent another task…"
-            />
+        <div className="mt-section flex min-h-0 flex-1 flex-col px-body">
+          <div className="flex items-baseline justify-between">
+            <h2 className="font-ui text-[0.72rem] font-medium uppercase tracking-wide text-text-faint">
+              Activity
+            </h2>
+            <span
+              className="font-ui text-[0.68rem] text-text-faint"
+              title="The agent works one step at a time; an up-front plan preview lands with the planner step."
+            >
+              live task list
+            </span>
           </div>
-        )}
-      </main>
+          <div className="mt-inline min-h-0 flex-1 overflow-y-auto pb-inline lg:pr-hair">
+            {b.status === "ERROR" ? (
+              <ErrorState message={b.error ?? "The agent run failed."} onRetry={b.reset} />
+            ) : (
+              <ActivityFeed items={activity} />
+            )}
+            {finalMessage && b.status === "FINISHED" && (
+              <div className="mt-section rounded-card border border-hairline bg-surface-1 px-body py-inline font-serif text-[0.95rem] leading-relaxed text-text">
+                {finalMessage}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* gate · steer · follow-up — pinned under the feed */}
+        <div className="flex flex-col gap-inline border-t border-hairline px-body py-inline">
+          {b.pendingAction && (
+            <ConfirmationPanel action={b.pendingAction} onApprove={b.confirm} onReject={b.reject} />
+          )}
+          {running ? (
+            <SteerInput onSteer={b.steer} disabled={b.status === "WAITING_FOR_CONFIRMATION"} />
+          ) : (
+            b.status !== "ERROR" && (
+              <QueryInput onSubmit={b.submit} busy={b.submitting} placeholder="Give the agent another task…" />
+            )
+          )}
+        </div>
+      </aside>
+
+      {/* ── Execution canvas / Inspector ─────────────────────────────────── */}
+      <section className="flex min-h-[55vh] flex-1 flex-col border-t border-hairline lg:min-h-0 lg:border-t-0">
+        <ExecutionCanvas events={b.events} />
+      </section>
     </div>
   );
 }

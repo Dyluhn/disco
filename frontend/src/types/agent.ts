@@ -110,6 +110,7 @@ export type WSServerFrame =
 
 export type WSClientFrame =
   | { type: "send_message"; content: string }
+  | { type: "steer"; steer_text: string } // the Steering Wheel: redirect without losing context
   | { type: "confirm"; action_id?: string }
   | { type: "reject"; action_id?: string }
   | { type: "cancel" }

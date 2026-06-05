@@ -82,6 +82,7 @@ export interface BuildStream extends BuildStreamState {
   confirm: () => void;
   reject: () => void;
   cancel: () => void;
+  steer: (text: string) => void;
 }
 
 export function useBuildStream(session: BuildSession | null): BuildStream {
@@ -100,6 +101,10 @@ export function useBuildStream(session: BuildSession | null): BuildStream {
   const confirm = useCallback(() => handle.current?.send({ type: "confirm" }), []);
   const reject = useCallback(() => handle.current?.send({ type: "reject" }), []);
   const cancel = useCallback(() => handle.current?.send({ type: "cancel" }), []);
+  const steer = useCallback(
+    (text: string) => text.trim() && handle.current?.send({ type: "steer", steer_text: text.trim() }),
+    [],
+  );
 
   const pendingAction =
     (state.pendingActionId &&
@@ -108,5 +113,5 @@ export function useBuildStream(session: BuildSession | null): BuildStream {
       ) as ActionEvent | undefined)) ||
     null;
 
-  return { ...state, pendingAction, confirm, reject, cancel };
+  return { ...state, pendingAction, confirm, reject, cancel, steer };
 }
