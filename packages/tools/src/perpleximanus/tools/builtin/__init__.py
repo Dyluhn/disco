@@ -1,19 +1,21 @@
 """The core toolset (tool-sandbox-contract.md §9) + a default registry builder.
 
-v1 ships the headless-buildable tools: file_read/write/edit, shell, code_exec,
-search, extract. Deferred (need external infra / a contract patch, documented as
-GAPs): `browser` (Playwright + dual-LLM read/act split + noVNC) and
-`deploy_preview` (a real dev server + controlled preview boundary).
+Ships the headless-buildable tools: file_read/write/edit/list, shell, code_exec,
+search, extract, and `browser` (web reach + the prompt-injection content defense,
+read/act separation — runs through the sandbox). Deferred: `deploy_preview` (a real
+dev server + controlled preview boundary).
 """
 
 from __future__ import annotations
 
 from ..registry import ToolRegistry
+from .browser import BrowserTool
 from .files import FileEditTool, FileListTool, FileReadTool, FileWriteTool
 from .retrieval import ExtractTool, SearchTool
 from .system import CodeExecTool, ShellTool
 
 __all__ = [
+    "BrowserTool",
     "CodeExecTool",
     "ExtractTool",
     "FileEditTool",
@@ -27,9 +29,8 @@ __all__ = [
 
 
 def build_default_registry() -> ToolRegistry:
-    """Register the v1 core toolset. browser/deploy_preview are intentionally
-    absent (deferred); scoping intersects with what's registered, so they're
-    simply never offered until built."""
+    """Register the core toolset. `deploy_preview` is intentionally absent (deferred);
+    scoping intersects with what's registered, so it's simply never offered until built."""
     registry = ToolRegistry()
     for tool in (
         FileReadTool(),
@@ -40,6 +41,7 @@ def build_default_registry() -> ToolRegistry:
         CodeExecTool(),
         SearchTool(),
         ExtractTool(),
+        BrowserTool(),
     ):
         registry.register(tool)
     return registry

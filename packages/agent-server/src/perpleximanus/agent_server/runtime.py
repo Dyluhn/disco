@@ -44,6 +44,7 @@ from perpleximanus.core.security import RuleBasedAnalyzer
 from perpleximanus.core.store.sqlite import SqliteEventStore
 from perpleximanus.retrieval.wiring import retrieval_capability_handlers
 from perpleximanus.tools import (
+    Capability,
     CapabilityBroker,
     DefaultToolExecutor,
     ProcessSandboxService,
@@ -227,8 +228,14 @@ class ConversationRuntime:
         ConfirmRisky gate (NOT Research's NeverConfirm), and the real condenser. The
         executor is held so the kill switch can revoke caps + tear down the sandbox."""
         broker = self._build_broker()
+        # The Agent toolset includes the `browser`, which needs egress — so the Build
+        # sandbox GRANTS network (the cost-legible coupling: selecting Build is visible as
+        # network-granting; the gate + analyzer, not the seal, control risky egress here).
+        build_spec = self._sandbox_spec.model_copy(
+            update={"permitted": self._sandbox_spec.permitted | {Capability.NETWORK}}
+        )
         session = SandboxSession(
-            self._sandbox_service, self._sandbox_spec, conversation_id=conversation_id
+            self._sandbox_service, build_spec, conversation_id=conversation_id
         )
         executor = DefaultToolExecutor(
             build_default_registry(),

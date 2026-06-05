@@ -74,9 +74,11 @@ def test_other_tools_relative_ordering():
     assert a.assess(_tool("file_write", path="notes.txt")) == M
     assert a.assess(_tool("file_write", path="/etc/passwd")) == H  # outside workspace
     assert a.assess(_tool("deploy", target="prod")) == H
-    # browser: submitting/interacting ranks above a plain read
+    # browser: a read is low; interacting is MEDIUM; SUBMITTING form data outward is
+    # HIGH — it must hit the confirmation gate even when a page tries to induce it.
     assert a.assess(_tool("browser", action="read")) == L
-    assert a.assess(_tool("browser", action="submit")) == M
+    assert a.assess(_tool("browser", action="click")) == M
+    assert a.assess(_tool("browser", action="submit")) == H
 
 
 def test_injected_base_risk_is_a_floor_for_other_tools():

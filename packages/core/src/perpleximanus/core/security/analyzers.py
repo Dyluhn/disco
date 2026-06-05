@@ -161,8 +161,12 @@ class RuleBasedAnalyzer:
             inferred, why = _H, f"destructive tool '{tool_name}'"
         if "browse" in name or "browser" in name:
             act = str(args.get("action") or args.get("op") or "").lower()
-            if act in ("submit", "click", "type", "fill", "post") or args.get("submit"):
-                inferred, why = max_risk(inferred, _M), f"'{tool_name}' submitting/interacting"
+            if act in ("submit", "post") or args.get("submit"):
+                # Sending form data outward (exfiltration / state-changing) — HIGH, so it
+                # hits the gate even when a page tries to induce it.
+                inferred, why = max_risk(inferred, _H), f"'{tool_name}' submitting form data"
+            elif act in ("click", "type", "fill"):
+                inferred, why = max_risk(inferred, _M), f"'{tool_name}' interacting with the page"
 
         base = self._base.get(tool_name)
         if base is not None:
