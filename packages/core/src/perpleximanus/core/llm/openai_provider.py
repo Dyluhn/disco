@@ -110,8 +110,29 @@ class OpenAIProvider:
         d: dict = {"role": m.role, "content": m.content}
         if getattr(m, "tool_call_id", None):
             d["tool_call_id"] = m.tool_call_id
-        if getattr(m, "tool_calls", None):
-            d["tool_calls"] = m.tool_calls
+        tool_calls = m.tool_calls
+        if tool_calls:
+            # The event layer's internal tool_calls shape is {id, name, arguments(dict)}
+            # (ActionEvent.to_llm_message). The OpenAI/llama-server wire format an
+            # assistant turn must echo back is {id, type:"function", function:{name,
+            # arguments:<JSON STRING>}} — without this conversion the server rejects the
+            # next turn ("Failed to parse messages"). The Agent surface is the first to
+            # send assistant tool-calls back (Research never does), so it surfaces here.
+            d["tool_calls"] = [
+                {
+                    "id": tc.get("id"),
+                    "type": "function",
+                    "function": {
+                        "name": tc.get("name"),
+                        "arguments": (
+                            tc["arguments"]
+                            if isinstance(tc.get("arguments"), str)
+                            else json.dumps(tc.get("arguments") or {})
+                        ),
+                    },
+                }
+                for tc in tool_calls
+            ]
         return d
 
     def _payload(self, req: CompletionRequest, model: str, *, stream: bool) -> dict:

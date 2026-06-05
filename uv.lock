@@ -489,6 +489,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "perpleximanus-core" },
     { name = "perpleximanus-retrieval" },
+    { name = "perpleximanus-tools" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -497,6 +498,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.110" },
     { name = "perpleximanus-core", editable = "packages/core" },
     { name = "perpleximanus-retrieval", editable = "packages/retrieval" },
+    { name = "perpleximanus-tools", editable = "packages/tools" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 

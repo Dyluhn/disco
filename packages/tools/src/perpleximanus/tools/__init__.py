@@ -34,6 +34,7 @@ from .sandbox import (
     SandboxError,
     SandboxInstance,
     SandboxService,
+    SandboxSession,
     SandboxSpec,
 )
 from .secrets import (
@@ -59,6 +60,7 @@ __all__ = [
     "SandboxError",
     "SandboxInstance",
     "SandboxService",
+    "SandboxSession",
     "SandboxSpec",
     "SecretsStore",
     "Tool",

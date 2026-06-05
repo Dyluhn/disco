@@ -15,11 +15,19 @@ grounded-answer frames. The Build surface's `ConfirmRisky` stays dormant.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from collections.abc import AsyncIterator
 from typing import Any
 
-from perpleximanus.core import NoOpCondenser, ToolResult
+from perpleximanus.core import (
+    ConversationStatus,
+    EventSource,
+    LLMSummarizingCondenser,
+    NoOpCondenser,
+    StatusEvent,
+    ToolResult,
+)
 from perpleximanus.core.llm import (
     ConfigStore,
     DefaultLLMRouter,
@@ -31,9 +39,20 @@ from perpleximanus.core.llm import (
 from perpleximanus.core.llm.config import RouterConfig
 from perpleximanus.core.llm.secrets import OPENROUTER_API_KEY_ENV
 from perpleximanus.core.llm.wiring import build_providers
-from perpleximanus.core.loop import AgentLoop, NeverConfirm, RouterAgent
+from perpleximanus.core.loop import AgentLoop, ConfirmRisky, NeverConfirm, RouterAgent
 from perpleximanus.core.security import RuleBasedAnalyzer
 from perpleximanus.core.store.sqlite import SqliteEventStore
+from perpleximanus.retrieval.wiring import retrieval_capability_handlers
+from perpleximanus.tools import (
+    CapabilityBroker,
+    DefaultToolExecutor,
+    ProcessSandboxService,
+    SandboxService,
+    SandboxSession,
+    SandboxSpec,
+    agent_scope,
+    build_default_registry,
+)
 
 
 class _NoToolExecutor:
@@ -72,8 +91,23 @@ class ConversationRuntime:
         enable_thinking: bool = False,
         mode: OperatingMode = OperatingMode.INTERACTIVE,
         research_providers: dict[str, Any] | None = None,
+        sandbox_service: SandboxService | None = None,
+        sandbox_spec: SandboxSpec | None = None,
     ) -> None:
         self._store = store
+        # The Build surface runs tools through this backend (gVisor/Podman/local —
+        # the proven SandboxBackends). Injectable; defaults to the dev `process`
+        # backend (tool-sandbox §5) so a fresh checkout runs without a container host.
+        # PRODUCTION should inject a real isolating backend.
+        self._sandbox_service = sandbox_service or ProcessSandboxService()
+        self._sandbox_spec = sandbox_spec or SandboxSpec()
+        # Per-conversation surface ("research" | "build"); set at create time. Kept in
+        # memory (no schema migration) — a server restart resets a conversation to the
+        # research default until re-selected. The Build executor + its broker are held
+        # so the kill switch can revoke them.
+        self._surface: dict[str, str] = {}
+        self._executors: dict[str, DefaultToolExecutor] = {}
+        self._cap_handlers: dict[str, Any] | None = None
         # The encrypted-at-rest secret store (OpenRouter key). Its decrypted key is
         # overlaid into the provider env per request; if it's locked/empty the env
         # value (if any) is used instead.
@@ -129,6 +163,37 @@ class ConversationRuntime:
         providers = build_providers(cfg, env=env, enable_thinking=thinking)
         return DefaultLLMRouter(cfg, providers)
 
+    def set_surface(self, conversation_id: str, surface: str) -> None:
+        """Select a conversation's surface ("research" | "build") before it runs. The
+        Build surface composes tools + sandbox + the ConfirmRisky gate; Research stays
+        read-only + ungated. Idempotent until the loop is built."""
+        self._surface[conversation_id] = "build" if surface == "build" else "research"
+
+    def _retrieval_handlers(self) -> dict[str, Any]:
+        """Lazily build the search/extract capability handlers from the research
+        providers — so the Build agent toolset's search/extract are REAL, not a false
+        affordance, without eagerly importing httpx."""
+        if self._cap_handlers is None:
+            deps = self._research()
+            self._cap_handlers = retrieval_capability_handlers(deps["search"], deps["extraction"])
+        return self._cap_handlers
+
+    def _build_broker(self) -> CapabilityBroker:
+        """The orchestrator-side capability broker for a Build conversation. search/
+        extract are backed by the research providers (lazy); provider keys never reach
+        the sandbox (§6). The kill switch calls broker.revoke_all()."""
+        broker = CapabilityBroker()
+
+        async def _search(*, query: str, limit: int = 8) -> Any:
+            return await self._retrieval_handlers()["search"](query=query, limit=limit)
+
+        async def _extract(*, url: str) -> Any:
+            return await self._retrieval_handlers()["extract"](url=url)
+
+        broker.register("search", _search)
+        broker.register("extract", _extract)
+        return broker
+
     def _loop_for(self, conversation_id: str) -> AgentLoop:
         loop = self._loops.get(conversation_id)
         if loop is None:
@@ -136,20 +201,55 @@ class ConversationRuntime:
             # new conversations pick up later reassignments via _router_now().
             router = self._router_now()
             agent = RouterAgent(router, conversation_id=conversation_id)
-            loop = AgentLoop(
-                conversation_id,
-                self._store,
-                agent,
-                _NoToolExecutor(),
-                router,
-                RuleBasedAnalyzer(),
-                NeverConfirm(),  # Research surface: no human gate
-                NoOpCondenser(),
-                RouterSummarizer(router),
-                mode=self._mode,
-            )
+            if self._surface.get(conversation_id) == "build":
+                loop = self._compose_build_loop(conversation_id, router, agent)
+            else:
+                loop = AgentLoop(
+                    conversation_id,
+                    self._store,
+                    agent,
+                    _NoToolExecutor(),
+                    router,
+                    RuleBasedAnalyzer(),
+                    NeverConfirm(),  # Research surface: no human gate
+                    NoOpCondenser(),
+                    RouterSummarizer(router),
+                    mode=self._mode,
+                )
             self._loops[conversation_id] = loop
         return loop
+
+    def _compose_build_loop(
+        self, conversation_id: str, router: DefaultLLMRouter, agent: RouterAgent
+    ) -> AgentLoop:
+        """[Agent surface] Compose — not reinvent — the loop for Build mode: the agent
+        toolset (Prompt 1) over a resilient SandboxSession, the SecurityAnalyzer, the
+        ConfirmRisky gate (NOT Research's NeverConfirm), and the real condenser. The
+        executor is held so the kill switch can revoke caps + tear down the sandbox."""
+        broker = self._build_broker()
+        session = SandboxSession(
+            self._sandbox_service, self._sandbox_spec, conversation_id=conversation_id
+        )
+        executor = DefaultToolExecutor(
+            build_default_registry(),
+            agent_scope(),
+            sandbox=session,
+            broker=broker,
+            conversation_id=conversation_id,
+        )
+        self._executors[conversation_id] = executor
+        return AgentLoop(
+            conversation_id,
+            self._store,
+            agent,
+            executor,
+            router,
+            RuleBasedAnalyzer(),
+            ConfirmRisky(),  # Agent surface: gate risky/UNKNOWN actions before they run
+            LLMSummarizingCondenser(),  # real condensation, not the no-op
+            RouterSummarizer(router),
+            mode=self._mode,
+        )
 
     # ---- research surface (Stage 4) -----------------------------------------
 
@@ -200,6 +300,56 @@ class ConversationRuntime:
         loop = self._loop_for(conversation_id)
         self._tasks[conversation_id] = asyncio.create_task(loop.run())
 
+    # ---- control ops: the confirmation gate + kill switch (BoD §13.4/§13.6) -----
+
+    async def confirm(self, conversation_id: str) -> None:
+        """Approve the pending action: execute EXACTLY it (the loop's `confirm`), then
+        resume the loop for the next steps."""
+        loop = self._loops.get(conversation_id)
+        if loop is not None:
+            await loop.confirm()
+            self.kick(conversation_id)  # continue plan→act→observe past the gate
+
+    async def reject(self, conversation_id: str, reason: str = "rejected by user") -> None:
+        """Deny the pending action: record the denial (no execution), then resume."""
+        loop = self._loops.get(conversation_id)
+        if loop is not None:
+            await loop.reject(reason)
+            self.kick(conversation_id)
+
+    async def cancel(self, conversation_id: str) -> None:
+        """Cooperative stop (distinct from the hard kill): the loop winds down."""
+        loop = self._loops.get(conversation_id)
+        if loop is not None:
+            await loop.cancel()
+
+    async def kill(self, conversation_id: str) -> None:
+        """The KILL SWITCH (BoD §13.6) — the ultimate stop above the three security
+        layers. Halts a RUNNING loop promptly (cancel the task mid-step), revokes the
+        agent's capabilities + tears down the sandbox session (executor.kill), and
+        records a terminal status so the UI reflects the stop."""
+        # 1. stop the running loop task promptly — do NOT wait for the current step.
+        task = self._tasks.pop(conversation_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        # 2. revoke capabilities + destroy the sandbox (the executor's kill, §6.4).
+        executor = self._executors.get(conversation_id)
+        if executor is not None:
+            await executor.kill()
+        # 3. record the stop so subscribers see it (no STOPPED status in the enum; IDLE
+        #    + a 'killed' detail is the contract's terminal-for-now shape).
+        await self._store.append(
+            conversation_id,
+            StatusEvent(
+                source=EventSource.SYSTEM, status=ConversationStatus.IDLE, detail="killed"
+            ),
+        )
+
     async def aclose(self) -> None:
         for task in self._tasks.values():
             task.cancel()
+        for executor in self._executors.values():
+            with contextlib.suppress(Exception):
+                await executor.kill()

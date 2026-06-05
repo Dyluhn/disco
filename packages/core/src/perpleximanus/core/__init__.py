@@ -37,6 +37,7 @@ from .store.sqlite import DEFAULT_OWNER_ID, SqliteEventStore
 from .view import (
     CondensationRequest,
     Condenser,
+    LLMSummarizingCondenser,
     NoOpCondenser,
     Summarizer,
     View,
@@ -65,6 +66,7 @@ __all__ = [
     "LLMMessage",
     "MessageEvent",
     "MessageEvent",
+    "LLMSummarizingCondenser",
     "NoOpCondenser",
     "ObservationEvent",
     "Page",

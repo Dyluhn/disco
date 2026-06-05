@@ -33,6 +33,7 @@ class CreateConversationBody(BaseModel):
     owner_id: str = DEFAULT_OWNER_ID
     space_id: str | None = None
     title: str | None = None
+    surface: str = "research"  # "research" (read-only, ungated) | "build" (agent + gate)
 
 
 class SendMessageBody(BaseModel):
@@ -68,9 +69,13 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         store.create_conversation(
             conversation_id, owner_id=body.owner_id, space_id=body.space_id, title=body.title
         )
+        # Select the surface (Build composes tools + sandbox + the ConfirmRisky gate).
+        if runtime is not None:
+            runtime.set_surface(conversation_id, body.surface)
         return {
             "conversation_id": conversation_id,
             "conversation_url": f"/ws/conversations/{conversation_id}",
+            "surface": body.surface,
         }
 
     @app.post("/conversations/{conversation_id}/messages")
@@ -95,6 +100,15 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     async def get_state(conversation_id: str) -> dict:
         state = await store.get_state(conversation_id)
         return state.model_dump(mode="json")
+
+    @app.post("/conversations/{conversation_id}/kill")
+    async def kill_conversation(conversation_id: str) -> dict:
+        """The KILL SWITCH (BoD §13.6): halt a running agent, tear down its sandbox,
+        revoke its capabilities. Always-available; the UI (Prompt 4) wires a button."""
+        if runtime is not None:
+            await runtime.kill(conversation_id)
+        state = await store.get_state(conversation_id)
+        return {"killed": True, "state": state.model_dump(mode="json")}
 
     @app.get("/conversations")
     async def list_conversations(
@@ -233,5 +247,13 @@ async def _handle_frame(
         await store.append(conversation_id, _user_message(frame.steer_text, steer=True))
         if runtime is not None:
             runtime.kick(conversation_id)
-    # confirm/reject/pause/resume/cancel: handled by the loop's control ops [VERIFY]
-    # — wired further in later stages; accepted here.
+    elif frame.type == "confirm" and runtime is not None:
+        # Approve the pending action: execute exactly it, then resume (Build gate).
+        await runtime.confirm(conversation_id)
+    elif frame.type == "reject" and runtime is not None:
+        # Deny the pending action: record denial, resume without executing.
+        await runtime.reject(conversation_id)
+    elif frame.type == "cancel" and runtime is not None:
+        # Cooperative stop (the hard kill is POST /conversations/{id}/kill).
+        await runtime.cancel(conversation_id)
+    # pause/resume: loop-level control, accepted here; wired with the UI (Prompt 4).

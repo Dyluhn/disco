@@ -131,8 +131,7 @@ class NoOpCondenser:
     """Phase 0 placeholder satisfying the `Condenser` protocol: never condenses.
 
     This lets the View/loop wire up against the real interface now; the
-    `LLMSummarizingCondenser` (first-half summarize, keep_first, minimum_progress
-    guard, soft/hard triggers — §5.2) lands in Phase 1.
+    `LLMSummarizingCondenser` is the real strategy used on the Agent surface.
     """
 
     def should_condense(self, view: View, *, token_count: int | None) -> CondensationRequest | None:
@@ -142,3 +141,87 @@ class NoOpCondenser:
         self, events: list[Event], view: View, *, summarizer: Summarizer
     ) -> CondensationEvent | None:
         return None
+
+
+class LLMSummarizingCondenser:
+    """[INTERIOR] The real condenser (§5.2). When the View grows past a token bound,
+    summarize the OLDEST forgettable span — keeping an anchoring HEAD (the initial
+    instruction) and a RECENT TAIL untouched — into ONE `CondensationEvent` tombstone.
+    `View.of` places the summary at the span's chronological position, so the loop
+    keeps going coherently instead of overflowing the context window.
+
+    - Triggers: SOFT at `max_tokens` (maintain the bound), HARD at `hard_max_tokens`.
+    - Guards: `keep_head` + `keep_recent` events are never forgotten; `min_forget`
+      ensures each condensation makes real PROGRESS (no churn on tiny spans).
+
+    `should_condense` is sync/pure over the View's token estimate; `condense` awaits the
+    SUMMARIZER-role model (a cheap, separate model — BoD §7.3/§15) and never deletes an
+    event (it appends a tombstone). It also self-computes its span, so the loop's
+    hard-reset path (`_hard_reset`, which calls `condense` directly) works too.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_tokens: int = 24_000,
+        hard_max_tokens: int = 32_000,
+        keep_head: int = 1,
+        keep_recent: int = 6,
+        min_forget: int = 2,
+    ) -> None:
+        self._max = max_tokens
+        self._hard = hard_max_tokens
+        self._keep_head = keep_head
+        self._keep_recent = keep_recent
+        self._min_forget = min_forget
+
+    def should_condense(
+        self, view: View, *, token_count: int | None
+    ) -> CondensationRequest | None:
+        if token_count is None:
+            return None
+        if token_count >= self._hard:
+            return CondensationRequest(soft=False, reason="tokens")  # must condense now
+        if token_count >= self._max:
+            return CondensationRequest(soft=True, reason="tokens")  # maintain the bound
+        return None
+
+    async def condense(
+        self, events: list[Event], view: View, *, summarizer: Summarizer
+    ) -> CondensationEvent | None:
+        forgotten = [
+            (e.forgotten_start_seq, e.forgotten_end_seq)
+            for e in events
+            if isinstance(e, CondensationEvent)
+        ]
+
+        def is_forgotten(seq: int | None) -> bool:
+            return seq is not None and any(a <= seq <= b for a, b in forgotten)
+
+        # The still-live, LLM-visible events in seq order (already-forgotten dropped).
+        live = [
+            e
+            for e in events
+            if isinstance(e, LLMConvertible) and e.seq is not None and not is_forgotten(e.seq)
+        ]
+        # Need an anchoring head + a recent tail AND at least `min_forget` in between —
+        # else there's nothing worth forgetting yet (the minimum-progress guard).
+        if len(live) < self._keep_head + self._keep_recent + self._min_forget:
+            return None
+        span = live[self._keep_head : len(live) - self._keep_recent]
+        if len(span) < self._min_forget:
+            return None
+
+        start_seq, end_seq = span[0].seq, span[-1].seq
+        if start_seq is None or end_seq is None:  # filtered above; assertion for the type
+            return None
+        summary = await summarizer.summarize([e.to_llm_message() for e in span])
+        if not summary.strip():
+            return None  # an empty summary would forget context for nothing
+        return CondensationEvent(
+            forgotten_start_seq=start_seq,
+            forgotten_end_seq=end_seq,
+            summary=summary,
+            summary_role="user",
+            reason="tokens",
+        )
