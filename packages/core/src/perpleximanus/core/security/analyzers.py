@@ -143,8 +143,15 @@ class RuleBasedAnalyzer:
             return _score_shell(str(tc.arguments.get("command", "")))
         return self._score_other(tc.tool_name, tc.arguments)
 
+    # Plan-mode meta tools: pure control signals with no side effects. `submit_plan`
+    # is intercepted by the loop before the gate; `plan_step` only marks capstone
+    # progress. Pin them LOW so a progress marker never interrupts an approved build.
+    _META_TOOLS = frozenset({"submit_plan", "plan_step"})
+
     def _score_other(self, tool_name: str, args: Mapping[str, object]) -> tuple[SecurityRisk, str]:
         name = tool_name.lower()
+        if name in self._META_TOOLS:
+            return _L, f"plan-mode control signal '{tool_name}' (no side effects)"
         inferred = _L
         why = f"tool '{tool_name}'"
 

@@ -9,6 +9,10 @@
 import {
   finishedState,
   gateState,
+  planEvent,
+  planGateState,
+  replanEvent,
+  replanGateState,
   traceAfterConfirm,
   traceAfterReject,
   traceBeforeGate,
@@ -105,12 +109,13 @@ function subscribeLive(cid: string, onFrame: (f: WSServerFrame) => void): AgentH
 // ---- offline: replay the fixture trace, pausing at the gate -----------------
 
 function runningState(): ConversationState {
-  return { ...gateState, execution_status: "RUNNING", pending_action_id: null };
+  return { ...gateState, execution_status: "RUNNING", pending_action_id: null, pending_plan_id: null };
 }
 
 function subscribeFixture(onFrame: (f: WSServerFrame) => void): AgentHandle {
   let cancelled = false;
-  let atGate = false;
+  let atGate = false; // paused at the per-action confirmation gate
+  let atPlan = false; // paused at the plan-approval gate
 
   async function emit(events: typeof traceBeforeGate, final: ConversationState | null) {
     for (const event of events) {
@@ -121,18 +126,37 @@ function subscribeFixture(onFrame: (f: WSServerFrame) => void): AgentHandle {
     if (final && !cancelled) onFrame({ type: "state", state: final });
   }
 
-  async function start() {
+  // Plan-first: a new task (or a re-plan request) proposes a plan and pauses for approval.
+  async function propose(event: typeof planEvent, gate: ConversationState) {
+    onFrame({ type: "state", state: runningState() });
+    if (cancelled) return;
+    await fixtureDelay(120);
+    onFrame({ type: "event", event });
+    if (cancelled) return;
+    atPlan = true;
+    onFrame({ type: "state", state: gate });
+  }
+
+  // After plan approval: run the build trace up to the per-action confirmation gate.
+  async function build() {
     onFrame({ type: "state", state: runningState() });
     await emit(traceBeforeGate, null);
     if (cancelled) return;
     atGate = true;
-    onFrame({ type: "state", state: gateState }); // pause for confirmation
+    onFrame({ type: "state", state: gateState });
   }
 
   return {
     send: (f) => {
-      if (f.type === "send_message") void start();
-      else if (f.type === "confirm" && atGate) {
+      if (f.type === "send_message") void propose(planEvent, planGateState);
+      else if (f.type === "approve_plan" && atPlan) {
+        atPlan = false;
+        void build();
+      } else if (f.type === "request_plan") {
+        // (Re-)enter plan mode — a focused revision after the build (or a re-propose).
+        atGate = false;
+        void propose(replanEvent, replanGateState);
+      } else if (f.type === "confirm" && atGate) {
         atGate = false;
         onFrame({ type: "state", state: runningState() });
         void emit(traceAfterConfirm, finishedState);

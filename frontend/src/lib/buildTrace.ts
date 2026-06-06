@@ -5,7 +5,11 @@
  * tested means the components stay thin and the "not a debug log" framing is structural.
  */
 
-import type { AgentEvent, ConversationStatus, SecurityRisk } from "@/types/agent";
+import type { AgentEvent, ConversationStatus, PlanStep, SecurityRisk } from "@/types/agent";
+
+// Plan-mode meta tools are control signals, not workspace work — they never appear
+// as Activity items or Terminal entries; their effect shows in the capstone tracker.
+const META_TOOLS = new Set(["submit_plan", "plan_step"]);
 
 export interface ActivityItem {
   id: string;
@@ -54,7 +58,9 @@ export function deriveActivity(
     if (e.kind === "observation") observed.add(e.action_id);
     if (e.kind === "agent_error" && e.action_id) failed.add(e.action_id);
   }
-  const actions = events.filter((e) => e.kind === "action" && e.tool_call);
+  const actions = events.filter(
+    (e) => e.kind === "action" && e.tool_call && !META_TOOLS.has(e.tool_call.tool_name),
+  );
   return actions.map((e) => {
     if (e.kind !== "action" || !e.tool_call) throw new Error("unreachable");
     const tc = e.tool_call;
@@ -150,4 +156,44 @@ export function latestAgentMessage(events: AgentEvent[]): string | null {
     if (e.kind === "message" && e.source === "agent") return e.message.content;
   }
   return null;
+}
+
+// ---- plan mode ------------------------------------------------------------
+
+export type StepState = "pending" | "active" | "done";
+
+export interface PlanView {
+  id: string;
+  summary: string;
+  steps: PlanStep[];
+  revision: number;
+}
+
+/** The latest proposed plan (highest revision wins — a re-plan supersedes the prior
+ * one). Returns null before any plan exists. */
+export function derivePlan(events: AgentEvent[]): PlanView | null {
+  let latest: PlanView | null = null;
+  for (const e of events) {
+    if (e.kind !== "plan") continue;
+    if (latest === null || e.revision >= latest.revision) {
+      latest = { id: e.id, summary: e.summary, steps: e.steps, revision: e.revision };
+    }
+  }
+  return latest;
+}
+
+/** Per-step progress (1-based index → state), derived from the agent's `plan_step`
+ * reports in the stream. Honest by construction: a step the agent never reported
+ * stays "pending" — progress is agent-driven, never inferred from action counts. */
+export function derivePlanProgress(events: AgentEvent[]): Map<number, StepState> {
+  const progress = new Map<number, StepState>();
+  for (const e of events) {
+    if (e.kind !== "action" || !e.tool_call || e.tool_call.tool_name !== "plan_step") continue;
+    const idx = Number(e.tool_call.arguments.index);
+    const state = String(e.tool_call.arguments.state);
+    if (!Number.isFinite(idx)) continue;
+    if (state === "done") progress.set(idx, "done");
+    else if (state === "active" && progress.get(idx) !== "done") progress.set(idx, "active");
+  }
+  return progress;
 }

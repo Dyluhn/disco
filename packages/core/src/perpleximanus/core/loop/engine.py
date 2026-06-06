@@ -27,6 +27,8 @@ from ..events import (
     LLMMessage,
     MessageEvent,
     ObservationEvent,
+    PlanEvent,
+    PlanStep,
     StatusEvent,
 )
 from ..llm import (
@@ -68,8 +70,19 @@ _TERMINAL_FOR_NOW = frozenset(
         ConversationStatus.STUCK,
         ConversationStatus.ERROR,
         ConversationStatus.WAITING_FOR_CONFIRMATION,
+        ConversationStatus.AWAITING_PLAN_APPROVAL,
     }
 )
+
+# Injected when the planner answers in prose / tries to act instead of calling the
+# plan tool: in PLANNING mode the only valid move is to PROPOSE a structured plan.
+_PLAN_NUDGE = (
+    "Do not take any action yet. First propose a plan by calling the `submit_plan` "
+    "tool with a short summary and a list of concrete, ordered steps."
+)
+# Safety cap on consecutive plan nudges, so a misbehaving planner can't spin (no
+# ActionEvent is emitted while nudging → max_iterations doesn't trip on its own).
+_MAX_PLAN_NUDGES = 3
 
 
 class AgentLoop:
@@ -92,6 +105,9 @@ class AgentLoop:
         stop_hooks: list[StopHook] | None = None,
         stuck_thresholds: StuckThresholds | None = None,
         veto_feedback: str = _DEFAULT_VETO_FEEDBACK,
+        planning_tools: frozenset[str] = frozenset(),
+        plan_tool: str = "submit_plan",
+        execution_mode: OperatingMode = OperatingMode.LONG_HORIZON,
     ) -> None:
         self.conversation_id = conversation_id
         self.store = store
@@ -104,6 +120,13 @@ class AgentLoop:
         self.summarizer = summarizer
         self.mode = mode
         self.max_iterations = max_iterations
+        # Plan-mode wiring (Build). Defaults are inert: with no planning_tools the
+        # mode filter and the plan intercept never fire, so Research and existing
+        # tests behave exactly as before.
+        self._planning_tools = planning_tools  # tools visible ONLY while planning
+        self._plan_tool = plan_tool  # the structured-plan signal, intercepted
+        self._execution_mode = execution_mode  # the mode an approved plan runs in
+        self._plan_nudges = 0  # consecutive nudges while planning (safety cap)
         self._stop_hooks = list(stop_hooks or [])
         self._stuck = StuckDetector(stuck_thresholds)
         self._veto_feedback = veto_feedback
@@ -145,6 +168,56 @@ class AgentLoop:
     def _estimate_tokens(view: View) -> int:
         # [VERIFY] cheap heuristic (~4 chars/token); swap for a tokenizer later.
         return sum(len(m.content) for m in view.messages) // 4
+
+    # ---- plan-mode helpers (Build) ------------------------------------------
+
+    def _tools_for_step(self) -> list:
+        """Mode-scoped tool visibility. With no planning_tools configured this is a
+        pass-through (Research / default). While PLANNING the agent sees ONLY the
+        planning tool(s); while executing it sees everything else."""
+        tools = self.executor.available_tools()
+        if not self._planning_tools:
+            return tools
+        if self.mode == OperatingMode.PLANNING:
+            return [t for t in tools if getattr(t, "name", None) in self._planning_tools]
+        return [t for t in tools if getattr(t, "name", None) not in self._planning_tools]
+
+    def _plan_from_args(self, arguments: dict, events: list[Event]) -> PlanEvent:
+        """Build a PlanEvent from a `submit_plan` tool call. Defensive against the
+        model's shape drift (steps as dicts or bare strings); revision counts prior
+        plans so a re-plan is visibly the next iteration."""
+        steps: list[PlanStep] = []
+        for s in arguments.get("steps") or []:
+            if isinstance(s, dict):
+                title = str(s.get("title") or s.get("step") or s.get("name") or "").strip()
+                detail = s.get("detail") or s.get("description")
+                if title:
+                    steps.append(PlanStep(title=title, detail=str(detail) if detail else None))
+            elif isinstance(s, str) and s.strip():
+                steps.append(PlanStep(title=s.strip()))
+        if not steps:
+            steps = [PlanStep(title="(the planner returned no concrete steps)")]
+        summary = str(arguments.get("summary") or "").strip() or "Proposed plan"
+        revision = 1 + sum(1 for e in events if isinstance(e, PlanEvent))
+        return PlanEvent(summary=summary, steps=steps, revision=revision)
+
+    @staticmethod
+    def initial_mode(
+        events: list[Event],
+        *,
+        planning: OperatingMode = OperatingMode.PLANNING,
+        execution: OperatingMode = OperatingMode.LONG_HORIZON,
+        default: OperatingMode = OperatingMode.INTERACTIVE,
+    ) -> OperatingMode:
+        """Reconstruct the loop's operating mode from the log so a rebuilt loop
+        (process restart) resumes in the right phase. Reads the last mode marker
+        stamped on a StatusEvent.detail by approve_plan / enter_planning."""
+        for e in reversed(events):
+            if isinstance(e, StatusEvent) and e.detail == "plan_approved":
+                return execution
+            if isinstance(e, StatusEvent) and e.detail == "planning":
+                return planning
+        return default
 
     # ---- view materialization + condensation (§8) ---------------------------
 
@@ -211,6 +284,7 @@ class AgentLoop:
             if state.execution_status in (
                 ConversationStatus.PAUSED,
                 ConversationStatus.WAITING_FOR_CONFIRMATION,
+                ConversationStatus.AWAITING_PLAN_APPROVAL,
             ):
                 return state
             # FINISHED/STUCK/ERROR with no new work → nothing to do.
@@ -235,6 +309,7 @@ class AgentLoop:
                     ConversationStatus.STUCK,
                     ConversationStatus.ERROR,
                     ConversationStatus.WAITING_FOR_CONFIRMATION,
+                    ConversationStatus.AWAITING_PLAN_APPROVAL,
                 ):
                     return state
 
@@ -256,11 +331,14 @@ class AgentLoop:
                 # (d) build the model-facing View, condensing if triggered (§8)
                 view = await self._materialize_view(events)
 
-                # (e) ask the agent for ONE action (principle 1)
+                # (e) ask the agent for ONE action (principle 1). The visible tool
+                # set is mode-scoped: while PLANNING the agent sees ONLY the plan
+                # tool (so it can't act before approval); while executing it sees
+                # everything except the plan tool.
                 try:
                     step = await self.agent.step(
                         view,
-                        self.executor.available_tools(),
+                        self._tools_for_step(),
                         mode=self.mode,
                         overflow_signal=self._overflow_signal(events),
                     )
@@ -282,6 +360,48 @@ class AgentLoop:
                     # classification (the exception class) is preserved in the detail.
                     await self._emit(ErrorEvent(code="model_error", detail=_describe_llm_error(e)))
                     return await self.get_state()
+
+                # (e.5) PLAN GATE — in PLANNING mode the agent proposes, it never
+                # acts. A `submit_plan` call is intercepted into a PlanEvent and the
+                # loop halts for human approval; anything else (prose, a stray tool)
+                # is nudged back to planning. The plan tool is NEVER executed.
+                if self.mode == OperatingMode.PLANNING:
+                    tc = step.tool_call
+                    if tc is not None and tc.tool_name == self._plan_tool:
+                        plan = self._plan_from_args(tc.arguments, events)
+                        await self._emit(plan)
+                        await self._emit(
+                            StatusEvent(
+                                status=ConversationStatus.AWAITING_PLAN_APPROVAL,
+                                detail=plan.id,
+                            )
+                        )
+                        return await self.get_state()
+                    # Safety: a misbehaving planner that keeps ignoring the nudge would
+                    # spin (no ActionEvent → no iteration counter, no stuck pattern).
+                    # Cap consecutive nudges and bail with a real error.
+                    self._plan_nudges += 1
+                    if self._plan_nudges >= _MAX_PLAN_NUDGES:
+                        await self._emit(
+                            ErrorEvent(
+                                code="plan_required",
+                                detail=(
+                                    "the planner did not propose a plan via `submit_plan` "
+                                    f"after {_MAX_PLAN_NUDGES} attempts"
+                                ),
+                            )
+                        )
+                        return await self.get_state()
+                    await self._emit(
+                        MessageEvent(
+                            source=EventSource.ENVIRONMENT,
+                            message=LLMMessage(role="user", content=_PLAN_NUDGE),
+                        )
+                    )
+                    continue
+                # Any non-planning step resets the nudge counter so a recovered loop
+                # gets a fresh budget the next time it (re-)enters planning.
+                self._plan_nudges = 0
 
                 # (f) finish path — subject to stop-hook veto (§7.4)
                 if step.finished and step.tool_call is None:
@@ -446,6 +566,37 @@ class AgentLoop:
                 AgentErrorEvent(error=f"Action {reason}.", action_id=state.pending_action_id)
             )
             await self._emit(StatusEvent(status=ConversationStatus.RUNNING))
+        return await self.get_state()
+
+    async def approve_plan(self) -> ConversationState:
+        """Approve the pending plan: flip into execution mode (full tools restored)
+        and resume to RUNNING. The caller then re-runs the loop. The per-action
+        risk gate still governs the build that follows (defense in depth)."""
+        async with self._lock:
+            state = await self.get_state()
+            if state.execution_status != ConversationStatus.AWAITING_PLAN_APPROVAL:
+                return state
+            self.mode = self._execution_mode
+            await self._emit(
+                StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
+            )
+        return await self.get_state()
+
+    async def enter_planning(self, text: str = "") -> ConversationState:
+        """(Re-)enter PLANNING mode — the entry point for the first plan AND for
+        re-planning after a build, so focused, diff-style changes are articulated
+        and re-approved rather than free-form steered. `text` is the user's
+        instruction for what to (re)plan. Reopens from FINISHED/STUCK."""
+        async with self._lock:
+            if text.strip():
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.USER,
+                        message=LLMMessage(role="user", content=text),
+                    )
+                )
+            self.mode = OperatingMode.PLANNING
+            await self._emit(StatusEvent(status=ConversationStatus.RUNNING, detail="planning"))
         return await self.get_state()
 
     async def pause(self) -> ConversationState:

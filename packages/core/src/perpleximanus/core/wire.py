@@ -39,8 +39,20 @@ class WSClientFrame(BaseModel):
     """[CONTRACT] One client→server frame."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
-    type: Literal["send_message", "confirm", "reject", "steer", "pause", "resume", "cancel", "ping"]
-    # send_message: a new user message (becomes a MessageEvent).
+    type: Literal[
+        "send_message",
+        "confirm",
+        "reject",
+        "steer",
+        "pause",
+        "resume",
+        "cancel",
+        "ping",
+        # Build plan-mode gate:
+        "approve_plan",  # approve the pending plan → start building
+        "request_plan",  # (re-)enter plan mode; `content` carries the instruction
+    ]
+    # send_message / request_plan: free text (a user message / the (re)plan instruction).
     content: str | None = None
     # confirm/reject: respond to WAITING_FOR_CONFIRMATION (echoes pending_action_id).
     action_id: str | None = None

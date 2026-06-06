@@ -31,6 +31,7 @@ from perpleximanus.core import (
 from perpleximanus.core.llm import (
     ConfigStore,
     DefaultLLMRouter,
+    DriverPrompts,
     ModelRole,
     OperatingMode,
     RouterSummarizer,
@@ -207,7 +208,10 @@ class ConversationRuntime:
             env[OPENROUTER_API_KEY_ENV] = or_key
         thinking = self._enable_thinking if enable_thinking is None else enable_thinking
         providers = build_providers(cfg, env=env, enable_thinking=thinking)
-        return DefaultLLMRouter(cfg, providers)
+        # DriverPrompts gives the AGENT_DRIVER role phase-aware system prompts (the
+        # plan→approve→build flow); every other role/mode defers to the default
+        # provider, so Research is unaffected.
+        return DefaultLLMRouter(cfg, providers, prompt_provider=DriverPrompts())
 
     def set_surface(self, conversation_id: str, surface: str) -> None:
         """Select a conversation's surface ("research" | "build") before it runs. The
@@ -349,7 +353,12 @@ class ConversationRuntime:
             ConfirmRisky(),  # Agent surface: gate risky/UNKNOWN actions before they run
             LLMSummarizingCondenser(),  # real condensation, not the no-op
             RouterSummarizer(router),
-            mode=self._mode,
+            # Build starts in PLANNING: the agent proposes a plan (via the sole
+            # `submit_plan` tool) and the loop halts for approval before any work.
+            # approve_plan flips it to execution; the per-action gate above still
+            # governs the build that follows.
+            mode=OperatingMode.PLANNING,
+            planning_tools=frozenset({"submit_plan"}),
         )
 
     # ---- research surface (Stage 4) -----------------------------------------
@@ -455,6 +464,23 @@ class ConversationRuntime:
         if loop is not None:
             await loop.reject(reason)
             self.kick(conversation_id)
+
+    async def approve_plan(self, conversation_id: str) -> None:
+        """Approve the pending plan: flip the loop into execution mode (full tools)
+        and run it. The per-action ConfirmRisky gate still governs the build."""
+        loop = self._loops.get(conversation_id)
+        if loop is not None:
+            await loop.approve_plan()
+            self.kick(conversation_id)  # start building the approved plan
+
+    async def request_plan(self, conversation_id: str, text: str = "") -> None:
+        """(Re-)enter plan mode with the user's instruction — the first plan AND the
+        re-plan after a build, so focused diff-style changes are planned and re-approved
+        instead of free-form steered."""
+        loop = self._loops.get(conversation_id)
+        if loop is not None:
+            await loop.enter_planning(text)
+            self.kick(conversation_id)  # produce the (revised) plan
 
     async def cancel(self, conversation_id: str) -> None:
         """Cooperative stop (distinct from the hard kill): the loop winds down."""

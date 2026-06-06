@@ -11,6 +11,7 @@ export type ConversationStatus =
   | "PAUSED"
   | "STUCK"
   | "WAITING_FOR_CONFIRMATION"
+  | "AWAITING_PLAN_APPROVAL"
   | "FINISHED"
   | "ERROR";
 
@@ -76,6 +77,16 @@ export interface StatusEvent extends EventBase {
   status: ConversationStatus;
   detail?: string | null;
 }
+export interface PlanStep {
+  title: string;
+  detail?: string | null;
+}
+export interface PlanEvent extends EventBase {
+  kind: "plan";
+  summary: string;
+  steps: PlanStep[];
+  revision: number;
+}
 export interface ErrorEvent extends EventBase {
   kind: "error";
   code?: string;
@@ -89,6 +100,7 @@ export type AgentEvent =
   | AgentErrorEvent
   | CondensationEvent
   | StatusEvent
+  | PlanEvent
   | ErrorEvent;
 
 export interface ConversationState {
@@ -98,6 +110,7 @@ export interface ConversationState {
   max_iterations: number;
   last_seq: number;
   pending_action_id: string | null;
+  pending_plan_id: string | null;
 }
 
 // ---- WS frames (event-state §7) ---------------------------------------------
@@ -113,6 +126,8 @@ export type WSClientFrame =
   | { type: "steer"; steer_text: string } // the Steering Wheel: redirect without losing context
   | { type: "confirm"; action_id?: string }
   | { type: "reject"; action_id?: string }
+  | { type: "approve_plan" } // approve the pending plan → start building
+  | { type: "request_plan"; content: string } // (re-)enter plan mode with an instruction
   | { type: "cancel" }
   | { type: "ping" };
 

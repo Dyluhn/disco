@@ -5,8 +5,9 @@
  * Exposes confirm/reject (the gate) and the raw send (the data layer owns the socket).
  */
 
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { subscribeConversation, type AgentHandle } from "@/api/agent";
+import { derivePlan, derivePlanProgress, type PlanView, type StepState } from "@/lib/buildTrace";
 import type {
   ActionEvent,
   AgentEvent,
@@ -23,6 +24,7 @@ export interface BuildStreamState {
   status: ConversationStatus;
   events: AgentEvent[];
   pendingActionId: string | null;
+  pendingPlanId: string | null;
   error: string | null;
 }
 
@@ -30,6 +32,7 @@ const initial: BuildStreamState = {
   status: "IDLE",
   events: [],
   pendingActionId: null,
+  pendingPlanId: null,
   error: null,
 };
 
@@ -51,18 +54,24 @@ function reducer(state: BuildStreamState, action: Action): BuildStreamState {
       ...state,
       status: f.state.execution_status,
       pendingActionId: f.state.pending_action_id,
+      pendingPlanId: f.state.pending_plan_id,
     };
   }
   if (f.type === "event") {
     const events = upsert(state.events, f.event);
     if (f.event.kind === "status") {
+      const status = f.event.status;
       return {
         ...state,
         events,
-        status: f.event.status,
+        status,
         pendingActionId:
-          f.event.status === "WAITING_FOR_CONFIRMATION"
+          status === "WAITING_FOR_CONFIRMATION"
             ? (f.event.detail ?? state.pendingActionId)
+            : null,
+        pendingPlanId:
+          status === "AWAITING_PLAN_APPROVAL"
+            ? (f.event.detail ?? state.pendingPlanId)
             : null,
       };
     }
@@ -79,10 +88,15 @@ function reducer(state: BuildStreamState, action: Action): BuildStreamState {
 
 export interface BuildStream extends BuildStreamState {
   pendingAction: ActionEvent | null;
+  plan: PlanView | null;
+  planProgress: Map<number, StepState>;
+  awaitingPlan: boolean;
   confirm: () => void;
   reject: () => void;
   cancel: () => void;
   steer: (text: string) => void;
+  approvePlan: () => void;
+  requestPlan: (text: string) => void;
 }
 
 export function useBuildStream(session: BuildSession | null): BuildStream {
@@ -105,6 +119,12 @@ export function useBuildStream(session: BuildSession | null): BuildStream {
     (text: string) => text.trim() && handle.current?.send({ type: "steer", steer_text: text.trim() }),
     [],
   );
+  const approvePlan = useCallback(() => handle.current?.send({ type: "approve_plan" }), []);
+  const requestPlan = useCallback(
+    (text: string) =>
+      text.trim() && handle.current?.send({ type: "request_plan", content: text.trim() }),
+    [],
+  );
 
   const pendingAction =
     (state.pendingActionId &&
@@ -113,5 +133,21 @@ export function useBuildStream(session: BuildSession | null): BuildStream {
       ) as ActionEvent | undefined)) ||
     null;
 
-  return { ...state, pendingAction, confirm, reject, cancel, steer };
+  const plan = useMemo(() => derivePlan(state.events), [state.events]);
+  const planProgress = useMemo(() => derivePlanProgress(state.events), [state.events]);
+  const awaitingPlan = state.status === "AWAITING_PLAN_APPROVAL";
+
+  return {
+    ...state,
+    pendingAction,
+    plan,
+    planProgress,
+    awaitingPlan,
+    confirm,
+    reject,
+    cancel,
+    steer,
+    approvePlan,
+    requestPlan,
+  };
 }

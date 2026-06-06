@@ -11,6 +11,7 @@ from __future__ import annotations
 from ..registry import ToolRegistry
 from .browser import BrowserTool
 from .files import FileEditTool, FileListTool, FileReadTool, FileWriteTool
+from .plan import PlanStepTool, SubmitPlanTool
 from .retrieval import ExtractTool, SearchTool
 from .system import CodeExecTool, ShellTool
 
@@ -22,8 +23,10 @@ __all__ = [
     "FileListTool",
     "FileReadTool",
     "FileWriteTool",
+    "PlanStepTool",
     "SearchTool",
     "ShellTool",
+    "SubmitPlanTool",
     "build_default_registry",
 ]
 
@@ -42,6 +45,8 @@ def build_default_registry() -> ToolRegistry:
         SearchTool(),
         ExtractTool(),
         BrowserTool(),
+        SubmitPlanTool(),  # plan-mode: proposed plan (intercepted by the loop)
+        PlanStepTool(),  # plan-mode: capstone progress reports
     ):
         registry.register(tool)
     return registry

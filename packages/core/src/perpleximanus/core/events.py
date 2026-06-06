@@ -42,6 +42,7 @@ class EventKind(str, Enum):
     CONDENSATION = "condensation"
     STATUS = "status"
     ERROR = "error"  # conversation-level error (distinct from agent_error)
+    PLAN = "plan"  # a proposed, structured plan awaiting approval (Build plan-mode)
 
 
 def _new_id() -> str:
@@ -131,6 +132,15 @@ class ToolResult(BaseModel):
     error: str | None = None  # populated iff success is False
 
 
+class PlanStep(BaseModel):
+    """One capstone in a proposed plan. The agent emits a list of these via the
+    `submit_plan` tool; the UI tracks each one's progress during the build."""
+
+    model_config = ConfigDict(frozen=True)
+    title: str  # short, plain-language capstone ("Scaffold the page + styles")
+    detail: str | None = None  # optional elaboration
+
+
 class SecurityRisk(str, Enum):
     """Mirrors §17 / the security contract. UNKNOWN is non-comparable."""
 
@@ -148,6 +158,10 @@ class ConversationStatus(str, Enum):
     PAUSED = "PAUSED"
     STUCK = "STUCK"
     WAITING_FOR_CONFIRMATION = "WAITING_FOR_CONFIRMATION"
+    # The agent proposed a plan and the loop is halted until the human approves
+    # it (Build plan-mode). Mirrors WAITING_FOR_CONFIRMATION but gates the whole
+    # plan up front, not one risky action.
+    AWAITING_PLAN_APPROVAL = "AWAITING_PLAN_APPROVAL"
     FINISHED = "FINISHED"
     ERROR = "ERROR"
 
@@ -252,6 +266,27 @@ class StatusEvent(BaseEvent):
     detail: str | None = None
 
 
+class PlanEvent(BaseEvent, LLMConvertible):
+    """A structured plan the agent proposed (in PLANNING mode) and the human is
+    asked to approve before any work runs. LLMConvertible so the committed plan
+    stays in the agent's context during execution — it renders as an assistant
+    message restating the steps it agreed to carry out."""
+
+    kind: Literal[EventKind.PLAN] = EventKind.PLAN
+    source: EventSource = EventSource.AGENT
+    summary: str  # one or two sentences: what this plan delivers
+    steps: list[PlanStep]
+    revision: int = 1  # bumps each time the user sends the plan back for changes
+
+    def to_llm_message(self) -> LLMMessage:
+        lines = [f"{i}. {s.title}" for i, s in enumerate(self.steps, start=1)]
+        body = "\n".join(lines)
+        return LLMMessage(
+            role="assistant",
+            content=f"Plan (revision {self.revision}): {self.summary}\n{body}",
+        )
+
+
 class ErrorEvent(BaseEvent):
     """A conversation-level (fatal-ish) error, e.g. MaxIterationsReached.
     NOT LLMConvertible."""
@@ -271,6 +306,7 @@ Event = Annotated[
     | AgentErrorEvent
     | CondensationEvent
     | StatusEvent
+    | PlanEvent
     | ErrorEvent,
     Field(discriminator="kind"),
 ]

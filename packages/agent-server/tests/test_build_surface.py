@@ -71,6 +71,14 @@ def _shell(command: str) -> ProposedToolCall:
     return ProposedToolCall(tool_name="shell", arguments={"command": command})
 
 
+def _plan(steps: list[str]) -> ProposedToolCall:
+    """A scripted `submit_plan` call — the entry to plan-first Build."""
+    return ProposedToolCall(
+        tool_name="submit_plan",
+        arguments={"summary": "scripted", "steps": [{"title": s} for s in steps]},
+    )
+
+
 def _runtime(store: SqliteEventStore, steps) -> ConversationRuntime:
     cfg = RouterConfig(
         models={"m": ModelEntry(model_id="m", provider="fake", context_window=8192)},
@@ -100,26 +108,65 @@ async def _build_convo(store, steps) -> ConversationRuntime:
     return runtime
 
 
-# A HIGH-risk action (rm -rf → gated) then a finish.
-_RISKY = [("removing the dir", [_shell("rm -rf doomed")]), ("done", [])]
+# Plan-first lifecycle: PLANNING propose → APPROVE flips to execution → risky shell
+# (gated by ConfirmRisky) → finish. Build now starts in PLANNING mode, so the first
+# scripted step must be a `submit_plan` call.
+_RISKY = [
+    ("here's the plan", [_plan(["remove the dir"])]),
+    ("removing the dir", [_shell("rm -rf doomed")]),
+    ("done", []),
+]
 
 
-# ---- the gate bites (the headline) ------------------------------------------
+async def _await_task(runtime: ConversationRuntime) -> None:
+    task = runtime._tasks.get(CID)
+    if task is not None:
+        await task
 
 
-async def test_risky_action_pauses_and_does_not_execute():
+async def _approve_plan_and_run(runtime: ConversationRuntime) -> None:
+    """Advance past the plan-approval gate into the per-action build phase. Used by the
+    tests that target the per-action gate (the plan gate isn't their subject)."""
+    await runtime.approve_plan(CID)
+    await _await_task(runtime)
+
+
+# ---- plan-first lifecycle: the plan gate, then the per-action gate ----------
+
+
+async def test_build_starts_in_planning_and_pauses_for_plan_approval():
+    """Submission proposes a plan and HALTS for approval — no work yet."""
+    from perpleximanus.core.events import PlanEvent
+
     store = SqliteEventStore(":memory:")
     runtime = await _build_convo(store, _RISKY)
     await _run_to_rest(runtime)
 
     state = await store.get_state(CID)
     events = await store.get_events(CID)
-    # Phase 1: proposed + waiting, the action recorded but NOT run.
+    assert state.execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+    assert state.pending_plan_id is not None
+    plan = next(e for e in events if isinstance(e, PlanEvent))
+    assert plan.id == state.pending_plan_id
+    assert plan.steps and plan.steps[0].title == "remove the dir"
+    # nothing else executed (no actions, no observations).
+    assert not any(isinstance(e, ActionEvent) for e in events)
+    assert not any(isinstance(e, ObservationEvent) for e in events)
+
+
+async def test_risky_action_pauses_and_does_not_execute():
+    """After plan approval, the per-action ConfirmRisky gate still bites."""
+    store = SqliteEventStore(":memory:")
+    runtime = await _build_convo(store, _RISKY)
+    await _run_to_rest(runtime)  # → AWAITING_PLAN_APPROVAL
+    await _approve_plan_and_run(runtime)  # approve → build → action gate
+
+    state = await store.get_state(CID)
+    events = await store.get_events(CID)
     assert state.execution_status == ConversationStatus.WAITING_FOR_CONFIRMATION
     assert state.pending_action_id is not None
     assert any(isinstance(e, ActionEvent) for e in events)
-    assert not any(isinstance(e, ObservationEvent) for e in events)  # nothing executed
-    # the analyzer's rationale rode along on the proposed action (for the UI, Prompt 4).
+    assert not any(isinstance(e, ObservationEvent) for e in events)
     action = next(e for e in events if isinstance(e, ActionEvent))
     assert "risk_assessment" in action.meta
 
@@ -128,13 +175,12 @@ async def test_confirm_executes_exactly_the_pending_action():
     store = SqliteEventStore(":memory:")
     runtime = await _build_convo(store, _RISKY)
     await _run_to_rest(runtime)
+    await _approve_plan_and_run(runtime)
     gated = await store.get_state(CID)
     assert gated.execution_status == ConversationStatus.WAITING_FOR_CONFIRMATION
 
     await runtime.confirm(CID)  # execute exactly it, then resume
-    task = runtime._tasks.get(CID)
-    if task is not None:
-        await task
+    await _await_task(runtime)
 
     events = await store.get_events(CID)
     observations = [e for e in events if isinstance(e, ObservationEvent)]
@@ -146,16 +192,45 @@ async def test_reject_denies_without_executing():
     store = SqliteEventStore(":memory:")
     runtime = await _build_convo(store, _RISKY)
     await _run_to_rest(runtime)
+    await _approve_plan_and_run(runtime)
 
     await runtime.reject(CID)  # deny, resume without executing
-    task = runtime._tasks.get(CID)
-    if task is not None:
-        await task
+    await _await_task(runtime)
 
     events = await store.get_events(CID)
-    assert not any(isinstance(e, ObservationEvent) for e in events)  # never executed
-    assert any(isinstance(e, AgentErrorEvent) for e in events)  # denial recorded
+    assert not any(isinstance(e, ObservationEvent) for e in events)
+    assert any(isinstance(e, AgentErrorEvent) for e in events)
     assert (await store.get_state(CID)).execution_status == ConversationStatus.FINISHED
+
+
+async def test_request_plan_after_finish_reopens_plan_mode_with_a_new_revision():
+    """Re-entering plan mode after a build proposes a NEW plan (revision 2) and
+    halts again for approval — the foundation of the diff-style change flow."""
+    from perpleximanus.core.events import PlanEvent
+
+    # A scripted lifecycle: plan #1 → approve → safe write → finish → request_plan(...) → plan #2.
+    safe = ProposedToolCall(
+        tool_name="file_write", arguments={"path": "f.txt", "content": "ok"}
+    )
+    steps = [
+        ("plan one", [_plan(["do the thing"])]),
+        ("doing", [safe]),
+        ("done", []),
+        ("plan two", [_plan(["do another thing"])]),
+    ]
+    store = SqliteEventStore(":memory:")
+    runtime = await _build_convo(store, steps)
+    await _run_to_rest(runtime)  # → AWAITING_PLAN_APPROVAL (#1)
+    await _approve_plan_and_run(runtime)  # build runs the safe write to FINISHED
+    assert (await store.get_state(CID)).execution_status == ConversationStatus.FINISHED
+
+    await runtime.request_plan(CID, "add a reset button")
+    await _await_task(runtime)
+
+    state = await store.get_state(CID)
+    assert state.execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+    plans = [e for e in await store.get_events(CID) if isinstance(e, PlanEvent)]
+    assert len(plans) == 2 and plans[-1].revision == 2  # the re-plan is revision 2
 
 
 # ---- ConfirmRisky vs NeverConfirm: the surfaces differ ----------------------
@@ -180,7 +255,7 @@ async def test_research_surface_is_ungated():
 async def test_kill_switch_revokes_caps_tears_down_sandbox_and_records_stop():
     store = SqliteEventStore(":memory:")
     runtime = await _build_convo(store, _RISKY)
-    await _run_to_rest(runtime)  # composes the loop + executor (now paused at the gate)
+    await _run_to_rest(runtime)  # composes the loop + executor (paused at the plan gate)
 
     executor = runtime._executors[CID]
     await runtime.kill(CID)

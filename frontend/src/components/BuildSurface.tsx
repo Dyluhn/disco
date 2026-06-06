@@ -20,6 +20,7 @@ import { AgentStatusBar } from "@/components/build/AgentStatusBar";
 import { BuildModelPicker } from "@/components/build/BuildModelPicker";
 import { ConfirmationPanel } from "@/components/build/ConfirmationPanel";
 import { ExecutionCanvas } from "@/components/build/ExecutionCanvas";
+import { PlanPanel } from "@/components/build/PlanPanel";
 import { SteerInput } from "@/components/build/SteerInput";
 
 // The active isolation tier, surfaced honestly at the point of use (the local container
@@ -40,7 +41,8 @@ export function BuildSurface() {
     [b.events, b.pendingActionId, b.status],
   );
   const finalMessage = useMemo(() => latestAgentMessage(b.events), [b.events]);
-  const running = b.status === "RUNNING" || b.status === "WAITING_FOR_CONFIRMATION";
+  const steerable = b.status === "RUNNING" || b.status === "WAITING_FOR_CONFIRMATION";
+  const settled = b.status === "FINISHED" || b.status === "IDLE" || b.status === "STUCK";
 
   if (!b.started) {
     return (
@@ -93,29 +95,49 @@ export function BuildSurface() {
           <div className="mt-inline min-h-0 flex-1 overflow-y-auto pb-inline lg:pr-hair">
             {b.status === "ERROR" ? (
               <ErrorState message={b.error ?? "The agent run failed."} onRetry={b.reset} />
-            ) : (
-              <ActivityFeed items={activity} />
-            )}
-            {finalMessage && b.status === "FINISHED" && (
-              <div className="mt-section rounded-card border border-hairline bg-surface-1 px-body py-inline text-[0.95rem]">
-                <Markdown>{finalMessage}</Markdown>
+            ) : b.awaitingPlan && b.plan ? (
+              // Plan gate is the hero: review + Approve/Revise before any work runs.
+              <div className="flex flex-col gap-section">
+                <PlanPanel
+                  plan={b.plan}
+                  progress={b.planProgress}
+                  onApprove={b.approvePlan}
+                  onRevise={b.requestPlan}
+                />
+                {activity.length > 0 && <ActivityFeed items={activity} />}
               </div>
+            ) : (
+              <>
+                {/* read-only capstone tracker: steps check off as the agent reports them */}
+                {b.plan && (
+                  <div className="mb-section">
+                    <PlanPanel plan={b.plan} progress={b.planProgress} />
+                  </div>
+                )}
+                <ActivityFeed items={activity} />
+                {finalMessage && b.status === "FINISHED" && (
+                  <div className="mt-section rounded-card border border-hairline bg-surface-1 px-body py-inline text-[0.95rem]">
+                    <Markdown>{finalMessage}</Markdown>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
 
-        {/* gate · steer · follow-up — pinned under the feed */}
+        {/* gate · steer · re-plan — pinned under the feed */}
         <div className="flex flex-col gap-inline border-t border-hairline px-body py-inline">
           {b.pendingAction && (
             <ConfirmationPanel action={b.pendingAction} onApprove={b.confirm} onReject={b.reject} />
           )}
-          {running ? (
+          {steerable ? (
             <SteerInput onSteer={b.steer} disabled={b.status === "WAITING_FOR_CONFIRMATION"} />
           ) : (
-            b.status !== "ERROR" && (
+            settled && (
               <div className="flex flex-col gap-hair">
                 <BuildModelPicker value={b.modelId} onChange={b.setModelId} />
-                <QueryInput onSubmit={b.submit} busy={b.submitting} placeholder="Give the agent another task…" />
+                {/* re-enter plan mode: a focused, diff-style change is planned + re-approved */}
+                <QueryInput onSubmit={b.requestPlan} placeholder="Plan a change to this build…" />
               </div>
             )
           )}

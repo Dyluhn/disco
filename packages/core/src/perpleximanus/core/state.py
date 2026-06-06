@@ -20,6 +20,7 @@ from .events import (
     Event,
     EventSource,
     MessageEvent,
+    PlanEvent,
     StatusEvent,
 )
 
@@ -39,6 +40,9 @@ class ConversationState(BaseModel):
     # The id of an action awaiting confirmation, if status is
     # WAITING_FOR_CONFIRMATION. Enables the two-phase confirm step (BoD §12.4).
     pending_action_id: str | None = None
+    # The id of a plan awaiting approval, if status is AWAITING_PLAN_APPROVAL.
+    # Mirror of pending_action_id for the plan-mode gate (Build).
+    pending_plan_id: str | None = None
     # Feature-scoped scratch state; keys are namespaced by subsystem,
     # e.g. "memory.last_condense_seq". [CONTRACT]
     extras: dict[str, Any] = Field(default_factory=dict)
@@ -55,6 +59,9 @@ class ConversationState(BaseModel):
         # The most recent action's id — the candidate awaiting confirmation when
         # the loop transitions to WAITING_FOR_CONFIRMATION (two-phase confirm).
         last_action_id: str | None = None
+        # The most recent plan's id — the candidate awaiting approval when the
+        # loop transitions to AWAITING_PLAN_APPROVAL (the plan-mode gate).
+        last_plan_id: str | None = None
 
         for e in events:
             if e.seq is not None:
@@ -67,9 +74,15 @@ class ConversationState(BaseModel):
                     st.pending_action_id = last_action_id
                 else:
                     st.pending_action_id = None
+                if e.status == ConversationStatus.AWAITING_PLAN_APPROVAL:
+                    st.pending_plan_id = last_plan_id
+                else:
+                    st.pending_plan_id = None
             elif isinstance(e, ActionEvent):
                 run_iteration += 1
                 last_action_id = e.id
+            elif isinstance(e, PlanEvent):
+                last_plan_id = e.id
             elif isinstance(e, MessageEvent) and e.source == EventSource.USER:
                 # A fresh user instruction starts a new run (ceiling + stuck).
                 run_iteration = 0

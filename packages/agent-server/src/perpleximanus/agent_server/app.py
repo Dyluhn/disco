@@ -293,6 +293,12 @@ async def _handle_frame(
     elif frame.type == "reject" and runtime is not None:
         # Deny the pending action: record denial, resume without executing.
         await runtime.reject(conversation_id)
+    elif frame.type == "approve_plan" and runtime is not None:
+        # Approve the pending plan: flip to execution mode and start building.
+        await runtime.approve_plan(conversation_id)
+    elif frame.type == "request_plan" and runtime is not None:
+        # (Re-)enter plan mode with the user's instruction (first plan or re-plan).
+        await runtime.request_plan(conversation_id, frame.content or "")
     elif frame.type == "cancel" and runtime is not None:
         # Cooperative stop (the hard kill is POST /conversations/{id}/kill).
         await runtime.cancel(conversation_id)

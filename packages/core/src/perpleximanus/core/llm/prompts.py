@@ -91,3 +91,60 @@ class StaticPromptProvider:
             if key in self._templates:
                 return self._templates[key]
         return self._fallback
+
+
+# Plan-mode driver prompts (Build). Kept here next to the selection logic; the
+# prose is [INTERIOR] and tunable. The plan→approve→build loop's quality leans on
+# these, so they are explicit about the two phases and the meta tools.
+_PLANNING_DRIVER_PROMPT = (
+    "You are an autonomous build agent, currently in PLANNING mode.\n"
+    "Your ONLY job right now is to propose a plan for the user's request and wait for "
+    "their approval. Do NOT take any action, write any files, or run any commands yet.\n\n"
+    "Study the request and the conversation so far (including any files already built and "
+    "prior results). Then call the `submit_plan` tool exactly once with:\n"
+    "  - summary: one or two plain-language sentences describing what you will deliver.\n"
+    "  - steps: an ordered list of concrete, verifiable capstones. Keep each step short "
+    "and outcome-focused (e.g. 'Scaffold index.html with the page layout'). Prefer 3–7 "
+    "steps; avoid trivial micro-steps.\n\n"
+    "If this is a change to existing work, plan the DIFF: only the steps needed for the "
+    "requested change, not a rebuild. Call `submit_plan` and nothing else."
+)
+_EXECUTION_DRIVER_PROMPT = (
+    "You are an autonomous build agent. The user has APPROVED your plan (it appears above "
+    "as a numbered list). Carry it out end to end using the available tools "
+    "(file_write, file_edit, shell, code_exec, etc.).\n\n"
+    "As you work, keep the capstone tracker honest by calling the `plan_step` tool: mark a "
+    "step 'active' when you start it and 'done' when you complete it. Work through the "
+    "steps in order. Some actions may pause for the user's confirmation — that is expected; "
+    "continue once approved.\n\n"
+    "When the whole plan is complete, stop and give a short final message summarizing what "
+    "you built. Do not call `submit_plan` during execution."
+)
+
+
+class DriverPrompts:
+    """[CONTRACT role] A PromptProvider that gives the AGENT_DRIVER role phase-aware
+    system prompts: a PLANNING prompt (propose a plan via `submit_plan`, take no
+    action) and an EXECUTION prompt (carry out the approved plan, report capstones
+    via `plan_step`). Every other role/mode defers to a wrapped base provider, so
+    Research and the non-driver roles are unaffected."""
+
+    def __init__(
+        self,
+        base: PromptProvider | None = None,
+        *,
+        planning_prompt: str = _PLANNING_DRIVER_PROMPT,
+        execution_prompt: str = _EXECUTION_DRIVER_PROMPT,
+    ) -> None:
+        self._base = base or StaticPromptProvider()
+        self._planning = planning_prompt
+        self._execution = execution_prompt
+
+    def system_prompt(
+        self, *, model_family: str, mode: OperatingMode | None, role: ModelRole
+    ) -> str:
+        if role == ModelRole.AGENT_DRIVER:
+            if mode == OperatingMode.PLANNING:
+                return self._planning
+            return self._execution
+        return self._base.system_prompt(model_family=model_family, mode=mode, role=role)

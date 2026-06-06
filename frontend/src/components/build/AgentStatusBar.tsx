@@ -14,11 +14,18 @@ const STATUS_LABEL: Record<ConversationStatus, string> = {
   PAUSED: "Paused",
   STUCK: "Stuck",
   WAITING_FOR_CONFIRMATION: "Waiting for you",
+  AWAITING_PLAN_APPROVAL: "Reviewing plan",
   FINISHED: "Finished",
   ERROR: "Error",
 };
 
-const ACTIVE: ConversationStatus[] = ["RUNNING", "WAITING_FOR_CONFIRMATION", "PAUSED", "STUCK"];
+const ACTIVE: ConversationStatus[] = [
+  "RUNNING",
+  "WAITING_FOR_CONFIRMATION",
+  "AWAITING_PLAN_APPROVAL",
+  "PAUSED",
+  "STUCK",
+];
 
 export function AgentStatusBar({
   status,
@@ -30,7 +37,8 @@ export function AgentStatusBar({
   onKill: () => void;
 }) {
   const active = ACTIVE.includes(status);
-  const waiting = status === "WAITING_FOR_CONFIRMATION";
+  const waiting =
+    status === "WAITING_FOR_CONFIRMATION" || status === "AWAITING_PLAN_APPROVAL";
   const Shield = isolation.adversarialSafe ? ShieldCheck : ShieldHalf;
 
   return (

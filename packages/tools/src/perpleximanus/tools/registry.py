@@ -61,6 +61,9 @@ AGENT_TOOLS = frozenset(
         "code_exec",
         "browser",
         "deploy_preview",
+        # plan-mode meta tools: propose a plan (planning) + report capstones (execution).
+        "submit_plan",
+        "plan_step",
     }
 )
 

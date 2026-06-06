@@ -38,6 +38,7 @@ from .nli import Entailment, NLIVerifier, StubNLIVerifier
 # OverflowSignal stays live (advisory metadata carried by the loop).
 from .policy import OverflowSignal
 from .prompts import (
+    DriverPrompts,
     PromptProvider,
     StaticPromptProvider,
     default_mode_for_role,
@@ -95,6 +96,7 @@ __all__ = [
     "NullRoutingSink",
     "OperatingMode",
     "OverflowSignal",
+    "DriverPrompts",
     "PromptProvider",
     "ProposedToolCall",
     "Requirement",
