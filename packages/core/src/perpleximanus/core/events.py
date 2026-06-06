@@ -43,6 +43,7 @@ class EventKind(str, Enum):
     STATUS = "status"
     ERROR = "error"  # conversation-level error (distinct from agent_error)
     PLAN = "plan"  # a proposed, structured plan awaiting approval (Build plan-mode)
+    REPORT = "report"  # a finished Deep Research multi-section grounded report
 
 
 def _new_id() -> str:
@@ -139,6 +140,27 @@ class PlanStep(BaseModel):
     model_config = ConfigDict(frozen=True)
     title: str  # short, plain-language capstone ("Scaffold the page + styles")
     detail: str | None = None  # optional elaboration
+
+
+class ReportSection(BaseModel):
+    """One section of a Deep Research report — a section of the long-form output
+    grounded in a specific subset of the per-run corpus. `cited_passage_ids` are
+    the stable passage ids the citation UI resolves to source cards (mirror of
+    the per-block citations in the existing GroundedAnswer shape). `confidence`
+    + `disputed_notes` carry the honesty-at-scale signal: when sources agree
+    cleanly the section is "high"; when they disagree the conflict is named."""
+
+    model_config = ConfigDict(frozen=True)
+    id: str  # stable identifier ("s0", "s1", ... — for ToC anchoring)
+    title: str  # section heading the report renders verbatim
+    markdown: str  # the section body — markdown with inline [[passage_id]] citations
+    cited_passage_ids: list[str] = Field(default_factory=list)
+    confidence: Literal["high", "mixed", "low"] = "high"
+    # Plain-language notes naming any conflicts between sources for this section.
+    # When sources contradict on a claim, the model writes a short note here so
+    # the reader sees the disagreement, not a falsely-confident synthesis.
+    disputed_notes: list[str] = Field(default_factory=list)
+    unsupported_count: int = 0  # claims that failed NLI verification for this section
 
 
 class SecurityRisk(str, Enum):
@@ -307,6 +329,49 @@ class PlanEvent(BaseEvent, LLMConvertible):
         )
 
 
+class ReportEvent(BaseEvent, LLMConvertible):
+    """A finished Deep Research report — the multi-section grounded synthesis
+    produced from the per-run corpus. LLMConvertible so a follow-up turn in the
+    same conversation has the committed report headers + summary in its View
+    (the long body would blow the context window; we render headers only).
+
+    `bounded_by` names the hard-cap that terminated the run, if any: "sources"
+    (max_sources hit), "rounds" (max_rounds_per_subq hit on all sub-questions),
+    "wall_clock" (max_wall_clock_s hit), or "subquestions" (decompose produced
+    more than max_subquestions). None means the run completed naturally."""
+
+    kind: Literal[EventKind.REPORT] = EventKind.REPORT
+    source: EventSource = EventSource.AGENT
+    query: str  # the original user question this report answers
+    summary: str  # executive summary (one or two paragraphs, top-of-report)
+    sections: list[ReportSection]
+    # The cited subset (only passages actually referenced by some section). The UI
+    # resolves [[passage_id]] markers against this list to render source cards.
+    # Plain dict[str, Any] to keep `core` free of any `retrieval` import — the
+    # producer (deep_research engine) populates with Passage.model_dump().
+    passages: list[dict[str, Any]] = Field(default_factory=list)
+    # The full discovery set (URL, title, snippet, status). All_hits for the
+    # All-Searched / Cited tabs at report scale. Same plain-dict reason.
+    all_hits: list[dict[str, Any]] = Field(default_factory=list)
+    unsupported_count: int = 0  # whole-report total (sum across sections)
+    bounded_by: str | None = None  # named cap if hit, else None (natural finish)
+    # The depth tier the run used ("quick" / "standard_deep" / "exhaustive"),
+    # surfaced for the UI's cost/time honesty + audit. Optional for backward-compat.
+    depth_tier: str | None = None
+
+    def to_llm_message(self) -> LLMMessage:
+        # Render headers + summary only — the full body is too large for the View
+        # and the citations would resolve to ids the model can't look up anyway.
+        # This keeps the committed report present in-context for a follow-up turn
+        # ("expand section 3") without bloating the window.
+        headers = "\n".join(f"## {s.title}" for s in self.sections)
+        bound = f"\n\n(Bounded by: {self.bounded_by}.)" if self.bounded_by else ""
+        return LLMMessage(
+            role="assistant",
+            content=f"Research report for: {self.query}\n\n{self.summary}\n\n{headers}{bound}",
+        )
+
+
 class ErrorEvent(BaseEvent):
     """A conversation-level (fatal-ish) error, e.g. MaxIterationsReached.
     NOT LLMConvertible."""
@@ -327,6 +392,7 @@ Event = Annotated[
     | CondensationEvent
     | StatusEvent
     | PlanEvent
+    | ReportEvent
     | ErrorEvent,
     Field(discriminator="kind"),
 ]

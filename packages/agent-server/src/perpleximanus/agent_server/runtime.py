@@ -22,13 +22,19 @@ from typing import Any
 
 from perpleximanus.core import (
     DEFAULT_OWNER_ID,
+    ActionEvent,
     ConversationStatus,
     EventSource,
     LLMMessage,
     LLMSummarizingCondenser,
     MessageEvent,
     NoOpCondenser,
+    ObservationEvent,
+    PlanEvent,
+    PlanStep,
+    ReportEvent,
     StatusEvent,
+    ToolCall,
     ToolResult,
 )
 from perpleximanus.core.llm import (
@@ -47,6 +53,11 @@ from perpleximanus.core.llm.wiring import build_providers
 from perpleximanus.core.loop import AgentLoop, ConfirmRisky, NeverConfirm, RouterAgent
 from perpleximanus.core.security import RuleBasedAnalyzer
 from perpleximanus.core.store.sqlite import SqliteEventStore
+from perpleximanus.retrieval.deep_research import (
+    DeepResearchRun,
+    DepthTier,
+    decompose_query,
+)
 from perpleximanus.retrieval.wiring import retrieval_capability_handlers
 from perpleximanus.tools import (
     Capability,
@@ -164,6 +175,8 @@ class ConversationRuntime:
         # per-conversation driver model override (the Build chat model picker → the
         # AGENT_DRIVER for that conversation; RouterAgent applies it).
         self._model_override: dict[str, str] = {}
+        # per-conversation Deep Research depth tier (set at submit time).
+        self._depth: dict[str, str] = {}
         # The encrypted-at-rest secret store (OpenRouter key). Its decrypted key is
         # overlaid into the provider env per request; if it's locked/empty the env
         # value (if any) is used instead.
@@ -222,19 +235,27 @@ class ConversationRuntime:
         # provider, so Research is unaffected.
         return DefaultLLMRouter(cfg, providers, prompt_provider=DriverPrompts())
 
+    # Three surfaces: research (single-pass /ws/research stream), build (agent +
+    # tools + plan gate), deep_research (long-horizon plan → iterate → report).
+    _VALID_SURFACES: frozenset[str] = frozenset({"research", "build", "deep_research"})
+
     def set_surface(self, conversation_id: str, surface: str) -> None:
-        """Select a conversation's surface ("research" | "build") before it runs. The
-        Build surface composes tools + sandbox + the ConfirmRisky gate; Research stays
-        read-only + ungated. Idempotent until the loop is built."""
-        self._surface[conversation_id] = "build" if surface == "build" else "research"
+        """Select a conversation's surface before it runs. Build composes tools +
+        sandbox + the ConfirmRisky gate; Deep Research composes the plan-gate +
+        the long-horizon engine; Research stays read-only + ungated. Idempotent
+        until the loop is built."""
+        self._surface[conversation_id] = (
+            surface if surface in self._VALID_SURFACES else "research"
+        )
 
     def _surface_of(self, conversation_id: str) -> str:
         """The conversation's surface, recovered durably across server restarts.
         In-memory `_surface` is authoritative when set (the create-time POST path
         sets it). When it's missing — typical after a server restart — we DERIVE
-        Build from the existence of a project manifest on disk: a project's
-        existence IS a record that the conversation was Build (Research never
-        snapshots). Defaults to "research" when neither signal is present."""
+        from durable signals on disk / on the event log:
+        - a project manifest on disk → Build (Research never snapshots).
+        - a ReportEvent on the conversation log → Deep Research.
+        Defaults to "research" when no durable signal exists."""
         cached = self._surface.get(conversation_id)
         if cached is not None:
             return cached
@@ -247,6 +268,30 @@ class ConversationRuntime:
                     return "build"
             except Exception:  # noqa: BLE001 — best-effort recovery
                 pass
+        # Deep Research recovery: a ReportEvent on the log is the durable marker
+        # (Research/Build never emit ReportEvent). Cheap SQL check — no need to
+        # deserialize the whole log just to read the discriminator column.
+        try:
+            conn = getattr(self._store, "_conn", None)
+            if conn is not None:
+                kinds = {
+                    row["kind"]
+                    for row in conn.execute(
+                        "SELECT DISTINCT kind FROM events WHERE conversation_id = ?",
+                        (conversation_id,),
+                    )
+                }
+                if "report" in kinds:
+                    self._surface[conversation_id] = "deep_research"
+                    return "deep_research"
+                # plan-event without any action-event marks a deep-research paused
+                # at its plan gate (Build that survived a restart would also have
+                # an on-disk project manifest, caught above).
+                if "plan" in kinds and "action" not in kinds:
+                    self._surface[conversation_id] = "deep_research"
+                    return "deep_research"
+        except Exception:  # noqa: BLE001 — best-effort recovery
+            pass
         return "research"
 
     def _sandbox_service_now(self) -> SandboxService:
@@ -330,8 +375,11 @@ class ConversationRuntime:
                 conversation_id=conversation_id,
                 model_override=self._model_override.get(conversation_id),
             )
-            if self._surface_of(conversation_id) == "build":
+            surface = self._surface_of(conversation_id)
+            if surface == "build":
                 loop = self._compose_build_loop(conversation_id, router, agent)
+            elif surface == "deep_research":
+                loop = self._compose_deep_research_loop(conversation_id, router, agent)
             else:
                 loop = AgentLoop(
                     conversation_id,
@@ -395,6 +443,58 @@ class ConversationRuntime:
             ),
         )
 
+    # ---- deep research surface ---------------------------------------------
+
+    def _compose_deep_research_loop(
+        self, conversation_id: str, router: DefaultLLMRouter, agent: RouterAgent
+    ) -> AgentLoop:
+        """Compose the loop frame for Deep Research. The loop itself doesn't drive
+        the research — `_run_with_persistence` short-circuits `loop.run()` for
+        this surface and runs `DeepResearchRun` directly. The AgentLoop exists
+        here as the host for the plan-approval gate (we reuse Build's plan
+        machinery: same PlanEvent, same AWAITING_PLAN_APPROVAL status, same
+        approve_plan WS frame). No tools, no risk gate, no condenser — Deep
+        Research's iteration lives in the engine, not the loop."""
+        return AgentLoop(
+            conversation_id,
+            self._store,
+            agent,
+            _NoToolExecutor(),
+            router,
+            RuleBasedAnalyzer(),
+            NeverConfirm(),  # no risky action gate — read-only research
+            NoOpCondenser(),  # the engine manages its own corpus; no View condense
+            RouterSummarizer(router),
+            mode=OperatingMode.PLANNING,
+            # Configure planning_tools so the loop's mode-tracking is consistent
+            # with Build (PLANNING → LONG_HORIZON on approve_plan). The actual
+            # plan-event is emitted synthetically by _run_with_persistence; the
+            # loop never sees a submit_plan tool call.
+            planning_tools=frozenset({"submit_plan"}),
+        )
+
+    def _depth_for(self, conversation_id: str) -> DepthTier:
+        """The depth tier for this conversation. Stored in `_depth` per cid (set
+        at create-time by the agent-server's POST /conversations handler).
+        Defaults to STANDARD_DEEP — the everyday Deep Research run."""
+        raw = self._depth.get(conversation_id) if hasattr(self, "_depth") else None
+        if raw is None:
+            return DepthTier.STANDARD_DEEP
+        try:
+            return DepthTier(raw)
+        except ValueError:
+            return DepthTier.STANDARD_DEEP
+
+    def set_depth(self, conversation_id: str, tier: str | None) -> None:
+        """Pin the Deep Research depth tier for this conversation (set at submit
+        time by the UI's tier selector). Stored in memory; recovery falls to the
+        default after restart, which is acceptable for a follow-up turn (rare
+        for Deep Research — the run is the conversation)."""
+        if not hasattr(self, "_depth"):
+            self._depth: dict[str, str] = {}
+        if tier and tier in {t.value for t in DepthTier}:
+            self._depth[conversation_id] = tier
+
     # ---- research surface (Stage 4) -----------------------------------------
 
     def _research(self) -> dict[str, Any]:
@@ -456,26 +556,270 @@ class ConversationRuntime:
     async def _run_with_persistence(
         self, conversation_id: str, loop: AgentLoop
     ) -> Any:
-        """Snapshot/rehydrate wrapper around `loop.run()`. No-op for Research
-        conversations (no project store, no Build sandbox). Snapshot on
-        FINISHED only — the chosen single trigger that matches the capstone
-        boundary the user already approves at the plan gate."""
+        """Snapshot/rehydrate wrapper around `loop.run()`. Surface-aware:
+        - Build → snapshot+rehydrate the workspace as before.
+        - Deep Research → short-circuit `loop.run()` on the post-plan-approval
+          turn and run the DeepResearchRun engine; emit the ReportEvent +
+          StatusEvent(FINISHED) directly.
+        - Research → unchanged (the loop runs, no persistence)."""
+        surface = self._surface_of(conversation_id)
+
+        if surface == "deep_research":
+            # Short-circuit the loop for Deep Research. The plan-mode intercept
+            # the loop would otherwise run isn't useful here — Deep Research
+            # decomposes the query algorithmically (not via an LLM planning
+            # round) and the engine handles the rest. The loop's plan-approval
+            # state machine is reused via control-op routing; the loop's
+            # `run()` itself is not the right driver.
+            await self._maybe_run_deep_research(conversation_id)
+            # Return the (possibly-updated) state. The store reflects whatever
+            # we emitted.
+            return await self._store.get_state(conversation_id)
+
         # Rehydrate hook: BEFORE the loop runs for the first time, if a project
         # storage path is configured AND a prior snapshot exists for this cid,
         # write its files into the (lazy) sandbox so the agent sees them. Reads
         # are cheap; the rehydrate only writes if there are files on disk.
-        if self._surface_of(conversation_id) == "build":
+        if surface == "build":
             await self._maybe_rehydrate(conversation_id)
 
         state = await loop.run()
 
         # Snapshot hook: if the run ended in FINISHED, capture the workspace.
         if (
-            self._surface_of(conversation_id) == "build"
+            surface == "build"
             and state.execution_status == ConversationStatus.FINISHED
         ):
             await self._maybe_snapshot(conversation_id)
         return state
+
+    async def _maybe_run_deep_research(self, conversation_id: str) -> None:
+        """The Deep Research driver. Inspects the conversation state to decide
+        what to do this turn:
+        - No PlanEvent yet + a USER message → decompose + emit synthetic
+          PlanEvent + AWAITING_PLAN_APPROVAL. Wait for the user to approve.
+        - PlanEvent exists + status is RUNNING with detail="plan_approved" +
+          no ReportEvent yet → run the engine, emit progress events, emit
+          ReportEvent + StatusEvent(FINISHED).
+        - Anything else → no-op (waiting on the user, or already finished).
+
+        All actions persist via the event store; the WS surface streams them.
+        Failures surface as ErrorEvent on the log — never raise out of the
+        background task."""
+        events = await self._store.get_events(conversation_id)
+        state = await self._store.get_state(conversation_id)
+        plans = [e for e in events if isinstance(e, PlanEvent)]
+        reports = [e for e in events if isinstance(e, ReportEvent)]
+
+        # Phase 1: no plan yet → decompose + propose
+        if not plans:
+            await self._propose_deep_research_plan(conversation_id, events)
+            return
+
+        # Phase 2: plan approved, no report yet → run the engine
+        if (
+            state.execution_status == ConversationStatus.RUNNING
+            and not reports
+        ):
+            # Distinguish "RUNNING because plan was just approved" from "RUNNING
+            # because we're already deep in the engine and the task re-fired."
+            # The marker: the last StatusEvent's detail is "plan_approved".
+            last_status = next(
+                (e for e in reversed(events) if isinstance(e, StatusEvent)), None
+            )
+            if last_status is not None and last_status.detail == "plan_approved":
+                await self._execute_deep_research(conversation_id, plans[-1])
+        # else: waiting at AWAITING_PLAN_APPROVAL, FINISHED, etc. — no-op.
+
+    async def _propose_deep_research_plan(
+        self, conversation_id: str, events: list
+    ) -> None:
+        """Decompose the latest user query into sub-questions and emit a
+        synthetic PlanEvent + AWAITING_PLAN_APPROVAL. Same shape Build's plan
+        gate uses — the UI reuses the existing approve_plan / request_plan
+        affordances without modification."""
+        # Find the most recent USER message — the query.
+        query = next(
+            (
+                e.message.content
+                for e in reversed(events)
+                if isinstance(e, MessageEvent) and e.source == EventSource.USER
+            ),
+            None,
+        )
+        if not query or not query.strip():
+            return  # nothing to plan; wait
+
+        await self._store.append(
+            conversation_id,
+            StatusEvent(status=ConversationStatus.RUNNING),
+        )
+        tier = self._depth_for(conversation_id)
+        from perpleximanus.retrieval.deep_research import bounds_for
+
+        bound = bounds_for(tier)
+        # Decompose via QUERY_REWRITER. The decompose call IS the planning
+        # step; we emit the result as a PlanEvent directly (no LLM "planning
+        # mode" loop needed — the engine owns the work).
+        router = self._router_now()
+        try:
+            subqs = await decompose_query(
+                router, query, max_subq=bound.max_subquestions
+            )
+        except Exception as exc:  # noqa: BLE001 — surface as a system reminder
+            await self._store.append(
+                conversation_id,
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "<system-reminder>\n"
+                            f"Plan decomposition failed: {type(exc).__name__}: {exc}. "
+                            "Try a more specific query.\n"
+                            "</system-reminder>"
+                        ),
+                    ),
+                ),
+            )
+            return
+
+        steps = [PlanStep(title=s.title) for s in subqs]
+        summary = (
+            f"Multi-section research report on: {query.strip()[:140]}. "
+            f"Will gather sources across {len(steps)} sub-questions "
+            f"(tier: {tier.value}; cap: {bound.max_sources} sources, "
+            f"{bound.max_rounds_per_subq} rounds/subq)."
+        )
+        plan = PlanEvent(
+            summary=summary,
+            steps=steps,
+            revision=1,
+            context=(
+                f"**Query:** {query.strip()}\n\n"
+                f"**Depth tier:** {tier.value}\n\n"
+                f"**Sub-questions** (each becomes a section of the report):\n\n"
+                + "\n".join(f"{i + 1}. {s.title}" for i, s in enumerate(subqs))
+            ),
+        )
+        await self._store.append(conversation_id, plan)
+        await self._store.append(
+            conversation_id,
+            StatusEvent(
+                status=ConversationStatus.AWAITING_PLAN_APPROVAL, detail=plan.id
+            ),
+        )
+
+    async def _execute_deep_research(
+        self, conversation_id: str, plan: PlanEvent
+    ) -> None:
+        """The post-approval driver: run DeepResearchRun on the approved plan,
+        emitting Action/Observation events for every retrieval round + section
+        synthesis, ending with a ReportEvent + StatusEvent(FINISHED)."""
+        # Find the query from the user's last (pre-plan) message.
+        events = await self._store.get_events(conversation_id)
+        query = next(
+            (
+                e.message.content
+                for e in events
+                if isinstance(e, MessageEvent) and e.source == EventSource.USER
+            ),
+            plan.summary,
+        )
+        plan_steps = [s.title for s in plan.steps]
+        tier = self._depth_for(conversation_id)
+
+        # Build the engine. Providers come from the existing research-stream
+        # plumbing (search, extract, reranker, embedder, nli); the vectorstore
+        # is per-run (InMemoryVectorStore). The router honors model_override
+        # from the leader pill (the existing _router_now path).
+        from perpleximanus.retrieval import (
+            DefaultRetrievalEngine,
+            InMemoryVectorStore,
+            RouterQueryRewriter,
+        )
+
+        deps = self._research()
+        router = self._router_now(
+            answerer_override=self._model_override.get(conversation_id)
+        )
+        retrieval_engine = DefaultRetrievalEngine(
+            search=deps["search"],
+            extraction=deps["extraction"],
+            reranker=deps["reranker"],
+            embedder=deps.get("embedder"),
+            rewriter=RouterQueryRewriter(router),
+        )
+        run = DeepResearchRun(
+            query=query,
+            router=router,
+            retrieval_engine=retrieval_engine,
+            embedder=deps.get("embedder"),
+            vector_store=InMemoryVectorStore(),
+            nli=deps["nli"],
+            depth=tier,
+            conversation_id=conversation_id,
+        )
+
+        # Emit callback: every engine event becomes an Action/Observation pair
+        # on the conversation log so the UI's activity feed reflects progress.
+        async def emit(kind: str, payload: dict[str, Any]) -> None:
+            # Treat phase + search + synthesize_section as actions (the agent
+            # "doing something"), observation kinds as observations (results).
+            if kind == "observation" or kind == "gap_reason":
+                # last action_id we appended (best-effort correlation)
+                last_action = next(
+                    (
+                        e
+                        for e in reversed(await self._store.get_events(conversation_id))
+                        if isinstance(e, ActionEvent)
+                    ),
+                    None,
+                )
+                await self._store.append(
+                    conversation_id,
+                    ObservationEvent(
+                        tool_result=ToolResult(
+                            call_id=f"call_{kind}",
+                            tool_name=kind,
+                            success=bool(payload.get("ok", True)),
+                            content=str(
+                                {k: v for k, v in payload.items() if k != "ok"}
+                            ),
+                            structured=payload,
+                        ),
+                        action_id=last_action.id if last_action else "",
+                    ),
+                )
+                return
+            # action-shaped events
+            await self._store.append(
+                conversation_id,
+                ActionEvent(
+                    thought=f"Deep Research: {kind}",
+                    tool_call=ToolCall(tool_name=kind, arguments=payload),
+                ),
+            )
+
+        try:
+            result = await run.run(plan_steps, emit=emit)
+        except Exception as exc:  # noqa: BLE001 — surface as ErrorEvent
+            from perpleximanus.core import ErrorEvent
+
+            await self._store.append(
+                conversation_id,
+                ErrorEvent(
+                    code="deep_research_failed",
+                    detail=f"{type(exc).__name__}: {exc}",
+                ),
+            )
+            return
+
+        # Emit the final ReportEvent + FINISHED status.
+        await self._store.append(conversation_id, result.to_event())
+        await self._store.append(
+            conversation_id, StatusEvent(status=ConversationStatus.FINISHED)
+        )
 
     def project_store(self) -> ProjectStore | None:
         """Public accessor for the live project store (used by the agent-server's
