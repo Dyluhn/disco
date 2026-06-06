@@ -13,7 +13,8 @@ import asyncio
 import contextlib
 import uuid
 
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+import httpx
+from fastapi import FastAPI, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from perpleximanus.core import (
     DEFAULT_OWNER_ID,
@@ -114,11 +115,31 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
 
     @app.get("/conversations/{conversation_id}/preview")
     async def get_preview(conversation_id: str) -> dict:
-        """Backend-aware live preview: the URL to iframe the agent's running dev server,
-        or a clean reason it's not available (no server yet / Podman stub)."""
+        """Backend-aware live preview availability (the browser iframes the proxy below)."""
         if runtime is None:
             return {"available": False, "reason": "no runtime"}
         return runtime.preview(conversation_id)
+
+    @app.get("/conversations/{conversation_id}/preview-app/{path:path}")
+    @app.get("/conversations/{conversation_id}/preview-app/")
+    async def preview_app(conversation_id: str, path: str = "") -> Response:
+        """Proxy the agent's dev server through THIS (tailnet-reachable) origin — the
+        backend-derived upstream (localhost for local, the remote tailnet IP for gVisor) is
+        reached server-side, so no random container port is exposed and previews work over
+        the tailnet. Forwards GET; good for a built page (single-origin assets)."""
+        upstream = runtime.preview_upstream(conversation_id) if runtime is not None else None
+        if upstream is None:
+            return Response("preview not available", status_code=503, media_type="text/plain")
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+                r = await client.get(f"{upstream}/{path}")
+        except Exception:  # noqa: BLE001 — upstream not up yet / unreachable
+            return Response("preview upstream unreachable", status_code=502, media_type="text/plain")  # noqa: E501
+        return Response(
+            content=r.content,
+            status_code=r.status_code,
+            media_type=r.headers.get("content-type", "text/html"),
+        )
 
     @app.post("/conversations/{conversation_id}/kill")
     async def kill_conversation(conversation_id: str) -> dict:

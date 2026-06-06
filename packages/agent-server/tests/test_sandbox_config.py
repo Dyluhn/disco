@@ -76,14 +76,17 @@ def test_preview_is_backend_aware_and_honest():
     pod = rt.preview("pod")
     assert pod["available"] is False and pod["stub"] is True
 
-    # local with a reachable dev server → the iframe URL
+    # local with a reachable dev server → available (proxied through this origin); the
+    # raw upstream is kept server-side (the browser hits the agent-server proxy).
     rt._executors["loc"] = _FakeExecutor(_FakeSession("local", "http://localhost:32768"))
     loc = rt.preview("loc")
-    assert loc["available"] is True and loc["url"] == "http://localhost:32768"
+    assert loc["available"] is True and loc.get("proxy") is True and "url" not in loc
+    assert rt.preview_upstream("loc") == "http://localhost:32768"
 
     # local with no dev server up → a reason, not a fake URL
     rt._executors["bare"] = _FakeExecutor(_FakeSession("local", None))
     assert rt.preview("bare")["available"] is False
+    assert rt.preview_upstream("bare") is None
 
 
 def test_sandbox_settings_round_trip_on_disk(tmp_path):

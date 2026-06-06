@@ -11,6 +11,7 @@ import * as Tabs from "@radix-ui/react-tabs";
 import { ExternalLink, FileCode2, MonitorPlay, SquareTerminal } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { deriveFiles, deriveTerminal } from "@/lib/buildTrace";
+import { agentHttpBase } from "@/api/client";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
@@ -91,13 +92,16 @@ function PreviewPane({ status, cid }: { status: ConversationStatus; cid: string 
   const active = status === "RUNNING" || status === "WAITING_FOR_CONFIRMATION";
   const { data } = useBuildPreview(cid, active);
 
-  if (data?.available && data.url) {
+  if (data?.available && cid) {
+    // the agent-server proxies the dev server through its (tailnet-reachable) origin —
+    // no random container port is exposed; works wherever the agent-server is reachable.
+    const src = `${agentHttpBase()}/conversations/${cid}/preview-app/`;
     return (
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex shrink-0 items-center justify-between gap-inline border-b border-hairline px-body py-hair">
-          <span className="truncate font-mono text-[0.74rem] text-text-faint">{data.url}</span>
+          <span className="truncate font-mono text-[0.74rem] text-text-faint">live preview</span>
           <a
-            href={data.url}
+            href={src}
             target="_blank"
             rel="noreferrer"
             className="flex items-center gap-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text"
@@ -107,7 +111,7 @@ function PreviewPane({ status, cid }: { status: ConversationStatus; cid: string 
         </div>
         <iframe
           title="Live preview"
-          src={data.url}
+          src={src}
           sandbox="allow-scripts allow-forms allow-same-origin allow-popups"
           className="min-h-0 flex-1 border-0 bg-white"
         />

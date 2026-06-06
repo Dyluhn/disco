@@ -401,31 +401,43 @@ class ConversationRuntime:
         loop = self._loop_for(conversation_id)
         self._tasks[conversation_id] = asyncio.create_task(loop.run())
 
+    def preview_upstream(self, conversation_id: str) -> str | None:
+        """The URL the AGENT-SERVER can reach the conversation's dev server at (the backend
+        owns how — localhost for local, the remote host's tailnet IP for gVisor). The
+        browser never touches this; the agent-server proxies it (single origin)."""
+        executor = self._executors.get(conversation_id)
+        session = getattr(executor, "_sandbox", None) if executor is not None else None
+        if session is None:
+            return None
+        if getattr(getattr(session, "_service", None), "name", "?") == "podman":
+            return None  # stub here
+        return session.expose_port(PREVIEW_PORT)
+
     def preview(self, conversation_id: str) -> dict[str, Any]:
-        """Backend-aware live preview: ask the conversation's ACTIVE sandbox to expose its
-        dev-server port (the backend owns "how to reach a port inside me" — dispatch falls
-        out for free). Podman is an honest labeled stub here. Returns the iframe URL when a
-        dev server is reachable, else a clean reason — never a fake URL."""
+        """Backend-aware live preview availability. The browser iframes the agent-server's
+        proxy (/conversations/{id}/preview-app/), which forwards to the active backend's
+        dev server — so previews work over the tailnet via the one reachable origin, with no
+        random container ports exposed. Podman is an honest labeled stub; never a fake URL."""
         executor = self._executors.get(conversation_id)
         session = getattr(executor, "_sandbox", None) if executor is not None else None
         if session is None:
             return {"available": False, "reason": "The agent hasn't started a sandbox yet."}
-        backend = getattr(getattr(session, "_service", None), "name", "?")
-        if backend == "podman":
+        if getattr(getattr(session, "_service", None), "name", "?") == "podman":
             return {
                 "available": False,
                 "stub": True,
                 "reason": "Preview isn't wired for the Podman backend in this environment "
                 "— it's completed at deployment.",
             }
-        url = session.expose_port(PREVIEW_PORT)
-        if url is None:
+        if session.expose_port(PREVIEW_PORT) is None:
             return {
                 "available": False,
                 "reason": f"No dev server detected. Run one on port {PREVIEW_PORT} inside the "
                 "sandbox to see a live preview.",
             }
-        return {"available": True, "url": url}
+        # the browser iframes the agent-server proxy path (built frontend-side from the
+        # agent base + this conversation id) — not a raw container port.
+        return {"available": True, "proxy": True}
 
     # ---- control ops: the confirmation gate + kill switch (BoD §13.4/§13.6) -----
 

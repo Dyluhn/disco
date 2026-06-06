@@ -141,7 +141,7 @@ export interface DriverModels {
  * reason it isn't available (no server yet / Podman stub). */
 export interface PreviewInfo {
   available: boolean;
-  url?: string;
+  proxy?: boolean; // served via the agent-server proxy (the browser builds the URL)
   reason?: string;
   stub?: boolean;
 }

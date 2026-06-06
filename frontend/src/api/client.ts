@@ -42,6 +42,12 @@ export function agentWsUrl(path: string): string | null {
   return `${AGENT_BASE.replace(/^http/, "ws")}${path}`;
 }
 
+/** The agent-server HTTP base (for forming proxied URLs the browser loads directly, e.g.
+ * the preview iframe). Empty when unconfigured. */
+export function agentHttpBase(): string {
+  return AGENT_BASE;
+}
+
 /** A GET against the AGENT-server (e.g. the driver model catalogue). */
 export function agentGet<T>(path: string): Promise<T> {
   return fetch(`${AGENT_BASE}${path}`, { headers: { accept: "application/json" } }).then(parse<T>);
