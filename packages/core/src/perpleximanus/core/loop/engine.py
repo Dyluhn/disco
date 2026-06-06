@@ -74,15 +74,44 @@ _TERMINAL_FOR_NOW = frozenset(
     }
 )
 
-# Injected when the planner answers in prose / tries to act instead of calling the
-# plan tool: in PLANNING mode the only valid move is to PROPOSE a structured plan.
+# Injected (as an implicit system-reminder) when the planner answers in prose
+# instead of calling submit_plan: in PLANNING mode the only terminal move is to
+# PROPOSE a structured plan. Reads (file_list/file_read/search/extract) fall
+# through and never trigger this — only a tool-less prose response does.
 _PLAN_NUDGE = (
-    "Do not take any action yet. First propose a plan by calling the `submit_plan` "
-    "tool with a short summary and a list of concrete, ordered steps."
+    "<system-reminder>\n"
+    "Still in PLANNING mode — no plan has been proposed yet. The only terminal "
+    "move here is to call the `submit_plan` tool with a summary, ordered steps, "
+    "and a markdown `context` block. You may continue to read (file_list, "
+    "file_read, search, extract) for more context first, but a prose reply alone "
+    "doesn't advance the conversation.\n"
+    "</system-reminder>"
 )
-# Safety cap on consecutive plan nudges, so a misbehaving planner can't spin (no
-# ActionEvent is emitted while nudging → max_iterations doesn't trip on its own).
-_MAX_PLAN_NUDGES = 3
+
+# Symmetric to _PLAN_NUDGE on the execution side: a hard gate that refuses FINISHED
+# until the agent has done productive work since the most recent plan approval.
+# Small open models sometimes echo the plan as prose and declare "done" without
+# touching anything — the gate catches that and re-enters the loop. Phrased as a
+# `<system-reminder>` (ambient, implicit) rather than a user-tone scolding: the
+# model sees an automated environment notification, not a confrontation.
+_EXECUTION_NUDGE = (
+    "<system-reminder>\n"
+    "The approved plan has not been executed yet — no workspace files have been "
+    "written, edited, or run since approval. Continue by calling a tool "
+    "(file_write, file_edit, shell, code_exec, …) to carry out the plan's steps "
+    "in order. The plan is in your context above.\n"
+    "</system-reminder>"
+)
+# No cap on execution nudges. The reminder keeps firing as long as the agent
+# tries to declare done without acting; the loop's own `max_iterations` backstop
+# and the user's kill switch are the ultimate exits — we never error out of the
+# gate itself. Keep the counter so tests + telemetry can observe how often the
+# reminder fired.
+
+# The tool names that don't count as "productive work" for the execution gate:
+# meta tools that don't change workspace state. plan_step is informational; the
+# planning tool would have been intercepted upstream but is named for clarity.
+_NON_PRODUCTIVE_TOOLS = frozenset({"submit_plan", "plan_step"})
 
 
 class AgentLoop:
@@ -127,6 +156,7 @@ class AgentLoop:
         self._plan_tool = plan_tool  # the structured-plan signal, intercepted
         self._execution_mode = execution_mode  # the mode an approved plan runs in
         self._plan_nudges = 0  # consecutive nudges while planning (safety cap)
+        self._execution_nudges = 0  # consecutive "you must act" nudges in execution
         self._stop_hooks = list(stop_hooks or [])
         self._stuck = StuckDetector(stuck_thresholds)
         self._veto_feedback = veto_feedback
@@ -202,6 +232,31 @@ class AgentLoop:
         context = str(arguments.get("context") or arguments.get("rationale") or "").strip()
         revision = 1 + sum(1 for e in events if isinstance(e, PlanEvent))
         return PlanEvent(summary=summary, steps=steps, revision=revision, context=context)
+
+    @staticmethod
+    def _productive_action_since_approval(events: list[Event]) -> bool:
+        """Has the agent done any state-changing or information-gathering work since the
+        most recent plan approval? Used to gate the execution-mode FINISHED transition:
+        if False, the loop refuses to finish (the model would be declaring done without
+        having acted). If there is no plan_approved marker (plan-mode never entered, or
+        not yet approved), the gate is inert — return True so the regular finish path
+        runs untouched."""
+        # find the seq of the most recent plan-approval marker
+        approval_seq: int | None = None
+        for e in reversed(events):
+            if isinstance(e, StatusEvent) and e.detail == "plan_approved":
+                approval_seq = e.seq
+                break
+        if approval_seq is None:
+            return True  # no plan-first lifecycle here; don't gate the finish
+        # any ActionEvent after that point whose tool is NOT a meta tool counts
+        for e in events:
+            if (e.seq or 0) <= approval_seq:
+                continue
+            if isinstance(e, ActionEvent) and e.tool_call is not None:
+                if e.tool_call.tool_name not in _NON_PRODUCTIVE_TOOLS:
+                    return True
+        return False
 
     @staticmethod
     def initial_mode(
@@ -383,21 +438,11 @@ class AgentLoop:
                         )
                         return await self.get_state()
                     if tc is None:
-                        # Safety: a misbehaving planner that keeps answering in prose would
-                        # spin (no ActionEvent → no iteration counter, no stuck pattern).
-                        # Cap consecutive nudges and bail with a real error.
+                        # The planner spoke without calling a tool. Append an implicit
+                        # system-reminder and re-enter. No cap, no error — the loop's
+                        # max_iterations and the user's kill switch are the ultimate
+                        # exits. The counter stays for telemetry.
                         self._plan_nudges += 1
-                        if self._plan_nudges >= _MAX_PLAN_NUDGES:
-                            await self._emit(
-                                ErrorEvent(
-                                    code="plan_required",
-                                    detail=(
-                                        "the planner did not propose a plan via "
-                                        f"`submit_plan` after {_MAX_PLAN_NUDGES} attempts"
-                                    ),
-                                )
-                            )
-                            return await self.get_state()
                         await self._emit(
                             MessageEvent(
                                 source=EventSource.ENVIRONMENT,
@@ -413,6 +458,26 @@ class AgentLoop:
 
                 # (f) finish path — subject to stop-hook veto (§7.4)
                 if step.finished and step.tool_call is None:
+                    # PLAN-MODE EXECUTION GATE — a forcing function, NOT a prompt. If
+                    # the loop is in execution mode (planning_tools configured) and the
+                    # agent declares "done" without any productive action since plan
+                    # approval, refuse the finish: append an IMPLICIT system-reminder
+                    # and re-enter the loop. No cap — the reminder keeps firing as long
+                    # as the agent tries to walk away without acting. The loop's own
+                    # max_iterations + the user's kill switch are the ultimate exits.
+                    if (
+                        self._planning_tools  # plan-first lifecycle is configured
+                        and self.mode != OperatingMode.PLANNING  # we're executing
+                        and not self._productive_action_since_approval(events)
+                    ):
+                        self._execution_nudges += 1  # telemetry only; not a gate
+                        await self._emit(
+                            MessageEvent(
+                                source=EventSource.ENVIRONMENT,
+                                message=LLMMessage(role="user", content=_EXECUTION_NUDGE),
+                            )
+                        )
+                        continue
                     if await self._stop_allowed(state, events):
                         # Record the agent's final message (the answer) before
                         # finishing — the deliverable text belongs on the log, not

@@ -15,6 +15,7 @@ from perpleximanus.core import (
     ActionEvent,
     AgentErrorEvent,
     ConversationStatus,
+    ErrorEvent,
     EventSource,
     LLMMessage,
     MessageEvent,
@@ -201,6 +202,58 @@ async def test_reject_denies_without_executing():
     assert not any(isinstance(e, ObservationEvent) for e in events)
     assert any(isinstance(e, AgentErrorEvent) for e in events)
     assert (await store.get_state(CID)).execution_status == ConversationStatus.FINISHED
+
+
+async def test_execution_gate_refuses_finish_without_productive_action():
+    """The forcing function: in execution mode, FINISHED is refused while no
+    productive ActionEvent has occurred since plan_approved — instead, an implicit
+    system-reminder is appended and the loop re-enters. The reminder fires every
+    time, with no cap (no ErrorEvent, no FINISHED-without-work)."""
+    safe = ProposedToolCall(
+        tool_name="file_write", arguments={"path": "f.txt", "content": "ok"}
+    )
+    # Steps: plan #1 → approve → FIRST execution turn tries to finish immediately
+    # → gate intercepts, appends system-reminder, retries → model now writes a file
+    # and finishes for real.
+    steps = [
+        ("here's the plan", [_plan(["do the thing"])]),  # plan
+        ("done!", []),  # tries to finish immediately (no action) → gate fires
+        ("ok ok writing", [safe]),  # complies on the next turn
+        ("done", []),  # finishes after producing real work
+    ]
+    store = SqliteEventStore(":memory:")
+    runtime = await _build_convo(store, steps)
+    await _run_to_rest(runtime)  # → AWAITING_PLAN_APPROVAL
+    await _approve_plan_and_run(runtime)
+
+    state = await store.get_state(CID)
+    events = await store.get_events(CID)
+
+    # the loop reached FINISHED — but only after the model produced an action
+    assert state.execution_status == ConversationStatus.FINISHED
+    productive = [
+        e
+        for e in events
+        if isinstance(e, ActionEvent)
+        and e.tool_call is not None
+        and e.tool_call.tool_name not in ("submit_plan", "plan_step")
+    ]
+    assert len(productive) >= 1  # the gate forced at least one real action
+
+    # the implicit reminder was appended (system-reminder tag → ambient framing)
+    reminders = [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and "<system-reminder>" in e.message.content
+        and "approved plan has not been executed" in e.message.content
+    ]
+    assert len(reminders) >= 1  # the gate fired at least once
+
+    # NO ErrorEvent was emitted — "don't error out, send implicit reminders"
+    assert not any(
+        isinstance(e, ErrorEvent) for e in events
+    ), "the gate must not error out; it nudges and re-enters"
 
 
 async def test_request_plan_after_finish_reopens_plan_mode_with_a_new_revision():
