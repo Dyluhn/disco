@@ -1,5 +1,6 @@
 import { McpSection } from "@/components/settings/McpSection";
 import { ModelMatrix } from "@/components/settings/ModelMatrix";
+import { ProjectStorageSection } from "@/components/settings/ProjectStorageSection";
 import { SandboxSection } from "@/components/settings/SandboxSection";
 import { SkillsSection } from "@/components/settings/SkillsSection";
 
@@ -21,6 +22,7 @@ export function SettingsView() {
 
         <ModelMatrix />
         <SandboxSection />
+        <ProjectStorageSection />
         <SkillsSection />
         <McpSection />
       </div>

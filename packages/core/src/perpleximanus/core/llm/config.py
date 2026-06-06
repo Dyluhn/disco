@@ -81,10 +81,27 @@ class SandboxSettings(BaseModel):
     workspace_root: str = "/opt/sandbox/workspaces"
 
 
+class ProjectStorageSettings(BaseModel):
+    """[settings] Where Build projects persist on the APP HOST — the user-chosen
+    directory under which each project's manifest + workspace tree lives.
+
+    Plain config held in `core` (same shared ConfigStore as the model catalogue);
+    the agent-server reads it to snapshot/rehydrate Build workspaces. Empty by
+    default — "not configured" — so an unset path is detectable rather than
+    accidentally falling back to a hidden default. Validation is done at the
+    SET path (the settings PUT endpoint) not at construction; load-time
+    construction must not throw."""
+
+    # absolute directory on the app host where projects persist. Empty == unset.
+    projects_root: str = ""
+
+
 class RouterConfig(BaseModel):
     models: dict[str, ModelEntry]  # key -> entry (the assignable catalogue)
     # the active sandbox backend + connection (settings-driven; agent-server maps it).
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
+    # the user-chosen Build-project persistence root (empty = unset).
+    projects: ProjectStorageSettings = Field(default_factory=ProjectStorageSettings)
     # v1.2 deterministic assignment — the source of truth (R10):
     default_model: str  # AGENT_DRIVER's model + fallback for any unassigned role
     assignments: dict[ModelRole, str] = Field(default_factory=dict)  # explicit per-role

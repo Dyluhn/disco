@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Navigate, Route, BrowserRouter as Router, Routes } from "react-router-dom";
+import { Navigate, Route, BrowserRouter as Router, Routes, useParams } from "react-router-dom";
 import { BuildSurface } from "@/components/BuildSurface";
 import { ResearchSurface } from "@/components/ResearchSurface";
 import { ModeProvider } from "@/shell/ModeProvider";
 import { Shell } from "@/shell/Shell";
 import { useMode } from "@/shell/mode";
 import { HistoryView } from "@/views/HistoryView";
+import { ProjectsView } from "@/views/ProjectsView";
 import { SettingsView } from "@/views/SettingsView";
 
 const queryClient = new QueryClient({
@@ -17,6 +18,13 @@ const queryClient = new QueryClient({
 function MainSurface() {
   const { mode } = useMode();
   return mode === "build" ? <BuildSurface /> : <ResearchSurface />;
+}
+
+/** Resume an existing Build project from /build/:cid — opens the Build surface
+ * pinned to a specific conversation id (the project surface's reopen path). */
+function ResumeProject() {
+  const { cid } = useParams<{ cid: string }>();
+  return <BuildSurface resumeCid={cid ?? null} />;
 }
 
 /**
@@ -34,6 +42,8 @@ export default function App() {
             <Route element={<Shell />}>
               <Route index element={<MainSurface />} />
               <Route path="history" element={<HistoryView />} />
+              <Route path="projects" element={<ProjectsView />} />
+              <Route path="build/:cid" element={<ResumeProject />} />
               <Route path="settings" element={<SettingsView />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>

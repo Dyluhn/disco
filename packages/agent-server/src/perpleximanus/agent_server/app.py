@@ -12,10 +12,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import uuid
+from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, Query, Response, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from perpleximanus.core import (
     DEFAULT_OWNER_ID,
     EventSource,
@@ -25,6 +27,11 @@ from perpleximanus.core import (
     WSServerFrame,
 )
 from perpleximanus.core.store.sqlite import SqliteEventStore
+from perpleximanus.tools.projects import (
+    StorageStatus,
+    aiter_zip_workspace,
+    validate_root,
+)
 from pydantic import BaseModel, ValidationError
 
 from .runtime import ConversationRuntime
@@ -158,6 +165,136 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     ) -> dict:
         ids = await store.list_conversations(owner_id=owner_id, limit=limit, cursor=cursor)
         return {"conversation_ids": ids}
+
+    # ---- Build projects (persistence list / download / delete) --------------
+
+    @app.get("/api/projects")
+    async def list_projects(
+        owner_id: str = Query(default=DEFAULT_OWNER_ID),
+    ) -> dict:
+        """List Build projects under the configured projects_root, joined with
+        their conversation metadata (title/created_at). Returns an empty list
+        with a clear `status` field when the storage isn't configured/valid —
+        graceful empty, never crash."""
+        ps = runtime.project_store() if runtime is not None else None
+        if ps is None:
+            return {"projects": [], "status": StorageStatus.UNSET.value}
+        status = ps.status()
+        if status != StorageStatus.OK:
+            return {"projects": [], "status": status.value, "root": str(ps.root or "")}
+        records = ps.list_projects()
+        # cross-reference with conversations so the row title/created_at always
+        # come from the authoritative store (manifest can drift on rename).
+        summaries = await store.list_conversation_summaries(
+            owner_id=owner_id, limit=500, cursor=None
+        )
+        by_id = {s.conversation_id: s for s in summaries}
+        projects = []
+        for r in records:
+            s = by_id.get(r.conversation_id)
+            projects.append(
+                {
+                    "id": r.conversation_id,
+                    "owner_id": r.owner_id or (s.owner_id if s else owner_id),
+                    "title": (s.title if s else None) or r.title or "(untitled)",
+                    "created_at": (s.created_at if s else None) or r.created_at,
+                    "last_snapshot_at": r.last_snapshot_at,
+                    "file_count": r.file_count,
+                    "total_bytes": r.total_bytes,
+                    "files_missing": r.files_missing,
+                }
+            )
+        return {"projects": projects, "status": status.value, "root": str(ps.root or "")}
+
+    @app.get("/api/projects/{conversation_id}/download")
+    async def download_project(conversation_id: str) -> StreamingResponse:
+        """Stream a zip of the project's workspace. 404 with a specific reason
+        when the storage is unconfigured / the project is unknown / the files
+        have been deleted under the manifest."""
+        ps = runtime.project_store() if runtime is not None else None
+        if ps is None or ps.status() != StorageStatus.OK:
+            raise HTTPException(
+                status_code=404,
+                detail={"reason": "storage_unavailable"},
+            )
+        record = ps.get(conversation_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail={"reason": "project_not_found"})
+        if record.files_missing:
+            raise HTTPException(status_code=404, detail={"reason": "files_missing"})
+        workspace = ps.path_for(conversation_id)
+        headers = {
+            "Content-Disposition": (
+                f'attachment; filename="{conversation_id}.zip"'
+            ),
+        }
+        return StreamingResponse(
+            aiter_zip_workspace(workspace),
+            media_type="application/zip",
+            headers=headers,
+        )
+
+    @app.delete("/api/projects/{conversation_id}")
+    async def delete_project(conversation_id: str) -> dict:
+        """Remove a project's manifest + workspace from disk. The conversation
+        events in SQLite are left alone (deleting those is a separate concern,
+        and matches the History surface's existing delete semantics)."""
+        ps = runtime.project_store() if runtime is not None else None
+        if ps is None or ps.status() != StorageStatus.OK:
+            raise HTTPException(
+                status_code=404,
+                detail={"reason": "storage_unavailable"},
+            )
+        deleted = ps.delete(conversation_id)
+        return {"id": conversation_id, "deleted": deleted}
+
+    @app.get("/api/storage/browse")
+    async def browse_storage(path: str = Query(default="")) -> dict:
+        """Server-side directory picker. Lists IMMEDIATE children of `path` (or
+        $HOME when empty). Returns `{path, parent, entries: [{name, is_dir}]}`.
+        Only directory listings; never returns file contents — the endpoint
+        exists ONLY to drive the settings path picker."""
+        try:
+            target = Path(path).expanduser().resolve() if path else Path.home()
+        except Exception as exc:  # noqa: BLE001 — bad path: 400 with the reason
+            raise HTTPException(
+                status_code=400, detail={"reason": "bad_path", "message": str(exc)}
+            ) from exc
+        if not target.exists():
+            raise HTTPException(
+                status_code=404,
+                detail={"reason": "not_found", "path": str(target)},
+            )
+        if not target.is_dir():
+            raise HTTPException(
+                status_code=400,
+                detail={"reason": "not_a_directory", "path": str(target)},
+            )
+        try:
+            entries = []
+            for child in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+                # hide dotfiles — the picker is for project storage, not system browsing
+                if child.name.startswith("."):
+                    continue
+                try:
+                    is_dir = child.is_dir()
+                except OSError:
+                    continue
+                entries.append({"name": child.name, "is_dir": is_dir})
+        except PermissionError as exc:
+            raise HTTPException(
+                status_code=403,
+                detail={"reason": "not_readable", "path": str(target)},
+            ) from exc
+        parent = str(target.parent) if target.parent != target else None
+        # Whether the CURRENT path is selectable as a projects_root.
+        select_status = validate_root(str(target)).value
+        return {
+            "path": str(target),
+            "parent": parent,
+            "entries": entries,
+            "selectable": select_status,
+        }
 
     # ---- WebSocket (§7.1–7.4) -----------------------------------------------
 

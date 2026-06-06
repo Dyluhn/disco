@@ -97,6 +97,19 @@ class SandboxConfigDTO(BaseModel):
     workspace_root: str
 
 
+class ProjectStorageConfigDTO(BaseModel):
+    """Where Build projects persist on the app host — the user-chosen directory.
+
+    Wire mirror of core's `ProjectStorageSettings`. The `status` field is derived
+    on the GET path so the UI knows immediately whether the saved path is valid
+    (ok / unset / not_found / not_a_directory / not_writable); on PUT, the path
+    is validated server-side and a 400 with a typed reason is returned for any
+    non-OK status."""
+
+    projects_root: str = ""
+    status: str = "unset"  # informational; populated by the GET path
+
+
 class SkillDTO(BaseModel):
     id: str
     name: str
@@ -268,6 +281,29 @@ def _sandbox_from(config: RouterConfig) -> SandboxConfigDTO:
     )
 
 
+def _projects_from(config: RouterConfig) -> ProjectStorageConfigDTO:
+    """Wire DTO for the Build-project storage path. The `status` derives from
+    the live `validate_root` check so the UI sees the truth at GET time
+    (a path saved yesterday could be missing today if the user deleted it)."""
+    from perpleximanus.tools.projects import validate_root
+
+    p = config.projects
+    return ProjectStorageConfigDTO(
+        projects_root=p.projects_root,
+        status=validate_root(p.projects_root).value,
+    )
+
+
+class ConfigValidationError(Exception):
+    """Raised by ConfigState.update_projects_config when the candidate path
+    fails validation. The endpoint maps this to a 400 with a typed `reason`."""
+
+    def __init__(self, reason: str, *, detail: str = "") -> None:
+        super().__init__(detail or reason)
+        self.reason = reason
+        self.detail = detail
+
+
 # ---- the session-scoped config state ----------------------------------------
 
 
@@ -407,6 +443,32 @@ class ConfigState:
             )
         )
         return _sandbox_from(self._store.load())
+
+    # Build-project storage path (persisted; agent-server reads it per request) ---
+
+    def projects_config(self) -> ProjectStorageConfigDTO:
+        return _projects_from(self._store.load())
+
+    def update_projects_config(
+        self, dto: ProjectStorageConfigDTO
+    ) -> ProjectStorageConfigDTO:
+        """Persist the chosen projects_root after validation. An empty path
+        unsets it (allowed). A non-empty path must be an existing, writable
+        directory or this raises ConfigValidationError; the endpoint maps that
+        to a 400 with a typed reason so the UI can show a specific error."""
+        from perpleximanus.core.llm import ProjectStorageSettings
+        from perpleximanus.tools.projects import StorageStatus, validate_root
+
+        raw = dto.projects_root.strip()
+        if raw:
+            status = validate_root(raw)
+            if status != StorageStatus.OK:
+                raise ConfigValidationError(
+                    reason=status.value,
+                    detail=f"projects_root {raw!r}: {status.value}",
+                )
+        self._store.save_projects(ProjectStorageSettings(projects_root=raw))
+        return _projects_from(self._store.load())
 
     # skills (wiring-pending) -------------------------------------------------
 

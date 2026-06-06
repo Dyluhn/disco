@@ -22,12 +22,14 @@ from .config_state import (
     AssignmentsDTO,
     AssignmentsPatch,
     ConfigState,
+    ConfigValidationError,
     McpConnectionDTO,
     ModelDTO,
     ModelUpsert,
     OpenRouterKeyBody,
     OpenRouterKeyStatus,
     OpenRouterModelDTO,
+    ProjectStorageConfigDTO,
     SandboxConfigDTO,
     SkillDTO,
     SkillPatch,
@@ -98,6 +100,25 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
     @app.put("/api/sandbox/config")
     async def put_sandbox_config(dto: SandboxConfigDTO) -> SandboxConfigDTO:
         return state.update_sandbox_config(dto)
+
+    @app.get("/api/projects/storage/config")
+    async def get_projects_config() -> ProjectStorageConfigDTO:
+        return state.projects_config()
+
+    @app.put("/api/projects/storage/config")
+    async def put_projects_config(
+        dto: ProjectStorageConfigDTO,
+    ) -> ProjectStorageConfigDTO:
+        """Persist the Build-project storage path. A non-empty path is validated
+        server-side; a bad path returns 400 with a typed `reason` so the UI shows
+        a specific error ("not_found" / "not_a_directory" / "not_writable")."""
+        try:
+            return state.update_projects_config(dto)
+        except ConfigValidationError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"reason": exc.reason, "message": exc.detail or exc.reason},
+            ) from exc
 
     # Declared AFTER /assignments so that literal path wins over {model_id}.
     @app.put("/api/models/{model_id}")

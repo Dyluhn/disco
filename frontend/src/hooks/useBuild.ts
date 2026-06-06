@@ -4,15 +4,26 @@
  * the gate (confirm/reject) + the kill switch. Components consume only this.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { createBuildConversation, killConversation } from "@/api/agent";
 import { useBuildStream, type BuildSession } from "./useBuildStream";
 
-export function useBuild() {
+/** Opens a Build conversation. If `resumeCid` is given (the /build/:cid route),
+ * skip the create call and connect to the existing conversation — the WebSocket
+ * subscription replays history-then-live, so the prior events restore. */
+export function useBuild(resumeCid?: string | null) {
   const [session, setSession] = useState<BuildSession | null>(null);
   const [modelId, setModelId] = useState<string | null>(null); // null → server default
   const stream = useBuildStream(session);
+
+  // Resume path: when a route param hands us a cid, jump straight in. The
+  // task label is informational on resume; the loop already has its history.
+  useEffect(() => {
+    if (resumeCid && (session === null || session.cid !== resumeCid)) {
+      setSession({ cid: resumeCid, task: "(resumed)" });
+    }
+  }, [resumeCid, session]);
 
   const create = useMutation({ mutationFn: createBuildConversation });
 
@@ -36,6 +47,7 @@ export function useBuild() {
     started: session !== null,
     cid: session?.cid ?? null,
     task: session?.task ?? null,
+    resumed: Boolean(resumeCid),
     submitting: create.isPending,
     modelId,
     setModelId,

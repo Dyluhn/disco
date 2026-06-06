@@ -21,9 +21,12 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from perpleximanus.core import (
+    DEFAULT_OWNER_ID,
     ConversationStatus,
     EventSource,
+    LLMMessage,
     LLMSummarizingCondenser,
+    MessageEvent,
     NoOpCondenser,
     StatusEvent,
     ToolResult,
@@ -55,6 +58,12 @@ from perpleximanus.tools import (
     SandboxSpec,
     agent_scope,
     build_default_registry,
+)
+from perpleximanus.tools.projects import (
+    ProjectStore,
+    StorageStatus,
+    rehydrate_workspace,
+    snapshot_workspace,
 )
 from perpleximanus.tools.sandbox import (
     GvisorSandboxService,
@@ -407,12 +416,160 @@ class ConversationRuntime:
 
     def kick(self, conversation_id: str) -> None:
         """Schedule the loop to run (idempotent: a no-op if already running). The
-        loop itself decides if there's unprocessed work and streams events."""
+        loop itself decides if there's unprocessed work and streams events.
+
+        Wraps `loop.run()` in a task that — for Build conversations with a valid
+        ProjectStore configured — first REHYDRATES the persisted workspace on
+        the very first kick, and SNAPSHOTS it after every run that ends in
+        FINISHED. Failures are reported as ambient system-reminder events on
+        the conversation log (the user + model both see them), never as
+        exceptions that crash the task."""
         existing = self._tasks.get(conversation_id)
         if existing is not None and not existing.done():
             return  # already running; the new message is picked up at the next step
         loop = self._loop_for(conversation_id)
-        self._tasks[conversation_id] = asyncio.create_task(loop.run())
+        self._tasks[conversation_id] = asyncio.create_task(
+            self._run_with_persistence(conversation_id, loop)
+        )
+
+    async def _run_with_persistence(
+        self, conversation_id: str, loop: AgentLoop
+    ) -> Any:
+        """Snapshot/rehydrate wrapper around `loop.run()`. No-op for Research
+        conversations (no project store, no Build sandbox). Snapshot on
+        FINISHED only — the chosen single trigger that matches the capstone
+        boundary the user already approves at the plan gate."""
+        # Rehydrate hook: BEFORE the loop runs for the first time, if a project
+        # storage path is configured AND a prior snapshot exists for this cid,
+        # write its files into the (lazy) sandbox so the agent sees them. Reads
+        # are cheap; the rehydrate only writes if there are files on disk.
+        if self._surface.get(conversation_id) == "build":
+            await self._maybe_rehydrate(conversation_id)
+
+        state = await loop.run()
+
+        # Snapshot hook: if the run ended in FINISHED, capture the workspace.
+        if (
+            self._surface.get(conversation_id) == "build"
+            and state.execution_status == ConversationStatus.FINISHED
+        ):
+            await self._maybe_snapshot(conversation_id)
+        return state
+
+    def project_store(self) -> ProjectStore | None:
+        """Public accessor for the live project store (used by the agent-server's
+        projects endpoints). Returns None if no path is configured; the caller
+        checks `.status()` for the full validation classification."""
+        return self._project_store_now()
+
+    def _project_store_now(self) -> ProjectStore | None:
+        """Build a ProjectStore from the current settings — None if no path is
+        configured. Built per-call (cheap; matches the rest of the runtime's
+        "reload the config each request" discipline). The validity status is
+        checked at the use site so a bad-but-set path can be reported clearly."""
+        root = self._config_store.load().projects.projects_root
+        if not root.strip():
+            return None
+        return ProjectStore(root)
+
+    async def _maybe_rehydrate(self, conversation_id: str) -> None:
+        """Restore the workspace files from a prior snapshot into the live
+        sandbox, if a snapshot exists. Idempotent: tracked via an in-process
+        flag so a second kick on the same conversation doesn't re-write the
+        files."""
+        if getattr(self, "_rehydrated", None) is None:
+            self._rehydrated: set[str] = set()
+        if conversation_id in self._rehydrated:
+            return
+        self._rehydrated.add(conversation_id)
+        store = self._project_store_now()
+        if store is None or store.status() != StorageStatus.OK:
+            return
+        record = None
+        try:
+            record = store.get(conversation_id)
+        except Exception:  # noqa: BLE001 — manifest unreadable: treat as no record
+            return
+        if record is None or record.files_missing:
+            return
+        executor = self._executors.get(conversation_id)
+        session = getattr(executor, "_sandbox", None) if executor is not None else None
+        if session is None:
+            return
+        try:
+            await rehydrate_workspace(session, store.path_for(conversation_id))
+        except Exception as exc:  # noqa: BLE001 — surface, don't crash the run
+            await self._emit_persistence_reminder(
+                conversation_id,
+                f"Could not restore project files: {exc}",
+            )
+
+    async def _maybe_snapshot(self, conversation_id: str) -> None:
+        """Mirror the live workspace out to disk + update the manifest."""
+        store = self._project_store_now()
+        if store is None:
+            return
+        status = store.status()
+        if status != StorageStatus.OK:
+            await self._emit_persistence_reminder(
+                conversation_id,
+                f"project storage is {status.value}; this build was NOT saved.",
+            )
+            return
+        executor = self._executors.get(conversation_id)
+        session = getattr(executor, "_sandbox", None) if executor is not None else None
+        if session is None:
+            return
+        # Title pulled from the conversations table; created_at is the row's
+        # creation timestamp. Both are cheap reads we surface in the list view.
+        title: str | None = None
+        created_at: str | None = None
+        owner_id: str | None = None
+        try:
+            summaries = await self._store.list_conversation_summaries(
+                owner_id=DEFAULT_OWNER_ID, limit=500, cursor=None
+            )
+            row = next((s for s in summaries if s.conversation_id == conversation_id), None)
+            if row is not None:
+                title = row.title
+                created_at = row.created_at
+                owner_id = row.owner_id
+        except Exception:  # noqa: BLE001 — metadata is best-effort
+            pass
+        try:
+            result = await snapshot_workspace(session, store.path_for(conversation_id))
+            store.write_manifest(
+                conversation_id,
+                title=title,
+                owner_id=owner_id,
+                created_at=created_at,
+                file_count=result.file_count,
+                total_bytes=result.total_bytes,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface, don't crash
+            await self._emit_persistence_reminder(
+                conversation_id,
+                f"snapshot failed: {exc}",
+            )
+
+    async def _emit_persistence_reminder(self, conversation_id: str, body: str) -> None:
+        """Surface a project-persistence problem on the event log as an implicit
+        system-reminder — same pattern as the loop's other gates, so the model
+        and the UI both see what went wrong, named."""
+        await self._store.append(
+            conversation_id,
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(
+                    role="user",
+                    content=(
+                        "<system-reminder>\n"
+                        f"Project persistence note: {body}\n"
+                        "</system-reminder>"
+                    ),
+                ),
+            ),
+        )
 
     def preview_upstream(self, conversation_id: str) -> str | None:
         """The URL the AGENT-SERVER can reach the conversation's dev server at (the backend

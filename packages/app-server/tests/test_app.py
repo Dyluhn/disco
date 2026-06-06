@@ -67,6 +67,48 @@ def test_sandbox_config_get_and_put_round_trip(client):
     assert client.get("/api/sandbox/config").json()["docker_socket"] == "ssh://sandbox@100.81.82.115"
 
 
+def test_projects_storage_config_round_trip(client, tmp_path):
+    # default = unset; the UI sees a clear empty state, not a fake-default
+    cfg = client.get("/api/projects/storage/config").json()
+    assert cfg["projects_root"] == ""
+    assert cfg["status"] == "unset"
+
+    # PUT a real directory → status=ok, persists
+    put = client.put(
+        "/api/projects/storage/config",
+        json={"projects_root": str(tmp_path), "status": "unset"},
+    )
+    assert put.status_code == 200
+    assert put.json()["projects_root"] == str(tmp_path)
+    assert put.json()["status"] == "ok"
+
+    # persisted
+    again = client.get("/api/projects/storage/config").json()
+    assert again["projects_root"] == str(tmp_path)
+    assert again["status"] == "ok"
+
+
+def test_projects_storage_config_rejects_bad_path_with_typed_reason(client):
+    # missing path → 400 with a TYPED reason the UI can map to a clear error
+    bad = client.put(
+        "/api/projects/storage/config",
+        json={"projects_root": "/definitely/does/not/exist/here", "status": "unset"},
+    )
+    assert bad.status_code == 400
+    assert bad.json()["detail"]["reason"] == "not_found"
+
+
+def test_projects_storage_config_unset_is_allowed(client):
+    # empty string is a valid "unset" — clearing the path is a legitimate user action
+    res = client.put(
+        "/api/projects/storage/config",
+        json={"projects_root": "", "status": "unset"},
+    )
+    assert res.status_code == 200
+    assert res.json()["projects_root"] == ""
+    assert res.json()["status"] == "unset"
+
+
 def test_assignments_default_and_per_role(client):
     a = client.get("/api/models/assignments").json()
     assert a["default_model"] == "driver-local"

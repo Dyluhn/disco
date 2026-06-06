@@ -20,7 +20,13 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
-from .config import ModelEntry, RouterConfig, SandboxSettings, default_config
+from .config import (
+    ModelEntry,
+    ProjectStorageSettings,
+    RouterConfig,
+    SandboxSettings,
+    default_config,
+)
 from .types import ModelRole
 
 _ENV_PATH = "PMX_CONFIG"
@@ -67,6 +73,14 @@ class ConfigStore:
     def save_sandbox(self, sandbox: SandboxSettings) -> RouterConfig:
         """Persist the active sandbox backend + connection over the current config."""
         return self.save(self.load().model_copy(update={"sandbox": sandbox}))
+
+    # -- Build-project persistence --------------------------------------------
+
+    def save_projects(self, projects: ProjectStorageSettings) -> RouterConfig:
+        """Persist the user-chosen Build-project storage path over the current config.
+        Same atomic write as save_sandbox; the agent-server reloads per-request so a
+        new path drives the NEXT snapshot/rehydrate."""
+        return self.save(self.load().model_copy(update={"projects": projects}))
 
     # -- assignments ----------------------------------------------------------
 

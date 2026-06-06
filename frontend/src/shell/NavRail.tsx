@@ -1,4 +1,12 @@
-import { Boxes, Clock, PanelLeftClose, PanelLeftOpen, Plus, Settings } from "lucide-react";
+import {
+  Boxes,
+  Clock,
+  FolderGit2,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+  Settings,
+} from "lucide-react";
 import type { ComponentType } from "react";
 import { NavLink } from "react-router-dom";
 import { cn } from "@/lib/cn";
@@ -16,6 +24,9 @@ interface NavItem {
 const ITEMS: NavItem[] = [
   { to: "/", label: "New", icon: Plus, end: true },
   { to: "/history", label: "History", icon: Clock },
+  // Projects is its OWN surface — distinct from History (ephemeral research) and
+  // Spaces (research corpora). This is for resumable Build workspaces.
+  { to: "/projects", label: "Projects", icon: FolderGit2 },
   { to: "/spaces", label: "Spaces", icon: Boxes, dormant: true },
   { to: "/settings", label: "Settings", icon: Settings },
 ];

@@ -15,6 +15,8 @@ import type { IsolationInfo } from "@/types/agent";
 import { EmptyState, ErrorState } from "@/components/states";
 import { Markdown } from "@/components/Markdown";
 import { QueryInput } from "@/components/QueryInput";
+import { Download } from "lucide-react";
+import { useDownloadProject } from "@/hooks/useProjects";
 import { ActivityFeed } from "@/components/build/ActivityFeed";
 import { AgentStatusBar } from "@/components/build/AgentStatusBar";
 import { BuildModelPicker } from "@/components/build/BuildModelPicker";
@@ -34,8 +36,9 @@ const ISOLATION: IsolationInfo = {
   adversarialSafe: false,
 };
 
-export function BuildSurface() {
-  const b = useBuild();
+export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) {
+  const b = useBuild(resumeCid);
+  const download = useDownloadProject();
   const activity = useMemo(
     () => deriveActivity(b.events, b.pendingActionId, b.status),
     [b.events, b.pendingActionId, b.status],
@@ -75,9 +78,26 @@ export function BuildSurface() {
       <aside className="flex min-h-0 flex-col border-hairline lg:w-[27rem] lg:shrink-0 lg:overflow-hidden lg:border-r">
         <div className="flex flex-col gap-inline px-body pt-section">
           <AgentStatusBar status={b.status} isolation={ISOLATION} onKill={b.kill} />
-          <h1 className="font-display text-[1.3rem] font-medium leading-tight tracking-tight text-text">
-            {b.task}
-          </h1>
+          <div className="flex items-center justify-between gap-inline">
+            <h1 className="font-display text-[1.3rem] font-medium leading-tight tracking-tight text-text">
+              {b.task}
+            </h1>
+            {/* Export the saved project as a zip — only available for resumed
+                projects and finished builds (a snapshot must exist on disk). */}
+            {b.cid && (b.resumed || b.status === "FINISHED") && (
+              <button
+                type="button"
+                onClick={() => b.cid && download.mutate(b.cid)}
+                disabled={download.isPending}
+                aria-label="Download the project as a zip"
+                title="Download a zip of the project files"
+                className="flex shrink-0 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text disabled:opacity-40"
+              >
+                <Download className="size-3.5" aria-hidden />
+                {download.isPending ? "Preparing…" : "Export"}
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="mt-section flex min-h-0 flex-1 flex-col px-body">
