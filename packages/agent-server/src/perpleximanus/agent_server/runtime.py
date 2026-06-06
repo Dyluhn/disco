@@ -61,6 +61,7 @@ from perpleximanus.tools.sandbox import (
     PodmanSandboxService,
     SandboxConfig,
 )
+from perpleximanus.tools.sandbox._container import PREVIEW_PORT
 
 
 def build_sandbox_service(settings: SandboxSettings) -> SandboxService:
@@ -396,6 +397,32 @@ class ConversationRuntime:
             return  # already running; the new message is picked up at the next step
         loop = self._loop_for(conversation_id)
         self._tasks[conversation_id] = asyncio.create_task(loop.run())
+
+    def preview(self, conversation_id: str) -> dict[str, Any]:
+        """Backend-aware live preview: ask the conversation's ACTIVE sandbox to expose its
+        dev-server port (the backend owns "how to reach a port inside me" — dispatch falls
+        out for free). Podman is an honest labeled stub here. Returns the iframe URL when a
+        dev server is reachable, else a clean reason — never a fake URL."""
+        executor = self._executors.get(conversation_id)
+        session = getattr(executor, "_sandbox", None) if executor is not None else None
+        if session is None:
+            return {"available": False, "reason": "The agent hasn't started a sandbox yet."}
+        backend = getattr(getattr(session, "_service", None), "name", "?")
+        if backend == "podman":
+            return {
+                "available": False,
+                "stub": True,
+                "reason": "Preview isn't wired for the Podman backend in this environment "
+                "— it's completed at deployment.",
+            }
+        url = session.expose_port(PREVIEW_PORT)
+        if url is None:
+            return {
+                "available": False,
+                "reason": f"No dev server detected. Run one on port {PREVIEW_PORT} inside the "
+                "sandbox to see a live preview.",
+            }
+        return {"available": True, "url": url}
 
     # ---- control ops: the confirmation gate + kill switch (BoD §13.4/§13.6) -----
 

@@ -96,6 +96,13 @@ class PodmanSandboxInstance(ContainerInstance):
         self._name = container_name
         self._runner = cli_runner
 
+    def expose_port(self, port: int) -> str | None:
+        """[STUB in this environment] Preview port exposure for the Podman backend is not
+        wired here (VM 202 destroyed). The Podman backend code is real + verified, but the
+        preview tunnel for it is completed at the Meta deployment. Returns None (the
+        agent-server surfaces the honest labeled reason) — never a fake URL."""
+        return None
+
     def _exec(self, argv: list[str], timeout: float) -> tuple[int, bytes, bytes]:
         return self._runner(["podman", "--url", self._cli_url, "exec", self._name, *argv], timeout)
 

@@ -18,10 +18,20 @@ import posixpath
 import uuid
 from typing import Any
 
-from ._container import ContainerInstance, sealed
+from ._container import PREVIEW_PORT, ContainerInstance, sealed
 from .base import SandboxInstance, SandboxSpec, SandboxUnavailableError
 from .config import SandboxConfig, default_sandbox_config
 from .isolation import IsolationProfile, isolation_for
+
+
+def _preview_host(docker_socket: str) -> str:
+    """The host a published port is reachable at: localhost for a local socket; the
+    remote Docker host (its tailnet IP) for Docker-over-SSH — that host serves the
+    published port and is reachable over the proven keyless tailnet."""
+    if docker_socket.startswith("ssh://"):
+        host = docker_socket.removeprefix("ssh://").split("@")[-1]
+        return host.split(":")[0].split("/")[0]  # strip any port / path
+    return "localhost"
 
 
 class GvisorSandboxInstance(ContainerInstance):
@@ -116,6 +126,9 @@ class GvisorSandboxService:
         # would (wrongly) create it on whatever host runs the backend.
         mem_mb = spec.memory_mb or self._cfg.default_memory_mb
         cpu = spec.cpu or self._cfg.default_cpu
+        # Publish ONLY the dev-server port, and only when network is granted (a sealed box
+        # has no port to reach) — the preview is the forcing function for that posture.
+        ports = None if sealed(spec) else {f"{PREVIEW_PORT}/tcp": None}
 
         try:
             return client.containers.run(
@@ -124,6 +137,7 @@ class GvisorSandboxService:
                 runtime=self._cfg.runtime,  # gVisor
                 # Sealed by default: no network unless the capability set granted it.
                 network_mode="none" if sealed(spec) else "bridge",
+                ports=ports,  # preview exposure (dev-server port only)
                 mem_limit=f"{mem_mb}m",
                 nano_cpus=int(cpu * 1_000_000_000),
                 volumes={host_workspace: {"bind": self._cfg.container_workspace, "mode": "rw"}},
@@ -156,6 +170,7 @@ class GvisorSandboxService:
             container_workspace=self._cfg.container_workspace,
             stop_timeout_s=self._cfg.stop_timeout_s,
             workspace_uid=self._cfg.workspace_uid,
+            preview_host=_preview_host(self._cfg.docker_socket),
         )
         self._instances[instance_id] = instance
         return instance

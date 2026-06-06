@@ -17,6 +17,7 @@ import {
 import type {
   ConversationState,
   DriverModels,
+  PreviewInfo,
   WSClientFrame,
   WSServerFrame,
 } from "@/types/agent";
@@ -53,6 +54,13 @@ export async function listDriverModels(): Promise<DriverModels> {
       default: "driver-local",
     };
   return agentGet<DriverModels>("/models");
+}
+
+/** The backend-aware live preview URL for a conversation's sandbox (or why not). */
+export async function getPreview(cid: string): Promise<PreviewInfo> {
+  if (!agentLive())
+    return { available: false, reason: "Live preview runs against the agent-server (offline here)." };
+  return agentGet<PreviewInfo>(`/conversations/${cid}/preview`);
 }
 
 /** The kill switch (BoD §13.6): halt, tear down the sandbox, revoke capabilities. */

@@ -103,6 +103,9 @@ class ProcessSandboxInstance:
     def display_url(self) -> str | None:
         return None  # the process backend has no display
 
+    def expose_port(self, port: int) -> str | None:
+        return None  # the dev (host process) backend doesn't isolate ports to expose
+
     async def destroy(self) -> None:
         self._destroyed = True
         shutil.rmtree(self._workspace, ignore_errors=True)

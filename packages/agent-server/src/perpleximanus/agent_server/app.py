@@ -112,6 +112,14 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         state = await store.get_state(conversation_id)
         return state.model_dump(mode="json")
 
+    @app.get("/conversations/{conversation_id}/preview")
+    async def get_preview(conversation_id: str) -> dict:
+        """Backend-aware live preview: the URL to iframe the agent's running dev server,
+        or a clean reason it's not available (no server yet / Podman stub)."""
+        if runtime is None:
+            return {"available": False, "reason": "no runtime"}
+        return runtime.preview(conversation_id)
+
     @app.post("/conversations/{conversation_id}/kill")
     async def kill_conversation(conversation_id: str) -> dict:
         """The KILL SWITCH (BoD §13.6): halt a running agent, tear down its sandbox,

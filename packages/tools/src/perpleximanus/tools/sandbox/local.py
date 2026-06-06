@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._container import ContainerInstance, sealed
+from ._container import PREVIEW_PORT, ContainerInstance, sealed
 from .base import SandboxSpec, SandboxUnavailableError
 from .config import SandboxConfig, default_local_config
 from .gvisor import GvisorSandboxService
@@ -63,6 +63,9 @@ class LocalSandboxService(GvisorSandboxService):
                 runtime=self._cfg.runtime,  # runc (a value, not a branch)
                 # Sealed by default: no network unless the capability set granted it.
                 network_mode="none" if sealed(spec) else "bridge",
+                # Publish ONLY the dev-server port (preview), and only when network is
+                # granted — reachable at localhost:<host port> on this same host.
+                ports=None if sealed(spec) else {f"{PREVIEW_PORT}/tcp": None},
                 # The limit goes through the LOCAL socket/daemon → it actually bites.
                 mem_limit=f"{mem_mb}m",
                 nano_cpus=int(cpu * 1_000_000_000),

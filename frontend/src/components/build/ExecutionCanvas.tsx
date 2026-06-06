@@ -8,9 +8,10 @@
 
 import { useMemo, useState } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
-import { FileCode2, MonitorPlay, SquareTerminal } from "lucide-react";
+import { ExternalLink, FileCode2, MonitorPlay, SquareTerminal } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { deriveFiles, deriveTerminal } from "@/lib/buildTrace";
+import { useBuildPreview } from "@/hooks/useBuildPreview";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
 type TabId = "files" | "terminal" | "preview";
@@ -82,11 +83,38 @@ function TerminalPane({ events }: { events: AgentEvent[] }) {
   );
 }
 
-/** One phase-aware pane (replacing the redundant Preview + Live tabs): while the agent
- * BUILDS you'd see the in-progress preview; once it reaches a capstone / finishes, the
- * same pane becomes the LIVE interactive view of the deliverable. Honestly flagged until
- * the deploy/preview + display (noVNC) channels are wired. */
-function PreviewPane({ status }: { status: ConversationStatus }) {
+/** One phase-aware pane (replacing the redundant Preview + Live tabs). When the agent's
+ * dev server is reachable (via the ACTIVE backend's port exposure — local direct, gVisor
+ * over the tailnet), this IS the live interactive preview (an iframe of the real running
+ * artifact). Until then it shows the phase-aware state + the honest reason. */
+function PreviewPane({ status, cid }: { status: ConversationStatus; cid: string | null }) {
+  const active = status === "RUNNING" || status === "WAITING_FOR_CONFIRMATION";
+  const { data } = useBuildPreview(cid, active);
+
+  if (data?.available && data.url) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="flex shrink-0 items-center justify-between gap-inline border-b border-hairline px-body py-hair">
+          <span className="truncate font-mono text-[0.74rem] text-text-faint">{data.url}</span>
+          <a
+            href={data.url}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text"
+          >
+            <ExternalLink className="size-3" aria-hidden /> Open
+          </a>
+        </div>
+        <iframe
+          title="Live preview"
+          src={data.url}
+          sandbox="allow-scripts allow-forms allow-same-origin allow-popups"
+          className="min-h-0 flex-1 border-0 bg-white"
+        />
+      </div>
+    );
+  }
+
   const done = status === "FINISHED" || status === "IDLE";
   return (
     <div className="flex h-full flex-col items-center justify-center gap-inline px-body text-center">
@@ -94,13 +122,14 @@ function PreviewPane({ status }: { status: ConversationStatus }) {
         {done ? "Live view" : "Building preview"}
       </p>
       <p className="max-w-measure font-ui text-[0.8rem] text-text-faint">
-        {done
-          ? "When the agent reaches a capstone, the running deliverable — a live app preview, or its browser (noVNC) for GUI tasks — becomes interactive here."
-          : "While the agent builds, a live preview of the deliverable will render here, updating as it works."}
+        {data?.reason ??
+          "While the agent builds, a live preview of the deliverable renders here when its dev server starts."}
       </p>
-      <span className="rounded-full border border-hairline px-inline py-px font-ui text-[0.66rem] uppercase tracking-wide text-text-faint">
-        not yet wired
-      </span>
+      {data?.stub && (
+        <span className="rounded-full border border-weak px-inline py-px font-ui text-[0.66rem] uppercase tracking-wide text-weak">
+          podman stub
+        </span>
+      )}
     </div>
   );
 }
@@ -122,9 +151,11 @@ const TABS: { id: TabId; label: string; icon: typeof FileCode2; soon?: boolean }
 export function ExecutionCanvas({
   events,
   status,
+  cid,
 }: {
   events: AgentEvent[];
   status: ConversationStatus;
+  cid: string | null;
 }) {
   // sensible default: Terminal if anything ran, else Files.
   const initial: TabId = useMemo(
@@ -164,7 +195,7 @@ export function ExecutionCanvas({
           <TerminalPane events={events} />
         </Tabs.Content>
         <Tabs.Content value="preview" className="h-full focus:outline-none">
-          <PreviewPane status={status} />
+          <PreviewPane status={status} cid={cid} />
         </Tabs.Content>
       </div>
     </Tabs.Root>

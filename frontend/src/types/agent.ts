@@ -136,3 +136,12 @@ export interface DriverModels {
   models: DriverModel[];
   default: string | null;
 }
+
+/** The backend-aware live preview: a URL to iframe the agent's running dev server, or a
+ * reason it isn't available (no server yet / Podman stub). */
+export interface PreviewInfo {
+  available: boolean;
+  url?: string;
+  reason?: string;
+  stub?: boolean;
+}

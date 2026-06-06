@@ -122,6 +122,9 @@ class SandboxSession:
     def display_url(self) -> str | None:
         return self._instance.display_url() if self._instance is not None else None
 
+    def expose_port(self, port: int) -> str | None:
+        return self._instance.expose_port(port) if self._instance is not None else None
+
     async def destroy(self) -> None:
         """Close the session at task end: no further use, and the live box torn down."""
         self._closed = True

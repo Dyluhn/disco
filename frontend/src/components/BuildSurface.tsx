@@ -124,7 +124,7 @@ export function BuildSurface() {
 
       {/* ── Execution canvas / Inspector ─────────────────────────────────── */}
       <section className="flex min-h-[55vh] flex-1 flex-col border-t border-hairline lg:min-h-0 lg:border-t-0">
-        <ExecutionCanvas events={b.events} status={b.status} />
+        <ExecutionCanvas events={b.events} status={b.status} cid={b.cid} />
       </section>
     </div>
   );

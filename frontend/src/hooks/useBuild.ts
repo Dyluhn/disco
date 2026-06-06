@@ -34,6 +34,7 @@ export function useBuild() {
 
   return {
     started: session !== null,
+    cid: session?.cid ?? null,
     task: session?.task ?? null,
     submitting: create.isPending,
     modelId,

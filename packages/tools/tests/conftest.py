@@ -49,6 +49,9 @@ class FakeSandboxInstance:
     def display_url(self) -> str | None:
         return None
 
+    def expose_port(self, port: int) -> str | None:
+        return None
+
     async def destroy(self) -> None:
         self._destroyed = True
 

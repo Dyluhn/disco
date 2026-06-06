@@ -22,6 +22,10 @@ from .base import ExecResult, SandboxError, SandboxSpec, SandboxUnavailableError
 # Exit codes the `timeout` coreutil reports when it fires (SIGTERM / then SIGKILL).
 TIMEOUT_EXIT_CODES = frozenset({124, 137})
 
+# The single in-container port a previewable session publishes (the agent runs its dev
+# server here). ONLY this port is ever exposed — containment: nothing else is reachable.
+PREVIEW_PORT = 8000
+
 
 def sealed(spec: SandboxSpec) -> bool:
     """Network is SEALED unless the capability set grants it (§7 deny-by-default):
@@ -44,6 +48,7 @@ class ContainerInstance:
         container_workspace: str,
         stop_timeout_s: int,
         workspace_uid: int = 1000,
+        preview_host: str = "localhost",
     ) -> None:
         self.id = id
         self.owner_id = owner_id
@@ -52,6 +57,9 @@ class ContainerInstance:
         self._container = container
         self._ws = container_workspace
         self._stop_timeout_s = stop_timeout_s
+        # the host the published preview port is reachable at (localhost for a local
+        # backend; the remote Docker host's tailnet IP for gVisor).
+        self._preview_host = preview_host
         # The image's run-user uid (contract: `agent` = 1000). Written files are owned
         # by it so the sandbox user can EDIT them — put_archive defaults to uid 0 (root),
         # which a non-root container user can read but not modify.
@@ -181,6 +189,25 @@ class ContainerInstance:
 
     def display_url(self) -> str | None:
         return None  # no noVNC display on these backends (yet)
+
+    def expose_port(self, port: int) -> str | None:
+        """Return a browser-reachable URL for the published preview port (ONLY the
+        dev-server port is exposed — containment). The container publishes PREVIEW_PORT
+        to a host port at create; we read the assignment + form the URL for THIS backend's
+        host (localhost locally; the remote Docker host's tailnet IP for gVisor — that
+        host is reachable over the proven keyless tailnet)."""
+        if port != PREVIEW_PORT:
+            return None  # nothing but the dev-server port is reachable
+        try:
+            self._container.reload()
+            ports = self._container.attrs.get("NetworkSettings", {}).get("Ports") or {}
+            binding = ports.get(f"{PREVIEW_PORT}/tcp")
+            if not binding:
+                return None  # not published (sealed session) → no preview
+            host_port = binding[0]["HostPort"]
+        except Exception:  # noqa: BLE001 — no mapping yet / box gone → no preview
+            return None
+        return f"http://{self._preview_host}:{host_port}"
 
     async def destroy(self) -> None:
         """Stop + remove the container. The workspace persists on the daemon host

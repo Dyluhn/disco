@@ -52,6 +52,40 @@ def test_injected_sandbox_overrides_the_persisted_config(tmp_path):
     assert isinstance(rt._sandbox_service_now(), ProcessSandboxService)  # override wins
 
 
+class _FakeSession:
+    def __init__(self, backend: str, url: str | None) -> None:
+        self._service = type("S", (), {"name": backend})()
+        self._url = url
+
+    def expose_port(self, port: int) -> str | None:
+        return self._url
+
+
+class _FakeExecutor:
+    def __init__(self, session) -> None:
+        self._sandbox = session
+
+
+def test_preview_is_backend_aware_and_honest():
+    rt = ConversationRuntime(SqliteEventStore(":memory:"))
+    # no session yet → a clean reason, never a URL
+    assert rt.preview("c")["available"] is False
+
+    # Podman → the honest labeled stub (matches the UI), no fake URL
+    rt._executors["pod"] = _FakeExecutor(_FakeSession("podman", "http://nope"))
+    pod = rt.preview("pod")
+    assert pod["available"] is False and pod["stub"] is True
+
+    # local with a reachable dev server → the iframe URL
+    rt._executors["loc"] = _FakeExecutor(_FakeSession("local", "http://localhost:32768"))
+    loc = rt.preview("loc")
+    assert loc["available"] is True and loc["url"] == "http://localhost:32768"
+
+    # local with no dev server up → a reason, not a fake URL
+    rt._executors["bare"] = _FakeExecutor(_FakeSession("local", None))
+    assert rt.preview("bare")["available"] is False
+
+
 def test_sandbox_settings_round_trip_on_disk(tmp_path):
     store = ConfigStore(tmp_path / "config.json")
     store.save_sandbox(
