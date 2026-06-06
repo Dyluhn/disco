@@ -52,12 +52,17 @@ _TIERS: dict[DepthTier, DepthBound] = {
         extract_cap=4,
         rerank_top_k=4,
     ),
-    # Standard-deep: the everyday Deep Research run. ~5 minutes on local Qwen.
-    # 6 sub-questions × up to 3 rounds. ~30 sources accumulated. The default.
+    # Standard-deep: the everyday Deep Research run. ~7-9 minutes on local Qwen
+    # when the auxiliary roles are routed to a light model; longer when those
+    # roles share Qwen (the conservative case). 6 sub-questions × up to 4
+    # rounds. ~40 sources accumulated. The default. Bound raised in the tuning
+    # pass so a moderate plan COMPLETES (covers all 6 sub-questions) — the
+    # prior 300s cap consistently cut off at sub-question 3, exactly when the
+    # prioritized decomposition would have started covering background.
     DepthTier.STANDARD_DEEP: DepthBound(
-        max_sources=30,
-        max_rounds_per_subq=3,
-        max_wall_clock_s=300,
+        max_sources=40,
+        max_rounds_per_subq=4,
+        max_wall_clock_s=600,
         max_subquestions=6,
         discover_limit=10,
         extract_cap=6,

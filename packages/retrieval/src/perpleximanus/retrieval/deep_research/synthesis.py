@@ -42,14 +42,51 @@ EmitFn = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
 _SECTION_PROMPT = (
-    "You are writing one section of a multi-section research report.\n\n"
+    "You are writing one section of an analytical research report. Your job is "
+    "to SYNTHESIZE across the cited sources — not summarize them serially.\n\n"
     "Section topic: {topic}\n\n"
-    "Use ONLY the following passages as your sources. Cite EVERY factual "
-    "sentence with [[id]] markers (e.g. [[a_p0]]). When passages disagree, "
-    "say so — DO NOT pick one and hide the conflict.\n\n"
-    "PASSAGES:\n{passages}\n\n"
-    "Write 3–6 short paragraphs. Markdown only. No section header (the report "
-    "adds it). End with [[id]] citations on every factual sentence."
+    "SOURCES (use ONLY these — every factual sentence must end in [[id]] "
+    "citations):\n{passages}\n\n"
+    "WRITE THE SECTION. Follow these rules carefully — they are what "
+    "distinguish analysis from a sourced-summary:\n\n"
+    "1. SYNTHESIZE, don't summarize. Connect, compare, and weigh across "
+    "sources within the section. Where sources CONVERGE, say so and cite the "
+    "agreement [[id1]] [[id2]]. Where they DIVERGE — different numbers, "
+    "different timelines, conflicting claims — surface the disagreement "
+    "explicitly with both citations. Do NOT write paragraph after paragraph of "
+    "'Source A says X [[a]]. Source B says Y [[b]].' Connect the cited claims "
+    "into an argument that answers the section topic.\n\n"
+    "2. ATTRIBUTE vendor claims; assert independent findings. There is a "
+    "difference between (a) a vendor promoting its own product, (b) a market "
+    "research firm's projection, and (c) a peer-reviewed measured result. "
+    "  - For (a): write 'Samsung has ANNOUNCED a battery PROMISING a 600-mile "
+    "range', NOT 'solid-state batteries deliver a 600-mile range.' "
+    "  - For (b): 'The market is PROJECTED to grow at 39% CAGR through 2030 "
+    "[[id]]', not 'the market will grow.' "
+    "  - For (c): peer-reviewed measured findings can be stated more "
+    "directly. "
+    "If a citation comes from a company promoting its own tech, mark it as a "
+    "claim, not a fact.\n\n"
+    "3. MEASURED, ANALYTICAL REGISTER. Cut these words and any like them: "
+    "'transformative,' 'revolutionary,' 'poised to revolutionize,' 'pivotal,' "
+    "'game-changing,' 'breakthrough,' 'paradigm shift,' 'cutting-edge.' "
+    "Describe, weigh, and qualify. The reader is an analyst, not a marketer.\n\n"
+    "4. FOREGROUND TENSION AND UNCERTAINTY. For maturing-but-overhyped tech, "
+    "the gap between announcements and shipping reality is OFTEN THE FINDING. "
+    "Where the field disagrees, where projected timelines slip, where the "
+    "evidence is thin or one-sided — surface it, don't smooth it over. "
+    "Tensions and uncertainty go in the section body, not hidden in footnotes.\n\n"
+    "5. STAY GROUNDED. Every factual claim ends with [[id]] citations to the "
+    "passages above. Cross-source observations (agreement/conflict) ARE "
+    "themselves grounded — cite the sources you're comparing. If you draw an "
+    "inference BEYOND what any single source says (a pattern across them, an "
+    "implication, a judgement of significance), introduce it with a phrase "
+    "like 'Taken together,' or 'The evidence suggests,' or 'This report's "
+    "assessment is that' — so a reader can distinguish your inference from a "
+    "cited fact. The inference still draws on cited sources, but its STATUS "
+    "as an inference is flagged.\n\n"
+    "FORMAT: 4–7 short paragraphs of markdown. No section header (the report "
+    "renders one). Every factual sentence ends in [[id]]."
 )
 
 
@@ -202,13 +239,32 @@ async def synthesize_section(
 
 
 _COHERENCE_PROMPT = (
-    "You are writing the executive summary that opens a multi-section research "
-    "report.\n\n"
+    "You are writing the executive summary of a research report. State the "
+    "FINDINGS — the actual answer to the question — so a reader who reads ONLY "
+    "the summary learns what the report concludes.\n\n"
     "Question: {query}\n\n"
-    "The report has these sections (with one-line summaries each):\n{outline}\n\n"
-    "Write a 2–3 paragraph executive summary that frames the report and points "
-    "to which sections cover what. Plain markdown. No section headers. "
-    "No new claims — just frame the existing work."
+    "Sections of the report (with their lead findings):\n{outline}\n\n"
+    "RULES — these are the difference between a summary that informs and one "
+    "that just describes structure:\n\n"
+    "1. LEAD WITH THE ANSWER. The first sentence states the report's bottom-"
+    "line answer to the question. Not 'this report examines X.' Not 'X is a "
+    "transformative technology.' The actual finding: where things stand, what "
+    "the state of play is, what the report concluded.\n\n"
+    "2. NAME THE KEY TENSIONS AND UNCERTAINTIES. If the field is divided, say "
+    "what's contested. If announcements outpace shipping reality, say so. If "
+    "evidence is thin in a particular area, name it. A good executive summary "
+    "tells the reader where to be skeptical.\n\n"
+    "3. NO STRUCTURE DESCRIPTION. The following sentences are BANNED: 'This "
+    "report begins by…', 'It then examines…', 'Finally, it evaluates…', "
+    "'The report is organized as…', 'The first section covers…'. Never tell "
+    "the reader what's coming; tell them what was found.\n\n"
+    "4. MEASURED REGISTER. Cut: 'transformative,' 'revolutionary,' 'poised "
+    "to revolutionize,' 'pivotal,' 'game-changing.' Describe and qualify.\n\n"
+    "5. SYNTHESIZE ACROSS SECTIONS. The summary is not three section "
+    "summaries glued together; it's the overarching story those sections "
+    "tell when read together.\n\n"
+    "FORMAT: 2–4 short paragraphs of markdown. No headers. No new claims "
+    "beyond what the sections established — the summary distills."
 )
 
 
@@ -223,10 +279,23 @@ async def coherence_pass(
     citations to verify — purely framing prose)."""
     if not sections:
         return "*(No sections were generated.)*"
-    outline = "\n".join(
-        f"- {s.title}: {(s.markdown.strip().split('.')[0] or s.title)[:140]}"
-        for s in sections
-    )
+    # Give the coherence pass enough to write findings, not structure: the
+    # first ~2 sentences of each section (the lead findings), the section's
+    # confidence rating (mixed/low means a tension the summary should surface),
+    # and any disputed_notes the section flagged.
+    outline_lines = []
+    for s in sections:
+        lead = ". ".join(s.markdown.strip().split(". ")[:2])[:320] or s.title
+        # strip [[id]] markers — clutter for the summary writer
+        lead = re.sub(r"\[\[[\w-]+\]\]", "", lead).replace("  ", " ").strip()
+        marks = []
+        if s.confidence in ("mixed", "low"):
+            marks.append(f"confidence={s.confidence}")
+        if s.disputed_notes:
+            marks.append(f"flagged disagreement: {s.disputed_notes[0][:100]}")
+        suffix = f"  [{'; '.join(marks)}]" if marks else ""
+        outline_lines.append(f"- **{s.title}** — {lead}{suffix}")
+    outline = "\n".join(outline_lines)
     instruction = _COHERENCE_PROMPT.format(query=query, outline=outline)
     try:
         resp = await router.complete(

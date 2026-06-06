@@ -42,13 +42,25 @@ class SubQuestion:
 
 _PROMPT_TEMPLATE = (
     "You are decomposing a research question into focused sub-questions that "
-    "together cover its scope. Each sub-question must be answerable in its "
-    "own section of a multi-section research report.\n\n"
+    "together ANSWER the SPECIFIC question asked. Each sub-question becomes one "
+    "section of a multi-section research report.\n\n"
     "Question: {query}\n\n"
-    "Output EXACTLY {n} sub-questions, one per line. Each line is a "
-    "self-contained question or topic heading (no numbering, no bullets, no "
-    "explanation). Order them logically (background → state of the art → "
-    "open questions / outlook)."
+    "RULES — read carefully, they affect what the reader actually learns:\n\n"
+    "1. ANSWER THE SPECIFIC QUESTION. Identify what the question is really "
+    "asking for (e.g. 'state of commercialization' → who is shipping or close, "
+    "realistic timelines, production vs. prototype reality, cost/economics, "
+    "key players). Make those the CORE sub-questions. Background / "
+    "fundamentals are CONTEXT, not the bulk — at most 1 of the {n} should be "
+    "purely background, and only if it materially supports the core.\n\n"
+    "2. ORDER BY IMPORTANCE TO THE QUESTION. List the most directly relevant "
+    "sub-question FIRST, then in descending order of importance. Runs that hit "
+    "their depth budget cover the early sub-questions first — so the most "
+    "important content must be earliest. Background goes LAST, never first.\n\n"
+    "3. Each sub-question must be SPECIFIC and ANSWERABLE — not 'What is X?' "
+    "but 'Which X products are shipping today vs. promised vs. discontinued?' "
+    "Tight, investigatable, the kind a domain analyst would ask.\n\n"
+    "Output EXACTLY {n} sub-questions, ONE PER LINE, in priority order. No "
+    "numbering, no bullets, no explanation, no header. Just the questions."
 )
 
 
