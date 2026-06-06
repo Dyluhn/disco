@@ -170,7 +170,7 @@ class GvisorSandboxService:
             container_workspace=self._cfg.container_workspace,
             stop_timeout_s=self._cfg.stop_timeout_s,
             workspace_uid=self._cfg.workspace_uid,
-            preview_host=_preview_host(self._cfg.docker_socket),
+            preview_host=self._cfg.preview_host or _preview_host(self._cfg.docker_socket),
         )
         self._instances[instance_id] = instance
         return instance

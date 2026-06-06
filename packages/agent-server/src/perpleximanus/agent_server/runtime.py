@@ -76,6 +76,9 @@ def build_sandbox_service(settings: SandboxSettings) -> SandboxService:
         runtime=settings.runtime,
         image=settings.image,
         workspace_root=settings.workspace_root,
+        # the host previews are reachable at — set PMX_PREVIEW_HOST to a LAN/tailnet IP so
+        # previews work from other devices, not just the agent-server's host (else derived).
+        preview_host=os.environ.get("PMX_PREVIEW_HOST", ""),
     )
     if settings.backend == "gvisor":
         return GvisorSandboxService(cfg)

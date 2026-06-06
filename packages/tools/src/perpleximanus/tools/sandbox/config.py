@@ -28,6 +28,10 @@ class SandboxConfig(BaseModel):
     image: str = "pmx-sandbox:base"
     workspace_root: str = "/opt/sandbox/workspaces"  # host dir bind-mounted to /workspace (gVisor)
     container_workspace: str = "/workspace"
+    # the host a published preview port is reachable at. Empty → derived (localhost for a
+    # local socket; the remote host's IP for Docker-over-SSH). Set a LAN/tailnet IP to make
+    # previews reachable from other devices, not just the agent-server's own host.
+    preview_host: str = ""
     # The image's run-user uid (contract: `agent` = 1000). Files written via the
     # interface are owned by it so the sandbox user can edit them, not just read them.
     workspace_uid: int = 1000
