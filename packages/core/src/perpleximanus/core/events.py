@@ -227,16 +227,28 @@ class ObservationEvent(BaseEvent, LLMConvertible):
 
 
 class AgentErrorEvent(BaseEvent, LLMConvertible):
-    """An error observation — tool failed, action invalid, execution raised.
-    Distinct from ErrorEvent (which is conversation-fatal)."""
+    """An error observation — tool failed, action invalid, execution raised, or
+    the human declined the proposed action. Distinct from ErrorEvent (which is
+    conversation-fatal).
+
+    `tool_call_id` carries the proposed action's call_id when the event is paired
+    with an ActionEvent; this lets the provider adapter (OpenAI etc.) properly
+    pair the assistant's tool_calls with their resulting messages. Required for
+    refused / rejected actions where no real tool result exists."""
 
     kind: Literal[EventKind.AGENT_ERROR] = EventKind.AGENT_ERROR
     source: EventSource = EventSource.ENVIRONMENT
     error: str
     action_id: str | None = None  # the action that failed, if any
+    tool_call_id: str | None = None  # for pairing with the assistant tool_call
 
     def to_llm_message(self) -> LLMMessage:
-        return LLMMessage(role="tool", content=f"ERROR: {self.error}", tool_call_id=None)
+        # Pre-formatted content (e.g. wrapped in <system-reminder>...</…>) is
+        # rendered as-is; raw error strings get the "ERROR:" prefix for the
+        # model's parse. This lets the rejection path inject ambient reminders
+        # without the user-tone framing of a tool-failure message.
+        content = self.error if self.error.startswith("<") else f"ERROR: {self.error}"
+        return LLMMessage(role="tool", content=content, tool_call_id=self.tool_call_id)
 
 
 class CondensationEvent(BaseEvent):

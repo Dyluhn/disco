@@ -45,7 +45,12 @@ from ..view import Condenser, Summarizer, View
 from .boundaries import Agent, ConfirmationPolicy, SecurityAnalyzer, StopHook, ToolExecutor
 from .stuck import StuckDetector, StuckThresholds
 
-_DEFAULT_VETO_FEEDBACK = "The goal does not appear complete yet. Continue working toward it."
+_DEFAULT_VETO_FEEDBACK = (
+    "<system-reminder>\n"
+    "The goal does not appear complete yet. Continue working toward it — a stop "
+    "hook refused the FINISHED transition.\n"
+    "</system-reminder>"
+)
 
 
 def _describe_llm_error(e: LLMError) -> str:
@@ -306,13 +311,22 @@ class AgentLoop:
     async def _execute_and_observe(self, action: ActionEvent) -> None:
         """[CONTRACT] Every executed ActionEvent yields exactly one observation
         event (ObservationEvent on success, AgentErrorEvent on failure),
-        correlated by action.id."""
+        correlated by action.id.
+
+        If the sandbox transparently RECREATED itself during this call (a mid-
+        session death the session healed), append an implicit system-reminder
+        so the model knows files-on-disk remain but processes/state were lost."""
+        # snapshot the sandbox's generation BEFORE execution; if it grew AND it
+        # was nonzero pre-call (i.e. the box already existed), a restart happened.
+        sbx = getattr(self.executor, "sandbox", None)
+        gen_before = getattr(sbx, "generation", 0) if sbx is not None else 0
         try:
             result = await self.executor.execute(action.tool_call)
         except LLMContextWindowExceeded:
             raise  # handled by view-materialization hard-reset (§8)
         except Exception as e:  # noqa: BLE001 — any tool/exec failure is an observation
             await self._emit(AgentErrorEvent(error=str(e), action_id=action.id))
+            await self._maybe_emit_sandbox_restart(sbx, gen_before)
             return
         if result.success:
             await self._emit(ObservationEvent(tool_result=result, action_id=action.id))
@@ -320,6 +334,35 @@ class AgentLoop:
             await self._emit(
                 AgentErrorEvent(error=result.error or "tool failed", action_id=action.id)
             )
+        await self._maybe_emit_sandbox_restart(sbx, gen_before)
+
+    async def _maybe_emit_sandbox_restart(self, sbx: object | None, gen_before: int) -> None:
+        """If the sandbox's generation grew during the last call AND we already
+        had a live instance (gen_before > 0), append an implicit system-reminder
+        so the model knows its box was transparently restarted. Cheap, idempotent
+        (zero-cost when no restart happened)."""
+        if sbx is None or gen_before == 0:
+            return
+        gen_after = getattr(sbx, "generation", gen_before)
+        if gen_after <= gen_before:
+            return
+        await self._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(
+                    role="user",
+                    content=(
+                        "<system-reminder>\n"
+                        "Your sandbox container was restarted mid-session (the prior "
+                        "container died and was transparently re-created). Files "
+                        "previously written to /workspace remain; any background "
+                        "processes or unsaved in-memory state are gone. If you relied "
+                        "on running state, re-establish it before continuing.\n"
+                        "</system-reminder>"
+                    ),
+                ),
+            )
+        )
 
     async def _stop_allowed(self, state: ConversationState, events: list[Event]) -> bool:
         for hook in self._stop_hooks:
@@ -630,13 +673,37 @@ class AgentLoop:
 
     async def reject(self, reason: str = "rejected by user") -> ConversationState:
         """Deny the pending action: record the denial (so the model sees it next
-        View) and resume to RUNNING without executing (§5)."""
+        View) and resume to RUNNING without executing (§5).
+
+        The rejection is recorded as an `AgentErrorEvent` whose content is wrapped
+        in an implicit `<system-reminder>` — the action did not produce an error,
+        the human declined it. Paired with the proposed action's call_id so the
+        provider adapter sees a properly-correlated tool result."""
         async with self._lock:
             state = await self.get_state()
             if state.execution_status != ConversationStatus.WAITING_FOR_CONFIRMATION:
                 return state
+            pending = (
+                await self._event_by_id(state.pending_action_id)
+                if state.pending_action_id
+                else None
+            )
+            call_id: str | None = None
+            if isinstance(pending, ActionEvent) and pending.tool_call:
+                call_id = pending.tool_call.call_id
+            reminder = (
+                "<system-reminder>\n"
+                f"The user reviewed the proposed action and did not approve it "
+                f"({reason}). The action was NOT executed. Pick a different "
+                "approach.\n"
+                "</system-reminder>"
+            )
             await self._emit(
-                AgentErrorEvent(error=f"Action {reason}.", action_id=state.pending_action_id)
+                AgentErrorEvent(
+                    error=reminder,
+                    action_id=state.pending_action_id,
+                    tool_call_id=call_id,
+                )
             )
             await self._emit(StatusEvent(status=ConversationStatus.RUNNING))
         return await self.get_state()

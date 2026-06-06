@@ -27,6 +27,7 @@ from perpleximanus.core.llm import (
     CompletionResponse,
     DefaultLLMRouter,
     ModelEntry,
+    OperatingMode,
     ProposedToolCall,
     RouterConfig,
     StreamChunk,
@@ -195,13 +196,91 @@ async def test_reject_denies_without_executing():
     await _run_to_rest(runtime)
     await _approve_plan_and_run(runtime)
 
+    # Grab the proposed action so we can verify the rejection is paired by call_id.
+    pre_events = await store.get_events(CID)
+    proposed = next(
+        e for e in pre_events if isinstance(e, ActionEvent) and e.tool_call is not None
+    )
+
     await runtime.reject(CID)  # deny, resume without executing
     await _await_task(runtime)
 
     events = await store.get_events(CID)
     assert not any(isinstance(e, ObservationEvent) for e in events)
-    assert any(isinstance(e, AgentErrorEvent) for e in events)
+    rejection = next(e for e in events if isinstance(e, AgentErrorEvent))
+    # Rejection is framed as an implicit system-reminder, not a user-tone error.
+    assert "<system-reminder>" in rejection.error
+    assert "did not approve" in rejection.error.lower()
+    # And it's paired with the proposed action's call_id so the provider adapter
+    # sees a properly-correlated tool result for the dangling assistant tool_call.
+    assert rejection.tool_call_id == proposed.tool_call.call_id
     assert (await store.get_state(CID)).execution_status == ConversationStatus.FINISHED
+
+
+async def test_sandbox_restart_emits_implicit_system_reminder():
+    """If the sandbox's generation grows during a tool call (mid-session death,
+    transparent recreate), the loop appends a system-reminder so the model knows
+    files-on-disk remain but in-memory state was lost. Idempotent when no restart."""
+    from perpleximanus.core import ToolCall, ToolResult
+    from perpleximanus.core.loop.boundaries import ToolExecutor
+    from perpleximanus.core.loop.engine import AgentLoop
+
+    class _FakeSandbox:
+        def __init__(self):
+            self.generation = 1  # already alive
+            self.id = "sbx-fake"
+
+    class _FakeExecutor(ToolExecutor):
+        def __init__(self, sandbox):
+            self.sandbox = sandbox
+
+        def available_tools(self):
+            return []
+
+        async def execute(self, tool_call):
+            # simulate a mid-call sandbox restart
+            self.sandbox.generation += 1
+            return ToolResult(
+                call_id=tool_call.call_id,
+                tool_name=tool_call.tool_name,
+                success=True,
+                content="ok",
+            )
+
+    store = SqliteEventStore(":memory:")
+    store.create_conversation(CID, owner_id="local")
+    sbx = _FakeSandbox()
+    loop = AgentLoop(
+        conversation_id=CID,
+        store=store,
+        agent=None,  # not exercised here
+        executor=_FakeExecutor(sbx),
+        router=None,
+        analyzer=None,
+        policy=None,
+        condenser=None,
+        summarizer=None,
+        mode=OperatingMode.INTERACTIVE,
+    )
+    action = ActionEvent(
+        thought="",
+        tool_call=ToolCall(tool_name="shell", arguments={"command": "true"}),
+    )
+    await loop._execute_and_observe(action)
+
+    events = await store.get_events(CID)
+    reminders = [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and "<system-reminder>" in e.message.content
+        and "sandbox container was restarted" in e.message.content
+    ]
+    assert len(reminders) == 1, (
+        "expected exactly one sandbox-restart reminder after a generation bump"
+    )
+    # And the observation still landed — the reminder ACCOMPANIES the result, not replaces it
+    assert any(isinstance(e, ObservationEvent) for e in events)
 
 
 async def test_execution_gate_refuses_finish_without_productive_action():
