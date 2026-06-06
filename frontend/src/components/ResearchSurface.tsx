@@ -8,6 +8,7 @@ import { FollowUps } from "./FollowUps";
 import { QueryInput } from "./QueryInput";
 import { SourcePanel } from "./SourcePanel";
 import { TtftIndicator } from "./TtftIndicator";
+import { DeepResearchSurface } from "./research/DeepResearchSurface";
 import { EmptyState, ErrorState } from "./states";
 
 export function ResearchSurface() {
@@ -25,6 +26,17 @@ export function ResearchSurface() {
     (query: string) => r.submit(query, { model_override: leaderId, think }),
     [r, leaderId, think],
   );
+
+  // Scope dispatch: Deep Research has its own surface (own conversation model,
+  // own progress + report). The standard scope keeps the single-pass flow
+  // unchanged. We dispatch at the surface boundary so the scope selector
+  // (visible in the QueryInput cluster on the empty state) gets the user to
+  // the right experience without a full mode-slider switch. NOTE: this early
+  // return MUST sit after all hook calls — moving it above the useCallback
+  // breaks the rules of hooks and remounts the tree blank.
+  if (scope === "deep_research") {
+    return <DeepResearchSurface onScopeChange={setScope} />;
+  }
 
   const clusterProps = {
     leaderId,

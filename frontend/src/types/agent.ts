@@ -95,6 +95,38 @@ export interface ErrorEvent extends EventBase {
   detail?: string | null;
 }
 
+/** One section of a Deep Research report — body is markdown with [[passage_id]]
+ * inline citations the existing CitedText parser already resolves. The
+ * confidence rollup + disputed_notes are the engine's honesty-at-scale surface. */
+export interface ReportSection {
+  id: string;
+  title: string;
+  markdown: string;
+  cited_passage_ids: string[];
+  confidence: "high" | "mixed" | "low";
+  disputed_notes: string[];
+  unsupported_count: number;
+}
+
+/** The finished Deep Research report — multi-section, grounded synthesis. The
+ * `bounded_by` field is the load-bearing honesty surface: when set, it names
+ * which depth cap stopped the run (sources / rounds / wall_clock / subquestions).
+ * `passages` and `all_hits` carry the cited subset + full discovery set for the
+ * source panel; the existing types/grounded.ts shapes (Passage / SearchHit)
+ * are the row contract — we keep `unknown` here to avoid the import cycle
+ * (the UI casts at render time). */
+export interface ReportEvent extends EventBase {
+  kind: "report";
+  query: string;
+  summary: string;
+  sections: ReportSection[];
+  passages: Array<Record<string, unknown>>;
+  all_hits: Array<Record<string, unknown>>;
+  unsupported_count: number;
+  bounded_by: string | null;
+  depth_tier: string | null;
+}
+
 export type AgentEvent =
   | MessageEvent
   | ActionEvent
@@ -103,6 +135,7 @@ export type AgentEvent =
   | CondensationEvent
   | StatusEvent
   | PlanEvent
+  | ReportEvent
   | ErrorEvent;
 
 export interface ConversationState {

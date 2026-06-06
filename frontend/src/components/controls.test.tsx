@@ -66,7 +66,7 @@ describe("Mode slider (the sole mode control)", () => {
 });
 
 describe("Scope control (one component, mode-driven options)", () => {
-  it("under Search offers Standard (default) + Deep Research (dormant)", async () => {
+  it("under Search offers Standard (default) + Deep Research (live)", async () => {
     const user = userEvent.setup();
     render(
       <ModeProvider>
@@ -78,7 +78,8 @@ describe("Scope control (one component, mode-driven options)", () => {
     expect(screen.getByRole("menuitem", { name: /Standard/i })).toBeInTheDocument();
     const deep = screen.getByRole("menuitem", { name: /Deep Research/i });
     expect(deep).toBeInTheDocument();
-    expect(deep).toHaveAttribute("aria-disabled", "true");
+    // Deep Research has been activated — it's now selectable, not dormant.
+    expect(deep).not.toHaveAttribute("aria-disabled", "true");
   });
 });
 

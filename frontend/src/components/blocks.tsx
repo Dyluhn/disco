@@ -44,7 +44,7 @@ function inlineMd(text: string, keyBase: number): ReactNode[] {
 /** Render prose text, replacing inline `[[id]]` markers with anchored citations.
  * Before the final answer arrives, render same-sized neutral placeholders so the
  * chips don't shift when provenance resolves (zero CLS). */
-function CitedText({ text, answer }: { text: string; answer: GroundedAnswer | null }) {
+export function CitedText({ text, answer }: { text: string; answer: GroundedAnswer | null }) {
   const numbers = answer ? citationNumbers(answer) : null;
   const out: ReactNode[] = [];
   let last = 0;

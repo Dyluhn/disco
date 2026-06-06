@@ -18,6 +18,14 @@ import {
   traceBeforeGate,
   FIXTURE_CID,
 } from "@/fixtures/agentTrace";
+import {
+  FIXTURE_DEEP_CID,
+  fixtureFinishedState,
+  fixtureInitialState,
+  fixturePlan,
+  fixtureReport,
+  fixtureRunningEvents,
+} from "@/fixtures/deepResearchTrace";
 import type {
   ConversationState,
   DriverModels,
@@ -175,9 +183,95 @@ function subscribeFixture(onFrame: (f: WSServerFrame) => void): AgentHandle {
   };
 }
 
+// ---- offline: Deep Research fixture replay ---------------------------------
+
+function subscribeDeepFixture(onFrame: (f: WSServerFrame) => void): AgentHandle {
+  let cancelled = false;
+  let atPlan = false;
+
+  async function streamUntilGate() {
+    onFrame({ type: "state", state: fixtureInitialState });
+    // Send events up to the AWAITING_PLAN_APPROVAL gate (the first 4 events:
+    // user msg, RUNNING, plan, gate-status).
+    for (let i = 0; i < 4; i++) {
+      if (cancelled) return;
+      await fixtureDelay(80);
+      onFrame({ type: "event", event: fixtureRunningEvents[i] });
+    }
+    atPlan = true;
+  }
+
+  async function streamRunAndReport() {
+    // Stream the post-approval events (plan_approved → phases → actions → obs)
+    // with small delays so the live progress feel is preserved.
+    for (let i = 4; i < fixtureRunningEvents.length; i++) {
+      if (cancelled) return;
+      await fixtureDelay(90);
+      onFrame({ type: "event", event: fixtureRunningEvents[i] });
+    }
+    if (cancelled) return;
+    await fixtureDelay(150);
+    onFrame({ type: "event", event: fixtureReport });
+    if (cancelled) return;
+    onFrame({
+      type: "event",
+      event: {
+        id: "evt_finished",
+        kind: "status",
+        source: "system",
+        seq: 80,
+        timestamp: "2026-06-06T12:00:00Z",
+        status: "FINISHED",
+      },
+    });
+    onFrame({ type: "state", state: fixtureFinishedState });
+  }
+
+  return {
+    send: (f) => {
+      if (f.type === "send_message") void streamUntilGate();
+      else if (f.type === "approve_plan" && atPlan) {
+        atPlan = false;
+        void streamRunAndReport();
+      } else if (f.type === "request_plan") {
+        // re-plan: re-emit a (slightly modified) plan and the gate. For
+        // fixture simplicity we just bump revision and re-gate; tests can
+        // observe the new revision on the next event.
+        atPlan = true;
+        void (async () => {
+          await fixtureDelay(80);
+          onFrame({
+            type: "event",
+            event: {
+              ...fixturePlan,
+              id: "evt_replan",
+              seq: 5,
+              revision: 2,
+              summary: `Revised plan: ${f.content ?? ""}`,
+            },
+          });
+        })();
+      } else if (f.type === "cancel") {
+        cancelled = true;
+        onFrame({
+          type: "state",
+          state: { ...fixtureFinishedState, execution_status: "IDLE" },
+        });
+      }
+    },
+    cancel: () => {
+      cancelled = true;
+    },
+  };
+}
+
 export function subscribeConversation(
   cid: string,
   onFrame: (f: WSServerFrame) => void,
 ): AgentHandle {
-  return agentLive() ? subscribeLive(cid, onFrame) : subscribeFixture(onFrame);
+  if (agentLive()) return subscribeLive(cid, onFrame);
+  // Dispatch by cid: the Deep Research fixture lives in its own module so the
+  // Build fixture stays unmodified.
+  if (cid === FIXTURE_DEEP_CID) return subscribeDeepFixture(onFrame);
+  return subscribeFixture(onFrame);
 }

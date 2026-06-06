@@ -52,7 +52,7 @@ export interface ScopeOption {
 export const SCOPE_OPTIONS: Record<Mode, ScopeOption[]> = {
   search: [
     { id: "standard", label: "Standard", dormant: false },
-    { id: "deep_research", label: "Deep Research", dormant: true },
+    { id: "deep_research", label: "Deep Research", dormant: false },
   ],
   build: [
     { id: "site", label: "Site", dormant: true },
