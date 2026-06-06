@@ -34,6 +34,7 @@ from perpleximanus.core.llm import (
     ModelRole,
     OperatingMode,
     RouterSummarizer,
+    SandboxSettings,
     SecretStore,
 )
 from perpleximanus.core.llm.config import RouterConfig
@@ -54,6 +55,34 @@ from perpleximanus.tools import (
     agent_scope,
     build_default_registry,
 )
+from perpleximanus.tools.sandbox import (
+    GvisorSandboxService,
+    LocalSandboxService,
+    PodmanSandboxService,
+    SandboxConfig,
+)
+
+
+def build_sandbox_service(settings: SandboxSettings) -> SandboxService:
+    """Map the persisted SandboxSettings → the concrete SandboxBackend — the ONE place
+    that knows the backend↔config mapping (settings drive the active backend). Podman is
+    real, verified backend code, but a STUB in THIS environment (VM 202 destroyed) — it
+    constructs but isn't live/verifiable here; completed at the Meta deployment."""
+    cfg = SandboxConfig(
+        backend=settings.backend,
+        docker_socket=settings.docker_socket,
+        podman_url=settings.podman_url,
+        runtime=settings.runtime,
+        image=settings.image,
+        workspace_root=settings.workspace_root,
+    )
+    if settings.backend == "gvisor":
+        return GvisorSandboxService(cfg)
+    if settings.backend == "local":
+        return LocalSandboxService(cfg)
+    if settings.backend == "podman":
+        return PodmanSandboxService(cfg)  # stub-in-this-env (see docstring)
+    return ProcessSandboxService()  # "process"/unknown → the dev backend (runs on host)
 
 
 def _model_label(model_id: str) -> str:
@@ -104,11 +133,12 @@ class ConversationRuntime:
         sandbox_spec: SandboxSpec | None = None,
     ) -> None:
         self._store = store
-        # The Build surface runs tools through this backend (gVisor/Podman/local —
-        # the proven SandboxBackends). Injectable; defaults to the dev `process`
-        # backend (tool-sandbox §5) so a fresh checkout runs without a container host.
-        # PRODUCTION should inject a real isolating backend.
-        self._sandbox_service = sandbox_service or ProcessSandboxService()
+        # The Build surface runs tools through a SandboxBackend. An explicitly injected
+        # service is an OVERRIDE (tests / `PMX_SANDBOX` at startup); otherwise the backend
+        # is read PER-REQUEST from the persisted SandboxSettings (the Settings selector),
+        # mirroring how `_router_now()` reloads model assignments — so a settings change
+        # drives the next conversation's sandbox without a restart.
+        self._injected_sandbox = sandbox_service
         self._sandbox_spec = sandbox_spec or SandboxSpec()
         # Per-conversation surface ("research" | "build"); set at create time. Kept in
         # memory (no schema migration) — a server restart resets a conversation to the
@@ -180,6 +210,13 @@ class ConversationRuntime:
         Build surface composes tools + sandbox + the ConfirmRisky gate; Research stays
         read-only + ungated. Idempotent until the loop is built."""
         self._surface[conversation_id] = "build" if surface == "build" else "research"
+
+    def _sandbox_service_now(self) -> SandboxService:
+        """The active sandbox backend: the injected override if present, else built from
+        the persisted SandboxSettings (reloaded each time — the Settings selector drives it)."""
+        if self._injected_sandbox is not None:
+            return self._injected_sandbox
+        return build_sandbox_service(self._config_store.load().sandbox)
 
     def set_model_override(self, conversation_id: str, model_id: str | None) -> None:
         """Pin the driver model for a conversation (the Build chat model picker). The id
@@ -288,7 +325,7 @@ class ConversationRuntime:
             update={"permitted": self._sandbox_spec.permitted | {Capability.NETWORK}}
         )
         session = SandboxSession(
-            self._sandbox_service, build_spec, conversation_id=conversation_id
+            self._sandbox_service_now(), build_spec, conversation_id=conversation_id
         )
         executor = DefaultToolExecutor(
             build_default_registry(),

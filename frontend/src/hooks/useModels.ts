@@ -5,11 +5,13 @@ import {
   deleteModel,
   getAssignments,
   getOpenRouterKeyStatus,
+  getSandboxConfig,
   listModels,
   listOpenRouterModels,
   setOpenRouterKey,
   updateAssignments,
   updateModel,
+  updateSandboxConfig,
 } from "@/api/models";
 import type {
   AssignmentsPatch,
@@ -19,6 +21,7 @@ import type {
   OpenRouterKeyStatus,
   OpenRouterModel,
 } from "@/types/models";
+import type { SandboxConfig } from "@/types/sandbox";
 
 /**
  * Query/mutation hooks for the model catalogue + assignments. Components consume
@@ -46,6 +49,20 @@ export function useUpdateAssignments() {
       // Write the authoritative result straight into the cache (no refetch flash).
       qc.setQueryData(ASSIGNMENTS_KEY, next);
     },
+  });
+}
+
+const SANDBOX_KEY = ["sandbox-config"] as const;
+
+export function useSandboxConfig() {
+  return useQuery<SandboxConfig>({ queryKey: SANDBOX_KEY, queryFn: getSandboxConfig });
+}
+
+export function useUpdateSandboxConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (cfg: SandboxConfig) => updateSandboxConfig(cfg),
+    onSuccess: (next) => qc.setQueryData(SANDBOX_KEY, next),
   });
 }
 

@@ -46,6 +46,27 @@ def test_models_catalogue_is_cost_and_capability_legible(client):
     assert "vision" in by_id["driver-overflow"]["capabilities"]
 
 
+def test_sandbox_config_get_and_put_round_trip(client):
+    # default reflects the seed (SandboxSettings default)
+    cfg = client.get("/api/sandbox/config").json()
+    assert cfg["backend"] in ("local", "gvisor", "process", "podman")
+    # select gVisor with a Docker-over-SSH connection (no secrets — keyless tailnet)
+    put = client.put(
+        "/api/sandbox/config",
+        json={
+            "backend": "gvisor",
+            "docker_socket": "ssh://sandbox@100.81.82.115",
+            "podman_url": cfg["podman_url"],
+            "runtime": "runsc",
+            "image": "pmx-sandbox:base",
+            "workspace_root": "/opt/sandbox/workspaces",
+        },
+    )
+    assert put.status_code == 200 and put.json()["backend"] == "gvisor"
+    # persisted: a fresh GET reflects the selection
+    assert client.get("/api/sandbox/config").json()["docker_socket"] == "ssh://sandbox@100.81.82.115"
+
+
 def test_assignments_default_and_per_role(client):
     a = client.get("/api/models/assignments").json()
     assert a["default_model"] == "driver-local"

@@ -28,6 +28,7 @@ from .config_state import (
     OpenRouterKeyBody,
     OpenRouterKeyStatus,
     OpenRouterModelDTO,
+    SandboxConfigDTO,
     SkillDTO,
     SkillPatch,
     normalize_openrouter,
@@ -89,6 +90,14 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
             return state.update_assignments(patch)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/sandbox/config")
+    async def get_sandbox_config() -> SandboxConfigDTO:
+        return state.sandbox_config()
+
+    @app.put("/api/sandbox/config")
+    async def put_sandbox_config(dto: SandboxConfigDTO) -> SandboxConfigDTO:
+        return state.update_sandbox_config(dto)
 
     # Declared AFTER /assignments so that literal path wins over {model_id}.
     @app.put("/api/models/{model_id}")

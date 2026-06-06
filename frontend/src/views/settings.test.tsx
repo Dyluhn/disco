@@ -112,3 +112,39 @@ describe("Settings — skills + MCP scaffolds", () => {
     expect(screen.getByRole("button", { name: /Add connection/i })).toBeDisabled();
   });
 });
+
+describe("Settings — sandbox", () => {
+  it("offers the three backends with isolation tiers legible; Podman is a stub", async () => {
+    withQuery(<SettingsView />);
+    expect(await screen.findByRole("heading", { name: "Sandbox" })).toBeInTheDocument();
+    // radios render after the async config load
+    expect(await screen.findByRole("radio", { name: /gVisor sandbox backend/i })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Local container sandbox backend/i })).toBeInTheDocument();
+    const podman = screen.getByRole("radio", { name: /Podman .* sandbox backend/i });
+    expect(within(podman).getByText(/stub here/i)).toBeInTheDocument();
+    // isolation tiers are surfaced at the point of choice
+    expect(screen.getByText(/Strong isolation/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/shared kernel/i).length).toBeGreaterThan(0);
+  });
+
+  it("surfaces the local → tighter-confirmation coupling when local is selected", async () => {
+    const user = userEvent.setup();
+    withQuery(<SettingsView />);
+    await user.click(await screen.findByRole("radio", { name: /Local container sandbox backend/i }));
+    expect(screen.getByText(/leans TIGHTER/i)).toBeInTheDocument();
+  });
+
+  it("saves a backend change (round-trips through the data layer)", async () => {
+    const user = userEvent.setup();
+    withQuery(<SettingsView />);
+    const gvisor = await screen.findByRole("radio", { name: /gVisor sandbox backend/i });
+    const local = screen.getByRole("radio", { name: /Local container sandbox backend/i });
+    // pick whichever is NOT currently selected → the form is dirty → Save enabled
+    const target = gvisor.getAttribute("aria-checked") === "true" ? local : gvisor;
+    await user.click(target);
+    const save = screen.getByRole("button", { name: /save sandbox/i });
+    expect(save).toBeEnabled();
+    await user.click(save);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^saved$/i })).toBeInTheDocument());
+  });
+});

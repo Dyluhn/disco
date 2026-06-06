@@ -58,8 +58,33 @@ class RoleRouting(BaseModel):
     overflow_ladder: list[str] = Field(default_factory=list)  # stronger models (§5.3)
 
 
+class SandboxSettings(BaseModel):
+    """[settings] The active sandbox backend + its (non-secret) connection details.
+
+    Plain config held in `core` (so it persists in the SAME shared ConfigStore as the
+    model catalogue — no parallel config path); the agent-server maps it to the concrete
+    `SandboxBackend`. Remote connections are KEYLESS over Tailscale SSH — there are no
+    secrets here, only host/socket/runtime detail.
+    """
+
+    # which backend is active. "process" (dev, host) | "gvisor" (strong, remote) |
+    # "local" (container, same host) | "podman" (remote; a STUB in this environment).
+    backend: str = "local"
+    # gVisor / Docker host endpoint — a local socket OR Docker-over-SSH (ssh://user@host).
+    docker_socket: str = "unix:///var/run/docker.sock"
+    # Podman native remote (rootless socket over Tailscale SSH).
+    podman_url: str = "http+ssh://sandbox@100.73.110.47/run/user/1000/podman/podman.sock"
+    # the OCI runtime: runsc (gVisor), runc/crun (local/podman).
+    runtime: str = "runc"
+    image: str = "pmx-sandbox:base"
+    # host dir bind-mounted to the container workspace (gVisor); local uses a named volume.
+    workspace_root: str = "/opt/sandbox/workspaces"
+
+
 class RouterConfig(BaseModel):
     models: dict[str, ModelEntry]  # key -> entry (the assignable catalogue)
+    # the active sandbox backend + connection (settings-driven; agent-server maps it).
+    sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     # v1.2 deterministic assignment — the source of truth (R10):
     default_model: str  # AGENT_DRIVER's model + fallback for any unassigned role
     assignments: dict[ModelRole, str] = Field(default_factory=dict)  # explicit per-role

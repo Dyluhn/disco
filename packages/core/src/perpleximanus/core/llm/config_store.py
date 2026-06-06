@@ -20,7 +20,7 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
-from .config import ModelEntry, RouterConfig, default_config
+from .config import ModelEntry, RouterConfig, SandboxSettings, default_config
 from .types import ModelRole
 
 _ENV_PATH = "PMX_CONFIG"
@@ -61,6 +61,12 @@ class ConfigStore:
         """Persist the full config (atomically) and return it."""
         self._write(config.model_dump(mode="json"))
         return config
+
+    # -- sandbox backend ------------------------------------------------------
+
+    def save_sandbox(self, sandbox: SandboxSettings) -> RouterConfig:
+        """Persist the active sandbox backend + connection over the current config."""
+        return self.save(self.load().model_copy(update={"sandbox": sandbox}))
 
     # -- assignments ----------------------------------------------------------
 

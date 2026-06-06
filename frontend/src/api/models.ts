@@ -8,6 +8,7 @@ import type {
   OpenRouterKeyStatus,
   OpenRouterModel,
 } from "@/types/models";
+import type { SandboxConfig } from "@/types/sandbox";
 import { apiGet, apiSend, fixtureDelay, isLive } from "./client";
 
 /**
@@ -117,6 +118,30 @@ export async function updateAssignments(patch: AssignmentsPatch): Promise<ModelA
     default_model: fixtureAssignments.default_model,
     roles: { ...fixtureAssignments.roles },
   };
+}
+
+// ---- sandbox backend -------------------------------------------------------
+
+let fixtureSandbox: SandboxConfig = {
+  backend: "local",
+  docker_socket: "unix:///var/run/docker.sock",
+  podman_url: "http+ssh://sandbox@100.73.110.47/run/user/1000/podman/podman.sock",
+  runtime: "runc",
+  image: "pmx-sandbox:base",
+  workspace_root: "/opt/sandbox/workspaces",
+};
+
+export async function getSandboxConfig(): Promise<SandboxConfig> {
+  if (isLive()) return apiGet<SandboxConfig>("/api/sandbox/config");
+  await fixtureDelay();
+  return { ...fixtureSandbox };
+}
+
+export async function updateSandboxConfig(cfg: SandboxConfig): Promise<SandboxConfig> {
+  if (isLive()) return apiSend<SandboxConfig>("PUT", "/api/sandbox/config", cfg);
+  await fixtureDelay();
+  fixtureSandbox = { ...cfg };
+  return { ...fixtureSandbox };
 }
 
 // ---- OpenRouter ------------------------------------------------------------

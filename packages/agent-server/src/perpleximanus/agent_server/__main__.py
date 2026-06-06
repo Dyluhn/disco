@@ -23,37 +23,26 @@ from .runtime import ConversationRuntime
 
 
 def _sandbox_service():
-    """The Build surface's sandbox backend, selected by PMX_SANDBOX. Default 'process'
-    keeps the dev default (runs on the host); 'local' contains the agent in a real
-    container so its shell/file/code-exec — and any `rm -rf` — stay isolated."""
-    backend = os.environ.get("PMX_SANDBOX", "process").lower()
-    image = os.environ.get("PMX_SANDBOX_IMAGE", "pmx-sandbox:base")
-    if backend == "process":
-        return None  # the runtime defaults to ProcessSandboxService
-    from perpleximanus.tools.sandbox import SandboxConfig
+    """An OPTIONAL startup OVERRIDE of the Build sandbox backend. Unset → the runtime
+    reads the backend from the persisted Settings (the Sandbox section) per request.
+    Set PMX_SANDBOX=process|local|gvisor|podman to force one (with the env connection)."""
+    backend = os.environ.get("PMX_SANDBOX")
+    if not backend:
+        return None  # config-driven (the Settings selector)
+    from perpleximanus.core.llm import SandboxSettings
 
-    if backend == "local":
-        from perpleximanus.tools.sandbox import LocalSandboxService
+    from .runtime import build_sandbox_service
 
-        return LocalSandboxService(
-            SandboxConfig(
-                backend="local",
-                runtime=os.environ.get("PMX_LOCAL_RUNTIME", "runc"),
-                docker_socket=os.environ.get(
-                    "PMX_LOCAL_SOCKET", "unix:///run/user/1000/podman/podman.sock"
-                ),
-                image=image,
-            )
+    return build_sandbox_service(
+        SandboxSettings(
+            backend=backend.lower(),
+            runtime=os.environ.get("PMX_LOCAL_RUNTIME", "runc"),
+            docker_socket=os.environ.get(
+                "PMX_LOCAL_SOCKET", "unix:///run/user/1000/podman/podman.sock"
+            ),
+            image=os.environ.get("PMX_SANDBOX_IMAGE", "pmx-sandbox:base"),
         )
-    if backend == "gvisor":
-        from perpleximanus.tools.sandbox import GvisorSandboxService
-
-        return GvisorSandboxService(SandboxConfig(backend="gvisor", image=image))
-    if backend == "podman":
-        from perpleximanus.tools.sandbox import PodmanSandboxService, default_podman_config
-
-        return PodmanSandboxService(default_podman_config().model_copy(update={"image": image}))
-    raise SystemExit(f"unknown PMX_SANDBOX={backend!r} (use process|local|gvisor|podman)")
+    )
 
 
 def main() -> None:

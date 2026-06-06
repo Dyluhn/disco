@@ -14,7 +14,13 @@ Also delivers the two functions the event/state contract was waiting on:
 
 from __future__ import annotations
 
-from .config import ModelEntry, RoleRouting, RouterConfig, default_config
+from .config import (
+    ModelEntry,
+    RoleRouting,
+    RouterConfig,
+    SandboxSettings,
+    default_config,
+)
 from .config_store import ConfigStore
 from .errors import (
     BudgetExceeded,
@@ -94,6 +100,7 @@ __all__ = [
     "Requirement",
     "RoleRouting",
     "RouterConfig",
+    "SandboxSettings",
     "RouterSummarizer",
     "RoutingDecision",
     "RoutingSink",

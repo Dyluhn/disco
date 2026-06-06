@@ -84,6 +84,19 @@ class AssignmentsPatch(BaseModel):
     roles: dict[str, str] | None = None
 
 
+class SandboxConfigDTO(BaseModel):
+    """The active sandbox backend + its (non-secret) connection — the wire mirror of
+    core's SandboxSettings. Persisted in the shared ConfigStore; the agent-server maps
+    it to the live backend. No secrets (remote connections are keyless Tailscale SSH)."""
+
+    backend: str  # "process" | "gvisor" | "local" | "podman"
+    docker_socket: str
+    podman_url: str
+    runtime: str
+    image: str
+    workspace_root: str
+
+
 class SkillDTO(BaseModel):
     id: str
     name: str
@@ -243,6 +256,18 @@ def _assignments_from(config: RouterConfig) -> AssignmentsDTO:
     return AssignmentsDTO(default_model=config.default_model, roles=roles)
 
 
+def _sandbox_from(config: RouterConfig) -> SandboxConfigDTO:
+    s = config.sandbox
+    return SandboxConfigDTO(
+        backend=s.backend,
+        docker_socket=s.docker_socket,
+        podman_url=s.podman_url,
+        runtime=s.runtime,
+        image=s.image,
+        workspace_root=s.workspace_root,
+    )
+
+
 # ---- the session-scoped config state ----------------------------------------
 
 
@@ -360,6 +385,28 @@ class ConfigState:
                 assignments[ModelRole(role_str)] = key  # ValueError on a bad role
         new_cfg = self._store.save_assignments(default_model, assignments)
         return _assignments_from(new_cfg)
+
+    # sandbox backend (persisted; the agent-server maps it to the live backend) ----
+
+    def sandbox_config(self) -> SandboxConfigDTO:
+        return _sandbox_from(self._store.load())
+
+    def update_sandbox_config(self, dto: SandboxConfigDTO) -> SandboxConfigDTO:
+        """Persist the chosen backend + connection. The agent-server reloads the shared
+        config per request, so a new selection drives the NEXT conversation's sandbox."""
+        from perpleximanus.core.llm import SandboxSettings
+
+        self._store.save_sandbox(
+            SandboxSettings(
+                backend=dto.backend,
+                docker_socket=dto.docker_socket,
+                podman_url=dto.podman_url,
+                runtime=dto.runtime,
+                image=dto.image,
+                workspace_root=dto.workspace_root,
+            )
+        )
+        return _sandbox_from(self._store.load())
 
     # skills (wiring-pending) -------------------------------------------------
 
