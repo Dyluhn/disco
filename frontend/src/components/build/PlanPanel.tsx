@@ -9,6 +9,7 @@
 import { useState } from "react";
 import { Check, CircleDashed, ClipboardList, Loader2 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { Markdown } from "@/components/Markdown";
 import type { StepState, PlanView } from "@/lib/buildTrace";
 
 function StepIcon({ state }: { state: StepState }) {
@@ -69,6 +70,22 @@ export function PlanPanel({
       </header>
 
       <p className="mt-inline font-ui text-[0.84rem] leading-snug text-text-muted">{plan.summary}</p>
+
+      {plan.context && (
+        <details
+          className="mt-inline rounded-control border border-hairline bg-surface-2 px-inline py-hair"
+          // Open by default at the gate (the rationale is the user's load-bearing input
+          // to the approve/revise decision); collapsed during execution.
+          open={gate}
+        >
+          <summary className="cursor-pointer font-ui text-[0.74rem] uppercase tracking-wide text-text-faint">
+            Context &amp; rationale
+          </summary>
+          <div className="mt-hair text-[0.84rem] leading-relaxed text-text-muted">
+            <Markdown>{plan.context}</Markdown>
+          </div>
+        </details>
+      )}
 
       <ol className="mt-body flex flex-col gap-hair">
         {plan.steps.map((step, i) => {

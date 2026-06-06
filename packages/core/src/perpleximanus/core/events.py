@@ -270,20 +270,28 @@ class PlanEvent(BaseEvent, LLMConvertible):
     """A structured plan the agent proposed (in PLANNING mode) and the human is
     asked to approve before any work runs. LLMConvertible so the committed plan
     stays in the agent's context during execution — it renders as an assistant
-    message restating the steps it agreed to carry out."""
+    message restating the steps it agreed to carry out.
+
+    `context` is an optional markdown body carrying the planner's findings from
+    exploring the workspace + web (Claude-Code-style: explain WHY this plan, what
+    you learned, the trade-offs). Empty by default for backward compatibility."""
 
     kind: Literal[EventKind.PLAN] = EventKind.PLAN
     source: EventSource = EventSource.AGENT
     summary: str  # one or two sentences: what this plan delivers
     steps: list[PlanStep]
     revision: int = 1  # bumps each time the user sends the plan back for changes
+    context: str = ""  # optional markdown rationale + exploration findings
 
     def to_llm_message(self) -> LLMMessage:
         lines = [f"{i}. {s.title}" for i, s in enumerate(self.steps, start=1)]
         body = "\n".join(lines)
+        # Include the context so the executing agent has its own findings in-View
+        # — same role Claude Code's plan-file markdown plays during execution.
+        ctx = f"\n\nContext:\n{self.context}" if self.context else ""
         return LLMMessage(
             role="assistant",
-            content=f"Plan (revision {self.revision}): {self.summary}\n{body}",
+            content=f"Plan (revision {self.revision}): {self.summary}\n{body}{ctx}",
         )
 
 

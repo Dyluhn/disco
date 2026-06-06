@@ -92,7 +92,7 @@ async def _drive(runtime: ConversationRuntime, store: SqliteEventStore, *, auto_
     """Drive the loop to a terminal-for-now status, printing events as they stream.
     Auto-approve the plan gate ONCE (the first time it appears), auto-approve risky
     actions, and return counters about what happened. Returns (shown, stats)."""
-    stats = {"actions": 0, "plan_gates": 0, "action_gates": 0}
+    stats = {"actions": 0, "plan_gates": 0, "action_gates": 0, "planning_reads": 0}
     for _round in range(60):
         runtime.kick(CID)
         task = runtime._tasks.get(CID)
@@ -106,6 +106,22 @@ async def _drive(runtime: ConversationRuntime, store: SqliteEventStore, *, auto_
         shown = _print_new(events, shown)
         stats["actions"] = sum(
             1 for e in events if isinstance(e, ActionEvent) and e.tool_call is not None
+        )
+        # Count read actions that happened BEFORE a plan was proposed (the
+        # exploration phase Claude Code calls "Phase 1: Initial Understanding").
+        _READ_TOOLS = {"file_read", "file_list", "search", "extract"}
+        first_plan_seq = next(
+            (e.seq for e in events if isinstance(e, PlanEvent)),
+            None,
+        )
+        stats["planning_reads"] = sum(
+            1
+            for e in events
+            if isinstance(e, ActionEvent)
+            and e.tool_call is not None
+            and e.tool_call.tool_name in _READ_TOOLS
+            and first_plan_seq is not None
+            and (e.seq or 0) < first_plan_seq
         )
         state = await store.get_state(CID)
 
@@ -163,11 +179,15 @@ async def main() -> None:
     shown, s1 = await _drive(runtime, store, auto_approve_plan=True, shown=0)
     state = await store.get_state(CID)
 
+    plan_events = [e for e in await store.get_events(CID) if isinstance(e, PlanEvent)]
+    first_plan_ctx_len = len(plan_events[0].context) if plan_events else 0
     print("\n--- round 1 result ---")
-    print(f"  status       : {state.execution_status.value}")
-    print(f"  plan gates   : {s1['plan_gates']} (PLANNING → AWAITING_PLAN_APPROVAL → approve → build)")
-    print(f"  action gates : {s1['action_gates']} (per-action ConfirmRisky still bites mid-build)")
-    print(f"  tool actions : {s1['actions']}")
+    print(f"  status         : {state.execution_status.value}")
+    print(f"  plan gates     : {s1['plan_gates']} (PLANNING → AWAITING_PLAN_APPROVAL → approve → build)")
+    print(f"  planning reads : {s1['planning_reads']} (Phase 1 exploration — file_list/file_read/search/extract)")
+    print(f"  plan ctx chars : {first_plan_ctx_len} (the markdown rationale on the PlanEvent)")
+    print(f"  action gates   : {s1['action_gates']} (per-action ConfirmRisky still bites mid-build)")
+    print(f"  tool actions   : {s1['actions']}")
 
     ok1 = (
         state.execution_status == ConversationStatus.FINISHED

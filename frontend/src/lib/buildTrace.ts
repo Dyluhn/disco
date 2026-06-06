@@ -167,6 +167,7 @@ export interface PlanView {
   summary: string;
   steps: PlanStep[];
   revision: number;
+  context: string;
 }
 
 /** The latest proposed plan (highest revision wins — a re-plan supersedes the prior
@@ -176,7 +177,13 @@ export function derivePlan(events: AgentEvent[]): PlanView | null {
   for (const e of events) {
     if (e.kind !== "plan") continue;
     if (latest === null || e.revision >= latest.revision) {
-      latest = { id: e.id, summary: e.summary, steps: e.steps, revision: e.revision };
+      latest = {
+        id: e.id,
+        summary: e.summary,
+        steps: e.steps,
+        revision: e.revision,
+        context: e.context ?? "",
+      };
     }
   }
   return latest;

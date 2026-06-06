@@ -86,6 +86,8 @@ export interface PlanEvent extends EventBase {
   summary: string;
   steps: PlanStep[];
   revision: number;
+  /** Optional markdown rationale + exploration findings (the WHY behind the WHAT). */
+  context?: string;
 }
 export interface ErrorEvent extends EventBase {
   kind: "error";

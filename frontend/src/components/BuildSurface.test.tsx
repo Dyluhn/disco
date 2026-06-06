@@ -50,7 +50,7 @@ async function enterBuildSubmitAndApprovePlan() {
 }
 
 describe("Build surface (plan gate → build → action gate)", () => {
-  it("pauses on a plan-approval gate FIRST, showing the proposed steps", async () => {
+  it("pauses on a plan-approval gate FIRST, showing the proposed steps + rationale", async () => {
     await enterBuildAndSubmit();
     const planGate = await waitFor(
       () => screen.getByRole("alertdialog", { name: /plan.*approval/i }),
@@ -60,6 +60,10 @@ describe("Build surface (plan gate → build → action gate)", () => {
     expect(within(planGate).getByText(/Write fizzbuzz\.py/i)).toBeInTheDocument();
     expect(within(planGate).getByText(/Run it to verify/i)).toBeInTheDocument();
     expect(within(planGate).getByText(/Remove the script/i)).toBeInTheDocument();
+    // the planner's context/rationale renders as markdown above the steps
+    expect(within(planGate).getByText(/Context & rationale/i)).toBeInTheDocument();
+    expect(within(planGate).getByText(/Findings/i)).toBeInTheDocument();
+    expect(within(planGate).getByText(/workspace is empty/i)).toBeInTheDocument();
     // and Approve/Revise are wired
     expect(within(planGate).getByRole("button", { name: /approve & build/i })).toBeEnabled();
     expect(within(planGate).getByRole("button", { name: /revise/i })).toBeEnabled();

@@ -30,15 +30,26 @@ class SubmitPlanArgs(BaseModel):
     steps: list[PlanStepInput] = Field(
         description="Ordered capstones to carry out once the plan is approved."
     )
+    context: str = Field(
+        default="",
+        description=(
+            "Optional markdown: WHY this plan, what you learned from exploring the "
+            "workspace (file_read/file_list) and the web (search/extract), and any "
+            "trade-offs the human should know before approving. Shown to the user above "
+            "the steps."
+        ),
+    )
 
 
 class SubmitPlanTool:
     definition = ToolDef(
         name="submit_plan",
         description=(
-            "Propose a plan for approval. Provide a short summary and an ordered list of "
-            "concrete steps. Call this BEFORE doing any work; do not take any other action "
-            "until the plan is approved."
+            "Propose a plan for approval. EXPLORE FIRST: use file_list/file_read to "
+            "understand the workspace and search/extract for any web context, THEN call "
+            "submit_plan with a short summary, ordered concrete steps, and a markdown "
+            "`context` block explaining what you found and why this plan. Do not take any "
+            "state-changing action until the plan is approved."
         ),
         args_model=SubmitPlanArgs,
         base_risk=SecurityRisk.LOW,

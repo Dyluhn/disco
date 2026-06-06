@@ -31,6 +31,8 @@ export const planEvent: AgentEvent = {
     { title: "Remove the script to clean up" },
   ],
   revision: 1,
+  context:
+    "## Findings\nThe workspace is empty (file_list returned no entries), so this is a fresh task — no diff to plan around.\n\n## Approach\nPython 3 is available in the sandbox. The classic 15-line FizzBuzz fits one file; running it via `python3 fizzbuzz.py` keeps the verification step trivial. The cleanup step is what triggers the per-action gate (rm -rf), which is expected and helps demo the layered approval.",
 };
 
 export const planGateState: ConversationState = {
@@ -218,6 +220,8 @@ export const replanEvent: AgentEvent = {
     { title: "Run the test to confirm it passes" },
   ],
   revision: 2,
+  context:
+    "## What changed\nRe-read `fizzbuzz.py` from the prior build — it's the standard 15-line loop, no helper function to import.\n\n## Approach\nWrite a self-contained test that re-implements the FizzBuzz check in `test_fizzbuzz.py` (since the script itself is just a top-level loop, not importable). The original file stays untouched, per the user's instruction.",
 };
 
 export const replanGateState: ConversationState = {

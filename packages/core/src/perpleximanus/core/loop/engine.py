@@ -185,7 +185,8 @@ class AgentLoop:
     def _plan_from_args(self, arguments: dict, events: list[Event]) -> PlanEvent:
         """Build a PlanEvent from a `submit_plan` tool call. Defensive against the
         model's shape drift (steps as dicts or bare strings); revision counts prior
-        plans so a re-plan is visibly the next iteration."""
+        plans so a re-plan is visibly the next iteration. `context` carries any
+        markdown rationale / exploration findings the planner included."""
         steps: list[PlanStep] = []
         for s in arguments.get("steps") or []:
             if isinstance(s, dict):
@@ -198,8 +199,9 @@ class AgentLoop:
         if not steps:
             steps = [PlanStep(title="(the planner returned no concrete steps)")]
         summary = str(arguments.get("summary") or "").strip() or "Proposed plan"
+        context = str(arguments.get("context") or arguments.get("rationale") or "").strip()
         revision = 1 + sum(1 for e in events if isinstance(e, PlanEvent))
-        return PlanEvent(summary=summary, steps=steps, revision=revision)
+        return PlanEvent(summary=summary, steps=steps, revision=revision, context=context)
 
     @staticmethod
     def initial_mode(
@@ -361,10 +363,13 @@ class AgentLoop:
                     await self._emit(ErrorEvent(code="model_error", detail=_describe_llm_error(e)))
                     return await self.get_state()
 
-                # (e.5) PLAN GATE — in PLANNING mode the agent proposes, it never
-                # acts. A `submit_plan` call is intercepted into a PlanEvent and the
-                # loop halts for human approval; anything else (prose, a stray tool)
-                # is nudged back to planning. The plan tool is NEVER executed.
+                # (e.5) PLAN GATE — in PLANNING mode the planner has THREE valid moves:
+                #   1. `submit_plan` → intercepted into a PlanEvent, loop halts for approval.
+                #   2. Any OTHER tool in planning_tools (e.g. file_read, file_list, search,
+                #      extract) → fall through to the normal action path; the planner explores
+                #      before proposing (the Claude-Code-style "Phase 1: gather context").
+                #   3. No tool call at all (a prose answer) → nudge back to planning.
+                # The plan tool itself is NEVER executed.
                 if self.mode == OperatingMode.PLANNING:
                     tc = step.tool_call
                     if tc is not None and tc.tool_name == self._plan_tool:
@@ -377,30 +382,33 @@ class AgentLoop:
                             )
                         )
                         return await self.get_state()
-                    # Safety: a misbehaving planner that keeps ignoring the nudge would
-                    # spin (no ActionEvent → no iteration counter, no stuck pattern).
-                    # Cap consecutive nudges and bail with a real error.
-                    self._plan_nudges += 1
-                    if self._plan_nudges >= _MAX_PLAN_NUDGES:
+                    if tc is None:
+                        # Safety: a misbehaving planner that keeps answering in prose would
+                        # spin (no ActionEvent → no iteration counter, no stuck pattern).
+                        # Cap consecutive nudges and bail with a real error.
+                        self._plan_nudges += 1
+                        if self._plan_nudges >= _MAX_PLAN_NUDGES:
+                            await self._emit(
+                                ErrorEvent(
+                                    code="plan_required",
+                                    detail=(
+                                        "the planner did not propose a plan via "
+                                        f"`submit_plan` after {_MAX_PLAN_NUDGES} attempts"
+                                    ),
+                                )
+                            )
+                            return await self.get_state()
                         await self._emit(
-                            ErrorEvent(
-                                code="plan_required",
-                                detail=(
-                                    "the planner did not propose a plan via `submit_plan` "
-                                    f"after {_MAX_PLAN_NUDGES} attempts"
-                                ),
+                            MessageEvent(
+                                source=EventSource.ENVIRONMENT,
+                                message=LLMMessage(role="user", content=_PLAN_NUDGE),
                             )
                         )
-                        return await self.get_state()
-                    await self._emit(
-                        MessageEvent(
-                            source=EventSource.ENVIRONMENT,
-                            message=LLMMessage(role="user", content=_PLAN_NUDGE),
-                        )
-                    )
-                    continue
-                # Any non-planning step resets the nudge counter so a recovered loop
-                # gets a fresh budget the next time it (re-)enters planning.
+                        continue
+                    # tc is a planning-allowed read tool — productive exploration.
+                    # Reset the nudge counter and fall through to the normal action path.
+                # Any productive step (planning read OR execution action) resets the
+                # nudge counter so a recovered loop gets a fresh budget next time.
                 self._plan_nudges = 0
 
                 # (f) finish path — subject to stop-hook veto (§7.4)

@@ -353,12 +353,16 @@ class ConversationRuntime:
             ConfirmRisky(),  # Agent surface: gate risky/UNKNOWN actions before they run
             LLMSummarizingCondenser(),  # real condensation, not the no-op
             RouterSummarizer(router),
-            # Build starts in PLANNING: the agent proposes a plan (via the sole
-            # `submit_plan` tool) and the loop halts for approval before any work.
-            # approve_plan flips it to execution; the per-action gate above still
-            # governs the build that follows.
+            # Build starts in PLANNING. The planner has a context-rich surface — it
+            # can READ to explore (file_list/file_read in the workspace, search/extract
+            # on the web) before calling `submit_plan`. This mirrors Claude Code's plan
+            # mode: writes/edits/shell are off the table until approval, but the
+            # planner can gather context first. approve_plan flips to execution; the
+            # per-action gate above still governs the build that follows.
             mode=OperatingMode.PLANNING,
-            planning_tools=frozenset({"submit_plan"}),
+            planning_tools=frozenset(
+                {"submit_plan", "file_list", "file_read", "search", "extract"}
+            ),
         )
 
     # ---- research surface (Stage 4) -----------------------------------------
