@@ -228,6 +228,27 @@ class ConversationRuntime:
         read-only + ungated. Idempotent until the loop is built."""
         self._surface[conversation_id] = "build" if surface == "build" else "research"
 
+    def _surface_of(self, conversation_id: str) -> str:
+        """The conversation's surface, recovered durably across server restarts.
+        In-memory `_surface` is authoritative when set (the create-time POST path
+        sets it). When it's missing — typical after a server restart — we DERIVE
+        Build from the existence of a project manifest on disk: a project's
+        existence IS a record that the conversation was Build (Research never
+        snapshots). Defaults to "research" when neither signal is present."""
+        cached = self._surface.get(conversation_id)
+        if cached is not None:
+            return cached
+        store = self._project_store_now()
+        if store is not None and store.status() == StorageStatus.OK:
+            try:
+                if store.get(conversation_id) is not None:
+                    # cache the recovery so subsequent lookups don't re-stat the FS
+                    self._surface[conversation_id] = "build"
+                    return "build"
+            except Exception:  # noqa: BLE001 — best-effort recovery
+                pass
+        return "research"
+
     def _sandbox_service_now(self) -> SandboxService:
         """The active sandbox backend: the injected override if present, else built from
         the persisted SandboxSettings (reloaded each time — the Settings selector drives it)."""
@@ -309,7 +330,7 @@ class ConversationRuntime:
                 conversation_id=conversation_id,
                 model_override=self._model_override.get(conversation_id),
             )
-            if self._surface.get(conversation_id) == "build":
+            if self._surface_of(conversation_id) == "build":
                 loop = self._compose_build_loop(conversation_id, router, agent)
             else:
                 loop = AgentLoop(
@@ -443,14 +464,14 @@ class ConversationRuntime:
         # storage path is configured AND a prior snapshot exists for this cid,
         # write its files into the (lazy) sandbox so the agent sees them. Reads
         # are cheap; the rehydrate only writes if there are files on disk.
-        if self._surface.get(conversation_id) == "build":
+        if self._surface_of(conversation_id) == "build":
             await self._maybe_rehydrate(conversation_id)
 
         state = await loop.run()
 
         # Snapshot hook: if the run ended in FINISHED, capture the workspace.
         if (
-            self._surface.get(conversation_id) == "build"
+            self._surface_of(conversation_id) == "build"
             and state.execution_status == ConversationStatus.FINISHED
         ):
             await self._maybe_snapshot(conversation_id)

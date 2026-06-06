@@ -196,3 +196,34 @@ def test_browse_storage_not_found_returns_404(store):
     res = client.get("/api/storage/browse?path=/definitely/not/a/real/path")
     assert res.status_code == 404
     assert res.json()["detail"]["reason"] == "not_found"
+
+
+def test_surface_recovery_treats_project_with_manifest_as_build(store, tmp_path):
+    """After a server restart, the in-memory _surface dict is empty. If a
+    project manifest exists for the conversation, _surface_of must recover
+    "build" so the loop composes Build (not Research with no tools) and the
+    rehydrate / snapshot hooks fire. Found in live e2e — guard against
+    regression."""
+    runtime = _runtime(store, root=str(tmp_path))
+    ps = ProjectStore(str(tmp_path))
+    cid = "conv_recover"
+    workspace = ps.path_for(cid)
+    workspace.mkdir(parents=True)
+    (workspace / "a.txt").write_bytes(b"x")
+    ps.write_manifest(
+        cid, title="r", owner_id="local",
+        created_at="2026-06-06T00:00:00Z", file_count=1, total_bytes=1,
+    )
+    # set_surface was NEVER called on this runtime — exactly the post-restart shape.
+    assert cid not in runtime._surface
+    # the recovery method should return "build" because a manifest exists
+    assert runtime._surface_of(cid) == "build"
+    # and the lookup caches the recovery so subsequent calls don't restat
+    assert runtime._surface[cid] == "build"
+
+
+def test_surface_recovery_defaults_to_research_when_no_manifest(store, tmp_path):
+    runtime = _runtime(store, root=str(tmp_path))
+    # no project on disk → defaults to research, doesn't pollute _surface
+    assert runtime._surface_of("conv_unknown") == "research"
+    assert "conv_unknown" not in runtime._surface
