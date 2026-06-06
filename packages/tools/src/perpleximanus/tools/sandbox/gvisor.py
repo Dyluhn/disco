@@ -24,6 +24,16 @@ from .config import SandboxConfig, default_sandbox_config
 from .isolation import IsolationProfile, isolation_for
 
 
+def _keepalive_command(workspace: str, *, previewable: bool) -> list[str]:
+    """The container's main process. Sealed → just a keepalive. Previewable → also start a
+    static file server on PREVIEW_PORT serving the workspace, so whatever the agent writes
+    is live in the preview immediately (the agent need not run a server itself)."""
+    if not previewable:
+        return ["sleep", "infinity"]
+    serve = f"python3 -m http.server {PREVIEW_PORT} >/dev/null 2>&1"
+    return ["sh", "-c", f"cd {workspace}; {serve} & exec sleep infinity"]
+
+
 def _preview_host(docker_socket: str) -> str:
     """The host a published port is reachable at: localhost for a local socket; the
     remote Docker host (its tailnet IP) for Docker-over-SSH — that host serves the
@@ -128,12 +138,15 @@ class GvisorSandboxService:
         cpu = spec.cpu or self._cfg.default_cpu
         # Publish ONLY the dev-server port, and only when network is granted (a sealed box
         # has no port to reach) — the preview is the forcing function for that posture.
+        # Previewable boxes also auto-serve the workspace on PREVIEW_PORT so a built page is
+        # live the moment the agent writes it (no need for the agent to run a server itself).
         ports = None if sealed(spec) else {f"{PREVIEW_PORT}/tcp": None}
+        command = _keepalive_command(self._cfg.container_workspace, previewable=not sealed(spec))
 
         try:
             return client.containers.run(
                 image=self._cfg.image,
-                command=["sleep", "infinity"],  # keepalive: stays up for exec_shell
+                command=command,  # keepalive (+ a static preview server when previewable)
                 runtime=self._cfg.runtime,  # gVisor
                 # Sealed by default: no network unless the capability set granted it.
                 network_mode="none" if sealed(spec) else "bridge",

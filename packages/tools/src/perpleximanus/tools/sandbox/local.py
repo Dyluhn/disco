@@ -24,7 +24,7 @@ from typing import Any
 from ._container import PREVIEW_PORT, ContainerInstance, sealed
 from .base import SandboxSpec, SandboxUnavailableError
 from .config import SandboxConfig, default_local_config
-from .gvisor import GvisorSandboxService
+from .gvisor import GvisorSandboxService, _keepalive_command
 
 
 class LocalSandboxInstance(ContainerInstance):
@@ -59,7 +59,10 @@ class LocalSandboxService(GvisorSandboxService):
             client.volumes.create(name=vol_name)  # auto-created; persists across the box
             return client.containers.run(
                 image=self._cfg.image,
-                command=["sleep", "infinity"],  # keepalive: stays up for exec_shell
+                # keepalive (+ a static preview server on PREVIEW_PORT when previewable)
+                command=_keepalive_command(
+                    self._cfg.container_workspace, previewable=not sealed(spec)
+                ),
                 runtime=self._cfg.runtime,  # runc (a value, not a branch)
                 # Sealed by default: no network unless the capability set granted it.
                 network_mode="none" if sealed(spec) else "bridge",
