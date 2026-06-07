@@ -12,6 +12,7 @@ export type ConversationStatus =
   | "STUCK"
   | "WAITING_FOR_CONFIRMATION"
   | "AWAITING_PLAN_APPROVAL"
+  | "AWAITING_USER_DECISION"
   | "FINISHED"
   | "ERROR";
 
@@ -127,6 +128,27 @@ export interface ReportEvent extends EventBase {
   depth_tier: string | null;
 }
 
+/** One concrete next-step option proposed by the agent after repeated failures.
+ *  The user clicks an option's card → the loop executes its tool_call as the
+ *  next action. Mirrors the backend `AlternativeOption`. */
+export interface AlternativeOption {
+  id: string;
+  title: string;
+  description: string;
+  tool_name: string;
+  arguments: Record<string, unknown>;
+}
+
+/** The structured-recovery handoff: emitted after 4+ consecutive tool failures.
+ *  The loop halts at `AWAITING_USER_DECISION` until the user picks one option
+ *  (or steers explicitly). */
+export interface AlternativesEvent extends EventBase {
+  kind: "alternatives";
+  failed_action_id: string;
+  summary: string;
+  options: AlternativeOption[];
+}
+
 export type AgentEvent =
   | MessageEvent
   | ActionEvent
@@ -136,6 +158,7 @@ export type AgentEvent =
   | StatusEvent
   | PlanEvent
   | ReportEvent
+  | AlternativesEvent
   | ErrorEvent;
 
 export interface ConversationState {
@@ -146,6 +169,7 @@ export interface ConversationState {
   last_seq: number;
   pending_action_id: string | null;
   pending_plan_id: string | null;
+  pending_alternatives_id?: string | null;
 }
 
 // ---- WS frames (event-state §7) ---------------------------------------------
@@ -163,6 +187,7 @@ export type WSClientFrame =
   | { type: "reject"; action_id?: string }
   | { type: "approve_plan" } // approve the pending plan → start building
   | { type: "request_plan"; content: string } // (re-)enter plan mode with an instruction
+  | { type: "pick_alternative"; option_id: string } // structured recovery: pick a proposed alternative
   | { type: "cancel" }
   | { type: "ping" };
 

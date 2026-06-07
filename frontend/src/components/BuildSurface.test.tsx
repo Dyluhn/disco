@@ -149,9 +149,16 @@ describe("Build surface (plan gate → build → action gate)", () => {
 describe("event → view selectors (buildTrace)", () => {
   it("deriveActivity gives plain labels, skips plan-mode meta tools, flags the pending action", () => {
     const items = deriveActivity(traceBeforeGate, gateState.pending_action_id, "WAITING_FOR_CONFIRMATION");
-    // plan_step actions are filtered out (control signals, not work)
-    expect(items.map((i) => i.label)).toEqual(["Wrote fizzbuzz.py", "Ran a command", "Ran a command"]);
-    const pending = items.at(-1)!;
+    // The activity feed is now a UNIFIED chat-and-action log (kind: "user" |
+    // "action" | "agent_message") so steer/revise messages can render in
+    // place. Filter to action items to verify the action labels.
+    const actions = items.filter((i) => i.kind === "action");
+    expect(actions.map((i) => i.label)).toEqual([
+      "Wrote fizzbuzz.py",
+      "Ran a command",
+      "Ran a command",
+    ]);
+    const pending = actions.at(-1)!;
     expect(pending.status).toBe("pending");
     expect(pending.attention).toBe(true); // HIGH-risk gated step floats up
   });

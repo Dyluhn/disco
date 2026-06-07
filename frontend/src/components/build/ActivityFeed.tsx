@@ -1,22 +1,110 @@
 /**
- * The Agent Activity Feed (BoD §13.4, Project-Manager tier): a plain-language, audit-log
- * narrative of what the agent did and why — NOT raw tool calls. A confidence gradient
- * drives attention: routine, high-confidence steps recede (muted); risky / pending /
- * failed steps are emphasized. The technical specifics (commands, output) live in the
- * Inspector canvas, never here.
+ * The Agent Activity Feed (BoD §13.4): a unified chat-and-action log. User
+ * messages (steer/send_message), agent prose (ask_user free-form replies), and
+ * tool calls are interleaved chronologically. The agent's NATURAL-LANGUAGE
+ * THOUGHT is always shown wrapped, NEVER truncated — that's the model talking,
+ * not metadata. Tool calls + observations can be expanded inline so users can
+ * see the raw command + result without losing the feed's narrative flow.
+ *
+ * Confidence gradient still drives attention: routine done steps recede,
+ * pending/failed/risky steps stand out.
  */
 
-import { AlertTriangle, Check, Circle, Loader2, X } from "lucide-react";
+import { useState } from "react";
+import {
+  AlertTriangle,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Circle,
+  Loader2,
+  MessageSquare,
+  User,
+  X,
+} from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { ActivityItem } from "@/lib/buildTrace";
 
 function StatusDot({ item }: { item: ActivityItem }) {
+  if (item.kind === "user")
+    return <User className="size-3.5 text-accent" aria-label="you" />;
+  if (item.kind === "agent_message")
+    return <MessageSquare className="size-3.5 text-text-muted" aria-label="agent message" />;
   if (item.status === "running")
     return <Loader2 className="size-3.5 animate-spin text-text-muted" aria-label="running" />;
+  if (item.status === "pending_send")
+    return <Loader2 className="size-3.5 animate-spin text-text-faint" aria-label="sending" />;
   if (item.status === "pending")
     return <AlertTriangle className="size-3.5 text-warn" aria-label="awaiting approval" />;
   if (item.status === "failed") return <X className="size-3.5 text-unsupported" aria-label="failed" />;
   return <Check className="size-3.5 text-supported" aria-label="done" />;
+}
+
+function ExpandableDetail({ item }: { item: ActivityItem }) {
+  const [open, setOpen] = useState(false);
+  const e = item.expandable;
+  if (!e) return null;
+  // Auto-open failed actions so the user sees what broke without clicking.
+  const isOpen = open || item.status === "failed";
+  const hasOutput = !!(e.output || e.error);
+  // Format arguments inline for the summary; pretty-printed JSON in the body.
+  const argsPreview = (() => {
+    if (e.tool_name === "shell") return String(e.arguments.command ?? "");
+    if (e.tool_name === "search") return `"${String(e.arguments.query ?? "")}"`;
+    if (e.tool_name === "extract") return String(e.arguments.url ?? "");
+    if (e.tool_name.startsWith("file_")) return String(e.arguments.path ?? "");
+    const argText = JSON.stringify(e.arguments);
+    return argText.length > 80 ? argText.slice(0, 80) + "…" : argText;
+  })();
+
+  return (
+    <div className="mt-hair">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-center gap-hair font-mono text-[0.74rem] text-text-faint transition-colors hover:text-text-muted"
+      >
+        {isOpen ? (
+          <ChevronDown className="size-3 shrink-0" aria-hidden />
+        ) : (
+          <ChevronRight className="size-3 shrink-0" aria-hidden />
+        )}
+        <span className="truncate text-left">{argsPreview}</span>
+      </button>
+      {isOpen && (
+        <div className="mt-hair flex flex-col gap-hair rounded-control border border-hairline bg-surface-2 p-inline">
+          <div>
+            <span className="font-ui text-[0.7rem] uppercase tracking-wide text-text-faint">
+              {e.tool_name}
+            </span>
+            <pre className="mt-px overflow-x-auto whitespace-pre-wrap break-words font-mono text-[0.74rem] leading-snug text-text-muted">
+              {JSON.stringify(e.arguments, null, 2)}
+            </pre>
+          </div>
+          {hasOutput && (
+            <div>
+              <span
+                className={cn(
+                  "font-ui text-[0.7rem] uppercase tracking-wide",
+                  e.error ? "text-unsupported" : "text-text-faint",
+                )}
+              >
+                {e.error ? "Error" : "Output"}
+              </span>
+              <pre
+                className={cn(
+                  "mt-px max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-[0.74rem] leading-snug",
+                  e.error ? "text-unsupported" : "text-text-muted",
+                )}
+              >
+                {e.error || e.output}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function ActivityFeed({ items }: { items: ActivityItem[] }) {
@@ -30,45 +118,80 @@ export function ActivityFeed({ items }: { items: ActivityItem[] }) {
   }
   return (
     <ol className="flex flex-col">
-      {items.map((item, i) => (
-        <li
-          key={item.id}
-          className={cn(
-            "flex items-start gap-inline border-l-2 py-inline pl-body",
-            item.attention ? "border-warn/60" : "border-transparent",
-          )}
-        >
-          <span className="mt-px shrink-0">
-            <StatusDot item={item} />
-          </span>
-          <div className="flex min-w-0 flex-col gap-px">
-            <span
-              className={cn(
-                "font-ui text-[0.88rem] leading-snug",
-                item.attention ? "font-medium text-text" : "text-text-muted",
-                item.status === "failed" && "text-unsupported",
-              )}
-            >
-              {item.label}
-              {item.status === "pending" && (
-                <span className="ml-inline font-ui text-[0.7rem] uppercase tracking-wide text-warn">
-                  needs approval
+      {items.map((item, i) => {
+        const isMessage = item.kind === "user" || item.kind === "agent_message";
+        return (
+          <li
+            key={item.id}
+            className={cn(
+              "flex items-start gap-inline border-l-2 py-inline pl-body",
+              item.attention
+                ? "border-warn/60"
+                : item.kind === "user"
+                  ? "border-accent/40"
+                  : "border-transparent",
+              item.status === "pending_send" && "opacity-70",
+            )}
+          >
+            <span className="mt-px shrink-0">
+              <StatusDot item={item} />
+            </span>
+            <div className="flex min-w-0 flex-1 flex-col gap-hair">
+              {item.kind === "user" && (
+                <span className="font-ui text-[0.7rem] uppercase tracking-wide text-accent">
+                  You
+                  {item.status === "pending_send" && (
+                    <span className="ml-hair font-ui text-text-faint normal-case tracking-normal">
+                      sending…
+                    </span>
+                  )}
                 </span>
               )}
-            </span>
-            {item.detail && (
-              <span className="truncate font-ui text-[0.78rem] leading-snug text-text-faint">
-                {item.detail}
+              {item.kind === "agent_message" && (
+                <span className="font-ui text-[0.7rem] uppercase tracking-wide text-text-muted">
+                  Agent
+                </span>
+              )}
+              <span
+                className={cn(
+                  "font-ui text-[0.88rem] leading-snug",
+                  item.attention ? "font-medium text-text" : "text-text-muted",
+                  item.status === "failed" && "text-unsupported",
+                  isMessage && "whitespace-pre-wrap text-text",
+                )}
+              >
+                {item.label}
+                {item.status === "pending" && (
+                  <span className="ml-inline font-ui text-[0.7rem] uppercase tracking-wide text-warn">
+                    needs approval
+                  </span>
+                )}
+              </span>
+              {/* The agent's natural-language thought — NEVER truncated, always
+                  shown wrapped. Swallowing this was the most painful UX bug. */}
+              {item.thought && !isMessage && (
+                <p className="whitespace-pre-wrap break-words font-ui text-[0.84rem] leading-snug text-text">
+                  {item.thought}
+                </p>
+              )}
+              {/* The technical detail row — a short single-line label like a
+                  file path or command preview. */}
+              {item.detail && !isMessage && !item.thought && (
+                <span className="truncate font-ui text-[0.78rem] leading-snug text-text-faint">
+                  {item.detail}
+                </span>
+              )}
+              {/* Expandable raw command + output drill-down. */}
+              {item.expandable && <ExpandableDetail item={item} />}
+            </div>
+            {i === items.length - 1 && item.status === "running" && (
+              <span className="ml-auto shrink-0 font-ui text-[0.7rem] uppercase tracking-wide text-text-faint">
+                now
               </span>
             )}
-          </div>
-          {i === items.length - 1 && item.status === "running" && (
-            <span className="ml-auto shrink-0 font-ui text-[0.7rem] uppercase tracking-wide text-text-faint">
-              now
-            </span>
-          )}
-        </li>
-      ))}
+          </li>
+        );
+      })}
     </ol>
   );
 }

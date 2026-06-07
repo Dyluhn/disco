@@ -15,16 +15,24 @@ const STATUS_LABEL: Record<ConversationStatus, string> = {
   STUCK: "Stuck",
   WAITING_FOR_CONFIRMATION: "Waiting for you",
   AWAITING_PLAN_APPROVAL: "Reviewing plan",
+  AWAITING_USER_DECISION: "Choose a path",
   FINISHED: "Finished",
   ERROR: "Error",
 };
 
+// The "kill is meaningful here" set. STUCK + terminal states (FINISHED, ERROR)
+// stay in because the sandbox may still be alive and the user may want to clean
+// up + clear the broken state, even after the loop exited. Only IDLE is excluded
+// — no conversation to kill.
 const ACTIVE: ConversationStatus[] = [
   "RUNNING",
   "WAITING_FOR_CONFIRMATION",
   "AWAITING_PLAN_APPROVAL",
+  "AWAITING_USER_DECISION",
   "PAUSED",
   "STUCK",
+  "FINISHED",
+  "ERROR",
 ];
 
 export function AgentStatusBar({

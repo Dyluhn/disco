@@ -10,7 +10,8 @@
 
 import { useMemo } from "react";
 import { useBuild } from "@/hooks/useBuild";
-import { deriveActivity, latestAgentMessage } from "@/lib/buildTrace";
+import { cn } from "@/lib/cn";
+import { deriveActivity, deriveLiveSignal, latestAgentMessage } from "@/lib/buildTrace";
 import type { IsolationInfo } from "@/types/agent";
 import { EmptyState, ErrorState } from "@/components/states";
 import { Markdown } from "@/components/Markdown";
@@ -18,12 +19,15 @@ import { QueryInput } from "@/components/QueryInput";
 import { Download } from "lucide-react";
 import { useDownloadProject } from "@/hooks/useProjects";
 import { ActivityFeed } from "@/components/build/ActivityFeed";
+import { LiveSignalBar } from "@/components/build/LiveSignalBar";
+import { ResizableSplit } from "@/components/build/ResizableSplit";
 import { AgentStatusBar } from "@/components/build/AgentStatusBar";
 import { BuildModelPicker } from "@/components/build/BuildModelPicker";
 import { ConfirmationPanel } from "@/components/build/ConfirmationPanel";
 import { ExecutionCanvas } from "@/components/build/ExecutionCanvas";
 import { PlanPanel } from "@/components/build/PlanPanel";
 import { SteerInput } from "@/components/build/SteerInput";
+import { AlternativesGate } from "@/components/build/AlternativesGate";
 
 // The active isolation tier, surfaced honestly at the point of use (the local container
 // backend the Build surface runs on — shared host kernel, not for adversarial workloads).
@@ -43,9 +47,24 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
     () => deriveActivity(b.events, b.pendingActionId, b.status),
     [b.events, b.pendingActionId, b.status],
   );
+  const liveSignal = useMemo(
+    () => deriveLiveSignal(b.events, b.status),
+    [b.events, b.status],
+  );
   const finalMessage = useMemo(() => latestAgentMessage(b.events), [b.events]);
-  const steerable = b.status === "RUNNING" || b.status === "WAITING_FOR_CONFIRMATION";
+  // Steer is available whenever a conversation EXISTS to steer — including
+  // STUCK/FINISHED, since the engine reopens on send_message (engine.py:671).
+  // Plan-approval is the only state where steering is wrong (the plan IS the
+  // input). Keeping SteerInput disabled mid-confirmation matches the prior shape.
+  const steerable =
+    b.status === "RUNNING" ||
+    b.status === "WAITING_FOR_CONFIRMATION" ||
+    b.status === "AWAITING_USER_DECISION" ||
+    b.status === "STUCK" ||
+    b.status === "FINISHED" ||
+    b.status === "PAUSED";
   const settled = b.status === "FINISHED" || b.status === "IDLE" || b.status === "STUCK";
+  const terminalIncomplete = b.status === "STUCK" || b.status === "ERROR";
 
   if (!b.started) {
     return (
@@ -72,10 +91,9 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
     );
   }
 
-  return (
-    <div className="flex min-h-0 flex-col lg:h-full lg:flex-row">
-      {/* ── Control pane (Project-Manager view) ───────────────────────────── */}
-      <aside className="flex min-h-0 flex-col border-hairline lg:w-[27rem] lg:shrink-0 lg:overflow-hidden lg:border-r">
+  // ── Control pane (chat) — the Project-Manager view ─────────────────────
+  const chatPane = (
+    <>
         <div className="flex flex-col gap-inline px-body pt-section">
           <AgentStatusBar status={b.status} isolation={ISOLATION} onKill={b.kill} />
           <div className="flex items-center justify-between gap-inline">
@@ -135,11 +153,30 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
                   </div>
                 )}
                 <ActivityFeed items={activity} />
-                {finalMessage && b.status === "FINISHED" && (
-                  <div className="mt-section rounded-card border border-hairline bg-surface-1 px-body py-inline text-[0.95rem]">
-                    <Markdown>{finalMessage}</Markdown>
-                  </div>
-                )}
+                <div className="mt-inline">
+                  <LiveSignalBar signal={liveSignal} />
+                </div>
+                {finalMessage &&
+                  (b.status === "FINISHED" ||
+                    b.status === "STUCK" ||
+                    b.status === "ERROR" ||
+                    b.status === "AWAITING_USER_DECISION") && (
+                    <div
+                      className={cn(
+                        "mt-section rounded-card border px-body py-inline text-[0.95rem]",
+                        b.status === "STUCK" || b.status === "ERROR"
+                          ? "border-warn/40 bg-warn/5"
+                          : "border-hairline bg-surface-1",
+                      )}
+                    >
+                      {(b.status === "STUCK" || b.status === "ERROR") && (
+                        <p className="mb-hair font-ui text-[0.74rem] uppercase tracking-wide text-warn">
+                          Agent's latest reply
+                        </p>
+                      )}
+                      <Markdown>{finalMessage}</Markdown>
+                    </div>
+                  )}
               </>
             )}
           </div>
@@ -150,24 +187,42 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
           {b.pendingAction && (
             <ConfirmationPanel action={b.pendingAction} onApprove={b.confirm} onReject={b.reject} />
           )}
-          {steerable ? (
-            <SteerInput onSteer={b.steer} disabled={b.status === "WAITING_FOR_CONFIRMATION"} />
-          ) : (
-            settled && (
-              <div className="flex flex-col gap-hair">
-                <BuildModelPicker value={b.modelId} onChange={b.setModelId} />
-                {/* re-enter plan mode: a focused, diff-style change is planned + re-approved */}
-                <QueryInput onSubmit={b.requestPlan} placeholder="Plan a change to this build…" />
-              </div>
-            )
+          {b.awaitingDecision && b.pendingAlternatives && (
+            <AlternativesGate
+              alternatives={b.pendingAlternatives}
+              onPick={b.pickAlternative}
+            />
+          )}
+          {steerable && (
+            <div className="flex flex-col gap-hair">
+              {terminalIncomplete && (
+                <p className="font-ui text-[0.74rem] text-warn">
+                  The run stopped before the plan was complete. Send a message to
+                  steer the agent back in, or use “Plan a change…” below to
+                  re-enter plan mode.
+                </p>
+              )}
+              <SteerInput
+                onSteer={b.steer}
+                disabled={b.status === "WAITING_FOR_CONFIRMATION"}
+              />
+            </div>
+          )}
+          {settled && (
+            <div className="flex flex-col gap-hair">
+              <BuildModelPicker value={b.modelId} onChange={b.setModelId} />
+              {/* re-enter plan mode: a focused, diff-style change is planned + re-approved */}
+              <QueryInput onSubmit={b.requestPlan} placeholder="Plan a change to this build…" />
+            </div>
           )}
         </div>
-      </aside>
+    </>
+  );
 
-      {/* ── Execution canvas / Inspector ─────────────────────────────────── */}
-      <section className="flex min-h-[55vh] flex-1 flex-col border-t border-hairline lg:min-h-0 lg:border-t-0">
-        <ExecutionCanvas events={b.events} status={b.status} cid={b.cid} />
-      </section>
-    </div>
+  return (
+    <ResizableSplit
+      chat={chatPane}
+      inspector={<ExecutionCanvas events={b.events} status={b.status} cid={b.cid} />}
+    />
   );
 }

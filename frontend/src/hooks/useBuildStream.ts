@@ -11,9 +11,23 @@ import { derivePlan, derivePlanProgress, type PlanView, type StepState } from "@
 import type {
   ActionEvent,
   AgentEvent,
+  AlternativesEvent,
   ConversationStatus,
+  MessageEvent,
   WSServerFrame,
 } from "@/types/agent";
+
+/** Build a transient optimistic MessageEvent for the user's just-sent
+ *  steer/revise text. The reducer drops it once the server echoes the
+ *  canonical event back (matched by content). */
+function localUserMessage(content: string): MessageEvent {
+  return {
+    id: `local-pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: "message",
+    source: "user",
+    message: { role: "user", content },
+  };
+}
 
 export interface BuildSession {
   cid: string;
@@ -25,6 +39,7 @@ export interface BuildStreamState {
   events: AgentEvent[];
   pendingActionId: string | null;
   pendingPlanId: string | null;
+  pendingAlternativesId: string | null;
   error: string | null;
 }
 
@@ -33,6 +48,7 @@ const initial: BuildStreamState = {
   events: [],
   pendingActionId: null,
   pendingPlanId: null,
+  pendingAlternativesId: null,
   error: null,
 };
 
@@ -44,10 +60,19 @@ function upsert(events: AgentEvent[], event: AgentEvent): AgentEvent[] {
   return next;
 }
 
-type Action = { type: "reset" } | { type: "frame"; frame: WSServerFrame };
+type Action =
+  | { type: "reset" }
+  | { type: "frame"; frame: WSServerFrame }
+  | { type: "local_message"; event: AgentEvent };
 
 function reducer(state: BuildStreamState, action: Action): BuildStreamState {
   if (action.type === "reset") return initial;
+  if (action.type === "local_message") {
+    // Optimistic echo: render the user's just-sent steer/revise message
+    // immediately so the UI acknowledges input. The server echoes the same
+    // event back with the SAME id; upsert dedupes — no duplicate row.
+    return { ...state, events: upsert(state.events, action.event) };
+  }
   const f = action.frame;
   if (f.type === "state") {
     return {
@@ -55,10 +80,30 @@ function reducer(state: BuildStreamState, action: Action): BuildStreamState {
       status: f.state.execution_status,
       pendingActionId: f.state.pending_action_id,
       pendingPlanId: f.state.pending_plan_id,
+      pendingAlternativesId: f.state.pending_alternatives_id ?? null,
     };
   }
   if (f.type === "event") {
-    const events = upsert(state.events, f.event);
+    // When the server echoes a USER MessageEvent, drop any matching optimistic
+    // placeholder (id prefix "local-pending-") with the same content so we
+    // don't render the message twice.
+    let working = state.events;
+    if (
+      f.event.kind === "message" &&
+      f.event.source === "user" &&
+      f.event.message?.content
+    ) {
+      const echo = f.event.message.content;
+      working = working.filter(
+        (e) =>
+          !(
+            e.id.startsWith("local-pending-") &&
+            e.kind === "message" &&
+            (e as MessageEvent).message?.content === echo
+          ),
+      );
+    }
+    const events = upsert(working, f.event);
     if (f.event.kind === "status") {
       const status = f.event.status;
       return {
@@ -72,6 +117,10 @@ function reducer(state: BuildStreamState, action: Action): BuildStreamState {
         pendingPlanId:
           status === "AWAITING_PLAN_APPROVAL"
             ? (f.event.detail ?? state.pendingPlanId)
+            : null,
+        pendingAlternativesId:
+          status === "AWAITING_USER_DECISION"
+            ? (f.event.detail ?? state.pendingAlternativesId)
             : null,
       };
     }
@@ -88,15 +137,18 @@ function reducer(state: BuildStreamState, action: Action): BuildStreamState {
 
 export interface BuildStream extends BuildStreamState {
   pendingAction: ActionEvent | null;
+  pendingAlternatives: AlternativesEvent | null;
   plan: PlanView | null;
   planProgress: Map<number, StepState>;
   awaitingPlan: boolean;
+  awaitingDecision: boolean;
   confirm: () => void;
   reject: () => void;
   cancel: () => void;
   steer: (text: string) => void;
   approvePlan: () => void;
   requestPlan: (text: string) => void;
+  pickAlternative: (optionId: string) => void;
 }
 
 export function useBuildStream(session: BuildSession | null): BuildStream {
@@ -115,14 +167,25 @@ export function useBuildStream(session: BuildSession | null): BuildStream {
   const confirm = useCallback(() => handle.current?.send({ type: "confirm" }), []);
   const reject = useCallback(() => handle.current?.send({ type: "reject" }), []);
   const cancel = useCallback(() => handle.current?.send({ type: "cancel" }), []);
-  const steer = useCallback(
-    (text: string) => text.trim() && handle.current?.send({ type: "steer", steer_text: text.trim() }),
-    [],
-  );
+  const steer = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    // Optimistic echo: render immediately so the user sees their input land in
+    // the timeline. The server's canonical echo (same content) replaces this
+    // placeholder on arrival.
+    dispatch({ type: "local_message", event: localUserMessage(trimmed) });
+    handle.current?.send({ type: "steer", steer_text: trimmed });
+  }, []);
   const approvePlan = useCallback(() => handle.current?.send({ type: "approve_plan" }), []);
-  const requestPlan = useCallback(
-    (text: string) =>
-      text.trim() && handle.current?.send({ type: "request_plan", content: text.trim() }),
+  const requestPlan = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    dispatch({ type: "local_message", event: localUserMessage(trimmed) });
+    handle.current?.send({ type: "request_plan", content: trimmed });
+  }, []);
+  const pickAlternative = useCallback(
+    (optionId: string) =>
+      handle.current?.send({ type: "pick_alternative", option_id: optionId }),
     [],
   );
 
@@ -132,22 +195,35 @@ export function useBuildStream(session: BuildSession | null): BuildStream {
         (e) => e.id === state.pendingActionId && e.kind === "action",
       ) as ActionEvent | undefined)) ||
     null;
+  const pendingAlternatives =
+    (state.pendingAlternativesId &&
+      (state.events.find(
+        (e) => e.id === state.pendingAlternativesId && e.kind === "alternatives",
+      ) as AlternativesEvent | undefined)) ||
+    null;
 
   const plan = useMemo(() => derivePlan(state.events), [state.events]);
-  const planProgress = useMemo(() => derivePlanProgress(state.events), [state.events]);
+  const planProgress = useMemo(
+    () => derivePlanProgress(state.events, state.status),
+    [state.events, state.status],
+  );
   const awaitingPlan = state.status === "AWAITING_PLAN_APPROVAL";
+  const awaitingDecision = state.status === "AWAITING_USER_DECISION";
 
   return {
     ...state,
     pendingAction,
+    pendingAlternatives,
     plan,
     planProgress,
     awaitingPlan,
+    awaitingDecision,
     confirm,
     reject,
     cancel,
     steer,
     approvePlan,
     requestPlan,
+    pickAlternative,
   };
 }

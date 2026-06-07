@@ -8,7 +8,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { ModeProvider } from "@/shell/ModeProvider";
 import {
   deriveAssemblingSections,
@@ -43,6 +43,11 @@ function renderSurface() {
 }
 
 describe("Deep Research surface — full lifecycle", () => {
+  // The hook stashes the active session in localStorage so cross-surface
+  // navigation resumes. Tests must start clean so each one mounts the empty
+  // state rather than picking up the previous test's stashed cid.
+  beforeEach(() => window.localStorage.clear());
+
   it("opens the empty state with a depth tier selector", () => {
     renderSurface();
     expect(

@@ -7,7 +7,7 @@
  */
 
 import { useState } from "react";
-import { Check, CircleDashed, ClipboardList, Loader2 } from "lucide-react";
+import { Check, CircleDashed, CirclePause, ClipboardList, Loader2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Markdown } from "@/components/Markdown";
 import type { StepState, PlanView } from "@/lib/buildTrace";
@@ -16,6 +16,13 @@ function StepIcon({ state }: { state: StepState }) {
   if (state === "done") return <Check className="size-3.5 shrink-0 text-supported" aria-hidden />;
   if (state === "active")
     return <Loader2 className="size-3.5 shrink-0 animate-spin text-accent" aria-hidden />;
+  if (state === "stalled")
+    return (
+      <CirclePause
+        className="size-3.5 shrink-0 text-warn"
+        aria-label="step started but never completed — the run stopped while this step was in progress"
+      />
+    );
   return <CircleDashed className="size-3.5 shrink-0 text-text-faint" aria-hidden />;
 }
 

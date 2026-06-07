@@ -13,9 +13,29 @@ const META_TOOLS = new Set(["submit_plan", "plan_step"]);
 
 export interface ActivityItem {
   id: string;
-  label: string; // plain language ("Wrote fizzbuzz.py")
-  detail?: string; // the technical specifics live in the canvas, summarized here
-  status: "done" | "running" | "pending" | "failed";
+  /** Discriminates the row's visual style. "action" is the agent's tool call;
+   * "user" is the human's message (steer, send_message, revise instruction);
+   * "agent_message" is a prose reply from the agent (ask_user free-form,
+   * finish-message, etc.). The feed becomes a unified chat-and-actions log
+   * rather than an action-only ledger. */
+  kind: "action" | "user" | "agent_message";
+  label: string; // plain language ("Wrote fizzbuzz.py" / "You: skip the cleanup")
+  /** The agent's natural-language THOUGHT — its reasoning + plain-English
+   * explanation of what it's doing. NEVER truncated; rendered wrapped. This
+   * is the model talking to the user, and swallowing it was a bug. */
+  thought?: string;
+  /** The technical detail — file path, command preview, etc. Single-line OK
+   * to truncate (this is a row label, not content). */
+  detail?: string;
+  /** Rich expandable content the user can drill into when they want the raw
+   * tool call + observation. Hidden by default to keep the feed scannable. */
+  expandable?: {
+    tool_name: string;
+    arguments: Record<string, unknown>;
+    output?: string; // observation content (truncated to ~2KB)
+    error?: string; // error message if the action failed
+  };
+  status: "done" | "running" | "pending" | "failed" | "pending_send";
   attention: boolean; // confidence gradient: risky/novel steps float up, routine recede
   risk?: SecurityRisk;
 }
@@ -58,30 +78,98 @@ export function deriveActivity(
     if (e.kind === "observation") observed.add(e.action_id);
     if (e.kind === "agent_error" && e.action_id) failed.add(e.action_id);
   }
-  const actions = events.filter(
-    (e) => e.kind === "action" && e.tool_call && !META_TOOLS.has(e.tool_call.tool_name),
-  );
-  return actions.map((e) => {
-    if (e.kind !== "action" || !e.tool_call) throw new Error("unreachable");
-    const tc = e.tool_call;
-    const risk = e.meta?.risk_assessment?.risk ?? e.self_assessed_risk;
-    const isPending = e.id === pendingActionId;
-    let st: ActivityItem["status"];
-    if (isPending) st = "pending";
-    else if (failed.has(e.id)) st = "failed";
-    else if (observed.has(e.id)) st = "done";
-    else if (status === "RUNNING") st = "running";
-    else st = "done";
-    return {
-      id: e.id,
-      label: plainLabel(tc.tool_name, tc.arguments),
-      detail: e.thought || detailFor(tc.tool_name, tc.arguments),
-      status: st,
-      // the confidence gradient: pending approvals + risky/unknown actions get attention
-      attention: isPending || risk === "HIGH" || risk === "UNKNOWN" || st === "failed",
-      risk,
-    };
-  });
+  // Walk events in order — the activity feed is a chronological chat-and-action
+  // log, not an action-only ledger. User messages (steer, send_message, revise)
+  // and mid-stream agent prose replies (ask_user free-form questions) are
+  // first-class items alongside tool calls. This is what makes typed input feel
+  // acknowledged: it appears in the timeline the moment the optimistic event is
+  // dispatched, then the server's canonical echo replaces the placeholder.
+  //
+  // The TRAILING agent message is the surface's "final answer" — rendered as
+  // a Markdown panel elsewhere in the BuildSurface. Excluding it from the feed
+  // prevents the same text rendering twice + keeps the feed the running narrative.
+  let lastAgentMessageIdx = -1;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.kind === "message" && e.source === "agent") {
+      lastAgentMessageIdx = i;
+      break;
+    }
+  }
+  // Index observations + errors by action id so we can attach the raw output
+  // to each action's expandable detail (the user explicitly asked to be able
+  // to drill into commands + results — hiding them is poor design).
+  const observationByActionId = new Map<string, { output?: string; error?: string }>();
+  for (const e of events) {
+    if (e.kind === "observation") {
+      observationByActionId.set(e.action_id, {
+        output: (e.tool_result.content || "").slice(0, 2000),
+      });
+    } else if (e.kind === "agent_error" && e.action_id) {
+      observationByActionId.set(e.action_id, { error: e.error });
+    }
+  }
+  const out: ActivityItem[] = [];
+  for (let idx = 0; idx < events.length; idx++) {
+    const e = events[idx];
+    if (e.kind === "action" && e.tool_call && !META_TOOLS.has(e.tool_call.tool_name)) {
+      const tc = e.tool_call;
+      const risk = e.meta?.risk_assessment?.risk ?? e.self_assessed_risk;
+      const isPending = e.id === pendingActionId;
+      let st: ActivityItem["status"];
+      if (isPending) st = "pending";
+      else if (failed.has(e.id)) st = "failed";
+      else if (observed.has(e.id)) st = "done";
+      else if (status === "RUNNING") st = "running";
+      else st = "done";
+      const obs = observationByActionId.get(e.id);
+      out.push({
+        id: e.id,
+        kind: "action",
+        label: plainLabel(tc.tool_name, tc.arguments),
+        thought: e.thought || undefined, // the model talking — NEVER truncate
+        detail: detailFor(tc.tool_name, tc.arguments),
+        expandable: {
+          tool_name: tc.tool_name,
+          arguments: tc.arguments,
+          output: obs?.output,
+          error: obs?.error,
+        },
+        status: st,
+        attention: isPending || risk === "HIGH" || risk === "UNKNOWN" || st === "failed",
+        risk,
+      });
+    } else if (e.kind === "message" && e.source === "user") {
+      // User input (steer/send_message/revise) — render verbatim. The optimistic
+      // echo from useBuildStream stamps id="local-pending-…" so we can show a
+      // subtle "sending" affordance until the server's canonical echo replaces it.
+      const content = e.message?.content ?? "";
+      if (!content.trim()) continue;
+      const isPendingSend = e.id.startsWith("local-pending-");
+      out.push({
+        id: e.id,
+        kind: "user",
+        label: content,
+        status: isPendingSend ? "pending_send" : "done",
+        attention: false,
+      });
+    } else if (e.kind === "message" && e.source === "agent") {
+      // Mid-stream agent prose (e.g. ask_user free-form questions). Skip the
+      // trailing agent message — it's rendered as the final-answer Markdown
+      // panel; double-rendering would break getByText assertions + read noisy.
+      if (idx === lastAgentMessageIdx) continue;
+      const content = e.message?.content ?? "";
+      if (!content.trim()) continue;
+      out.push({
+        id: e.id,
+        kind: "agent_message",
+        label: content,
+        status: "done",
+        attention: false,
+      });
+    }
+  }
+  return out;
 }
 
 export interface WorkspaceFile {
@@ -160,7 +248,7 @@ export function latestAgentMessage(events: AgentEvent[]): string | null {
 
 // ---- plan mode ------------------------------------------------------------
 
-export type StepState = "pending" | "active" | "done";
+export type StepState = "pending" | "active" | "done" | "stalled";
 
 export interface PlanView {
   id: string;
@@ -191,8 +279,16 @@ export function derivePlan(events: AgentEvent[]): PlanView | null {
 
 /** Per-step progress (1-based index → state), derived from the agent's `plan_step`
  * reports in the stream. Honest by construction: a step the agent never reported
- * stays "pending" — progress is agent-driven, never inferred from action counts. */
-export function derivePlanProgress(events: AgentEvent[]): Map<number, StepState> {
+ * stays "pending" — progress is agent-driven, never inferred from action counts.
+ *
+ * Status-aware: when the conversation reaches a terminal-without-completion state
+ * (FINISHED/STUCK/ERROR — anything that means "the loop stopped before this step
+ * could be marked done"), any lingering "active" step is rewritten to "stalled"
+ * so the UI doesn't lie with a spinning blue icon on work that isn't progressing. */
+export function derivePlanProgress(
+  events: AgentEvent[],
+  status?: ConversationStatus,
+): Map<number, StepState> {
   const progress = new Map<number, StepState>();
   for (const e of events) {
     if (e.kind !== "action" || !e.tool_call || e.tool_call.tool_name !== "plan_step") continue;
@@ -202,5 +298,71 @@ export function derivePlanProgress(events: AgentEvent[]): Map<number, StepState>
     if (state === "done") progress.set(idx, "done");
     else if (state === "active" && progress.get(idx) !== "done") progress.set(idx, "active");
   }
+  // Stalled-step reconciliation: in terminal states, an "active" marker means
+  // the agent started a step and the loop stopped before it finished. Show that
+  // honestly instead of pretending it's still working.
+  const terminalStopped =
+    status === "FINISHED" || status === "STUCK" || status === "ERROR" || status === "IDLE";
+  if (terminalStopped) {
+    for (const [idx, st] of progress) {
+      if (st === "active") progress.set(idx, "stalled");
+    }
+  }
   return progress;
+}
+
+/** The live activity signal — what the agent is doing RIGHT NOW between events.
+ * Without true token streaming, the UI would otherwise show a static "Working"
+ * label that feels frozen during slow local-model turns (5-30s for Qwen 27B).
+ * This selector inspects the event tail and the status to produce a precise
+ * label for what the user is waiting on. */
+export type LiveSignal =
+  | { kind: "idle" }
+  | { kind: "thinking_about_user_message"; preview: string }
+  | { kind: "tool_executing"; tool_name: string; detail?: string }
+  | { kind: "composing_next_step" }
+  | { kind: "starting" };
+
+export function deriveLiveSignal(
+  events: AgentEvent[],
+  status: ConversationStatus,
+): LiveSignal {
+  if (status !== "RUNNING") return { kind: "idle" };
+  // Walk the tail backward to classify what we're waiting on. Skip noise
+  // events (environment reminders) — they're meta, not the live signal.
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.kind === "status") continue;
+    if (e.kind === "message" && e.source === "environment") continue;
+    if (e.kind === "message" && e.source === "user") {
+      // Just received a user message → the model is reading + composing a reply.
+      const text = (e.message?.content ?? "").slice(0, 80);
+      return { kind: "thinking_about_user_message", preview: text };
+    }
+    if (e.kind === "action" && e.tool_call) {
+      // Action emitted but no observation yet → tool is executing.
+      // (If a later observation/error existed, we'd have hit it first walking back.)
+      const tc = e.tool_call;
+      return {
+        kind: "tool_executing",
+        tool_name: tc.tool_name,
+        detail:
+          tc.tool_name === "shell"
+            ? String(tc.arguments.command ?? "")
+            : tc.tool_name.startsWith("file_")
+              ? String(tc.arguments.path ?? "")
+              : undefined,
+      };
+    }
+    if (e.kind === "observation" || e.kind === "agent_error") {
+      // Last event was a tool result; model is composing its next step.
+      return { kind: "composing_next_step" };
+    }
+    if (e.kind === "message" && e.source === "agent") {
+      // Agent just spoke; another step is in progress.
+      return { kind: "composing_next_step" };
+    }
+  }
+  // No prior signal → we just kicked off; model is reading the goal.
+  return { kind: "starting" };
 }
