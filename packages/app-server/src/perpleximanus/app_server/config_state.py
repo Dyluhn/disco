@@ -12,6 +12,7 @@ mirror the frontend's `src/types/models.ts` + `src/types/config.ts`.
 
 from __future__ import annotations
 
+from perpleximanus.core import SkillStore
 from perpleximanus.core.llm import ConfigStore, ModelRole, RouterConfig, SecretStore
 from perpleximanus.core.llm.config import ModelEntry
 from perpleximanus.core.llm.types import Requirement
@@ -115,10 +116,23 @@ class SkillDTO(BaseModel):
     name: str
     description: str
     enabled: bool
+    body: str = ""  # the markdown instructions handed to the agent
 
 
 class SkillPatch(BaseModel):
-    enabled: bool
+    """Partial update for an existing skill. Any field omitted is left unchanged."""
+
+    name: str | None = None
+    description: str | None = None
+    enabled: bool | None = None
+    body: str | None = None
+
+
+class SkillCreate(BaseModel):
+    name: str
+    description: str = ""
+    body: str = ""
+    enabled: bool = True
 
 
 class McpConnectionDTO(BaseModel):
@@ -322,6 +336,7 @@ class ConfigState:
         *,
         store: ConfigStore | None = None,
         secrets: SecretStore | None = None,
+        skills: SkillStore | None = None,
     ) -> None:
         if store is not None:
             self._store = store
@@ -330,26 +345,9 @@ class ConfigState:
         else:
             self._store = ConfigStore()
         self._secrets = secrets or SecretStore()
-        self._skills: list[SkillDTO] = [
-            SkillDTO(
-                id="web-research",
-                name="Web research",
-                description="Search, extract, and ground answers against live sources.",
-                enabled=True,
-            ),
-            SkillDTO(
-                id="code-exec",
-                name="Code execution",
-                description="Run code in the sandbox to compute and verify.",
-                enabled=True,
-            ),
-            SkillDTO(
-                id="doc-analysis",
-                name="Document analysis",
-                description="Read and reason over uploaded documents.",
-                enabled=False,
-            ),
-        ]
+        # Real, persistent skills (.md files under PMX_SKILLS_DIR). Replaces the
+        # old fixture list — skills now survive restarts and feed the agent.
+        self._skills_store = skills or SkillStore()
         self._mcp: list[McpConnectionDTO] = [
             McpConnectionDTO(
                 id="fs", name="Filesystem", url="stdio://mcp-server-filesystem", status="connected"
@@ -470,17 +468,47 @@ class ConfigState:
         self._store.save_projects(ProjectStorageSettings(projects_root=raw))
         return _projects_from(self._store.load())
 
-    # skills (wiring-pending) -------------------------------------------------
+    # skills — real, persistent .md files (PMX_SKILLS_DIR) -------------------
+
+    @staticmethod
+    def _skill_dto(s) -> SkillDTO:
+        return SkillDTO(
+            id=s.id, name=s.name, description=s.description, enabled=s.enabled, body=s.body
+        )
 
     def skills(self) -> list[SkillDTO]:
-        return [s.model_copy() for s in self._skills]
+        return [self._skill_dto(s) for s in self._skills_store.list()]
 
-    def set_skill_enabled(self, skill_id: str, enabled: bool) -> list[SkillDTO]:
-        self._skills = [
-            s.model_copy(update={"enabled": enabled}) if s.id == skill_id else s
-            for s in self._skills
-        ]
-        return self.skills()
+    def create_skill(self, create: SkillCreate) -> SkillDTO:
+        s = self._skills_store.create(
+            name=create.name,
+            description=create.description,
+            body=create.body,
+            enabled=create.enabled,
+        )
+        return self._skill_dto(s)
+
+    def update_skill(self, skill_id: str, patch: SkillPatch) -> SkillDTO | None:
+        existing = self._skills_store.get(skill_id)
+        if existing is None:
+            return None
+        updated = existing.model_copy(
+            update={
+                k: v
+                for k, v in {
+                    "name": patch.name,
+                    "description": patch.description,
+                    "enabled": patch.enabled,
+                    "body": patch.body,
+                }.items()
+                if v is not None
+            }
+        )
+        self._skills_store.save(updated)
+        return self._skill_dto(updated)
+
+    def delete_skill(self, skill_id: str) -> bool:
+        return self._skills_store.delete(skill_id)
 
     # mcp (wiring-pending) ----------------------------------------------------
 

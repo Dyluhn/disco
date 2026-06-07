@@ -33,9 +33,11 @@ from perpleximanus.core import (
     PlanEvent,
     PlanStep,
     ReportEvent,
+    SkillStore,
     StatusEvent,
     ToolCall,
     ToolResult,
+    render_skills_for_prompt,
 )
 from perpleximanus.core.llm import (
     ConfigStore,
@@ -156,8 +158,13 @@ class ConversationRuntime:
         research_providers: dict[str, Any] | None = None,
         sandbox_service: SandboxService | None = None,
         sandbox_spec: SandboxSpec | None = None,
+        skill_store: SkillStore | None = None,
     ) -> None:
         self._store = store
+        # The user's reusable instruction modules (.md skills). Read per-request
+        # so a skill toggled in Settings affects the next conversation without a
+        # restart — same live-reload model as the config + sandbox stores.
+        self._skill_store = skill_store or SkillStore()
         # The Build surface runs tools through a SandboxBackend. An explicitly injected
         # service is an OVERRIDE (tests / `PMX_SANDBOX` at startup); otherwise the backend
         # is read PER-REQUEST from the persisted SandboxSettings (the Settings selector),
@@ -232,8 +239,15 @@ class ConversationRuntime:
         providers = build_providers(cfg, env=env, enable_thinking=thinking)
         # DriverPrompts gives the AGENT_DRIVER role phase-aware system prompts (the
         # plan→approve→build flow); every other role/mode defers to the default
-        # provider, so Research is unaffected.
-        return DefaultLLMRouter(cfg, providers, prompt_provider=DriverPrompts())
+        # provider, so Research is unaffected. Enabled SKILLS (the user's reusable
+        # .md instructions) are rendered and prepended to the driver prompts —
+        # read fresh each request so a Settings toggle takes effect next run.
+        skills_block = render_skills_for_prompt(self._skill_store.enabled())
+        return DefaultLLMRouter(
+            cfg,
+            providers,
+            prompt_provider=DriverPrompts(skills_block=skills_block),
+        )
 
     # Three surfaces: research (single-pass /ws/research stream), build (agent +
     # tools + plan gate), deep_research (long-horizon plan → iterate → report).

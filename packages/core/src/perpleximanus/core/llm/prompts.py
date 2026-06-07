@@ -167,7 +167,13 @@ class DriverPrompts:
     system prompts: a PLANNING prompt (propose a plan via `submit_plan`, take no
     action) and an EXECUTION prompt (carry out the approved plan, report capstones
     via `plan_step`). Every other role/mode defers to a wrapped base provider, so
-    Research and the non-driver roles are unaffected."""
+    Research and the non-driver roles are unaffected.
+
+    `skills_block` is an optional rendered block of the user's enabled SKILLS
+    (reusable instructions, Claude-Code style). When present it is prepended to
+    BOTH driver prompts so the agent follows the user's standing guidance during
+    planning and execution. Empty by default — users with no skills see the
+    unchanged prompts."""
 
     def __init__(
         self,
@@ -175,16 +181,23 @@ class DriverPrompts:
         *,
         planning_prompt: str = _PLANNING_DRIVER_PROMPT,
         execution_prompt: str = _EXECUTION_DRIVER_PROMPT,
+        skills_block: str = "",
     ) -> None:
         self._base = base or StaticPromptProvider()
         self._planning = planning_prompt
         self._execution = execution_prompt
+        self._skills_block = skills_block.strip()
+
+    def _with_skills(self, prompt: str) -> str:
+        if not self._skills_block:
+            return prompt
+        return f"{self._skills_block}\n\n---\n\n{prompt}"
 
     def system_prompt(
         self, *, model_family: str, mode: OperatingMode | None, role: ModelRole
     ) -> str:
         if role == ModelRole.AGENT_DRIVER:
             if mode == OperatingMode.PLANNING:
-                return self._planning
-            return self._execution
+                return self._with_skills(self._planning)
+            return self._with_skills(self._execution)
         return self._base.system_prompt(model_family=model_family, mode=mode, role=role)

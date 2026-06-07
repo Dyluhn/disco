@@ -37,6 +37,7 @@ from .events import (
     event_to_json_dict,
 )
 from .migration import migrate_event
+from .skills import Skill, SkillStore, render_skills_for_prompt, slugify
 from .state import ConversationState
 from .store.base import EventFilter, EventStore, Page
 from .store.sqlite import DEFAULT_OWNER_ID, SqliteEventStore
@@ -83,7 +84,11 @@ __all__ = [
     "ReportEvent",
     "ReportSection",
     "SecurityRisk",
+    "Skill",
+    "SkillStore",
     "SqliteEventStore",
+    "render_skills_for_prompt",
+    "slugify",
     "StatusEvent",
     "Summarizer",
     "ToolCall",

@@ -79,3 +79,35 @@ async def test_existing_system_message_is_not_overridden():
     seen = local.seen_requests[0]
     assert seen.messages[0].content == "MY OWN SYSTEM PROMPT"  # caller's, untouched
     assert len(seen.messages) == 2  # nothing prepended
+
+
+def test_driver_prompts_inject_enabled_skills_block():
+    """Enabled skills are prepended to BOTH driver prompts (planning + execution)
+    so the agent follows the user's standing instructions; absent skills leave
+    the prompts unchanged."""
+    from perpleximanus.core import Skill, render_skills_for_prompt
+    from perpleximanus.core.llm import DriverPrompts, ModelRole, OperatingMode
+
+    skills = [
+        Skill(id="yf", name="Yahoo Finance", description="stock data", body="Use the v8 endpoint."),
+    ]
+    block = render_skills_for_prompt(skills)
+    dp = DriverPrompts(skills_block=block)
+
+    planning = dp.system_prompt(
+        model_family="qwen", mode=OperatingMode.PLANNING, role=ModelRole.AGENT_DRIVER
+    )
+    execution = dp.system_prompt(
+        model_family="qwen", mode=OperatingMode.LONG_HORIZON, role=ModelRole.AGENT_DRIVER
+    )
+    assert "Yahoo Finance" in planning and "v8 endpoint" in planning
+    assert "Yahoo Finance" in execution and "v8 endpoint" in execution
+    # The original prompt content still follows.
+    assert "PLANNING mode" in planning
+
+    # No skills → prompts unchanged (no skills header).
+    bare = DriverPrompts(skills_block="")
+    bare_planning = bare.system_prompt(
+        model_family="qwen", mode=OperatingMode.PLANNING, role=ModelRole.AGENT_DRIVER
+    )
+    assert "Skill:" not in bare_planning

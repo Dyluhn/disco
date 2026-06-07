@@ -1,0 +1,112 @@
+"""SkillStore — .md-file-backed reusable instruction modules (Claude-Code style)."""
+
+from __future__ import annotations
+
+from perpleximanus.core import Skill, SkillStore, render_skills_for_prompt, slugify
+
+
+def test_slugify_is_filesystem_safe():
+    assert slugify("Stock API Helper") == "stock-api-helper"
+    assert slugify("  weird!!  chars??  ") == "weird-chars"
+    assert slugify("") == "skill"
+
+
+def test_create_persists_a_markdown_file(tmp_path):
+    store = SkillStore(tmp_path)
+    skill = store.create(
+        name="Yahoo Finance",
+        description="How to fetch stock data",
+        body="Use the v8 chart endpoint with a Mozilla User-Agent.",
+    )
+    assert skill.id == "yahoo-finance"
+    f = tmp_path / "yahoo-finance.md"
+    assert f.is_file()
+    text = f.read_text()
+    assert "name: Yahoo Finance" in text
+    assert "enabled: true" in text
+    assert "v8 chart endpoint" in text
+
+
+def test_round_trip_preserves_content(tmp_path):
+    store = SkillStore(tmp_path)
+    store.create(name="A", description="desc", body="line one\n\nline two")
+    loaded = store.get("a")
+    assert loaded is not None
+    assert loaded.name == "A"
+    assert loaded.description == "desc"
+    assert loaded.body == "line one\n\nline two"
+    assert loaded.enabled is True
+
+
+def test_list_sorts_by_name_and_skips_missing_dir(tmp_path):
+    # Missing dir → empty, not an error.
+    assert SkillStore(tmp_path / "nope").list() == []
+    store = SkillStore(tmp_path)
+    store.create(name="Zebra")
+    store.create(name="Apple")
+    names = [s.name for s in store.list()]
+    assert names == ["Apple", "Zebra"]
+
+
+def test_create_dedupes_ids(tmp_path):
+    store = SkillStore(tmp_path)
+    a = store.create(name="Same Name")
+    b = store.create(name="Same Name")
+    assert a.id == "same-name"
+    assert b.id == "same-name-2"
+    assert len(store.list()) == 2
+
+
+def test_save_overwrites_and_toggles_enabled(tmp_path):
+    store = SkillStore(tmp_path)
+    s = store.create(name="Toggle Me", body="x")
+    store.save(s.model_copy(update={"enabled": False}))
+    reloaded = store.get(s.id)
+    assert reloaded is not None and reloaded.enabled is False
+    assert reloaded.body == "x"  # body preserved across the toggle
+
+
+def test_delete_removes_the_file(tmp_path):
+    store = SkillStore(tmp_path)
+    s = store.create(name="Ephemeral")
+    assert store.delete(s.id) is True
+    assert store.get(s.id) is None
+    assert store.delete(s.id) is False  # second delete → False
+
+
+def test_enabled_filters_disabled_skills(tmp_path):
+    store = SkillStore(tmp_path)
+    store.create(name="On", body="a", enabled=True)
+    store.create(name="Off", body="b", enabled=False)
+    enabled = store.enabled()
+    assert [s.name for s in enabled] == ["On"]
+
+
+def test_render_for_prompt_includes_only_enabled_with_body(tmp_path):
+    skills = [
+        Skill(id="a", name="A", description="da", body="do A", enabled=True),
+        Skill(id="b", name="B", body="do B", enabled=False),  # disabled → excluded
+        Skill(id="c", name="C", body="", enabled=True),  # empty body → excluded
+    ]
+    rendered = render_skills_for_prompt(skills)
+    assert "## Skill: A" in rendered
+    assert "do A" in rendered
+    assert "Skill: B" not in rendered
+    assert "Skill: C" not in rendered
+
+
+def test_render_for_prompt_empty_when_no_enabled_skills():
+    assert render_skills_for_prompt([]) == ""
+    assert render_skills_for_prompt([Skill(id="x", name="X", enabled=False)]) == ""
+
+
+def test_frontmatterless_file_is_tolerated(tmp_path):
+    # A hand-dropped .md with no frontmatter still loads (body = whole file).
+    (tmp_path).mkdir(exist_ok=True)
+    (tmp_path / "raw.md").write_text("just some instructions, no frontmatter")
+    store = SkillStore(tmp_path)
+    s = store.get("raw")
+    assert s is not None
+    assert s.name == "raw"  # falls back to the stem
+    assert "no frontmatter" in s.body
+    assert s.enabled is True

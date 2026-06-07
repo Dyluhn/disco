@@ -1,29 +1,97 @@
-import { MCP_CONNECTIONS, SKILLS } from "@/fixtures/config";
-import type { McpConnection, Skill } from "@/types/config";
+import { MCP_CONNECTIONS } from "@/fixtures/config";
+import type { McpConnection, Skill, SkillCreate, SkillPatch } from "@/types/config";
 import { apiGet, apiSend, fixtureDelay, isLive } from "./client";
 
 /**
- * Data-access for the skills + MCP surfaces (wiring-pending scaffolds). Components
- * reach these only through hooks. Live (VITE_API_BASE set) → the app-server
- * GET /api/skills, PUT /api/skills/{id}, GET /api/mcp; otherwise → the in-repo
- * fixture (session-scoped, no browser storage). DTO shapes match the types.
+ * Data-access for the skills + MCP surfaces. Components reach these only through
+ * hooks.
+ *
+ * Skills are a REAL subsystem: live (VITE_API_BASE set) → the app-server's
+ * GET/POST/PUT/DELETE /api/skills, backed by .md files on disk. Offline → a
+ * localStorage-backed store so skills persist across reloads in fixture mode too
+ * (the user explicitly wanted persistence). MCP remains a session-scoped scaffold.
  */
 
-let fixtureSkills: Skill[] = SKILLS.map((s) => ({ ...s }));
-const fixtureMcp: McpConnection[] = MCP_CONNECTIONS.map((c) => ({ ...c }));
+const SKILLS_LS_KEY = "pmx.skills";
+
+function slugify(name: string): string {
+  return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "skill";
+}
+
+function readLocalSkills(): Skill[] {
+  try {
+    const raw = window.localStorage.getItem(SKILLS_LS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as Skill[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalSkills(skills: Skill[]): void {
+  try {
+    window.localStorage.setItem(SKILLS_LS_KEY, JSON.stringify(skills));
+  } catch {
+    /* swallow — private mode */
+  }
+}
 
 export async function listSkills(): Promise<Skill[]> {
   if (isLive()) return apiGet<Skill[]>("/api/skills");
   await fixtureDelay();
-  return fixtureSkills.map((s) => ({ ...s }));
+  return readLocalSkills();
 }
 
-export async function setSkillEnabled(id: string, enabled: boolean): Promise<Skill[]> {
-  if (isLive()) return apiSend<Skill[]>("PUT", `/api/skills/${encodeURIComponent(id)}`, { enabled });
+export async function createSkill(create: SkillCreate): Promise<Skill> {
+  if (isLive()) return apiSend<Skill>("POST", "/api/skills", create);
   await fixtureDelay();
-  fixtureSkills = fixtureSkills.map((s) => (s.id === id ? { ...s, enabled } : s));
-  return fixtureSkills.map((s) => ({ ...s }));
+  const skills = readLocalSkills();
+  let id = slugify(create.name);
+  let i = 2;
+  while (skills.some((s) => s.id === id)) id = `${slugify(create.name)}-${i++}`;
+  const skill: Skill = {
+    id,
+    name: create.name,
+    description: create.description ?? "",
+    body: create.body ?? "",
+    enabled: create.enabled ?? true,
+  };
+  writeLocalSkills([...skills, skill]);
+  return skill;
 }
+
+export async function updateSkill(id: string, patch: SkillPatch): Promise<Skill> {
+  if (isLive())
+    return apiSend<Skill>("PUT", `/api/skills/${encodeURIComponent(id)}`, patch);
+  await fixtureDelay();
+  const skills = readLocalSkills();
+  let updated: Skill | undefined;
+  const next = skills.map((s) => {
+    if (s.id !== id) return s;
+    updated = { ...s, ...patch };
+    return updated;
+  });
+  writeLocalSkills(next);
+  if (!updated) throw new Error(`unknown skill ${id}`);
+  return updated;
+}
+
+export async function deleteSkill(id: string): Promise<void> {
+  if (isLive()) {
+    await apiSend<void>("DELETE", `/api/skills/${encodeURIComponent(id)}`);
+    return;
+  }
+  await fixtureDelay();
+  writeLocalSkills(readLocalSkills().filter((s) => s.id !== id));
+}
+
+/** Back-compat shim: the old toggle helper, now a thin wrapper over updateSkill. */
+export async function setSkillEnabled(id: string, enabled: boolean): Promise<Skill> {
+  return updateSkill(id, { enabled });
+}
+
+const fixtureMcp: McpConnection[] = MCP_CONNECTIONS.map((c) => ({ ...c }));
 
 export async function listMcpConnections(): Promise<McpConnection[]> {
   if (isLive()) return apiGet<McpConnection[]>("/api/mcp");

@@ -31,6 +31,7 @@ from .config_state import (
     OpenRouterModelDTO,
     ProjectStorageConfigDTO,
     SandboxConfigDTO,
+    SkillCreate,
     SkillDTO,
     SkillPatch,
     normalize_openrouter,
@@ -165,15 +166,27 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
     async def delete_openrouter_key() -> OpenRouterKeyStatus:
         return state.clear_openrouter_key()
 
-    # ---- skills (wiring-pending scaffold) -----------------------------------
+    # ---- skills — real, persistent .md instruction modules ------------------
 
     @app.get("/api/skills")
     async def get_skills() -> list[SkillDTO]:
         return state.skills()
 
+    @app.post("/api/skills", status_code=201)
+    async def create_skill(create: SkillCreate) -> SkillDTO:
+        return state.create_skill(create)
+
     @app.put("/api/skills/{skill_id}")
-    async def put_skill(skill_id: str, patch: SkillPatch) -> list[SkillDTO]:
-        return state.set_skill_enabled(skill_id, patch.enabled)
+    async def put_skill(skill_id: str, patch: SkillPatch) -> SkillDTO:
+        updated = state.update_skill(skill_id, patch)
+        if updated is None:
+            raise HTTPException(status_code=404, detail=f"unknown skill {skill_id!r}")
+        return updated
+
+    @app.delete("/api/skills/{skill_id}", status_code=204)
+    async def delete_skill(skill_id: str) -> None:
+        if not state.delete_skill(skill_id):
+            raise HTTPException(status_code=404, detail=f"unknown skill {skill_id!r}")
 
     # ---- mcp connections (wiring-pending scaffold) --------------------------
 

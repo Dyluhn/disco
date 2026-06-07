@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from perpleximanus.app_server import create_app
 from perpleximanus.app_server.config_state import ConfigState, normalize_openrouter
-from perpleximanus.core import SqliteEventStore
+from perpleximanus.core import SkillStore, SqliteEventStore
 from perpleximanus.core.llm import ConfigStore, SecretBox, SecretStore
 
 
@@ -26,6 +26,7 @@ def client(store: SqliteEventStore, tmp_path) -> TestClient:
     cfg_state = ConfigState(
         store=ConfigStore(tmp_path / "config.json"),
         secrets=SecretStore(tmp_path / "secrets.json", box=SecretBox("test-app-secret")),
+        skills=SkillStore(tmp_path / "skills"),
     )
     return TestClient(create_app(store, cfg_state))
 
@@ -209,12 +210,48 @@ def test_assignment_update_is_absolute(client):
 # ---- skills + mcp scaffolds -------------------------------------------------
 
 
-def test_skills_list_and_toggle(client):
-    skills = client.get("/api/skills").json()
-    web = next(s for s in skills if s["id"] == "web-research")
-    assert web["enabled"] is True
-    updated = client.put("/api/skills/doc-analysis", json={"enabled": True}).json()
-    assert next(s for s in updated if s["id"] == "doc-analysis")["enabled"] is True
+def test_skills_crud_round_trip(client):
+    # Fresh store starts empty (no fixture skills — real .md files now).
+    assert client.get("/api/skills").json() == []
+
+    # Create a skill.
+    created = client.post(
+        "/api/skills",
+        json={
+            "name": "Yahoo Finance",
+            "description": "How to fetch stock data",
+            "body": "Use the v8 chart endpoint with a Mozilla User-Agent.",
+        },
+    )
+    assert created.status_code == 201
+    skill = created.json()
+    assert skill["id"] == "yahoo-finance"
+    assert skill["enabled"] is True
+    assert "v8 chart endpoint" in skill["body"]
+
+    # It persists on the next list.
+    listed = client.get("/api/skills").json()
+    assert len(listed) == 1
+    assert listed[0]["name"] == "Yahoo Finance"
+
+    # Partial update: toggle enabled + edit the body, leave name/description.
+    updated = client.put(
+        "/api/skills/yahoo-finance",
+        json={"enabled": False, "body": "Updated instructions."},
+    ).json()
+    assert updated["enabled"] is False
+    assert updated["body"] == "Updated instructions."
+    assert updated["name"] == "Yahoo Finance"  # untouched
+
+    # Delete.
+    assert client.delete("/api/skills/yahoo-finance").status_code == 204
+    assert client.get("/api/skills").json() == []
+    # Deleting a missing skill is a 404.
+    assert client.delete("/api/skills/yahoo-finance").status_code == 404
+
+
+def test_skills_update_missing_is_404(client):
+    assert client.put("/api/skills/nope", json={"enabled": True}).status_code == 404
 
 
 def test_mcp_connections(client):

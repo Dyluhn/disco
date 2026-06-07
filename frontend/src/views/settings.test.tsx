@@ -95,14 +95,24 @@ describe("Settings — OpenRouter", () => {
 });
 
 describe("Settings — skills + MCP scaffolds", () => {
-  it("lists skills with disabled toggles, honestly flagged not wired", async () => {
+  it("skills are a real, persistent subsystem with a working create editor", async () => {
+    window.localStorage.clear();
+    const user = userEvent.setup();
     withQuery(<SettingsView />);
-    const sw = await screen.findByRole("switch", { name: /Enable Web research/i });
-    // The toggle does not control anything yet, so it must be disabled, not fake.
-    expect(sw).toBeDisabled();
-    // Red markers present (the badge + the specific NotWired explanation).
-    expect(screen.getAllByText(/not wired/i).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText(/not implemented at all/i)).toBeInTheDocument();
+    // The Skills section renders with a working "New skill" button (not a
+    // disabled, not-wired scaffold anymore).
+    const newBtn = await screen.findByRole("button", { name: /New skill/i });
+    expect(newBtn).toBeEnabled();
+    // Clicking it opens a real editor with name / description / instructions.
+    await user.click(newBtn);
+    expect(
+      await screen.findByRole("textbox", { name: /Skill name/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("textbox", { name: /Skill instructions/i }),
+    ).toBeInTheDocument();
+    // Save is gated until name + body are filled (honest affordance).
+    expect(screen.getByRole("button", { name: /Save skill/i })).toBeDisabled();
   });
 
   it("lists MCP connections with an inert (pending) add affordance", async () => {
