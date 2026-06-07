@@ -65,7 +65,7 @@ export function ResizableSplit({
     } catch { /* swallow */ }
   }, [collapsed]);
 
-  // Pointer-based resize. Capturing on the document lets the drag continue
+  // Pointer-based resize. Capturing on the window lets the drag continue
   // even if the cursor moves outside the handle.
   const onPointerMove = useCallback((e: PointerEvent) => {
     const c = containerRef.current;
@@ -73,10 +73,13 @@ export function ResizableSplit({
     const rect = c.getBoundingClientRect();
     const total = rect.width;
     const insWidth = rect.right - e.clientX;
-    // Clamp by both pixel mins.
+    // Clamp by both pixel mins. When the window is too narrow to honor both
+    // mins, the floor wins (Math.min of the two bounds) so the inspector never
+    // exceeds its allotted space and starves the chat.
     const minIns = MIN_INSPECTOR_PX;
-    const maxIns = total - MIN_CHAT_PX;
-    const clamped = Math.min(Math.max(insWidth, minIns), Math.max(maxIns, minIns));
+    const maxIns = Math.max(total - MIN_CHAT_PX, MIN_INSPECTOR_PX);
+    const lo = Math.min(minIns, maxIns);
+    const clamped = Math.min(Math.max(insWidth, lo), maxIns);
     setInspectorFrac(clamped / total);
   }, []);
   const onPointerUp = useCallback(() => {
@@ -98,6 +101,17 @@ export function ResizableSplit({
     },
     [collapsed, onPointerMove, onPointerUp],
   );
+
+  // Safety net: if the component unmounts mid-drag, tear down the window
+  // listeners + restore the cursor so they don't leak / fire on an unmounted tree.
+  useEffect(() => {
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+  }, [onPointerMove, onPointerUp]);
 
   const inspectorStyle = collapsed
     ? { width: 0, minWidth: 0 }

@@ -84,9 +84,11 @@ function reducer(state: BuildStreamState, action: Action): BuildStreamState {
     };
   }
   if (f.type === "event") {
-    // When the server echoes a USER MessageEvent, drop any matching optimistic
-    // placeholder (id prefix "local-pending-") with the same content so we
-    // don't render the message twice.
+    // When the server echoes a USER MessageEvent, drop EXACTLY ONE matching
+    // optimistic placeholder (id prefix "local-pending-", same content). Removing
+    // one-to-one (not all matches) means two identical steers sent in quick
+    // succession don't collapse into one row — each server echo retires one
+    // placeholder.
     let working = state.events;
     if (
       f.event.kind === "message" &&
@@ -94,14 +96,15 @@ function reducer(state: BuildStreamState, action: Action): BuildStreamState {
       f.event.message?.content
     ) {
       const echo = f.event.message.content;
-      working = working.filter(
+      const idx = working.findIndex(
         (e) =>
-          !(
-            e.id.startsWith("local-pending-") &&
-            e.kind === "message" &&
-            (e as MessageEvent).message?.content === echo
-          ),
+          e.id.startsWith("local-pending-") &&
+          e.kind === "message" &&
+          (e as MessageEvent).message?.content === echo,
       );
+      if (idx !== -1) {
+        working = [...working.slice(0, idx), ...working.slice(idx + 1)];
+      }
     }
     const events = upsert(working, f.event);
     if (f.event.kind === "status") {

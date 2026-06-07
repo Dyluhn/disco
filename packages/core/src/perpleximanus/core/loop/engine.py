@@ -20,6 +20,8 @@ import asyncio
 from ..events import (
     ActionEvent,
     AgentErrorEvent,
+    AlternativeOption,
+    AlternativesEvent,
     ConversationStatus,
     ErrorEvent,
     Event,
@@ -30,6 +32,7 @@ from ..events import (
     PlanEvent,
     PlanStep,
     StatusEvent,
+    ToolCall,
 )
 from ..llm import (
     Difficulty,
@@ -159,13 +162,16 @@ _ASK_USER_PARAMETERS_SCHEMA = {
         },
         "options": {
             "type": "array",
-            "description": "Optional 2-3 alternatives the user can click. Omit for a free-form question.",
+            "description": "Optional 2-3 alternatives the user can click. Omit for free-form.",
             "items": {
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "description": "Short stable id, e.g. 'sudo' or 'skip'."},
+                    "id": {"type": "string", "description": "Short stable id, e.g. 'sudo'."},
                     "title": {"type": "string", "description": "Card label (3-5 words)."},
-                    "description": {"type": "string", "description": "One sentence: why this might work."},
+                    "description": {
+                        "type": "string",
+                        "description": "One sentence: why this might work.",
+                    },
                     "tool_name": {"type": "string", "description": "The tool to call if picked."},
                     "arguments": {"type": "object", "description": "Args for that tool."},
                 },
@@ -411,16 +417,14 @@ class AgentLoop:
 
     def _alternatives_from_args(
         self, arguments: dict, events: list[Event]
-    ) -> "AlternativesEvent | None":
-        """Build an AlternativesEvent from a `propose_alternatives` tool call.
+    ) -> AlternativesEvent | None:
+        """Build an AlternativesEvent from an `ask_user` tool call's options.
         Defensive against the model's shape drift — options may come as dicts
         with various key names. Correlates with the most recent ActionEvent so
         the UI can show which step the alternatives are answering.
 
         Returns None when the args are too malformed to produce a useful gate;
-        the loop nudges and re-enters."""
-        from ..events import AlternativeOption, AlternativesEvent
-
+        the loop falls back to a free-form question (see the ASK-USER GATE)."""
         raw_options = arguments.get("options") or arguments.get("alternatives") or []
         options: list[AlternativeOption] = []
         for i, opt in enumerate(raw_options):
@@ -1298,8 +1302,6 @@ class AgentLoop:
         _execute_and_observe path (including the risk gate).
 
         Idempotent: a pick on a non-pending state is a no-op."""
-        from ..events import AlternativesEvent
-
         async with self._lock:
             state = await self.get_state()
             if state.execution_status != ConversationStatus.AWAITING_USER_DECISION:
@@ -1345,14 +1347,15 @@ class AgentLoop:
                     source=EventSource.USER,
                     message=LLMMessage(
                         role="user",
-                        content=f"Try the alternative approach: “{option.title}”. {option.description}",
+                        content=(
+                            f"Try the alternative approach: “{option.title}”. "
+                            f"{option.description}"
+                        ),
                     ),
                 )
             )
             # Synthesize the ActionEvent. The thought records WHY we're running
             # it (the option's description) so the trace stays self-explanatory.
-            from ..events import ActionEvent, ToolCall
-
             action = ActionEvent(
                 source=EventSource.AGENT,
                 thought=f"User picked alternative: {option.title}. {option.description}",

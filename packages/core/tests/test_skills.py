@@ -110,3 +110,45 @@ def test_frontmatterless_file_is_tolerated(tmp_path):
     assert s.name == "raw"  # falls back to the stem
     assert "no frontmatter" in s.body
     assert s.enabled is True
+
+
+# ---- security: path traversal must be refused -------------------------------
+
+
+def test_get_refuses_path_traversal(tmp_path):
+    store = SkillStore(tmp_path)
+    store.create(name="Real")
+    # None of these may escape the skills dir; all read as "not found".
+    for bad in ["../../etc/passwd", "../secret", "..", "foo/bar", "/etc/hosts", "a/../../b"]:
+        assert store.get(bad) is None
+
+
+def test_delete_refuses_path_traversal(tmp_path):
+    # Plant a file OUTSIDE the skills dir; a traversal delete must not touch it.
+    victim = tmp_path / "victim.md"
+    victim.write_text("important")
+    skills_dir = tmp_path / "skills"
+    store = SkillStore(skills_dir)
+    store.create(name="Real")
+    assert store.delete("../victim") is False
+    assert victim.exists()  # untouched
+    assert store.delete("../../victim") is False
+    assert victim.exists()
+
+
+def test_save_refuses_unsafe_id(tmp_path):
+    import pytest
+
+    store = SkillStore(tmp_path)
+    with pytest.raises(ValueError):
+        store.save(Skill(id="../escape", name="x", body="y"))
+
+
+def test_body_size_is_capped(tmp_path):
+    store = SkillStore(tmp_path)
+    huge = "x" * (SkillStore.MAX_BODY_BYTES + 5000)
+    s = store.create(name="Big", body=huge)
+    assert len(s.body) == SkillStore.MAX_BODY_BYTES
+    # Persisted file also reflects the cap.
+    reloaded = store.get(s.id)
+    assert reloaded is not None and len(reloaded.body) == SkillStore.MAX_BODY_BYTES

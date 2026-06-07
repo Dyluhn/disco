@@ -84,6 +84,11 @@ async function parse<T>(res: Response): Promise<T> {
     const text = await res.text().catch(() => "");
     throw new ApiError(text || `${res.status} ${res.statusText}`, res.status);
   }
+  // 204 No Content (e.g. DELETE) has an empty body — res.json() would throw
+  // "Unexpected end of JSON input". Short-circuit to undefined for these.
+  if (res.status === 204 || res.headers.get("content-length") === "0") {
+    return undefined as T;
+  }
   return (await res.json()) as T;
 }
 

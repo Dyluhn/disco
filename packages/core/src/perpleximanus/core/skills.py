@@ -77,12 +77,37 @@ class SkillStore:
     """CRUD over skill `.md` files in a directory. One file per skill, named
     `<id>.md`. The directory is created lazily on first write."""
 
+    # Hard cap on a skill body's size — these are injected verbatim into every
+    # Build request's system prompt, so an unbounded body would blow the context
+    # window and inflate cost. 64 KB is generous for instructions while bounding
+    # the blast radius.
+    MAX_BODY_BYTES = 64 * 1024
+
     def __init__(self, path: str | os.PathLike[str] | None = None) -> None:
         self._dir = Path(path or os.environ.get(_ENV_DIR, _DEFAULT_DIR))
 
     @property
     def directory(self) -> Path:
         return self._dir
+
+    def _path_for(self, skill_id: str) -> Path | None:
+        """Resolve a skill id to its file path, REFUSING any id that would escape
+        the skills directory (path traversal). The id must be a clean slug —
+        anything else (``..``, slashes, absolute paths) is rejected by requiring
+        the slug to be idempotent AND the resolved path to stay inside the dir.
+        Returns None for an unsafe id; callers treat that as 'not found'."""
+        # A valid skill id is its own slug — reject ../, slashes, dots, etc.
+        if not skill_id or slugify(skill_id) != skill_id:
+            return None
+        candidate = (self._dir / f"{skill_id}.md").resolve()
+        try:
+            base = self._dir.resolve()
+        except OSError:
+            return None
+        # The resolved path must live directly under the skills directory.
+        if candidate.parent != base:
+            return None
+        return candidate
 
     def list(self) -> list[Skill]:
         """All skills, sorted by name. Missing directory → empty list (not an error)."""
@@ -97,23 +122,32 @@ class SkillStore:
         return skills
 
     def get(self, skill_id: str) -> Skill | None:
-        f = self._dir / f"{skill_id}.md"
-        return self._read_file(f) if f.is_file() else None
+        f = self._path_for(skill_id)  # rejects path-traversal ids → None
+        return self._read_file(f) if (f is not None and f.is_file()) else None
 
     def enabled(self) -> list[Skill]:
         """Only the enabled skills — what the agent's context injection reads."""
         return [s for s in self.list() if s.enabled]
 
     def save(self, skill: Skill) -> Skill:
-        """Create or overwrite a skill file (atomic write). Returns the saved skill."""
+        """Create or overwrite a skill file (atomic write). Returns the saved skill.
+        Refuses an unsafe id (path traversal) and over-cap bodies."""
+        f = self._path_for(skill.id)
+        if f is None:
+            raise ValueError(f"unsafe skill id {skill.id!r}")
+        body = (skill.body or "")[: self.MAX_BODY_BYTES]
+        skill = skill.model_copy(update={"body": body})
         self._dir.mkdir(parents=True, exist_ok=True)
-        f = self._dir / f"{skill.id}.md"
-        tmp = f.with_suffix(".md.tmp")
+        # Unique temp name so two concurrent saves of the same id can't interleave
+        # bytes on a shared scratch file before the atomic rename.
+        tmp = f.with_suffix(f".md.{os.getpid()}.{id(skill)}.tmp")
         tmp.write_text(skill.to_markdown(), encoding="utf-8")
         tmp.replace(f)
         return skill
 
-    def create(self, name: str, description: str = "", body: str = "", enabled: bool = True) -> Skill:
+    def create(
+        self, name: str, description: str = "", body: str = "", enabled: bool = True
+    ) -> Skill:
         """Create a new skill, deriving a unique id from the name."""
         base = slugify(name)
         skill_id = base
@@ -126,9 +160,9 @@ class SkillStore:
         )
 
     def delete(self, skill_id: str) -> bool:
-        """Delete a skill file. Returns True if it existed."""
-        f = self._dir / f"{skill_id}.md"
-        if f.is_file():
+        """Delete a skill file. Returns True if it existed. Refuses unsafe ids."""
+        f = self._path_for(skill_id)  # rejects path-traversal ids → None
+        if f is not None and f.is_file():
             f.unlink()
             return True
         return False
