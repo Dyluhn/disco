@@ -561,6 +561,74 @@ class AgentLoop:
         return (bool(missing), missing)
 
     @staticmethod
+    def _plan_step_lag_signal(events: list[Event]) -> bool:
+        """The 'auditor' for the soft plan-step nudge. Returns True when the
+        agent has done substantial productive work but the capstone tracker is
+        clearly lagging — the classic 'did the work, forgot to check it off'
+        failure. The nudge that follows is SOFT (a gentle suggestion, not a
+        gate), and fires at most once per lag episode (no re-fire until the
+        agent marks another step or the lag clears).
+
+        Heuristic (all derivable from the log, stateless):
+          - a plan exists with steps, and we're past plan approval
+          - productive (state-changing) actions since approval >= total steps
+            (i.e. enough work has happened that *something* should be marked)
+          - fewer than half the steps are marked done (tracker is behind)
+          - no soft-lag nudge has fired since the last plan_step action
+            (so we nudge once per episode, not every iteration)
+        """
+        # Latest plan.
+        plan: PlanEvent | None = None
+        approval_seq: int | None = None
+        for e in events:
+            if isinstance(e, PlanEvent):
+                if plan is None or e.revision >= plan.revision:
+                    plan = e
+            if isinstance(e, StatusEvent) and e.detail == "plan_approved":
+                approval_seq = e.seq
+        if plan is None or not plan.steps or approval_seq is None:
+            return False
+        total = len(plan.steps)
+
+        productive = 0
+        steps_done: set[int] = set()
+        last_plan_step_seq = -1
+        last_lag_nudge_seq = -1
+        for e in events:
+            seq = e.seq or 0
+            if seq <= approval_seq:
+                continue
+            if isinstance(e, ActionEvent) and e.tool_call is not None:
+                name = e.tool_call.tool_name
+                if name == "plan_step":
+                    last_plan_step_seq = seq
+                    try:
+                        if str(e.tool_call.arguments.get("state")) == "done":
+                            steps_done.add(int(e.tool_call.arguments.get("index")))  # type: ignore[arg-type]
+                    except (TypeError, ValueError):
+                        pass
+                elif name not in _NON_PRODUCTIVE_TOOLS:
+                    productive += 1
+            elif (
+                isinstance(e, MessageEvent)
+                and e.source == EventSource.ENVIRONMENT
+                and e.message is not None
+                and "plan-step tracker" in e.message.content
+            ):
+                last_lag_nudge_seq = seq
+
+        if productive < total:
+            return False  # not enough work yet to expect check-offs
+        if len(steps_done) * 2 >= total:
+            return False  # tracker is keeping up (>= half done)
+        # Only nudge once per episode: skip if a lag nudge already fired more
+        # recently than the last plan_step action (the agent hasn't checked
+        # anything off since we last reminded it — no point repeating).
+        if last_lag_nudge_seq > last_plan_step_seq:
+            return False
+        return True
+
+    @staticmethod
     def initial_mode(
         events: list[Event],
         *,
@@ -733,6 +801,34 @@ class AgentLoop:
                 if self._stuck.is_stuck(self._recent(events)):
                     await self._emit(StatusEvent(status=ConversationStatus.STUCK))
                     return await self.get_state()
+
+                # (c.5) SOFT plan-step nudge — the auditor. When substantial work
+                # has happened but the capstone tracker is lagging (the "did the
+                # work, forgot to check it off" failure), inject ONE gentle
+                # reminder so the model keeps the tracker honest. NOT a gate —
+                # the model is free to ignore it; it fires at most once per lag
+                # episode. This is the proactive nudge (vs. the finish-boundary
+                # auto-continue which catches the same thing at the end).
+                if self._plan_step_lag_signal(events):
+                    await self._emit(
+                        MessageEvent(
+                            source=EventSource.ENVIRONMENT,
+                            message=LLMMessage(
+                                role="user",
+                                content=(
+                                    "<system-reminder>\n"
+                                    "Gentle note: you've done a fair amount of work but "
+                                    "the plan-step tracker is behind — most steps aren't "
+                                    "marked done yet. If any completed steps are done, "
+                                    "mark them with plan_step(idx, 'done') so the user can "
+                                    "see real progress. No need to stop what you're doing; "
+                                    "just keep the tracker in sync as you go.\n"
+                                    "</system-reminder>"
+                                ),
+                            ),
+                        )
+                    )
+                    events = await self._events()  # include the nudge in this step's View
 
                 # (d) build the model-facing View, condensing if triggered (§8)
                 view = await self._materialize_view(events)

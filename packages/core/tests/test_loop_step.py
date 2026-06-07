@@ -616,3 +616,101 @@ async def test_planning_mode_preserves_acknowledgment_prose():
         and "stock ticker" in (e.message.content if e.message else "")
     ]
     assert len(acks) == 1
+
+
+# ---- the soft plan-step nudge (the "auditor") --------------------------------
+
+
+def _ev_seq(events):
+    """Assign sequential seqs to a hand-built event list (the store does this in
+    production; the helper is pure and reads seq)."""
+    out = []
+    for i, e in enumerate(events, start=1):
+        out.append(e.model_copy(update={"seq": i}))
+    return out
+
+
+def test_plan_step_lag_signal_fires_when_work_outpaces_tracker():
+    """Auditor: lots of productive actions since approval, < half the steps
+    marked done, and no prior lag nudge → soft nudge warranted."""
+    from perpleximanus.core import ActionEvent, PlanEvent, StatusEvent, ToolCall
+    from perpleximanus.core import ConversationStatus
+    from perpleximanus.core.loop.engine import AgentLoop
+
+    def act(tool, args=None):
+        return ActionEvent(thought="x", tool_call=ToolCall(tool_name=tool, arguments=args or {}))
+
+    events = _ev_seq(
+        [
+            PlanEvent(summary="p", steps=[{"title": "a"}, {"title": "b"}, {"title": "c"}], revision=1),
+            StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"),
+            act("file_write", {"path": "1"}),
+            act("file_write", {"path": "2"}),
+            act("shell", {"command": "echo"}),
+            # 3 productive actions >= 3 steps; zero steps marked done.
+        ]
+    )
+    assert AgentLoop._plan_step_lag_signal(events) is True
+
+
+def test_plan_step_lag_signal_silent_when_tracker_keeps_up():
+    """When at least half the steps are marked done, the tracker is keeping up
+    — no nudge."""
+    from perpleximanus.core import ActionEvent, PlanEvent, StatusEvent, ToolCall
+    from perpleximanus.core import ConversationStatus
+    from perpleximanus.core.loop.engine import AgentLoop
+
+    def act(tool, args=None):
+        return ActionEvent(thought="x", tool_call=ToolCall(tool_name=tool, arguments=args or {}))
+
+    events = _ev_seq(
+        [
+            PlanEvent(summary="p", steps=[{"title": "a"}, {"title": "b"}], revision=1),
+            StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"),
+            act("file_write", {"path": "1"}),
+            act("plan_step", {"index": 1, "state": "done"}),
+            act("file_write", {"path": "2"}),
+        ]
+    )
+    # 2 productive >= 2 steps, but 1 of 2 steps done (>= half) → no nudge.
+    assert AgentLoop._plan_step_lag_signal(events) is False
+
+
+def test_plan_step_lag_signal_fires_once_per_episode():
+    """After a lag nudge fires, it must not re-fire until the agent checks off
+    another step (otherwise it would nag every iteration)."""
+    from perpleximanus.core import (
+        ActionEvent,
+        EventSource,
+        LLMMessage,
+        MessageEvent,
+        PlanEvent,
+        StatusEvent,
+        ToolCall,
+    )
+    from perpleximanus.core import ConversationStatus
+    from perpleximanus.core.loop.engine import AgentLoop
+
+    def act(tool, args=None):
+        return ActionEvent(thought="x", tool_call=ToolCall(tool_name=tool, arguments=args or {}))
+
+    nudge = MessageEvent(
+        source=EventSource.ENVIRONMENT,
+        message=LLMMessage(
+            role="user",
+            content="<system-reminder>\nGentle note: the plan-step tracker is behind.\n</system-reminder>",
+        ),
+    )
+    events = _ev_seq(
+        [
+            PlanEvent(summary="p", steps=[{"title": "a"}, {"title": "b"}, {"title": "c"}], revision=1),
+            StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"),
+            act("file_write", {"path": "1"}),
+            act("file_write", {"path": "2"}),
+            act("shell", {"command": "echo"}),
+            nudge,  # the soft nudge already fired
+            act("file_write", {"path": "3"}),  # more work, still no check-off
+        ]
+    )
+    # The nudge is more recent than the last plan_step (there is none) → silent.
+    assert AgentLoop._plan_step_lag_signal(events) is False
