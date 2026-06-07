@@ -787,10 +787,26 @@ class AgentLoop:
                         )
                         return await self.get_state()
                     if tc is None:
-                        # The planner spoke without calling a tool. Append an implicit
-                        # system-reminder and re-enter. No cap, no error — the loop's
-                        # max_iterations and the user's kill switch are the ultimate
-                        # exits. The counter stays for telemetry.
+                        # The planner spoke without calling a tool. PRESERVE the
+                        # prose first — this is how the agent acknowledges the
+                        # user's request conversationally before it starts
+                        # exploring/planning ("Got it — you want X; let me look
+                        # at the available APIs and think through the
+                        # architecture."). Without this the acknowledgment was
+                        # silently discarded and the user heard nothing back.
+                        # THEN append the nudge to keep it moving toward
+                        # submit_plan. No cap, no error — the loop's
+                        # max_iterations and the user's kill switch are the
+                        # ultimate exits. The counter stays for telemetry.
+                        if step.thought.strip():
+                            await self._emit(
+                                MessageEvent(
+                                    source=EventSource.AGENT,
+                                    message=LLMMessage(
+                                        role="assistant", content=step.thought
+                                    ),
+                                )
+                            )
                         self._plan_nudges += 1
                         await self._emit(
                             MessageEvent(

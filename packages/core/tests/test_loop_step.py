@@ -569,3 +569,50 @@ async def test_auto_continue_budget_resets_on_new_user_message():
     ]
     # The counter should reflect ONLY events since the last user message.
     assert AgentLoop._auto_continue_attempts(events) == 1
+
+
+# ---- talk-back: the agent acknowledges before/while it works -----------------
+
+
+async def test_planning_mode_preserves_acknowledgment_prose():
+    """In PLANNING mode, a thought-only step (the agent greeting the user /
+    acknowledging the request before it explores) must be RECORDED as an agent
+    message, not silently discarded. Previously only the plan-nudge survived,
+    so the user heard nothing back before work began."""
+    from loop_fakes import AgentStep
+    from perpleximanus.core import MessageEvent, ToolCall
+    from perpleximanus.core.llm import OperatingMode
+
+    ack = AgentStep(
+        thought="Got it — you want a stock ticker. Let me check the APIs first.",
+        tool_call=None,
+        finished=False,
+    )
+    # After the ack the model proposes a plan via submit_plan.
+    plan = AgentStep(
+        thought="here's the plan",
+        tool_call=ToolCall(
+            tool_name="submit_plan",
+            arguments={"summary": "a stock ticker", "steps": [{"title": "scaffold"}]},
+        ),
+        finished=False,
+    )
+    agent = ScriptedAgent([ack, plan])
+    loop, store = build_loop(
+        agent,
+        mode=OperatingMode.PLANNING,
+    )
+    loop._planning_tools = frozenset({"submit_plan"})
+    await loop.send_message("build a stock ticker")
+    await loop.run()
+
+    events = await store.get_events(CID)
+    # The acknowledgment landed as an agent message (the user heard back).
+    acks = [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source.value == "agent"
+        and "stock ticker" in (e.message.content if e.message else "")
+    ]
+    assert len(acks) == 1
