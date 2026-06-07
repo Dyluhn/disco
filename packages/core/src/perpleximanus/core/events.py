@@ -44,6 +44,7 @@ class EventKind(str, Enum):
     ERROR = "error"  # conversation-level error (distinct from agent_error)
     PLAN = "plan"  # a proposed, structured plan awaiting approval (Build plan-mode)
     REPORT = "report"  # a finished Deep Research multi-section grounded report
+    ALTERNATIVES = "alternatives"  # 2–3 user-choosable options after repeated tool failure
 
 
 def _new_id() -> str:
@@ -184,6 +185,10 @@ class ConversationStatus(str, Enum):
     # it (Build plan-mode). Mirrors WAITING_FOR_CONFIRMATION but gates the whole
     # plan up front, not one risky action.
     AWAITING_PLAN_APPROVAL = "AWAITING_PLAN_APPROVAL"
+    # Repeated tool failures (4 in a row) on the same conceptual step. The agent
+    # proposed 2–3 alternative approaches via `propose_alternatives`; the loop is
+    # halted until the user clicks one (or steers explicitly with send_message).
+    AWAITING_USER_DECISION = "AWAITING_USER_DECISION"
     FINISHED = "FINISHED"
     ERROR = "ERROR"
 
@@ -372,6 +377,52 @@ class ReportEvent(BaseEvent, LLMConvertible):
         )
 
 
+class AlternativeOption(BaseModel):
+    """One concrete next-step option the agent proposed after exhausting retries.
+    Each option carries a human-readable description + a structured ToolCall the
+    loop will execute as the next action if the user picks it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    id: str  # stable id for the user's pick_alternative frame
+    title: str  # short label rendered on the option card (e.g. "Try with sudo")
+    description: str  # one or two sentences: why this might work / what changes
+    tool_name: str  # the tool the loop will call if this option is picked
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class AlternativesEvent(BaseEvent, LLMConvertible):
+    """The structured recovery hand-off: when an action has failed 4 consecutive
+    times, the loop asks the agent to enumerate 2–3 distinct alternative
+    approaches via the `propose_alternatives` tool. The agent's structured
+    options become this event, the loop halts at AWAITING_USER_DECISION, and the
+    user picks one (or steers explicitly). The picked option's ToolCall becomes
+    the next action.
+
+    Mirrors PlanEvent's shape (gate event + LLMConvertible so the proposed
+    options stay in-context for any follow-up turn). `failed_action_id`
+    correlates this gate with the action that triggered the recovery."""
+
+    kind: Literal[EventKind.ALTERNATIVES] = EventKind.ALTERNATIVES
+    source: EventSource = EventSource.AGENT
+    failed_action_id: str  # the original ActionEvent.id that exhausted retries
+    summary: str  # what we're choosing between, one sentence
+    options: list[AlternativeOption]
+
+    def to_llm_message(self) -> LLMMessage:
+        lines = [
+            f"{i}. {o.title} — {o.description}"
+            for i, o in enumerate(self.options, start=1)
+        ]
+        body = "\n".join(lines)
+        return LLMMessage(
+            role="assistant",
+            content=(
+                f"After repeated failures on the prior step, I proposed these "
+                f"alternatives: {self.summary}\n{body}"
+            ),
+        )
+
+
 class ErrorEvent(BaseEvent):
     """A conversation-level (fatal-ish) error, e.g. MaxIterationsReached.
     NOT LLMConvertible."""
@@ -393,6 +444,7 @@ Event = Annotated[
     | StatusEvent
     | PlanEvent
     | ReportEvent
+    | AlternativesEvent
     | ErrorEvent,
     Field(discriminator="kind"),
 ]

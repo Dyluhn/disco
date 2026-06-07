@@ -1008,6 +1008,14 @@ class ConversationRuntime:
             await loop.enter_planning(text)
             self.kick(conversation_id)  # produce the (revised) plan
 
+    async def pick_alternative(self, conversation_id: str, option_id: str) -> None:
+        """Resume from AWAITING_USER_DECISION by selecting the agent's proposed
+        alternative path. The loop synthesizes an ActionEvent from the option's
+        ToolCall and executes it directly, then resumes."""
+        loop = self._loops.get(conversation_id)
+        if loop is not None:
+            await loop.pick_alternative(option_id)
+
     async def cancel(self, conversation_id: str) -> None:
         """Cooperative stop (distinct from the hard kill): the loop winds down."""
         loop = self._loops.get(conversation_id)

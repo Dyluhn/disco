@@ -76,6 +76,8 @@ _TERMINAL_FOR_NOW = frozenset(
         ConversationStatus.ERROR,
         ConversationStatus.WAITING_FOR_CONFIRMATION,
         ConversationStatus.AWAITING_PLAN_APPROVAL,
+        # ask_user halts the loop — kicks must not race past the gate.
+        ConversationStatus.AWAITING_USER_DECISION,
     }
 )
 
@@ -116,7 +118,155 @@ _EXECUTION_NUDGE = (
 # The tool names that don't count as "productive work" for the execution gate:
 # meta tools that don't change workspace state. plan_step is informational; the
 # planning tool would have been intercepted upstream but is named for clarity.
-_NON_PRODUCTIVE_TOOLS = frozenset({"submit_plan", "plan_step"})
+_NON_PRODUCTIVE_TOOLS = frozenset(
+    {"submit_plan", "plan_step", "ask_user", "propose_plan_update"}
+)
+
+# The virtual ask_user tool — the model's escape hatch when it (in its own
+# reasoning, not at harness nudging) decides it needs the human's judgment.
+# This is the Claude Code pattern done honestly: the tool is described, it's
+# in the model's tool list, and the model chooses to call it. The harness
+# never says "you must use this now"; the model uses it when its reasoning
+# concludes that human input is the next-best step.
+#
+# When called, the loop INTERCEPTS it (the tool is never executed against the
+# sandbox) and converts it into an AlternativesEvent + AWAITING_USER_DECISION
+# status. The user then picks an option or types a steer message.
+_ASK_USER_TOOL_NAME = "ask_user"
+_ASK_USER_DESCRIPTION = (
+    "Pause the run and ask the human user for input. Call this tool when YOU "
+    "(in your own reasoning) decide that the next step depends on human "
+    "judgment, a clarification, or a choice between options you can't pick "
+    "with confidence. Typical situations: you've tried 2-3 substantively "
+    "different approaches and they all failed; the right path depends on a "
+    "preference the user hasn't stated; an action would be irreversible and "
+    "you want confirmation of intent (not safety — that's the risk gate). "
+    "Provide a clear one-sentence `question` summarizing what you need. "
+    "Optionally, provide an `options` list of 2-3 concrete next-step "
+    "alternatives the user can click; each option must have a short "
+    "`title`, a brief `description`, and a `tool_name` + `arguments` shape "
+    "for the action that will run if the user picks it. Without options, "
+    "the user simply replies in chat. Do NOT call this on every error — "
+    "first attempt to reason about the failure yourself."
+)
+# Pure JSON Schema (no Pydantic model needed — the loop parses args defensively).
+_ASK_USER_PARAMETERS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "question": {
+            "type": "string",
+            "description": "One-sentence summary of what you need from the user.",
+        },
+        "options": {
+            "type": "array",
+            "description": "Optional 2-3 alternatives the user can click. Omit for a free-form question.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Short stable id, e.g. 'sudo' or 'skip'."},
+                    "title": {"type": "string", "description": "Card label (3-5 words)."},
+                    "description": {"type": "string", "description": "One sentence: why this might work."},
+                    "tool_name": {"type": "string", "description": "The tool to call if picked."},
+                    "arguments": {"type": "object", "description": "Args for that tool."},
+                },
+                "required": ["title", "tool_name", "arguments"],
+            },
+            "minItems": 0,
+            "maxItems": 3,
+        },
+    },
+    "required": ["question"],
+}
+
+
+def _ask_user_tool_spec():
+    """Lazy-imported ToolSpec for ask_user — avoids a circular import on
+    module load (ToolSpec lives in ..llm which doesn't yet exist when this
+    module imports)."""
+    from ..llm.types import ToolSpec
+
+    return ToolSpec(
+        name=_ASK_USER_TOOL_NAME,
+        description=_ASK_USER_DESCRIPTION,
+        parameters_schema=_ASK_USER_PARAMETERS_SCHEMA,
+    )
+
+
+# The propose_plan_update tool — the model's auto-recovery affordance for
+# when its current plan is no longer right. Call this when a step fails in a
+# way that invalidates the path, OR when discoveries during execution suggest
+# a different decomposition is better, OR when the user steers toward a new
+# goal. The user accepts/refines/rejects via the existing plan-approval gate.
+_PROPOSE_PLAN_UPDATE_DESCRIPTION = (
+    "Propose a REVISED plan when the current plan is no longer the right path. "
+    "Use this when: a step has failed in a way that means the whole plan needs "
+    "rethinking; you've discovered something during execution that suggests a "
+    "different decomposition; or the user's steer message implies a new goal. "
+    "The user will see the new plan in the chat alongside the prior one (it "
+    "slots chronologically), and chooses to Approve, Refine, or implicitly "
+    "reject by sending a different message. Provide a `summary` (one sentence "
+    "describing what changed and why), an ordered list of `steps` (each with a "
+    "`title`), and an optional `context` markdown body explaining your "
+    "reasoning. Do NOT call this on every error — only when the current plan "
+    "is structurally wrong. Small course corrections inside a single step "
+    "should be handled with another tool call."
+)
+_PROPOSE_PLAN_UPDATE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {
+            "type": "string",
+            "description": "One sentence: what changed in the plan and why.",
+        },
+        "steps": {
+            "type": "array",
+            "description": "The new ordered list of steps.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "detail": {"type": "string"},
+                },
+                "required": ["title"],
+            },
+            "minItems": 1,
+        },
+        "context": {
+            "type": "string",
+            "description": "Optional markdown body: what you learned, why this plan now.",
+        },
+    },
+    "required": ["summary", "steps"],
+}
+
+
+def _propose_plan_update_tool_spec():
+    from ..llm.types import ToolSpec
+
+    return ToolSpec(
+        name="propose_plan_update",
+        description=_PROPOSE_PLAN_UPDATE_DESCRIPTION,
+        parameters_schema=_PROPOSE_PLAN_UPDATE_SCHEMA,
+    )
+
+
+# Lazy singletons — built on first access so module-level import order stays clean.
+_ASK_USER_TOOL_SPEC = None
+_PROPOSE_PLAN_UPDATE_TOOL_SPEC = None
+
+
+def _ask_user_tool_singleton():
+    global _ASK_USER_TOOL_SPEC
+    if _ASK_USER_TOOL_SPEC is None:
+        _ASK_USER_TOOL_SPEC = _ask_user_tool_spec()
+    return _ASK_USER_TOOL_SPEC
+
+
+def _propose_plan_update_tool_singleton():
+    global _PROPOSE_PLAN_UPDATE_TOOL_SPEC
+    if _PROPOSE_PLAN_UPDATE_TOOL_SPEC is None:
+        _PROPOSE_PLAN_UPDATE_TOOL_SPEC = _propose_plan_update_tool_spec()
+    return _PROPOSE_PLAN_UPDATE_TOOL_SPEC
 
 
 class AgentLoop:
@@ -162,6 +312,11 @@ class AgentLoop:
         self._execution_mode = execution_mode  # the mode an approved plan runs in
         self._plan_nudges = 0  # consecutive nudges while planning (safety cap)
         self._execution_nudges = 0  # consecutive "you must act" nudges in execution
+        # Auto-continue cap: when the agent declares finished but the plan
+        # isn't done, the loop re-kicks itself this many times before landing
+        # FINISHED with partial-plan detail. The user shouldn't have to poke
+        # the model to keep going; this is the harness driving the loop forward.
+        self._auto_continue_cap = 3
         self._stop_hooks = list(stop_hooks or [])
         self._stuck = StuckDetector(stuck_thresholds)
         self._veto_feedback = veto_feedback
@@ -209,13 +364,29 @@ class AgentLoop:
     def _tools_for_step(self) -> list:
         """Mode-scoped tool visibility. With no planning_tools configured this is a
         pass-through (Research / default). While PLANNING the agent sees ONLY the
-        planning tool(s); while executing it sees everything else."""
+        planning tool(s); while executing it sees everything else.
+
+        In execution mode the loop also appends a VIRTUAL `ask_user` tool — a
+        clean escape hatch the model can call when it (in its own reasoning)
+        decides it needs human input. The loop intercepts the call (the tool
+        is never executed by the executor); see the ASK-USER GATE in the run
+        loop. This is the Claude Code pattern: the tool is *available*, the
+        model *discovers and chooses* it, the harness does not nudge it."""
         tools = self.executor.available_tools()
-        if not self._planning_tools:
-            return tools
-        if self.mode == OperatingMode.PLANNING:
+        if self._planning_tools and self.mode == OperatingMode.PLANNING:
             return [t for t in tools if getattr(t, "name", None) in self._planning_tools]
-        return [t for t in tools if getattr(t, "name", None) not in self._planning_tools]
+        if self._planning_tools:
+            tools = [t for t in tools if getattr(t, "name", None) not in self._planning_tools]
+        # Append the virtual ask_user + propose_plan_update tools in execution
+        # mode. Both are documented so the model decides WHEN to use them;
+        # neither is injected by reminder. propose_plan_update is the model's
+        # auto-recovery affordance: when its current plan is wrong, it proposes
+        # a revision and the user accepts/refines via the plan-approval gate.
+        tools = list(tools) + [
+            _ask_user_tool_singleton(),
+            _propose_plan_update_tool_singleton(),
+        ]
+        return tools
 
     def _plan_from_args(self, arguments: dict, events: list[Event]) -> PlanEvent:
         """Build a PlanEvent from a `submit_plan` tool call. Defensive against the
@@ -237,6 +408,76 @@ class AgentLoop:
         context = str(arguments.get("context") or arguments.get("rationale") or "").strip()
         revision = 1 + sum(1 for e in events if isinstance(e, PlanEvent))
         return PlanEvent(summary=summary, steps=steps, revision=revision, context=context)
+
+    def _alternatives_from_args(
+        self, arguments: dict, events: list[Event]
+    ) -> "AlternativesEvent | None":
+        """Build an AlternativesEvent from a `propose_alternatives` tool call.
+        Defensive against the model's shape drift — options may come as dicts
+        with various key names. Correlates with the most recent ActionEvent so
+        the UI can show which step the alternatives are answering.
+
+        Returns None when the args are too malformed to produce a useful gate;
+        the loop nudges and re-enters."""
+        from ..events import AlternativeOption, AlternativesEvent
+
+        raw_options = arguments.get("options") or arguments.get("alternatives") or []
+        options: list[AlternativeOption] = []
+        for i, opt in enumerate(raw_options):
+            if not isinstance(opt, dict):
+                continue
+            tool_name = str(
+                opt.get("tool_name")
+                or (opt.get("tool_call") or {}).get("name")
+                or (opt.get("tool_call") or {}).get("tool_name")
+                or ""
+            ).strip()
+            if not tool_name:
+                continue
+            args = (
+                opt.get("arguments")
+                or (opt.get("tool_call") or {}).get("arguments")
+                or {}
+            )
+            if not isinstance(args, dict):
+                continue
+            title = str(opt.get("title") or opt.get("label") or f"Option {i + 1}").strip()
+            description = str(opt.get("description") or opt.get("why") or "").strip()
+            option_id = str(opt.get("id") or f"opt_{i + 1}")
+            options.append(
+                AlternativeOption(
+                    id=option_id,
+                    title=title,
+                    description=description,
+                    tool_name=tool_name,
+                    arguments=args,
+                )
+            )
+        # `ask_user` semantics: the question text is the primary signal; options
+        # are optional clickable alternatives. With no options, the loop emits
+        # the question as a model message instead of building an AlternativesEvent
+        # (handled by the caller — see the ASK-USER GATE).
+        if not options:
+            return None
+        summary = str(
+            arguments.get("question")
+            or arguments.get("summary")
+            or arguments.get("goal")
+            or ""
+        ).strip()
+        if not summary:
+            summary = "the agent is asking which path to take"
+        # Correlate with the most recent failed action (the immediate predecessor).
+        failed_action_id = ""
+        for e in reversed(events):
+            if isinstance(e, ActionEvent):
+                failed_action_id = e.id
+                break
+        return AlternativesEvent(
+            failed_action_id=failed_action_id,
+            summary=summary,
+            options=options,
+        )
 
     @staticmethod
     def _productive_action_since_approval(events: list[Event]) -> bool:
@@ -262,6 +503,62 @@ class AgentLoop:
                 if e.tool_call.tool_name not in _NON_PRODUCTIVE_TOOLS:
                     return True
         return False
+
+    @staticmethod
+    def _auto_continue_attempts(events: list[Event]) -> int:
+        """Count auto-continue events fired since the most recent USER message.
+        The cap resets every time the user sends a fresh prompt — each new
+        instruction gets its own auto-continue budget. The harness uses this
+        to keep the loop moving without infinite-looping."""
+        count = 0
+        for e in reversed(events):
+            if isinstance(e, MessageEvent) and e.source == EventSource.USER:
+                return count
+            if (
+                isinstance(e, StatusEvent)
+                and e.detail
+                and e.detail.startswith("auto_continue:")
+            ):
+                count += 1
+        return count
+
+    @staticmethod
+    def _plan_is_incomplete(events: list[Event]) -> tuple[bool, list[int]]:
+        """Is the most recent plan only partially done? Returns (incomplete, missing_idxs).
+
+        Walks the log to find the latest PlanEvent and the plan_step(index, state)
+        ActionEvents that report per-step progress. A step is "complete" iff the
+        agent emitted plan_step(idx, state="done") for it. If there's no plan at
+        all, returns (False, []) — nothing to gate on.
+
+        This is the truth-source for the FINISHED gate: if a plan exists and any
+        step is unmarked or stuck "active", the loop refuses to transition to
+        FINISHED and falls back to STUCK — honest about the work being incomplete
+        rather than lying about completion."""
+        # The latest plan (a re-plan supersedes prior).
+        plan: PlanEvent | None = None
+        for e in events:
+            if isinstance(e, PlanEvent):
+                if plan is None or e.revision >= plan.revision:
+                    plan = e
+        if plan is None or not plan.steps:
+            return (False, [])
+        done: set[int] = set()
+        for e in events:
+            if not isinstance(e, ActionEvent) or e.tool_call is None:
+                continue
+            if e.tool_call.tool_name != "plan_step":
+                continue
+            try:
+                idx = int(e.tool_call.arguments.get("index"))  # type: ignore[arg-type]
+                state = str(e.tool_call.arguments.get("state"))
+            except (TypeError, ValueError):
+                continue
+            if state == "done":
+                done.add(idx)
+        total = len(plan.steps)
+        missing = [i + 1 for i in range(total) if (i + 1) not in done]
+        return (bool(missing), missing)
 
     @staticmethod
     def initial_mode(
@@ -313,18 +610,23 @@ class AgentLoop:
         event (ObservationEvent on success, AgentErrorEvent on failure),
         correlated by action.id.
 
+        NO hidden retries, NO automatic failure escalation. Errors are surfaced
+        IMMEDIATELY and IN FULL to the model on its next turn (the Claude Code
+        pattern — see the v2 redesign note in this module's header). Recovery
+        is a collaboration: the model reasons about the visible error, the user
+        watches the trace and can steer at any moment, and the agent has a
+        clean `ask_user` tool available when IT decides it needs human input.
+
         If the sandbox transparently RECREATED itself during this call (a mid-
         session death the session healed), append an implicit system-reminder
         so the model knows files-on-disk remain but processes/state were lost."""
-        # snapshot the sandbox's generation BEFORE execution; if it grew AND it
-        # was nonzero pre-call (i.e. the box already existed), a restart happened.
         sbx = getattr(self.executor, "sandbox", None)
         gen_before = getattr(sbx, "generation", 0) if sbx is not None else 0
         try:
             result = await self.executor.execute(action.tool_call)
         except LLMContextWindowExceeded:
             raise  # handled by view-materialization hard-reset (§8)
-        except Exception as e:  # noqa: BLE001 — any tool/exec failure is an observation
+        except Exception as e:  # noqa: BLE001 — any tool/exec failure is observable
             await self._emit(AgentErrorEvent(error=str(e), action_id=action.id))
             await self._maybe_emit_sandbox_restart(sbx, gen_before)
             return
@@ -387,7 +689,11 @@ class AgentLoop:
                 ConversationStatus.AWAITING_PLAN_APPROVAL,
             ):
                 return state
-            # FINISHED/STUCK/ERROR with no new work → nothing to do.
+            # AWAITING_USER_DECISION: the agent voluntarily paused for the user.
+            # A new user message (steer / send_message) IS the resume signal —
+            # treat it like FINISHED/STUCK below (re-kick if there's fresh work).
+            # No special control op needed; the user just typing IS the answer.
+            # FINISHED/STUCK/ERROR/AWAITING_USER_DECISION with no new work → idle.
             if not self._has_unprocessed_user_message(await self._events()):
                 return state
         await self._emit(StatusEvent(status=ConversationStatus.RUNNING))
@@ -533,6 +839,79 @@ class AgentLoop:
                                     message=LLMMessage(role="assistant", content=step.thought),
                                 )
                             )
+                        # AUTO-CONTINUE GATE — when the agent declares finished
+                        # but the plan still has incomplete steps, DO NOT land
+                        # in STUCK and freeze. The user shouldn't have to poke
+                        # the loop to keep going. Instead, inject a continuation
+                        # prompt and re-run automatically, up to AUTO_CONTINUE_CAP
+                        # times per user message. Only after the cap (typically
+                        # 3) do we fall through to FINISHED with a "soft" detail
+                        # so the user sees a clean ending rather than a freeze.
+                        #
+                        # The cap resets when the user sends a new message —
+                        # each fresh prompt gets its own auto-continue budget.
+                        incomplete, missing = self._plan_is_incomplete(events)
+                        if incomplete:
+                            attempts = self._auto_continue_attempts(events)
+                            if attempts < self._auto_continue_cap:
+                                await self._emit(
+                                    MessageEvent(
+                                        source=EventSource.ENVIRONMENT,
+                                        message=LLMMessage(
+                                            role="user",
+                                            content=(
+                                                "<system-reminder>\n"
+                                                "You declared the work finished, but plan "
+                                                f"steps {missing} are not yet marked done. "
+                                                "Keep working: either complete the remaining "
+                                                "steps and mark them via "
+                                                "plan_step(idx, 'done'), OR — if a step is "
+                                                "structurally wrong now — call "
+                                                "propose_plan_update to revise the plan. "
+                                                "Do not declare finished again until every "
+                                                "step is marked done. The user will see this "
+                                                "as the agent automatically continuing.\n"
+                                                "</system-reminder>"
+                                            ),
+                                        ),
+                                    )
+                                )
+                                await self._emit(
+                                    StatusEvent(
+                                        status=ConversationStatus.RUNNING,
+                                        detail=f"auto_continue:plan_incomplete:{attempts + 1}",
+                                    )
+                                )
+                                continue  # back to the loop's top — keep going
+                            # Cap hit. Land FINISHED with a "partial" detail
+                            # rather than STUCK; the user sees a clean ending
+                            # and can steer if more work is needed. STUCK is
+                            # reserved for genuine confusion (stuck detector),
+                            # not for "model couldn't quite finish the bookkeeping".
+                            await self._emit(
+                                MessageEvent(
+                                    source=EventSource.ENVIRONMENT,
+                                    message=LLMMessage(
+                                        role="user",
+                                        content=(
+                                            "<system-reminder>\n"
+                                            f"After {self._auto_continue_cap} auto-continues, "
+                                            f"plan steps {missing} are still not marked done. "
+                                            "Landing the run as FINISHED with partial-plan "
+                                            "detail — the user can review and steer if more "
+                                            "work is needed.\n"
+                                            "</system-reminder>"
+                                        ),
+                                    ),
+                                )
+                            )
+                            await self._emit(
+                                StatusEvent(
+                                    status=ConversationStatus.FINISHED,
+                                    detail="partial_plan",
+                                )
+                            )
+                            return await self.get_state()
                         await self._emit(StatusEvent(status=ConversationStatus.FINISHED))
                         return await self.get_state()
                     await self._emit(
@@ -552,6 +931,81 @@ class AgentLoop:
                         )
                     )
                     continue
+
+                # (g.5) ASK-USER GATE — `ask_user` is a MODEL-CHOSEN escape
+                # hatch. When the agent itself decides it needs human input
+                # (after trying 2-3 distinct approaches that all failed, OR
+                # when the right path depends on a judgment call only the user
+                # can make), it can call ask_user(question, options=[...]).
+                #
+                # This is NEVER nudged by the harness — the model discovers the
+                # tool via its system prompt + tool list, and chooses to use it.
+                # That's the Claude Code lesson: tools are options the model
+                # discovers naturally, not fallbacks the harness funnels into.
+                # The loop intercepts the call (the tool is never "executed"
+                # against the sandbox), builds an AlternativesEvent, and halts
+                # at AWAITING_USER_DECISION until the user picks an option or
+                # types a steer message.
+                # PROPOSE-PLAN-UPDATE GATE — when the agent's existing plan is
+                # no longer right (a step failed, a discovery invalidates the
+                # path, the user steered toward a different goal), the agent can
+                # call `propose_plan_update` to emit a NEW plan revision and
+                # halt at AWAITING_PLAN_APPROVAL. The user accepts (Approve &
+                # build), refines (Revise…), or rejects. The new plan slots
+                # chronologically into the chat (PlanPanel renders the latest
+                # revision; prior ones stay in the event log for audit).
+                #
+                # This is what enables auto-recovery without the user having to
+                # poke the model after every failure — the model proposes a
+                # course correction; the user confirms or refines.
+                if (
+                    step.tool_call is not None
+                    and step.tool_call.tool_name == "propose_plan_update"
+                ):
+                    new_plan = self._plan_from_args(step.tool_call.arguments, events)
+                    await self._emit(new_plan)
+                    await self._emit(
+                        StatusEvent(
+                            status=ConversationStatus.AWAITING_PLAN_APPROVAL,
+                            detail=new_plan.id,
+                        )
+                    )
+                    return await self.get_state()
+
+                if step.tool_call is not None and step.tool_call.tool_name == "ask_user":
+                    alt = self._alternatives_from_args(step.tool_call.arguments, events)
+                    if alt is not None:
+                        # ask_user WITH options → AlternativesEvent + gate
+                        await self._emit(alt)
+                        await self._emit(
+                            StatusEvent(
+                                status=ConversationStatus.AWAITING_USER_DECISION,
+                                detail=alt.id,
+                            )
+                        )
+                        return await self.get_state()
+                    # ask_user WITHOUT options → free-form question. Emit it as
+                    # an assistant message (from the tool's `question` arg or
+                    # the step's thought, whichever has content) and pause the
+                    # loop — same AWAITING_USER_DECISION semantic, just no
+                    # clickable cards. The user replies via send_message/steer.
+                    question = str(
+                        step.tool_call.arguments.get("question") or ""
+                    ).strip() or step.thought.strip()
+                    if question:
+                        await self._emit(
+                            MessageEvent(
+                                source=EventSource.AGENT,
+                                message=LLMMessage(role="assistant", content=question),
+                            )
+                        )
+                    await self._emit(
+                        StatusEvent(
+                            status=ConversationStatus.AWAITING_USER_DECISION,
+                            detail="free_form_question",
+                        )
+                    )
+                    return await self.get_state()
 
                 # (h) build the ActionEvent
                 action = ActionEvent(
@@ -721,6 +1175,93 @@ class AgentLoop:
                 StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
             )
         return await self.get_state()
+
+    async def pick_alternative(self, option_id: str) -> ConversationState:
+        """Resume from AWAITING_USER_DECISION by selecting one of the agent's
+        proposed alternatives. Pulls the option's ToolCall, synthesizes an
+        ActionEvent under EventSource.AGENT (the loop "speaks for" the agent
+        here — the option WAS the agent's own proposal, the user is just
+        choosing which one), and transitions to RUNNING. The loop's next
+        iteration sees the dangling ActionEvent and executes it via the normal
+        _execute_and_observe path (including the risk gate).
+
+        Idempotent: a pick on a non-pending state is a no-op."""
+        from ..events import AlternativesEvent
+
+        async with self._lock:
+            state = await self.get_state()
+            if state.execution_status != ConversationStatus.AWAITING_USER_DECISION:
+                return state
+            # Find the latest AlternativesEvent + the picked option.
+            events = await self._events()
+            alt: AlternativesEvent | None = None
+            for e in reversed(events):
+                if isinstance(e, AlternativesEvent):
+                    alt = e
+                    break
+            if alt is None:
+                # No alternatives event but status said pending — log a
+                # reminder + clear to RUNNING so the user isn't trapped.
+                await self._emit(
+                    StatusEvent(status=ConversationStatus.RUNNING, detail="alternatives_missing")
+                )
+                return await self.get_state()
+            option = next((o for o in alt.options if o.id == option_id), None)
+            if option is None:
+                # Bad pick (stale id?) — record + return without resuming so
+                # the UI can re-prompt with the same gate.
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                "<system-reminder>\n"
+                                f"User picked an unknown alternative id ({option_id!r}). "
+                                "Re-emit the gate or ask for direction.\n"
+                                "</system-reminder>"
+                            ),
+                        ),
+                    )
+                )
+                return await self.get_state()
+            # Record the human's pick as a user message — keeps the log honest
+            # (the audit trail shows "user chose X") AND lands in the LLM View
+            # so a follow-up turn has the context.
+            await self._emit(
+                MessageEvent(
+                    source=EventSource.USER,
+                    message=LLMMessage(
+                        role="user",
+                        content=f"Try the alternative approach: “{option.title}”. {option.description}",
+                    ),
+                )
+            )
+            # Synthesize the ActionEvent. The thought records WHY we're running
+            # it (the option's description) so the trace stays self-explanatory.
+            from ..events import ActionEvent, ToolCall
+
+            action = ActionEvent(
+                source=EventSource.AGENT,
+                thought=f"User picked alternative: {option.title}. {option.description}",
+                tool_call=ToolCall(
+                    tool_name=option.tool_name,
+                    arguments=option.arguments,
+                ),
+            )
+            emitted = await self._emit(action)
+            await self._emit(
+                StatusEvent(
+                    status=ConversationStatus.RUNNING,
+                    detail=f"alternative_picked:{option.id}",
+                )
+            )
+        # Execute the synthesized action directly so the option actually runs
+        # before returning to the main loop (analogous to confirm()'s
+        # post-gate execute). The loop's next call to run() then proceeds
+        # with the freshly-emitted observation in view.
+        await self._execute_and_observe(emitted)
+        return await self.run()
 
     async def enter_planning(self, text: str = "") -> ConversationState:
         """(Re-)enter PLANNING mode — the entry point for the first plan AND for

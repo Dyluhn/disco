@@ -73,6 +73,16 @@ def _shell(command: str) -> ProposedToolCall:
     return ProposedToolCall(tool_name="shell", arguments={"command": command})
 
 
+def _plan_step_done(idx: int) -> ProposedToolCall:
+    """Mark a plan step done — required by the plan-completeness FINISHED gate.
+    Without this, the loop refuses to land in FINISHED (plan has incomplete steps)
+    and falls back to STUCK. The scripted scenarios that should end FINISHED need
+    to walk the plan to completion before declaring done."""
+    return ProposedToolCall(
+        tool_name="plan_step", arguments={"index": idx, "state": "done"}
+    )
+
+
 def _plan(steps: list[str]) -> ProposedToolCall:
     """A scripted `submit_plan` call — the entry to plan-first Build."""
     return ProposedToolCall(
@@ -116,6 +126,7 @@ async def _build_convo(store, steps) -> ConversationRuntime:
 _RISKY = [
     ("here's the plan", [_plan(["remove the dir"])]),
     ("removing the dir", [_shell("rm -rf doomed")]),
+    ("step 1 complete", [_plan_step_done(1)]),
     ("done", []),
 ]
 
@@ -185,8 +196,15 @@ async def test_confirm_executes_exactly_the_pending_action():
     await _await_task(runtime)
 
     events = await store.get_events(CID)
-    observations = [e for e in events if isinstance(e, ObservationEvent)]
-    assert len(observations) == 1  # exactly the pending action ran, once
+    # Filter for the gated SHELL action's observation. The script now also marks
+    # plan step 1 done (required by the plan-completeness FINISHED gate), which
+    # produces its own observation — not the subject of this assertion.
+    shell_observations = [
+        e
+        for e in events
+        if isinstance(e, ObservationEvent) and e.tool_result.tool_name == "shell"
+    ]
+    assert len(shell_observations) == 1  # exactly the gated action ran, once
     assert (await store.get_state(CID)).execution_status == ConversationStatus.FINISHED
 
 
@@ -206,7 +224,16 @@ async def test_reject_denies_without_executing():
     await _await_task(runtime)
 
     events = await store.get_events(CID)
-    assert not any(isinstance(e, ObservationEvent) for e in events)
+    # The SHELL action specifically must NOT have produced an observation. The
+    # script's follow-on plan_step(1, done) may still run as the loop resumes;
+    # that's expected — the test guards the gate semantic, not total observation
+    # count.
+    shell_observations = [
+        e
+        for e in events
+        if isinstance(e, ObservationEvent) and e.tool_result.tool_name == "shell"
+    ]
+    assert shell_observations == []
     rejection = next(e for e in events if isinstance(e, AgentErrorEvent))
     # Rejection is framed as an implicit system-reminder, not a user-tone error.
     assert "<system-reminder>" in rejection.error
@@ -214,6 +241,10 @@ async def test_reject_denies_without_executing():
     # And it's paired with the proposed action's call_id so the provider adapter
     # sees a properly-correlated tool result for the dangling assistant tool_call.
     assert rejection.tool_call_id == proposed.tool_call.call_id
+    # The scripted scenario keeps running after rejection (next scripted step
+    # marks plan step 1 done — an artifact of deterministic scripting, not a
+    # claim about real-agent behavior post-reject). So the completeness gate is
+    # satisfied and the loop lands in FINISHED.
     assert (await store.get_state(CID)).execution_status == ConversationStatus.FINISHED
 
 
@@ -298,6 +329,7 @@ async def test_execution_gate_refuses_finish_without_productive_action():
         ("here's the plan", [_plan(["do the thing"])]),  # plan
         ("done!", []),  # tries to finish immediately (no action) → gate fires
         ("ok ok writing", [safe]),  # complies on the next turn
+        ("marking done", [_plan_step_done(1)]),  # plan-completeness gate
         ("done", []),  # finishes after producing real work
     ]
     store = SqliteEventStore(":memory:")
@@ -347,6 +379,7 @@ async def test_request_plan_after_finish_reopens_plan_mode_with_a_new_revision()
     steps = [
         ("plan one", [_plan(["do the thing"])]),
         ("doing", [safe]),
+        ("marking done", [_plan_step_done(1)]),  # plan-completeness gate
         ("done", []),
         ("plan two", [_plan(["do another thing"])]),
     ]

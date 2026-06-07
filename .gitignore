@@ -19,6 +19,11 @@ htmlcov/
 *.db-wal
 *.db-shm
 
+# App-server config + secrets (NEVER commit — contains encrypted key material)
+perpleximanus-config.json
+perpleximanus-secrets.json
+*-secrets.json
+
 # OS / editor
 .DS_Store
 *.swp

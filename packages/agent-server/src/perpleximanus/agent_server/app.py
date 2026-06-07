@@ -436,6 +436,9 @@ async def _handle_frame(
     elif frame.type == "request_plan" and runtime is not None:
         # (Re-)enter plan mode with the user's instruction (first plan or re-plan).
         await runtime.request_plan(conversation_id, frame.content or "")
+    elif frame.type == "pick_alternative" and runtime is not None and frame.option_id is not None:
+        # User chose one of the agent's proposed alternatives (after 4+ failures).
+        await runtime.pick_alternative(conversation_id, frame.option_id)
     elif frame.type == "cancel" and runtime is not None:
         # Cooperative stop (the hard kill is POST /conversations/{id}/kill).
         await runtime.cancel(conversation_id)

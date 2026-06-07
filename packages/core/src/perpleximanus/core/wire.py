@@ -51,6 +51,9 @@ class WSClientFrame(BaseModel):
         # Build plan-mode gate:
         "approve_plan",  # approve the pending plan → start building
         "request_plan",  # (re-)enter plan mode; `content` carries the instruction
+        # Structured error recovery: pick one of the alternatives the agent
+        # proposed after 4 consecutive failures (see AlternativesEvent).
+        "pick_alternative",
     ]
     # send_message / request_plan: free text (a user message / the (re)plan instruction).
     content: str | None = None
@@ -60,3 +63,6 @@ class WSClientFrame(BaseModel):
     steer_text: str | None = None
     # sent on (re)connect to request replay of events after this seq.
     last_seq: int | None = None
+    # pick_alternative: the id of the AlternativeOption to execute as the next
+    # action (the loop pulls its ToolCall and injects it as the resume action).
+    option_id: str | None = None
