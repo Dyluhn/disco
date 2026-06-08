@@ -21,7 +21,7 @@ class WSServerFrame(BaseModel):
     """[CONTRACT] One server→client frame. Discriminated by `type`."""
 
     model_config = ConfigDict(frozen=True)
-    type: Literal["event", "token", "state", "error", "pong"]
+    type: Literal["event", "token", "file_stream", "state", "error", "pong"]
     # type == "event": a newly-appended Event (full object, §2). PRIMARY signal.
     event: Event | None = None
     # type == "token": an incremental token for typewriter rendering. Tokens are
@@ -29,6 +29,11 @@ class WSServerFrame(BaseModel):
     # (No model in Phase 0 — present for contract completeness.)
     token: str | None = None
     token_for_event_id: str | None = None
+    # type == "file_stream": a watch-it-write delta — the driver is assembling a
+    # file body in a tool call. {path, delta, tool, index}: `delta` appends to the
+    # per-path buffer. NOT persisted; superseded by the final ActionEvent when it
+    # lands (which carries the authoritative full content).
+    file_stream: dict[str, Any] | None = None
     # type == "state": a ConversationState snapshot (on connect + on change).
     state: ConversationState | None = None
     # type == "error": a transport/protocol error (NOT an agent error).

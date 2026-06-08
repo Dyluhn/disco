@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     space_id        TEXT,
     title           TEXT,
     created_at      TEXT NOT NULL,
-    status          TEXT
+    status          TEXT,
+    surface         TEXT  -- "research" | "build" | "deep_research" (set at create)
 );
 CREATE INDEX IF NOT EXISTS idx_conversations_owner
     ON conversations (owner_id, created_at DESC);
@@ -74,10 +75,23 @@ class SqliteEventStore:
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.execute("PRAGMA synchronous=FULL;")  # durable on commit (G2)
         self._conn.executescript(_SCHEMA)
+        # Migration: add `surface` to pre-existing conversations tables (CREATE TABLE
+        # IF NOT EXISTS won't add a new column). Idempotent — ignore "duplicate".
+        try:
+            self._conn.execute("ALTER TABLE conversations ADD COLUMN surface TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
         self._conn.commit()
         self._write_lock = asyncio.Lock()
         # conversation_id -> set of live subscriber queues.
         self._subscribers: dict[str, set[asyncio.Queue[Event]]] = defaultdict(set)
+        # conversation_id -> set of EPHEMERAL subscriber queues. These carry
+        # transient frames (watch-it-write file-stream deltas) that are broadcast
+        # to live listeners but NEVER persisted — they're display-only and would
+        # bloat the event log (hundreds per file). No history, live subscribers
+        # only; a late joiner simply misses in-flight deltas and gets the final
+        # persisted ActionEvent instead.
+        self._eph_subscribers: dict[str, set[asyncio.Queue[dict]]] = defaultdict(set)
 
     def close(self) -> None:
         self._conn.close()
@@ -91,15 +105,19 @@ class SqliteEventStore:
         owner_id: str = DEFAULT_OWNER_ID,
         space_id: str | None = None,
         title: str | None = None,
+        surface: str | None = None,
     ) -> None:
         """Register a conversation with explicit ownership (§6.1). Idempotent.
         Auto-creation on first append uses DEFAULT_OWNER_ID; call this to set a
-        real owner/space/title up front (the §7.5 POST /conversations path)."""
+        real owner/space/title/surface up front (the §7.5 POST /conversations path).
+        `surface` ("research"|"build"|"deep_research") is persisted so History can
+        route an item to the right surface — even a still-running one with no
+        report yet (the durable answer to which kind of task this is)."""
         self._conn.execute(
             "INSERT OR IGNORE INTO conversations "
-            "(conversation_id, owner_id, space_id, title, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (conversation_id, owner_id, space_id, title, datetime.now().isoformat()),
+            "(conversation_id, owner_id, space_id, title, created_at, surface) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (conversation_id, owner_id, space_id, title, datetime.now().isoformat(), surface),
         )
         self._conn.commit()
 
@@ -150,6 +168,27 @@ class SqliteEventStore:
     def _publish(self, conversation_id: str, event: Event) -> None:
         for q in self._subscribers.get(conversation_id, set()):
             q.put_nowait(event)
+
+    def publish_ephemeral(self, conversation_id: str, frame: dict) -> None:
+        """Broadcast a transient (non-persisted) frame to live subscribers. Used
+        for watch-it-write file-stream deltas. Fire-and-forget; if there is no
+        listener the frame is simply dropped (the final ActionEvent is the durable
+        record). Sync + non-blocking so the agent loop can call it inline."""
+        for q in self._eph_subscribers.get(conversation_id, set()):
+            q.put_nowait(frame)
+
+    async def subscribe_ephemeral(self, conversation_id: str) -> AsyncIterator[dict]:
+        """Live-only stream of transient frames for a conversation (no history)."""
+        return self._subscribe_ephemeral(conversation_id)
+
+    async def _subscribe_ephemeral(self, conversation_id: str) -> AsyncIterator[dict]:
+        queue: asyncio.Queue[dict] = asyncio.Queue()
+        self._eph_subscribers[conversation_id].add(queue)
+        try:
+            while True:
+                yield await queue.get()
+        finally:
+            self._eph_subscribers[conversation_id].discard(queue)
 
     async def append(self, conversation_id: str, event: Event) -> Event:
         async with self._write_lock:
@@ -262,7 +301,7 @@ class SqliteEventStore:
         no cross-owner data, ever."""
         offset = int(cursor) if cursor else 0
         rows = self._conn.execute(
-            "SELECT conversation_id, owner_id, title, created_at FROM conversations "
+            "SELECT conversation_id, owner_id, title, created_at, surface FROM conversations "
             "WHERE owner_id = ? ORDER BY created_at DESC, conversation_id DESC LIMIT ? OFFSET ?",
             (owner_id, limit, offset),
         ).fetchall()
@@ -272,6 +311,7 @@ class SqliteEventStore:
                 owner_id=r["owner_id"],
                 title=r["title"],
                 created_at=r["created_at"],
+                surface=r["surface"] or "research",  # null (pre-migration) → research
             )
             for r in rows
         ]

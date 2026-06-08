@@ -15,11 +15,14 @@ Also delivers the two functions the event/state contract was waiting on:
 from __future__ import annotations
 
 from .config import (
+    EncodersSettings,
+    ExtractionSettings,
     ModelEntry,
     ProjectStorageSettings,
     RoleRouting,
     RouterConfig,
     SandboxSettings,
+    SearchSettings,
     default_config,
 )
 from .config_store import ConfigStore
@@ -105,6 +108,9 @@ __all__ = [
     "RouterConfig",
     "ProjectStorageSettings",
     "SandboxSettings",
+    "EncodersSettings",
+    "ExtractionSettings",
+    "SearchSettings",
     "RouterSummarizer",
     "RoutingDecision",
     "RoutingSink",

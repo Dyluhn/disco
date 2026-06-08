@@ -16,6 +16,13 @@ Key invariants (principles §1):
 from __future__ import annotations
 
 import asyncio
+import logging
+from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..llm import StreamChunk
+    from .boundaries import StreamHook
 
 from ..events import (
     ActionEvent,
@@ -23,9 +30,11 @@ from ..events import (
     AlternativeOption,
     AlternativesEvent,
     ConversationStatus,
+    DeliverableEvent,
     ErrorEvent,
     Event,
     EventSource,
+    KnowledgeEvent,
     LLMMessage,
     MessageEvent,
     ObservationEvent,
@@ -46,7 +55,16 @@ from ..state import ConversationState
 from ..store.base import EventStore
 from ..view import Condenser, Summarizer, View
 from .boundaries import Agent, ConfirmationPolicy, SecurityAnalyzer, StopHook, ToolExecutor
+from .stream_extract import extract_partial_string_field
 from .stuck import StuckDetector, StuckThresholds
+
+_LOG = logging.getLogger("perpleximanus.loop")
+
+# D2: the reserved AlternativesEvent option id for "Continue anyway" — the bypass the
+# user can always pick at the circuit-breaker gate to reset the failure streak and let
+# the agent keep going. The frontend renders it as a distinct button; pick_alternative
+# special-cases it (reset streak + resume) rather than running a tool.
+_CONTINUE_OPTION_ID = "__continue__"
 
 _DEFAULT_VETO_FEEDBACK = (
     "<system-reminder>\n"
@@ -122,7 +140,16 @@ _EXECUTION_NUDGE = (
 # meta tools that don't change workspace state. plan_step is informational; the
 # planning tool would have been intercepted upstream but is named for clarity.
 _NON_PRODUCTIVE_TOOLS = frozenset(
-    {"submit_plan", "plan_step", "ask_user", "propose_plan_update"}
+    {
+        "submit_plan",
+        "plan_step",
+        "ask_user",
+        "propose_plan_update",
+        "notify_user",
+        "finish",
+        "remember",  # bookkeeping — recording a fact isn't task progress on its own
+        "serve",  # a handoff marker, not task work itself
+    }
 )
 
 # The virtual ask_user tool — the model's escape hatch when it (in its own
@@ -275,6 +302,210 @@ def _propose_plan_update_tool_singleton():
     return _PROPOSE_PLAN_UPDATE_TOOL_SPEC
 
 
+# GAP B turn-taking tools — notify (non-blocking progress / mid-run reply) and
+# finish (the explicit, affirmative terminal move). Both are intercepted by the
+# loop and never reach the executor.
+_NOTIFY_USER_DESCRIPTION = (
+    "Send the user a NON-BLOCKING message — a progress update, an explanation of "
+    "what you're doing, or a reply to something they said mid-run. The run does "
+    "NOT stop; you keep working on your next step right after. Use this freely to "
+    "narrate and to answer the user — it is the correct way to 'talk' during a "
+    "build. (For a question you genuinely need answered before continuing, use "
+    "`ask_user` instead, which halts.)"
+)
+_NOTIFY_USER_SCHEMA = {
+    "type": "object",
+    "properties": {"message": {"type": "string", "description": "The message to the user."}},
+    "required": ["message"],
+}
+# The `remember` virtual tool — durable memory. When the agent learns a fact it
+# will need LATER in the SAME run (a chosen library version, a discovered build
+# command, a constraint the user stated, a dead-end to avoid), it records it
+# here. The loop intercepts the call and emits a pinned KnowledgeEvent: pinned
+# means the fact is EXEMPT from condensation, so it survives even after the raw
+# transcript that taught it is summarized away. This is the standing-memory
+# channel that backs MEMORY.md-style recall without a separate store — the View
+# already injects KnowledgeEvents back into context every step.
+_REMEMBER_DESCRIPTION = (
+    "Record a durable fact you will need LATER in this run — a decision you made "
+    "(a chosen library/version), something you discovered (the build command, an "
+    "API shape, a path), a constraint the user stated, or a dead-end to avoid. "
+    "Unlike normal observations, a remembered fact is PINNED: it survives context "
+    "condensation, so you won't forget it on a long run. Keep each `fact` to one "
+    "or two sentences. Optionally set `scope` to a keyword/path the fact applies "
+    "to. This does NOT stop the run — you keep working right after."
+)
+_REMEMBER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "fact": {
+            "type": "string",
+            "description": "The durable fact to remember (one or two sentences).",
+        },
+        "scope": {
+            "type": "string",
+            "description": "Optional applicability hint — a keyword or path the fact applies to.",
+        },
+    },
+    "required": ["fact"],
+}
+# The `serve` virtual tool — the finished-artifact HANDOFF. When the agent has
+# produced something the user should see/use (a built site, a running app, a
+# generated report/file), it calls `serve` to mark the deliverable. The loop
+# intercepts the call and emits a DeliverableEvent that the UI renders as a real
+# handoff (Open the live app / Download the files) — the difference between "the
+# run ended" and "here is your thing." Non-blocking: the agent keeps working (it
+# usually serves, then verifies, then finishes).
+_SERVE_DESCRIPTION = (
+    "Hand off a finished deliverable to the user. Call this when you've produced "
+    "something they should open or download. Set `kind`='app' for a runnable "
+    "result they open in the live preview (a built site / running dev server "
+    "rooted at `path`) — make sure a server is actually serving it (the workspace "
+    "auto-serves on the preview port; for a subfolder like dist/ start a server "
+    "yourself first). Set `kind`='files' for artifacts to download (`path` = the "
+    "file or folder). Give a short human `title`. This does NOT end the run — "
+    "serve the deliverable, verify it, THEN call finish."
+)
+_SERVE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {
+            "type": "string",
+            "description": "Short human label, e.g. 'Landing page' or 'Sales report'.",
+        },
+        "path": {
+            "type": "string",
+            "description": "Workspace-relative path: app root (kind=app) or file/folder (files).",
+        },
+        "kind": {
+            "type": "string",
+            "enum": ["app", "files"],
+            "description": "'app' = open in live preview; 'files' = download. Default 'app'.",
+        },
+    },
+    "required": ["title", "path"],
+}
+_FINISH_DESCRIPTION = (
+    "Declare the task COMPLETE and end the run. Call this ONLY when every plan "
+    "step is done and verified — it is the single affirmative way to finish. A "
+    "plain message without this tool does NOT end the run. Provide a short "
+    "`summary` of what you built / accomplished. STRONGLY PREFERRED: attach a "
+    "`verify` shell command that proves the deliverable works (the build "
+    "compiles, the tests pass, the server responds) — exit 0 means good. If it "
+    "fails, the run does NOT finish and you'll see exactly what broke."
+)
+_FINISH_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string", "description": "Short summary of what was accomplished."},
+        "verify": {
+            "type": "string",
+            "description": (
+                "Optional check that proves completion (exit 0 = success). Either a "
+                "shell command (`npm test`, `python -m pytest -q`, `curl -fsS "
+                "localhost:8000/`), OR for a STATIC page use the literal `static` "
+                "(checks index.html exists + parses) or `static:<path>` for another "
+                "file — NO server needed. If it fails, the finish is refused and you "
+                "must fix the problem."
+            ),
+        },
+    },
+    "required": [],
+}
+
+
+def _notify_user_tool_spec():
+    from ..llm.types import ToolSpec
+
+    return ToolSpec(
+        name="notify_user",
+        description=_NOTIFY_USER_DESCRIPTION,
+        parameters_schema=_NOTIFY_USER_SCHEMA,
+    )
+
+
+def _finish_tool_spec():
+    from ..llm.types import ToolSpec
+
+    return ToolSpec(
+        name="finish", description=_FINISH_DESCRIPTION, parameters_schema=_FINISH_SCHEMA
+    )
+
+
+def _remember_tool_spec():
+    from ..llm.types import ToolSpec
+
+    return ToolSpec(
+        name="remember", description=_REMEMBER_DESCRIPTION, parameters_schema=_REMEMBER_SCHEMA
+    )
+
+
+def _serve_tool_spec():
+    from ..llm.types import ToolSpec
+
+    return ToolSpec(name="serve", description=_SERVE_DESCRIPTION, parameters_schema=_SERVE_SCHEMA)
+
+
+# E4 — static-site verify. A static deliverable shouldn't have to curl a running
+# server to prove it's good; the honest post-condition is "the file exists and is
+# parseable HTML." The agent signals this with verify="static" (default index.html)
+# or verify="static:<path>". We translate it to a server-free python3 check that
+# runs through the SAME safe gate as any verify command (it assesses LOW — no
+# confirm). exit 0 ⇔ the page exists, is non-trivial, and parses.
+_STATIC_VERIFY_PREFIX = "static"
+
+
+def _static_verify_command(path: str) -> str:
+    p = (path or "index.html").strip().strip("'\"") or "index.html"
+    # single-quote the path safely for the shell, then hand to python3 -c
+    safe = p.replace("'", "'\\''")
+    script = (
+        "import sys,os.path,html.parser as H;"
+        f"p='{safe}';"
+        "(os.path.isfile(p) or sys.exit('missing '+p));"
+        "d=open(p,encoding='utf-8',errors='replace').read();"
+        "(len(d.strip())>=20 or sys.exit('empty '+p));"
+        "t=[];pr=H.HTMLParser();pr.handle_starttag=lambda n,a:t.append(n);pr.feed(d);"
+        "print('OK '+p+' tags='+str(len(t)));"
+        "sys.exit(0 if t else 'no html tags in '+p)"
+    )
+    return f'python3 -c "{script}"'
+
+
+_NOTIFY_USER_TOOL_SPEC = None
+_FINISH_TOOL_SPEC = None
+_REMEMBER_TOOL_SPEC = None
+_SERVE_TOOL_SPEC = None
+
+
+def _notify_user_tool_singleton():
+    global _NOTIFY_USER_TOOL_SPEC
+    if _NOTIFY_USER_TOOL_SPEC is None:
+        _NOTIFY_USER_TOOL_SPEC = _notify_user_tool_spec()
+    return _NOTIFY_USER_TOOL_SPEC
+
+
+def _finish_tool_singleton():
+    global _FINISH_TOOL_SPEC
+    if _FINISH_TOOL_SPEC is None:
+        _FINISH_TOOL_SPEC = _finish_tool_spec()
+    return _FINISH_TOOL_SPEC
+
+
+def _remember_tool_singleton():
+    global _REMEMBER_TOOL_SPEC
+    if _REMEMBER_TOOL_SPEC is None:
+        _REMEMBER_TOOL_SPEC = _remember_tool_spec()
+    return _REMEMBER_TOOL_SPEC
+
+
+def _serve_tool_singleton():
+    global _SERVE_TOOL_SPEC
+    if _SERVE_TOOL_SPEC is None:
+        _SERVE_TOOL_SPEC = _serve_tool_spec()
+    return _SERVE_TOOL_SPEC
+
+
 class AgentLoop:
     """[CONTRACT] The orchestrator. See module docstring + §2 state machine."""
 
@@ -318,6 +549,14 @@ class AgentLoop:
         self._execution_mode = execution_mode  # the mode an approved plan runs in
         self._plan_nudges = 0  # consecutive nudges while planning (safety cap)
         self._execution_nudges = 0  # consecutive "you must act" nudges in execution
+        # GAP B backstop: max tool-less prose turns in a row before the loop ends
+        # the run (a talking-without-acting model can't advance max_iterations).
+        self._max_consecutive_noops = 6
+        # Circuit breaker (Cluster 2): after this many consecutive failures the
+        # harness hands off to the user (AWAITING_USER_DECISION) instead of
+        # grinding. Set above StuckDetector's identical-repeat threshold (3) so
+        # identical loops still STUCK first; this catches the DISTINCT-failure case.
+        self._circuit_breaker_threshold = 4
         # Auto-continue cap: when the agent declares finished but the plan
         # isn't done, the loop re-kicks itself this many times before landing
         # FINISHED with partial-plan detail. The user shouldn't have to poke
@@ -327,8 +566,67 @@ class AgentLoop:
         self._stuck = StuckDetector(stuck_thresholds)
         self._veto_feedback = veto_feedback
         self._lock = asyncio.Lock()
+        # Watch-it-write sink (optional). The runtime wires this to the store's
+        # ephemeral broadcast; when set, the driver's streamed tool-call arg
+        # fragments are decoded into growing file-content frames and published
+        # live (display-only, never persisted). None → no streaming (tests, CLI).
+        self.stream_sink: Callable[[dict], None] | None = None
 
     # ---- emission + small helpers -------------------------------------------
+
+    # Tools whose streamed arguments carry a file body worth watching assemble.
+    _STREAMING_WRITE_TOOLS = ("file_write", "file_append", "write_file")
+    # Coalesce threshold: don't publish a frame until this many new content chars
+    # have accrued (or a newline appears) — keeps the type-out smooth without
+    # firing a WS frame per 3-char model token. The trailing remainder below the
+    # threshold is delivered by the authoritative ActionEvent, so nothing is lost.
+    _STREAM_FLUSH_CHARS = 24
+
+    def _build_stream_hook(self) -> StreamHook | None:
+        """Per-step watch-it-write hook (or None if no sink is wired). Decodes the
+        driver's streamed tool-call arg fragments into growing file-content frames
+        and publishes them live via `self.stream_sink`. The frontend appends each
+        `delta` to a per-path buffer and reconciles against the final, authoritative
+        ActionEvent when it lands (which supersedes the streamed text)."""
+        sink = self.stream_sink
+        if sink is None:
+            return None
+        # Per-step, per-tool-index accumulator (fresh each step → no stale state).
+        state: dict[int, dict] = {}
+
+        async def _hook(chunk: StreamChunk) -> None:
+            st = state.setdefault(
+                chunk.tool_index, {"args": "", "sent": 0, "path": None, "tool": ""}
+            )
+            st["args"] += chunk.tool_args_delta
+            if chunk.tool_name:
+                st["tool"] = chunk.tool_name
+            if st["tool"] not in self._STREAMING_WRITE_TOOLS:
+                return  # only stream tools that carry a file body
+            if not st["path"]:
+                # Require the WHOLE path (closing quote present) so a frame never
+                # shows a half-typed filename like "styles" for "styles.css".
+                p = extract_partial_string_field(st["args"], "path", require_complete=True)
+                if p:
+                    st["path"] = p
+            content = extract_partial_string_field(st["args"], "content")
+            if content is None:
+                return
+            new = content[st["sent"] :]
+            if len(new) < self._STREAM_FLUSH_CHARS and "\n" not in new:
+                return  # coalesce — wait for more
+            st["sent"] = len(content)
+            sink(
+                {
+                    "type": "file_stream",
+                    "tool": st["tool"],
+                    "path": st["path"] or "",
+                    "index": chunk.tool_index,
+                    "delta": new,
+                }
+            )
+
+        return _hook
 
     async def _emit(self, event: Event) -> Event:
         return await self.store.append(self.conversation_id, event)
@@ -362,10 +660,35 @@ class AgentLoop:
 
     @staticmethod
     def _estimate_tokens(view: View) -> int:
-        # [VERIFY] cheap heuristic (~4 chars/token); swap for a tokenizer later.
-        return sum(len(m.content) for m in view.messages) // 4
+        # ~4 chars/token heuristic. A-S1 fix: the old version summed only message
+        # `.content`, ignoring tool-call argument JSON, tool schemas, and the
+        # system prompt — so the real prompt was LARGER than estimated yet the
+        # trigger still fired. Now we also count serialized tool-call args and add
+        # a fixed allowance for the system prompt + tool-schema prefix.
+        chars = 0
+        for m in view.messages:
+            chars += len(m.content or "")
+            for tc in getattr(m, "tool_calls", None) or []:
+                # tool_calls may be dicts or pydantic models; stringify defensively.
+                chars += len(str(getattr(tc, "arguments", None) or tc))
+        # System prompt + tool-schema prefix allowance (~2k tokens), counted so the
+        # trigger reflects the true prompt size, not just the transcript tail.
+        return chars // 4 + 2_000
 
     # ---- plan-mode helpers (Build) ------------------------------------------
+
+    def _readonly_tool_names(self) -> frozenset[str] | None:
+        """The executor's set of read-only tool names, or None if this executor
+        can't report it (older/fake executors). None → the capability backstop
+        is skipped and only the name allowlist governs (legacy behavior); a real
+        DefaultToolExecutor always reports, so the backstop is live in prod."""
+        fn = getattr(self.executor, "readonly_tool_names", None)
+        if fn is None:
+            return None
+        try:
+            return frozenset(fn())
+        except Exception:  # noqa: BLE001 — never let tool-listing crash the loop
+            return None
 
     def _tools_for_step(self) -> list:
         """Mode-scoped tool visibility. With no planning_tools configured this is a
@@ -379,8 +702,26 @@ class AgentLoop:
         loop. This is the Claude Code pattern: the tool is *available*, the
         model *discovers and chooses* it, the harness does not nudge it."""
         tools = self.executor.available_tools()
-        if self._planning_tools and self.mode == OperatingMode.PLANNING:
-            return [t for t in tools if getattr(t, "name", None) in self._planning_tools]
+        if self.mode == OperatingMode.PLANNING:
+            # The PLANNING agent is READ-ONLY (Claude-Code plan-mode parity): it
+            # gathers context and proposes a plan; writes/exec are off the table
+            # until approval. TWO independent, fail-safe guards:
+            #   (1) capability backstop (ALWAYS, when the executor can report it):
+            #       drop any tool not marked read_only — so even a misconfigured
+            #       name allowlist that names a write tool can't leak it.
+            #   (2) name allowlist (when configured): restrict further to the
+            #       operator's curated set.
+            readonly = self._readonly_tool_names()  # frozenset | None (None=unknown)
+            allow = self._planning_tools
+
+            def _planner_ok(name: str | None) -> bool:
+                if readonly is not None and name not in readonly:
+                    return False  # capability backstop — never a mutating tool
+                if allow:
+                    return name in allow  # allowlist restricts further
+                return True
+
+            return [t for t in tools if _planner_ok(getattr(t, "name", None))]
         if self._planning_tools:
             tools = [t for t in tools if getattr(t, "name", None) not in self._planning_tools]
         # Append the virtual ask_user + propose_plan_update tools in execution
@@ -391,6 +732,10 @@ class AgentLoop:
         tools = list(tools) + [
             _ask_user_tool_singleton(),
             _propose_plan_update_tool_singleton(),
+            _notify_user_tool_singleton(),
+            _finish_tool_singleton(),
+            _remember_tool_singleton(),
+            _serve_tool_singleton(),
         ]
         return tools
 
@@ -477,6 +822,19 @@ class AgentLoop:
             if isinstance(e, ActionEvent):
                 failed_action_id = e.id
                 break
+        # D2 — always append the "Continue anyway" bypass so the user is never trapped
+        # at a decision gate: pick it to reset the failure streak and let the agent
+        # keep going with its own judgment (pick_alternative special-cases this id).
+        options = [
+            *options,
+            AlternativeOption(
+                id=_CONTINUE_OPTION_ID,
+                title="Continue anyway",
+                description="Let the agent keep working with its own best next step.",
+                tool_name="",  # not a tool — the loop intercepts this id
+                arguments={},
+            ),
+        ]
         return AlternativesEvent(
             failed_action_id=failed_action_id,
             summary=summary,
@@ -507,6 +865,66 @@ class AgentLoop:
                 if e.tool_call.tool_name not in _NON_PRODUCTIVE_TOOLS:
                     return True
         return False
+
+    @staticmethod
+    def _hard_deny_reason(action: ActionEvent) -> str | None:
+        """Cluster 3: a non-negotiable command-level refusal. Returns a reason if
+        the action is a hard-denied shell command (mkfs, raw-device write, fork
+        bomb, rm -rf /), else None. Refused outright before the confirm gate."""
+        from ..security.analyzers import hard_deny_reason
+
+        tc = action.tool_call
+        if tc is None or tc.tool_name not in ("shell", "code_exec"):
+            return None
+        command = str(tc.arguments.get("command") or tc.arguments.get("code") or "")
+        return hard_deny_reason(command)
+
+    @staticmethod
+    def _count_recent_failures(events: list[Event]) -> int:
+        """Consecutive AgentErrorEvents walking back from the tail. Reset by a
+        successful ObservationEvent or a USER message (a fresh instruction).
+        Interleaved ActionEvents and agent/env messages do NOT reset. Drives the
+        Cluster 2 circuit breaker."""
+        streak = 0
+        for e in reversed(events):
+            if isinstance(e, AgentErrorEvent):
+                streak += 1
+            elif isinstance(e, ObservationEvent):
+                break
+            elif isinstance(e, MessageEvent) and e.source == EventSource.USER:
+                break
+        return streak
+
+    @staticmethod
+    def _recovery_requested_since_reset(events: list[Event]) -> bool:
+        """D2 guard: True if a circuit-breaker recovery was ALREADY requested in the
+        current failure streak (a `recovery_requested` StatusEvent before the streak's
+        reset boundary — a USER message or successful Observation). Stops the breaker
+        from re-asking every iteration; the second time through it falls to the step
+        (agent proposes) or, if it failed again, the hard halt."""
+        for e in reversed(events):
+            if isinstance(e, StatusEvent) and e.detail == "recovery_requested":
+                return True
+            if isinstance(e, ObservationEvent) and e.tool_result.success:
+                return False
+            if isinstance(e, MessageEvent) and e.source == EventSource.USER:
+                return False
+        return False
+
+    @staticmethod
+    def _consecutive_noops(events: list[Event]) -> int:
+        """Count trailing agent prose MessageEvents not separated by an
+        ActionEvent or a USER message. Resets when the agent acts or the user
+        speaks. The GAP B backstop reads this to stop a talk-without-acting loop."""
+        count = 0
+        for e in reversed(events):
+            if isinstance(e, ActionEvent):
+                break
+            if isinstance(e, MessageEvent) and e.source == EventSource.USER:
+                break
+            if isinstance(e, MessageEvent) and e.source == EventSource.AGENT:
+                count += 1
+        return count
 
     @staticmethod
     def _auto_continue_attempts(events: list[Event]) -> int:
@@ -654,7 +1072,11 @@ class AgentLoop:
 
     async def _materialize_view(self, events: list[Event]) -> View:
         view = View.of(events)
-        req = self.condenser.should_condense(view, token_count=self._estimate_tokens(view))
+        est = self._estimate_tokens(view)
+        # H3: log the prompt size per step so cost regressions are visible (the 60k
+        # bloat was invisible because nothing measured it). DEBUG-level; cheap.
+        _LOG.debug("driver view: ~%d input tokens, %d messages", est, len(view.messages))
+        req = self.condenser.should_condense(view, token_count=est)
         if req is not None:
             tombstone = await self.condenser.condense(events, view, summarizer=self.summarizer)
             if tombstone is not None:
@@ -738,6 +1160,87 @@ class AgentLoop:
             )
         )
 
+    async def _finish_verify_passed(self, command: str) -> bool:
+        """Run the agent's stated acceptance check before allowing `finish`
+        (verify-on-finish post-condition gate). The agent attaches a shell
+        command to finish whose exit 0 means the deliverable is good; we run it,
+        VISIBLE in the trace, and on failure REFUSE the finish so the agent fixes
+        the real problem instead of declaring a broken build complete.
+
+        The verify command is NOT privileged: it passes the same hard-deny gate
+        AND the same confirmation policy as any action. A command that would
+        normally require confirmation is refused here (we don't silently run a
+        gated command as a 'verification') — the agent is told to run it as an
+        ordinary, gated action first. Ordinary test/build/lint checks assess as
+        MEDIUM and run unimpeded. Returns True iff the check ran and passed."""
+        call = ToolCall(tool_name="shell", arguments={"command": command})
+        action = ActionEvent(thought=f"Verifying completion: {command}", tool_call=call)
+
+        deny = self._hard_deny_reason(action)
+        if deny is not None:
+            await self._emit(action)
+            await self._emit(
+                AgentErrorEvent(
+                    error=(
+                        "<system-reminder>\n"
+                        f"The verify command attached to finish is hard-denied ({deny}); it "
+                        "will not run. Provide a safe verify command, or finish without one.\n"
+                        "</system-reminder>"
+                    ),
+                    action_id=action.id,
+                    tool_call_id=call.call_id,
+                )
+            )
+            return False
+
+        risk = self.analyzer.assess(action)
+        if self.policy.should_confirm(risk):
+            await self._emit(action)
+            await self._emit(
+                AgentErrorEvent(
+                    error=(
+                        "<system-reminder>\n"
+                        "The verify command attached to finish needs confirmation to run "
+                        "and won't be executed silently as a verification. Run that check "
+                        "as a normal action first (it will go through the confirm gate), "
+                        "then finish.\n"
+                        "</system-reminder>"
+                    ),
+                    action_id=action.id,
+                    tool_call_id=call.call_id,
+                )
+            )
+            return False
+
+        await self._emit(action)
+        await self._execute_and_observe(action)
+        # Find the observation correlated to THIS verify action (robust against a
+        # trailing sandbox-restart notice that _execute_and_observe may append).
+        events_after = await self._events()
+        obs = next(
+            (e for e in reversed(events_after) if getattr(e, "action_id", None) == action.id),
+            None,
+        )
+        passed = isinstance(obs, ObservationEvent) and obs.tool_result.success
+        if not passed:
+            await self._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "<system-reminder>\n"
+                            f"You called finish, but the verify command `{command}` did not "
+                            "pass (see the result above). The task is NOT complete. Fix what "
+                            "it surfaced, then finish again — or finish without a verify "
+                            "command if the check itself is wrong.\n"
+                            "</system-reminder>"
+                        ),
+                    ),
+                )
+            )
+        return passed
+
     async def _stop_allowed(self, state: ConversationState, events: list[Event]) -> bool:
         for hook in self._stop_hooks:
             if not await hook.allow_stop(state, events):
@@ -806,6 +1309,75 @@ class AgentLoop:
                     await self._emit(StatusEvent(status=ConversationStatus.STUCK))
                     return await self.get_state()
 
+                # (c.2) CIRCUIT BREAKER (Cluster 2). StuckDetector only catches
+                # IDENTICAL action→error repeats; a model that tries N DIFFERENT
+                # things that all fail would otherwise grind to max_iterations.
+                # After `_circuit_breaker_threshold` consecutive failures, if the
+                # model hasn't itself escalated (it would have halted at a gate
+                # already), the HARNESS hands off to the user instead of grinding:
+                # it halts at AWAITING_USER_DECISION with a summary of what failed.
+                # The user's next message resets the streak (see _count_recent_failures).
+                fails = self._count_recent_failures(events)
+                recent_errors = [
+                    e.error for e in reversed(events) if isinstance(e, AgentErrorEvent)
+                ][:fails]
+                recovery_requested = self._recovery_requested_since_reset(events)
+                if fails >= self._circuit_breaker_threshold and not recovery_requested:
+                    # D2 — FIRST time we hit the wall: don't dump a dead-end message.
+                    # Ask the agent to DIAGNOSE the failures and propose 2-3 CONCRETE
+                    # recovery options via `ask_user` (model-generated, runnable, from
+                    # its own failure context — not a canned list). The marker
+                    # (StatusEvent detail) guards against re-asking before it steps; the
+                    # NEXT iteration falls through so the agent actually proposes.
+                    errs = "\n".join(f"  • {err[:200]}" for err in recent_errors[:4])
+                    await self._emit(
+                        MessageEvent(
+                            source=EventSource.ENVIRONMENT,
+                            message=LLMMessage(
+                                role="user",
+                                content=(
+                                    "<system-reminder>\n"
+                                    f"You've failed {fails} times in a row:\n{errs}\n\n"
+                                    "STOP retrying blindly. Call `ask_user` NOW with: a "
+                                    "1–2 sentence DIAGNOSIS of what is actually blocking you "
+                                    "as the `question`, and 2–3 concrete recovery `options`, "
+                                    "each a SPECIFIC tool action that CHANGES the approach "
+                                    "(not a repeat of what just failed). The user will pick "
+                                    "one — or let you continue.\n"
+                                    "</system-reminder>"
+                                ),
+                            ),
+                        )
+                    )
+                    await self._emit(
+                        StatusEvent(
+                            status=ConversationStatus.RUNNING, detail="recovery_requested"
+                        )
+                    )
+                    continue
+                if fails > self._circuit_breaker_threshold:
+                    # Recovery was already requested AND it failed again → NOW hand off
+                    # with a plain summary (the old behavior) so it can't loop forever.
+                    summary = (
+                        f"I've hit {fails} failures in a row and couldn't find a way "
+                        "through. Pausing for your direction. The recent errors were:\n"
+                        + "\n".join(f"  • {err[:200]}" for err in recent_errors[:4])
+                        + "\n\nHow would you like me to proceed?"
+                    )
+                    await self._emit(
+                        MessageEvent(
+                            source=EventSource.AGENT,
+                            message=LLMMessage(role="assistant", content=summary),
+                        )
+                    )
+                    await self._emit(
+                        StatusEvent(
+                            status=ConversationStatus.AWAITING_USER_DECISION,
+                            detail="circuit_breaker",
+                        )
+                    )
+                    return await self.get_state()
+
                 # (c.5) SOFT plan-step nudge — the auditor. When substantial work
                 # has happened but the capstone tracker is lagging (the "did the
                 # work, forgot to check it off" failure), inject ONE gentle
@@ -847,6 +1419,7 @@ class AgentLoop:
                         self._tools_for_step(),
                         mode=self.mode,
                         overflow_signal=self._overflow_signal(events),
+                        on_stream=self._build_stream_hook(),
                     )
                 except LLMContextWindowExceeded:
                     if await self._hard_reset(await self._events()):
@@ -866,6 +1439,84 @@ class AgentLoop:
                     # classification (the exception class) is preserved in the detail.
                     await self._emit(ErrorEvent(code="model_error", detail=_describe_llm_error(e)))
                     return await self.get_state()
+
+                # (e.4) TURN-TAKING NORMALIZATION (GAP B fix). Completion is now
+                # AFFIRMATIVE: the agent ends a run only by calling the `finish`
+                # tool, never by emitting a tool-less prose turn (which the old
+                # code mis-read as "done"). Two virtual tools the loop intercepts:
+                #   - `notify_user`: non-blocking progress / a mid-run reply →
+                #     record an agent message and CONTINUE (the safe talk-back
+                #     channel that replaces the dangerous tool-less-prose one).
+                #   - `finish`: the explicit terminal move → normalize to a
+                #     finished, tool-less step so the existing finish-path gate
+                #     (stop-hook veto, plan-completeness, auto-continue) runs.
+                if step.tool_call is not None and step.tool_call.tool_name == "notify_user":
+                    msg = str(step.tool_call.arguments.get("message") or "").strip() or step.thought
+                    if msg.strip():
+                        await self._emit(
+                            MessageEvent(
+                                source=EventSource.AGENT,
+                                message=LLMMessage(role="assistant", content=msg),
+                            )
+                        )
+                    continue  # non-blocking — keep working
+                if step.tool_call is not None and step.tool_call.tool_name == "remember":
+                    # Durable memory: emit a PINNED KnowledgeEvent so the fact
+                    # survives condensation and is re-injected into context every
+                    # step. Non-blocking — like notify_user, the agent keeps
+                    # working right after. A blank fact is ignored (no-op).
+                    fact = str(step.tool_call.arguments.get("fact") or "").strip()
+                    if fact:
+                        scope = str(step.tool_call.arguments.get("scope") or "").strip()
+                        await self._emit(
+                            KnowledgeEvent(source=EventSource.AGENT, scope=scope, snippet=fact)
+                        )
+                    continue  # non-blocking — keep working
+                if step.tool_call is not None and step.tool_call.tool_name == "serve":
+                    # Finished-artifact HANDOFF: emit a DeliverableEvent the UI renders
+                    # as Open-the-app / Download-the-files. Non-blocking — the agent
+                    # serves, verifies, then finishes. A missing path/title is ignored
+                    # (no-op) rather than emitting a useless handoff.
+                    title = str(step.tool_call.arguments.get("title") or "").strip()
+                    path = str(step.tool_call.arguments.get("path") or "").strip()
+                    kind = str(step.tool_call.arguments.get("kind") or "app").strip()
+                    if kind not in ("app", "files"):
+                        kind = "app"
+                    if title and path:
+                        await self._emit(
+                            DeliverableEvent(
+                                source=EventSource.AGENT,
+                                title=title,
+                                path=path,
+                                artifact_kind=kind,  # type: ignore[arg-type]
+                            )
+                        )
+                    continue  # non-blocking — keep working
+                if step.tool_call is not None and step.tool_call.tool_name == "finish":
+                    # VERIFY-ON-FINISH (post-condition gate). If the agent attached
+                    # a `verify` check to finish, RUN it first and refuse the finish
+                    # if it doesn't pass — the "run the tests before you claim done"
+                    # forcing function. The check is visible in the trace; on
+                    # failure the agent sees exactly what broke and adapts, instead
+                    # of declaring a broken build complete.
+                    verify_cmd = str(step.tool_call.arguments.get("verify") or "").strip()
+                    # E4: a `static` directive verifies a static page WITHOUT a server
+                    # (files present + HTML parses) — the honest check for a page build.
+                    if verify_cmd == _STATIC_VERIFY_PREFIX or verify_cmd.startswith(
+                        _STATIC_VERIFY_PREFIX + ":"
+                    ):
+                        _, _, _path = verify_cmd.partition(":")
+                        verify_cmd = _static_verify_command(_path)
+                    if verify_cmd and not await self._finish_verify_passed(verify_cmd):
+                        continue  # verification failed/refused — keep working
+                    summary = str(step.tool_call.arguments.get("summary") or "").strip()
+                    step = step.model_copy(
+                        update={
+                            "finished": True,
+                            "tool_call": None,
+                            "thought": summary or step.thought,
+                        }
+                    )
 
                 # (e.5) PLAN GATE — in PLANNING mode the planner has THREE valid moves:
                 #   1. `submit_plan` → intercepted into a PlanEvent, loop halts for approval.
@@ -1038,14 +1689,63 @@ class AgentLoop:
                     )
                     continue
 
-                # (g) no-op step (thought only) — record and continue
+                # (g) no-op step (thought only) — record and continue. GAP B
+                # backstop: a tool-less prose turn emits a MessageEvent (not an
+                # ActionEvent), so `iteration`/max_iterations never advances on
+                # it. Without a guard, a model that keeps talking without acting
+                # would loop forever. Count consecutive no-ops since the last
+                # real action / user message; nudge, then hard-stop.
                 if step.tool_call is None:
-                    await self._emit(
-                        MessageEvent(
-                            source=EventSource.AGENT,
-                            message=LLMMessage(role="assistant", content=step.thought),
+                    if step.thought.strip():
+                        await self._emit(
+                            MessageEvent(
+                                source=EventSource.AGENT,
+                                message=LLMMessage(role="assistant", content=step.thought),
+                            )
                         )
-                    )
+                    noops = self._consecutive_noops(await self._events())
+                    if noops >= self._max_consecutive_noops:
+                        # The model is talking without acting and won't stop —
+                        # end cleanly rather than spin. (A real run resumes on a
+                        # user steer; the prompt steers toward finish/act.)
+                        await self._emit(
+                            MessageEvent(
+                                source=EventSource.ENVIRONMENT,
+                                message=LLMMessage(
+                                    role="user",
+                                    content=(
+                                        "<system-reminder>\n"
+                                        f"You have sent {noops} messages in a row without "
+                                        "calling a tool. Ending the run. To continue, the "
+                                        "user can send a new instruction; otherwise call a "
+                                        "tool to act or `finish` to complete.\n"
+                                        "</system-reminder>"
+                                    ),
+                                ),
+                            )
+                        )
+                        await self._emit(
+                            StatusEvent(
+                                status=ConversationStatus.FINISHED, detail="noop_limit"
+                            )
+                        )
+                        return await self.get_state()
+                    if noops == self._max_consecutive_noops - 1:
+                        await self._emit(
+                            MessageEvent(
+                                source=EventSource.ENVIRONMENT,
+                                message=LLMMessage(
+                                    role="user",
+                                    content=(
+                                        "<system-reminder>\n"
+                                        "You've sent several messages without acting. Call a "
+                                        "tool to make progress, or `finish` if the task is "
+                                        "complete.\n"
+                                        "</system-reminder>"
+                                    ),
+                                ),
+                            )
+                        )
                     continue
 
                 # (g.5) ASK-USER GATE — `ask_user` is a MODEL-CHOSEN escape
@@ -1130,6 +1830,27 @@ class AgentLoop:
                     self_assessed_risk=step.self_assessed_risk,
                     llm_response_id=step.llm_response_id,
                 )
+
+                # (h.5) HARD DENY (Cluster 3) — catastrophic commands are refused
+                # outright, BEFORE the confirm gate. No approval, policy, or LLM
+                # can run them. The agent sees the refusal as an error and adapts.
+                deny_reason = self._hard_deny_reason(action)
+                if deny_reason is not None:
+                    await self._emit(action)  # record the proposed action for audit
+                    await self._emit(
+                        AgentErrorEvent(
+                            error=(
+                                "<system-reminder>\n"
+                                f"REFUSED: that command is hard-denied ({deny_reason}). It "
+                                "will never be executed regardless of approval. Choose a "
+                                "different, safe approach.\n"
+                                "</system-reminder>"
+                            ),
+                            action_id=action.id,
+                            tool_call_id=action.tool_call.call_id if action.tool_call else None,
+                        )
+                    )
+                    continue
 
                 # (i) RISK GATE — assess, then maybe require confirmation (§5).
                 # Audit (security §7): when the analyzer exposes the detailed
@@ -1318,6 +2039,29 @@ class AgentLoop:
                 # reminder + clear to RUNNING so the user isn't trapped.
                 await self._emit(
                     StatusEvent(status=ConversationStatus.RUNNING, detail="alternatives_missing")
+                )
+                return await self.get_state()
+            # D2 BYPASS — "Continue anyway": the user lets the agent keep going with
+            # its own judgment. RESET the failure streak (a USER message resets
+            # _count_recent_failures) and resume RUNNING; the agent picks its own next
+            # step instead of one of the proposed alternatives. This is the escape
+            # hatch the crude breaker lacked.
+            if option_id == _CONTINUE_OPTION_ID:
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.USER,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                "Continue — keep working. I've reviewed the failures and "
+                                "want you to proceed with your own best next step. Don't just "
+                                "repeat the exact action that was failing; adjust your approach."
+                            ),
+                        ),
+                    )
+                )
+                await self._emit(
+                    StatusEvent(status=ConversationStatus.RUNNING, detail="continue_anyway")
                 )
                 return await self.get_state()
             option = next((o for o in alt.options if o.id == option_id), None)

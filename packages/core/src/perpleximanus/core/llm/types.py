@@ -111,6 +111,10 @@ class TokenUsage(BaseModel):
     output_tokens: int
     # Cost in USD if known (OpenRouter reports it; local = 0.0).
     cost_usd: float = 0.0
+    # Cluster 8: cached prompt tokens (read from cache, ~10x cheaper). Surfaced
+    # so KV-cache hit-rate is OBSERVABLE — without it, a silently-broken prefix
+    # is invisible except on the bill. 0 when the provider doesn't report it.
+    cached_tokens: int = 0
 
 
 class ProposedToolCall(BaseModel):
@@ -169,5 +173,12 @@ class StreamChunk(BaseModel):
 
     model_config = ConfigDict(frozen=True)
     delta_text: str = ""
+    # Tool-call argument streaming (the file body for a `file_write` arrives HERE,
+    # not in delta_text). `tool_args_delta` is a raw JSON fragment of the tool call's
+    # `arguments` string as the model emits it; consumers accumulate per `tool_index`
+    # and may incrementally extract a field (e.g. `content`) for watch-it-write UX.
+    tool_name: str = ""
+    tool_args_delta: str = ""
+    tool_index: int = 0
     done: bool = False
     final: CompletionResponse | None = None  # present iff done is True

@@ -46,6 +46,7 @@ class ConversationSummary(BaseModel):
     owner_id: str
     title: str | None = None
     created_at: str  # ISO-8601
+    surface: str = "research"  # "research" | "build" | "deep_research" — for History routing
 
 
 @runtime_checkable
@@ -85,6 +86,16 @@ class EventStore(Protocol):
     async def subscribe(
         self, conversation_id: str, after_seq: int | None = None
     ) -> AsyncIterator[Event]: ...
+
+    def publish_ephemeral(self, conversation_id: str, frame: dict) -> None:
+        """Broadcast a transient, NON-persisted frame to live subscribers (e.g.
+        watch-it-write file-stream deltas). Fire-and-forget; dropped if no live
+        listener. Display-only — the durable record is the final persisted event."""
+        ...
+
+    async def subscribe_ephemeral(self, conversation_id: str) -> AsyncIterator[dict]:
+        """Live-only stream of transient frames (no history, no replay)."""
+        ...
 
     async def conversation_exists(self, conversation_id: str) -> bool: ...
 

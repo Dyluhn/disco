@@ -13,14 +13,20 @@ about the interiors behind these seams.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
 from ..events import ActionEvent, Event, SecurityRisk, ToolCall, ToolResult
-from ..llm import OperatingMode, OverflowSignal, ToolSpec
+from ..llm import OperatingMode, OverflowSignal, StreamChunk, ToolSpec
 from ..state import ConversationState
 from ..view import View
+
+# A watch-it-write hook: awaited with each streamed tool-call argument fragment
+# (StreamChunk.tool_args_delta) so the loop can surface a file body as it
+# assembles. Optional everywhere — None means "don't stream" (tests, CLI).
+StreamHook = Callable[[StreamChunk], Awaitable[None]]
 
 
 class AgentStep(BaseModel):
@@ -52,6 +58,7 @@ class Agent(Protocol):
         *,
         mode: OperatingMode,
         overflow_signal: OverflowSignal,
+        on_stream: StreamHook | None = None,
     ) -> AgentStep: ...
 
 

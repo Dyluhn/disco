@@ -1,0 +1,168 @@
+"""Verify-on-finish — the post-condition gate (Claude-Code 'run the tests before
+you claim done'). When the agent attaches a `verify` shell command to `finish`,
+the loop RUNS it and refuses the finish unless it passes. The check is not
+privileged: it passes the same hard-deny gate and confirmation policy as any
+action.
+"""
+
+from __future__ import annotations
+
+from llm_fakes import simple_config
+from loop_fakes import FakeAnalyzer, FakeExecutor, SequenceProvider, build_loop
+from perpleximanus.core import (
+    ActionEvent,
+    AgentErrorEvent,
+    ConversationStatus,
+    ObservationEvent,
+    SecurityRisk,
+    ToolResult,
+)
+from perpleximanus.core.llm import DefaultLLMRouter, ProposedToolCall
+from perpleximanus.core.loop import ConfirmRisky, NeverConfirm, RouterAgent
+
+CID = "conv"
+
+
+def _agent(scripted):
+    provider = SequenceProvider(scripted)
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    return RouterAgent(router, conversation_id=CID)
+
+
+def _finish(verify=None, summary="done"):
+    args = {"summary": summary}
+    if verify is not None:
+        args["verify"] = verify
+    return {"tool_calls": [ProposedToolCall(tool_name="finish", arguments=args)]}
+
+
+async def test_verify_passes_then_run_finishes_and_check_is_in_the_trace():
+    agent = _agent([_finish(verify="pytest -q")])
+    executor = FakeExecutor()  # default: every execute() succeeds
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("ship it")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    # The verify command actually ran, through the executor, as a shell action.
+    assert len(executor.calls) == 1
+    assert executor.calls[0].tool_name == "shell"
+    assert executor.calls[0].arguments == {"command": "pytest -q"}
+    # It's visible in the trace: a verify ActionEvent + its successful Observation.
+    events = await store.get_events(CID)
+    verify_actions = [
+        e for e in events if isinstance(e, ActionEvent) and e.tool_call.tool_name == "shell"
+    ]
+    assert len(verify_actions) == 1
+    assert "Verifying completion" in verify_actions[0].thought
+    assert any(isinstance(e, ObservationEvent) for e in events)
+
+
+async def test_verify_fails_then_finish_is_refused_and_loop_continues():
+    # Call 1: finish with a verify that FAILS → refused, loop keeps going.
+    # Call 2: finish WITHOUT verify → the run finishes.
+    agent = _agent([_finish(verify="pytest -q"), _finish(verify=None)])
+    failing = ToolResult(
+        call_id="c", tool_name="shell", success=False, content="2 failed", error="exit 1"
+    )
+    executor = FakeExecutor(result=failing)
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("ship it")
+    state = await loop.run()
+
+    # It ultimately finished (via the second, verify-less finish)...
+    assert state.execution_status == ConversationStatus.FINISHED
+    events = await store.get_events(CID)
+    # ...but the failed verify was recorded as an error (the agent saw it)...
+    assert any(isinstance(e, AgentErrorEvent) for e in events)
+    # ...and there is exactly ONE FINISHED status (the first finish did NOT land).
+    finishes = [
+        e
+        for e in events
+        if getattr(e, "status", None) == ConversationStatus.FINISHED
+    ]
+    assert len(finishes) == 1
+
+
+async def test_hard_denied_verify_is_refused_without_running():
+    # A catastrophic verify command is refused BEFORE execution.
+    agent = _agent([_finish(verify="rm -rf /"), _finish(verify=None)])
+    executor = FakeExecutor()
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("go")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    # The dangerous command NEVER reached the executor.
+    assert executor.calls == []
+    events = await store.get_events(CID)
+    assert any(
+        isinstance(e, AgentErrorEvent) and "hard-denied" in e.error for e in events
+    )
+
+
+async def test_verify_needing_confirmation_is_refused_not_silently_run():
+    # Under ConfirmRisky, a verify command the analyzer flags HIGH must NOT be
+    # silently auto-run as a 'verification' — it's refused with guidance to run
+    # it as a normal, gated action first.
+    agent = _agent([_finish(verify="deploy --prod"), _finish(verify=None)])
+    executor = FakeExecutor()
+    loop, store = build_loop(
+        agent,
+        executor=executor,
+        analyzer=FakeAnalyzer(SecurityRisk.HIGH),  # everything assesses HIGH
+        policy=ConfirmRisky(),  # gates HIGH
+    )
+
+    await loop.send_message("go")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert executor.calls == []  # never silently executed
+    events = await store.get_events(CID)
+    assert any(
+        isinstance(e, AgentErrorEvent) and "needs confirmation" in e.error for e in events
+    )
+
+
+async def test_finish_without_verify_is_unchanged():
+    # Back-compat: no verify → finishes immediately, no shell action.
+    agent = _agent([_finish(verify=None)])
+    executor = FakeExecutor()
+    loop, _ = build_loop(agent, executor=executor, policy=NeverConfirm())
+    await loop.send_message("go")
+    state = await loop.run()
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert executor.calls == []
+
+
+# ---- E4: static-site verify (no server) -------------------------------------
+
+
+async def test_static_verify_translates_to_a_serverfree_html_check():
+    """`verify="static"` runs a files-present + HTML-parses check, NOT a server
+    curl — the honest post-condition for a static page build."""
+    agent = _agent([_finish(verify="static")])
+    executor = FakeExecutor()
+    loop, _ = build_loop(agent, executor=executor, policy=NeverConfirm())
+    await loop.send_message("ship the page")
+    state = await loop.run()
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert len(executor.calls) == 1
+    cmd = executor.calls[0].arguments["command"]
+    # translated to a server-free python3 HTML check over index.html
+    assert cmd.startswith("python3 -c")
+    assert "html.parser" in cmd and "index.html" in cmd
+    assert "curl" not in cmd
+
+
+async def test_static_verify_honours_a_custom_path():
+    agent = _agent([_finish(verify="static:about.html")])
+    executor = FakeExecutor()
+    loop, _ = build_loop(agent, executor=executor, policy=NeverConfirm())
+    await loop.send_message("ship about")
+    await loop.run()
+    assert "about.html" in executor.calls[0].arguments["command"]

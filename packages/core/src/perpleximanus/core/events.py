@@ -45,6 +45,9 @@ class EventKind(str, Enum):
     PLAN = "plan"  # a proposed, structured plan awaiting approval (Build plan-mode)
     REPORT = "report"  # a finished Deep Research multi-section grounded report
     ALTERNATIVES = "alternatives"  # 2–3 user-choosable options after repeated tool failure
+    KNOWLEDGE = "knowledge"  # a scoped best-practice snippet (Cluster 7)
+    DATASOURCE = "datasource"  # durable API/schema docs, condensation-immune (Cluster 7)
+    DELIVERABLE = "deliverable"  # the agent's finished-artifact handoff signal
 
 
 def _new_id() -> str:
@@ -185,9 +188,12 @@ class ConversationStatus(str, Enum):
     # it (Build plan-mode). Mirrors WAITING_FOR_CONFIRMATION but gates the whole
     # plan up front, not one risky action.
     AWAITING_PLAN_APPROVAL = "AWAITING_PLAN_APPROVAL"
-    # Repeated tool failures (4 in a row) on the same conceptual step. The agent
-    # proposed 2–3 alternative approaches via `propose_alternatives`; the loop is
-    # halted until the user clicks one (or steers explicitly with send_message).
+    # The run is halted for the user to decide. Reached two ways: (1) the agent
+    # itself calls `ask_user` with options; (2) the harness circuit breaker fires
+    # after `_circuit_breaker_threshold` consecutive failures and hands off rather
+    # than grinding. The user clicks an option (when present) or steers via
+    # send_message. (There is no `propose_alternatives` tool — the model uses
+    # `ask_user`; the breaker is harness-driven.)
     AWAITING_USER_DECISION = "AWAITING_USER_DECISION"
     FINISHED = "FINISHED"
     ERROR = "ERROR"
@@ -228,10 +234,50 @@ class ActionEvent(BaseEvent, LLMConvertible):
                 {
                     "id": self.tool_call.call_id,
                     "name": self.tool_call.tool_name,
-                    "arguments": self.tool_call.arguments,
+                    "arguments": _snip_args(self.tool_call.arguments),
                 }
             ],
         )
+
+
+# A-S2 (the Snip shaper): the per-observation char cap applied at RENDER time
+# (to_llm_message), NOT at storage. The full content stays in the event payload
+# (and on disk for spilled artifacts) — only the LLM-facing message is trimmed.
+# Reversible: the model re-runs the tool or file_reads the artifact for the rest.
+_OBS_SNIP_CHARS = 8_000
+_OBS_SNIP_HEAD = 5_000
+_OBS_SNIP_TAIL = 2_000
+
+
+def snip_content(content: str, *, max_chars: int, head: int, tail: int) -> str:
+    """Trim an over-long string to head + tail with a recoverable marker. Pure +
+    deterministic (same input → same output) so it preserves View.of purity."""
+    if len(content) <= max_chars:
+        return content
+    dropped = len(content) - head - tail
+    return (
+        f"{content[:head]}\n"
+        f"… [snipped {dropped:,} chars — re-run the tool or use file_read for the full output] …\n"
+        f"{content[-tail:]}"
+    )
+
+
+# H2: elide large ARGUMENT values (e.g. a file_write's full body) at RENDER time.
+# A written file's content doesn't belong in the action history every turn — it's on
+# disk + readable. Re-sending a 59 KB body each action is the dominant cost bloat.
+# Pure + deterministic (preserves View.of purity); reversible (the marker tells the
+# model the file exists + to file_read it).
+_ARG_SNIP_CHARS = 1_500
+
+
+def _snip_args(arguments: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for k, v in arguments.items():
+        if isinstance(v, str) and len(v) > _ARG_SNIP_CHARS:
+            out[k] = f"<{len(v):,} chars elided — already applied; use file_read for the content>"
+        else:
+            out[k] = v
+    return out
 
 
 class ObservationEvent(BaseEvent, LLMConvertible):
@@ -246,9 +292,15 @@ class ObservationEvent(BaseEvent, LLMConvertible):
     action_id: str
 
     def to_llm_message(self) -> LLMMessage:
+        # A-S2 Snip: cap a single large observation before it hits the context.
         return LLMMessage(
             role="tool",
-            content=self.tool_result.content,
+            content=snip_content(
+                self.tool_result.content,
+                max_chars=_OBS_SNIP_CHARS,
+                head=_OBS_SNIP_HEAD,
+                tail=_OBS_SNIP_TAIL,
+            ),
             tool_call_id=self.tool_result.call_id,
         )
 
@@ -391,12 +443,12 @@ class AlternativeOption(BaseModel):
 
 
 class AlternativesEvent(BaseEvent, LLMConvertible):
-    """The structured recovery hand-off: when an action has failed 4 consecutive
-    times, the loop asks the agent to enumerate 2–3 distinct alternative
-    approaches via the `propose_alternatives` tool. The agent's structured
-    options become this event, the loop halts at AWAITING_USER_DECISION, and the
+    """The structured recovery hand-off. Emitted when the agent voluntarily calls
+    `ask_user` WITH options — it enumerates 2–3 concrete next-step alternatives,
+    those become this event, the loop halts at AWAITING_USER_DECISION, and the
     user picks one (or steers explicitly). The picked option's ToolCall becomes
-    the next action.
+    the next action. (The harness circuit breaker reaches the same status but with
+    a free-form question, no clickable options.)
 
     Mirrors PlanEvent's shape (gate event + LLMConvertible so the proposed
     options stay in-context for any follow-up turn). `failed_action_id`
@@ -423,6 +475,78 @@ class AlternativesEvent(BaseEvent, LLMConvertible):
         )
 
 
+class KnowledgeEvent(BaseEvent, LLMConvertible):
+    """A scoped best-practice snippet injected into the agent's context (Cluster
+    7). `scope` is an optional applicability hint (a task keyword or path glob)
+    the View can use to inject only relevant knowledge; `snippet` is the
+    guidance. LLMConvertible so it renders into the model context, and pinned
+    against condensation so standing guidance survives a long run."""
+
+    kind: Literal[EventKind.KNOWLEDGE] = EventKind.KNOWLEDGE
+    source: EventSource = EventSource.SYSTEM
+    scope: str = ""
+    snippet: str
+
+    def to_llm_message(self) -> LLMMessage:
+        scope = f" (applies to: {self.scope})" if self.scope else ""
+        return LLMMessage(
+            role="user",
+            content=f"<knowledge{scope}>\n{self.snippet}\n</knowledge>",
+        )
+
+
+class DatasourceEvent(BaseEvent, LLMConvertible):
+    """Durable data-API / schema documentation the agent learned or was given
+    (Cluster 7). The long-horizon hazard this fixes: an API contract learned
+    mid-run lives only in an Observation's inline text, which condensation later
+    compresses into lossy prose → the agent hallucinates an endpoint. A
+    DatasourceEvent is condensation-IMMUNE, so the exact contract stays verbatim
+    across an arbitrarily long build."""
+
+    kind: Literal[EventKind.DATASOURCE] = EventKind.DATASOURCE
+    source: EventSource = EventSource.SYSTEM
+    name: str  # the data source / API name
+    docs: str  # endpoint shape, auth, params, example response — verbatim
+
+    def to_llm_message(self) -> LLMMessage:
+        return LLMMessage(
+            role="user",
+            content=f"<datasource name=\"{self.name}\">\n{self.docs}\n</datasource>",
+        )
+
+
+class DeliverableEvent(BaseEvent, LLMConvertible):
+    """The agent's explicit 'here is the finished thing' handoff (Build). It names
+    WHAT was produced and WHERE, so the UI can present a real handoff (open the
+    live app / download the files) instead of leaving the user to guess what the
+    run made. Distinct from the live preview (which shows work-in-progress): a
+    DeliverableEvent is the agent affirming a result is ready.
+
+    `kind`:
+      • "app"   — a runnable result the user opens in the live preview (a built
+                  site / running dev server rooted at `path`).
+      • "files" — one or more workspace artifacts to download/inspect (`path` is
+                  the file or directory).
+
+    LLMConvertible so the agent's own context reflects what it has already handed
+    off (it shouldn't re-deliver the same thing); the body stays terse."""
+
+    kind: Literal[EventKind.DELIVERABLE] = EventKind.DELIVERABLE
+    source: EventSource = EventSource.AGENT
+    title: str  # short human label, e.g. "Landing page" / "Sales report"
+    path: str  # workspace-relative path (dir for an app root, file/dir for files)
+    artifact_kind: Literal["app", "files"] = "app"
+
+    def to_llm_message(self) -> LLMMessage:
+        return LLMMessage(
+            role="user",
+            content=(
+                f"<deliverable kind=\"{self.artifact_kind}\" path=\"{self.path}\">\n"
+                f"{self.title}\n</deliverable>"
+            ),
+        )
+
+
 class ErrorEvent(BaseEvent):
     """A conversation-level (fatal-ish) error, e.g. MaxIterationsReached.
     NOT LLMConvertible."""
@@ -445,6 +569,9 @@ Event = Annotated[
     | PlanEvent
     | ReportEvent
     | AlternativesEvent
+    | KnowledgeEvent
+    | DatasourceEvent
+    | DeliverableEvent
     | ErrorEvent,
     Field(discriminator="kind"),
 ]

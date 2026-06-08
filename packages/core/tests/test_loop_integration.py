@@ -25,12 +25,18 @@ CID = "conv"
 
 
 async def test_loop_router_event_contracts_compose():
-    # Faked router: call 1 proposes a shell tool call; call 2 returns plain text
-    # (RouterAgent treats "no tool call" as finished).
+    # Faked router: call 1 proposes a shell tool call; call 2 calls the `finish`
+    # tool — the new AFFIRMATIVE terminal move (GAP B). A tool-less prose turn no
+    # longer ends the run; only `finish` does.
     provider = SequenceProvider(
         [
             {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "ls -la"})]},
-            {"text": "all done"},
+            {
+                "text": "all done",
+                "tool_calls": [
+                    ProposedToolCall(tool_name="finish", arguments={"summary": "listed the files"})
+                ],
+            },
         ]
     )
     router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})

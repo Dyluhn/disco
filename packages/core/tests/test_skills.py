@@ -152,3 +152,64 @@ def test_body_size_is_capped(tmp_path):
     # Persisted file also reflects the cap.
     reloaded = store.get(s.id)
     assert reloaded is not None and len(reloaded.body) == SkillStore.MAX_BODY_BYTES
+
+
+# ---- Cluster 4: lazy / path-scoped skill injection --------------------------
+
+
+def test_unscoped_skills_always_render_full():
+    from perpleximanus.core import Skill, render_skills_for_prompt
+
+    skills = [Skill(id="a", name="House Style", body="Use TypeScript strict mode.", enabled=True)]
+    out = render_skills_for_prompt(skills)  # no active_paths
+    assert "House Style" in out
+    assert "TypeScript strict mode" in out
+
+
+def test_scoped_skill_shows_manifest_only_without_matching_path():
+    from perpleximanus.core import Skill, render_skills_for_prompt
+
+    skills = [
+        Skill(
+            id="css",
+            name="CSS Rules",
+            description="our spacing scale",
+            body="Use the 8px grid everywhere.",
+            scope="**/*.css",
+            enabled=True,
+        )
+    ]
+    out = render_skills_for_prompt(skills, active_paths=["src/App.tsx"])
+    assert "CSS Rules" in out  # manifest entry present
+    assert "applies to **/*.css" in out
+    assert "8px grid" not in out  # full body NOT injected (no matching path)
+
+
+def test_scoped_skill_shows_full_body_on_matching_path():
+    from perpleximanus.core import Skill, render_skills_for_prompt
+
+    skills = [
+        Skill(
+            id="css",
+            name="CSS Rules",
+            body="Use the 8px grid everywhere.",
+            scope="**/*.css",
+            enabled=True,
+        )
+    ]
+    out = render_skills_for_prompt(skills, active_paths=["src/styles/main.css"])
+    assert "8px grid" in out  # full body injected (path matches the scope glob)
+
+
+def test_scope_round_trips_through_markdown(tmp_path):
+    from perpleximanus.core import SkillStore
+
+    store = SkillStore(tmp_path)
+    store.create(name="Scoped", body="x")
+    s = store.get("scoped")
+    # default scope is empty
+    assert s is not None and s.scope == ""
+    # save with a scope, reload
+    store.save(s.model_copy(update={"scope": "src/**/*.ts"}))
+    reloaded = store.get("scoped")
+    assert reloaded is not None and reloaded.scope == "src/**/*.ts"

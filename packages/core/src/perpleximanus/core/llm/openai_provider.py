@@ -127,7 +127,11 @@ class OpenAIProvider:
                         "arguments": (
                             tc["arguments"]
                             if isinstance(tc.get("arguments"), str)
-                            else json.dumps(tc.get("arguments") or {})
+                            # Cluster 8: deterministic key order so an identical
+                            # tool-call serializes byte-identically every turn —
+                            # otherwise dict ordering drift silently breaks the
+                            # KV-cache prefix.
+                            else json.dumps(tc.get("arguments") or {}, sort_keys=True)
                         ),
                     },
                 }
@@ -189,6 +193,18 @@ class OpenAIProvider:
 
     # -- response shaping -----------------------------------------------------
 
+    @staticmethod
+    def _cached_tokens(usage: dict) -> int:
+        """Cluster 8: extract cached prompt tokens across provider shapes —
+        OpenAI's `prompt_tokens_details.cached_tokens` and Anthropic's
+        `cache_read_input_tokens`. 0 when not reported."""
+        details = usage.get("prompt_tokens_details") or {}
+        return int(
+            details.get("cached_tokens", 0)
+            or usage.get("cache_read_input_tokens", 0)
+            or 0
+        )
+
     def _to_response(self, req: CompletionRequest, model: str, data: dict) -> CompletionResponse:
         choice = (data.get("choices") or [{}])[0]
         msg = choice.get("message") or {}
@@ -200,6 +216,7 @@ class OpenAIProvider:
                 input_tokens=int(usage.get("prompt_tokens", 0) or 0),
                 output_tokens=int(usage.get("completion_tokens", 0) or 0),
                 cost_usd=0.0,  # local models are free
+                cached_tokens=self._cached_tokens(usage),
             ),
             finish_reason=_map_finish(choice.get("finish_reason")),
             model_used=data.get("model", model),
@@ -285,8 +302,9 @@ class OpenAIProvider:
                             content.append(piece)
                             yield StreamChunk(delta_text=piece)
                         for tc in delta.get("tool_calls") or []:
+                            idx = tc.get("index", 0)
                             slot = tool_buf.setdefault(
-                                tc.get("index", 0), {"id": None, "name": "", "args": ""}
+                                idx, {"id": None, "name": "", "args": ""}
                             )
                             if tc.get("id"):
                                 slot["id"] = tc["id"]
@@ -295,6 +313,13 @@ class OpenAIProvider:
                                 slot["name"] = fn["name"]
                             if fn.get("arguments"):
                                 slot["args"] += fn["arguments"]
+                                # Surface the tool-call arg fragment so consumers can
+                                # watch the file body assemble live (watch-it-write).
+                                yield StreamChunk(
+                                    tool_name=slot["name"],
+                                    tool_args_delta=fn["arguments"],
+                                    tool_index=idx,
+                                )
                         if ch.get("finish_reason"):
                             finish = ch["finish_reason"]
         except httpx.TimeoutException as exc:
@@ -320,6 +345,7 @@ class OpenAIProvider:
                 input_tokens=int(usage.get("prompt_tokens", 0) or 0),
                 output_tokens=int(usage.get("completion_tokens", 0) or 0),
                 cost_usd=0.0,
+                cached_tokens=self._cached_tokens(usage),
             ),
             finish_reason=_map_finish(finish),
             model_used=model_used,

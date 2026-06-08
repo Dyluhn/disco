@@ -84,6 +84,44 @@ def _destructive_rm(low: str) -> bool:
     return "r" in flagchars and "f" in flagchars
 
 
+# Cluster 3 — HARD DENY: catastrophic, never-allowed commands. Distinct from
+# HIGH (which routes to human confirmation): these are refused outright by the
+# loop BEFORE the confirm gate — no approval, no policy, no LLM can run them.
+# OS-level enforcement (egress/filesystem isolation) is the deeper layer; this
+# is the command-level non-negotiable floor.
+_SHELL_DENY: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bmkfs\b"), "format a filesystem (irreversible)"),
+    (re.compile(r"\bdd\b[^\n;|&]*\bof=/dev/(sd|nvme|hd|disk|vd)"), "raw write to a disk device"),
+    (re.compile(r">\s*/dev/(sd|nvme|hd|disk|vd)"), "redirect to a raw disk device"),
+    (re.compile(r":\(\)\s*\{\s*:?\s*\|?\s*:?\s*&?\s*\}\s*;?\s*:"), "fork bomb"),
+    (
+        re.compile(r"\brm\b[^\n;|&]*\s-[rfRF]*\s*(/|/\*)(\s|$)"),
+        "recursive delete of the root filesystem",
+    ),
+    # E6: protect the live preview. Killing the server on :8000 (the user's preview)
+    # is what broke the stuck build — the agent must not pkill/kill it. Use the
+    # controlled restart_preview path instead.
+    (
+        re.compile(r"\b(pkill|killall)\b[^\n;|&]*http\.server"),
+        "killing the preview server on :8000 (use restart_preview instead)",
+    ),
+    (
+        re.compile(r"\b(pkill|killall)\b[^\n;|&]*\b(8000|preview)\b"),
+        "killing the preview server on :8000 (use restart_preview instead)",
+    ),
+]
+
+
+def hard_deny_reason(command: str) -> str | None:
+    """Return a reason string if a shell command is HARD-DENIED (never runnable),
+    else None. Pure + deterministic. The loop refuses denied actions outright."""
+    low = command.lower()
+    for pat, why in _SHELL_DENY:
+        if pat.search(low):
+            return why
+    return None
+
+
 def _score_shell(command: str) -> tuple[SecurityRisk, str]:
     low = command.lower()
     if _destructive_rm(low):

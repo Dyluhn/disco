@@ -43,14 +43,21 @@ class Skill(BaseModel):
     description: str = ""
     enabled: bool = True
     body: str = Field(default="", description="Markdown instructions for the agent.")
+    # Cluster 4 lazy injection: an optional glob (e.g. "src/**/*.tsx" or
+    # "**/*.css"). When set, the skill's FULL body is injected only when the
+    # agent is touching a matching path; otherwise only a one-line manifest
+    # entry is shown (Claude-Code CLAUDE.md style). Empty scope → always full.
+    scope: str = ""
 
     def to_markdown(self) -> str:
         """Serialize to a .md file with frontmatter. The body is preserved verbatim."""
+        scope_line = f"scope: {self.scope}\n" if self.scope else ""
         fm = (
             "---\n"
             f"name: {self.name}\n"
             f"description: {self.description}\n"
             f"enabled: {'true' if self.enabled else 'false'}\n"
+            f"{scope_line}"
             "---\n"
         )
         return fm + (self.body or "")
@@ -178,25 +185,58 @@ class SkillStore:
             name=fm.get("name", f.stem),
             description=fm.get("description", ""),
             enabled=fm.get("enabled", "true").lower() != "false",
+            scope=fm.get("scope", ""),
             body=body.strip("\n"),
         )
 
 
-def render_skills_for_prompt(skills: list[Skill]) -> str:
-    """Render enabled skills as a system-prompt block the agent reads. Empty
-    string when there are none (so the prompt is unchanged for users with no
-    skills). Each skill is a titled section; the body is the agent-facing
-    instructions."""
+def render_skills_for_prompt(
+    skills: list[Skill], *, active_paths: list[str] | None = None
+) -> str:
+    """Render enabled skills as a system-prompt block. Empty string when there
+    are none.
+
+    Cluster 4 LAZY injection: a SCOPED skill (with a `scope` glob) shows only a
+    one-line manifest entry by default, and its FULL body only when one of
+    `active_paths` matches its glob — so N full bodies every turn becomes
+    1 manifest + only-the-relevant-bodies (the CLAUDE.md table-of-contents +
+    path-triggered detail pattern). UNSCOPED skills always show their full body
+    (back-compat). `active_paths` is the set of workspace paths the agent is
+    currently touching; None/empty → only unscoped skills render in full.
+    """
+    import fnmatch
+
     enabled = [s for s in skills if s.enabled and s.body.strip()]
     if not enabled:
         return ""
+    paths = active_paths or []
+
+    def in_scope(s: Skill) -> bool:
+        if not s.scope:
+            return True  # unscoped → always full
+        return any(fnmatch.fnmatch(p, s.scope) for p in paths)
+
+    full = [s for s in enabled if in_scope(s)]
+    manifest_only = [s for s in enabled if not in_scope(s)]
+
     parts = [
         "The user has configured these SKILLS — reusable instructions you should "
         "follow when relevant to the task. Treat them as standing guidance:",
     ]
-    for s in enabled:
+    for s in full:
         header = f"## Skill: {s.name}"
         if s.description:
             header += f"\n_{s.description}_"
         parts.append(f"{header}\n\n{s.body.strip()}")
+    if manifest_only:
+        lines = [
+            f"  • {s.name}"
+            + (f" — {s.description}" if s.description else "")
+            + (f"  (applies to {s.scope})" if s.scope else "")
+            for s in manifest_only
+        ]
+        parts.append(
+            "Other skills available (their detail loads when you work on a matching "
+            "file):\n" + "\n".join(lines)
+        )
     return "\n\n".join(parts)

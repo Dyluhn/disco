@@ -254,7 +254,9 @@ async def test_ask_user_intercepts_and_halts_at_decision_gate():
     events = await store.get_events(CID)
     alts = [e for e in events if isinstance(e, AlternativesEvent)]
     assert len(alts) == 1
-    assert [o.id for o in alts[0].options] == ["a", "b"]
+    # The agent's two options + the always-appended "Continue anyway" bypass (D2).
+    assert [o.id for o in alts[0].options] == ["a", "b", "__continue__"]
+    assert alts[0].options[-1].title == "Continue anyway"
     assert alts[0].options[0].tool_name == "shell"
     assert state.pending_alternatives_id == alts[0].id
 
@@ -264,7 +266,6 @@ async def test_pick_alternative_runs_the_selected_option():
     'a's tool_call (shell with sudo) → executes it → returns to RUNNING."""
     from perpleximanus.core import (
         ActionEvent,
-        AlternativesEvent,
         ConversationStatus,
         ObservationEvent,
     )
@@ -382,7 +383,9 @@ async def test_propose_plan_update_intercepts_and_halts_at_plan_approval():
                 {"title": "Test the new endpoint"},
                 {"title": "Update index.html with the new URL"},
             ],
-            "context": "yahoo.com returns 403 via corsproxy.io; allorigins is the working alternative",
+            "context": (
+                "yahoo.com returns 403 via corsproxy.io; allorigins is the working alt"
+            ),
         },
         thought="my current plan is wrong; here's a course correction",
     )
@@ -454,20 +457,21 @@ async def test_finished_with_incomplete_plan_auto_continues_then_lands_finished(
     FINISHED with a partial-plan detail — the user sees a clean ending and
     can steer if more work is wanted. Critically: the user is NEVER required
     to type something just to keep the loop moving."""
+    # Pre-seed: plan with 2 steps, only step 1 done, then RUNNING. The agent
+    # script repeatedly emits finish_step (model claims done despite step 2
+    # being unmarked).
     from perpleximanus.core import (
         ActionEvent,
         ConversationStatus,
+        EventSource,
+        LLMMessage,
         PlanEvent,
         StatusEvent,
         ToolCall,
     )
+    from perpleximanus.core import MessageEvent as ME
     from perpleximanus.core import SqliteEventStore as Store
     from perpleximanus.core.llm import OperatingMode
-
-    # Pre-seed: plan with 2 steps, only step 1 done, then RUNNING. The agent
-    # script repeatedly emits finish_step (model claims done despite step 2
-    # being unmarked).
-    from perpleximanus.core import EventSource, LLMMessage, MessageEvent as ME
 
     store = Store(":memory:")
     await store.append(
@@ -633,8 +637,7 @@ def _ev_seq(events):
 def test_plan_step_lag_signal_fires_when_work_outpaces_tracker():
     """Auditor: lots of productive actions since approval, < half the steps
     marked done, and no prior lag nudge → soft nudge warranted."""
-    from perpleximanus.core import ActionEvent, PlanEvent, StatusEvent, ToolCall
-    from perpleximanus.core import ConversationStatus
+    from perpleximanus.core import ActionEvent, ConversationStatus, PlanEvent, StatusEvent, ToolCall
     from perpleximanus.core.loop.engine import AgentLoop
 
     def act(tool, args=None):
@@ -642,7 +645,11 @@ def test_plan_step_lag_signal_fires_when_work_outpaces_tracker():
 
     events = _ev_seq(
         [
-            PlanEvent(summary="p", steps=[{"title": "a"}, {"title": "b"}, {"title": "c"}], revision=1),
+            PlanEvent(
+                summary="p",
+                steps=[{"title": "a"}, {"title": "b"}, {"title": "c"}],
+                revision=1,
+            ),
             StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"),
             act("file_write", {"path": "1"}),
             act("file_write", {"path": "2"}),
@@ -656,8 +663,7 @@ def test_plan_step_lag_signal_fires_when_work_outpaces_tracker():
 def test_plan_step_lag_signal_silent_when_tracker_keeps_up():
     """When at least half the steps are marked done, the tracker is keeping up
     — no nudge."""
-    from perpleximanus.core import ActionEvent, PlanEvent, StatusEvent, ToolCall
-    from perpleximanus.core import ConversationStatus
+    from perpleximanus.core import ActionEvent, ConversationStatus, PlanEvent, StatusEvent, ToolCall
     from perpleximanus.core.loop.engine import AgentLoop
 
     def act(tool, args=None):
@@ -681,6 +687,7 @@ def test_plan_step_lag_signal_fires_once_per_episode():
     another step (otherwise it would nag every iteration)."""
     from perpleximanus.core import (
         ActionEvent,
+        ConversationStatus,
         EventSource,
         LLMMessage,
         MessageEvent,
@@ -688,7 +695,6 @@ def test_plan_step_lag_signal_fires_once_per_episode():
         StatusEvent,
         ToolCall,
     )
-    from perpleximanus.core import ConversationStatus
     from perpleximanus.core.loop.engine import AgentLoop
 
     def act(tool, args=None):
@@ -698,12 +704,19 @@ def test_plan_step_lag_signal_fires_once_per_episode():
         source=EventSource.ENVIRONMENT,
         message=LLMMessage(
             role="user",
-            content="<system-reminder>\nGentle note: the plan-step tracker is behind.\n</system-reminder>",
+            content=(
+                "<system-reminder>\nGentle note: the plan-step tracker is behind.\n"
+                "</system-reminder>"
+            ),
         ),
     )
     events = _ev_seq(
         [
-            PlanEvent(summary="p", steps=[{"title": "a"}, {"title": "b"}, {"title": "c"}], revision=1),
+            PlanEvent(
+                summary="p",
+                steps=[{"title": "a"}, {"title": "b"}, {"title": "c"}],
+                revision=1,
+            ),
             StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"),
             act("file_write", {"path": "1"}),
             act("file_write", {"path": "2"}),

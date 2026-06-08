@@ -21,10 +21,13 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .config import (
+    EncodersSettings,
+    ExtractionSettings,
     ModelEntry,
     ProjectStorageSettings,
     RouterConfig,
     SandboxSettings,
+    SearchSettings,
     default_config,
 )
 from .types import ModelRole
@@ -73,6 +76,19 @@ class ConfigStore:
     def save_sandbox(self, sandbox: SandboxSettings) -> RouterConfig:
         """Persist the active sandbox backend + connection over the current config."""
         return self.save(self.load().model_copy(update={"sandbox": sandbox}))
+
+    def save_encoders(self, encoders: EncodersSettings) -> RouterConfig:
+        """Persist the encoder mode (bundled-local vs remote) over the current config.
+        The agent-server reloads per-request, so a change drives the NEXT research run."""
+        return self.save(self.load().model_copy(update={"encoders": encoders}))
+
+    def save_search(self, search: SearchSettings) -> RouterConfig:
+        """Persist the web-discovery provider (ddgs/searxng/tavily) over the config."""
+        return self.save(self.load().model_copy(update={"search": search}))
+
+    def save_extraction(self, extraction: ExtractionSettings) -> RouterConfig:
+        """Persist the extraction provider (local/crawl4ai/firecrawl) over the config."""
+        return self.save(self.load().model_copy(update={"extraction": extraction}))
 
     # -- Build-project persistence --------------------------------------------
 

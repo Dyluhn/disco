@@ -8,7 +8,7 @@ agnostic. Binds the event/state spine and the LLM router together.
 
 from __future__ import annotations
 
-from .agent import RouterAgent
+from .agent import BuildAgent, ResearchAgent, RouterAgent
 from .boundaries import (
     Agent,
     AgentStep,
@@ -36,6 +36,8 @@ __all__ = [
     "ConfirmationPolicy",
     "NeverConfirm",
     "NullSecurityAnalyzer",
+    "BuildAgent",
+    "ResearchAgent",
     "RouterAgent",
     "SecurityAnalyzer",
     "SelfAssessedAnalyzer",

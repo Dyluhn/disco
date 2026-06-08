@@ -38,7 +38,7 @@ class ScriptedAgent:
         self.seen_views = []
         self.calls = 0
 
-    async def step(self, view, tools, *, mode: OperatingMode, overflow_signal):
+    async def step(self, view, tools, *, mode: OperatingMode, overflow_signal, on_stream=None):
         i = self.calls
         if i in self._before:
             await self._before[i]()
@@ -63,7 +63,7 @@ class GatedAgent:
         self.proceed = asyncio.Event()
         self.calls = 0
 
-    async def step(self, view, tools, *, mode, overflow_signal):
+    async def step(self, view, tools, *, mode, overflow_signal, on_stream=None):
         i = self.calls
         self.calls += 1
         if i == self.gate_at:

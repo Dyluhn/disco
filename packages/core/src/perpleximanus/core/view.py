@@ -19,7 +19,95 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel
 
-from .events import CondensationEvent, Event, LLMConvertible, LLMMessage
+from .events import (
+    ActionEvent,
+    CondensationEvent,
+    DatasourceEvent,
+    Event,
+    KnowledgeEvent,
+    LLMConvertible,
+    LLMMessage,
+    PlanEvent,
+)
+
+
+def _latest_plan(events: list[Event]) -> PlanEvent | None:
+    """The maximal-revision PlanEvent — the plan the agent is currently executing.
+    A re-plan supersedes prior ones."""
+    plan: PlanEvent | None = None
+    for e in events:
+        if isinstance(e, PlanEvent) and (plan is None or e.revision >= plan.revision):
+            plan = e
+    return plan
+
+
+def _pinned_seqs(events: list[Event]) -> set[int]:
+    """Seqs that condensation must NEVER forget: the latest PlanEvent (GAP D) plus
+    every KnowledgeEvent and DatasourceEvent (Cluster 7 — standing guidance and
+    durable API contracts must survive verbatim across a long run instead of
+    dissolving into a lossy summary). The head user message is already protected
+    by `keep_head`."""
+    pinned: set[int] = set()
+    plan = _latest_plan(events)
+    if plan is not None and plan.seq is not None:
+        pinned.add(plan.seq)
+    for e in events:
+        if isinstance(e, KnowledgeEvent | DatasourceEvent) and e.seq is not None:
+            pinned.add(e.seq)
+    return pinned
+
+
+def _recitation_message(events: list[Event]) -> LLMMessage | None:
+    """GAP D recency recitation: an EPHEMERAL objective + step checklist appended
+    at the View TAIL so the goal stays in the high-attention recent window even
+    after dozens of tool calls drift the plan toward the forgettable middle.
+    Built purely from the log (latest plan + plan_step actions) — no model call,
+    regenerated every materialization, never stored (preserves append-only)."""
+    plan = _latest_plan(events)
+    if plan is None or not plan.steps:
+        return None
+    done: set[int] = set()
+    active: set[int] = set()
+    for e in events:
+        if not isinstance(e, ActionEvent) or e.tool_call is None:
+            continue
+        if e.tool_call.tool_name != "plan_step":
+            continue
+        try:
+            idx = int(e.tool_call.arguments.get("index"))  # type: ignore[arg-type]
+            state = str(e.tool_call.arguments.get("state"))
+        except (TypeError, ValueError):
+            continue
+        if state == "done":
+            done.add(idx)
+        elif state == "active":
+            active.add(idx)
+    lines = []
+    next_pending = None
+    for i, step in enumerate(plan.steps, start=1):
+        if i in done:
+            mark = "✓"
+        elif i in active:
+            mark = "→"
+        else:
+            mark = "□"
+            if next_pending is None:
+                next_pending = i
+        lines.append(f"  {mark} {i}. {step.title}")
+    nxt = (
+        f"\nNext incomplete step: {next_pending}. {plan.steps[next_pending - 1].title}"
+        if next_pending is not None
+        else "\nAll steps marked done — verify, then finish."
+    )
+    body = (
+        "<current-objective>\n"
+        f"Goal: {plan.summary}\n"
+        f"Plan progress ({len(done)}/{len(plan.steps)} done):\n"
+        + "\n".join(lines)
+        + nxt
+        + "\n</current-objective>"
+    )
+    return LLMMessage(role="user", content=body)
 
 
 class View(BaseModel):
@@ -55,7 +143,13 @@ class View(BaseModel):
                 # First tombstone for a given start_seq wins its slot.
                 summary_at_start.setdefault(e.forgotten_start_seq, e)
 
+        # GAP D: the latest PlanEvent is pinned — never forgotten even if a
+        # tombstone range covers it.
+        pinned = _pinned_seqs(events)
+
         def is_forgotten(seq: int | None) -> bool:
+            if seq is not None and seq in pinned:
+                return False
             return seq is not None and any(a <= seq <= b for a, b in forgotten)
 
         # 2. Walk events in seq order. When we reach the start of a forgotten
@@ -82,6 +176,12 @@ class View(BaseModel):
             msgs.append(e.to_llm_message())
             if e.seq is not None:
                 visible.append(e.seq)
+
+        # GAP D recency recitation: append the ephemeral objective+checklist at
+        # the TAIL so the goal sits in the high-attention recent window.
+        recitation = _recitation_message(events)
+        if recitation is not None:
+            msgs.append(recitation)
 
         forgotten_n = sum(b - a + 1 for a, b in forgotten)
         return cls(
@@ -163,14 +263,33 @@ class LLMSummarizingCondenser:
     def __init__(
         self,
         *,
-        max_tokens: int = 24_000,
-        hard_max_tokens: int = 32_000,
+        context_window: int | None = None,
+        soft_frac: float = 0.65,
+        hard_frac: float = 0.80,
+        max_tokens: int | None = None,
+        hard_max_tokens: int | None = None,
         keep_head: int = 1,
         keep_recent: int = 6,
         min_forget: int = 2,
+        budget_tokens: int = 24_000,
+        hard_budget_tokens: int = 32_000,
     ) -> None:
-        self._max = max_tokens
-        self._hard = hard_max_tokens
+        # Derive trigger thresholds from the ROUTED model's context window (soft=65%,
+        # hard=80%) BUT CAP them at a fixed WORKING BUDGET (H1). Cost scales with input
+        # tokens PER CALL — a huge window (e.g. DeepSeek 1M → 65% = 681k) is capacity,
+        # NOT a license to re-send 60k+ every action. So `soft = min(0.65×window,
+        # budget)`: a big-window model still condenses at ~24k, keeping the driver's
+        # context rich-but-bounded (recent + plan + pins + a running summary), not the
+        # full growing transcript. Explicit max_tokens/hard_max_tokens still override
+        # (tests). The budget is the binding constraint on any model ≥ ~37k window.
+        if context_window is not None:
+            derived_soft = min(int(context_window * soft_frac), budget_tokens)
+            derived_hard = min(int(context_window * hard_frac), hard_budget_tokens)
+        else:
+            # No window known → the working budget IS the bound.
+            derived_soft, derived_hard = budget_tokens, hard_budget_tokens
+        self._max = max_tokens if max_tokens is not None else derived_soft
+        self._hard = hard_max_tokens if hard_max_tokens is not None else derived_hard
         self._keep_head = keep_head
         self._keep_recent = keep_recent
         self._min_forget = min_forget
@@ -215,7 +334,13 @@ class LLMSummarizingCondenser:
         start_seq, end_seq = span[0].seq, span[-1].seq
         if start_seq is None or end_seq is None:  # filtered above; assertion for the type
             return None
-        summary = await summarizer.summarize([e.to_llm_message() for e in span])
+        # GAP D: don't feed the pinned plan into the summarizer — it stays
+        # rendered verbatim (View.of exempts it), so summarizing it is waste.
+        pinned = _pinned_seqs(events)
+        span_for_summary = [e for e in span if e.seq not in pinned]
+        summary = await summarizer.summarize(
+            [e.to_llm_message() for e in span_for_summary]
+        )
         if not summary.strip():
             return None  # an empty summary would forget context for nothing
         return CondensationEvent(

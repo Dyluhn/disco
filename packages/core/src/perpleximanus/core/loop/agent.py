@@ -43,8 +43,9 @@ from ..llm import (
     OverflowSignal,
     Requirement,
 )
+from ..obs import log_span
 from ..view import View
-from .boundaries import AgentStep
+from .boundaries import AgentStep, StreamHook
 
 
 class RouterAgent:
@@ -57,10 +58,22 @@ class RouterAgent:
         conversation_id: str | None = None,
         requirements: frozenset[Requirement] = frozenset({Requirement.TOOL_CALLING}),
         model_override: str | None = None,
+        temperature: float = 0.4,
+        prose_finishes: bool = True,
     ) -> None:
         self._router = router
         self._cid = conversation_id
         self._requirements = requirements
+        # Cluster 9 anti-fewshot jitter for the acting driver (0.0 would be a
+        # deterministic self-imitation chain on a long run).
+        self._temperature = temperature
+        # Research↔Build isolation: completion semantics are owned by the AGENT,
+        # not a mode flag. `prose_finishes=True` means a tool-less prose turn IS
+        # the answer (Research/chat). `False` means talking isn't finishing —
+        # the run ends only via the `finish` tool (Build). See ResearchAgent /
+        # BuildAgent below; this base default (True) matches the original v1
+        # convention so direct RouterAgent(router) callers are unchanged.
+        self._prose_finishes = prose_finishes
         # v1.2 model-pill hook: the driver model key chosen for THIS conversation,
         # overriding the settings assignment. None → follow settings. Set by the
         # app/agent server from the per-conversation pill selection.
@@ -73,6 +86,7 @@ class RouterAgent:
         *,
         mode: OperatingMode,
         overflow_signal: OverflowSignal,
+        on_stream: StreamHook | None = None,
     ) -> AgentStep:
         req = CompletionRequest(
             profile=CapabilityProfile(
@@ -83,6 +97,12 @@ class RouterAgent:
             ),
             messages=view.messages,
             tools=tools,
+            # Cluster 9: a small non-zero temperature for the driver (anti-fewshot).
+            # A long uniform run at temp 0.0 is a near-deterministic self-imitation
+            # chain — maximally prone to repeating a prior failing pattern. The
+            # summarizer + other structured roles stay at 0.0 (they set it
+            # explicitly); only the acting driver gets the jitter.
+            temperature=self._temperature,
             request_id=f"req_{uuid.uuid4().hex}",
         )
         ctx = CallContext(
@@ -91,7 +111,33 @@ class RouterAgent:
             last_local_confidence=overflow_signal.last_local_confidence,
             model_override=self._model_override,
         )
-        resp = await self._router.complete(req, context=ctx)
+        # STREAM the driver call, not `complete()`. This is load-bearing, not an
+        # optimization: for large tool-call arguments (e.g. a `file_write` with a big
+        # file body), some OpenAI-compatible providers (observed: DeepSeek via
+        # OpenRouter/NovitaAI) return EMPTY `arguments` in non-streaming mode but
+        # assemble them correctly from streamed deltas — and far faster (~18s vs ~5min
+        # for the same request). Consuming the stream to its final chunk gives the
+        # correctly-assembled response; surfacing the intermediate deltas to the UI
+        # (watch-it-write) is the next layer on top of this.
+        resp = None
+        with log_span("agent.step", role="agent_driver", cid=self._cid) as span:
+            async for chunk in self._router.stream_complete(req, context=ctx):
+                # Forward tool-call arg deltas (the file body) to the watch-it-write
+                # hook. The agent stays ignorant of tool semantics — it just relays the
+                # raw fragments; the loop accumulates + extracts the field to display.
+                if on_stream is not None and chunk.tool_args_delta:
+                    await on_stream(chunk)
+                if chunk.done and chunk.final is not None:
+                    resp = chunk.final
+            if resp is None:
+                # The stream produced no terminal chunk — fall back to the non-stream
+                # call so a provider that doesn't stream still works (never wedge).
+                resp = await self._router.complete(req, context=ctx)
+            # measured fields land on the span's `end` record (trace-assertable)
+            span["model"] = resp.model_used
+            span["in_tokens"] = resp.usage.input_tokens
+            span["out_tokens"] = resp.usage.output_tokens
+            span["finish"] = str(resp.finish_reason)
 
         if resp.tool_calls:
             # One-action-per-iteration: take the FIRST proposed call (§3).
@@ -102,7 +148,69 @@ class RouterAgent:
                 finished=False,
                 llm_response_id=resp.request_id,
             )
-        # No tool call → the agent has stopped acting → finished (v1 convention).
+        # No tool call → a tool-less PROSE turn. Completion semantics are owned
+        # by the AGENT (Research↔Build isolation), not derived from the per-step
+        # mode:
+        #   - ResearchAgent (prose_finishes=True): the prose IS the answer →
+        #     finished. Research/chat completion depends on this.
+        #   - BuildAgent (prose_finishes=False): talking is NOT finishing. The
+        #     run ends only via the affirmative `finish` tool the loop intercepts,
+        #     so mid-run talk-back can't silently end a build.
         return AgentStep(
-            thought=resp.text, tool_call=None, finished=True, llm_response_id=resp.request_id
+            thought=resp.text,
+            tool_call=None,
+            finished=self._prose_finishes,
+            llm_response_id=resp.request_id,
+        )
+
+
+class ResearchAgent(RouterAgent):
+    """The Research / plain-chat brain. A tool-less prose turn IS the answer →
+    the run finishes (single-pass-ish grounded chat). Deterministic by default
+    (temperature 0.0) — research answers shouldn't jitter. This is a distinct
+    class from BuildAgent so a Build-surface change can never silently alter
+    Research's completion behavior (the leak that caused the GAP B bug)."""
+
+    def __init__(
+        self,
+        router: DefaultLLMRouter,
+        *,
+        conversation_id: str | None = None,
+        requirements: frozenset[Requirement] = frozenset({Requirement.TOOL_CALLING}),
+        model_override: str | None = None,
+        temperature: float = 0.0,
+    ) -> None:
+        super().__init__(
+            router,
+            conversation_id=conversation_id,
+            requirements=requirements,
+            model_override=model_override,
+            temperature=temperature,
+            prose_finishes=True,
+        )
+
+
+class BuildAgent(RouterAgent):
+    """The Build (agentic) brain. Talking is NOT finishing — the long-horizon
+    run ends only via the affirmative `finish` tool, so the mid-run talk-back
+    the prompt encourages can't silently end a build. A small non-zero
+    temperature (anti-fewshot) keeps a long uniform run from collapsing into a
+    deterministic self-imitation chain."""
+
+    def __init__(
+        self,
+        router: DefaultLLMRouter,
+        *,
+        conversation_id: str | None = None,
+        requirements: frozenset[Requirement] = frozenset({Requirement.TOOL_CALLING}),
+        model_override: str | None = None,
+        temperature: float = 0.4,
+    ) -> None:
+        super().__init__(
+            router,
+            conversation_id=conversation_id,
+            requirements=requirements,
+            model_override=model_override,
+            temperature=temperature,
+            prose_finishes=False,
         )

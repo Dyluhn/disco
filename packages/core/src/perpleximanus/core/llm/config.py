@@ -20,6 +20,8 @@ ids or OpenRouter strings, which are [VERIFY] and filled in at wiring time.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from .types import ModelRole, Requirement
@@ -96,12 +98,56 @@ class ProjectStorageSettings(BaseModel):
     projects_root: str = ""
 
 
+class EncodersSettings(BaseModel):
+    """[settings] Where the non-generative encoders (embeddings / rerank / NLI)
+    run. `remote=False` (default) = BUNDLED in-process (ONNX/CPU via fastembed —
+    self-contained, no encoder server). `remote=True` = the external LAN endpoints
+    (TEI / OpenAI-embeddings / NLI-sidecar). The three endpoint URLs are PERSISTED
+    here (UI-editable when Remote is selected); an empty string falls back to the
+    PMX_*_URL env default, so an unconfigured remote still resolves.
+    These are NOT LLM-router roles — they don't follow the model assignments."""
+
+    remote: bool = False
+    reranker_url: str = ""  # empty → PMX_RERANKER_URL env default
+    embedder_url: str = ""  # empty → PMX_EMBEDDER_URL env default
+    nli_url: str = ""  # empty → PMX_NLI_URL env default
+
+
+class SearchSettings(BaseModel):
+    """[settings] Web DISCOVERY provider. The THREE tiers of the universal design:
+    (a) self-host `searxng` (base_url), (b) a paid API `tavily`/`brave` (BYO key
+    in secrets via api_key_env), and (c) the BUNDLED `ddgs` — DuckDuckGo scraping,
+    in-process, no key, no container — the FIRST-RUN DEFAULT so a fresh install
+    searches the moment it's downloaded."""
+
+    provider: Literal["ddgs", "searxng", "tavily", "brave"] = "ddgs"
+    base_url: str = ""  # for searxng (self-host); empty → PMX_SEARXNG_URL env
+    api_key_env: str = ""  # secrets key name for tavily/brave (never the key itself)
+
+
+class ExtractionSettings(BaseModel):
+    """[settings] URL → clean content provider. Same three tiers: (a) self-host
+    `crawl4ai` (base_url), (b) paid `firecrawl` (BYO key), (c) the BUNDLED `local`
+    — in-process httpx fetch + stdlib readability→markdown, no service — the
+    FIRST-RUN DEFAULT so extraction works offline-of-services out of the box."""
+
+    provider: Literal["local", "crawl4ai", "firecrawl"] = "local"
+    base_url: str = ""  # for crawl4ai (self-host) / firecrawl base; empty → default
+    api_key_env: str = ""  # secrets key name for firecrawl (never the key itself)
+
+
 class RouterConfig(BaseModel):
     models: dict[str, ModelEntry]  # key -> entry (the assignable catalogue)
     # the active sandbox backend + connection (settings-driven; agent-server maps it).
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     # the user-chosen Build-project persistence root (empty = unset).
     projects: ProjectStorageSettings = Field(default_factory=ProjectStorageSettings)
+    # where the bundled-vs-remote encoders run (settings-driven; agent-server honors it).
+    encoders: EncodersSettings = Field(default_factory=EncodersSettings)
+    # universal data providers — bundled (ddgs / local) by default so a fresh
+    # install works with no keys; upgradeable to self-host or paid in Settings.
+    search: SearchSettings = Field(default_factory=SearchSettings)
+    extraction: ExtractionSettings = Field(default_factory=ExtractionSettings)
     # v1.2 deterministic assignment — the source of truth (R10):
     default_model: str  # AGENT_DRIVER's model + fallback for any unassigned role
     assignments: dict[ModelRole, str] = Field(default_factory=dict)  # explicit per-role

@@ -330,25 +330,49 @@ class DefaultLLMRouter:
         self._enforce_hard_budget(req, entry, path, ctx)
         provider = self._providers[entry.provider]
         exec_req = self._inject_prompt(req, entry)
-        decision = RoutingDecision(
-            profile=req.profile,
-            chosen_model=entry.model_id,
-            provider=entry.provider,
-            path=path,
-            reason=reason,
-            overflow_triggers=[],
-        )
-        emitted = False
-        async for chunk in provider.stream_complete(exec_req, model=entry.model_id):
-            if chunk.done and chunk.final is not None:
-                final = chunk.final.model_copy(update={"routing": decision})
-                if not emitted:
-                    self._sink.record(decision)
-                    self._cost.add(final.usage.cost_usd, ctx.conversation_id)
-                    emitted = True
-                yield chunk.model_copy(update={"final": final})
-            else:
-                yield chunk
+
+        # Same-model transient retry as `complete` — but GUARDED: a stream can only
+        # be restarted while NOTHING has reached the consumer yet. Once a chunk is
+        # yielded downstream (the watch-it-write body lands in the UI) we cannot
+        # un-emit it, so replaying would duplicate content. A transient that fires
+        # before the first chunk → retry; mid-stream → propagate (the loop surfaces
+        # it as an AgentErrorEvent and the model retries the action on its next turn).
+        attempt = 1
+        while True:
+            decision = RoutingDecision(
+                profile=req.profile,
+                chosen_model=entry.model_id,
+                provider=entry.provider,
+                path=path,
+                reason=reason,
+                overflow_triggers=[],
+                attempt=attempt,
+            )
+            yielded_any = False
+            recorded = False
+            try:
+                async for chunk in provider.stream_complete(exec_req, model=entry.model_id):
+                    if chunk.done and chunk.final is not None:
+                        final = chunk.final.model_copy(update={"routing": decision})
+                        if not recorded:
+                            self._sink.record(decision)
+                            self._cost.add(final.usage.cost_usd, ctx.conversation_id)
+                            recorded = True
+                        yielded_any = True
+                        yield chunk.model_copy(update={"final": final})
+                    else:
+                        yielded_any = True
+                        yield chunk
+                return  # stream completed cleanly
+            except (LLMContextWindowExceeded, LLMAuthError, LLMContentFiltered) as exc:
+                self._record_failure(req, entry, path, reason, exc)
+                raise
+            except LLMTransientError:
+                if yielded_any or attempt >= _MAX_ATTEMPTS:
+                    self._record_failure(req, entry, path, reason, None)
+                    raise
+                attempt += 1
+                continue
 
     # -- helpers --------------------------------------------------------------
 
