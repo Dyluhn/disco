@@ -16,21 +16,49 @@ _FS = frozenset({Capability.FILESYSTEM})
 
 class FileReadArgs(BaseModel):
     path: str = Field(description="Workspace-relative path to read.")
+    # C-1 (filesystem-as-memory): line-range reads so a large file can be
+    # navigated by path + selective read instead of dumped whole into context.
+    offset: int | None = Field(
+        default=None, description="1-based line to start at (omit to read from the top)."
+    )
+    limit: int | None = Field(
+        default=None, description="Max number of lines to read (omit for the rest of the file)."
+    )
 
 
 class FileReadTool:
     definition = ToolDef(
         name="file_read",
-        description="Read a UTF-8 text file from the workspace.",
+        description=(
+            "Read a UTF-8 text file from the workspace. For large files, pass "
+            "`offset` (1-based start line) and `limit` (line count) to read a "
+            "slice — navigate by path + selective read rather than dumping the "
+            "whole file into context."
+        ),
         args_model=FileReadArgs,
         needs=_FS,
         runs_in="sandbox",
+        read_only=True,  # observes only — safe for the planner
     )
 
     async def run(self, args: FileReadArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None  # sandbox tools always receive an instance
         data = await ctx.sandbox.read_file(args.path)
-        return ToolOutcome(success=True, content=data.decode("utf-8", errors="replace"))
+        text = data.decode("utf-8", errors="replace")
+        if args.offset is None and args.limit is None:
+            return ToolOutcome(success=True, content=text)
+        # Line-range slice. offset is 1-based; clamp to bounds.
+        lines = text.splitlines()
+        start = max((args.offset or 1) - 1, 0)
+        end = start + args.limit if args.limit is not None else len(lines)
+        sliced = lines[start:end]
+        shown_to = start + len(sliced)
+        note = (
+            f"[lines {start + 1}-{shown_to} of {len(lines)}"
+            + ("; more below — increase offset" if shown_to < len(lines) else "")
+            + "]\n"
+        )
+        return ToolOutcome(success=True, content=note + "\n".join(sliced))
 
 
 class FileWriteArgs(BaseModel):
@@ -56,6 +84,43 @@ class FileWriteTool:
         )
 
 
+class FileAppendArgs(BaseModel):
+    path: str = Field(description="Workspace-relative path to append to.")
+    content: str = Field(description="UTF-8 content to append (created if absent).")
+
+
+class FileAppendTool:
+    """Append to a file via the file API — the dedicated replacement for shell
+    `>>` (which corrupts on quotes/`$`/backticks). Closes the one legitimate
+    reason a model reaches for shell redirection (Cluster 9 <file_rules>)."""
+
+    definition = ToolDef(
+        name="file_append",
+        description=(
+            "Append UTF-8 content to a workspace file (creating it if absent). Use "
+            "this instead of shell `>>` — raw-shell append corrupts on special "
+            "characters."
+        ),
+        args_model=FileAppendArgs,
+        needs=_FS,
+        runs_in="sandbox",
+    )
+
+    async def run(self, args: FileAppendArgs, ctx: ToolContext) -> ToolOutcome:
+        assert ctx.sandbox is not None
+        try:
+            existing = await ctx.sandbox.read_file(args.path)
+        except Exception:  # noqa: BLE001 — absent file → start empty
+            existing = b""
+        combined = existing + args.content.encode("utf-8")
+        await ctx.sandbox.write_file(args.path, combined)
+        return ToolOutcome(
+            success=True,
+            content=f"appended {len(args.content.encode('utf-8'))} bytes to {args.path}",
+            artifacts=[args.path],
+        )
+
+
 class FileListArgs(BaseModel):
     path: str = Field(default=".", description="Workspace-relative directory to list.")
 
@@ -67,6 +132,7 @@ class FileListTool:
         args_model=FileListArgs,
         needs=_FS,
         runs_in="sandbox",
+        read_only=True,  # observes only — safe for the planner
     )
 
     async def run(self, args: FileListArgs, ctx: ToolContext) -> ToolOutcome:

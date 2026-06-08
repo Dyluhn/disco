@@ -56,6 +56,17 @@ class DefaultToolExecutor:
     def available_tools(self) -> list[ToolSpec]:
         return [t.definition.to_spec() for t in self._registry.in_scope(self._scope)]
 
+    def readonly_tool_names(self) -> frozenset[str]:
+        """Names of in-scope tools that only OBSERVE (ToolDef.read_only). The loop
+        consults this to scope the PLANNING agent to read-only tools — a
+        capability-level backstop to any name allowlist, so a misconfigured
+        allowlist can't leak a write/exec tool to the planner (planner safety)."""
+        return frozenset(
+            t.definition.name
+            for t in self._registry.in_scope(self._scope)
+            if t.definition.read_only
+        )
+
     async def execute(self, call: ToolCall) -> ToolResult:
         if self._killed:
             return self._fail(call, "sandbox_error", "executor killed; instance revoked")

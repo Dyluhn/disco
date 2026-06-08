@@ -38,7 +38,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-from ._container import TIMEOUT_EXIT_CODES, ContainerInstance, sealed
+from ._container import TIMEOUT_EXIT_CODES, ContainerInstance, egress_mode
 from .base import ExecResult, SandboxError, SandboxInstance, SandboxSpec, SandboxUnavailableError
 from .config import SandboxConfig, default_podman_config
 
@@ -242,7 +242,13 @@ class PodmanSandboxService:
                 mem_limit=f"{mem_mb}m",
                 cpu_quota=int(cpu * _CPU_PERIOD),
                 cpu_period=_CPU_PERIOD,
-                network_mode="none" if sealed(spec) else "bridge",
+                # FAIL-SAFE egress (the allowlisting proxy is wired for gVisor only so
+                # far): only an explicit NETWORK capability ("open") gets raw bridge. A
+                # filtered box (non-empty egress_allow) that we CAN'T yet enforce per-host
+                # is SEALED — deny-all, never the old silent full-bridge false guarantee.
+                # See gvisor.py _setup_filtered_egress; wiring this here is a live-verify
+                # follow-up on the Podman host (VM 202).
+                network_mode="bridge" if egress_mode(spec) == "open" else "none",
                 volumes={vol_name: {"bind": self._cfg.container_workspace, "mode": "rw"}},
                 environment={},  # NO host env leaks in
                 working_dir=self._cfg.container_workspace,

@@ -54,6 +54,7 @@ class SubmitPlanTool:
         args_model=SubmitPlanArgs,
         base_risk=SecurityRisk.LOW,
         runs_in="in_process",
+        read_only=True,  # emits a plan for approval — no environment mutation
     )
 
     async def run(self, args: SubmitPlanArgs, ctx: ToolContext) -> ToolOutcome:
@@ -80,6 +81,7 @@ class PlanStepTool:
         args_model=PlanStepArgs,
         base_risk=SecurityRisk.LOW,
         runs_in="in_process",
+        read_only=True,  # informational progress signal — no environment mutation
     )
 
     async def run(self, args: PlanStepArgs, ctx: ToolContext) -> ToolOutcome:

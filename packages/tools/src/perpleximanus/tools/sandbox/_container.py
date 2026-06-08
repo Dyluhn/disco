@@ -33,6 +33,63 @@ def sealed(spec: SandboxSpec) -> bool:
     return not spec.egress_allow and Capability.NETWORK not in spec.permitted
 
 
+# The single egress proxy port a filtered box reaches its allowlisting sidecar on.
+EGRESS_PROXY_PORT = 8888
+
+
+def egress_mode(spec: SandboxSpec) -> str:
+    """Resolve a spec's egress posture to one of THREE modes — the fix for the old
+    binary (none|bridge) that silently gave an allowlisted box full network:
+
+      • "sealed"   — no allowlist, no NETWORK cap → no network at all.
+      • "filtered" — a non-empty `egress_allow` → an allowlisting PROXY sidecar
+                     enforces the list per-connection; the box's only route out is
+                     the proxy (internal, no-NAT network). THIS is what makes the
+                     allowlist real instead of a false guarantee.
+      • "open"     — NETWORK capability granted with NO allowlist → deliberate raw
+                     egress (e.g. the browser tool needs the whole web). An explicit
+                     capability grant, not an unenforced allowlist.
+
+    `filtered` takes precedence: an allowlist always means "only these", even if the
+    NETWORK capability is also present."""
+    if spec.egress_allow:
+        return "filtered"
+    if Capability.NETWORK in spec.permitted:
+        return "open"
+    return "sealed"
+
+
+def format_allow(entries: frozenset[str]) -> str:
+    """Render an allowlist as the comma string the proxy CLI (`--allow`) consumes.
+    Sorted for determinism (stable container args → reproducible runs)."""
+    return ",".join(sorted(e.strip() for e in entries if e.strip()))
+
+
+def proxy_env(proxy_host: str, port: int = EGRESS_PROXY_PORT) -> dict[str, str]:
+    """The HTTP(S)_PROXY environment a filtered sandbox gets so proxy-aware clients
+    (curl, pip, npm, requests) route through the allowlisting sidecar. Defense in
+    depth only — the no-NAT network is the real containment; a client that ignores
+    these vars still has no route except the proxy. Both cases (lower/upper) are set
+    because different tools read different ones."""
+    url = f"http://{proxy_host}:{port}"
+    return {
+        "HTTP_PROXY": url,
+        "HTTPS_PROXY": url,
+        "http_proxy": url,
+        "https_proxy": url,
+        # never proxy loopback (a dev server talking to itself)
+        "NO_PROXY": "localhost,127.0.0.1",
+        "no_proxy": "localhost,127.0.0.1",
+    }
+
+
+def proxy_run_argv(allow: str, port: int = EGRESS_PROXY_PORT) -> list[str]:
+    """The command that runs the allowlisting proxy inside the sidecar. The proxy
+    script is `put_archive`'d to /egress_proxy.py first (it's stdlib-only, so the
+    base image's python3 runs it with no install)."""
+    return ["python3", "/egress_proxy.py", "--port", str(port), "--allow", allow]
+
+
 class ContainerInstance:
     """A running container (gVisor or Podman). Tools execute against it; the
     workspace is reached only through the file methods (exec/cp), never a path."""

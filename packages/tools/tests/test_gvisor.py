@@ -31,13 +31,23 @@ class FakeContainer:
         self.run_kwargs = run_kwargs
         self.stopped = False
         self.removed = False
+        self.started = False
+        self.attrs: dict = {}  # NetworkSettings populated on reload() if needed
         self.exec_calls: list[list[str]] = []
         # queued (exit_code, stdout_bytes, stderr_bytes) for shell execs; else echoes ok
         self.exec_results: list[tuple[int, bytes, bytes]] = []
         self.fs: dict[str, bytes] = {}  # in-container files, by absolute path
 
-    def exec_run(self, cmd, demux=False, workdir=None):
+    def start(self):
+        self.started = True
+
+    def reload(self):  # docker-py refreshes .attrs; the fake leaves them empty
+        pass
+
+    def exec_run(self, cmd, demux=False, workdir=None, detach=False):
         self.exec_calls.append(cmd)
+        if detach:
+            return _Exec(0, (b"", b"") if demux else b"")
         # file ops the backend issues: cat / ls / mkdir against the tiny FS
         if cmd[0] == "cat":
             path = cmd[-1]
@@ -86,6 +96,32 @@ class _FakeImages:
         return object()  # an opaque image handle is enough
 
 
+class FakeNetwork:
+    """Stands in for a docker-py Network (filtered-egress internal network)."""
+
+    def __init__(self, name: str, **attrs: Any) -> None:
+        self.name = name
+        self.attrs = attrs
+        self.connected: list[Any] = []  # containers connected, with aliases
+        self.removed = False
+
+    def connect(self, container, aliases=None):
+        self.connected.append((container, aliases))
+
+    def remove(self):
+        self.removed = True
+
+
+class _FakeNetworks:
+    def __init__(self) -> None:
+        self.created: list[FakeNetwork] = []
+
+    def create(self, name, **kwargs):
+        net = FakeNetwork(name, **kwargs)
+        self.created.append(net)
+        return net
+
+
 class FakeDockerClient:
     def __init__(
         self,
@@ -98,6 +134,8 @@ class FakeDockerClient:
         self._run_error = run_error
         self.containers = self
         self.images = _FakeImages(has_image)
+        self.networks = _FakeNetworks()
+        self.runs: list[FakeContainer] = []  # every container started (sidecar + sandbox)
         self.last: FakeContainer | None = None
 
     def ping(self):
@@ -109,8 +147,15 @@ class FakeDockerClient:
     def run(self, **kwargs):  # client.containers.run(**kwargs)
         if self._run_error is not None:
             raise self._run_error
-        self.last = FakeContainer(kwargs)
-        return self.last
+        c = FakeContainer(kwargs)
+        self.runs.append(c)
+        self.last = c
+        return c
+
+    def create(self, **kwargs):  # client.containers.create(**kwargs) — the egress sidecar
+        c = FakeContainer(kwargs)
+        self.runs.append(c)
+        return c  # NOT self.last: the sandbox (via run) stays the asserted-on container
 
 
 def _svc(tmp_path, client: Any) -> GvisorSandboxService:
@@ -143,22 +188,63 @@ async def test_create_exec_close_session_model(tmp_path):
         await inst.exec_shell("echo", timeout_s=5)
 
 
-async def test_sealed_by_default_open_when_granted(tmp_path):
+async def test_sealed_by_default_filtered_on_allowlist_open_on_capability(tmp_path):
+    # The THREE-way egress posture (the fix for the old none|bridge binary that
+    # silently gave an allowlisted box full network).
     client = FakeDockerClient()
     svc = _svc(tmp_path, client)
-    # default spec → sealed
+    # 1) default spec → SEALED (no network at all)
     await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
     assert client.last.run_kwargs["network_mode"] == "none"
-    # egress grant → open
+    # 2) egress allowlist → FILTERED (proxy enforces the list) — NOT raw bridge.
     await svc.create(
         SandboxSpec(egress_allow=frozenset({"api.example.com"})), owner_id="o", conversation_id="c"
     )
-    assert client.last.run_kwargs["network_mode"] == "bridge"
-    # NETWORK capability also counts as a raw-egress grant
+    sandbox_kw = client.last.run_kwargs
+    assert "network_mode" not in sandbox_kw  # NOT full bridge!
+    assert sandbox_kw["network"].startswith("pmx-egr-")  # the internal no-NAT net
+    assert sandbox_kw["environment"]["HTTPS_PROXY"].startswith("http://pmx-egr-")
+    # 3) raw NETWORK capability, no allowlist → OPEN (deliberate raw egress).
     await svc.create(
         SandboxSpec(permitted=frozenset({Capability.NETWORK})), owner_id="o", conversation_id="c"
     )
     assert client.last.run_kwargs["network_mode"] == "bridge"
+
+
+async def test_filtered_egress_stands_up_and_tears_down_proxy_sidecar(tmp_path):
+    client = FakeDockerClient()
+    svc = _svc(tmp_path, client)
+    inst = await svc.create(
+        SandboxSpec(egress_allow=frozenset({"api.example.com", ".pypi.org"})),
+        owner_id="o",
+        conversation_id="c",
+    )
+    # An INTERNAL (no-NAT) network was created — the containment substrate.
+    assert len(client.networks.created) == 1
+    net = client.networks.created[0]
+    assert net.attrs.get("internal") is True
+    # A proxy SIDECAR exists (created before the sandbox) and joined the net.
+    assert len(client.runs) == 2  # sidecar + sandbox
+    sidecar = client.runs[0]
+    # VERIFIED-LIVE invariant #1: the sidecar is create→connect→START (NOT run +
+    # hot-connect) so gVisor sees both NICs at boot. So it must be explicitly
+    # started, and joined to the net BEFORE that.
+    assert sidecar.started is True
+    assert net.connected and net.connected[0][0] is sidecar
+    # VERIFIED-LIVE invariant #2: a working resolver replaces the dead embedded
+    # 127.0.0.11 (else the proxy can't resolve any upstream).
+    resolv = [c for c in sidecar.exec_calls if any("resolv.conf" in str(a) for a in c)]
+    assert resolv, "sidecar resolv.conf was not repointed to a public resolver"
+    assert any("1.1.1.1" in str(a) for a in resolv[0])
+    # The stdlib proxy script was injected and launched with the allowlist.
+    assert any("egress_proxy.py" in p for p in sidecar.fs)
+    launched = [c for c in sidecar.exec_calls if any("egress_proxy.py" in str(a) for a in c)]
+    assert launched, "proxy was not launched in the sidecar"
+    joined = " ".join(launched[0])
+    assert "api.example.com" in joined and ".pypi.org" in joined
+    # destroy() tears down BOTH the sandbox and the egress aux (no orphans).
+    await inst.destroy()
+    assert sidecar.removed and net.removed
 
 
 async def test_resource_limits_and_workspace_mount_applied(tmp_path):

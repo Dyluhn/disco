@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._container import PREVIEW_PORT, ContainerInstance, sealed
+from ._container import PREVIEW_PORT, ContainerInstance, egress_mode
 from .base import SandboxSpec, SandboxUnavailableError
 from .config import SandboxConfig, default_local_config
 from .gvisor import GvisorSandboxService, _keepalive_command
@@ -55,20 +55,22 @@ class LocalSandboxService(GvisorSandboxService):
         mem_mb = spec.memory_mb or self._cfg.default_memory_mb
         cpu = spec.cpu or self._cfg.default_cpu
 
+        # FAIL-SAFE egress: the allowlisting proxy is wired for gVisor only so far, so
+        # on this lowest-isolation tier a filtered box (an allowlist we can't enforce
+        # per-host) is SEALED — deny-all, never the old silent full-bridge. Only an
+        # explicit NETWORK capability ("open") gets raw bridge.
+        open_net = egress_mode(spec) == "open"
         try:
             client.volumes.create(name=vol_name)  # auto-created; persists across the box
-            return client.containers.run(
+            container = client.containers.run(
                 image=self._cfg.image,
                 # keepalive (+ a static preview server on PREVIEW_PORT when previewable)
-                command=_keepalive_command(
-                    self._cfg.container_workspace, previewable=not sealed(spec)
-                ),
+                command=_keepalive_command(self._cfg.container_workspace, previewable=open_net),
                 runtime=self._cfg.runtime,  # runc (a value, not a branch)
-                # Sealed by default: no network unless the capability set granted it.
-                network_mode="none" if sealed(spec) else "bridge",
+                network_mode="bridge" if open_net else "none",
                 # Publish ONLY the dev-server port (preview), and only when network is
                 # granted — reachable at localhost:<host port> on this same host.
-                ports=None if sealed(spec) else {f"{PREVIEW_PORT}/tcp": None},
+                ports={f"{PREVIEW_PORT}/tcp": None} if open_net else None,
                 # The limit goes through the LOCAL socket/daemon → it actually bites.
                 mem_limit=f"{mem_mb}m",
                 nano_cpus=int(cpu * 1_000_000_000),
@@ -82,3 +84,5 @@ class LocalSandboxService(GvisorSandboxService):
             raise
         except Exception as exc:  # noqa: BLE001 — start failure, real cause preserved
             raise SandboxUnavailableError(f"container failed to start: {exc}") from exc
+        # No filtered-egress aux on this tier (sealed/open only) → no proxy/network.
+        return container, None, None

@@ -58,8 +58,22 @@ class SandboxSpec(BaseModel):
 
     def egress_allowed(self, host: str) -> bool:
         """[CONTRACT §7] Deny-by-default: a host is reachable only if explicitly
-        allow-listed. Enforced outside the guest by the backend (§7 rule 3)."""
-        return host in self.egress_allow
+        allow-listed. Enforced outside the guest by the backend (§7 rule 3).
+
+        Matching: an exact host (`api.example.com`) OR a leading-dot suffix entry
+        (`.example.com`) which matches the apex and any subdomain. This is the
+        predicate an egress-interception proxy consults per connection (Cluster 3).
+        """
+        h = host.lower().strip()
+        for entry in self.egress_allow:
+            e = entry.lower().strip()
+            if e.startswith("."):
+                # `.example.com` → matches `example.com` and `*.example.com`
+                if h == e[1:] or h.endswith(e):
+                    return True
+            elif h == e:
+                return True
+        return False
 
 
 @runtime_checkable

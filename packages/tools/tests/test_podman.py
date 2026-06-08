@@ -153,6 +153,17 @@ async def test_sealed_default_open_when_granted():
     assert client.last.create_kwargs["network_mode"] == "bridge"
 
 
+async def test_allowlist_fails_safe_to_sealed_on_podman():
+    # The allowlisting proxy is gVisor-only so far. A filtered box (an allowlist we
+    # CANNOT enforce per-host here) must FAIL SAFE to deny-all — never the old
+    # silent full-bridge. Only an explicit NETWORK capability opens raw egress.
+    svc, client, _ = _svc()
+    await svc.create(
+        SandboxSpec(egress_allow=frozenset({"api.example.com"})), owner_id="o", conversation_id="c"
+    )
+    assert client.last.create_kwargs["network_mode"] == "none"  # deny-all, not bridge
+
+
 async def test_limits_and_no_env_leak_in_create(monkeypatch):
     monkeypatch.setenv("PMX_FAKE_SECRET", "sk-do-not-leak")
     svc, client, _ = _svc()

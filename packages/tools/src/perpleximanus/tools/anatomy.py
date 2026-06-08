@@ -83,6 +83,16 @@ class ToolDef(BaseModel):
     # None => the analyzer decides entirely.
     base_risk: SecurityRisk | None = None
     runs_in: Literal["sandbox", "in_process"] = "sandbox"
+    # Planner-safety flag (Claude-Code plan-mode parity). True iff the tool only
+    # OBSERVES — it makes no durable change to the workspace, sandbox, or the
+    # outside world (reads/searches/the plan-submission signal). The loop shows
+    # ONLY read-only tools to the PLANNING agent, so a plan is drafted from
+    # context-gathering alone and writes/exec are off the table until approval.
+    # FAIL-SAFE DEFAULT (False): an unmarked tool is treated as mutating and is
+    # WITHHELD from the planner — a new write tool that forgets to set this can
+    # never silently leak to the planner; the worst case is an over-restricted
+    # planner, never an under-restricted one.
+    read_only: bool = False
     # [EXTENSION resolving §6 OPEN] named capabilities this tool may invoke via
     # the orchestrator-mediated CapabilitySet (e.g. "search", "extract").
     uses_capabilities: frozenset[str] = frozenset()
