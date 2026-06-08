@@ -98,8 +98,11 @@ milestone. Backend coherence (GAP A–H) is largely landed.
 - [ ] Synthetic-fake harnesses (streaming, providers, Deep Research lifecycle) used
   `_ScriptedRouter`/hand-made docs — violate the real-captured-samples rule; rebuild from captures
 - [ ] All harness work + UI/server mods are UNCOMMITTED — commit before further change
-- [ ] Phase 2 `--replay` e2e blocked on `research_demo.jsonl` (the capture that OOM'd the box)
-- [ ] Phase 7 Playwright E2E/visual not built (build against the replay backend)
+- [ ] Phase 2 `--replay` e2e blocked on `research_demo.jsonl` (the capture that OOM'd the box; needs the model server up)
+- [x] ✅ Phase 7 Playwright E2E + visual regression — BUILT (commit 3449cbb): `frontend/e2e/*.spec.ts`
+  (4 flows) + Firefox visual baselines (both themes), fixture mode via `vite --mode test`, `make e2e`.
+  Meta-verified (break heading → functional + visual go red)
+- [ ] Phase 3 build-surface deterministic replay still needs a `ReplaySandbox` on the `sandbox_service=` seam (pure code, model-independent)
 
 ## future-plans.md follow-ups (system-reminder pattern, not yet built)
 
