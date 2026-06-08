@@ -46,6 +46,22 @@ def _sandbox_service():
 
 
 def main() -> None:
+    # Surface app-logger output (providers, the loop) alongside uvicorn's access log —
+    # uvicorn configures only its own loggers, so without this the perpleximanus.*
+    # INFO traces (e.g. "ddgs search …", "local extract …") are silently dropped.
+    import logging
+
+    level = os.environ.get("PMX_LOG_LEVEL", "INFO").upper()
+    if os.environ.get("PMX_LOG_JSON") == "1":
+        # Structured JSON logs (core.obs span records become one JSON object/line —
+        # greppable + trace-assertable). Plain text otherwise.
+        from perpleximanus.core.obs import install_json_logging
+
+        install_json_logging(level)
+    else:
+        logging.basicConfig(
+            level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+        )
     store = SqliteEventStore(os.environ.get("PMX_DB", "perpleximanus.db"))
     runtime = ConversationRuntime(store, sandbox_service=_sandbox_service())
     app = create_app(store, runtime=runtime)

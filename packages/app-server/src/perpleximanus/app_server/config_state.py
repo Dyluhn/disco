@@ -12,6 +12,8 @@ mirror the frontend's `src/types/models.ts` + `src/types/config.ts`.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from perpleximanus.core import SkillStore
 from perpleximanus.core.llm import ConfigStore, ModelRole, RouterConfig, SecretStore
 from perpleximanus.core.llm.config import ModelEntry
@@ -96,6 +98,34 @@ class SandboxConfigDTO(BaseModel):
     runtime: str
     image: str
     workspace_root: str
+
+
+class EncodersConfigDTO(BaseModel):
+    """Where the non-generative encoders (embeddings / rerank / NLI) run. `remote=False`
+    (default) = BUNDLED in-process (ONNX/CPU); `remote=True` = the external LAN
+    endpoints. The three endpoint URLs are UI-editable when Remote is selected and
+    persisted; an empty one falls back to the PMX_*_URL env default. The wire mirror
+    of core's EncodersSettings — the agent-server honors it on the next research run.
+    NOT an LLM-router role assignment."""
+
+    remote: bool
+    reranker_url: str = ""
+    embedder_url: str = ""
+    nli_url: str = ""
+
+
+class DataSourcesConfigDTO(BaseModel):
+    """The universal web-data providers (§B). Each slot has three tiers; the bundled
+    defaults (`ddgs` / `local`) need no key. `api_key_env` is the NAME of the env var
+    holding a paid key (never the key itself). The wire mirror of core's
+    SearchSettings + ExtractionSettings."""
+
+    search_provider: Literal["ddgs", "searxng", "tavily", "brave"] = "ddgs"
+    search_base_url: str = ""
+    search_api_key_env: str = ""
+    extraction_provider: Literal["local", "crawl4ai", "firecrawl"] = "local"
+    extraction_base_url: str = ""
+    extraction_api_key_env: str = ""
 
 
 class ProjectStorageConfigDTO(BaseModel):
@@ -274,13 +304,43 @@ def _entry_from(upsert: ModelUpsert, *, provider: str) -> ModelEntry:
     )
 
 
+# Roles NOT assignable to a catalogue LLM in the Settings matrix:
+#  - AGENT_DRIVER follows `default_model` (+ the per-conversation pick), shown separately.
+#  - NLI_VERIFIER is an ENCODER (cross-encoder), bundled in-process / remote via the
+#    Encoders setting — it does NOT route through the LLM model assignments, so
+#    surfacing it as an assignable LLM role would be a false affordance.
+_NON_ASSIGNABLE_ROLES = frozenset({ModelRole.AGENT_DRIVER, ModelRole.NLI_VERIFIER})
+
+
 def _assignments_from(config: RouterConfig) -> AssignmentsDTO:
     roles = {
         role.value: config.assignments.get(role, config.default_model)
         for role in ModelRole
-        if role != ModelRole.AGENT_DRIVER
+        if role not in _NON_ASSIGNABLE_ROLES
     }
     return AssignmentsDTO(default_model=config.default_model, roles=roles)
+
+
+def _encoders_from(config: RouterConfig) -> EncodersConfigDTO:
+    e = config.encoders
+    return EncodersConfigDTO(
+        remote=e.remote,
+        reranker_url=e.reranker_url,
+        embedder_url=e.embedder_url,
+        nli_url=e.nli_url,
+    )
+
+
+def _data_sources_from(config: RouterConfig) -> DataSourcesConfigDTO:
+    s, x = config.search, config.extraction
+    return DataSourcesConfigDTO(
+        search_provider=s.provider,
+        search_base_url=s.base_url,
+        search_api_key_env=s.api_key_env,
+        extraction_provider=x.provider,
+        extraction_base_url=x.base_url,
+        extraction_api_key_env=x.api_key_env,
+    )
 
 
 def _sandbox_from(config: RouterConfig) -> SandboxConfigDTO:
@@ -441,6 +501,52 @@ class ConfigState:
             )
         )
         return _sandbox_from(self._store.load())
+
+    # encoders: bundled-local vs remote (persisted; agent-server honors per request) -
+
+    def encoders_config(self) -> EncodersConfigDTO:
+        return _encoders_from(self._store.load())
+
+    def update_encoders_config(self, dto: EncodersConfigDTO) -> EncodersConfigDTO:
+        """Persist the encoder mode. The agent-server rebuilds its research providers
+        when this changes, so the toggle takes effect on the NEXT research run."""
+        from perpleximanus.core.llm import EncodersSettings
+
+        self._store.save_encoders(
+            EncodersSettings(
+                remote=dto.remote,
+                reranker_url=dto.reranker_url.strip(),
+                embedder_url=dto.embedder_url.strip(),
+                nli_url=dto.nli_url.strip(),
+            )
+        )
+        return _encoders_from(self._store.load())
+
+    # data sources: web search + extraction provider tiers (persisted) ----------
+
+    def data_sources_config(self) -> DataSourcesConfigDTO:
+        return _data_sources_from(self._store.load())
+
+    def update_data_sources_config(self, dto: DataSourcesConfigDTO) -> DataSourcesConfigDTO:
+        """Persist the search + extraction provider choices. The agent-server rebuilds
+        its research providers when these change → effective on the NEXT research run."""
+        from perpleximanus.core.llm import ExtractionSettings, SearchSettings
+
+        self._store.save_search(
+            SearchSettings(
+                provider=dto.search_provider,
+                base_url=dto.search_base_url.strip(),
+                api_key_env=dto.search_api_key_env.strip(),
+            )
+        )
+        self._store.save_extraction(
+            ExtractionSettings(
+                provider=dto.extraction_provider,
+                base_url=dto.extraction_base_url.strip(),
+                api_key_env=dto.extraction_api_key_env.strip(),
+            )
+        )
+        return _data_sources_from(self._store.load())
 
     # Build-project storage path (persisted; agent-server reads it per request) ---
 

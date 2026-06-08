@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 from collections.abc import AsyncIterator
 from typing import Any
@@ -52,7 +53,14 @@ from perpleximanus.core.llm import (
 from perpleximanus.core.llm.config import RouterConfig
 from perpleximanus.core.llm.secrets import OPENROUTER_API_KEY_ENV
 from perpleximanus.core.llm.wiring import build_providers
-from perpleximanus.core.loop import AgentLoop, ConfirmRisky, NeverConfirm, RouterAgent
+from perpleximanus.core.loop import (
+    AgentLoop,
+    BuildAgent,
+    ConfirmRisky,
+    NeverConfirm,
+    ResearchAgent,
+    RouterAgent,
+)
 from perpleximanus.core.security import RuleBasedAnalyzer
 from perpleximanus.core.store.sqlite import SqliteEventStore
 from perpleximanus.retrieval.deep_research import (
@@ -181,7 +189,12 @@ class ConversationRuntime:
         self._cap_handlers: dict[str, Any] | None = None
         # per-conversation driver model override (the Build chat model picker → the
         # AGENT_DRIVER for that conversation; RouterAgent applies it).
-        self._model_override: dict[str, str] = {}
+        # B0: PERSISTED (not just in-memory) — a server restart used to silently revert
+        # every conversation's picked model to the default. Persisted to a JSON sidecar
+        # next to the event DB (PMX_DB) so a resumed conversation keeps its model.
+        db_path = os.environ.get("PMX_DB", "")
+        self._override_path = f"{db_path}.overrides.json" if db_path else ""
+        self._model_override: dict[str, str] = self._load_overrides()
         # per-conversation Deep Research depth tier (set at submit time).
         self._depth: dict[str, str] = {}
         # The encrypted-at-rest secret store (OpenRouter key). Its decrypted key is
@@ -191,7 +204,11 @@ class ConversationRuntime:
         # The live retrieval/grounding providers for research_stream(). Injected
         # in tests (hermetic fakes); else lazily built from env on first use so
         # importing the runtime doesn't pull httpx until research is actually run.
-        self._research_providers = research_providers
+        self._injected_research_providers = research_providers  # test fake (or None)
+        self._research_providers: dict[str, Any] | None = None  # lazy cache (non-test)
+        # the (remote, reranker_url, embedder_url, nli_url) tuple the cache was built
+        # for — rebuild when the mode OR any endpoint URL changes.
+        self._research_encoders_key: tuple | None = None
         # A statically-injected router (test seam) pins routing; otherwise the
         # router is rebuilt per request from the shared, persisted config store so
         # Settings assignments are actually honored.
@@ -206,28 +223,43 @@ class ConversationRuntime:
         self._mode = mode
         self._loops: dict[str, AgentLoop] = {}
         self._tasks: dict[str, asyncio.Task] = {}
+        # Cooperative-cancellation flags for Deep Research (whose engine isn't an
+        # AgentLoop and can't be soft-cancelled the loop's way). Stop sets the flag;
+        # the engine polls it at each sub-question/section boundary and halts,
+        # keeping the partial report (resumable). See _execute_deep_research.
+        self._cancel_flags: dict[str, asyncio.Event] = {}
+
+    # The generative (text-producing) roles a model PICK drives. NLI_VERIFIER is a
+    # cross-encoder (entailment scorer), NOT a chat model — pointing it at a picked
+    # LLM would break verification, so it always follows its own assignment.
+    _GENERATIVE_ROLES: tuple[ModelRole, ...] = (
+        ModelRole.AGENT_DRIVER,
+        ModelRole.RAG_ANSWERER,
+        ModelRole.QUERY_REWRITER,
+        ModelRole.SUMMARIZER,
+    )
 
     def _router_now(
-        self, answerer_override: str | None = None, *, enable_thinking: bool | None = None
+        self, pick: str | None = None, *, enable_thinking: bool | None = None
     ) -> DefaultLLMRouter:
         """The router for the CURRENT assignments. Cheap to rebuild (providers are
         plain objects; the HTTP client is created per call), so we reload the config
-        each request rather than cache a stale router. `answerer_override` (the
-        research pill) reassigns RAG_ANSWERER for this request only; `enable_thinking`
+        each request rather than cache a stale router. `pick` (the model pill) is a
+        catalogue key the user explicitly chose for THIS conversation; `enable_thinking`
         overrides the default reasoning mode for this request (the Think toggle)."""
         if self._injected_router is not None:
             return self._injected_router
         cfg = self._config_store.load()
-        # The research model pill picks the ANSWERER (not a chat driver), so apply
-        # it by reassigning RAG_ANSWERER for this request — the assignment path the
-        # router honors for that role — rather than the driver-only CallContext
-        # override. Unknown keys are ignored (fail safe to the saved assignment).
-        if answerer_override and answerer_override in cfg.models:
-            cfg = cfg.model_copy(
-                update={
-                    "assignments": {**cfg.assignments, ModelRole.RAG_ANSWERER: answerer_override}
-                }
-            )
+        # A model PICK drives the ENTIRE generative pipeline, not just one role.
+        # When the user picks (say) an OpenRouter DeepSeek, the expectation is that
+        # DeepSeek does the whole job — the brain AND the context condensation AND
+        # query rewriting AND answer synthesis — not that the picked model "leads"
+        # while local models quietly do the summarizing/rewriting underneath. So we
+        # reassign every generative role to the pick for this request. (Unknown keys
+        # are ignored — fail safe to the saved assignment.)
+        if pick and pick in cfg.models:
+            reassigned = {**cfg.assignments, **{r: pick for r in self._GENERATIVE_ROLES}}
+            cfg = cfg.model_copy(update={"assignments": reassigned})
         # Overlay the decrypted OpenRouter key into the env build_providers reads,
         # so OR models (api_key_env=PMX_OPENROUTER_API_KEY) authenticate without the
         # secret ever being on disk in plaintext.
@@ -315,12 +347,43 @@ class ConversationRuntime:
             return self._injected_sandbox
         return build_sandbox_service(self._config_store.load().sandbox)
 
+    def _driver_context_window(self) -> int | None:
+        """The context window of the model currently assigned to AGENT_DRIVER, for
+        A-S1's model-aware condensation threshold. Best-effort: None on any lookup
+        miss so the condenser falls back to its safe defaults."""
+        try:
+            cfg = self._config_store.load()
+            key = cfg.model_for(ModelRole.AGENT_DRIVER)
+            return cfg.entry_for(key).context_window
+        except Exception:  # noqa: BLE001 — never block loop construction on this
+            return None
+
+    def _load_overrides(self) -> dict[str, str]:
+        if self._override_path and os.path.exists(self._override_path):
+            try:
+                with open(self._override_path) as f:
+                    data = json.load(f)
+                return {str(k): str(v) for k, v in data.items() if v}
+            except Exception:  # noqa: BLE001 — corrupt/missing → start empty, never crash
+                return {}
+        return {}
+
+    def _save_overrides(self) -> None:
+        if not self._override_path:
+            return
+        try:
+            with open(self._override_path, "w") as f:
+                json.dump(self._model_override, f)
+        except Exception:  # noqa: BLE001 — persistence is best-effort, never fatal
+            pass
+
     def set_model_override(self, conversation_id: str, model_id: str | None) -> None:
         """Pin the driver model for a conversation (the Build chat model picker). The id
         is a catalogue KEY; RouterAgent reassigns AGENT_DRIVER to it. Must be set before
-        the loop is built (at create time)."""
+        the loop is built (at create time). PERSISTED (B0) so a restart keeps the pick."""
         if model_id:
             self._model_override[conversation_id] = model_id
+            self._save_overrides()
 
     def driver_models(self) -> dict[str, Any]:
         """The driver-eligible models (live + tool-calling), deduped by underlying model,
@@ -380,16 +443,24 @@ class ConversationRuntime:
     def _loop_for(self, conversation_id: str) -> AgentLoop:
         loop = self._loops.get(conversation_id)
         if loop is None:
-            # A conversation pins the assignments it started with (consistency);
-            # new conversations pick up later reassignments via _router_now().
-            router = self._router_now()
-            # the model picker pins the driver model for this conversation (AGENT_DRIVER).
-            agent = RouterAgent(
-                router,
-                conversation_id=conversation_id,
-                model_override=self._model_override.get(conversation_id),
-            )
+            # The per-conversation model PICK drives the WHOLE generative pipeline:
+            # build the router with it so the brain AND the summarizer (context
+            # condensation) AND any other generative role all run on the picked
+            # model — not just the driver while local models summarize underneath.
+            override = self._model_override.get(conversation_id)
+            router = self._router_now(pick=override)
             surface = self._surface_of(conversation_id)
+            # Research↔Build isolation: the SURFACE picks the agent class, so
+            # completion semantics (prose=answer for Research vs affirmative
+            # `finish` for Build) are owned by type, not a shared mode flag.
+            if surface == "build":
+                agent: RouterAgent = BuildAgent(
+                    router, conversation_id=conversation_id, model_override=override
+                )
+            else:
+                agent = ResearchAgent(
+                    router, conversation_id=conversation_id, model_override=override
+                )
             if surface == "build":
                 loop = self._compose_build_loop(conversation_id, router, agent)
             elif surface == "deep_research":
@@ -407,6 +478,12 @@ class ConversationRuntime:
                     RouterSummarizer(router),
                     mode=self._mode,
                 )
+            # Watch-it-write: wire the loop's stream sink to the store's ephemeral
+            # broadcast so streamed file-content frames reach the conversation's WS
+            # subscribers live (never persisted). Bound to this cid.
+            loop.stream_sink = lambda frame, _cid=conversation_id: self._store.publish_ephemeral(
+                _cid, frame
+            )
             self._loops[conversation_id] = loop
         return loop
 
@@ -443,7 +520,9 @@ class ConversationRuntime:
             router,
             RuleBasedAnalyzer(),
             ConfirmRisky(),  # Agent surface: gate risky/UNKNOWN actions before they run
-            LLMSummarizingCondenser(),  # real condensation, not the no-op
+            # A-S1: derive condensation thresholds from the AGENT_DRIVER model's
+            # context window (soft 65% / hard 80%) instead of the old bare 24k/32k.
+            LLMSummarizingCondenser(context_window=self._driver_context_window()),
             RouterSummarizer(router),
             # Build starts in PLANNING. The planner has a context-rich surface — it
             # can READ to explore (file_list/file_read in the workspace, search/extract
@@ -512,11 +591,40 @@ class ConversationRuntime:
     # ---- research surface (Stage 4) -----------------------------------------
 
     def _research(self) -> dict[str, Any]:
-        if self._research_providers is None:
-            # Lazy import: the live providers pull httpx; only do so on first use.
+        # A statically-injected provider set (tests) is used as-is. Otherwise build
+        # from the PERSISTED encoder mode, and rebuild if the Settings toggle changed
+        # it — so flipping local↔remote takes effect on the next research run without
+        # a restart (rebuild is cheap: fastembed models are module-cached, not per
+        # provider instance).
+        if self._injected_research_providers is not None:
+            return self._injected_research_providers
+        cfg = self._config_store.load()
+        enc, sch, ext = cfg.encoders, cfg.search, cfg.extraction
+        # paid-provider keys resolve from os.environ by the configured env-var NAME
+        # (same mechanism as model api_key_env); bundled providers need no key.
+        search_key = os.environ.get(sch.api_key_env, "") if sch.api_key_env else ""
+        ext_key = os.environ.get(ext.api_key_env, "") if ext.api_key_env else ""
+        key = (
+            enc.remote, enc.reranker_url, enc.embedder_url, enc.nli_url,
+            sch.provider, sch.base_url, sch.api_key_env,
+            ext.provider, ext.base_url, ext.api_key_env,
+        )
+        if self._research_providers is None or self._research_encoders_key != key:
             from perpleximanus.retrieval.live import build_live_retrieval
 
-            self._research_providers = build_live_retrieval()
+            self._research_providers = build_live_retrieval(
+                remote=enc.remote,
+                reranker_url=enc.reranker_url,
+                embedder_url=enc.embedder_url,
+                nli_url=enc.nli_url,
+                search_provider=sch.provider,
+                search_base_url=sch.base_url,
+                search_api_key=search_key,
+                extraction_provider=ext.provider,
+                extraction_base_url=ext.base_url,
+                extraction_api_key=ext_key,
+            )
+            self._research_encoders_key = key
         return self._research_providers
 
     def research_stream(
@@ -539,7 +647,7 @@ class ConversationRuntime:
         deps = self._research()
         return stream_research_answer(
             query,
-            router=self._router_now(answerer_override=model_override, enable_thinking=think),
+            router=self._router_now(pick=model_override, enable_thinking=think),
             search=deps["search"],
             extraction=deps["extraction"],
             reranker=deps["reranker"],
@@ -605,7 +713,25 @@ class ConversationRuntime:
             and state.execution_status == ConversationStatus.FINISHED
         ):
             await self._maybe_snapshot(conversation_id)
+            # G (safe leak fix): a FINISHED build's container is pure waste — tear it
+            # down to free the port/memory/GPU + the idle preview server. ONLY when a
+            # snapshot was durably written (storage configured); otherwise keep it so
+            # resuming can't lose unsnapshotted files. A resume re-creates the sandbox
+            # and rehydrates from the snapshot.
+            if self._config_store.load().projects.projects_root.strip():
+                await self._teardown_sandbox(conversation_id)
         return state
+
+    async def _teardown_sandbox(self, conversation_id: str) -> None:
+        """Destroy a conversation's sandbox session (frees the container/port/memory +
+        the idle preview server) while KEEPING the event log + the project snapshot. A
+        later run re-creates the sandbox and rehydrates. Callers MUST ensure the
+        workspace is durable (snapshotted) first — this does not snapshot."""
+        executor = self._executors.pop(conversation_id, None)
+        if executor is not None:
+            with contextlib.suppress(Exception):
+                await executor.kill()  # destroys the sandbox instance (§6.4)
+        self._loops.pop(conversation_id, None)  # force a fresh sandbox on the next run
 
     async def _maybe_run_deep_research(self, conversation_id: str) -> None:
         """The Deep Research driver. Inspects the conversation state to decide
@@ -628,6 +754,17 @@ class ConversationRuntime:
         # Phase 1: no plan yet → decompose + propose
         if not plans:
             await self._propose_deep_research_plan(conversation_id, events)
+            return
+
+        # Phase 2b: RESUME a stopped run (status PAUSED) → re-run the execution to
+        # completion. The plan is already approved; flip back to RUNNING and execute.
+        # The new full ReportEvent supersedes the partial one from the stop.
+        if state.execution_status == ConversationStatus.PAUSED:
+            await self._store.append(
+                conversation_id,
+                StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"),
+            )
+            await self._execute_deep_research(conversation_id, plans[-1])
             return
 
         # Phase 2: plan approved, no report yet → run the engine
@@ -755,7 +892,7 @@ class ConversationRuntime:
 
         deps = self._research()
         router = self._router_now(
-            answerer_override=self._model_override.get(conversation_id)
+            pick=self._model_override.get(conversation_id)
         )
         retrieval_engine = DefaultRetrievalEngine(
             search=deps["search"],
@@ -815,8 +952,12 @@ class ConversationRuntime:
                 ),
             )
 
+        # Fresh cancel flag for this execution; the engine polls it at each
+        # sub-question/section boundary so Stop actually halts the run.
+        flag = asyncio.Event()
+        self._cancel_flags[conversation_id] = flag
         try:
-            result = await run.run(plan_steps, emit=emit)
+            result = await run.run(plan_steps, emit=emit, should_cancel=flag.is_set)
         except Exception as exc:  # noqa: BLE001 — surface as ErrorEvent
             from perpleximanus.core import ErrorEvent
 
@@ -828,11 +969,20 @@ class ConversationRuntime:
                 ),
             )
             return
+        finally:
+            self._cancel_flags.pop(conversation_id, None)
 
-        # Emit the final ReportEvent + FINISHED status.
+        # Emit the partial-or-final ReportEvent. If the user pressed Stop, the run
+        # halted at a checkpoint (bounded_by="stopped") with the partial report
+        # preserved → emit PAUSED (resumable), NOT FINISHED.
         await self._store.append(conversation_id, result.to_event())
+        stopped = getattr(result, "bounded_by", None) == "stopped"
         await self._store.append(
-            conversation_id, StatusEvent(status=ConversationStatus.FINISHED)
+            conversation_id,
+            StatusEvent(
+                status=ConversationStatus.PAUSED if stopped else ConversationStatus.FINISHED,
+                detail="stopped" if stopped else None,
+            ),
         )
 
     def project_store(self) -> ProjectStore | None:
@@ -988,6 +1138,32 @@ class ConversationRuntime:
         # agent base + this conversation id) — not a raw container port.
         return {"available": True, "proxy": True}
 
+    async def restart_preview(self, conversation_id: str) -> bool:
+        """Backend half of the UI 'Restart preview' button (§E7). Bounded + safe: the
+        same idempotent restart as the agent's `restart_preview` tool, run directly on
+        the conversation's sandbox session — kill any stale http.server (the supervised
+        keepalive respawns it; else we start one detached) so a down preview is always
+        user-fixable in one click. False if there's no live sandbox to act on."""
+        executor = self._executors.get(conversation_id)
+        session = getattr(executor, "_sandbox", None) if executor is not None else None
+        if session is None:
+            return False
+        probe = (
+            "python3 -c \"import socket,sys; sys.exit(0 if socket.socket()"
+            f".connect_ex(('127.0.0.1',{PREVIEW_PORT}))==0 else 1)\""
+        )
+        script = (
+            "pkill -f 'http.server' 2>/dev/null || true; sleep 1; "
+            f"if ! {probe}; then setsid nohup python3 -m http.server {PREVIEW_PORT} "
+            ">/tmp/pmx-preview.log 2>&1 & fi; sleep 1; "
+            f"if {probe}; then echo ok; else echo failed; fi"
+        )
+        try:
+            res = await session.exec_shell(script, timeout_s=20)
+        except Exception:  # noqa: BLE001 — a restart attempt must never raise to the API
+            return False
+        return res.stdout.strip().endswith("ok")
+
     # ---- control ops: the confirmation gate + kill switch (BoD §13.4/§13.6) -----
 
     async def confirm(self, conversation_id: str) -> None:
@@ -1031,10 +1207,20 @@ class ConversationRuntime:
             await loop.pick_alternative(option_id)
 
     async def cancel(self, conversation_id: str) -> None:
-        """Cooperative stop (distinct from the hard kill): the loop winds down."""
+        """Cooperative stop (distinct from the hard kill): the loop winds down. For
+        Deep Research (engine, not an AgentLoop) this ALSO sets the cancel flag the
+        engine polls — without it, Stop was a no-op (the engine ran to completion)."""
+        self._cancel_flags.setdefault(conversation_id, asyncio.Event()).set()
         loop = self._loops.get(conversation_id)
         if loop is not None:
             await loop.cancel()
+
+    async def resume(self, conversation_id: str) -> None:
+        """Continue a stopped (PAUSED) Deep Research run. Clears the cancel flag and
+        re-kicks; `_maybe_run_deep_research` detects the PAUSED state and re-runs the
+        execution to completion (the new full report supersedes the partial)."""
+        self._cancel_flags.pop(conversation_id, None)
+        self.kick(conversation_id)
 
     async def kill(self, conversation_id: str) -> None:
         """The KILL SWITCH (BoD §13.6) — the ultimate stop above the three security
@@ -1047,10 +1233,17 @@ class ConversationRuntime:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
-        # 2. revoke capabilities + destroy the sandbox (the executor's kill, §6.4).
-        executor = self._executors.get(conversation_id)
+        # 2. revoke capabilities + destroy the sandbox (the executor's kill, §6.4),
+        #    then DROP the executor + loop from the caches. Critical: a killed executor
+        #    is permanently `_killed=True` and returns "executor killed; instance
+        #    revoked" for every call — if it stayed cached, RESUMING the conversation
+        #    would reuse the dead executor and every tool call would fail forever (the
+        #    exact unrecoverable loop a build hit). Popping them forces `_loop_for` to
+        #    rebuild a FRESH executor + sandbox on the next run.
+        executor = self._executors.pop(conversation_id, None)
         if executor is not None:
             await executor.kill()
+        self._loops.pop(conversation_id, None)
         # 3. record the stop so subscribers see it (no STOPPED status in the enum; IDLE
         #    + a 'killed' detail is the contract's terminal-for-now shape).
         await self._store.append(

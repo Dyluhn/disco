@@ -73,6 +73,12 @@ def _shell(command: str) -> ProposedToolCall:
     return ProposedToolCall(tool_name="shell", arguments={"command": command})
 
 
+def _finish(summary: str = "done") -> ProposedToolCall:
+    """The affirmative terminal move (GAP B). In execution mode a tool-less prose
+    turn no longer ends the run; only `finish` does."""
+    return ProposedToolCall(tool_name="finish", arguments={"summary": summary})
+
+
 def _plan_step_done(idx: int) -> ProposedToolCall:
     """Mark a plan step done — required by the plan-completeness FINISHED gate.
     Without this, the loop refuses to land in FINISHED (plan has incomplete steps)
@@ -127,7 +133,7 @@ _RISKY = [
     ("here's the plan", [_plan(["remove the dir"])]),
     ("removing the dir", [_shell("rm -rf doomed")]),
     ("step 1 complete", [_plan_step_done(1)]),
-    ("done", []),
+    ("done", [_finish()]),
 ]
 
 
@@ -327,10 +333,10 @@ async def test_execution_gate_refuses_finish_without_productive_action():
     # and finishes for real.
     steps = [
         ("here's the plan", [_plan(["do the thing"])]),  # plan
-        ("done!", []),  # tries to finish immediately (no action) → gate fires
+        ("done!", [_finish()]),  # tries to finish immediately (no action) → gate fires
         ("ok ok writing", [safe]),  # complies on the next turn
         ("marking done", [_plan_step_done(1)]),  # plan-completeness gate
-        ("done", []),  # finishes after producing real work
+        ("done", [_finish()]),  # finishes after producing real work
     ]
     store = SqliteEventStore(":memory:")
     runtime = await _build_convo(store, steps)
@@ -380,7 +386,7 @@ async def test_request_plan_after_finish_reopens_plan_mode_with_a_new_revision()
         ("plan one", [_plan(["do the thing"])]),
         ("doing", [safe]),
         ("marking done", [_plan_step_done(1)]),  # plan-completeness gate
-        ("done", []),
+        ("done", [_finish()]),
         ("plan two", [_plan(["do another thing"])]),
     ]
     store = SqliteEventStore(":memory:")

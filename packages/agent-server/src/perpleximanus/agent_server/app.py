@@ -17,7 +17,7 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from perpleximanus.core import (
     DEFAULT_OWNER_ID,
     EventSource,
@@ -70,13 +70,45 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         allow_headers=["*"],
     )
 
+    # ---- health (liveness/readiness — the canary + ops probe hit this) ------
+
+    @app.get("/health")
+    async def health() -> JSONResponse:
+        """Cheap readiness probe: store reachable + runtime/router wired. Does NOT
+        call a model (that's the canary's job — `harness/canary.py` adds a real
+        grounded research query on top). Returns 200 ok / 503 degraded so a
+        systemd-timer or uptime check can alert on a dead dependency."""
+        checks: dict[str, object] = {}
+        ok = True
+        try:
+            await store.list_conversations(owner_id=DEFAULT_OWNER_ID, limit=1)
+            checks["store"] = "ok"
+        except Exception as e:  # noqa: BLE001 — any store failure is a health signal
+            checks["store"] = f"error: {e}"
+            ok = False
+        if runtime is None:
+            checks["runtime"] = "absent (wire-only mode)"
+        else:
+            try:
+                checks["models"] = len(runtime.driver_models().get("models", []))
+                checks["runtime"] = "ok"
+            except Exception as e:  # noqa: BLE001
+                checks["runtime"] = f"error: {e}"
+                ok = False
+        body = {"status": "ok" if ok else "degraded", "version": app.version, "checks": checks}
+        return JSONResponse(body, status_code=200 if ok else 503)
+
     # ---- REST surface (§7.5) ------------------------------------------------
 
     @app.post("/conversations")
     async def create_conversation(body: CreateConversationBody) -> dict:
         conversation_id = f"conv_{uuid.uuid4().hex}"
         store.create_conversation(
-            conversation_id, owner_id=body.owner_id, space_id=body.space_id, title=body.title
+            conversation_id,
+            owner_id=body.owner_id,
+            space_id=body.space_id,
+            title=body.title,
+            surface=body.surface,  # persist so History routes it (even mid-run, no report yet)
         )
         # Select the surface (Build composes tools + sandbox + the ConfirmRisky gate) +
         # pin the driver model if the picker chose one.
@@ -126,6 +158,14 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         if runtime is None:
             return {"available": False, "reason": "no runtime"}
         return runtime.preview(conversation_id)
+
+    @app.post("/conversations/{conversation_id}/preview/restart")
+    async def restart_preview(conversation_id: str) -> dict:
+        """Bring a down preview back on demand (§E7) — the UI 'Restart preview' button.
+        Bounded + safe (same path as the agent's restart_preview tool)."""
+        if runtime is None:
+            return {"ok": False}
+        return {"ok": await runtime.restart_preview(conversation_id)}
 
     @app.get("/conversations/{conversation_id}/preview-app/{path:path}")
     @app.get("/conversations/{conversation_id}/preview-app/")
@@ -318,7 +358,19 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
                     WSServerFrame(type="event", event=event).model_dump(mode="json")
                 )
 
+        # Watch-it-write: drain the EPHEMERAL bus (transient file-stream deltas,
+        # never persisted) onto the same socket. A second pump so a flood of
+        # stream frames never blocks the primary event pump (and vice versa).
+        eph_stream = await store.subscribe_ephemeral(conversation_id)
+
+        async def pump_ephemeral() -> None:
+            async for frame in eph_stream:
+                await websocket.send_json(
+                    WSServerFrame(type="file_stream", file_stream=frame).model_dump(mode="json")
+                )
+
         sender = asyncio.create_task(pump_events())
+        eph_sender = asyncio.create_task(pump_ephemeral())
         try:
             while True:
                 try:
@@ -344,8 +396,11 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
                 await _handle_frame(store, websocket, conversation_id, frame, runtime)
         finally:
             sender.cancel()
+            eph_sender.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await sender
+            with contextlib.suppress(asyncio.CancelledError):
+                await eph_sender
 
     # ---- research-answer stream (Stage 4) -----------------------------------
 
@@ -442,4 +497,8 @@ async def _handle_frame(
     elif frame.type == "cancel" and runtime is not None:
         # Cooperative stop (the hard kill is POST /conversations/{id}/kill).
         await runtime.cancel(conversation_id)
-    # pause/resume: loop-level control, accepted here; wired with the UI (Prompt 4).
+    elif frame.type == "resume" and runtime is not None:
+        # Continue a stopped/incomplete run (explicit — never automatic on open).
+        # Re-kicks the loop; the deep-research driver re-runs the execution.
+        await runtime.resume(conversation_id)
+    # pause: loop-level control, accepted here; wired with the UI later.

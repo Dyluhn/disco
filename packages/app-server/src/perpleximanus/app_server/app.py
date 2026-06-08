@@ -23,6 +23,8 @@ from .config_state import (
     AssignmentsPatch,
     ConfigState,
     ConfigValidationError,
+    DataSourcesConfigDTO,
+    EncodersConfigDTO,
     McpConnectionDTO,
     ModelDTO,
     ModelUpsert,
@@ -47,6 +49,7 @@ class ConversationSummaryDTO(BaseModel):
     owner_id: str
     title: str | None = None
     created_at: str
+    surface: str = "research"  # "research" | "build" | "deep_research" — History routing
 
 
 def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> FastAPI:
@@ -101,6 +104,22 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
     @app.put("/api/sandbox/config")
     async def put_sandbox_config(dto: SandboxConfigDTO) -> SandboxConfigDTO:
         return state.update_sandbox_config(dto)
+
+    @app.get("/api/encoders/config")
+    async def get_encoders_config() -> EncodersConfigDTO:
+        return state.encoders_config()
+
+    @app.put("/api/encoders/config")
+    async def put_encoders_config(dto: EncodersConfigDTO) -> EncodersConfigDTO:
+        return state.update_encoders_config(dto)
+
+    @app.get("/api/data-sources/config")
+    async def get_data_sources_config() -> DataSourcesConfigDTO:
+        return state.data_sources_config()
+
+    @app.put("/api/data-sources/config")
+    async def put_data_sources_config(dto: DataSourcesConfigDTO) -> DataSourcesConfigDTO:
+        return state.update_data_sources_config(dto)
 
     @app.get("/api/projects/storage/config")
     async def get_projects_config() -> ProjectStorageConfigDTO:
@@ -211,6 +230,7 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
                 owner_id=s.owner_id,
                 title=s.title,
                 created_at=s.created_at,
+                surface=s.surface,
             )
             for s in summaries
         ]

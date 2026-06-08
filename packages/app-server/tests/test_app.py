@@ -114,7 +114,20 @@ def test_assignments_default_and_per_role(client):
     a = client.get("/api/models/assignments").json()
     assert a["default_model"] == "driver-local"
     assert a["roles"]["rag_answerer"] == "rag-local"
-    assert set(a["roles"]) == {"rag_answerer", "query_rewriter", "summarizer", "nli_verifier"}
+    # Only the GENERATIVE LLM roles are assignable. nli_verifier is an ENCODER
+    # (bundled in-process / remote via the Encoders setting), NOT an LLM-router
+    # role — exposing it here would be a false affordance (the assignment is ignored).
+    assert set(a["roles"]) == {"rag_answerer", "query_rewriter", "summarizer"}
+    assert "nli_verifier" not in a["roles"]
+
+
+def test_encoders_config_round_trips(client):
+    # Default: bundled in-process (local).
+    assert client.get("/api/encoders/config").json()["remote"] is False
+    # Flip to remote and back — persisted.
+    assert client.put("/api/encoders/config", json={"remote": True}).json()["remote"] is True
+    assert client.get("/api/encoders/config").json()["remote"] is True
+    assert client.put("/api/encoders/config", json={"remote": False}).json()["remote"] is False
 
 
 def test_model_crud_add_edit_remove(client):
