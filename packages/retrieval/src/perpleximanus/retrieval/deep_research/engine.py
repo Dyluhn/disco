@@ -121,10 +121,16 @@ class DeepResearchRun:
         plan_steps: list[str],
         *,
         emit: EmitFn,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> ReportFromRun:
         """Execute the run. Returns the assembled report. `emit` is awaited
         between phases so the agent-server can write events to the conversation
-        log; we never write to the store directly."""
+        log; we never write to the store directly.
+
+        `should_cancel` makes Stop REAL: it is polled at each sub-question and each
+        section boundary; when it returns true the run halts at that checkpoint and
+        returns the partial report so far with `bounded_by="stopped"` (resumable).
+        Without it the run is uninterruptible (the old, broken behavior)."""
         started = time.monotonic()
         bounded_by: str | None = None
         # honor the depth bound on plan width too
@@ -138,6 +144,9 @@ class DeepResearchRun:
         results: list[SubQuestionResult] = []
         remaining = self._bound.max_sources
         for subq in subqs:
+            if should_cancel is not None and should_cancel():
+                bounded_by = "stopped"  # user pressed Stop — halt at this checkpoint
+                break
             if (time.monotonic() - started) > self._bound.max_wall_clock_s:
                 bounded_by = bounded_by or "wall_clock"
                 break
@@ -171,6 +180,9 @@ class DeepResearchRun:
         # ---- synthesize phase: map step per section ------------------------
         sections: list[ReportSection] = []
         for i, sub_result in enumerate(results):
+            if should_cancel is not None and should_cancel():
+                bounded_by = "stopped"  # Stop pressed during synthesis — halt here
+                break
             if (time.monotonic() - started) > self._bound.max_wall_clock_s:
                 bounded_by = bounded_by or "wall_clock"
                 break

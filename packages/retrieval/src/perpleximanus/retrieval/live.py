@@ -389,19 +389,87 @@ _DEFAULTS = {
 }
 
 
-def build_live_retrieval(env: Mapping[str, str] | None = None) -> dict[str, Any]:
-    """Construct the five live providers from env (LAN defaults). Returns a dict
-    {search, extraction, reranker, embedder, nli} the research wiring composes into
-    a RetrievalEngine + GroundingPipeline."""
+def _make_search(provider: str, base_url: str, api_key: str):
+    """Select the discovery provider (§B2). BUNDLED `ddgs` is the default — no key,
+    no service. `searxng` self-hosts; `tavily` is a paid key."""
+    from .bundled_providers import DdgsSearchProvider, TavilySearchProvider
+
+    if provider == "searxng":
+        return SearxngSearchProvider(base_url)
+    if provider == "tavily":
+        return TavilySearchProvider(api_key)
+    return DdgsSearchProvider()  # default / "ddgs"
+
+
+def _make_extraction(provider: str, base_url: str, api_key: str):
+    """Select the extraction provider (§B1). BUNDLED `local` is the default — in-
+    process, no service. `crawl4ai` self-hosts; `firecrawl` is a paid key."""
+    from .bundled_providers import FirecrawlExtractionProvider, LocalExtractionProvider
+
+    if provider == "crawl4ai":
+        return Crawl4aiExtractionProvider(base_url)
+    if provider == "firecrawl":
+        return FirecrawlExtractionProvider(api_key, base_url or "https://api.firecrawl.dev")
+    return LocalExtractionProvider()  # default / "local"
+
+
+def build_live_retrieval(
+    env: Mapping[str, str] | None = None,
+    *,
+    remote: bool | None = None,
+    reranker_url: str = "",
+    embedder_url: str = "",
+    nli_url: str = "",
+    search_provider: str = "ddgs",
+    search_base_url: str = "",
+    search_api_key: str = "",
+    extraction_provider: str = "local",
+    extraction_base_url: str = "",
+    extraction_api_key: str = "",
+) -> dict[str, Any]:
+    """Construct the five providers. Returns a dict {search, extraction, reranker,
+    embedder, nli} the research wiring composes into a RetrievalEngine +
+    GroundingPipeline.
+
+    ENCODERS — local by default (portability). Search + extraction are inherently
+    remote (SearXNG / Crawl4AI are web services), but the three ENCODERS (reranker,
+    embedder, NLI) are bundled IN-PROCESS via fastembed (ONNX/CPU) by default — no
+    separate encoder server needed, and faster than the network hop. `remote=True`
+    (the persisted Settings toggle) uses the LAN TEI/OpenAI/NLI-sidecar services;
+    when `remote` is None it falls back to the `PMX_ENCODERS=remote` env.
+
+    The three `*_url` args are the PERSISTED endpoint overrides (Settings → Encoders
+    → Remote). Each takes precedence when non-empty; an empty one falls back to the
+    PMX_*_URL env default — so a remote user who hasn't typed URLs still resolves."""
     e = os.environ if env is None else env
 
     def url(key: str) -> str:
         return e.get(key, _DEFAULTS[key])
 
-    return {
-        "search": SearxngSearchProvider(url("PMX_SEARXNG_URL")),
-        "extraction": Crawl4aiExtractionProvider(url("PMX_CRAWL4AI_URL")),
-        "reranker": TeiReranker(url("PMX_RERANKER_URL")),
-        "embedder": OpenAIEmbedder(url("PMX_EMBEDDER_URL")),
-        "nli": SidecarNLIVerifier(url("PMX_NLI_URL")),
+    if remote is None:
+        remote = e.get("PMX_ENCODERS", "local").lower() == "remote"
+    use_remote = remote
+    # B1/B2 — pluggable discovery + extraction. Bundled (ddgs/local) by default so a
+    # fresh install works keyless; searxng/crawl4ai self-host (base_url, empty → env
+    # default); tavily/firecrawl are paid (resolved api_key passed in by the runtime).
+    providers: dict[str, Any] = {
+        "search": _make_search(
+            search_provider, search_base_url or url("PMX_SEARXNG_URL"), search_api_key
+        ),
+        "extraction": _make_extraction(
+            extraction_provider, extraction_base_url or url("PMX_CRAWL4AI_URL"), extraction_api_key
+        ),
     }
+    if use_remote:
+        # config override (non-empty) wins; else the env/default for that endpoint
+        providers["reranker"] = TeiReranker(reranker_url or url("PMX_RERANKER_URL"))
+        providers["embedder"] = OpenAIEmbedder(embedder_url or url("PMX_EMBEDDER_URL"))
+        providers["nli"] = SidecarNLIVerifier(nli_url or url("PMX_NLI_URL"))
+    else:
+        # In-process ONNX/CPU encoders (imported lazily — models load on first use).
+        from .local_encoders import FastEmbedEmbedder, FastEmbedNLIVerifier, FastEmbedReranker
+
+        providers["reranker"] = FastEmbedReranker()
+        providers["embedder"] = FastEmbedEmbedder()
+        providers["nli"] = FastEmbedNLIVerifier()
+    return providers

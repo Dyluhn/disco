@@ -35,11 +35,11 @@ from perpleximanus.retrieval.deep_research import (
     bounds_for,
     decompose_query,
 )
+from perpleximanus.retrieval.deep_research.decompose import SubQuestion
 from perpleximanus.retrieval.deep_research.gather import (
     SubQuestionResult,
     gather_for_subquestion,
 )
-from perpleximanus.retrieval.deep_research.decompose import SubQuestion
 from perpleximanus.retrieval.engine import DefaultRetrievalEngine
 from perpleximanus.retrieval.models import (
     ExtractedDoc,
@@ -49,7 +49,6 @@ from perpleximanus.retrieval.models import (
     SearchHit,
 )
 from perpleximanus.retrieval.vectorstore import InMemoryVectorStore
-
 
 # ---- fakes ------------------------------------------------------------------
 
@@ -399,6 +398,69 @@ async def test_full_run_produces_multi_section_report() -> None:
     assert any(p.get("phase") == "gather" for p in phases)
     assert any(p.get("phase") == "synthesize" for p in phases)
     assert any(p.get("phase") == "coherence" for p in phases)
+
+
+async def test_should_cancel_halts_at_checkpoint_with_partial_report() -> None:
+    """Stop is REAL: `should_cancel` is polled at each sub-question boundary; when
+    it trips, the run halts there, returns the partial sections gathered so far, and
+    flags bounded_by='stopped'. (Regression for "Stop is useless" — the engine used
+    to run to completion regardless.)"""
+    search = _FakeSearch()
+    extraction = _FakeExtraction()
+    reranker = _FakeReranker()
+    embedder = _FakeEmbedder()
+    vector_store = InMemoryVectorStore()
+    router = _ScriptedRouter({
+        "query_rewriter": ["SUFFICIENT\nnone"] * 5,
+        "rag_answerer": ["body [[p0]]"] * 5 + ["summary"],
+    })
+    engine = DefaultRetrievalEngine(
+        search=search, extraction=extraction, reranker=reranker, embedder=embedder
+    )
+    run = DeepResearchRun(
+        query="the state of X",
+        router=router, retrieval_engine=engine,
+        embedder=None, vector_store=vector_store, nli=_FakeNLI(),
+        depth=DepthTier.STANDARD_DEEP, conversation_id="conv_stop",
+    )
+    plan_steps = ["What is X?", "How does X work?", "Where is X going?", "Risks?"]
+    _, emit = _collect_events()
+
+    # Cancel after the first sub-question is gathered: returns False once (the first
+    # gather proceeds), then True (the second checkpoint halts).
+    calls = {"n": 0}
+
+    def should_cancel() -> bool:
+        calls["n"] += 1
+        return calls["n"] > 1
+
+    result = await run.run(plan_steps, emit=emit, should_cancel=should_cancel)
+
+    assert result.bounded_by == "stopped"  # halted by Stop, not by a cap
+    assert len(result.sections) < len(plan_steps)  # partial — it did NOT finish all 4
+    assert result.to_event().bounded_by == "stopped"  # propagates to the event
+
+
+async def test_no_should_cancel_runs_to_completion() -> None:
+    """Without a cancel hook the run is uninterruptible (baseline) — every section."""
+    search, extraction, reranker, embedder = (
+        _FakeSearch(), _FakeExtraction(), _FakeReranker(), _FakeEmbedder()
+    )
+    router = _ScriptedRouter({
+        "query_rewriter": ["SUFFICIENT\nnone"] * 4,
+        "rag_answerer": ["body [[p0]]"] * 4 + ["summary"],
+    })
+    engine = DefaultRetrievalEngine(
+        search=search, extraction=extraction, reranker=reranker, embedder=embedder
+    )
+    run = DeepResearchRun(
+        query="X", router=router, retrieval_engine=engine, embedder=None,
+        vector_store=InMemoryVectorStore(), nli=_FakeNLI(),
+        depth=DepthTier.STANDARD_DEEP, conversation_id="conv_nostop",
+    )
+    _, emit = _collect_events()
+    result = await run.run(["a", "b"], emit=emit)  # no should_cancel
+    assert result.bounded_by is None and len(result.sections) == 2
 
 
 async def test_cap_hit_produces_bounded_by_subquestions() -> None:
