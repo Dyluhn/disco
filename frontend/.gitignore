@@ -6,3 +6,9 @@ coverage/
 *.tsbuildinfo
 shots/
 screenshots/
+
+# Playwright (keep e2e/ specs + *-snapshots baselines; drop run artifacts)
+test-results/
+playwright-report/
+blob-report/
+.playwright/

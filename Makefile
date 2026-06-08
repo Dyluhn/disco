@@ -28,7 +28,7 @@ help:
 	@echo "  make canary-health  live /health probe only (no model call)"
 	@echo "  make replay      event-log deterministic replay (needs loop_demo fixture — 'make capture-loop')"
 	@echo "  make capture-loop  record a real deep-research conversation (event-log + cassette) — HEAVY"
-	@echo "  make e2e         [Phase 7 — not yet built] frontend Playwright E2E + visual"
+	@echo "  make e2e         frontend Playwright E2E + visual regression (fixture mode)"
 
 # ---- hermetic (fast, offline) ----------------------------------------------
 
@@ -87,7 +87,10 @@ canary-health:
 replay:
 	PYTHONPATH=. uv run python -m harness.replay_runner
 
-# ---- not yet built (honest stub — fail loudly rather than pretend) ----------
+# ---- Phase 7 — frontend E2E + visual regression (fixture mode, no backend) --
 
 e2e:
-	@echo "Phase 7 (Playwright E2E + visual regression) is not built yet — see the plan."; exit 2
+	cd frontend && npm run test:e2e
+
+e2e-update:
+	cd frontend && npm run test:e2e:update

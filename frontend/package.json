@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:update": "playwright test --update-snapshots"
   },
   "dependencies": {
     "@fontsource-variable/fraunces": "^5.1.0",
@@ -34,6 +36,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
+    "@playwright/test": "^1.60.0",
     "@tailwindcss/vite": "^4.0.0",
     "@testing-library/jest-dom": "^6.5.0",
     "@testing-library/react": "^16.0.0",
