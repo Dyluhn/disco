@@ -21,6 +21,7 @@ from .providers import (
     ReplaySearchProvider,
 )
 from .router import RecordingRouter, ReplayRouter
+from .sandbox import RecordingSandboxService, ReplaySandboxService
 
 
 def _live_encoders() -> dict:
@@ -45,14 +46,28 @@ def build_replay_runtime(cassette: Cassette, store, *, config_store=None, secret
         secret_store=secret_store or SecretStore(":memory:"),
         router=ReplayRouter(cassette),
         research_providers=providers,
+        # The build surface runs tools through a sandbox; serve it from the cassette
+        # too so a recorded BUILD conversation replays deterministically (research
+        # runs never touch it, so this is harmless there).
+        sandbox_service=ReplaySandboxService(cassette),
     )
 
 
 def build_recording_runtime(
-    cassette: Cassette, store, *, config_store, secret_store, model_pick="driver-local"
+    cassette: Cassette,
+    store,
+    *,
+    config_store,
+    secret_store,
+    model_pick="driver-local",
+    record_sandbox=False,
 ):
     """A runtime backed by the REAL services, wrapped to record every LLM + search
-    + extraction call into `cassette`. Run a real flow through it, then `save()`."""
+    + extraction call into `cassette`. Run a real flow through it, then `save()`.
+
+    `record_sandbox=True` additionally records the build sandbox (exec/read/list)
+    by wrapping the host `process` backend — set it when capturing a BUILD demo
+    (research captures leave it off; they never touch the sandbox)."""
     from perpleximanus.retrieval.live import build_live_retrieval
 
     real = build_live_retrieval()
@@ -63,11 +78,17 @@ def build_recording_runtime(
         "embedder": real["embedder"],
         "nli": real["nli"],
     }
+    sandbox = None
+    if record_sandbox:
+        from perpleximanus.tools.sandbox.process import ProcessSandboxService
+
+        sandbox = RecordingSandboxService(ProcessSandboxService(), cassette)
     rt = ConversationRuntime(
         store,
         config_store=config_store,
         secret_store=secret_store,
         research_providers=providers,
+        sandbox_service=sandbox,
     )
     # wrap the per-request router so its completions are recorded
     base_router = rt._router_now(pick=model_pick)

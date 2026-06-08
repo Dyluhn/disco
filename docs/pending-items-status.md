@@ -102,7 +102,10 @@ milestone. Backend coherence (GAP A–H) is largely landed.
 - [x] ✅ Phase 7 Playwright E2E + visual regression — BUILT (commit 3449cbb): `frontend/e2e/*.spec.ts`
   (4 flows) + Firefox visual baselines (both themes), fixture mode via `vite --mode test`, `make e2e`.
   Meta-verified (break heading → functional + visual go red)
-- [ ] Phase 3 build-surface deterministic replay still needs a `ReplaySandbox` on the `sandbox_service=` seam (pure code, model-independent)
+- [x] ✅ Phase 3 build-surface `ReplaySandbox` — BUILT (`harness/sandbox.py`): Recording/Replay sandbox
+  on the `sandbox_service=` seam, keyed by `(method, args, occurrence-nonce)` for the stateful backend;
+  wired into `build_replay_runtime`; round-trip tested (`test_sandbox_replay.py`). Full e2e BUILD replay
+  still needs a captured build cassette (`record_sandbox=True` → needs the model server up)
 
 ## future-plans.md follow-ups (system-reminder pattern, not yet built)
 
