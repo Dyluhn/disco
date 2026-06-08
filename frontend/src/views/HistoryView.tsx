@@ -112,15 +112,36 @@ export function HistoryView() {
                     key={c.id}
                     className="flex items-center justify-between gap-section border-b border-hairline py-inline last:border-b-0"
                   >
-                    {/* open → the main surface (loading the specific conversation
-                        is a live-wire detail; the affordance navigates today) */}
+                    {/* open → the conversation's OWN surface, READ-ONLY (the route
+                        loads it via /deep|build/:cid; the surface subscribes + replays
+                        but never re-runs it — view ≠ start). Research → the main page. */}
                     <button
                       type="button"
-                      onClick={() => navigate("/")}
+                      onClick={() =>
+                        navigate(
+                          c.surface === "deep_research"
+                            ? `/deep/${c.id}`
+                            : c.surface === "build"
+                              ? `/build/${c.id}`
+                              : "/",
+                        )
+                      }
                       className="group min-w-0 flex-1 text-left"
                     >
-                      <div className="truncate font-ui text-[0.9rem] text-text transition-colors group-hover:text-accent">
-                        {c.title}
+                      <div className="flex items-center gap-hair">
+                        <span className="truncate font-ui text-[0.9rem] text-text transition-colors group-hover:text-accent">
+                          {c.title}
+                        </span>
+                        {c.surface === "deep_research" && (
+                          <span className="shrink-0 rounded-full border border-hairline px-hair font-ui text-[0.62rem] uppercase tracking-wide text-text-faint">
+                            deep
+                          </span>
+                        )}
+                        {c.surface === "build" && (
+                          <span className="shrink-0 rounded-full border border-hairline px-hair font-ui text-[0.62rem] uppercase tracking-wide text-text-faint">
+                            build
+                          </span>
+                        )}
                       </div>
                       <div className="font-ui text-[0.76rem] text-text-faint">
                         {formatDate(c.created_at)}

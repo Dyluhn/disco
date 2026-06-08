@@ -18,12 +18,17 @@ describe("Settings — model-assignment matrix", () => {
     );
     // The absolute, no-automatic-routing story is stated.
     expect(screen.getByText(/no automatic routing/i)).toBeInTheDocument();
-    // Every non-driver role has its own selector.
-    for (const role of ["RAG answerer", "Query rewriter", "Summarizer", "NLI verifier"]) {
+    // Every GENERATIVE non-driver role has its own selector...
+    for (const role of ["RAG answerer", "Query rewriter", "Summarizer"]) {
       expect(
         screen.getByRole("button", { name: new RegExp(`Choose model for ${role}`, "i") }),
       ).toBeInTheDocument();
     }
+    // ...but NLI is an ENCODER (Settings → Encoders), NOT an assignable LLM role:
+    // surfacing it in the matrix would be a false affordance (the assignment is ignored).
+    expect(
+      screen.queryByRole("button", { name: /Choose model for NLI verifier/i }),
+    ).not.toBeInTheDocument();
     // Cost is visible per assignment (all local → Free).
     expect(screen.getAllByText("Free").length).toBeGreaterThan(0);
   });
@@ -48,6 +53,23 @@ describe("Settings — model-assignment matrix", () => {
         screen.getByRole("button", { name: /Choose model for RAG answerer/i }),
       ).toHaveTextContent(/Summarizer Local/i),
     );
+  });
+});
+
+describe("Settings — Encoders (bundled-local vs remote)", () => {
+  it("shows the encoder mode as an honest, wired toggle (default bundled-local)", async () => {
+    const user = userEvent.setup();
+    withQuery(<SettingsView />);
+    // The section exists and states the truth (encoders are bundled, not an LLM role).
+    await screen.findByRole("heading", { name: /Encoders/i });
+    const bundled = await screen.findByRole("button", { name: /Bundled \(local\)/i });
+    const remote = screen.getByRole("button", { name: /Remote endpoints/i });
+    // Default is bundled-local (pressed); remote is the alternative.
+    await waitFor(() => expect(bundled).toHaveAttribute("aria-pressed", "true"));
+    expect(remote).toHaveAttribute("aria-pressed", "false");
+    // Flipping to remote is a real action (persists + reflects).
+    await user.click(remote);
+    await waitFor(() => expect(remote).toHaveAttribute("aria-pressed", "true"));
   });
 });
 

@@ -78,13 +78,42 @@ export type ModelRole =
   | "summarizer"
   | "nli_verifier";
 
-/** The non-driver roles that get explicit per-role selectors in Settings. */
-export type AssignableRole = Exclude<ModelRole, "agent_driver">;
+/** Roles that get explicit per-role LLM selectors in Settings. AGENT_DRIVER
+ * follows the default + per-conversation pick; NLI_VERIFIER is an ENCODER
+ * (bundled in-process / remote via the Encoders setting), NOT an LLM-router role,
+ * so it isn't assignable here. */
+export type AssignableRole = Exclude<ModelRole, "agent_driver" | "nli_verifier">;
 
 export interface RoleMeta {
   id: AssignableRole;
   label: string;
   description: string;
+}
+
+/** Where the non-generative encoders (embeddings / rerank / NLI) run — the wire
+ * mirror of the app-server's EncodersConfigDTO. `remote=false` = bundled
+ * in-process (ONNX/CPU); `remote=true` = external LAN endpoints. The endpoint URLs
+ * are editable when Remote is selected; an empty one falls back to the server's
+ * env default. */
+export interface EncodersConfig {
+  remote: boolean;
+  reranker_url?: string;
+  embedder_url?: string;
+  nli_url?: string;
+}
+
+/** Universal web-data providers (§B). Each slot has three tiers; the bundled
+ * defaults (ddgs / local) need no key. `*_api_key_env` is the NAME of an env var
+ * holding a paid key — never the key itself. Mirror of DataSourcesConfigDTO. */
+export type SearchProvider = "ddgs" | "searxng" | "tavily" | "brave";
+export type ExtractionProvider = "local" | "crawl4ai" | "firecrawl";
+export interface DataSourcesConfig {
+  search_provider: SearchProvider;
+  search_base_url: string;
+  search_api_key_env: string;
+  extraction_provider: ExtractionProvider;
+  extraction_base_url: string;
+  extraction_api_key_env: string;
 }
 
 /**
@@ -106,12 +135,7 @@ export const ROLES: RoleMeta[] = [
   {
     id: "summarizer",
     label: "Summarizer",
-    description: "Condenses context — a cheap, separate model.",
-  },
-  {
-    id: "nli_verifier",
-    label: "NLI verifier",
-    description: "Checks each claim's entailment against its cited passage.",
+    description: "Condenses context on a long run.",
   },
 ];
 

@@ -75,6 +75,14 @@ export async function getPreview(cid: string): Promise<PreviewInfo> {
   return agentGet<PreviewInfo>(`/conversations/${cid}/preview`);
 }
 
+/** Bring a down preview back (§E7): bounded, idempotent restart of the static
+ *  serve on the conversation's sandbox. Returns whether a server is now up. */
+export async function restartPreview(cid: string): Promise<boolean> {
+  if (!agentLive()) return false;
+  const r = await agentSend<{ ok: boolean }>("POST", `/conversations/${cid}/preview/restart`);
+  return Boolean(r?.ok);
+}
+
 /** The kill switch (BoD §13.6): halt, tear down the sandbox, revoke capabilities. */
 export async function killConversation(cid: string): Promise<void> {
   if (!agentLive()) return; // offline: the hook marks the run stopped

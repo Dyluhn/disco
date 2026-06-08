@@ -34,6 +34,11 @@ export interface DeepResearchSession {
   cid: string;
   query: string;
   depthTier: "quick" | "standard_deep" | "exhaustive";
+  /** Whether subscribing should ALSO start the run (send the query). Command–Query
+   *  Separation: only a fresh `submit()` sets this true. Opening an existing run
+   *  (from History / a /deep/:cid route) is a SAFE read — subscribe + replay only,
+   *  never `send_message`. This is what stops "viewing spins it back up". */
+  kick?: boolean;
 }
 
 interface RawState {
@@ -124,6 +129,8 @@ export interface DeepResearchStream {
   approvePlan: () => void;
   requestPlan: (text: string) => void;
   cancel: () => void;
+  /** Continue a stopped/incomplete run (explicit — never on open). */
+  resume: () => void;
 }
 
 export function useDeepResearchStream(
@@ -139,11 +146,13 @@ export function useDeepResearchStream(
       dispatch({ type: "frame", frame }),
     );
     handle.current = h;
-    // Kick the loop: send the query as the first user message. The engine's
-    // _propose_deep_research_plan path decomposes it into a PlanEvent +
-    // AWAITING_PLAN_APPROVAL, and we wait for the user to approve via the
-    // plan gate.
-    h.send({ type: "send_message", content: session.query });
+    // Command–Query Separation: only a FRESH submit kicks the loop. Opening an
+    // existing run (resume / History) is a safe read — subscribe + replay only.
+    // The engine's _propose_deep_research_plan path decomposes the query into a
+    // PlanEvent + AWAITING_PLAN_APPROVAL; we then wait at the plan gate.
+    if (session.kick) {
+      h.send({ type: "send_message", content: session.query });
+    }
     return () => h.cancel();
   }, [session]);
 
@@ -152,6 +161,8 @@ export function useDeepResearchStream(
     text.trim() &&
     handle.current?.send({ type: "request_plan", content: text.trim() });
   const cancel = () => handle.current?.send({ type: "cancel" });
+  // Resume a stopped/incomplete run (explicit; never automatic on open).
+  const resume = () => handle.current?.send({ type: "resume" });
 
   const plan = useMemo(() => derivePlan(state.events), [state.events]);
   const progress = useMemo(
@@ -186,5 +197,6 @@ export function useDeepResearchStream(
     approvePlan,
     requestPlan,
     cancel,
+    resume,
   };
 }

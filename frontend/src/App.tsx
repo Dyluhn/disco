@@ -4,6 +4,7 @@ import { BuildSurface } from "@/components/BuildSurface";
 import { ResearchSurface } from "@/components/ResearchSurface";
 import { DeepResearchSurface } from "@/components/research/DeepResearchSurface";
 import { ModeProvider } from "@/shell/ModeProvider";
+import { ToastProvider } from "@/components/Toast";
 import { Shell } from "@/shell/Shell";
 import { useMode } from "@/shell/mode";
 import { HistoryView } from "@/views/HistoryView";
@@ -48,6 +49,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <Router>
         <ModeProvider>
+          <ToastProvider>
           <Routes>
             <Route element={<Shell />}>
               <Route index element={<MainSurface />} />
@@ -59,6 +61,7 @@ export default function App() {
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           </Routes>
+          </ToastProvider>
         </ModeProvider>
       </Router>
     </QueryClientProvider>

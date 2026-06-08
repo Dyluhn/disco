@@ -4,17 +4,23 @@ import {
   createModel,
   deleteModel,
   getAssignments,
+  getDataSourcesConfig,
+  getEncodersConfig,
   getOpenRouterKeyStatus,
   getSandboxConfig,
   listModels,
   listOpenRouterModels,
   setOpenRouterKey,
   updateAssignments,
+  updateDataSourcesConfig,
+  updateEncodersConfig,
   updateModel,
   updateSandboxConfig,
 } from "@/api/models";
 import type {
   AssignmentsPatch,
+  DataSourcesConfig,
+  EncodersConfig,
   ModelAssignments,
   ModelInfo,
   ModelUpsert,
@@ -63,6 +69,37 @@ export function useUpdateSandboxConfig() {
   return useMutation({
     mutationFn: (cfg: SandboxConfig) => updateSandboxConfig(cfg),
     onSuccess: (next) => qc.setQueryData(SANDBOX_KEY, next),
+  });
+}
+
+const ENCODERS_KEY = ["encoders-config"] as const;
+
+export function useEncodersConfig() {
+  return useQuery<EncodersConfig>({ queryKey: ENCODERS_KEY, queryFn: getEncodersConfig });
+}
+
+export function useUpdateEncodersConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (cfg: EncodersConfig) => updateEncodersConfig(cfg),
+    onSuccess: (next) => qc.setQueryData(ENCODERS_KEY, next),
+  });
+}
+
+const DATA_SOURCES_KEY = ["data-sources-config"] as const;
+
+export function useDataSourcesConfig() {
+  return useQuery<DataSourcesConfig>({
+    queryKey: DATA_SOURCES_KEY,
+    queryFn: getDataSourcesConfig,
+  });
+}
+
+export function useUpdateDataSourcesConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (cfg: DataSourcesConfig) => updateDataSourcesConfig(cfg),
+    onSuccess: (next) => qc.setQueryData(DATA_SOURCES_KEY, next),
   });
 }
 

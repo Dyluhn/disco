@@ -187,8 +187,16 @@ export function deriveFiles(events: AgentEvent[]): WorkspaceFile[] {
     const { tool_name, arguments: a } = e.tool_call;
     if (tool_name === "file_write" && typeof a.path === "string") {
       byPath.set(a.path, String(a.content ?? ""));
-    } else if (tool_name === "file_edit" && typeof a.path === "string" && !byPath.has(a.path)) {
-      byPath.set(a.path, ""); // edited a file we didn't see created; content unknown here
+    } else if (tool_name === "file_append" && typeof a.path === "string") {
+      // Accumulate appended content so an incrementally-written file still renders.
+      byPath.set(a.path, (byPath.get(a.path) ?? "") + String(a.content ?? ""));
+    } else if (tool_name === "file_edit" && typeof a.path === "string") {
+      const cur = byPath.get(a.path);
+      if (cur === undefined) {
+        byPath.set(a.path, ""); // edited a file we didn't see created; content unknown here
+      } else if (typeof a.old === "string" && typeof a.new === "string") {
+        byPath.set(a.path, cur.replace(a.old, a.new)); // mirror the edit so the preview tracks it
+      }
     }
   }
   return [...byPath.entries()].map(([path, content]) => ({
@@ -196,6 +204,46 @@ export function deriveFiles(events: AgentEvent[]): WorkspaceFile[] {
     content,
     bytes: new TextEncoder().encode(content).length,
   }));
+}
+
+/** Cluster 5 (UI 2.1): assemble a self-contained HTML document from the written
+ * files for a CLIENT-SIDE `srcdoc` preview — no backend, no dev server. Picks
+ * the entry HTML (index.html, else any *.html), inlines local <link
+ * rel=stylesheet> and <script src> references from sibling files so the iframe
+ * renders the real thing as it's built. Returns null when there's no renderable
+ * HTML artifact (so the pane falls back to the live-server preview / placeholder).
+ */
+export function deriveSrcDoc(files: WorkspaceFile[]): string | null {
+  if (files.length === 0) return null;
+  const byName = new Map<string, string>();
+  for (const f of files) {
+    // index by basename and by path so both `href="style.css"` and
+    // `href="./css/style.css"` resolve.
+    byName.set(f.path, f.content);
+    byName.set(f.path.split("/").pop() ?? f.path, f.content);
+  }
+  const entry =
+    files.find((f) => /(^|\/)index\.html$/i.test(f.path)) ??
+    files.find((f) => /\.html$/i.test(f.path));
+  if (!entry) return null;
+  let html = entry.content;
+  // Inline <link rel="stylesheet" href="local.css">
+  html = html.replace(
+    /<link[^>]*rel=["']?stylesheet["']?[^>]*href=["']([^"']+)["'][^>]*>/gi,
+    (m, href) => {
+      const css = byName.get(href) ?? byName.get(href.replace(/^\.?\//, ""));
+      return css != null ? `<style>\n${css}\n</style>` : m;
+    },
+  );
+  // Inline <script src="local.js">
+  html = html.replace(
+    /<script[^>]*src=["']([^"']+)["'][^>]*><\/script>/gi,
+    (m, src) => {
+      const js = byName.get(src) ?? byName.get(src.replace(/^\.?\//, ""));
+      return js != null ? `<script>\n${js}\n</script>` : m;
+    },
+  );
+  return html;
 }
 
 export interface TerminalEntry {
@@ -242,6 +290,30 @@ export function latestAgentMessage(events: AgentEvent[]): string | null {
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i];
     if (e.kind === "message" && e.source === "agent") return e.message.content;
+  }
+  return null;
+}
+
+// ---- deliverable handoff --------------------------------------------------
+
+export interface DeliverableView {
+  id: string;
+  title: string;
+  path: string;
+  kind: "app" | "files";
+}
+
+/** The latest finished-artifact handoff the agent declared via `serve` (a
+ * DeliverableEvent). The newest wins — a later serve supersedes an earlier one
+ * (the agent refined or replaced the deliverable). Returns null before any
+ * handoff, so the panel stays hidden until there is a real thing to hand off
+ * (no false affordance). */
+export function deriveDeliverable(events: AgentEvent[]): DeliverableView | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.kind === "deliverable") {
+      return { id: e.id, title: e.title, path: e.path, kind: e.artifact_kind };
+    }
   }
   return null;
 }
@@ -321,12 +393,22 @@ export type LiveSignal =
   | { kind: "thinking_about_user_message"; preview: string }
   | { kind: "tool_executing"; tool_name: string; detail?: string }
   | { kind: "composing_next_step" }
-  | { kind: "starting" };
+  | { kind: "starting" }
+  | { kind: "waiting_for_you"; label: string };
 
 export function deriveLiveSignal(
   events: AgentEvent[],
   status: ConversationStatus,
 ): LiveSignal {
+  // Cluster 6: liveness is no longer RUNNING-only. During gate/await states the
+  // bar narrates what the agent is waiting ON, so the surface never reads as
+  // frozen between turns or while a gate is open.
+  if (status === "WAITING_FOR_CONFIRMATION")
+    return { kind: "waiting_for_you", label: "Waiting for you to approve an action" };
+  if (status === "AWAITING_PLAN_APPROVAL")
+    return { kind: "waiting_for_you", label: "Waiting for you to review the plan" };
+  if (status === "AWAITING_USER_DECISION")
+    return { kind: "waiting_for_you", label: "Waiting for your decision" };
   if (status !== "RUNNING") return { kind: "idle" };
   // Walk the tail backward to classify what we're waiting on. Skip noise
   // events (environment reminders) — they're meta, not the live signal.
@@ -365,4 +447,16 @@ export function deriveLiveSignal(
   }
   // No prior signal → we just kicked off; model is reading the goal.
   return { kind: "starting" };
+}
+
+/** Cluster 6: aggregate plan progress for a glanceable "N of M" + bar. Built
+ * from the same progress Map the PlanPanel already has. */
+export function planProgressSummary(
+  totalSteps: number,
+  progress: Map<number, StepState>,
+): { done: number; total: number; fraction: number } {
+  let done = 0;
+  for (const st of progress.values()) if (st === "done") done += 1;
+  const total = Math.max(totalSteps, 0);
+  return { done, total, fraction: total > 0 ? done / total : 0 };
 }

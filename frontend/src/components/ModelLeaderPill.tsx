@@ -6,6 +6,7 @@ import { costLabel, costTag } from "@/lib/cost";
 import { findModel, useAssignments, useModels } from "@/hooks/useModels";
 import { isFree, type ModelInfo, type ModelProvider } from "@/types/models";
 import { CapabilityBadges } from "./CapabilityBadges";
+import { useToast } from "./Toast";
 
 /**
  * The model "leader" pill (Prompt 3C). Selects, by hand, the model that LEADS
@@ -28,6 +29,7 @@ export function ModelLeaderPill({ value, onChange }: Props) {
   const [open, setOpen] = useState(false);
   const { data: models } = useModels();
   const { data: assignments } = useAssignments();
+  const toast = useToast();
 
   const defaultModel = findModel(models, assignments?.default_model ?? null);
   const selected = findModel(models, value);
@@ -43,6 +45,17 @@ export function ModelLeaderPill({ value, onChange }: Props) {
   const pick = (id: string | null) => {
     onChange(id);
     setOpen(false);
+    // Cost honesty (A2): a PAID pick drives the WHOLE generative pipeline
+    // (answering, rewriting, summarizing) — not just the answer. Say so once, so
+    // nobody runs up a bill thinking they only changed one model. Free/local: silent.
+    const m = id ? findModel(models, id) : null;
+    if (m && !isFree(m)) {
+      toast.show({
+        tone: "cost",
+        title: `Now using ${m.label} for all generative work`,
+        body: "Answering, rewriting, and summarizing all run on this paid model for this conversation.",
+      });
+    }
   };
 
   return (

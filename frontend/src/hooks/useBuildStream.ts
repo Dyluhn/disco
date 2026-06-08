@@ -32,11 +32,26 @@ function localUserMessage(content: string): MessageEvent {
 export interface BuildSession {
   cid: string;
   task: string;
+  /** Whether subscribing should ALSO start the run (send the task). Only a fresh
+   *  `submit()` sets this true — opening an existing build (resume / History) is a
+   *  safe read (subscribe + replay only), never `send_message`. (Command–Query
+   *  Separation: viewing must not start work.) */
+  kick?: boolean;
+}
+
+/** The file the driver is writing RIGHT NOW, assembled from file_stream deltas.
+ *  Cleared when the authoritative ActionEvent for that write lands (or the run
+ *  leaves RUNNING). One at a time — the driver emits one tool call per step. */
+export interface StreamingFile {
+  path: string;
+  content: string;
+  tool: string;
 }
 
 export interface BuildStreamState {
   status: ConversationStatus;
   events: AgentEvent[];
+  streamingFile: StreamingFile | null;
   pendingActionId: string | null;
   pendingPlanId: string | null;
   pendingAlternativesId: string | null;
@@ -46,6 +61,7 @@ export interface BuildStreamState {
 const initial: BuildStreamState = {
   status: "IDLE",
   events: [],
+  streamingFile: null,
   pendingActionId: null,
   pendingPlanId: null,
   pendingAlternativesId: null,
@@ -81,6 +97,18 @@ function reducer(state: BuildStreamState, action: Action): BuildStreamState {
       pendingActionId: f.state.pending_action_id,
       pendingPlanId: f.state.pending_plan_id,
       pendingAlternativesId: f.state.pending_alternatives_id ?? null,
+    };
+  }
+  if (f.type === "file_stream") {
+    // Watch-it-write: append the delta to the active file buffer. A new path (or
+    // the first frame) starts a fresh buffer. These are transient — the matching
+    // ActionEvent will supersede this with the authoritative content below.
+    const fs = f.file_stream;
+    const prior =
+      state.streamingFile && state.streamingFile.path === fs.path ? state.streamingFile.content : "";
+    return {
+      ...state,
+      streamingFile: { path: fs.path, tool: fs.tool, content: prior + fs.delta },
     };
   }
   if (f.type === "event") {
@@ -130,6 +158,12 @@ function reducer(state: BuildStreamState, action: Action): BuildStreamState {
     if (f.event.kind === "error") {
       return { ...state, events, status: "ERROR", error: f.event.detail ?? "conversation error" };
     }
+    // The driver's step concluded → the authoritative ActionEvent now carries the
+    // full file. Retire the transient streaming buffer so the event renders as the
+    // source of truth (no double display, no stale half-file lingering).
+    if (f.event.kind === "action") {
+      return { ...state, events, streamingFile: null };
+    }
     return { ...state, events };
   }
   if (f.type === "error") {
@@ -163,7 +197,9 @@ export function useBuildStream(session: BuildSession | null): BuildStream {
     dispatch({ type: "reset" });
     const h = subscribeConversation(session.cid, (frame) => dispatch({ type: "frame", frame }));
     handle.current = h;
-    h.send({ type: "send_message", content: session.task }); // kick the loop with the task
+    // View ≠ start: only a fresh submit kicks the loop. Opening an existing build
+    // (resume / History) is a safe read — subscribe + replay only.
+    if (session.kick) h.send({ type: "send_message", content: session.task });
     return () => h.cancel();
   }, [session]);
 

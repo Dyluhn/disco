@@ -1,3 +1,5 @@
+import { DataSourcesSection } from "@/components/settings/DataSourcesSection";
+import { EncoderSection } from "@/components/settings/EncoderSection";
 import { McpSection } from "@/components/settings/McpSection";
 import { ModelMatrix } from "@/components/settings/ModelMatrix";
 import { ProjectStorageSection } from "@/components/settings/ProjectStorageSection";
@@ -21,6 +23,8 @@ export function SettingsView() {
         </header>
 
         <ModelMatrix />
+        <EncoderSection />
+        <DataSourcesSection />
         <SandboxSection />
         <ProjectStorageSection />
         <SkillsSection />

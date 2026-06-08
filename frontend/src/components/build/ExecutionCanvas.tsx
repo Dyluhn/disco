@@ -6,20 +6,62 @@
  * not faked (no false affordances).
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
-import { ExternalLink, FileCode2, MonitorPlay, SquareTerminal } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { ExternalLink, FileCode2, MonitorPlay, PenLine, RotateCw, SquareTerminal } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { deriveFiles, deriveTerminal } from "@/lib/buildTrace";
+import { deriveFiles, deriveSrcDoc, deriveTerminal } from "@/lib/buildTrace";
 import { agentHttpBase } from "@/api/client";
+import { restartPreview } from "@/api/agent";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
+import type { StreamingFile } from "@/hooks/useBuildStream";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
 type TabId = "files" | "terminal" | "preview";
 
-function FilesPane({ events }: { events: AgentEvent[] }) {
+/** The live watch-it-write pane: the file the driver is composing RIGHT NOW,
+ *  content growing with a blinking cursor. Auto-scrolls to follow the tail so the
+ *  newest line is always visible (the whole point — see it isn't hung). */
+function StreamingFileView({ file }: { file: StreamingFile }) {
+  const tailRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    // follow the writing edge; cheap because content only ever appends
+    tailRef.current?.scrollIntoView({ block: "end" });
+  }, [file.content]);
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex items-center justify-between border-b border-accent/30 bg-accent/5 px-body py-hair font-mono text-[0.74rem]">
+        <span className="flex items-center gap-hair text-accent">
+          <PenLine className="size-3 shrink-0 animate-pulse" aria-hidden />
+          <span className="truncate text-text">{file.path || "writing…"}</span>
+        </span>
+        <span className="text-text-faint">{file.content.length} B · writing</span>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto">
+        <pre className="whitespace-pre-wrap px-body py-inline font-mono text-[0.78rem] leading-relaxed text-text">
+          {file.content}
+          <span className="ml-px inline-block animate-pulse text-accent">▋</span>
+          <div ref={tailRef} />
+        </pre>
+      </div>
+    </div>
+  );
+}
+
+function FilesPane({
+  events,
+  streamingFile,
+}: {
+  events: AgentEvent[];
+  streamingFile: StreamingFile | null;
+}) {
   const files = useMemo(() => deriveFiles(events), [events]);
   const [active, setActive] = useState(0);
+  // While a write is streaming, it is the hero — show the live buffer regardless
+  // of which file was selected. The final ActionEvent retires it (streamingFile →
+  // null) and the file then appears in the list as a normal, complete entry.
+  if (streamingFile) return <StreamingFileView file={streamingFile} />;
   if (files.length === 0)
     return <Empty>No files written yet. Files the agent creates appear here.</Empty>;
   const file = files[Math.min(active, files.length - 1)];
@@ -88,31 +130,131 @@ function TerminalPane({ events }: { events: AgentEvent[] }) {
  * dev server is reachable (via the ACTIVE backend's port exposure — local direct, gVisor
  * over the tailnet), this IS the live interactive preview (an iframe of the real running
  * artifact). Until then it shows the phase-aware state + the honest reason. */
-function PreviewPane({ status, cid }: { status: ConversationStatus; cid: string | null }) {
-  const active = status === "RUNNING" || status === "WAITING_FOR_CONFIRMATION";
+function PreviewPane({
+  status,
+  cid,
+  events,
+}: {
+  status: ConversationStatus;
+  cid: string | null;
+  events: AgentEvent[];
+}) {
+  // Keep the backend preview active through FINISHED/STUCK too (UI 2.2): the
+  // pane shouldn't go MORE dead at the moment of completion.
+  const active =
+    status === "RUNNING" ||
+    status === "WAITING_FOR_CONFIRMATION" ||
+    status === "FINISHED" ||
+    status === "STUCK";
   const { data } = useBuildPreview(cid, active);
+  const qc = useQueryClient();
 
-  if (data?.available && cid) {
-    // the agent-server proxies the dev server through its (tailnet-reachable) origin —
-    // no random container port is exposed; works wherever the agent-server is reachable.
-    const src = `${agentHttpBase()}/conversations/${cid}/preview-app/`;
+  // A client-side srcdoc render of the written files — shows the ACTUAL site the
+  // agent wrote (entry HTML + inlined local css/js), no backend / dev server.
+  const srcDoc = useMemo(() => deriveSrcDoc(deriveFiles(events)), [events]);
+  const proxyAvailable = Boolean(data?.available && cid);
+
+  // E7 — one-click recovery. Reload the iframe (bump the key); if the live proxy
+  // is NOT reachable, also ask the backend to restart the static serve, then
+  // re-poll availability. So a hung/down preview is always user-fixable here.
+  const [reloadKey, setReloadKey] = useState(0);
+  const [restarting, setRestarting] = useState(false);
+  async function refresh() {
+    setReloadKey((k) => k + 1);
+    if (cid && !proxyAvailable) {
+      setRestarting(true);
+      try {
+        await restartPreview(cid);
+        await qc.invalidateQueries({ queryKey: ["build-preview", cid] });
+      } finally {
+        setRestarting(false);
+      }
+    }
+  }
+  const RefreshButton = (
+    <button
+      type="button"
+      onClick={refresh}
+      disabled={restarting}
+      title="Reload the preview — and restart the server if it's down"
+      className="flex items-center gap-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text disabled:opacity-50"
+    >
+      <RotateCw className={cn("size-3", restarting && "animate-spin")} aria-hidden />
+      {restarting ? "Restarting…" : "Refresh"}
+    </button>
+  );
+  const proxySrc = cid ? `${agentHttpBase()}/conversations/${cid}/preview-app/?r=${reloadKey}` : null;
+
+  // PRIORITY (the fix): default to the RENDERED view, because the backend's bare
+  // `python -m http.server` shows a useless directory LISTING (file paths) when
+  // there's no index.html at the served root — which is most of the time. The
+  // rendered view shows the real HTML instead. A live dev server (a real bundler
+  // app, e.g. Vite) is one click away via the toggle / Open, and is used
+  // automatically when there's no renderable file to show.
+  const [mode, setMode] = useState<"rendered" | "live">("rendered");
+  const showLive = proxyAvailable && (mode === "live" || srcDoc == null);
+
+  if (showLive && proxySrc) {
     return (
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex shrink-0 items-center justify-between gap-inline border-b border-hairline px-body py-hair">
-          <span className="truncate font-mono text-[0.74rem] text-text-faint">live preview</span>
-          <a
-            href={src}
-            target="_blank"
-            rel="noreferrer"
-            className="flex items-center gap-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text"
-          >
-            <ExternalLink className="size-3" aria-hidden /> Open
-          </a>
+          <span className="truncate font-mono text-[0.74rem] text-text-faint">live server</span>
+          <div className="flex items-center gap-inline">
+            {RefreshButton}
+            {srcDoc != null && (
+              <button
+                type="button"
+                onClick={() => setMode("rendered")}
+                className="font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text"
+              >
+                Rendered
+              </button>
+            )}
+            <a
+              href={proxySrc}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center gap-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text"
+            >
+              <ExternalLink className="size-3" aria-hidden /> Open
+            </a>
+          </div>
         </div>
         <iframe
+          key={reloadKey}
           title="Live preview"
-          src={src}
+          src={proxySrc}
           sandbox="allow-scripts allow-forms allow-same-origin allow-popups"
+          className="min-h-0 flex-1 border-0 bg-white"
+        />
+      </div>
+    );
+  }
+
+  // The renderable HTML artifact → show the real site now, no server needed.
+  if (srcDoc != null) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="flex shrink-0 items-center justify-between gap-inline border-b border-hairline px-body py-hair">
+          <span className="truncate font-mono text-[0.74rem] text-text-faint">preview</span>
+          <div className="flex items-center gap-inline">
+            {RefreshButton}
+            {proxyAvailable && (
+              <button
+                type="button"
+                onClick={() => setMode("live")}
+                className="flex items-center gap-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text"
+              >
+                <MonitorPlay className="size-3" aria-hidden /> Live server
+              </button>
+            )}
+          </div>
+        </div>
+        <iframe
+          key={reloadKey}
+          title="Static preview"
+          srcDoc={srcDoc}
+          sandbox="allow-scripts"
           className="min-h-0 flex-1 border-0 bg-white"
         />
       </div>
@@ -134,6 +276,18 @@ function PreviewPane({ status, cid }: { status: ConversationStatus; cid: string 
           podman stub
         </span>
       )}
+      {/* one-click recovery even when nothing renders yet (§E7) */}
+      {cid && !data?.stub && (
+        <button
+          type="button"
+          onClick={refresh}
+          disabled={restarting}
+          className="mt-hair flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text disabled:opacity-50"
+        >
+          <RotateCw className={cn("size-3.5", restarting && "animate-spin")} aria-hidden />
+          {restarting ? "Restarting preview…" : "Refresh / restart preview"}
+        </button>
+      )}
     </div>
   );
 }
@@ -146,30 +300,53 @@ function Empty({ children }: { children: React.ReactNode }) {
   );
 }
 
-const TABS: { id: TabId; label: string; icon: typeof FileCode2; soon?: boolean }[] = [
+const TABS: { id: TabId; label: string; icon: typeof FileCode2 }[] = [
   { id: "files", label: "Files", icon: FileCode2 },
   { id: "terminal", label: "Terminal", icon: SquareTerminal },
-  { id: "preview", label: "Preview", icon: MonitorPlay, soon: true },
+  { id: "preview", label: "Preview", icon: MonitorPlay },
 ];
 
 export function ExecutionCanvas({
   events,
   status,
   cid,
+  streamingFile = null,
 }: {
   events: AgentEvent[];
   status: ConversationStatus;
   cid: string | null;
+  streamingFile?: StreamingFile | null;
 }) {
-  // sensible default: Terminal if anything ran, else Files.
+  // Cluster 5: when there's a renderable artifact, Preview is the hero — the
+  // user's first instinct should be to WATCH it build, not read logs. Else
+  // Terminal if anything ran, else Files.
   const initial: TabId = useMemo(
-    () => (deriveTerminal(events).length > 0 ? "terminal" : "files"),
+    () =>
+      deriveSrcDoc(deriveFiles(events)) != null
+        ? "preview"
+        : deriveTerminal(events).length > 0
+          ? "terminal"
+          : "files",
     // initial only — don't yank the user's tab as the stream grows
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
+  // Controlled tab so a starting write can pull focus to Files (watch-it-write is
+  // the hero moment). We only force the switch on the streaming RISING edge — once
+  // the user clicks away mid-write, we respect it (no repeated yank per delta).
+  const [tab, setTab] = useState<TabId>(initial);
+  const wasStreaming = useRef(false);
+  useEffect(() => {
+    const now = streamingFile != null;
+    if (now && !wasStreaming.current) setTab("files");
+    wasStreaming.current = now;
+  }, [streamingFile]);
   return (
-    <Tabs.Root defaultValue={initial} className="flex h-full min-h-0 flex-col">
+    <Tabs.Root
+      value={tab}
+      onValueChange={(v) => setTab(v as TabId)}
+      className="flex h-full min-h-0 flex-col"
+    >
       <Tabs.List className="flex shrink-0 items-center gap-px border-b border-hairline px-inline">
         {TABS.map((t) => (
           <Tabs.Trigger
@@ -183,23 +360,24 @@ export function ExecutionCanvas({
           >
             <t.icon className="size-3.5" aria-hidden />
             {t.label}
-            {t.soon && (
-              <span className="rounded-full border border-hairline px-1 text-[0.55rem] uppercase tracking-wide text-text-faint">
-                soon
-              </span>
+            {t.id === "files" && streamingFile && (
+              <span
+                className="size-1.5 animate-pulse rounded-full bg-accent"
+                aria-label="writing"
+              />
             )}
           </Tabs.Trigger>
         ))}
       </Tabs.List>
       <div className="min-h-0 flex-1">
         <Tabs.Content value="files" className="h-full focus:outline-none">
-          <FilesPane events={events} />
+          <FilesPane events={events} streamingFile={streamingFile} />
         </Tabs.Content>
         <Tabs.Content value="terminal" className="h-full focus:outline-none">
           <TerminalPane events={events} />
         </Tabs.Content>
         <Tabs.Content value="preview" className="h-full focus:outline-none">
-          <PreviewPane status={status} cid={cid} />
+          <PreviewPane status={status} cid={cid} events={events} />
         </Tabs.Content>
       </div>
     </Tabs.Root>

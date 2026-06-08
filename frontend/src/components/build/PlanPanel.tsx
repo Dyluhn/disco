@@ -10,6 +10,7 @@ import { useState } from "react";
 import { Check, CircleDashed, CirclePause, ClipboardList, Loader2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Markdown } from "@/components/Markdown";
+import { planProgressSummary } from "@/lib/buildTrace";
 import type { StepState, PlanView } from "@/lib/buildTrace";
 
 function StepIcon({ state }: { state: StepState }) {
@@ -41,6 +42,7 @@ export function PlanPanel({
   const [revising, setRevising] = useState(false);
   const [text, setText] = useState("");
   const gate = Boolean(onApprove);
+  const summary = planProgressSummary(plan.steps.length, progress);
 
   const submitRevision = () => {
     const t = text.trim();
@@ -72,6 +74,20 @@ export function PlanPanel({
         {gate && (
           <span className="ml-auto rounded-full border border-accent px-inline py-px font-ui text-[0.7rem] uppercase tracking-wide text-accent">
             needs your approval
+          </span>
+        )}
+        {/* Cluster 6: glanceable aggregate progress (tracker mode only). */}
+        {!gate && plan.steps.length > 0 && (
+          <span className="ml-auto flex items-center gap-hair">
+            <span className="font-mono text-[0.72rem] text-text-faint">
+              {summary.done}/{summary.total}
+            </span>
+            <span className="h-1 w-14 overflow-hidden rounded-full bg-surface-2" aria-hidden>
+              <span
+                className="block h-full bg-accent transition-[width]"
+                style={{ width: `${Math.round(summary.fraction * 100)}%` }}
+              />
+            </span>
           </span>
         )}
       </header>

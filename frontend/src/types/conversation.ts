@@ -8,4 +8,6 @@ export interface ConversationSummary {
   title: string;
   /** ISO-8601 creation timestamp */
   created_at: string;
+  /** which surface produced it — History routes by this (read-only open). */
+  surface?: "research" | "build" | "deep_research";
 }

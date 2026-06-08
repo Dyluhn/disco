@@ -2,6 +2,8 @@ import { DEFAULT_ASSIGNMENTS, MODEL_CATALOGUE } from "@/fixtures/models";
 import { ApiError } from "./client";
 import type {
   AssignmentsPatch,
+  DataSourcesConfig,
+  EncodersConfig,
   ModelAssignments,
   ModelInfo,
   ModelUpsert,
@@ -142,6 +144,47 @@ export async function updateSandboxConfig(cfg: SandboxConfig): Promise<SandboxCo
   await fixtureDelay();
   fixtureSandbox = { ...cfg };
   return { ...fixtureSandbox };
+}
+
+// ---- encoders (bundled-local vs remote) ------------------------------------
+
+let fixtureEncoders: EncodersConfig = { remote: false };
+
+export async function getEncodersConfig(): Promise<EncodersConfig> {
+  if (isLive()) return apiGet<EncodersConfig>("/api/encoders/config");
+  await fixtureDelay();
+  return { ...fixtureEncoders };
+}
+
+export async function updateEncodersConfig(cfg: EncodersConfig): Promise<EncodersConfig> {
+  if (isLive()) return apiSend<EncodersConfig>("PUT", "/api/encoders/config", cfg);
+  await fixtureDelay();
+  fixtureEncoders = { ...cfg };
+  return { ...fixtureEncoders };
+}
+
+// ---- data sources (search + extraction provider tiers) ---------------------
+
+let fixtureDataSources: DataSourcesConfig = {
+  search_provider: "ddgs",
+  search_base_url: "",
+  search_api_key_env: "",
+  extraction_provider: "local",
+  extraction_base_url: "",
+  extraction_api_key_env: "",
+};
+
+export async function getDataSourcesConfig(): Promise<DataSourcesConfig> {
+  if (isLive()) return apiGet<DataSourcesConfig>("/api/data-sources/config");
+  await fixtureDelay();
+  return { ...fixtureDataSources };
+}
+
+export async function updateDataSourcesConfig(cfg: DataSourcesConfig): Promise<DataSourcesConfig> {
+  if (isLive()) return apiSend<DataSourcesConfig>("PUT", "/api/data-sources/config", cfg);
+  await fixtureDelay();
+  fixtureDataSources = { ...cfg };
+  return { ...fixtureDataSources };
 }
 
 // ---- OpenRouter ------------------------------------------------------------

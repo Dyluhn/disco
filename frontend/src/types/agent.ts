@@ -149,6 +149,18 @@ export interface AlternativesEvent extends EventBase {
   options: AlternativeOption[];
 }
 
+/** The agent's finished-artifact HANDOFF (Build). Mirrors the backend
+ *  DeliverableEvent: it names WHAT was produced and WHERE, so the UI can offer a
+ *  real handoff (open the live app / download the files) instead of leaving the
+ *  user to guess what the run made. `artifact_kind` drives the affordance:
+ *  "app" → open in the live preview; "files" → download `path`. */
+export interface DeliverableEvent extends EventBase {
+  kind: "deliverable";
+  title: string;
+  path: string;
+  artifact_kind: "app" | "files";
+}
+
 export type AgentEvent =
   | MessageEvent
   | ActionEvent
@@ -159,6 +171,7 @@ export type AgentEvent =
   | PlanEvent
   | ReportEvent
   | AlternativesEvent
+  | DeliverableEvent
   | ErrorEvent;
 
 export interface ConversationState {
@@ -177,8 +190,19 @@ export interface ConversationState {
 export type WSServerFrame =
   | { type: "state"; state: ConversationState }
   | { type: "event"; event: AgentEvent }
+  | { type: "file_stream"; file_stream: FileStreamFrame }
   | { type: "error"; error: { detail?: string } }
   | { type: "pong" };
+
+/** A watch-it-write delta: the driver is assembling a file body in a tool call.
+ *  `delta` appends to the per-path buffer. NOT persisted — superseded by the
+ *  final ActionEvent (which carries the authoritative full content). */
+export interface FileStreamFrame {
+  tool: string;
+  path: string;
+  index: number;
+  delta: string;
+}
 
 export type WSClientFrame =
   | { type: "send_message"; content: string }
@@ -189,6 +213,7 @@ export type WSClientFrame =
   | { type: "request_plan"; content: string } // (re-)enter plan mode with an instruction
   | { type: "pick_alternative"; option_id: string } // structured recovery: pick a proposed alternative
   | { type: "cancel" }
+  | { type: "resume" } // continue a stopped/incomplete run (explicit, never on open)
   | { type: "ping" };
 
 /** Which isolation tier backs the sandbox — surfaced so the lower-isolation tier is

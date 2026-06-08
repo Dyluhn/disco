@@ -9,6 +9,7 @@ import * as Dropdown from "@radix-ui/react-dropdown-menu";
 import { Check, ChevronDown, Cpu } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useDriverModels } from "@/hooks/useDriverModels";
+import { useToast } from "@/components/Toast";
 import type { DriverModel } from "@/types/agent";
 
 export function BuildModelPicker({
@@ -21,6 +22,7 @@ export function BuildModelPicker({
   disabled?: boolean;
 }) {
   const { data } = useDriverModels();
+  const toast = useToast();
   const models = data?.models ?? [];
   const defaultId = data?.default ?? null;
   const effectiveId = value ?? defaultId;
@@ -29,9 +31,22 @@ export function BuildModelPicker({
   const local = models.filter((m) => m.provider === "local");
   const overflow = models.filter((m) => m.provider === "openrouter");
 
+  const select = (m: DriverModel) => {
+    onChange(m.id === defaultId ? null : m.id);
+    // Cost honesty (A2): the build driver IS the whole agent — a paid pick bills
+    // every step. Say it once on a paid pick; free/local stays silent.
+    if (!m.free) {
+      toast.show({
+        tone: "cost",
+        title: `Now building with ${m.label}`,
+        body: "This paid model drives every step of the agent for this build.",
+      });
+    }
+  };
+
   const Row = ({ m }: { m: DriverModel }) => (
     <Dropdown.Item
-      onSelect={() => onChange(m.id === defaultId ? null : m.id)}
+      onSelect={() => select(m)}
       className="flex cursor-pointer items-center gap-inline rounded-control px-inline py-hair font-ui text-[0.82rem] text-text outline-none data-[highlighted]:bg-surface-2"
     >
       <Check className={cn("size-3.5 shrink-0", m.id === effectiveId ? "text-accent" : "opacity-0")} aria-hidden />

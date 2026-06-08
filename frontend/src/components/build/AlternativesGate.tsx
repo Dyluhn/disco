@@ -12,9 +12,11 @@
  *   (closes the gate by letting the user use the SteerInput beneath it)
  */
 
-import { AlertTriangle, ArrowRight, Terminal } from "lucide-react";
+import { AlertTriangle, ArrowRight, PlayCircle, Terminal } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { AlternativesEvent } from "@/types/agent";
+
+const CONTINUE_ID = "__continue__";
 
 export function AlternativesGate({
   alternatives,
@@ -26,6 +28,10 @@ export function AlternativesGate({
   /** Optional: render a "Skip" link that drops focus into the steer input. */
   onSteer?: () => void;
 }) {
+  // The "Continue anyway" bypass is rendered as a distinct action, NOT a
+  // recommendation card (it's an escape, not a proposed fix).
+  const recommendations = alternatives.options.filter((o) => o.id !== CONTINUE_ID);
+  const hasContinue = alternatives.options.some((o) => o.id === CONTINUE_ID);
   return (
     <div
       role="alertdialog"
@@ -45,10 +51,10 @@ export function AlternativesGate({
       <ul
         className={cn(
           "mt-hair grid gap-inline",
-          alternatives.options.length >= 3 ? "lg:grid-cols-3" : "lg:grid-cols-2",
+          recommendations.length >= 3 ? "lg:grid-cols-3" : "lg:grid-cols-2",
         )}
       >
-        {alternatives.options.map((opt, i) => (
+        {recommendations.map((opt, i) => (
           <li key={opt.id}>
             <button
               type="button"
@@ -82,20 +88,29 @@ export function AlternativesGate({
         ))}
       </ul>
 
-      {onSteer && (
-        <div className="mt-hair flex items-center justify-between border-t border-hairline pt-hair">
-          <span className="font-ui text-[0.76rem] text-text-faint">
-            None of these fit?
-          </span>
+      <div className="mt-hair flex flex-wrap items-center justify-between gap-inline border-t border-hairline pt-inline">
+        {hasContinue ? (
+          <button
+            type="button"
+            onClick={() => onPick(CONTINUE_ID)}
+            className="flex items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.8rem] text-text-muted transition-colors hover:border-accent hover:text-text"
+          >
+            <PlayCircle className="size-3.5" aria-hidden />
+            Continue anyway — let the agent keep going
+          </button>
+        ) : (
+          <span />
+        )}
+        {onSteer && (
           <button
             type="button"
             onClick={onSteer}
-            className="font-ui text-[0.78rem] text-text-muted underline-offset-2 hover:underline"
+            className="font-ui text-[0.78rem] text-text-faint underline-offset-2 hover:underline"
           >
-            Skip — I'll steer manually
+            or steer manually
           </button>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

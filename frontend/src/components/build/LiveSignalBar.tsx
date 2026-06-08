@@ -17,9 +17,13 @@ export function LiveSignalBar({ signal }: { signal: LiveSignal }) {
   if (signal.kind === "idle") return null;
 
   const { Icon, label, detail } = describe(signal);
+  // When the agent is WAITING ON THE USER it isn't working — no spinner (a
+  // spinner there would falsely imply progress). Otherwise the spinner conveys
+  // active work between events.
+  const working = signal.kind !== "waiting_for_you";
   return (
     <div className="flex items-center gap-hair rounded-control border border-dashed border-hairline bg-surface-1/60 px-inline py-hair">
-      <Loader2 className="size-3.5 shrink-0 animate-spin text-accent" aria-hidden />
+      {working && <Loader2 className="size-3.5 shrink-0 animate-spin text-accent" aria-hidden />}
       <Icon className="size-3.5 shrink-0 text-text-faint" aria-hidden />
       <div className="flex min-w-0 flex-1 items-baseline gap-hair">
         <span className="font-ui text-[0.82rem] text-text">{label}</span>
@@ -68,6 +72,8 @@ function describe(signal: LiveSignal): {
     }
     case "composing_next_step":
       return { Icon: MessageSquare, label: "Composing the next step…" };
+    case "waiting_for_you":
+      return { Icon: User, label: signal.label };
     default:
       // unreachable — exhaustive switch
       return { Icon: Loader2, label: "Working…" };

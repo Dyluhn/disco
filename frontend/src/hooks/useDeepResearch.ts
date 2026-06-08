@@ -1,8 +1,16 @@
 /**
  * Deep Research orchestrator hook (parallel to useBuild + useResearch):
  * creates a deep_research conversation, drives its run through the agent
- * loop's plan-mode flow, exposes the derived state. Components consume
- * only this.
+ * loop's plan-mode flow, exposes the derived state + lifecycle controls.
+ *
+ * LIFECYCLE MODEL (universal background-task pattern):
+ *   - The run is a SERVER-SIDE resource (cid + persisted event log). It survives
+ *     navigation away; closing the surface never kills it.
+ *   - VIEW (open from History / a /deep/:cid route) is a SAFE read: subscribe +
+ *     replay only — it NEVER starts the run (Command–Query Separation). No
+ *     localStorage stash; selecting the deep-research scope = a fresh compose.
+ *   - START is the only path that kicks (a fresh `submit()`).
+ *   - CONTROL is explicit: stop (pause), kill (end), resume (continue), retry.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -11,74 +19,30 @@ import {
   createDeepResearchConversation,
   exportReportAsMarkdown,
 } from "@/api/deepResearch";
+import { killConversation } from "@/api/agent";
 import {
   useDeepResearchStream,
   type DeepResearchSession,
 } from "./useDeepResearchStream";
 
-/** localStorage stash of the active deep-research session so the run survives
- *  navigation away from the surface (e.g. user pops over to Build then returns).
- *  Backend persistence isn't enough on its own — the cid lives in component
- *  state, and the WS gets torn down on unmount. Persisting the cid here lets
- *  the surface re-subscribe on remount; the WS history replay (already in
- *  place via subscribeConversation) hydrates all derived state. */
-const ACTIVE_SESSION_KEY = "pmx.deep.activeSession";
+type Tier = "quick" | "standard_deep" | "exhaustive";
 
-function readActiveSession(): DeepResearchSession | null {
-  try {
-    const raw = window.localStorage.getItem(ACTIVE_SESSION_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as DeepResearchSession;
-    if (typeof parsed?.cid !== "string") return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function writeActiveSession(s: DeepResearchSession | null) {
-  try {
-    if (s) window.localStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(s));
-    else window.localStorage.removeItem(ACTIVE_SESSION_KEY);
-  } catch {
-    /* swallow: localStorage may be unavailable (private mode) */
-  }
-}
-
-/** Same opt-in to the resume path the Build hook uses for /build/:cid. The
- *  /deep/:cid route passes the cid + a placeholder query; the WS subscription
- *  replays the conversation history (history-then-live) so the surface
- *  recovers all the derived state. Without a route cid, we fall back to the
- *  localStorage stash so cross-surface navigation also resumes naturally. */
 export function useDeepResearch(resumeCid?: string | null) {
-  const [session, setSession] = useState<DeepResearchSession | null>(() =>
-    resumeCid ? null : readActiveSession(),
-  );
+  // No localStorage auto-restore: a fresh surface starts EMPTY (compose). An
+  // existing run is reached as a server resource via History (/deep/:cid), not a
+  // client stash — so selecting the scope can never re-attach/trap you.
+  const [session, setSession] = useState<DeepResearchSession | null>(null);
   const [leaderId, setLeaderId] = useState<string | null>(null);
-  const [depthTier, setDepthTier] = useState<
-    "quick" | "standard_deep" | "exhaustive"
-  >(() => (readActiveSession()?.depthTier as
-    | "quick"
-    | "standard_deep"
-    | "exhaustive") ?? "standard_deep");
+  const [depthTier, setDepthTier] = useState<Tier>("standard_deep");
   const stream = useDeepResearchStream(session);
 
+  // Resume path: a /deep/:cid route hands us a cid → open it READ-ONLY (kick is
+  // absent, so the stream subscribes + replays but never sends the query).
   useEffect(() => {
     if (resumeCid && (session === null || session.cid !== resumeCid)) {
       setSession({ cid: resumeCid, query: "(resumed)", depthTier });
     }
   }, [resumeCid, session, depthTier]);
-
-  // Mirror the active session to localStorage so navigating away + back
-  // resumes. Clear the stash when the run reaches a terminal state so a stale
-  // cid doesn't haunt the next visit.
-  useEffect(() => {
-    if (session && (stream.status === "FINISHED" || stream.status === "ERROR")) {
-      writeActiveSession(null);
-    } else {
-      writeActiveSession(session);
-    }
-  }, [session, stream.status]);
 
   const create = useMutation({ mutationFn: createDeepResearchConversation });
 
@@ -89,18 +53,37 @@ export function useDeepResearch(resumeCid?: string | null) {
       create.mutate(
         { query: trimmed, leaderId, depthTier },
         {
+          // kick:true — this is the ONLY path that starts the run.
           onSuccess: (cid) =>
-            setSession({ cid, query: trimmed, depthTier }),
+            setSession({ cid, query: trimmed, depthTier, kick: true }),
         },
       );
     },
     [create, leaderId, depthTier],
   );
 
-  const reset = useCallback(() => {
-    setSession(null);
-    writeActiveSession(null);
-  }, []);
+  // Stop = pause (cooperative; the engine halts at the next checkpoint and keeps
+  // the partial report). The Stop button maps to the stream's cancel.
+  const stop = stream.cancel;
+
+  // Kill = end the run for good (force-cancel the server task; final).
+  const kill = useCallback(async () => {
+    stream.cancel();
+    if (session) await killConversation(session.cid);
+  }, [session, stream]);
+
+  // Resume = continue a stopped/incomplete run (explicit; never on open).
+  const resume = stream.resume;
+
+  // Retry = a fresh run of the same query (a NEW conversation).
+  const retry = useCallback(() => {
+    if (session?.query && session.query !== "(resumed)") {
+      setSession(null);
+      submit(session.query);
+    }
+  }, [session, submit]);
+
+  const reset = useCallback(() => setSession(null), []);
 
   const exportReport = useCallback(() => {
     if (stream.report) exportReportAsMarkdown(stream.report);
@@ -117,6 +100,10 @@ export function useDeepResearch(resumeCid?: string | null) {
     depthTier,
     setDepthTier,
     submit,
+    stop,
+    kill,
+    resume,
+    retry,
     reset,
     exportReport,
     ...stream,

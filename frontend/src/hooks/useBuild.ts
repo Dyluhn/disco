@@ -31,7 +31,9 @@ export function useBuild(resumeCid?: string | null) {
     (task: string) => {
       const trimmed = task.trim();
       if (!trimmed) return;
-      create.mutate(modelId, { onSuccess: (cid) => setSession({ cid, task: trimmed }) });
+      create.mutate(modelId, {
+        onSuccess: (cid) => setSession({ cid, task: trimmed, kick: true }),
+      });
     },
     [create, modelId],
   );

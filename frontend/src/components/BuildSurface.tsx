@@ -8,10 +8,16 @@
  * Data-flow discipline: reads only the useBuild() hook; never fetches.
  */
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useBuild } from "@/hooks/useBuild";
 import { cn } from "@/lib/cn";
-import { deriveActivity, deriveLiveSignal, latestAgentMessage } from "@/lib/buildTrace";
+import {
+  deriveActivity,
+  deriveDeliverable,
+  deriveLiveSignal,
+  latestAgentMessage,
+} from "@/lib/buildTrace";
+import { agentHttpBase } from "@/api/client";
 import type { IsolationInfo } from "@/types/agent";
 import { EmptyState, ErrorState } from "@/components/states";
 import { Markdown } from "@/components/Markdown";
@@ -26,6 +32,7 @@ import { BuildModelPicker } from "@/components/build/BuildModelPicker";
 import { ConfirmationPanel } from "@/components/build/ConfirmationPanel";
 import { ExecutionCanvas } from "@/components/build/ExecutionCanvas";
 import { PlanPanel } from "@/components/build/PlanPanel";
+import { DeliverablePanel } from "@/components/build/DeliverablePanel";
 import { SteerInput } from "@/components/build/SteerInput";
 import { AlternativesGate } from "@/components/build/AlternativesGate";
 
@@ -52,6 +59,43 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
     [b.events, b.status],
   );
   const finalMessage = useMemo(() => latestAgentMessage(b.events), [b.events]);
+  const deliverable = useMemo(() => deriveDeliverable(b.events), [b.events]);
+
+  // Auto-scroll the feed to the bottom ONLY on a "you need to look now" moment —
+  // never on every event (that would yank the user off whatever they're reading).
+  // Two triggers: (1) the agent needs input (a gate just opened), or (2) a
+  // capstone happened (the run finished/stuck/errored, or a deliverable landed).
+  // We detect the TRANSITION into those, so re-renders mid-state don't re-scroll.
+  const feedScrollRef = useRef<HTMLDivElement>(null);
+  const prevStatusRef = useRef(b.status);
+  const prevDeliverableRef = useRef<string | null>(null);
+  useEffect(() => {
+    const el = feedScrollRef.current;
+    const prevStatus = prevStatusRef.current;
+    const prevDeliverable = prevDeliverableRef.current;
+    const deliverableId = deliverable?.id ?? null;
+    prevStatusRef.current = b.status;
+    prevDeliverableRef.current = deliverableId;
+    if (!el) return;
+
+    const needsInput =
+      b.status === "WAITING_FOR_CONFIRMATION" ||
+      b.status === "AWAITING_USER_DECISION" ||
+      b.status === "AWAITING_PLAN_APPROVAL";
+    const capstone = b.status === "FINISHED" || b.status === "STUCK" || b.status === "ERROR";
+    const statusTransitioned = b.status !== prevStatus;
+    const newDeliverable = deliverableId !== null && deliverableId !== prevDeliverable;
+
+    if ((statusTransitioned && (needsInput || capstone)) || newDeliverable) {
+      // Smooth in the browser; fall back to the scrollTop property (jsdom has no
+      // scrollTo) so the behavior is testable.
+      if (typeof el.scrollTo === "function") {
+        el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+      } else {
+        el.scrollTop = el.scrollHeight;
+      }
+    }
+  }, [b.status, deliverable?.id]);
   // Steer is available whenever a conversation EXISTS to steer — including
   // STUCK/FINISHED, since the engine reopens on send_message (engine.py:671).
   // Plan-approval is the only state where steering is wrong (the plan IS the
@@ -95,7 +139,12 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
   const chatPane = (
     <>
         <div className="flex flex-col gap-inline px-body pt-section">
-          <AgentStatusBar status={b.status} isolation={ISOLATION} onKill={b.kill} />
+          <AgentStatusBar
+            status={b.status}
+            isolation={ISOLATION}
+            onKill={b.kill}
+            onStop={b.cancel}
+          />
           <div className="flex items-center justify-between gap-inline">
             <h1 className="font-display text-[1.3rem] font-medium leading-tight tracking-tight text-text">
               {b.task}
@@ -130,7 +179,10 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
               live task list
             </span>
           </div>
-          <div className="mt-inline min-h-0 flex-1 overflow-y-auto pb-inline lg:pr-hair">
+          <div
+            ref={feedScrollRef}
+            className="mt-inline min-h-0 flex-1 overflow-y-auto pb-inline lg:pr-hair"
+          >
             {b.status === "ERROR" ? (
               <ErrorState message={b.error ?? "The agent run failed."} onRetry={b.reset} />
             ) : b.awaitingPlan && b.plan ? (
@@ -184,6 +236,19 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
 
         {/* gate · steer · re-plan — pinned under the feed */}
         <div className="flex flex-col gap-inline border-t border-hairline px-body py-inline">
+          {/* finished-artifact handoff: open the live app / download the files */}
+          <DeliverablePanel
+            deliverable={deliverable}
+            onOpen={() =>
+              b.cid &&
+              window.open(
+                `${agentHttpBase()}/conversations/${b.cid}/preview-app/`,
+                "_blank",
+                "noopener,noreferrer",
+              )
+            }
+            onDownload={() => b.cid && download.mutate(b.cid)}
+          />
           {b.pendingAction && (
             <ConfirmationPanel action={b.pendingAction} onApprove={b.confirm} onReject={b.reject} />
           )}
@@ -222,7 +287,14 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
   return (
     <ResizableSplit
       chat={chatPane}
-      inspector={<ExecutionCanvas events={b.events} status={b.status} cid={b.cid} />}
+      inspector={
+        <ExecutionCanvas
+          events={b.events}
+          status={b.status}
+          cid={b.cid}
+          streamingFile={b.streamingFile}
+        />
+      }
     />
   );
 }

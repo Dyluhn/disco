@@ -25,7 +25,7 @@
  * subscription, the Build status state machine.
  */
 
-import { Download, RotateCcw, Settings as SettingsIcon, Square } from "lucide-react";
+import { Ban, Download, Play, RotateCcw, Settings as SettingsIcon, Square } from "lucide-react";
 import { Link } from "react-router-dom";
 import { PlanPanel } from "@/components/build/PlanPanel";
 import { useDeepResearch } from "@/hooks/useDeepResearch";
@@ -46,6 +46,12 @@ interface Props {
    *  scope and Deep Research unmounts cleanly. */
   onScopeChange?: (next: ScopeId) => void;
 }
+
+const CTRL_BTN =
+  "flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text";
+// Kill is destructive (ends the run for good) → warn-tinted, distinct from Stop.
+const KILL_BTN =
+  "flex items-center gap-hair rounded-control border border-warn/40 px-inline py-hair font-ui text-[0.78rem] text-warn transition-colors hover:bg-warn/10";
 
 export function DeepResearchSurface({ resumeCid, onScopeChange }: Props) {
   const r = useDeepResearch(resumeCid);
@@ -90,31 +96,47 @@ export function DeepResearchSurface({ resumeCid, onScopeChange }: Props) {
             {r.query}
           </h1>
           <div className="flex items-center gap-inline">
+            {/* While running: Stop (pause, keeps partial) + Kill (end, final). */}
             {r.status === "RUNNING" && (
-              <button
-                type="button"
-                onClick={r.cancel}
-                className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text"
-              >
-                <Square className="size-3" aria-hidden />
-                Stop
+              <>
+                <button type="button" onClick={r.stop} className={CTRL_BTN}>
+                  <Square className="size-3" aria-hidden />
+                  Stop
+                </button>
+                <button type="button" onClick={r.kill} className={KILL_BTN}>
+                  <Ban className="size-3.5" aria-hidden />
+                  Kill
+                </button>
+              </>
+            )}
+            {/* Stopped (paused): Resume continues it; Kill ends it. */}
+            {r.status === "PAUSED" && (
+              <>
+                <button type="button" onClick={r.resume} className={CTRL_BTN}>
+                  <Play className="size-3.5 text-accent" aria-hidden />
+                  Resume
+                </button>
+                <button type="button" onClick={r.kill} className={KILL_BTN}>
+                  <Ban className="size-3.5" aria-hidden />
+                  Kill
+                </button>
+              </>
+            )}
+            {/* Errored: Retry = a fresh run of the same query. */}
+            {r.status === "ERROR" && (
+              <button type="button" onClick={r.retry} className={CTRL_BTN}>
+                <RotateCcw className="size-3.5" aria-hidden />
+                Retry
               </button>
             )}
             {r.report && (
-              <button
-                type="button"
-                onClick={r.exportReport}
-                className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text"
-              >
+              <button type="button" onClick={r.exportReport} className={CTRL_BTN}>
                 <Download className="size-3.5" aria-hidden />
                 Export
               </button>
             )}
             {(r.status === "FINISHED" || r.status === "ERROR") && (
-              <Link
-                to="/"
-                className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text"
-              >
+              <Link to="/" className={CTRL_BTN}>
                 <RotateCcw className="size-3.5" aria-hidden />
                 New research
               </Link>
@@ -126,7 +148,7 @@ export function DeepResearchSurface({ resumeCid, onScopeChange }: Props) {
         {r.status === "ERROR" && (
           <ErrorState
             message={r.error ?? "The research run failed."}
-            onRetry={r.reset}
+            onRetry={r.retry}
           />
         )}
 

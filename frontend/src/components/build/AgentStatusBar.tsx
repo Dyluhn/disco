@@ -4,7 +4,7 @@
  * and the always-available KILL SWITCH (BoD §13.6).
  */
 
-import { Loader2, OctagonX, ShieldCheck, ShieldHalf } from "lucide-react";
+import { Loader2, OctagonX, ShieldCheck, ShieldHalf, Square } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { ConversationStatus, IsolationInfo } from "@/types/agent";
 
@@ -39,14 +39,24 @@ export function AgentStatusBar({
   status,
   isolation,
   onKill,
+  onStop,
 }: {
   status: ConversationStatus;
   isolation: IsolationInfo;
   onKill: () => void;
+  /** Cluster 6: graceful stop (cooperative cancel — no sandbox teardown). */
+  onStop?: () => void;
 }) {
   const active = ACTIVE.includes(status);
   const waiting =
     status === "WAITING_FOR_CONFIRMATION" || status === "AWAITING_PLAN_APPROVAL";
+  // Graceful Stop is meaningful while the agent is actually running or waiting
+  // on a gate — a non-destructive halt, distinct from the red teardown Kill.
+  const canStop =
+    status === "RUNNING" ||
+    status === "WAITING_FOR_CONFIRMATION" ||
+    status === "AWAITING_USER_DECISION" ||
+    status === "PAUSED";
   const Shield = isolation.adversarialSafe ? ShieldCheck : ShieldHalf;
 
   return (
@@ -74,21 +84,34 @@ export function AgentStatusBar({
         </span>
       </div>
 
-      <button
-        type="button"
-        onClick={onKill}
-        disabled={!active}
-        aria-label="Kill the agent: stop, tear down the sandbox, revoke its access"
-        className={cn(
-          "flex items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.78rem] font-medium transition-colors",
-          active
-            ? "border-unsupported text-unsupported hover:bg-unsupported hover:text-bg"
-            : "cursor-not-allowed border-hairline text-text-faint",
+      <div className="flex items-center gap-hair">
+        {onStop && canStop && (
+          <button
+            type="button"
+            onClick={onStop}
+            aria-label="Stop the agent gracefully (does not tear down the sandbox)"
+            className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-text-muted hover:text-text"
+          >
+            <Square className="size-3.5" aria-hidden />
+            Stop
+          </button>
         )}
-      >
-        <OctagonX className="size-3.5" aria-hidden />
-        Kill
-      </button>
+        <button
+          type="button"
+          onClick={onKill}
+          disabled={!active}
+          aria-label="Kill the agent: stop, tear down the sandbox, revoke its access"
+          className={cn(
+            "flex items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.78rem] font-medium transition-colors",
+            active
+              ? "border-unsupported text-unsupported hover:bg-unsupported hover:text-bg"
+              : "cursor-not-allowed border-hairline text-text-faint",
+          )}
+        >
+          <OctagonX className="size-3.5" aria-hidden />
+          Kill
+        </button>
+      </div>
     </div>
   );
 }
