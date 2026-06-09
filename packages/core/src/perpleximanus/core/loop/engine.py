@@ -129,7 +129,8 @@ _PLAN_NUDGE = (
 _READ_ONLY_TOOLS = frozenset(
     {"file_read", "file_list", "search", "extract", "preview_status", "browser"}
 )
-_READ_STREAK_LIMIT = 4  # reads-in-a-row before the "stop reading, edit now" nudge
+_READ_STREAK_LIMIT = 4  # reads-in-a-row before the "stop reading, act now" nudge
+# Execution mode: you've read enough — make the edit.
 _READ_NUDGE = (
     "<system-reminder>\n"
     "You've made several READ-ONLY calls in a row without changing anything, and "
@@ -138,6 +139,14 @@ _READ_NUDGE = (
     "end_line, new_text)` or `file_insert_lines(path, after_line, text)` (target by "
     "the line numbers you just saw) or `file_edit` (matching is forgiving). Reading "
     "the same file again will not help; commit the edit.\n"
+    "</system-reminder>"
+)
+# Planning mode: you've read enough — propose the plan.
+_READ_NUDGE_PLANNING = (
+    "<system-reminder>\n"
+    "You've made several READ-ONLY calls in a row to understand the code. You have "
+    "enough context now — STOP reading and call `submit_plan` with the ordered steps "
+    "for the change. You can read more details during execution; propose the plan now.\n"
     "</system-reminder>"
 )
 
@@ -1599,20 +1608,24 @@ class AgentLoop:
 
                 # (c.6) READ-STREAK nudge — supportive, inclusive (the framework
                 # helping a capable model commit). A long unbroken run of read-only
-                # calls means the model has the context but won't make the edit
-                # (observed live: a 27B read a file 9× describing edits it never made).
-                # Inject ONE reminder to stop reading + use the line-targeted editors;
-                # fires once per streak, only in execution mode (planning legitimately
-                # reads to gather context before proposing).
+                # calls means the model has the context but won't ACT — it keeps
+                # reading instead of editing (execution) or proposing (planning).
+                # Observed live: a 27B read a large file 16× describing edits/plans it
+                # never made. Inject ONE mode-appropriate reminder to stop reading and
+                # commit; fires once per streak (guarded), resets on any non-read action.
                 if (
-                    self.mode != OperatingMode.PLANNING
-                    and self._trailing_read_only_streak(events) >= _READ_STREAK_LIMIT
+                    self._trailing_read_only_streak(events) >= _READ_STREAK_LIMIT
                     and not self._read_nudge_active(events)
                 ):
+                    nudge = (
+                        _READ_NUDGE_PLANNING
+                        if self.mode == OperatingMode.PLANNING
+                        else _READ_NUDGE
+                    )
                     await self._emit(
                         MessageEvent(
                             source=EventSource.ENVIRONMENT,
-                            message=LLMMessage(role="user", content=_READ_NUDGE),
+                            message=LLMMessage(role="user", content=nudge),
                         )
                     )
                     events = await self._events()
