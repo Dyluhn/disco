@@ -163,8 +163,10 @@ _NON_PRODUCTIVE_TOOLS = frozenset(
 # concludes that human input is the next-best step.
 #
 # When called, the loop INTERCEPTS it (the tool is never executed against the
-# sandbox) and converts it into an AlternativesEvent + AWAITING_USER_DECISION
-# status. The user then picks an option or types a steer message.
+# sandbox). WITH options it becomes an AlternativesEvent + AWAITING_USER_DECISION
+# (the user picks a card); WITHOUT options it becomes a free-form question +
+# AWAITING_USER_QUESTION (the user types an answer). Either way the reply resumes
+# the run.
 _ASK_USER_TOOL_NAME = "ask_user"
 _ASK_USER_DESCRIPTION = (
     "Pause the run and ask the human user for input. Call this tool when YOU "
