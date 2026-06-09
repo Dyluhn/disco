@@ -93,3 +93,32 @@ def test_no_runtime_means_the_wire_layer_still_just_appends():
     assert resp.status_code == 200
     events = client.get(f"/conversations/{cid}/events").json()["events"]
     assert [e["kind"] for e in events] == ["message"]  # just the user message; no loop
+
+
+def test_create_conversation_applies_depth_tier():
+    """The POST /conversations `depth_tier` must reach the runtime — it was dropped
+    (handler set surface+model but never depth), so every Deep Research run silently
+    used the standard_deep default regardless of the UI picker."""
+    from perpleximanus.retrieval.deep_research import DepthTier
+
+    store = SqliteEventStore(":memory:")
+    runtime = _runtime(store, "x")
+    client = TestClient(create_app(store, runtime=runtime))
+
+    cid = client.post(
+        "/conversations",
+        json={"owner_id": "local", "surface": "deep_research", "depth_tier": "exhaustive"},
+    ).json()["conversation_id"]
+    assert runtime._depth_for(cid) == DepthTier.EXHAUSTIVE
+
+    cid_q = client.post(
+        "/conversations",
+        json={"owner_id": "local", "surface": "deep_research", "depth_tier": "quick"},
+    ).json()["conversation_id"]
+    assert runtime._depth_for(cid_q) == DepthTier.QUICK
+
+    # omitted → the standard_deep default still applies
+    cid_def = client.post(
+        "/conversations", json={"owner_id": "local", "surface": "deep_research"}
+    ).json()["conversation_id"]
+    assert runtime._depth_for(cid_def) == DepthTier.STANDARD_DEEP

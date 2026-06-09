@@ -44,6 +44,10 @@ class CreateConversationBody(BaseModel):
     title: str | None = None
     surface: str = "research"  # "research" (read-only, ungated) | "build" (agent + gate)
     model_override: str | None = None  # pin the driver model (catalogue key) for this convo
+    # Deep Research depth tier ("quick" | "standard_deep" | "exhaustive"). The UI's
+    # depth picker sends it here; the runtime reads it via _depth_for. Without
+    # wiring it through, every run silently used the standard_deep default.
+    depth_tier: str | None = None
 
 
 class SendMessageBody(BaseModel):
@@ -128,6 +132,10 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         if runtime is not None:
             runtime.set_surface(conversation_id, body.surface)
             runtime.set_model_override(conversation_id, body.model_override)
+            # Deep Research depth tier (no-op for other surfaces). Was dropped before —
+            # every DR run defaulted to standard_deep regardless of the UI picker.
+            if body.depth_tier:
+                runtime.set_depth(conversation_id, body.depth_tier)
         return {
             "conversation_id": conversation_id,
             "conversation_url": f"/ws/conversations/{conversation_id}",
