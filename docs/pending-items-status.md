@@ -33,18 +33,21 @@ wrong frame shape (`2188d0f`, canary now PASS). NEXT: the session-lifecycle clus
   (NOTE: only active when `projects_root` is configured — the snapshot/teardown/rehydrate path.)
 - [ ] 🟡 Auto-suspend on WS-disconnect / idle-TTL — `app.py:378-403` catches
   `WebSocketDisconnect` but finally-block only cancels pump tasks; no teardown, no idle timer
-- [ ] 🟡 Auto-resume on reconnect — rehydrate exists (`runtime.py:1004-1035`
-  `_maybe_rehydrate`, on first kick); WS reconnect/backoff missing (`agent.ts:94-123` one-shot)
+- [x] ✅ Auto-resume on reconnect — `b3694a0`: `subscribeLive` reconnects with exponential
+  backoff (was one-shot → a blip sent a fatal error). Server replays history-then-live + reducers
+  dedup by id. Mock-WebSocket test. (Workspace rehydrate on kick already existed, `runtime.py:1004`.)
 - [x] ✅ Reconcile orphaned RUNNING on startup — `8bcdef9`: `runtime.reconcile_orphaned_runs()`
   marks stale-RUNNING conversations PAUSED + an interrupted note, wired to a FastAPI startup
   lifespan in `create_app`. Fixes the stale-'RUNNING'-forever-after-crash. Regression test added.
   (Container-leak cleanup for podman/gvisor backends is a separate follow-up; process backend doesn't leak.)
-- [ ] 🔴 Build explicit Resume button — Deep Research has it (`useDeepResearchStream.ts:164`,
-  `runtime.py:1218`); Build has no `resume` verb (`useBuildStream.ts:252-267`).
-  Read-only-on-open IS done (`useBuild.ts:30-39`, "View ≠ start")
+- [x] ✅ Build explicit Resume button — `e0bd746`: `useBuildStream.resume()` (sends the existing
+  surface-agnostic `resume` frame) + a Resume button on `AgentStatusBar` when PAUSED (replaces Stop).
+  Pairs with orphan-reconciliation (reconciled→PAUSED runs get one-click Resume). Regression test.
 - [ ] 🔴 Checkpointed Deep Research resume — `runtime.py:757-768` re-runs the same plan;
   engine stateless (`deep_research/engine.py:119-235`) → redoes completed sub-questions
-- [ ] 🔴 Build session persistence (localStorage cid) — `useBuild.ts:15-26` React-state only
+- [x] ✅ Build session persistence — NON-ISSUE (by design): builds persist as server resources
+  reached via History + the `/build/:cid` route (read-only-on-open, `useBuild.ts:30-39`). A
+  localStorage stash was the "trap" Deep Research deliberately REMOVED — don't re-introduce it.
 
 ## Cluster 2 — Backend agent-coherence (GAP A–H + addendum)
 
@@ -98,8 +101,8 @@ wrong frame shape (`2188d0f`, canary now PASS). NEXT: the session-lifecycle clus
   still inside the scroll container (`BuildSurface.tsx:202-206`)
 - [ ] 🟡 Liveness — auto-scroll on key transitions + active-state spinner landed; no continuous
   auto-scroll, no `pmx-rise` entrance animations
-- [ ] 🔴 Persistence + reconnect + notifications — no localStorage cid, no WS reconnect/backoff,
-  no completion `Notification`/title badge
+- [ ] 🟡 Persistence + reconnect + notifications — reconnect/backoff DONE (`b3694a0`); persistence
+  is by-design (History + route); STILL MISSING: completion `Notification` / `document.title` badge
 - [ ] 🟡 Plan front-door polish — Revise modal keeps text (`PlanPanel.tsx:142-188`); missing
   "drafting…" skeleton, "re-planning" stale state, per-step skip/reorder
 
