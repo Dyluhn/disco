@@ -53,7 +53,7 @@ from ..llm import (
 )
 from ..state import ConversationState
 from ..store.base import EventStore
-from ..view import Condenser, Summarizer, View
+from ..view import Condenser, Summarizer, View, microcompact
 from .boundaries import Agent, ConfirmationPolicy, SecurityAnalyzer, StopHook, ToolExecutor
 from .stream_extract import extract_partial_string_field
 from .stuck import StuckDetector, StuckThresholds
@@ -1088,6 +1088,15 @@ class AgentLoop:
     # ---- view materialization + condensation (§8) ---------------------------
 
     async def _materialize_view(self, events: list[Event]) -> View:
+        # S3 Microcompact (GAP A): a cheap, no-model pass FIRST — tombstone no-op
+        # turns (a failed call an identical later call superseded) so the lossy
+        # model-summarization condenser fires on a smaller, denser residue (or not
+        # at all). Idempotent: re-running won't re-tombstone an already-dropped span.
+        micro = microcompact(events)
+        if micro:
+            for tomb in micro:
+                await self._emit(tomb)
+            events = await self._events()
         view = View.of(events)
         est = self._estimate_tokens(view)
         # H3: log the prompt size per step so cost regressions are visible (the 60k

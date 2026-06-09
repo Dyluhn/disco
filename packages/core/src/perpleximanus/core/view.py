@@ -15,6 +15,7 @@ Phase 1 deliverable, BoD §22).
 
 from __future__ import annotations
 
+import json
 from typing import Literal, Protocol
 
 from pydantic import BaseModel
@@ -27,8 +28,91 @@ from .events import (
     KnowledgeEvent,
     LLMConvertible,
     LLMMessage,
+    ObservationEvent,
     PlanEvent,
 )
+
+# Tools that DO change durable state (the workspace / the plan), so their turns are
+# never microcompacted even when an attempt failed — a failed file write still may
+# have left partial state, and plan_step turns carry progress meaning.
+_DURABLE_TOOLS = frozenset({"file_write", "file_append", "file_edit", "plan_step"})
+
+
+def microcompact(events: list[Event]) -> list[CondensationEvent]:
+    """S3 Microcompact (GAP A) — a NO-MODEL, deterministic pass that tombstones
+    NO-OP turns: a tool call that FAILED and was later SUPERSEDED by an IDENTICAL
+    (same tool + same arguments) call that SUCCEEDED. The failed attempt holds no
+    durable state and no information the successful retry doesn't — so it just eats
+    context. Drop it (reversibly — the bytes stay on the log) with a one-line
+    tombstone.
+
+    Conservative by construction (dropping something useful would corrupt the
+    model's context):
+      - only EXACT retries (same tool_name + same arguments) count as a supersession;
+      - durable-state tools (file writes, plan_step) are never touched;
+      - only the action+observation pair when they are ADJACENT (obs.seq ==
+        action.seq + 1) — so we never sweep an unrelated event caught between them;
+      - spans already covered by a tombstone are skipped (idempotent — safe to run
+        every step).
+    Returns the tombstones to append (possibly empty)."""
+    # Already-forgotten seqs — never re-tombstone them.
+    forgotten: list[tuple[int, int]] = [
+        (e.forgotten_start_seq, e.forgotten_end_seq)
+        for e in events
+        if isinstance(e, CondensationEvent)
+    ]
+
+    def already_forgotten(seq: int) -> bool:
+        return any(a <= seq <= b for a, b in forgotten)
+
+    # Pair each action with its observation (by action_id), keyed by (tool, args).
+    obs_by_action: dict[str, ObservationEvent] = {
+        e.action_id: e for e in events if isinstance(e, ObservationEvent) and e.action_id
+    }
+    # Which (tool, args) keys later SUCCEEDED — the supersession signal.
+    succeeded_keys: set[str] = set()
+    for a in events:
+        if not isinstance(a, ActionEvent) or a.tool_call is None:
+            continue
+        o = obs_by_action.get(a.id)
+        if o is not None and o.tool_result.success:
+            succeeded_keys.add(_call_key(a))
+
+    tombstones: list[CondensationEvent] = []
+    for a in events:
+        if not isinstance(a, ActionEvent) or a.tool_call is None:
+            continue
+        if a.tool_call.tool_name in _DURABLE_TOOLS:
+            continue
+        o = obs_by_action.get(a.id)
+        if o is None or o.tool_result.success:
+            continue  # only FAILED attempts are candidates
+        if a.seq is None or o.seq is None or o.seq != a.seq + 1:
+            continue  # require adjacency — never sweep an event caught between
+        if already_forgotten(a.seq):
+            continue
+        if _call_key(a) not in succeeded_keys:
+            continue  # not superseded → the failure still carries information; keep it
+        tombstones.append(
+            CondensationEvent(
+                forgotten_start_seq=a.seq,
+                forgotten_end_seq=o.seq,
+                summary=(
+                    f"[microcompacted: a failed `{a.tool_call.tool_name}` attempt was "
+                    "dropped — an identical call succeeded later]"
+                ),
+                summary_role="user",
+            )
+        )
+    return tombstones
+
+
+def _call_key(a: ActionEvent) -> str:
+    """A stable identity for a tool call: tool name + canonical args. Two calls with
+    the same key are 'the same call' for supersession purposes."""
+    return a.tool_call.tool_name + "\x00" + json.dumps(
+        a.tool_call.arguments or {}, sort_keys=True, default=str
+    )
 
 
 def _latest_plan(events: list[Event]) -> PlanEvent | None:

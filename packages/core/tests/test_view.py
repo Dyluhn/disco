@@ -25,6 +25,60 @@ from perpleximanus.core import (
     NoOpCondenser,
     View,
 )
+from perpleximanus.core.view import microcompact
+
+# ---- S3 Microcompact (GAP A) — drop no-op turns -----------------------------
+
+
+def _failed_then_retried_ok():
+    """A failed `shell` call superseded by an IDENTICAL successful retry. Returns the
+    seq-assigned event list (with_seqs copies, so seqs are populated)."""
+    a1 = action(tool="shell", args={"command": "pip install x"})
+    o1 = observation(action_id=a1.id, tool="shell", success=False, content="network error")
+    a2 = action(tool="shell", args={"command": "pip install x"})  # identical call
+    o2 = observation(action_id=a2.id, tool="shell", success=True, content="installed")
+    return with_seqs([user_msg("go"), a1, o1, a2, o2])
+
+
+def test_microcompact_tombstones_a_failed_then_superseded_turn():
+    events = _failed_then_retried_ok()
+    a1_seq, o1_seq = events[1].seq, events[2].seq  # the failed action + its observation
+    tombs = microcompact(events)
+    assert len(tombs) == 1
+    assert (tombs[0].forgotten_start_seq, tombs[0].forgotten_end_seq) == (a1_seq, o1_seq)
+    # applying it: the failed turn is gone from the View, the success remains, and a
+    # one-line tombstone marks the drop.
+    view = View.of(events + tombs)
+    blob = "\n".join(m.content for m in view.messages)
+    assert "network error" not in blob  # the failed attempt is forgotten
+    assert "installed" in blob  # the superseding success stays
+    assert "microcompacted" in blob  # the one-liner marks it
+
+
+def test_microcompact_keeps_an_unsuperseded_failure():
+    """A failure NOT followed by an identical success still carries information — keep it."""
+    a1 = action(tool="shell", args={"command": "pip install x"})
+    o1 = observation(action_id=a1.id, tool="shell", success=False, content="network error")
+    events = with_seqs([user_msg("go"), a1, o1])
+    assert microcompact(events) == []
+
+
+def test_microcompact_never_touches_durable_tools():
+    """A failed file_write superseded by an identical success is NOT microcompacted
+    (write tools may have left partial state; plan_step carries progress)."""
+    a1 = action(tool="file_write", args={"path": "a.txt", "content": "hi"})
+    o1 = observation(action_id=a1.id, tool="file_write", success=False, content="disk full")
+    a2 = action(tool="file_write", args={"path": "a.txt", "content": "hi"})
+    o2 = observation(action_id=a2.id, tool="file_write", success=True, content="wrote 2 bytes")
+    events = with_seqs([user_msg("go"), a1, o1, a2, o2])
+    assert microcompact(events) == []
+
+
+def test_microcompact_is_idempotent():
+    """Re-running after the tombstone is applied finds nothing new (safe every step)."""
+    events = _failed_then_retried_ok()
+    tombs = microcompact(events)
+    assert microcompact(events + tombs) == []
 
 
 def test_view_is_deterministic():
