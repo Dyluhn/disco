@@ -732,6 +732,14 @@ class ConversationRuntime:
             with contextlib.suppress(Exception):
                 await executor.kill()  # destroys the sandbox instance (§6.4)
         self._loops.pop(conversation_id, None)  # force a fresh sandbox on the next run
+        # The sandbox (and its files) are gone, so the NEXT run must rehydrate the
+        # snapshot into a fresh sandbox. Clear the rehydrate-once flag — otherwise
+        # `_maybe_rehydrate` skips it and the continuation runs in an EMPTY workspace,
+        # silently losing all prior work (the "can't keep building after the first
+        # plan finished" bug — the second iteration started from nothing).
+        rehydrated = getattr(self, "_rehydrated", None)
+        if rehydrated is not None:
+            rehydrated.discard(conversation_id)
 
     async def _maybe_run_deep_research(self, conversation_id: str) -> None:
         """The Deep Research driver. Inspects the conversation state to decide

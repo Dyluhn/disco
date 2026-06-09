@@ -69,3 +69,28 @@ async def test_kill_drops_executor_and_loop_so_resume_rebuilds(tmp_path, monkeyp
     assert ex.killed is True
     assert cid not in rt._executors  # dropped → resume won't reuse the dead one
     assert cid not in rt._loops
+
+
+async def test_teardown_clears_rehydrate_flag_so_continuation_restores_files(
+    tmp_path, monkeypatch
+):
+    """The 'can't keep building after the first plan finished' fix: tearing down a
+    FINISHED build's sandbox must clear the rehydrate-once flag, so the NEXT run
+    restores the snapshot into the fresh sandbox instead of starting from an EMPTY
+    workspace (which silently loses all prior work)."""
+    monkeypatch.setenv("PMX_DB", str(tmp_path / "c.db"))
+    rt = ConversationRuntime(
+        SqliteEventStore(":memory:"),
+        config_store=ConfigStore(tmp_path / "config.json"),
+        secret_store=SecretStore(tmp_path / "s.json", box=SecretBox(None)),
+    )
+    cid = "conv_build"
+    # First run rehydrated once → the flag is set (and stays set within a live
+    # session so each subsequent kick doesn't re-overwrite in-progress files).
+    await rt._maybe_rehydrate(cid)
+    assert cid in rt._rehydrated
+    # FINISHED → the sandbox is torn down. The flag MUST clear, else the next run
+    # skips rehydrate and the continuation builds on nothing.
+    rt._executors[cid] = _FakeExecutor()
+    await rt._teardown_sandbox(cid)
+    assert cid not in rt._rehydrated
