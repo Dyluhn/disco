@@ -72,7 +72,10 @@ Summary ACCURATE: "Pumped-storage hydropower remains dominant by capacity, yet l
 
 ## Phase 5 — Build two sites (live, 3 iterations each)
 Driver: WS build (auto-approve plan, auto-confirm risky, wait FINISHED). Sites persist in agent-projects/.
-### Site 1 — macOS clone (interactive) — v1 building…
+### Site 1 — macOS clone (interactive) — agent-projects/conv_318b722c…
+**v1 ✅ BUILT + TESTED** (28KB index.html, 0 page errors): menu bar (Finder/File/Edit…) + live clock, gradient wallpaper, desktop icons (Notes/Calculator), dock. Interaction test: double-click opened a real Notes WINDOW (traffic-light buttons, B/I/U/Clear/Save toolbar, line/word count, Ctrl+S) + Calculator. Screenshots: site1-v1-macos.png, site1-v1-apps-open.png, site1-v1-calc-open.png.
+FEEDBACK→v2: (1) functional menu-bar dropdowns; (2) add a working Terminal app; (3) window minimize-to-dock (yellow) + maximize (green); (4) dock icons launch apps on click.
+**v2 building…**
 
 ### 🐞 REAL BUG FOUND + FIXED (live): depth_tier was IGNORED
 POST /conversations set surface + model but DROPPED depth_tier → EVERY Deep Research run used
