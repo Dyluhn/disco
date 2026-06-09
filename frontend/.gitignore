@@ -12,3 +12,6 @@ test-results/
 playwright-report/
 blob-report/
 .playwright/
+
+# Playwright evidence screenshots (generated, not baselines)
+e2e/_artifacts/
