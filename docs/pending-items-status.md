@@ -35,7 +35,10 @@ wrong frame shape (`2188d0f`, canary now PASS). NEXT: the session-lifecycle clus
   `WebSocketDisconnect` but finally-block only cancels pump tasks; no teardown, no idle timer
 - [ ] 🟡 Auto-resume on reconnect — rehydrate exists (`runtime.py:1004-1035`
   `_maybe_rehydrate`, on first kick); WS reconnect/backoff missing (`agent.ts:94-123` one-shot)
-- [ ] 🔴 Reconcile orphaned RUNNING on startup — no lifespan/startup hook in agent-server; no RUNNING sweep
+- [x] ✅ Reconcile orphaned RUNNING on startup — `8bcdef9`: `runtime.reconcile_orphaned_runs()`
+  marks stale-RUNNING conversations PAUSED + an interrupted note, wired to a FastAPI startup
+  lifespan in `create_app`. Fixes the stale-'RUNNING'-forever-after-crash. Regression test added.
+  (Container-leak cleanup for podman/gvisor backends is a separate follow-up; process backend doesn't leak.)
 - [ ] 🔴 Build explicit Resume button — Deep Research has it (`useDeepResearchStream.ts:164`,
   `runtime.py:1218`); Build has no `resume` verb (`useBuildStream.ts:252-267`).
   Read-only-on-open IS done (`useBuild.ts:30-39`, "View ≠ start")
