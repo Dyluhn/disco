@@ -13,6 +13,7 @@ export type ConversationStatus =
   | "WAITING_FOR_CONFIRMATION"
   | "AWAITING_PLAN_APPROVAL"
   | "AWAITING_USER_DECISION"
+  | "AWAITING_USER_QUESTION"
   | "FINISHED"
   | "ERROR";
 
@@ -183,6 +184,8 @@ export interface ConversationState {
   pending_action_id: string | null;
   pending_plan_id: string | null;
   pending_alternatives_id?: string | null;
+  // The agent's free-form question message id, if status is AWAITING_USER_QUESTION.
+  pending_question_id?: string | null;
 }
 
 // ---- WS frames (event-state §7) ---------------------------------------------

@@ -409,6 +409,8 @@ export function deriveLiveSignal(
     return { kind: "waiting_for_you", label: "Waiting for you to review the plan" };
   if (status === "AWAITING_USER_DECISION")
     return { kind: "waiting_for_you", label: "Waiting for your decision" };
+  if (status === "AWAITING_USER_QUESTION")
+    return { kind: "waiting_for_you", label: "The agent asked you a question" };
   if (status !== "RUNNING") return { kind: "idle" };
   // Walk the tail backward to classify what we're waiting on. Skip noise
   // events (environment reminders) — they're meta, not the live signal.

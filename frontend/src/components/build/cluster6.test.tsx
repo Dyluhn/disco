@@ -25,6 +25,10 @@ describe("deriveLiveSignal — narrates gate/await states (not just RUNNING)", (
     });
     expect(deriveLiveSignal([], "AWAITING_PLAN_APPROVAL").kind).toBe("waiting_for_you");
     expect(deriveLiveSignal([], "AWAITING_USER_DECISION").kind).toBe("waiting_for_you");
+    expect(deriveLiveSignal([], "AWAITING_USER_QUESTION")).toEqual({
+      kind: "waiting_for_you",
+      label: expect.stringMatching(/question/i),
+    });
   });
 
   it("is idle only for genuinely terminal/inactive states", () => {

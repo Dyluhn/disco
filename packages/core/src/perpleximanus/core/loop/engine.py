@@ -97,8 +97,11 @@ _TERMINAL_FOR_NOW = frozenset(
         ConversationStatus.ERROR,
         ConversationStatus.WAITING_FOR_CONFIRMATION,
         ConversationStatus.AWAITING_PLAN_APPROVAL,
-        # ask_user halts the loop — kicks must not race past the gate.
+        # ask_user halts the loop — kicks must not race past the gate. Both the
+        # pick-a-card (DECISION) and the free-form (QUESTION) Ask-gates re-kick
+        # only on the user's reply.
         ConversationStatus.AWAITING_USER_DECISION,
+        ConversationStatus.AWAITING_USER_QUESTION,
     }
 )
 
@@ -1264,11 +1267,12 @@ class AgentLoop:
                 ConversationStatus.AWAITING_PLAN_APPROVAL,
             ):
                 return state
-            # AWAITING_USER_DECISION: the agent voluntarily paused for the user.
+            # AWAITING_USER_DECISION / AWAITING_USER_QUESTION: the agent
+            # voluntarily paused for the user (pick-a-card or free-form question).
             # A new user message (steer / send_message) IS the resume signal —
             # treat it like FINISHED/STUCK below (re-kick if there's fresh work).
             # No special control op needed; the user just typing IS the answer.
-            # FINISHED/STUCK/ERROR/AWAITING_USER_DECISION with no new work → idle.
+            # FINISHED/STUCK/ERROR/AWAITING_USER_*/no new work → idle.
             if not self._has_unprocessed_user_message(await self._events()):
                 return state
         await self._emit(StatusEvent(status=ConversationStatus.RUNNING))
@@ -1802,23 +1806,27 @@ class AgentLoop:
                         return await self.get_state()
                     # ask_user WITHOUT options → free-form question. Emit it as
                     # an assistant message (from the tool's `question` arg or
-                    # the step's thought, whichever has content) and pause the
-                    # loop — same AWAITING_USER_DECISION semantic, just no
-                    # clickable cards. The user replies via send_message/steer.
+                    # the step's thought, whichever has content) and halt at the
+                    # two-way Ask-gate (AWAITING_USER_QUESTION) — the UI renders
+                    # an AskPanel with a focused answer box, not muted prose. The
+                    # status's detail carries the question message's id so the
+                    # surface can resolve it. The user's reply (send_message /
+                    # steer) IS the resume signal.
                     question = str(
                         step.tool_call.arguments.get("question") or ""
                     ).strip() or step.thought.strip()
+                    question_id: str | None = None
                     if question:
-                        await self._emit(
-                            MessageEvent(
-                                source=EventSource.AGENT,
-                                message=LLMMessage(role="assistant", content=question),
-                            )
+                        q_event = MessageEvent(
+                            source=EventSource.AGENT,
+                            message=LLMMessage(role="assistant", content=question),
                         )
+                        question_id = q_event.id
+                        await self._emit(q_event)
                     await self._emit(
                         StatusEvent(
-                            status=ConversationStatus.AWAITING_USER_DECISION,
-                            detail="free_form_question",
+                            status=ConversationStatus.AWAITING_USER_QUESTION,
+                            detail=question_id or "free_form_question",
                         )
                     )
                     return await self.get_state()

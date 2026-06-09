@@ -195,6 +195,13 @@ class ConversationStatus(str, Enum):
     # send_message. (There is no `propose_alternatives` tool — the model uses
     # `ask_user`; the breaker is harness-driven.)
     AWAITING_USER_DECISION = "AWAITING_USER_DECISION"
+    # The agent called `ask_user` with a FREE-FORM question (no options) and the
+    # loop is halted until the user TYPES an answer. The two-way Ask-gate: unlike
+    # AWAITING_USER_DECISION (pick a card), this is an open question the user
+    # answers in prose. The user's reply (send_message / steer) IS the resume
+    # signal — same re-kick semantics as AWAITING_USER_DECISION, just a different
+    # surface (AskPanel, not the alternatives cards).
+    AWAITING_USER_QUESTION = "AWAITING_USER_QUESTION"
     FINISHED = "FINISHED"
     ERROR = "ERROR"
 

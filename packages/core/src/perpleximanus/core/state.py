@@ -48,6 +48,10 @@ class ConversationState(BaseModel):
     # AWAITING_USER_DECISION. The third gate (with pending_action_id and
     # pending_plan_id) — same idempotency model.
     pending_alternatives_id: str | None = None
+    # The id of the agent's free-form question MessageEvent awaiting a typed
+    # answer, if status is AWAITING_USER_QUESTION. The two-way Ask-gate's pending
+    # id — lets a reconnecting surface resolve the question from a state snapshot.
+    pending_question_id: str | None = None
     # Feature-scoped scratch state; keys are namespaced by subsystem,
     # e.g. "memory.last_condense_seq". [CONTRACT]
     extras: dict[str, Any] = Field(default_factory=dict)
@@ -69,6 +73,9 @@ class ConversationState(BaseModel):
         last_plan_id: str | None = None
         # Likewise for the alternatives gate (AWAITING_USER_DECISION).
         last_alternatives_id: str | None = None
+        # The most recent agent message id — the candidate question when the loop
+        # transitions to AWAITING_USER_QUESTION (the free-form Ask-gate).
+        last_agent_message_id: str | None = None
 
         for e in events:
             if e.seq is not None:
@@ -89,6 +96,12 @@ class ConversationState(BaseModel):
                     st.pending_alternatives_id = last_alternatives_id
                 else:
                     st.pending_alternatives_id = None
+                if e.status == ConversationStatus.AWAITING_USER_QUESTION:
+                    # Prefer the explicit id the engine stamped on the status
+                    # event; fall back to the last agent message.
+                    st.pending_question_id = e.detail or last_agent_message_id
+                else:
+                    st.pending_question_id = None
             elif isinstance(e, ActionEvent):
                 run_iteration += 1
                 last_action_id = e.id
@@ -99,6 +112,10 @@ class ConversationState(BaseModel):
             elif isinstance(e, MessageEvent) and e.source == EventSource.USER:
                 # A fresh user instruction starts a new run (ceiling + stuck).
                 run_iteration = 0
+            elif isinstance(e, MessageEvent) and e.source == EventSource.AGENT:
+                # Track the latest agent message — the free-form Ask-gate's
+                # question is the agent message just before the status flip.
+                last_agent_message_id = e.id
             elif isinstance(e, ErrorEvent):
                 st.execution_status = ConversationStatus.ERROR
 

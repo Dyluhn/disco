@@ -55,6 +55,7 @@ export interface BuildStreamState {
   pendingActionId: string | null;
   pendingPlanId: string | null;
   pendingAlternativesId: string | null;
+  pendingQuestionId: string | null;
   error: string | null;
 }
 
@@ -65,6 +66,7 @@ const initial: BuildStreamState = {
   pendingActionId: null,
   pendingPlanId: null,
   pendingAlternativesId: null,
+  pendingQuestionId: null,
   error: null,
 };
 
@@ -97,6 +99,7 @@ function reducer(state: BuildStreamState, action: Action): BuildStreamState {
       pendingActionId: f.state.pending_action_id,
       pendingPlanId: f.state.pending_plan_id,
       pendingAlternativesId: f.state.pending_alternatives_id ?? null,
+      pendingQuestionId: f.state.pending_question_id ?? null,
     };
   }
   if (f.type === "file_stream") {
@@ -153,6 +156,10 @@ function reducer(state: BuildStreamState, action: Action): BuildStreamState {
           status === "AWAITING_USER_DECISION"
             ? (f.event.detail ?? state.pendingAlternativesId)
             : null,
+        pendingQuestionId:
+          status === "AWAITING_USER_QUESTION"
+            ? (f.event.detail ?? state.pendingQuestionId)
+            : null,
       };
     }
     if (f.event.kind === "error") {
@@ -175,14 +182,20 @@ function reducer(state: BuildStreamState, action: Action): BuildStreamState {
 export interface BuildStream extends BuildStreamState {
   pendingAction: ActionEvent | null;
   pendingAlternatives: AlternativesEvent | null;
+  /** The agent's free-form question, when status is AWAITING_USER_QUESTION. */
+  pendingQuestion: MessageEvent | null;
   plan: PlanView | null;
   planProgress: Map<number, StepState>;
   awaitingPlan: boolean;
   awaitingDecision: boolean;
+  awaitingQuestion: boolean;
   confirm: () => void;
   reject: () => void;
   cancel: () => void;
   steer: (text: string) => void;
+  /** Answer the agent's free-form question — resumes the loop (alias of steer,
+   *  named for the Ask-gate so the AskPanel reads clearly). */
+  answer: (text: string) => void;
   approvePlan: () => void;
   requestPlan: (text: string) => void;
   pickAlternative: (optionId: string) => void;
@@ -245,6 +258,12 @@ export function useBuildStream(session: BuildSession | null): BuildStream {
         (e) => e.id === state.pendingAlternativesId && e.kind === "alternatives",
       ) as AlternativesEvent | undefined)) ||
     null;
+  const pendingQuestion =
+    (state.pendingQuestionId &&
+      (state.events.find(
+        (e) => e.id === state.pendingQuestionId && e.kind === "message",
+      ) as MessageEvent | undefined)) ||
+    null;
 
   const plan = useMemo(() => derivePlan(state.events), [state.events]);
   const planProgress = useMemo(
@@ -253,19 +272,25 @@ export function useBuildStream(session: BuildSession | null): BuildStream {
   );
   const awaitingPlan = state.status === "AWAITING_PLAN_APPROVAL";
   const awaitingDecision = state.status === "AWAITING_USER_DECISION";
+  const awaitingQuestion = state.status === "AWAITING_USER_QUESTION";
 
   return {
     ...state,
     pendingAction,
     pendingAlternatives,
+    pendingQuestion,
     plan,
     planProgress,
     awaitingPlan,
     awaitingDecision,
+    awaitingQuestion,
     confirm,
     reject,
     cancel,
     steer,
+    // Answering a free-form question is just a user message that re-kicks the
+    // loop — same wire path as steer, exposed under an Ask-gate-friendly name.
+    answer: steer,
     approvePlan,
     requestPlan,
     pickAlternative,

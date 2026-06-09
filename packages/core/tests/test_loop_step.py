@@ -417,9 +417,11 @@ async def test_propose_plan_update_intercepts_and_halts_at_plan_approval():
 
 async def test_ask_user_without_options_pauses_as_free_form_question():
     """When the model calls ask_user with no options (just a question), the
-    loop emits the question as an assistant MessageEvent and parks at
-    AWAITING_USER_DECISION — same gate, just no clickable cards. The user
-    replies via send_message or steer."""
+    loop emits the question as an assistant MessageEvent and parks at the
+    two-way Ask-gate (AWAITING_USER_QUESTION) — a free-form question, not the
+    pick-a-card AWAITING_USER_DECISION gate. The user replies via send_message
+    or steer. `pending_question_id` resolves to the question message so the UI
+    can render it in the AskPanel."""
     from perpleximanus.core import ConversationStatus, MessageEvent
 
     free_form = action_step(
@@ -433,7 +435,7 @@ async def test_ask_user_without_options_pauses_as_free_form_question():
     await loop.run()
 
     state = await store.get_state(CID)
-    assert state.execution_status == ConversationStatus.AWAITING_USER_DECISION
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
     # The question landed as an assistant message in the timeline
     events = await store.get_events(CID)
     questions = [
@@ -444,6 +446,8 @@ async def test_ask_user_without_options_pauses_as_free_form_question():
         and "Should I use sudo" in (e.message.content if e.message else "")
     ]
     assert len(questions) == 1
+    # the gate's pending id points at the question message (not a sentinel)
+    assert state.pending_question_id == questions[0].id
 
 
 # ---- auto-continue (the harness re-runs the loop instead of freezing) -------

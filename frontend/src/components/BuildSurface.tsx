@@ -35,6 +35,7 @@ import { PlanPanel } from "@/components/build/PlanPanel";
 import { DeliverablePanel } from "@/components/build/DeliverablePanel";
 import { SteerInput } from "@/components/build/SteerInput";
 import { AlternativesGate } from "@/components/build/AlternativesGate";
+import { AskPanel } from "@/components/build/AskPanel";
 
 // The active isolation tier, surfaced honestly at the point of use (the local container
 // backend the Build surface runs on — shared host kernel, not for adversarial workloads).
@@ -81,6 +82,7 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
     const needsInput =
       b.status === "WAITING_FOR_CONFIRMATION" ||
       b.status === "AWAITING_USER_DECISION" ||
+      b.status === "AWAITING_USER_QUESTION" ||
       b.status === "AWAITING_PLAN_APPROVAL";
     const capstone = b.status === "FINISHED" || b.status === "STUCK" || b.status === "ERROR";
     const statusTransitioned = b.status !== prevStatus;
@@ -271,6 +273,12 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
             <AlternativesGate
               alternatives={b.pendingAlternatives}
               onPick={b.pickAlternative}
+            />
+          )}
+          {b.awaitingQuestion && (
+            <AskPanel
+              question={b.pendingQuestion?.message?.content ?? finalMessage ?? "The agent has a question."}
+              onAnswer={b.answer}
             />
           )}
           {steerable && (
