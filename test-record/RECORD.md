@@ -134,3 +134,12 @@ Calculator fully works, 0 page errors. Screenshots: site1-clean-v1.png, site1-v2
 site1-v2-apps.png. This works for SMALL and LARGE models (line-targeted edits + nudge are model-agnostic).
 
 These fixes ALSO fixed the earlier symptom: builds no longer dead-end on iteration.
+
+
+## Site 1 — macOS clone: 3 ITERATIONS COMPLETE (conv_585a9a94)
+- v1: built from scratch (24KB) — menu bar+clock, dock, draggable windows, Notes + Calculator. (site1-clean-v1.png)
+- v2: iterated → added a working Terminal (help/date/clear/echo) via file_replace_lines×3 + file_edit×2; 24KB→30KB. Notes+Calc+Terminal open as windows. (site1-v2-desktop.png, site1-v3-apps.png)
+- v3: iterated → window traffic-light min/maximize + dock open-indicators (file_write edit). Still works: 6 windows, Terminal UI present, 0 page errors. (site1-v3-desktop.png)
+All iterations made REAL in-place edits to the existing file (the framework fix working).
+
+## Site 2 — Electrical-engineering gamified site — v1 building…
