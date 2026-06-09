@@ -125,8 +125,9 @@ backend-coherence 🔴s (GAP A S3 microcompact, persistent CodeAct kernel, GAP H
   loop leaves RUNNING (cancel is cooperative); Kill (destructive) gated behind an inline confirm
   ("Kill this run? Confirm/Cancel", Stop hidden during it). Added the missing AWAITING_USER_QUESTION
   status label. Tests + real-browser e2e screenshot. (PAUSED phantom: Resume button already landed `e0bd746`.)
-- [ ] 🟡 Aggregate progress + sticky plan — done/total + bar (`PlanPanel.tsx:80-91`) but PlanPanel
-  still inside the scroll container (`BuildSurface.tsx:202-206`)
+- [x] ✅ Aggregate progress + sticky plan — `f9d4dc5`: the read-only plan tracker is now `sticky
+  top-0` (opaque bg) so the plan + done/total progress bar stay pinned while the feed scrolls.
+  Real-browser e2e asserts <40px drift on a 4000px scroll + screenshot. (done/total + bar already in `PlanPanel`.)
 - [ ] 🟡 Liveness — auto-scroll on key transitions + active-state spinner landed; no continuous
   auto-scroll, no `pmx-rise` entrance animations
 - [x] ✅ Persistence + reconnect + notifications — reconnect/backoff DONE (`b3694a0`); persistence
