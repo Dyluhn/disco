@@ -104,6 +104,17 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
       }
     }
   }, [b.status, deliverable?.id]);
+
+  // Continuous "follow the stream" auto-scroll: as the feed grows during a run,
+  // keep the latest line in view — but ONLY when the user is already near the
+  // bottom (within 120px). If they've scrolled up to read history, we don't yank
+  // them back down. Keyed on the activity length so it fires per new line.
+  useEffect(() => {
+    const el = feedScrollRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (nearBottom) el.scrollTop = el.scrollHeight;
+  }, [activity.length, b.streamingFile?.content]);
   // Steer is available whenever a conversation EXISTS to steer — including
   // STUCK/FINISHED, since the engine reopens on send_message (engine.py:671).
   // Plan-approval is the only state where steering is wrong (the plan IS the

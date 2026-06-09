@@ -124,7 +124,7 @@ export function ActivityFeed({ items }: { items: ActivityItem[] }) {
           <li
             key={item.id}
             className={cn(
-              "flex items-start gap-inline border-l-2 py-inline pl-body",
+              "pmx-rise flex items-start gap-inline border-l-2 py-inline pl-body",
               item.attention
                 ? "border-warn/60"
                 : item.kind === "user"
