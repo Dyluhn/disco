@@ -807,3 +807,45 @@ def test_productive_gate_rejects_read_only_then_finish():
     assert AgentLoop._productive_action_since_approval(_seqd([approved, rd, wr])) is True
     # no plan-approval marker → gate inert (don't block)
     assert AgentLoop._productive_action_since_approval(_seqd([rd])) is True
+
+
+def test_read_streak_detector_and_nudge_guard():
+    """The supportive read-streak nudge: a run of read-only calls (no edit between)
+    is detected so the loop can tell a capable model to stop reading + commit the
+    edit — fired once per streak (the inclusivity fix for large-file iteration)."""
+    from perpleximanus.core import ActionEvent, MessageEvent, ObservationEvent, ToolCall, ToolResult
+    from perpleximanus.core.events import EventSource, LLMMessage
+    from perpleximanus.core.loop.engine import _READ_NUDGE, AgentLoop
+
+    def rd():
+        return ActionEvent(
+            thought="reading", tool_call=ToolCall(tool_name="file_read", arguments={"path": "i"})
+        )
+
+    def obs(name="file_read"):
+        return ObservationEvent(
+            tool_result=ToolResult(call_id="c", tool_name=name, success=True, content="x"),
+            action_id="a",
+        )
+
+    # 5 read/observation pairs in a row → streak of 5
+    evs = []
+    for _ in range(5):
+        evs += [rd(), obs()]
+    assert AgentLoop._trailing_read_only_streak(evs) == 5
+    assert AgentLoop._read_nudge_active(evs) is False  # no nudge yet
+
+    # once the nudge is on the log, the guard reports active (fires once)
+    nudge_evt = MessageEvent(
+        source=EventSource.ENVIRONMENT, message=LLMMessage(role="user", content=_READ_NUDGE)
+    )
+    nudged = evs + [nudge_evt]
+    assert AgentLoop._read_nudge_active(nudged) is True
+
+    # a state-changing action breaks the streak + resets the guard
+    wr = ActionEvent(
+        thought="edit", tool_call=ToolCall(tool_name="file_replace_lines", arguments={})
+    )
+    after_edit = nudged + [wr, obs("file_replace_lines")]
+    assert AgentLoop._trailing_read_only_streak(after_edit) == 0
+    assert AgentLoop._read_nudge_active(after_edit) is False

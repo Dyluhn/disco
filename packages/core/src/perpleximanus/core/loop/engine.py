@@ -124,6 +124,23 @@ _PLAN_NUDGE = (
     "</system-reminder>"
 )
 
+# Read-only / information-gathering tools. A long unbroken streak of these (no edit
+# between) means the model is over-reading — supportively nudge it to commit the edit.
+_READ_ONLY_TOOLS = frozenset(
+    {"file_read", "file_list", "search", "extract", "preview_status", "browser"}
+)
+_READ_STREAK_LIMIT = 4  # reads-in-a-row before the "stop reading, edit now" nudge
+_READ_NUDGE = (
+    "<system-reminder>\n"
+    "You've made several READ-ONLY calls in a row without changing anything, and "
+    "you've already described the edit you intend. You have enough context now — "
+    "STOP reading and make the change. Use `file_replace_lines(path, start_line, "
+    "end_line, new_text)` or `file_insert_lines(path, after_line, text)` (target by "
+    "the line numbers you just saw) or `file_edit` (matching is forgiving). Reading "
+    "the same file again will not help; commit the edit.\n"
+    "</system-reminder>"
+)
+
 # A hard temperature jitter for the single stuck-escape retry step. When the loop
 # detects a repeating action→error/obs rut it gives the model ONE retry at this
 # temperature (vs. the driver's small anti-fewshot default) to break the
@@ -939,6 +956,41 @@ class AgentLoop:
         return False
 
     @staticmethod
+    def _trailing_read_only_streak(events: list[Event]) -> int:
+        """Count trailing READ-ONLY actions (file_read/list, search, extract, preview,
+        browser) with no state-changing action or user message in between. A long
+        streak means the model is over-reading — it has the context but won't commit
+        the edit (observed live: 9 reads, each thought 'now let me edit', no edit)."""
+        n = 0
+        for e in reversed(events):
+            if isinstance(e, MessageEvent) and e.source == EventSource.USER:
+                break
+            if isinstance(e, ObservationEvent):
+                continue
+            if isinstance(e, ActionEvent) and e.tool_call is not None:
+                if e.tool_call.tool_name in _READ_ONLY_TOOLS:
+                    n += 1
+                else:
+                    break  # a non-read action breaks the streak
+        return n
+
+    @staticmethod
+    def _read_nudge_active(events: list[Event]) -> bool:
+        """True if a read-streak nudge was already emitted in the CURRENT streak
+        (so it fires once, not every step). Reset by any non-read action / user msg."""
+        for e in reversed(events):
+            if isinstance(e, MessageEvent):
+                c = e.message.content if e.message else ""
+                if e.source == EventSource.USER:
+                    return False
+                if e.source == EventSource.ENVIRONMENT and "STOP reading" in c:
+                    return True
+            if isinstance(e, ActionEvent) and e.tool_call is not None:
+                if e.tool_call.tool_name not in _READ_ONLY_TOOLS:
+                    return False
+        return False
+
+    @staticmethod
     def _hard_deny_reason(action: ActionEvent) -> str | None:
         """Cluster 3: a non-negotiable command-level refusal. Returns a reason if
         the action is a hard-denied shell command (mkfs, raw-device write, fork
@@ -1544,6 +1596,26 @@ class AgentLoop:
                         )
                     )
                     events = await self._events()  # include the nudge in this step's View
+
+                # (c.6) READ-STREAK nudge — supportive, inclusive (the framework
+                # helping a capable model commit). A long unbroken run of read-only
+                # calls means the model has the context but won't make the edit
+                # (observed live: a 27B read a file 9× describing edits it never made).
+                # Inject ONE reminder to stop reading + use the line-targeted editors;
+                # fires once per streak, only in execution mode (planning legitimately
+                # reads to gather context before proposing).
+                if (
+                    self.mode != OperatingMode.PLANNING
+                    and self._trailing_read_only_streak(events) >= _READ_STREAK_LIMIT
+                    and not self._read_nudge_active(events)
+                ):
+                    await self._emit(
+                        MessageEvent(
+                            source=EventSource.ENVIRONMENT,
+                            message=LLMMessage(role="user", content=_READ_NUDGE),
+                        )
+                    )
+                    events = await self._events()
 
                 # (d) build the model-facing View, condensing if triggered (§8)
                 view = await self._materialize_view(events)
