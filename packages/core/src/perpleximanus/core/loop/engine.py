@@ -1604,6 +1604,7 @@ class AgentLoop:
                 # Observed live: a 27B read a large file 16× describing edits/plans it
                 # never made. Inject ONE mode-appropriate reminder to stop reading and
                 # commit; fires once per streak (guarded), resets on any non-read action.
+                read_loop_break = False
                 if self._trailing_read_only_streak(events) >= _READ_STREAK_LIMIT:
                     nudge = (
                         _READ_NUDGE_PLANNING
@@ -1617,6 +1618,7 @@ class AgentLoop:
                         )
                     )
                     events = await self._events()
+                    read_loop_break = True  # jitter this step's temperature (see below)
 
                 # (d) build the model-facing View, condensing if triggered (§8)
                 view = await self._materialize_view(events)
@@ -1625,11 +1627,14 @@ class AgentLoop:
                 # set is mode-scoped: while PLANNING the agent sees ONLY the plan
                 # tool (so it can't act before approval); while executing it sees
                 # everything except the plan tool.
-                # Escape temperature: on the retry step right after a stuck reframe
-                # (marker present, model hasn't acted yet), jitter hard to break the
-                # self-imitation chain that produced the repeat.
+                # Escape temperature: jitter HARD to break a self-imitation chain.
+                # Two triggers: (1) the step right after a stuck reframe; (2) a long
+                # read-only streak — a model locked into reading at low temp keeps
+                # emitting file_read despite the nudge (observed live: 29 reads, 7
+                # ignored nudges). Bumping the temperature when we nudge widens the
+                # distribution so it actually samples an EDIT tool instead of read.
                 in_escape = escape_seq is not None and not acted_since_escape
-                escape_temp = _STUCK_ESCAPE_TEMP if in_escape else None
+                escape_temp = _STUCK_ESCAPE_TEMP if (in_escape or read_loop_break) else None
                 try:
                     step = await self.agent.step(
                         view,
