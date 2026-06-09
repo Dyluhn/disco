@@ -186,6 +186,7 @@ export interface BuildStream extends BuildStreamState {
   approvePlan: () => void;
   requestPlan: (text: string) => void;
   pickAlternative: (optionId: string) => void;
+  resume: () => void;
 }
 
 export function useBuildStream(session: BuildSession | null): BuildStream {
@@ -227,6 +228,10 @@ export function useBuildStream(session: BuildSession | null): BuildStream {
       handle.current?.send({ type: "pick_alternative", option_id: optionId }),
     [],
   );
+  // Resume a PAUSED build (e.g. stopped, or interrupted by a server restart and
+  // reconciled to PAUSED). The backend clears the cancel flag, rehydrates the
+  // workspace, and re-kicks the loop — continuation, not a fresh run.
+  const resume = useCallback(() => handle.current?.send({ type: "resume" }), []);
 
   const pendingAction =
     (state.pendingActionId &&
@@ -264,5 +269,6 @@ export function useBuildStream(session: BuildSession | null): BuildStream {
     approvePlan,
     requestPlan,
     pickAlternative,
+    resume,
   };
 }

@@ -4,7 +4,7 @@
  * and the always-available KILL SWITCH (BoD §13.6).
  */
 
-import { Loader2, OctagonX, ShieldCheck, ShieldHalf, Square } from "lucide-react";
+import { Loader2, OctagonX, Play, ShieldCheck, ShieldHalf, Square } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { ConversationStatus, IsolationInfo } from "@/types/agent";
 
@@ -40,12 +40,15 @@ export function AgentStatusBar({
   isolation,
   onKill,
   onStop,
+  onResume,
 }: {
   status: ConversationStatus;
   isolation: IsolationInfo;
   onKill: () => void;
   /** Cluster 6: graceful stop (cooperative cancel — no sandbox teardown). */
   onStop?: () => void;
+  /** Resume a PAUSED build (stopped, or interrupted by a server restart). */
+  onResume?: () => void;
 }) {
   const active = ACTIVE.includes(status);
   const waiting =
@@ -85,7 +88,18 @@ export function AgentStatusBar({
       </div>
 
       <div className="flex items-center gap-hair">
-        {onStop && canStop && (
+        {onResume && status === "PAUSED" && (
+          <button
+            type="button"
+            onClick={onResume}
+            aria-label="Resume the agent — continue this build where it left off"
+            className="flex items-center gap-hair rounded-control border border-accent/40 px-inline py-hair font-ui text-[0.78rem] text-accent transition-colors hover:border-accent hover:bg-accent/5"
+          >
+            <Play className="size-3.5" aria-hidden />
+            Resume
+          </button>
+        )}
+        {onStop && canStop && status !== "PAUSED" && (
           <button
             type="button"
             onClick={onStop}
