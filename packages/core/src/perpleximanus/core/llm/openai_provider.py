@@ -18,6 +18,7 @@ the loop's reactive surfacing depend on.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import AsyncIterator, Iterable
 from typing import Literal
@@ -54,6 +55,14 @@ _FINISH: dict[str, FinishReason] = {
 
 def _map_finish(raw: str | None) -> FinishReason:
     return _FINISH.get(raw or "stop", "stop")
+
+
+def _is_anthropic(model: str) -> bool:
+    """Whether a model id routes to Anthropic (direct or via OpenRouter), so we
+    emit Claude-style `cache_control` breakpoints. Other providers get plain
+    string content + `prompt_cache_key` only."""
+    m = model.lower()
+    return "claude" in m or m.startswith("anthropic/")
 
 
 def _is_context_overflow(err_type: str, message: str) -> bool:
@@ -169,7 +178,56 @@ class OpenAIProvider:
             body["chat_template_kwargs"] = {"enable_thinking": et}
         if stream:
             body["stream_options"] = {"include_usage": True}
+        # GAP H — prompt-cache routing. A stable hint derived from the IMMUTABLE
+        # prefix (system prompt + tool surface) so OpenAI/OpenRouter keep prompt-cache
+        # affinity across a conversation's turns instead of re-billing the whole
+        # prefix each turn. Local llama.cpp prefix-caches the KV automatically and
+        # ignores this — harmless. (Prefix byte-stability is already handled:
+        # sort_keys on tool args + a single mode-stable prompt.)
+        ckey = self._prompt_cache_key(req)
+        if ckey:
+            body["prompt_cache_key"] = ckey
+        # Anthropic (Claude via OpenRouter): explicit cache breakpoints. The OpenAI
+        # format has no cache_control, so Anthropic models need the system prompt +
+        # tool surface marked as cacheable content blocks. Gated on the model id so
+        # local/OpenAI payloads stay plain-string (they'd reject block-array content).
+        if _is_anthropic(model):
+            self._mark_anthropic_cache(body)
         return body
+
+    @staticmethod
+    def _prompt_cache_key(req: CompletionRequest) -> str | None:
+        """A deterministic cache-routing key from the stable prefix: the system
+        message(s) + the sorted tool names. Identical agent configuration → identical
+        key → same prompt-cache bucket across turns (and across conversations that
+        share the prefix, which is a cache WIN, not a leak — keys are opaque hashes)."""
+        parts = [m.content or "" for m in req.messages if m.role == "system"]
+        parts.extend(sorted(t.name for t in (req.tools or [])))
+        if not parts:
+            return None
+        return "pmx-" + hashlib.sha256("\x00".join(parts).encode("utf-8")).hexdigest()[:24]
+
+    @staticmethod
+    def _mark_anthropic_cache(body: dict) -> None:
+        """Add Anthropic `cache_control: ephemeral` breakpoints on the two big stable
+        blocks — the system prompt and the last tool definition — so Claude caches
+        the prefix. Converts the system message's string content into the single-
+        text-block array Anthropic requires for the marker; non-system turns and
+        OpenAI-shaped payloads are left untouched."""
+        for m in body.get("messages", []):
+            if m.get("role") == "system" and isinstance(m.get("content"), str):
+                m["content"] = [
+                    {
+                        "type": "text",
+                        "text": m["content"],
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
+                break  # one breakpoint at the end of the system prompt is enough
+        tools = body.get("tools")
+        if tools:
+            # The tool surface is stable too — a breakpoint after the last tool caches it.
+            tools[-1]["cache_control"] = {"type": "ephemeral"}
 
     # -- error mapping (preserve the real message) ----------------------------
 
