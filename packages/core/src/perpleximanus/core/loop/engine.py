@@ -124,6 +124,14 @@ _PLAN_NUDGE = (
     "</system-reminder>"
 )
 
+# A hard temperature jitter for the single stuck-escape retry step. When the loop
+# detects a repeating action→error/obs rut it gives the model ONE retry at this
+# temperature (vs. the driver's small anti-fewshot default) to break the
+# self-imitation chain, BEFORE declaring STUCK. No reminder is injected — the
+# escape is pure sampling variance over the already-visible failure context (the
+# harness-doesn't-nudge rule).
+_STUCK_ESCAPE_TEMP = 0.9
+
 # Symmetric to _PLAN_NUDGE on the execution side: a hard gate that refuses FINISHED
 # until the agent has done productive work since the most recent plan approval.
 # Small open models sometimes echo the plan as prose and declare "done" without
@@ -929,6 +937,20 @@ class AgentLoop:
         return False
 
     @staticmethod
+    def _stuck_escape_seq(events: list[Event]) -> int | None:
+        """The seq of the most recent `stuck_escape` marker since the last USER
+        message, else None. Reset only on a USER message — NOT on a successful
+        observation: pattern-1 stuck (the same *succeeding* no-op action repeated)
+        would otherwise reset every cycle and reframe forever. One reframe escape per
+        user turn; a second stall in the same turn halts."""
+        for e in reversed(events):
+            if isinstance(e, StatusEvent) and e.detail == "stuck_escape":
+                return e.seq
+            if isinstance(e, MessageEvent) and e.source == EventSource.USER:
+                return None
+        return None
+
+    @staticmethod
     def _consecutive_noops(events: list[Event]) -> int:
         """Count trailing agent prose MessageEvents not separated by an
         ActionEvent or a USER message. Resets when the agent acts or the user
@@ -1331,10 +1353,35 @@ class AgentLoop:
                     )
                     return await self.get_state()
 
-                # (c) stuck detection BEFORE more work (§6)
+                # (c) stuck detection BEFORE more work (§6). ESCAPE-then-halt: a
+                # repeating action→error loop first gets ONE reframe attempt (a strong
+                # "stop repeating, try a different approach" reminder + a temperature
+                # bump to break the self-imitation chain) BEFORE we declare STUCK. Only
+                # if it repeats AGAIN after acting on the reframe do we halt — so a
+                # transient rut doesn't dead-end a run the model could escape.
+                escape_seq = self._stuck_escape_seq(events)
+                acted_since_escape = escape_seq is not None and any(
+                    isinstance(e, ActionEvent) and e.seq is not None and e.seq > escape_seq
+                    for e in events
+                )
                 if self._stuck.is_stuck(self._recent(events)):
-                    await self._emit(StatusEvent(status=ConversationStatus.STUCK))
-                    return await self.get_state()
+                    if escape_seq is None:
+                        # First time: do NOT inject a reminder (the harness-doesn't-nudge
+                        # rule — reminders dilute instructions; failures are already
+                        # visible context). Instead drop a `stuck_escape` MARKER (a status
+                        # event, not a reminder) and let the model retry the NEXT step at a
+                        # high temperature — jittering hard to break the self-imitation
+                        # chain — before we ever declare STUCK.
+                        await self._emit(
+                            StatusEvent(status=ConversationStatus.RUNNING, detail="stuck_escape")
+                        )
+                        continue
+                    if acted_since_escape:
+                        # The high-temp retry happened and it's STILL stuck → halt now.
+                        await self._emit(StatusEvent(status=ConversationStatus.STUCK))
+                        return await self.get_state()
+                    # else: escape just marked, model hasn't retried yet → fall through
+                    # and let it act this iteration (with the bumped temperature below).
 
                 # (c.2) CIRCUIT BREAKER (Cluster 2). StuckDetector only catches
                 # IDENTICAL action→error repeats; a model that tries N DIFFERENT
@@ -1440,6 +1487,11 @@ class AgentLoop:
                 # set is mode-scoped: while PLANNING the agent sees ONLY the plan
                 # tool (so it can't act before approval); while executing it sees
                 # everything except the plan tool.
+                # Escape temperature: on the retry step right after a stuck reframe
+                # (marker present, model hasn't acted yet), jitter hard to break the
+                # self-imitation chain that produced the repeat.
+                in_escape = escape_seq is not None and not acted_since_escape
+                escape_temp = _STUCK_ESCAPE_TEMP if in_escape else None
                 try:
                     step = await self.agent.step(
                         view,
@@ -1447,6 +1499,7 @@ class AgentLoop:
                         mode=self.mode,
                         overflow_signal=self._overflow_signal(events),
                         on_stream=self._build_stream_hook(),
+                        temperature=escape_temp,
                     )
                 except LLMContextWindowExceeded:
                     if await self._hard_reset(await self._events()):

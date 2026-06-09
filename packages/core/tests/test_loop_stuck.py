@@ -84,9 +84,38 @@ def test_events_outside_window_dont_count():
 # ---- loop integration: STUCK then resume ------------------------------------
 
 
+async def test_loop_tries_a_temp_escape_before_going_stuck():
+    """Escape-then-halt: the FIRST time the loop detects an action→obs/error rut it
+    drops a `stuck_escape` MARKER (a status event — NOT an injected reminder; the
+    harness-doesn't-nudge rule) and lets the model retry the next step at a high
+    temperature. It does NOT halt yet. Only if it's STILL stuck after that retry does
+    STUCK fire — and the escape buys the model at least one extra step it wouldn't
+    have had under immediate-halt."""
+    from perpleximanus.core import MessageEvent
+
+    agent = ScriptedAgent([action_step()] * 6 + [finish_step()])
+    loop, store = build_loop(agent, stuck_thresholds=StuckThresholds(repeat_action_observation=3))
+    await loop.send_message("repeat please")
+    state = await loop.run()
+
+    events = await store.get_events(CID)
+    # the escape was attempted (a status marker on the log)…
+    assert any(isinstance(e, StatusEvent) and e.detail == "stuck_escape" for e in events)
+    # …but NO harness reminder was injected (the anti-nudge invariant holds)…
+    def _is_reminder(e):
+        return isinstance(e, MessageEvent) and "<system-reminder>" in (
+            e.message.content if e.message else ""
+        )
+
+    assert not any(_is_reminder(e) for e in events)
+    # …and it still ended STUCK because the model kept repeating after the retry.
+    assert state.execution_status == ConversationStatus.STUCK
+
+
 async def test_loop_goes_stuck_then_resumes_on_new_message():
-    # Same action forever → identical action→obs cycles → STUCK at threshold 3.
-    agent = ScriptedAgent([action_step(), action_step(), action_step(), finish_step()])
+    # Same action forever → identical action→obs cycles → STUCK (after the reframe
+    # escape is spent: 3 to trigger + ≥1 retry that's still stuck).
+    agent = ScriptedAgent([action_step()] * 6 + [finish_step()])
     loop, store = build_loop(agent, stuck_thresholds=StuckThresholds(repeat_action_observation=3))
     await loop.send_message("repeat please")
     state = await loop.run()

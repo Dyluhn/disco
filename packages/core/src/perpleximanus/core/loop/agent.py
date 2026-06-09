@@ -87,6 +87,7 @@ class RouterAgent:
         mode: OperatingMode,
         overflow_signal: OverflowSignal,
         on_stream: StreamHook | None = None,
+        temperature: float | None = None,
     ) -> AgentStep:
         req = CompletionRequest(
             profile=CapabilityProfile(
@@ -101,8 +102,9 @@ class RouterAgent:
             # A long uniform run at temp 0.0 is a near-deterministic self-imitation
             # chain — maximally prone to repeating a prior failing pattern. The
             # summarizer + other structured roles stay at 0.0 (they set it
-            # explicitly); only the acting driver gets the jitter.
-            temperature=self._temperature,
+            # explicitly); only the acting driver gets the jitter. A per-step
+            # `temperature` override (the loop's stuck-escape bump) wins when given.
+            temperature=temperature if temperature is not None else self._temperature,
             request_id=f"req_{uuid.uuid4().hex}",
         )
         ctx = CallContext(
