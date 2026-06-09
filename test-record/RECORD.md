@@ -105,3 +105,32 @@ Also fixed: ddgs rate-limit retry (Standard search initially returned 0 sources)
 
 ## Phase 5 — Build two sites (live, 3 iterations each)
 (pending)
+
+
+## 🔑 BREAKTHROUGH — making the framework support large-file editing (Dylan's directive)
+
+Problem (found live): the 27B (≈Sonnet-4.6-no-think) builds a 28KB site from scratch perfectly but
+COULD NOT iterate on it — it read the file endlessly and never committed an edit. Root cause was
+the FRAMEWORK, not the model. Peeled the onion through repeated live tests; fixed each layer:
+
+1. **Exact-match file_edit** → no model reproduces a long substring of a big file byte-perfectly →
+   FIX: forgiving file_edit (strip pasted line-numbers, whitespace-normalized match, helpful failure)
+   + NEW line-targeted tools `file_replace_lines` / `file_insert_lines` (edit by line number, no
+   exact reproduction). [commit: inclusive editing]
+2. **Whole-file read got snipped** (>8000 chars → head+tail) → model saw a CORRUPTED MIDDLE,
+   said "the file is being truncated," re-read forever → FIX: char-budgeted PAGINATED file_read
+   (clean line-numbered pages under the snip cap + "read more with offset="). [commit: paginated read]
+3. **Reads counted as 'productive'** so a change request could finish on reads alone → FIX: build-finish
+   gate requires a state-changing action. [commit: gate]
+4. **Model still over-read (16×) without committing** → FIX: supportive, mode-aware READ-STREAK NUDGE —
+   after N reads with no edit, one reminder to STOP reading and commit (planning→submit_plan,
+   execution→file_replace_lines/insert). [commits: read-streak nudge + mode-aware]
+
+**PROVEN (clean run, conv_585a9a94):** v1 macOS clone (24185 B) → iteration "add a Terminal app" →
+the model READ 4×, got NUDGED, then made REAL edits (file_replace_lines×3 + file_edit×2) → file grew
+to 30169 B → a genuinely functional Terminal added (terminal-input + keydown + command switch with
+help/date/clear/echo built-ins). Rendered + tested: Notes + Calculator + Terminal all open as windows,
+Calculator fully works, 0 page errors. Screenshots: site1-clean-v1.png, site1-v2-desktop.png,
+site1-v2-apps.png. This works for SMALL and LARGE models (line-targeted edits + nudge are model-agnostic).
+
+These fixes ALSO fixed the earlier symptom: builds no longer dead-end on iteration.
