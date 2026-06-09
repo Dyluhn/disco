@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import os
 from collections.abc import AsyncIterator
 from typing import Any
@@ -93,6 +94,8 @@ from perpleximanus.tools.sandbox import (
     SandboxConfig,
 )
 from perpleximanus.tools.sandbox._container import PREVIEW_PORT
+
+_LOG = logging.getLogger(__name__)
 
 
 def build_sandbox_service(settings: SandboxSettings) -> SandboxService:
@@ -740,6 +743,58 @@ class ConversationRuntime:
         rehydrated = getattr(self, "_rehydrated", None)
         if rehydrated is not None:
             rehydrated.discard(conversation_id)
+
+    async def reconcile_orphaned_runs(self, *, owner_id: str = DEFAULT_OWNER_ID) -> int:
+        """Startup reconciliation. A conversation whose latest status is RUNNING but
+        whose loop died with the previous server process is an ORPHAN: it shows
+        'RUNNING' forever in History / the Deep Research read-only view, and its
+        sandbox/GPU may have leaked. On boot there are NO live loops, so every
+        RUNNING conversation is stale. Mark each PAUSED (resumable) + drop an
+        environment note so the user can pick it up. Returns the count reconciled.
+
+        Single-owner ('local') today; extend across owners when auth lands.
+        """
+        reconciled = 0
+        cursor: str | None = None
+        page = 200
+        while True:
+            ids = await self._store.list_conversations(owner_id=owner_id, limit=page, cursor=cursor)
+            if not ids:
+                break
+            for cid in ids:
+                # One unreadable conversation must never abort server boot.
+                with contextlib.suppress(Exception):
+                    state = await self._store.get_state(cid)
+                    if state.execution_status is ConversationStatus.RUNNING:
+                        await self._store.append(
+                            cid,
+                            MessageEvent(
+                                source=EventSource.ENVIRONMENT,
+                                message=LLMMessage(
+                                    role="user",
+                                    content=(
+                                        "⚠️ This run was interrupted when the server restarted, "
+                                        "so its sandbox was reclaimed. It's paused — send a "
+                                        "message to pick it up (your saved files restore on the "
+                                        "next step)."
+                                    ),
+                                ),
+                            ),
+                        )
+                        await self._store.append(
+                            cid,
+                            StatusEvent(
+                                status=ConversationStatus.PAUSED,
+                                detail="reconciled: orphaned RUNNING after server restart",
+                            ),
+                        )
+                        reconciled += 1
+            if len(ids) < page:
+                break
+            cursor = str((int(cursor) if cursor else 0) + len(ids))
+        if reconciled:
+            _LOG.info("reconciled %d orphaned RUNNING conversation(s) on startup", reconciled)
+        return reconciled
 
     async def _maybe_run_deep_research(self, conversation_id: str) -> None:
         """The Deep Research driver. Inspects the conversation state to decide

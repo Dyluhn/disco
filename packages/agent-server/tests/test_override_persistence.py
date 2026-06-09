@@ -94,3 +94,48 @@ async def test_teardown_clears_rehydrate_flag_so_continuation_restores_files(
     rt._executors[cid] = _FakeExecutor()
     await rt._teardown_sandbox(cid)
     assert cid not in rt._rehydrated
+
+
+async def test_reconcile_marks_orphaned_running_paused_and_notes(tmp_path, monkeypatch):
+    """Startup orphan reconciliation: a conversation left RUNNING (its loop died with
+    the previous server process) is marked PAUSED with an interrupted note; a FINISHED
+    one is untouched — fixes the stale-'RUNNING'-forever-after-a-crash."""
+    from perpleximanus.core import (
+        ConversationStatus,
+        EventSource,
+        LLMMessage,
+        MessageEvent,
+        StatusEvent,
+    )
+
+    monkeypatch.setenv("PMX_DB", str(tmp_path / "c.db"))
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(
+        store,
+        config_store=ConfigStore(tmp_path / "config.json"),
+        secret_store=SecretStore(tmp_path / "s.json", box=SecretBox(None)),
+    )
+
+    # an orphaned RUNNING build (its loop died mid-run)
+    store.create_conversation("conv_orphan", surface="build")
+    await store.append(
+        "conv_orphan",
+        MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="build X")),
+    )
+    await store.append("conv_orphan", StatusEvent(status=ConversationStatus.RUNNING))
+    # a FINISHED one — must NOT be touched
+    store.create_conversation("conv_done", surface="build")
+    await store.append("conv_done", StatusEvent(status=ConversationStatus.FINISHED))
+
+    n = await rt.reconcile_orphaned_runs()
+
+    assert n == 1
+    assert (await store.get_state("conv_orphan")).execution_status is ConversationStatus.PAUSED
+    assert (await store.get_state("conv_done")).execution_status is ConversationStatus.FINISHED
+    # the interrupted note is on the log so the UI can explain the pause
+    events = await store.get_events("conv_orphan")
+    assert any(
+        getattr(e, "source", None) is EventSource.ENVIRONMENT
+        and "interrupted" in getattr(getattr(e, "message", None), "content", "")
+        for e in events
+    )

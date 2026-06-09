@@ -61,7 +61,19 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     """Build the FastAPI app over a given store. The store is injected so tests
     drive it headlessly. `runtime` runs the agent loop with real inference (Stage
     2); pass None in tests that only exercise the wire layer (the loop won't run)."""
-    app = FastAPI(title="perpleximanus agent-server", version="0.1.0")
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        # On startup, reconcile orphaned RUNNING conversations — loops that died with
+        # a previous server process. Without this they show 'RUNNING' forever in
+        # History / the Deep Research read-only view (and may have leaked a sandbox).
+        if runtime is not None:
+            with contextlib.suppress(Exception):  # never block boot on reconciliation
+                await runtime.reconcile_orphaned_runs()
+        yield
+
+    app = FastAPI(
+        title="perpleximanus agent-server", version="0.1.0", lifespan=lifespan
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],  # dev: open (ownership is an explicit param, not a cookie)
