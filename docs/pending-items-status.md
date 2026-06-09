@@ -98,7 +98,9 @@ milestone. Backend coherence (GAP A–H) is largely landed.
 - [ ] Synthetic-fake harnesses (streaming, providers, Deep Research lifecycle) used
   `_ScriptedRouter`/hand-made docs — violate the real-captured-samples rule; rebuild from captures
 - [ ] All harness work + UI/server mods are UNCOMMITTED — commit before further change
-- [ ] Phase 2 `--replay` e2e blocked on `research_demo.jsonl` (the capture that OOM'd the box; needs the model server up)
+- [x] ✅ Phase 2 `--replay` e2e — DONE. The OOM blocker was a real bug: the cross-encoder rerank
+  ballooned to 16 GB on full-page passages (fixed in commit 4669a76 — truncate+batch → 2.3 GB).
+  Captured `research_demo.jsonl`; `make eval` passes (faithfulness 1.0, no baseline regression, 3.5 GB peak)
 - [x] ✅ Phase 7 Playwright E2E + visual regression — BUILT (commit 3449cbb): `frontend/e2e/*.spec.ts`
   (4 flows) + Firefox visual baselines (both themes), fixture mode via `vite --mode test`, `make e2e`.
   Meta-verified (break heading → functional + visual go red)
