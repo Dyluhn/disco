@@ -967,13 +967,20 @@ class AgentLoop:
     @staticmethod
     def _trailing_read_only_streak(events: list[Event]) -> int:
         """Count trailing READ-ONLY actions (file_read/list, search, extract, preview,
-        browser) with no state-changing action or user message in between. A long
-        streak means the model is over-reading — it has the context but won't commit
-        the edit (observed live: 9 reads, each thought 'now let me edit', no edit)."""
+        browser) with no state-changing action, user message, OR prior read-nudge in
+        between. Resetting at the last nudge means a model that IGNORES one nudge and
+        keeps reading hits the threshold AGAIN and gets re-nudged (escalating), rather
+        than reading 38× after a single ignored reminder (observed live)."""
         n = 0
         for e in reversed(events):
-            if isinstance(e, MessageEvent) and e.source == EventSource.USER:
-                break
+            if isinstance(e, MessageEvent):
+                c = e.message.content if e.message else ""
+                if e.source == EventSource.USER:
+                    break
+                # a prior read-nudge resets the count (so the NEXT streak re-fires)
+                if e.source == EventSource.ENVIRONMENT and "STOP reading" in c:
+                    break
+                continue
             if isinstance(e, ObservationEvent):
                 continue
             if isinstance(e, ActionEvent) and e.tool_call is not None:
@@ -982,22 +989,6 @@ class AgentLoop:
                 else:
                     break  # a non-read action breaks the streak
         return n
-
-    @staticmethod
-    def _read_nudge_active(events: list[Event]) -> bool:
-        """True if a read-streak nudge was already emitted in the CURRENT streak
-        (so it fires once, not every step). Reset by any non-read action / user msg."""
-        for e in reversed(events):
-            if isinstance(e, MessageEvent):
-                c = e.message.content if e.message else ""
-                if e.source == EventSource.USER:
-                    return False
-                if e.source == EventSource.ENVIRONMENT and "STOP reading" in c:
-                    return True
-            if isinstance(e, ActionEvent) and e.tool_call is not None:
-                if e.tool_call.tool_name not in _READ_ONLY_TOOLS:
-                    return False
-        return False
 
     @staticmethod
     def _hard_deny_reason(action: ActionEvent) -> str | None:
@@ -1613,10 +1604,7 @@ class AgentLoop:
                 # Observed live: a 27B read a large file 16× describing edits/plans it
                 # never made. Inject ONE mode-appropriate reminder to stop reading and
                 # commit; fires once per streak (guarded), resets on any non-read action.
-                if (
-                    self._trailing_read_only_streak(events) >= _READ_STREAK_LIMIT
-                    and not self._read_nudge_active(events)
-                ):
+                if self._trailing_read_only_streak(events) >= _READ_STREAK_LIMIT:
                     nudge = (
                         _READ_NUDGE_PLANNING
                         if self.mode == OperatingMode.PLANNING
