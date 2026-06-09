@@ -153,22 +153,21 @@ async def test_circuit_breaker_hands_off_after_distinct_failures():
     # The harness halts for the user instead of grinding to max_iterations.
     assert state.execution_status == ConversationStatus.AWAITING_USER_DECISION
     events = await store.get_events(CID)
+    from perpleximanus.core import AlternativesEvent
+
+    # The harness SYNTHESIZES an AlternativesEvent so the UI renders the recovery
+    # gate (not dead-end prose): the failure summary + a "Continue anyway" option.
+    alt = next(e for e in reversed(events) if isinstance(e, AlternativesEvent))
+    assert "failures in a row" in alt.summary
+    assert any(o.id == "__continue__" for o in alt.options)
+    # …and the gate's detail points at that alt so the View resolves it.
     terminal = next(
         e
         for e in reversed(events)
         if e.__class__.__name__ == "StatusEvent"
         and e.status == ConversationStatus.AWAITING_USER_DECISION
     )
-    assert terminal.detail == "circuit_breaker"
-    # A handoff message summarizing the failures was posted to the user.
-    handoff = [
-        e
-        for e in events
-        if isinstance(e, MessageEvent)
-        and e.source == EventSource.AGENT
-        and "failures in a row" in e.message.content
-    ]
-    assert len(handoff) == 1
+    assert terminal.detail == alt.id
 
 
 async def test_no_breaker_when_failures_below_threshold():

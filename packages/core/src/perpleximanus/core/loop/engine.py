@@ -1459,24 +1459,42 @@ class AgentLoop:
                     )
                     continue
                 if fails > self._circuit_breaker_threshold:
-                    # Recovery was already requested AND it failed again → NOW hand off
-                    # with a plain summary (the old behavior) so it can't loop forever.
+                    # Recovery was already requested AND it failed again → hand off. The
+                    # model never volunteered clickable options, so the HARNESS now
+                    # SYNTHESIZES an AlternativesEvent (failure summary + the structural
+                    # "Continue anyway" / steer escapes) so the UI renders the recovery
+                    # GATE — not just dead-end prose. Picking continue resets the streak
+                    # (pick_alternative special-cases _CONTINUE_OPTION_ID); steering is
+                    # the manual escape. detail=the alt id so the View resolves the gate.
                     summary = (
                         f"I've hit {fails} failures in a row and couldn't find a way "
                         "through. Pausing for your direction. The recent errors were:\n"
                         + "\n".join(f"  • {err[:200]}" for err in recent_errors[:4])
-                        + "\n\nHow would you like me to proceed?"
                     )
-                    await self._emit(
-                        MessageEvent(
-                            source=EventSource.AGENT,
-                            message=LLMMessage(role="assistant", content=summary),
-                        )
+                    failed_action_id = next(
+                        (e.id for e in reversed(events) if isinstance(e, ActionEvent)), ""
                     )
+                    alt = AlternativesEvent(
+                        failed_action_id=failed_action_id,
+                        summary=summary,
+                        options=[
+                            AlternativeOption(
+                                id=_CONTINUE_OPTION_ID,
+                                title="Continue anyway",
+                                description=(
+                                    "Reset the failure streak and let the agent try another "
+                                    "approach with its own judgment."
+                                ),
+                                tool_name="",  # not a tool — the loop intercepts this id
+                                arguments={},
+                            )
+                        ],
+                    )
+                    await self._emit(alt)
                     await self._emit(
                         StatusEvent(
                             status=ConversationStatus.AWAITING_USER_DECISION,
-                            detail="circuit_breaker",
+                            detail=alt.id,
                         )
                     )
                     return await self.get_state()
