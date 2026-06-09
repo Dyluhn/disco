@@ -23,7 +23,7 @@ import type { IsolationInfo } from "@/types/agent";
 import { EmptyState, ErrorState } from "@/components/states";
 import { Markdown } from "@/components/Markdown";
 import { QueryInput } from "@/components/QueryInput";
-import { Download } from "lucide-react";
+import { Download, Loader2 } from "lucide-react";
 import { useDownloadProject } from "@/hooks/useProjects";
 import { ActivityFeed } from "@/components/build/ActivityFeed";
 import { LiveSignalBar } from "@/components/build/LiveSignalBar";
@@ -115,6 +115,10 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
     b.status === "FINISHED" ||
     b.status === "PAUSED";
   const settled = b.status === "FINISHED" || b.status === "IDLE" || b.status === "STUCK";
+  // Front-door "drafting…" moment: the run is live but no plan exists yet (the
+  // agent is exploring + composing the first plan). Show a skeleton so the surface
+  // never reads as frozen between submit and the plan-approval gate.
+  const draftingPlan = b.status === "RUNNING" && !b.plan;
   const terminalIncomplete = b.status === "STUCK" || b.status === "ERROR";
 
   if (!b.started) {
@@ -220,6 +224,23 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
               </div>
             ) : (
               <>
+                {/* front-door: drafting the first plan (live, no plan yet) */}
+                {draftingPlan && (
+                  <div
+                    aria-label="Drafting a plan"
+                    className="mb-section flex flex-col gap-hair rounded-control border border-hairline bg-surface-1 p-body"
+                  >
+                    <div className="flex items-center gap-hair font-ui text-[0.84rem] text-text-muted">
+                      <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                      Drafting a plan — exploring the workspace and shaping the steps…
+                    </div>
+                    <div className="mt-hair flex flex-col gap-hair" aria-hidden>
+                      <div className="h-2.5 w-2/3 animate-pulse rounded bg-surface-2" />
+                      <div className="h-2.5 w-5/6 animate-pulse rounded bg-surface-2" />
+                      <div className="h-2.5 w-1/2 animate-pulse rounded bg-surface-2" />
+                    </div>
+                  </div>
+                )}
                 {/* read-only capstone tracker: steps check off as the agent reports
                     them. Sticky to the top of the scroll area so the plan + progress
                     stay visible while the activity feed scrolls beneath it. */}

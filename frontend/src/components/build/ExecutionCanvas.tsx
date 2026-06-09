@@ -341,6 +341,18 @@ export function ExecutionCanvas({
     if (now && !wasStreaming.current) setTab("files");
     wasStreaming.current = now;
   }, [streamingFile]);
+  // Auto-switch to Preview at the capstone: when the run FINISHES and there's a
+  // renderable artifact, pull focus to the result (the deliverable handoff — the
+  // user wants to SEE the finished app, not stare at the file tree). Only on the
+  // rising edge into FINISHED, so it never yanks the user mid-run or repeatedly.
+  const wasFinished = useRef(false);
+  useEffect(() => {
+    const finished = status === "FINISHED";
+    if (finished && !wasFinished.current && deriveSrcDoc(deriveFiles(events)) != null) {
+      setTab("preview");
+    }
+    wasFinished.current = finished;
+  }, [status, events]);
   return (
     <Tabs.Root
       value={tab}
