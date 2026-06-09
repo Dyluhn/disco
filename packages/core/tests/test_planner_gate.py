@@ -128,3 +128,59 @@ def test_execution_mode_exposes_mutating_tools_plus_virtuals():
     assert {"shell", "file_write"} <= names
     # ...and the virtual escape-hatch tools are appended.
     assert {"ask_user", "notify_user", "finish"} <= names
+
+
+# ---- force-commit: ignored read-streak nudges withhold read tools -----------
+
+
+def test_force_commit_in_planning_leaves_only_plan_tool_and_ask_user():
+    # When read-streak nudges were ignored, _force_commit is armed for one step:
+    # the planner loses every read-only tool so its only moves are submit_plan or
+    # ask_user. This is the inclusive fix for a model stuck reading a large file.
+    ex = ReadonlyExecutor(readonly={"file_read", "search", "submit_plan"})
+    loop = _loop(
+        ex,
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"file_read", "search", "submit_plan"}),
+    )
+    loop._force_commit = True
+    names = _names(loop._tools_for_step())
+    assert names == {"submit_plan", "ask_user"}  # reads withheld, plan tool kept
+    # And without the flag the planner sees the reads again (it self-clears).
+    loop._force_commit = False
+    assert "file_read" in _names(loop._tools_for_step())
+
+
+def test_force_commit_in_execution_withholds_read_only_tools():
+    ex = ReadonlyExecutor(readonly={"file_read", "search", "submit_plan"})
+    loop = _loop(ex, mode=OperatingMode.LONG_HORIZON)
+    loop._force_commit = True
+    names = _names(loop._tools_for_step())
+    # Read-only tools are gone; the editing/exec tools and ask_user remain.
+    assert "file_read" not in names and "search" not in names
+    assert {"shell", "file_write", "ask_user"} <= names
+
+
+def test_read_nudges_since_user_counts_only_after_last_user_message():
+    from perpleximanus.core.events import EventSource, MessageEvent
+    from perpleximanus.core.llm.types import LLMMessage
+
+    def env(text):
+        return MessageEvent(
+            source=EventSource.ENVIRONMENT,
+            message=LLMMessage(role="user", content=text),
+        )
+
+    def user(text):
+        return MessageEvent(
+            source=EventSource.USER, message=LLMMessage(role="user", content=text)
+        )
+
+    stop = "<system-reminder>\nSTOP reading — commit now.\n</system-reminder>"
+    events = [
+        env(stop),  # belongs to a PRIOR turn — must NOT be counted
+        user("new request"),
+        env(stop),
+        env(stop),
+    ]
+    assert AgentLoop._read_nudges_since_user(events) == 2
