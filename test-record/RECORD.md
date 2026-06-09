@@ -58,11 +58,21 @@ Query: "What is the capital city of Australia, and in what year did it officiall
 - Answer ACCURATE + grounded: "Canberra… officially proclaimed 12 March 1913" with inline citations [1]-[5]. All Searched 10, Cited 6. 0 page errors.
 - Screenshots: search-standard-before.png / search-standard-after.png
 - ISSUE FOUND + FIXED: first attempt returned 0 sources (transient DDG rate-limit, silent degrade). Added retry-with-backoff to DdgsSearchProvider (committed). Re-run succeeded.
-### Mode 2/4 — Deep Research Quick — (running)
-- ISSUE FOUND: Deep Research decompose stalled — the rewriter/summarizer models (gemma @ 192.168.1.81:8087) return 401 (operator deployment needs PMX_GEMMA_API_KEY, not available here). No plan gate appeared.
-- FIX (for this run): reassigned query_rewriter + summarizer roles → rag-local (the working free local Qwen @ :18080). Plan gate now appears + approves. Report assembling.
-### Mode 3/4 — Deep Research Standard — (pending)
-### Mode 4/4 — Deep Research Exhaustive — (pending)
+### Mode 2/4 — Deep Research QUICK — ✅ VERIFIED (conv_2241a9)
+Query: "What causes the seasons on Earth…". 3 sections (correct for Quick), 9 cited / 34 discovered, bounded_by=rounds.
+Summary ACCURATE: "caused by the 23.5-degree axial tilt… NOT variations in distance from the Sun" (debunks the misconception). Screenshot dr-quick-report.png.
+### Mode 3/4 — Deep Research STANDARD-DEEP — ✅ VERIFIED (conv_00b1fc)
+Query: Li-ion vs solid-state batteries. 3 sections, 14 cited / 114 discovered, bounded_by=rounds.
+Summary ACCURATE: "As of early 2026, solid-state batteries remain confined to pilot lines… Toyota, Honda…". Screenshot dr-standard-report.png.
+### Mode 4/4 — Deep Research EXHAUSTIVE — running (conv_47d386, 12 sub-questions confirmed)
+Query: grid-scale energy storage comparison. Plan = 12 steps (highest tier). ~15-30 min, persists server-side.
+
+### 🐞 REAL BUG FOUND + FIXED (live): depth_tier was IGNORED
+POST /conversations set surface + model but DROPPED depth_tier → EVERY Deep Research run used
+standard_deep regardless of the Quick/Standard/Exhaustive picker. A 'quick' run produced 6
+sub-questions. Fixed (wire body.depth_tier → runtime.set_depth) + regression test. Now Quick=3,
+Standard=6, Exhaustive=12 (verified). Commit in agent-server.
+Also fixed: ddgs rate-limit retry (Standard search initially returned 0 sources).
 
 ## Phase 5 — Build two sites (live, 3 iterations each)
 (pending)
