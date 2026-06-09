@@ -116,14 +116,23 @@ backend-coherence 🔴s (GAP A S3 microcompact, persistent CodeAct kernel, GAP H
   Frontend: `useBuildStream.pendingQuestion`/`awaitingQuestion`/`answer()` + a new `AskPanel`
   (Markdown question + focused answer box, Enter sends) wired into `BuildSurface`; `deriveLiveSignal`
   narrates it; feed auto-scrolls. Tests: core loop-step, AskPanel, useBuildStream wiring, live-signal.
-- [ ] 🟡 Graceful Stop / Kill confirm / Pause — `cancel()` wired to Stop (`useBuildStream.ts:208`,
-  `AgentStatusBar.tsx:88-97`); missing "Stopping…" pending, Kill confirm; PAUSED phantom
+  Offline demo (`6e0e8f1`) + real-browser e2e w/ screenshots (`31f81d9`). **Planner extension
+  (`101e1b6`):** `ask_user` is now available in PLANNING mode too (was execution-only) + the planning
+  prompt's Phase 1.5 "ASK IF BLOCKED" — found by a LIVE run where the real Qwen3.6-27B wanted to ask
+  for a user-required detail (brand color) but was forced to guess a placeholder. VERIFIED live
+  end-to-end: model asks → AskPanel → answer → plan uses the real value (screenshots captured).
+- [x] ✅ Graceful Stop / Kill confirm — `1ee4220`: Stop shows a "Stopping…" pending state until the
+  loop leaves RUNNING (cancel is cooperative); Kill (destructive) gated behind an inline confirm
+  ("Kill this run? Confirm/Cancel", Stop hidden during it). Added the missing AWAITING_USER_QUESTION
+  status label. Tests + real-browser e2e screenshot. (PAUSED phantom: Resume button already landed `e0bd746`.)
 - [ ] 🟡 Aggregate progress + sticky plan — done/total + bar (`PlanPanel.tsx:80-91`) but PlanPanel
   still inside the scroll container (`BuildSurface.tsx:202-206`)
 - [ ] 🟡 Liveness — auto-scroll on key transitions + active-state spinner landed; no continuous
   auto-scroll, no `pmx-rise` entrance animations
-- [ ] 🟡 Persistence + reconnect + notifications — reconnect/backoff DONE (`b3694a0`); persistence
-  is by-design (History + route); STILL MISSING: completion `Notification` / `document.title` badge
+- [x] ✅ Persistence + reconnect + notifications — reconnect/backoff DONE (`b3694a0`); persistence
+  is by-design (History + route); completion `Notification` + `document.title` badge DONE (`1ee4220`,
+  `useBuildNotifications`): badges the title + best-effort OS-notify when a build finishes or a gate
+  opens while the tab is hidden; restores on refocus; no noise when visible. Tests cover all branches.
 - [ ] 🟡 Plan front-door polish — Revise modal keeps text (`PlanPanel.tsx:142-188`); missing
   "drafting…" skeleton, "re-planning" stale state, per-step skip/reorder
 
