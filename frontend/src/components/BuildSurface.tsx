@@ -220,9 +220,11 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
               </div>
             ) : (
               <>
-                {/* read-only capstone tracker: steps check off as the agent reports them */}
+                {/* read-only capstone tracker: steps check off as the agent reports
+                    them. Sticky to the top of the scroll area so the plan + progress
+                    stay visible while the activity feed scrolls beneath it. */}
                 {b.plan && (
-                  <div className="mb-section">
+                  <div className="sticky top-0 z-10 mb-section bg-bg pb-inline">
                     <PlanPanel plan={b.plan} progress={b.planProgress} />
                   </div>
                 )}

@@ -29,3 +29,34 @@ test.describe("Build controls — Kill confirmation", () => {
     await expect(kill).toBeVisible();
   });
 });
+
+test.describe("Build surface — sticky plan tracker", () => {
+  test("the plan stays pinned while the activity feed scrolls beneath it", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("radio", { name: "build" }).click();
+    const input = page.getByPlaceholder(/describe what you want/i);
+    await input.fill("Write a fizzbuzz script, run it, then delete it to clean up.");
+    await input.press("Enter");
+
+    // Approve the plan + the risky action so the run finishes with a full feed.
+    await page.getByRole("button", { name: /approve & build/i }).click();
+    await page.getByRole("button", { name: /approve & run/i }).click();
+    await expect(page.getByText(/fizzbuzz ran correctly/i)).toBeVisible();
+
+    // The read-only plan tracker (a plan step capstone) is on screen…
+    const planStep = page.getByText(/Write fizzbuzz\.py/i).first();
+    await expect(planStep).toBeVisible();
+    const before = await planStep.boundingBox();
+
+    // …scroll the feed to the bottom; a sticky plan stays put (pinned to the top).
+    await page.mouse.move(440, 400);
+    await page.mouse.wheel(0, 4000);
+    await page.waitForTimeout(300);
+    await expect(planStep).toBeVisible(); // still in the viewport after scrolling
+    const after = planStep ? await planStep.boundingBox() : null;
+    // its top barely moves (pinned), unlike feed content which scrolls away.
+    if (before && after) expect(Math.abs(after.y - before.y)).toBeLessThan(40);
+
+    await page.screenshot({ path: "e2e/_artifacts/sticky-plan.png", fullPage: false });
+  });
+});
