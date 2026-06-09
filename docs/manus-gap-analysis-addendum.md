@@ -21,9 +21,17 @@ finding is a *correctness* one, not an enhancement: the egress allowlist is
 never translated to any iptables/proxy rule; `gvisor.py:152`/`podman.py:245`/
 `local.py:68` do a binary `none`/`bridge` choice), so `tool-sandbox-contract.md:36,87`
 promises a deny-by-default guarantee the code does not deliver. The two doc
-overclaims to fix: (1) "true CodeAct / Manus-faithful" — `code_exec` is actually
-*stateless one-shot*, file-state only, no persistent interpreter (`system.py:92-99`,
-`process.py:63-87`); (2) the `AlternativesEvent` docstring (`events.py:393-399`)
+overclaims to fix: (1) ~~"true CodeAct / Manus-faithful" — `code_exec` was
+*stateless one-shot*, file-state only, no persistent interpreter~~ **RESOLVED
+(2026-06-09):** `code_exec` Python cells now share state across calls via a
+namespace-serialization harness (`system.py`, `_CODEACT_RUNNER_SRC`) — names
+defined in one cell are in scope in the next, like a notebook kernel. With `dill`
+present even functions/imports carry; without it, picklable data values carry
+(pickle fallback); unserializable handles never carry (by design). Not a live
+in-process kernel (the sandbox exposes only write_file + exec_shell), but the
+across-cell *statefulness* the claim implied is now real + tested against the
+process sandbox. Node remains one-shot (documented). (2) the `AlternativesEvent`
+docstring (`events.py:393-399`)
 describes a 4-strike circuit breaker via a `propose_alternatives` tool that **does
 not exist** (grep finds it only in two docstrings). Everything else is additive HOW.
 
@@ -377,6 +385,13 @@ research says **hard-code the breaker in the LOOP**:
   specs — this research is what makes that gate actually FIRE on failure.
 
 ### 3.8 GAP E — CodeAct is one-shot, not persistent (overclaim correction + recipe)
+> **RESOLVED 2026-06-09** (different mechanism than the recipe below). Rather than add an `exec_code`
+> kernel primitive to every backend, Python `code_exec` now wraps each cell in a namespace-serialization
+> runner (`system.py` `_CODEACT_RUNNER_SRC`): restore the prior namespace → run the cell → persist the
+> still-serializable names. dill carries functions/imports; pickle fallback carries data; unserializable
+> handles never carry. Across-cell statefulness is real + tested (`test_code_exec_python_state_persists_across_cells`).
+> The kernel-primitive recipe below is kept as the path to a *live* interpreter if file-mediated state proves limiting.
+
 Correct first: GAP E (`manus-gap-analysis.md:148-150`) and §3 (`:209`) assert "true CodeAct / Manus-faithful";
 code proves it's stateless one-shot, file-state only. `CodeExecTool.run` (`system.py:92-99`) writes
 `_codeact.{ext}` and runs `{interp} {fname}` via `exec_shell`, which spawns a FRESH subprocess per call

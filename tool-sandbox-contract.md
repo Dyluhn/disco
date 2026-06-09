@@ -84,7 +84,13 @@ No secret is ever readable from inside the sandbox. Secrets live only in the orc
 
 ## 7. Egress control [CONTRACT] — deny-by-default
 
-Empty `egress_allow` ⇒ no network; per-task allowlist; enforced outside the guest. The `process` backend models the policy (`SandboxSpec.egress_allowed`) with a documented weaker guarantee; `e2b`/`gvisor` enforce for real.
+Empty `egress_allow` ⇒ no network; enforced outside the guest. **The strength of the guarantee is tier-dependent — do not assume a per-task *selective allowlist* on every backend:**
+
+- **gVisor** — the full contract: a per-task selective allowlist enforced by a filtered-egress proxy sidecar (`egress_proxy.py` 403s denied hosts; the guest's `HTTP_PROXY` points at it, `internal=True` so there's no other route out). Allowed destinations reach out; everything else is blocked.
+- **podman / local** — **sealed deny-all, not a selective allowlist.** With `egress_allow` empty the container has no network; a non-empty allowlist is **not** honored selectively (all-or-nothing). Stricter than the contract for the empty case, coarser for the allowlist case — no per-host filtering on these tiers yet.
+- **process** — models the policy (`SandboxSpec.egress_allowed`) only; a documented weaker guarantee (the host network is reachable; dev-only, not an isolation boundary).
+
+So "per-task allowlist" is a gVisor-tier guarantee. Choose gVisor when selective egress matters; podman/local give deny-all-or-open, not a curated allowlist.
 
 ## 8. Tool registry & scoping [CONTRACT]
 

@@ -116,6 +116,42 @@ async def test_code_exec_timeout_is_surfaced():
     assert res.success is False and res.structured["timed_out"] is True
 
 
+async def test_code_exec_python_state_persists_across_cells(tmp_path):
+    """Stateful CodeAct (the 'persistent kernel' contract): a name defined in one
+    Python cell is in scope in the next, via the namespace-serialization harness —
+    proven against the REAL process sandbox (actual python3 subprocesses)."""
+    from perpleximanus.tools.sandbox.process import ProcessSandboxInstance
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    sbx = ProcessSandboxInstance("i1", "o", "c", SandboxSpec(), ws)
+    ex = DefaultToolExecutor(build_default_registry(), agent_scope(), sandbox=sbx)
+
+    r1 = await ex.execute(call("code_exec", language="python", code="x = 21 * 2"))
+    assert r1.success, r1.content
+    # the next cell sees `x` from the previous one — not a fresh interpreter
+    r2 = await ex.execute(call("code_exec", language="python", code="print(x)"))
+    assert r2.success and "42" in r2.content, r2.content
+
+
+async def test_code_exec_erroring_cell_keeps_prior_state(tmp_path):
+    """A cell that raises surfaces the traceback + a failure, but does NOT wipe the
+    session — names bound before it remain available (kernel-like)."""
+    from perpleximanus.tools.sandbox.process import ProcessSandboxInstance
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    sbx = ProcessSandboxInstance("i2", "o", "c", SandboxSpec(), ws)
+    ex = DefaultToolExecutor(build_default_registry(), agent_scope(), sandbox=sbx)
+
+    await ex.execute(call("code_exec", language="python", code="counter = 7"))
+    err = await ex.execute(call("code_exec", language="python", code="raise ValueError('boom')"))
+    assert err.success is False and "ValueError" in err.content
+    # state survived the error
+    ok = await ex.execute(call("code_exec", language="python", code="print(counter + 1)"))
+    assert ok.success and "8" in ok.content, ok.content
+
+
 # ---- agent-vs-research scoping (the registry split) --------------------------
 
 
