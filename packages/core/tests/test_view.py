@@ -172,3 +172,27 @@ class _FakeSummarizer:
 
     async def summarize(self, messages):
         return "[fake summary]"
+
+
+def test_recitation_scopes_plan_steps_to_the_current_plan():
+    """After a re-plan, the recitation must NOT count the PRIOR plan's done marks —
+    else every step shows done on the new plan and the model gets confused (observed
+    live → STUCK). Only plan_steps after the latest PlanEvent count."""
+    from perpleximanus.core import PlanEvent
+    from perpleximanus.core.view import _recitation_message
+
+    def act(tool, args):
+        return action(tool=tool, args=args)
+
+    evs = with_seqs([
+        user_msg("build"),
+        PlanEvent(summary="v1", steps=[{"title": "a"}, {"title": "b"}], revision=1),
+        act("plan_step", {"index": 1, "state": "done"}),
+        act("plan_step", {"index": 2, "state": "done"}),  # v1 fully done
+        PlanEvent(summary="v2", steps=[{"title": "x"}, {"title": "y"}, {"title": "z"}], revision=2),
+        act("plan_step", {"index": 1, "state": "done"}),  # only step 1 of v2 done
+    ])
+    msg = _recitation_message(evs)
+    assert msg is not None
+    # the new plan is 1/3 done — NOT 3/3 (v1's marks excluded)
+    assert "1/3 done" in msg.content

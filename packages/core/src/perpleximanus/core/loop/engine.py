@@ -1103,11 +1103,16 @@ class AgentLoop:
                     plan = e
         if plan is None or not plan.steps:
             return (False, [])
+        # Only count plan_step marks made AFTER the current plan (a re-plan starts a
+        # fresh checklist — a prior plan's "done" marks must not satisfy the new gate).
+        plan_seq = plan.seq or 0
         done: set[int] = set()
         for e in events:
             if not isinstance(e, ActionEvent) or e.tool_call is None:
                 continue
             if e.tool_call.tool_name != "plan_step":
+                continue
+            if (e.seq or 0) < plan_seq:
                 continue
             try:
                 idx = int(e.tool_call.arguments.get("index"))  # type: ignore[arg-type]

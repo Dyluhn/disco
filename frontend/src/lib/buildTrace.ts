@@ -370,14 +370,26 @@ export function derivePlanProgress(
   status?: ConversationStatus,
 ): Map<number, StepState> {
   const progress = new Map<number, StepState>();
-  for (const e of events) {
-    if (e.kind !== "action" || !e.tool_call || e.tool_call.tool_name !== "plan_step") continue;
+  // Only count plan_step marks AFTER the latest plan — a re-plan starts a fresh
+  // checklist, so the prior plan's "done" marks must not show on the new one
+  // (else every step looks done after a re-plan).
+  let latestPlanIdx = -1;
+  let latestRev = -1;
+  events.forEach((e, i) => {
+    if (e.kind === "plan" && e.revision >= latestRev) {
+      latestRev = e.revision;
+      latestPlanIdx = i;
+    }
+  });
+  events.forEach((e, i) => {
+    if (i < latestPlanIdx) return; // belongs to a superseded plan
+    if (e.kind !== "action" || !e.tool_call || e.tool_call.tool_name !== "plan_step") return;
     const idx = Number(e.tool_call.arguments.index);
     const state = String(e.tool_call.arguments.state);
-    if (!Number.isFinite(idx)) continue;
+    if (!Number.isFinite(idx)) return;
     if (state === "done") progress.set(idx, "done");
     else if (state === "active" && progress.get(idx) !== "done") progress.set(idx, "active");
-  }
+  });
   // Stalled-step reconciliation: in terminal states, an "active" marker means
   // the agent started a step and the loop stopped before it finished. Show that
   // honestly instead of pretending it's still working.

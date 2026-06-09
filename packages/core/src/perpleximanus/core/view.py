@@ -150,6 +150,11 @@ def _recitation_message(events: list[Event]) -> LLMMessage | None:
     plan = _latest_plan(events)
     if plan is None or not plan.steps:
         return None
+    # Only count plan_step marks made AFTER the current plan was proposed. A re-plan
+    # (new PlanEvent) starts a fresh checklist — counting the PRIOR plan's "done"
+    # marks would show every step done on the new plan (observed live: after a
+    # re-plan the model saw "all 5 done", got confused, looped → STUCK).
+    plan_seq = plan.seq or 0
     done: set[int] = set()
     active: set[int] = set()
     for e in events:
@@ -157,6 +162,8 @@ def _recitation_message(events: list[Event]) -> LLMMessage | None:
             continue
         if e.tool_call.tool_name != "plan_step":
             continue
+        if (e.seq or 0) < plan_seq:
+            continue  # belongs to a superseded plan
         try:
             idx = int(e.tool_call.arguments.get("index"))  # type: ignore[arg-type]
             state = str(e.tool_call.arguments.get("state"))
