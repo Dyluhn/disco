@@ -65,6 +65,11 @@ def chunk_passages(url: str, title: str, content: str) -> list[Passage]:
 _UA = "Mozilla/5.0 (compatible; perpleximanus/1.0; +https://perpleximanus.local)"
 _TIMEOUT = httpx.Timeout(20.0)
 
+# ddgs rate-limit resilience: retry an empty/failed DuckDuckGo search a few times
+# with linear backoff before degrading to no-results (see DdgsSearchProvider).
+_DDGS_MAX_ATTEMPTS = 3
+_DDGS_BACKOFF_S = 1.5
+
 
 # ===== SEARCH ================================================================
 
@@ -105,13 +110,33 @@ class DdgsSearchProvider:
         return hits
 
     def _blocking_search(self, query: str, limit: int) -> list[dict]:
-        try:
-            from ddgs import DDGS  # lazy: keeps import cost off the hot path
+        # DuckDuckGo rate-limits aggressively; a rate-limited call raises OR returns
+        # an empty list — INDISTINGUISHABLE from a genuine no-results one to the
+        # caller (both surface as "No sources"). Retry a few times with backoff so a
+        # transient 0-results blip (the common case under back-to-back queries)
+        # becomes a real result set instead of a silently-empty answer.
+        import time
 
-            with DDGS() as d:
-                return list(d.text(query, max_results=limit))
-        except Exception:  # noqa: BLE001 — rate-limit / network: degrade, don't crash
-            return []
+        last_err: Exception | None = None
+        for attempt in range(_DDGS_MAX_ATTEMPTS):
+            try:
+                from ddgs import DDGS  # lazy: keeps import cost off the hot path
+
+                with DDGS() as d:
+                    rows = list(d.text(query, max_results=limit))
+                if rows:
+                    return rows
+            except Exception as e:  # noqa: BLE001 — rate-limit / network: retry then degrade
+                last_err = e
+            if attempt < _DDGS_MAX_ATTEMPTS - 1:
+                time.sleep(_DDGS_BACKOFF_S * (attempt + 1))
+        _LOG.warning(
+            "ddgs search yielded nothing after %d attempts (%s)%s",
+            _DDGS_MAX_ATTEMPTS,
+            query[:60],
+            f": {last_err}" if last_err else " — likely rate-limited",
+        )
+        return []
 
 
 class TavilySearchProvider:
