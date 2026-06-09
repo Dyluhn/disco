@@ -51,7 +51,7 @@ async def test_file_read_line_range_slice():
     assert "line7" in out.content
     assert "line8" not in out.content
     assert "lines 5-7 of 20" in out.content
-    assert "more below" in out.content
+    assert "read more with offset=8" in out.content
     await inst.destroy()
 
 

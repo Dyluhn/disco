@@ -15,6 +15,13 @@ from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 
 _FS = frozenset({Capability.FILESYSTEM})
 
+# A read result longer than the observation snip cap (events._OBS_SNIP_CHARS=8000)
+# gets destructively snipped (head+tail) at context ingestion, leaving the model a
+# corrupted middle — so it re-reads forever and never commits an edit (observed
+# live). So file_read PAGES by a CHARACTER budget kept safely under that cap: each
+# read returns intact, line-numbered lines + an explicit "read more with offset=…".
+_READ_CHAR_BUDGET = 7_000
+
 # A line-number prefix the model may have copied out of a numbered file_read
 # ("  123\t<code>"). file_edit strips it defensively so a paste-back still matches.
 _LINENO_PREFIX = re.compile(r"(?m)^\s*\d+\t")
@@ -79,25 +86,33 @@ class FileReadTool:
         text = data.decode("utf-8", errors="replace")
         lines = text.splitlines()
         total = len(lines)
-        if args.offset is None and args.limit is None:
-            # number the whole file so the model can reference ranges for editing
+        start = max((args.offset or 1) - 1, 0)
+        if start >= total and total > 0:
             return ToolOutcome(
                 success=True,
-                content=f"[{total} lines]\n{_number_lines(text)}",
+                content=f"[lines {start + 1}-{total} of {total} — offset past end of file]",
             )
-        # Line-range slice. offset is 1-based; clamp to bounds.
-        start = max((args.offset or 1) - 1, 0)
-        end = start + args.limit if args.limit is not None else total
-        sliced = lines[start:end]
-        shown_to = start + len(sliced)
-        note = (
-            f"[lines {start + 1}-{shown_to} of {total}"
-            + ("; more below — increase offset" if shown_to < total else "")
-            + "]\n"
-        )
-        return ToolOutcome(
-            success=True, content=note + _number_lines("\n".join(sliced), start=start + 1)
-        )
+        # A page that fits under the snip cap, line-numbered from the absolute start
+        # so line numbers are correct. If `limit` is given, respect it but still cap
+        # by chars so a huge limit can't corrupt the result.
+        out: list[str] = []
+        width = len(str(total)) or 1
+        used = 0
+        i = start
+        cap = start + args.limit if args.limit is not None else total
+        while i < min(cap, total):
+            line = f"{i + 1:>{width}}\t{lines[i]}"
+            if out and used + len(line) + 1 > _READ_CHAR_BUDGET:
+                break
+            out.append(line)
+            used += len(line) + 1
+            i += 1
+        shown_to = i
+        # there's more file to read below if we didn't reach the end (whether we
+        # stopped on the char budget or the caller's limit)
+        more = f"; read more with offset={shown_to + 1}" if shown_to < total else ""
+        header = f"[lines {start + 1}-{shown_to} of {total}{more}]\n"
+        return ToolOutcome(success=True, content=header + "\n".join(out))
 
 
 class FileWriteArgs(BaseModel):
