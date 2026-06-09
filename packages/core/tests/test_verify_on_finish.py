@@ -166,3 +166,74 @@ async def test_static_verify_honours_a_custom_path():
     await loop.send_message("ship about")
     await loop.run()
     assert "about.html" in executor.calls[0].arguments["command"]
+
+
+async def test_app_verify_translates_to_a_running_server_http_check():
+    """`verify="app"` runs a SERVER-AWARE check (GET the app, require HTTP 200 +
+    non-empty body) — the verify_app gap. Distinct from the static file check."""
+    agent = _agent([_finish(verify="app")])
+    executor = FakeExecutor()
+    loop, _ = build_loop(agent, executor=executor, policy=NeverConfirm())
+    await loop.send_message("ship the app")
+    state = await loop.run()
+    assert state.execution_status == ConversationStatus.FINISHED
+    cmd = executor.calls[0].arguments["command"]
+    assert cmd.startswith("python3 -c")
+    assert "urllib.request" in cmd  # it actually fetches the URL
+    assert "localhost:8000" in cmd and "code==200" in cmd
+    assert "html.parser" not in cmd  # not the static check
+
+
+async def test_app_verify_honours_a_custom_url():
+    agent = _agent([_finish(verify="app:http://localhost:3000/health")])
+    executor = FakeExecutor()
+    loop, _ = build_loop(agent, executor=executor, policy=NeverConfirm())
+    await loop.send_message("ship the api")
+    await loop.run()
+    assert "localhost:3000/health" in executor.calls[0].arguments["command"]
+
+
+def test_app_verify_command_distinguishes_serving_from_not(tmp_path):
+    """The generated command genuinely passes against a live server and fails when
+    nothing serves — run it as a real subprocess against a threaded http.server."""
+    import http.server
+    import socket
+    import subprocess
+    import threading
+
+    from perpleximanus.core.loop.engine import _app_verify_command
+
+    # a real one-request server on an ephemeral port, serving a non-trivial body
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+
+    class _H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            body = b"<html><body>hello from the app</body></html>"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):  # silence
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", port), _H)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    try:
+        ok = subprocess.run(
+            _app_verify_command(f"http://127.0.0.1:{port}/"), shell=True, capture_output=True
+        )
+        assert ok.returncode == 0, ok.stderr.decode()
+        assert b"OK" in ok.stdout
+    finally:
+        srv.shutdown()
+
+    # nothing serving on that port now → the verify fails (nonzero)
+    bad = subprocess.run(
+        _app_verify_command(f"http://127.0.0.1:{port}/"), shell=True, capture_output=True
+    )
+    assert bad.returncode != 0

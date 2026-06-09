@@ -419,12 +419,13 @@ _FINISH_SCHEMA = {
         "verify": {
             "type": "string",
             "description": (
-                "Optional check that proves completion (exit 0 = success). Either a "
-                "shell command (`npm test`, `python -m pytest -q`, `curl -fsS "
-                "localhost:8000/`), OR for a STATIC page use the literal `static` "
-                "(checks index.html exists + parses) or `static:<path>` for another "
-                "file — NO server needed. If it fails, the finish is refused and you "
-                "must fix the problem."
+                "Optional check that proves completion (exit 0 = success). One of: a "
+                "shell command (`npm test`, `python -m pytest -q`); for a STATIC page "
+                "the literal `static` (checks index.html exists + parses) or "
+                "`static:<path>`; or for a RUNNING web app the literal `app` (GETs "
+                "http://localhost:8000/ and requires HTTP 200 + a non-empty body) or "
+                "`app:<url>` for another address — make sure the server is serving "
+                "first. If it fails, the finish is refused and you must fix the problem."
             ),
         },
     },
@@ -486,6 +487,34 @@ def _static_verify_command(path: str) -> str:
         "t=[];pr=H.HTMLParser();pr.handle_starttag=lambda n,a:t.append(n);pr.feed(d);"
         "print('OK '+p+' tags='+str(len(t)));"
         "sys.exit(0 if t else 'no html tags in '+p)"
+    )
+    return f'python3 -c "{script}"'
+
+
+# verify="app" / "app:<url>" — SERVER-AWARE self-verification (the verify_app
+# gap). Where `static` only proves a file exists + parses, `app` proves the
+# RUNNING deliverable actually serves: it GETs the URL inside the sandbox and
+# requires HTTP 200 + a non-trivial body. Portable (python3/urllib — no curl/
+# chromium dependency) so it runs on every backend; routes through the same safe
+# verify gate. A full pixel screenshot needs a browser in the sandbox image (not
+# present on the process backend) — this is the honest server-up post-condition.
+_APP_VERIFY_PREFIX = "app"
+
+
+def _app_verify_command(url: str) -> str:
+    u = (url or "http://localhost:8000/").strip().strip("'\"") or "http://localhost:8000/"
+    safe = u.replace("'", "'\\''")
+    # No try/except (a `-c` one-liner can't carry the block): a connection failure
+    # raises URLError → nonzero exit + a traceback the agent reads as "not serving".
+    script = (
+        "import sys,urllib.request as U;"
+        f"u='{safe}';"
+        "r=U.urlopen(u,timeout=10);"
+        "code=getattr(r,'status',None) or r.getcode();"
+        "(code==200 or sys.exit('HTTP '+str(code)+' from '+u));"
+        "b=r.read().decode('utf-8','replace');"
+        "(len(b.strip())>=20 or sys.exit('empty body from '+u));"
+        "print('OK '+u+' '+str(code)+' bytes='+str(len(b)))"
     )
     return f'python3 -c "{script}"'
 
@@ -1587,6 +1616,13 @@ class AgentLoop:
                     ):
                         _, _, _path = verify_cmd.partition(":")
                         verify_cmd = _static_verify_command(_path)
+                    # app / app:<url> — verify the RUNNING deliverable actually serves
+                    # (HTTP 200 + non-trivial body), not just that a file exists.
+                    elif verify_cmd == _APP_VERIFY_PREFIX or verify_cmd.startswith(
+                        _APP_VERIFY_PREFIX + ":"
+                    ):
+                        _, _, _url = verify_cmd.partition(":")
+                        verify_cmd = _app_verify_command(_url)
                     if verify_cmd and not await self._finish_verify_passed(verify_cmd):
                         continue  # verification failed/refused — keep working
                     summary = str(step.tool_call.arguments.get("summary") or "").strip()
