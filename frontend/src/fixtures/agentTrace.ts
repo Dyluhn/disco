@@ -208,6 +208,36 @@ export const finishedState: ConversationState = {
   pending_plan_id: null,
 };
 
+// ---- the two-way Ask-gate demo (free-form ask_user) ------------------------
+// Reached offline when the build task contains "ask" — the agent poses a
+// free-form question and parks at AWAITING_USER_QUESTION so the AskPanel is
+// clickable without a live model. Answering (steer) resumes to finished.
+export const ASK_QUESTION_ID = "evt_ask_question";
+
+export const askQuestionEvent: AgentEvent = {
+  kind: "message",
+  id: ASK_QUESTION_ID,
+  source: "agent",
+  seq: 9,
+  message: {
+    role: "agent",
+    content:
+      "Before I write the script — should the output go to **stdout** or to a `results.txt` file? " +
+      "Either works; it depends on how you want to use it.",
+  },
+};
+
+export const askGateState: ConversationState = {
+  conversation_id: FIXTURE_CID,
+  execution_status: "AWAITING_USER_QUESTION",
+  iteration: 1,
+  max_iterations: 500,
+  last_seq: 9,
+  pending_action_id: null,
+  pending_plan_id: null,
+  pending_question_id: ASK_QUESTION_ID,
+};
+
 /** Re-entering plan mode after the build: a focused, diff-style revision (revision 2). */
 export const replanEvent: AgentEvent = {
   kind: "plan",

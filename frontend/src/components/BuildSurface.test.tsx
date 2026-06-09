@@ -122,6 +122,31 @@ describe("Build surface (plan gate → build → action gate)", () => {
     });
   });
 
+  it("two-way Ask-gate: a free-form question pauses with an AskPanel; answering resumes", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("radio", { name: "build" }));
+    // a task that makes the agent ask a clarifying question (offline demo branch)
+    await user.type(screen.getByPlaceholderText(/describe what you want/i), "ask me about the output format");
+    await user.keyboard("{Enter}");
+
+    // the Ask-gate panel appears with the question + a focused answer box
+    const ask = await waitFor(
+      () => screen.getByRole("alertdialog", { name: /question for you/i }),
+      { timeout: 5000 },
+    );
+    expect(within(ask).getByText(/stdout/i)).toBeInTheDocument();
+    const box = within(ask).getByRole("textbox", { name: /answer the agent/i });
+    await user.type(box, "stdout is fine");
+    await user.keyboard("{Enter}");
+
+    // answering resumes the run to a finished result (the gate is gone)
+    await waitFor(
+      () => expect(screen.queryByRole("alertdialog", { name: /question for you/i })).not.toBeInTheDocument(),
+      { timeout: 5000 },
+    );
+  });
+
   it("after FINISHED, the bottom input becomes the 'Plan a change' box (re-enter plan mode)", async () => {
     const user = await enterBuildSubmitAndApprovePlan();
     await waitFor(() => screen.getByRole("button", { name: /approve & run/i }), { timeout: 5000 });

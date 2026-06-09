@@ -7,6 +7,8 @@
  */
 
 import {
+  askGateState,
+  askQuestionEvent,
   finishedState,
   gateState,
   planEvent,
@@ -166,6 +168,7 @@ function subscribeFixture(onFrame: (f: WSServerFrame) => void): AgentHandle {
   let cancelled = false;
   let atGate = false; // paused at the per-action confirmation gate
   let atPlan = false; // paused at the plan-approval gate
+  let atAsk = false; // paused at the free-form Ask-gate (AWAITING_USER_QUESTION)
 
   async function emit(events: typeof traceBeforeGate, final: ConversationState | null) {
     for (const event of events) {
@@ -196,10 +199,31 @@ function subscribeFixture(onFrame: (f: WSServerFrame) => void): AgentHandle {
     onFrame({ type: "state", state: gateState });
   }
 
+  // The two-way Ask-gate demo: the agent poses a free-form question and parks at
+  // AWAITING_USER_QUESTION so the AskPanel is reachable offline. The user's typed
+  // answer (a steer frame) resumes the run to finished.
+  async function askDemo() {
+    onFrame({ type: "state", state: runningState() });
+    if (cancelled) return;
+    await fixtureDelay(120);
+    onFrame({ type: "event", event: askQuestionEvent });
+    if (cancelled) return;
+    atAsk = true;
+    onFrame({ type: "state", state: askGateState });
+  }
+
   return {
     send: (f) => {
-      if (f.type === "send_message") void propose(planEvent, planGateState);
-      else if (f.type === "approve_plan" && atPlan) {
+      if (f.type === "send_message")
+        // A task mentioning "ask" routes to the Ask-gate demo; everything else
+        // follows the normal plan-first flow.
+        void (/\bask\b/i.test(f.content ?? "") ? askDemo() : propose(planEvent, planGateState));
+      else if (f.type === "steer" && atAsk) {
+        // the answer to the agent's question → resume + finish
+        atAsk = false;
+        onFrame({ type: "state", state: runningState() });
+        void emit(traceAfterConfirm, finishedState);
+      } else if (f.type === "approve_plan" && atPlan) {
         atPlan = false;
         void build();
       } else if (f.type === "request_plan") {
