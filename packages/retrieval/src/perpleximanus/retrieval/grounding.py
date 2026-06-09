@@ -65,8 +65,12 @@ class GroundingPipeline:
             LLMMessage(
                 role="system",
                 content=(
-                    "Answer using ONLY the numbered passages. End every factual "
-                    "claim with its source ids in brackets, e.g. [src1_p0]."
+                    "Answer using ONLY the numbered passages below — not your own prior "
+                    "knowledge, EVEN IF you already know the answer. End EVERY factual "
+                    "claim with its supporting source ids in brackets, e.g. [src1_p0]. "
+                    "Every claim MUST carry at least one citation — an answer with no "
+                    "[id] citations is invalid, even for well-known facts. If the passages "
+                    "do not contain the answer, say exactly that."
                 ),
             ),
             LLMMessage(role="user", content=f"Passages:\n{numbered}\n\nQuestion: {query}"),
@@ -93,11 +97,19 @@ class GroundingPipeline:
         by_id = {p.id: p for p in retrieval.passages}
 
         # 1–2. constrained generation via the RAG_ANSWERER role.
+        # `enable_thinking=False`: grounded answering is extraction, not reasoning. A
+        # reasoning model (Qwen3.6 et al) left to think spends its whole budget in
+        # `reasoning_content`, hits `finish_reason=length` mid-thought, and returns
+        # EMPTY `content` — no claims, empty prose (the canary's "up but not grounding"
+        # failure). With thinking off it answers directly and cites; max_tokens just
+        # bounds the answer length.
         resp = await self._router.complete(
             CompletionRequest(
                 profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
                 messages=self._prompt(query, retrieval.passages),
                 temperature=0.0,
+                max_tokens=2048,
+                enable_thinking=False,
             )
         )
 

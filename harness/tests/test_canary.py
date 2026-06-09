@@ -18,10 +18,28 @@ _GROUNDED = [
     {
         "type": "final",
         "answer": {
-            "answer_markdown": "Paris is the capital [src1_p0].",
+            # The real /ws/research final-frame shape: text lives in `blocks` with
+            # inline `cited_passage_ids` (NOT `answer_markdown`, which is the offline
+            # GroundingPipeline shape — accepting only that field is what made the
+            # canary mis-report a genuinely-grounded live answer as "empty prose").
+            "query": "What is the capital of France?",
+            "blocks": [
+                {
+                    "kind": "prose",
+                    "id": "b0",
+                    "text": "Paris is the capital [[src1_p0]].",
+                    "cited_passage_ids": ["src1_p0"],
+                }
+            ],
+            "claims": [
+                {
+                    "claim": {"text": "Paris is the capital", "cited_passage_ids": ["src1_p0"]},
+                    "verdict": "supported",
+                }
+            ],
             "passages": [{"id": "src1_p0", "source_url": "https://x.test", "text": "..."}],
             "all_hits": [{"url": "https://x.test"}],
-            "claims": [],
+            "unsupported_count": 0,
         },
     },
     {"type": "state", "status": "finished"},

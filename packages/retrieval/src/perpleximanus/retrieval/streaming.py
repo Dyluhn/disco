@@ -324,7 +324,13 @@ async def stream_research_answer(
                 profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
                 messages=_answer_prompt(query, top),
                 temperature=0.0,
-                # reasoning needs headroom beyond the answer itself (see docstring)
+                # `think=False` (default) turns the reasoning model's thinking OFF so it
+                # answers directly and cites. Otherwise a reasoning model (Qwen3.6 et al)
+                # spends its whole budget in `reasoning_content`, hits the token ceiling
+                # mid-thought, and `content` comes back EMPTY — no claims, empty prose
+                # (the canary's "up but not grounding" failure). `think=True` keeps it on
+                # with a bigger budget for a deeper, reasoned answer.
+                enable_thinking=think,
                 max_tokens=4096 if think else 1200,
                 stream=True,
             )

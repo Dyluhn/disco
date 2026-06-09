@@ -60,8 +60,20 @@ def evaluate_research_frames(frames: list[dict]) -> CanaryResult:
     passages = answer.get("passages") or []
     if not passages:
         return CanaryResult("research", False, "final answer cited ZERO sources (not grounded)")
-    if not (answer.get("answer_markdown") or "").strip():
+    # Answer text lives in `blocks` (the live /ws/research stream) OR `answer_markdown`
+    # (the offline GroundingPipeline shape) — accept either.
+    blocks = answer.get("blocks") or []
+    text = (
+        (answer.get("answer_markdown") or "") + "".join(b.get("text", "") for b in blocks)
+    ).strip()
+    if not text:
         return CanaryResult("research", False, "final answer is empty prose")
+    # Grounding means the prose actually CITES the sources, not just lists them.
+    cited = any(b.get("cited_passage_ids") for b in blocks) or any(
+        (c.get("claim") or {}).get("cited_passage_ids") for c in (answer.get("claims") or [])
+    )
+    if not cited:
+        return CanaryResult("research", False, "answer has sources but no inline citations")
     return CanaryResult("research", True, f"grounded on {len(passages)} sources")
 
 

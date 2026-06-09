@@ -162,8 +162,11 @@ class OpenAIProvider:
                 }
                 for t in req.tools
             ]
-        if self._enable_thinking is not None:
-            body["chat_template_kwargs"] = {"enable_thinking": self._enable_thinking}
+        # Per-call override wins over the provider/model default (the answerer turns
+        # thinking OFF so a reasoning model doesn't spend its whole budget thinking).
+        et = req.enable_thinking if req.enable_thinking is not None else self._enable_thinking
+        if et is not None:
+            body["chat_template_kwargs"] = {"enable_thinking": et}
         if stream:
             body["stream_options"] = {"include_usage": True}
         return body

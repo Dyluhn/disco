@@ -95,6 +95,13 @@ class CompletionRequest(BaseModel):
     temperature: float = 0.0
     max_tokens: int | None = None
     response_format: Literal["text", "json"] = "text"
+    # Per-call control of a reasoning model's "thinking" (Qwen3.6 et al). None →
+    # use the provider/model default; False → force thinking OFF for this call.
+    # Grounded extraction (RAG_ANSWERER) sets False: it does NOT need to reason, and
+    # leaving it on makes the model burn its whole token budget thinking → empty
+    # `content` (the "up but not grounding" failure the canary caught). The agent
+    # driver leaves it None so it keeps its reasoning.
+    enable_thinking: bool | None = None
     # Opaque per-call correlation id, surfaced back on the response and carried
     # into ActionEvent.llm_response_id (event contract). VOLATILE.
     request_id: str | None = None
