@@ -142,4 +142,6 @@ These fixes ALSO fixed the earlier symptom: builds no longer dead-end on iterati
 - v3: iterated → window traffic-light min/maximize + dock open-indicators (file_write edit). Still works: 6 windows, Terminal UI present, 0 page errors. (site1-v3-desktop.png)
 All iterations made REAL in-place edits to the existing file (the framework fix working).
 
-## Site 2 — Electrical-engineering gamified site — v1 building…
+## Site 2 — EE gamified ("EE Quest") (conv_c35043df)
+- v1 ✅ BUILT (47KB, 0 errors): Games/Leaderboard/Lessons tabs; Ohm's Law Challenge (V/I/R triangle, solve-the-missing-value, score+streak+timer — TESTED playable) + Resistor Colors game; XP/Level system; localStorage leaderboard. Screenshots: site2-v1.png, site2-v1-game.png, site2-v1-leaderboard.png, site2-v1-lessons.png.
+- v2 iterating (add a 3rd game + name-entry leaderboard)…
