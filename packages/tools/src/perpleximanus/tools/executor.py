@@ -131,8 +131,10 @@ class DefaultToolExecutor:
 
     def _build_context(self, tool_def: ToolDef) -> ToolContext:
         sandbox = self._sandbox if tool_def.runs_in == "sandbox" else None
+        sessions = getattr(self._sandbox, "sessions", None) if tool_def.runs_in == "sandbox" else None
         return ToolContext(
             sandbox=sandbox,
+            sessions=sessions,
             workspace_path=".",  # relative to the sandbox instance's jailed workspace
             timeout_s=self._default_timeout_s,
             capabilities=self._broker.grant(tool_def.uses_capabilities),

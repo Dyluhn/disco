@@ -46,6 +46,7 @@ class ToolContext(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
     sandbox: Any | None  # SandboxInstance | None (None for in_process tools)
+    sessions: Any | None = None  # ShellSessionManager | None (BP-01)
     workspace_path: str
     timeout_s: int
     capabilities: Any  # CapabilitySet (scoped grants; secrets.py)

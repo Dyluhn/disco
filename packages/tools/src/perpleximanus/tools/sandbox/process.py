@@ -18,6 +18,7 @@ than production.
 from __future__ import annotations
 
 import asyncio
+import shlex
 import shutil
 import tempfile
 import uuid
@@ -108,6 +109,26 @@ class ProcessSandboxInstance:
 
     async def destroy(self) -> None:
         self._destroyed = True
+        
+        # Cleanup tmux sessions on destroy (BP-01).
+        # Container backends need nothing (container death kills the tmux server), 
+        # but the process backend shares the host tmux server, so we must clean up explicitly.
+        ns = f"{self.conversation_id[:8]}-"
+        prefix = f"pmx-{ns}"
+        
+        proc = await asyncio.create_subprocess_shell(
+            "tmux list-sessions -F '#{session_name}'",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out, _ = await proc.communicate()
+        if proc.returncode == 0:
+            for line in out.decode("utf-8").splitlines():
+                if line.startswith(prefix):
+                    await asyncio.create_subprocess_shell(
+                        f"tmux kill-session -t {shlex.quote(line)}"
+                    )
+        
         shutil.rmtree(self._workspace, ignore_errors=True)
 
 

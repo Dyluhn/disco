@@ -22,6 +22,7 @@ from .files import (
 from .plan import PlanStepTool, SubmitPlanTool
 from .preview import PreviewStatusTool, RestartPreviewTool, RunServerTool
 from .retrieval import ExtractTool, SearchTool
+from .shell_sessions import ShellExecTool, ShellKillTool, ShellViewTool, ShellWaitTool, ShellWriteTool
 from .system import CodeExecTool, ShellTool
 
 __all__ = [
@@ -40,6 +41,11 @@ __all__ = [
     "SearchTool",
     "RunServerTool",
     "ShellTool",
+    "ShellExecTool",
+    "ShellKillTool",
+    "ShellViewTool",
+    "ShellWaitTool",
+    "ShellWriteTool",
     "SubmitPlanTool",
     "build_default_registry",
 ]
@@ -58,6 +64,11 @@ def build_default_registry() -> ToolRegistry:
         FileInsertLinesTool(),
         FileListTool(),
         ShellTool(),
+        ShellExecTool(),
+        ShellViewTool(),
+        ShellWaitTool(),
+        ShellWriteTool(),
+        ShellKillTool(),
         CodeExecTool(),
         SearchTool(),
         ExtractTool(),

@@ -52,6 +52,13 @@ class SandboxSession:
         self._generation = 0  # bumped on every (re)create — telemetry + tests
         self._lock = asyncio.Lock()
 
+        from .shell_sessions import ShellSessionManager
+        # Process backend shares the host tmux server across conversations, so
+        # session names need a per-conversation namespace; container backends get
+        # an isolated tmux server each (service.name per SandboxService protocol).
+        ns = f"{conversation_id[:8]}-" if service.name == "process" else ""
+        self.sessions = ShellSessionManager(self._ensure, namespace=ns)
+
     @property
     def id(self) -> str:
         if self._instance is not None:
@@ -92,6 +99,7 @@ class SandboxSession:
                 self._spec, owner_id=self.owner_id, conversation_id=self.conversation_id
             )
             self._generation += 1
+            self.sessions.reset_known_sessions()
 
     async def _resilient(self, op):
         """Run one instance op; on a typed mid-session death, re-create and raise a

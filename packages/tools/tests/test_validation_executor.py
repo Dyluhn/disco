@@ -138,4 +138,5 @@ def test_tool_context_has_no_secret_field():
         "capabilities",
         "owner_id",
         "conversation_id",
+        "sessions",
     }
