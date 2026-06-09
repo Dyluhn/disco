@@ -85,6 +85,40 @@ describe("AgentStatusBar — graceful Stop control", () => {
     expect(screen.getByRole("button", { name: /kill the agent/i })).toBeInTheDocument();
   });
 
+  it("Stop shows a 'Stopping…' pending state after click (cancel isn't instant)", async () => {
+    const user = userEvent.setup();
+    render(<AgentStatusBar status="RUNNING" isolation={ISO} onKill={() => {}} onStop={() => {}} />);
+    await user.click(screen.getByRole("button", { name: /stop the agent gracefully/i }));
+    // the click isn't a dead void — the button reflects the in-flight cancel
+    expect(screen.getByText(/stopping…/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /stop the agent gracefully/i })).toBeDisabled();
+  });
+
+  it("Kill requires confirmation — first click arms, second confirms", async () => {
+    const onKill = vi.fn();
+    const user = userEvent.setup();
+    render(<AgentStatusBar status="RUNNING" isolation={ISO} onKill={onKill} onStop={() => {}} />);
+    // first click does NOT kill — it arms the confirm
+    await user.click(screen.getByRole("button", { name: /kill the agent/i }));
+    expect(onKill).not.toHaveBeenCalled();
+    expect(screen.getByText(/kill this run\?/i)).toBeInTheDocument();
+    // confirm fires the destructive action
+    await user.click(screen.getByRole("button", { name: /confirm kill/i }));
+    expect(onKill).toHaveBeenCalledTimes(1);
+  });
+
+  it("Kill confirm can be cancelled without killing", async () => {
+    const onKill = vi.fn();
+    const user = userEvent.setup();
+    render(<AgentStatusBar status="RUNNING" isolation={ISO} onKill={onKill} onStop={() => {}} />);
+    await user.click(screen.getByRole("button", { name: /kill the agent/i }));
+    await user.click(screen.getByRole("button", { name: /keep the run/i }));
+    expect(onKill).not.toHaveBeenCalled();
+    // back to the armed Kill button (not the confirm prompt)
+    expect(screen.getByRole("button", { name: /kill the agent/i })).toBeInTheDocument();
+    expect(screen.queryByText(/kill this run\?/i)).not.toBeInTheDocument();
+  });
+
   it("shows a Resume button (not Stop) when PAUSED, wired to onResume", async () => {
     const onResume = vi.fn();
     const user = userEvent.setup();

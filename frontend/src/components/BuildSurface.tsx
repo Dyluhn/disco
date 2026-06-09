@@ -10,6 +10,7 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import { useBuild } from "@/hooks/useBuild";
+import { useBuildNotifications } from "@/hooks/useBuildNotifications";
 import { cn } from "@/lib/cn";
 import {
   deriveActivity,
@@ -61,6 +62,10 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
   );
   const finalMessage = useMemo(() => latestAgentMessage(b.events), [b.events]);
   const deliverable = useMemo(() => deriveDeliverable(b.events), [b.events]);
+
+  // Attention when tabbed away: badge the title + (best-effort) OS-notify when the
+  // run finishes or needs the user while the tab is hidden.
+  useBuildNotifications(b.status, b.task);
 
   // Auto-scroll the feed to the bottom ONLY on a "you need to look now" moment —
   // never on every event (that would yank the user off whatever they're reading).
