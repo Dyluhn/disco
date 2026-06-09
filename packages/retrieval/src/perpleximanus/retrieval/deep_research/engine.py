@@ -122,28 +122,56 @@ class DeepResearchRun:
         *,
         emit: EmitFn,
         should_cancel: Callable[[], bool] | None = None,
+        resume_sections: list[ReportSection] | None = None,
+        resume_passages: list[RetrievalPassage] | None = None,
+        resume_all_hits: list[Any] | None = None,
     ) -> ReportFromRun:
         """Execute the run. Returns the assembled report. `emit` is awaited
         between phases so the agent-server can write events to the conversation
         log; we never write to the store directly.
 
-        `should_cancel` makes Stop REAL: it is polled at each sub-question and each
-        section boundary; when it returns true the run halts at that checkpoint and
-        returns the partial report so far with `bounded_by="stopped"` (resumable).
-        Without it the run is uninterruptible (the old, broken behavior)."""
+        Each sub-question is gathered AND synthesized before moving to the next —
+        so a completed section is a durable checkpoint. `should_cancel` makes Stop
+        REAL: it is polled at each sub-question boundary; when it returns true the
+        run halts there and returns the partial report (every section completed so
+        far) with `bounded_by="stopped"`. Without it the run is uninterruptible.
+
+        Resume (checkpointed): pass `resume_sections` (+ their `resume_passages` /
+        `resume_all_hits`) from a prior stopped run's partial ReportEvent. Their
+        sub-questions are skipped — we only gather+synthesize the steps NOT already
+        done, then re-run the coherence pass over the full set. This is what makes
+        a resumed Deep Research run continue instead of redoing completed sections."""
         started = time.monotonic()
         bounded_by: str | None = None
         # honor the depth bound on plan width too
         if len(plan_steps) > self._bound.max_subquestions:
             plan_steps = plan_steps[: self._bound.max_subquestions]
             bounded_by = "subquestions"
-        subqs = [SubQuestion(title=t) for t in plan_steps]
-        await emit("phase", {"phase": "gather", "subquestions": len(subqs)})
 
-        # ---- gather phase: retrieve-reason-refine per sub-question ----------
+        # Carry forward already-completed sections (resume). Match by title — the
+        # plan step titles ARE the section titles, so a section present means that
+        # sub-question is done and must not be re-gathered.
+        sections: list[ReportSection] = list(resume_sections or [])
+        done_titles = {s.title for s in sections}
+        carried_passages: list[RetrievalPassage] = list(resume_passages or [])
+        carried_hits: list[Any] = list(resume_all_hits or [])
+        pending = [SubQuestion(title=t) for t in plan_steps if t not in done_titles]
+        await emit(
+            "phase",
+            {
+                "phase": "gather",
+                "subquestions": len(pending),
+                "resumed_sections": len(sections),
+            },
+        )
+
+        # ---- per-sub-question: gather → synthesize (a durable checkpoint) ----
+        # The source budget governs the NEW gathering this invocation does; carried
+        # passages were already budgeted in the prior run, so resume gets a fresh
+        # allowance to make progress on its remaining sub-questions.
         results: list[SubQuestionResult] = []
         remaining = self._bound.max_sources
-        for subq in subqs:
+        for subq in pending:
             if should_cancel is not None and should_cancel():
                 bounded_by = "stopped"  # user pressed Stop — halt at this checkpoint
                 break
@@ -168,24 +196,13 @@ class DeepResearchRun:
             remaining -= len(sub_result.passages)
             if sub_result.bounded_by_rounds and bounded_by is None:
                 bounded_by = "rounds"
-        await emit(
-            "phase",
-            {
-                "phase": "synthesize",
-                "sections": len(results),
-                "passages_total": sum(len(r.passages) for r in results),
-            },
-        )
-
-        # ---- synthesize phase: map step per section ------------------------
-        sections: list[ReportSection] = []
-        for i, sub_result in enumerate(results):
-            if should_cancel is not None and should_cancel():
-                bounded_by = "stopped"  # Stop pressed during synthesis — halt here
-                break
-            if (time.monotonic() - started) > self._bound.max_wall_clock_s:
-                bounded_by = bounded_by or "wall_clock"
-                break
+            # Synthesize THIS section immediately so it survives a later Stop. The
+            # section id is positional over the full (resumed + new) set so ids
+            # stay unique + stable across a resume.
+            await emit(
+                "phase",
+                {"phase": "synthesize", "section": len(sections) + 1},
+            )
             section = await synthesize_section(
                 sub_result,
                 router=self._router,
@@ -193,22 +210,34 @@ class DeepResearchRun:
                 vector_store=self._vector_store,
                 namespace=self._namespace,
                 nli=self._nli,
-                section_id=f"s{i}",
+                section_id=f"s{len(sections)}",
                 top_k_for_section=self._bound.rerank_top_k,
                 emit=emit,
             )
             sections.append(section)
+            # A checkpoint signal the agent-server persists as incremental progress,
+            # so even a hard crash mid-run leaves completed sections recoverable.
+            await emit(
+                "section_done",
+                {"section_id": section.id, "title": section.title, "done": len(sections)},
+            )
 
         # ---- reduce step: coherence pass produces the executive summary ----
         await emit("phase", {"phase": "coherence"})
         summary = await coherence_pass(self._query, sections, router=self._router)
 
         # ---- assemble: passages cited by some section (dedup) + all_hits ---
+        # Carried (resumed) passages first, then newly gathered, so a resumed run's
+        # citations resolve against the sources its earlier sections actually used.
         cited_ids: set[str] = set()
         for s in sections:
             cited_ids.update(s.cited_passage_ids)
         all_passages: list[RetrievalPassage] = []
         seen: set[str] = set()
+        for p in carried_passages:
+            if p.id in cited_ids and p.id not in seen:
+                seen.add(p.id)
+                all_passages.append(p)
         for r in results:
             for p in r.passages:
                 if p.id in cited_ids and p.id not in seen:
@@ -216,6 +245,10 @@ class DeepResearchRun:
                     all_passages.append(p)
         all_hits = []
         hit_urls: set[str] = set()
+        for h in carried_hits:
+            if h.url not in hit_urls:
+                hit_urls.add(h.url)
+                all_hits.append(h)
         for r in results:
             for h in r.all_hits:
                 if h.url not in hit_urls:

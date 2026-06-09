@@ -235,3 +235,79 @@ async def test_on_disconnect_grace_fires_suspend_but_reconnect_cancels_it(tmp_pa
     await asyncio.sleep(0.12)
     assert keep.killed is True
     assert "conv_a" not in rt._executors
+
+
+async def test_deep_research_resume_carries_the_partial_report_forward(tmp_path, monkeypatch):
+    """Checkpointed Deep Research resume (runtime wiring): a PAUSED run with a partial
+    (bounded_by='stopped') ReportEvent on the log resumes by passing that report as
+    `resume_from` to the engine — so completed sections are carried, not redone — and
+    flips the status back to RUNNING/plan_approved first."""
+    from perpleximanus.core import (
+        ConversationStatus,
+        EventSource,
+        LLMMessage,
+        MessageEvent,
+        PlanEvent,
+        PlanStep,
+        ReportEvent,
+        ReportSection,
+        StatusEvent,
+    )
+
+    monkeypatch.setenv("PMX_DB", str(tmp_path / "c.db"))
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(
+        store,
+        config_store=ConfigStore(tmp_path / "config.json"),
+        secret_store=SecretStore(tmp_path / "s.json", box=SecretBox(None)),
+    )
+    cid = "conv_dr"
+    store.create_conversation(cid, surface="deep_research")
+    await store.append(
+        cid,
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="state of X"),
+        ),
+    )
+    plan = PlanEvent(
+        summary="report on X",
+        steps=[PlanStep(title="A"), PlanStep(title="B")],
+        revision=1,
+    )
+    await store.append(cid, plan)
+    # a partial report from a prior Stop: section A done, section B not.
+    partial = ReportEvent(
+        query="state of X",
+        summary="(partial)",
+        sections=[
+            ReportSection(
+                id="s0", title="A", markdown="body [[p0]]", cited_passage_ids=["p0"]
+            )
+        ],
+        passages=[],
+        all_hits=[],
+        bounded_by="stopped",
+    )
+    await store.append(cid, partial)
+    await store.append(cid, StatusEvent(status=ConversationStatus.PAUSED, detail="stopped"))
+
+    # Capture what _execute_deep_research is handed (don't run the real engine).
+    captured: dict = {}
+
+    async def _fake_execute(conversation_id, plan_arg, *, resume_from=None):
+        captured["cid"] = conversation_id
+        captured["resume_from"] = resume_from
+
+    monkeypatch.setattr(rt, "_execute_deep_research", _fake_execute)
+    await rt._maybe_run_deep_research(cid)
+
+    # it resumed with the partial report (its completed section carried), and
+    # flipped the status back to RUNNING/plan_approved before executing.
+    assert captured["resume_from"] is not None
+    assert [s.title for s in captured["resume_from"].sections] == ["A"]
+    last_status = next(
+        e for e in reversed(await store.get_events(cid)) if isinstance(e, StatusEvent)
+    )
+    assert last_status.status is ConversationStatus.RUNNING
+    assert last_status.detail == "plan_approved"

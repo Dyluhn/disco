@@ -20,7 +20,13 @@ spinners (`74a8661`); the **build-continuation bug** — second iteration ran in
 sandbox because the rehydrate flag wasn't cleared on teardown (`06f0dbe`, VERIFIED live
 through the real UI: 3 iterations, workspace accumulated); and the **research-grounding
 empty-prose** bug — reasoning model burned its budget thinking + the canary checked the
-wrong frame shape (`2188d0f`, canary now PASS). NEXT: the session-lifecycle cluster.
+wrong frame shape (`2188d0f`, canary now PASS).
+
+**Lifecycle cluster (in progress, 2026-06-09):** **auto-suspend on tab-close** landed
+(`a98d224`) — idle build sandboxes free after a 60s disconnect grace, RUNNING runs left
+alone, no-op without durable storage. Cluster 1 is now all-✅ except **checkpointed Deep
+Research resume** (the one remaining 🔴 — engine is stateless and redoes completed
+sub-questions). NEXT.
 
 ---
 
@@ -31,8 +37,12 @@ wrong frame shape (`2188d0f`, canary now PASS). NEXT: the session-lifecycle clus
   now clears the `_rehydrated` flag so the next iteration rehydrates the snapshot (was: empty
   sandbox, lost prior work). VERIFIED live (3 iterations accumulated). Regression test added.
   (NOTE: only active when `projects_root` is configured — the snapshot/teardown/rehydrate path.)
-- [ ] 🟡 Auto-suspend on WS-disconnect / idle-TTL — `app.py:378-403` catches
-  `WebSocketDisconnect` but finally-block only cancels pump tasks; no teardown, no idle timer
+- [x] ✅ Auto-suspend on WS-disconnect / idle-TTL — `a98d224`: `runtime.on_connect`/`on_disconnect`
+  track live UI sockets; when the last closes, a 60s-grace timer (longer than the WS reconnect
+  backoff, so a blip cancels it) runs `_suspend` → snapshot + `_teardown_sandbox`. Guards: skips
+  if no live executor, if `projects_root` unset (no durable snapshot → keep), or if status is
+  RUNNING (let in-flight work finish). Wired in `app.py` (accept → on_connect; finally → on_disconnect).
+  Regression tests: idle-frees-vs-running-kept, no-op-without-storage, grace+reconnect-cancel.
 - [x] ✅ Auto-resume on reconnect — `b3694a0`: `subscribeLive` reconnects with exponential
   backoff (was one-shot → a blip sent a fatal error). Server replays history-then-live + reducers
   dedup by id. Mock-WebSocket test. (Workspace rehydrate on kick already existed, `runtime.py:1004`.)

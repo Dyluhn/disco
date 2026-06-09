@@ -437,8 +437,73 @@ async def test_should_cancel_halts_at_checkpoint_with_partial_report() -> None:
     result = await run.run(plan_steps, emit=emit, should_cancel=should_cancel)
 
     assert result.bounded_by == "stopped"  # halted by Stop, not by a cap
-    assert len(result.sections) < len(plan_steps)  # partial — it did NOT finish all 4
+    # partial but USABLE: the sub-question that finished before Stop is a fully
+    # synthesized section (a durable checkpoint), not lost work.
+    assert 0 < len(result.sections) < len(plan_steps)
+    assert result.sections[0].title == "What is X?"
     assert result.to_event().bounded_by == "stopped"  # propagates to the event
+
+
+async def test_resume_skips_completed_sections_and_finishes_the_rest() -> None:
+    """Checkpointed resume: a stopped run's completed sections are carried forward;
+    a second run.run() with those `resume_sections` only gathers+synthesizes the
+    sub-questions NOT already done, then produces the full multi-section report.
+    (Regression for 'Deep Research resume redoes everything from scratch'.)"""
+    plan_steps = ["What is X?", "How does X work?", "Where is X going?", "Risks?"]
+
+    def _engine():
+        s, e, r = _FakeSearch(), _FakeExtraction(), _FakeReranker()
+        return s, DefaultRetrievalEngine(search=s, extraction=e, reranker=r, embedder=None)
+
+    # ---- run 1: stop after the first sub-question is gathered+synthesized ----
+    search1, eng1 = _engine()
+    router1 = _ScriptedRouter({
+        "query_rewriter": ["SUFFICIENT\nnone"] * 5,
+        "rag_answerer": ["body [[p0]]"] * 5 + ["summary"],
+    })
+    run1 = DeepResearchRun(
+        query="the state of X", router=router1, retrieval_engine=eng1,
+        embedder=None, vector_store=InMemoryVectorStore(), nli=_FakeNLI(),
+        depth=DepthTier.STANDARD_DEEP, conversation_id="conv_resume",
+    )
+    _, emit = _collect_events()
+    n = {"c": 0}
+
+    def cancel1() -> bool:
+        n["c"] += 1
+        return n["c"] > 1  # gather subq0, halt at subq1
+
+    partial = await run1.run(plan_steps, emit=emit, should_cancel=cancel1)
+    assert partial.bounded_by == "stopped"
+    assert [s.title for s in partial.sections] == ["What is X?"]  # 1 done
+    done_title = partial.sections[0].title
+
+    # ---- run 2: resume — carry the completed section, finish the rest --------
+    search2, eng2 = _engine()
+    router2 = _ScriptedRouter({
+        "query_rewriter": ["SUFFICIENT\nnone"] * 5,
+        "rag_answerer": ["body [[p0]]"] * 5 + ["summary"],
+    })
+    run2 = DeepResearchRun(
+        query="the state of X", router=router2, retrieval_engine=eng2,
+        embedder=None, vector_store=InMemoryVectorStore(), nli=_FakeNLI(),
+        depth=DepthTier.STANDARD_DEEP, conversation_id="conv_resume",
+    )
+    _, emit2 = _collect_events()
+    final = await run2.run(
+        plan_steps, emit=emit2,
+        resume_sections=partial.sections,
+        resume_passages=partial.cited_passages,
+        resume_all_hits=partial.all_hits,
+    )
+
+    # the full report: 4 sections in plan order, the carried one preserved verbatim
+    assert [s.title for s in final.sections] == plan_steps
+    assert final.bounded_by is None  # it finished
+    # the completed sub-question was NOT re-gathered on resume (no search for it)
+    assert not any(done_title in q for q in search2.calls), search2.calls
+    # but the remaining sub-questions WERE searched this run
+    assert any("How does X work?" in q for q in search2.calls)
 
 
 async def test_no_should_cancel_runs_to_completion() -> None:

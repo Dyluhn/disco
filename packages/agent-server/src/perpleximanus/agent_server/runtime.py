@@ -879,15 +879,20 @@ class ConversationRuntime:
             await self._propose_deep_research_plan(conversation_id, events)
             return
 
-        # Phase 2b: RESUME a stopped run (status PAUSED) → re-run the execution to
-        # completion. The plan is already approved; flip back to RUNNING and execute.
-        # The new full ReportEvent supersedes the partial one from the stop.
+        # Phase 2b: RESUME a stopped run (status PAUSED) → continue from the
+        # checkpoint. The plan is already approved; flip back to RUNNING and execute,
+        # carrying the partial ReportEvent's completed sections so the engine skips
+        # the sub-questions that already finished (instead of redoing them). The new
+        # full ReportEvent supersedes the partial one from the stop.
         if state.execution_status == ConversationStatus.PAUSED:
+            partial = reports[-1] if reports else None
             await self._store.append(
                 conversation_id,
                 StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"),
             )
-            await self._execute_deep_research(conversation_id, plans[-1])
+            await self._execute_deep_research(
+                conversation_id, plans[-1], resume_from=partial
+            )
             return
 
         # Phase 2: plan approved, no report yet → run the engine
@@ -985,11 +990,20 @@ class ConversationRuntime:
         )
 
     async def _execute_deep_research(
-        self, conversation_id: str, plan: PlanEvent
+        self,
+        conversation_id: str,
+        plan: PlanEvent,
+        *,
+        resume_from: ReportEvent | None = None,
     ) -> None:
         """The post-approval driver: run DeepResearchRun on the approved plan,
         emitting Action/Observation events for every retrieval round + section
-        synthesis, ending with a ReportEvent + StatusEvent(FINISHED)."""
+        synthesis, ending with a ReportEvent + StatusEvent(FINISHED).
+
+        `resume_from` is a prior stopped run's partial ReportEvent: its completed
+        sections (+ their cited passages / discovered hits) are carried into the
+        engine so resume continues from the checkpoint instead of redoing the
+        sub-questions that already finished."""
         # Find the query from the user's last (pre-plan) message.
         events = await self._store.get_events(conversation_id)
         query = next(
@@ -1075,12 +1089,35 @@ class ConversationRuntime:
                 ),
             )
 
+        # Checkpointed resume: rebuild the retrieval-typed passages/hits from the
+        # prior partial ReportEvent's plain dicts so the engine can carry its
+        # completed sections forward (and skip those sub-questions).
+        resume_sections = list(resume_from.sections) if resume_from else None
+        resume_passages = None
+        resume_all_hits = None
+        if resume_from:
+            from perpleximanus.retrieval.models import Passage, SearchHit
+
+            resume_passages = [
+                Passage.model_validate(p) for p in resume_from.passages
+            ]
+            resume_all_hits = [
+                SearchHit.model_validate(h) for h in resume_from.all_hits
+            ]
+
         # Fresh cancel flag for this execution; the engine polls it at each
         # sub-question/section boundary so Stop actually halts the run.
         flag = asyncio.Event()
         self._cancel_flags[conversation_id] = flag
         try:
-            result = await run.run(plan_steps, emit=emit, should_cancel=flag.is_set)
+            result = await run.run(
+                plan_steps,
+                emit=emit,
+                should_cancel=flag.is_set,
+                resume_sections=resume_sections,
+                resume_passages=resume_passages,
+                resume_all_hits=resume_all_hits,
+            )
         except Exception as exc:  # noqa: BLE001 — surface as ErrorEvent
             from perpleximanus.core import ErrorEvent
 
