@@ -75,27 +75,29 @@ def test_backstop_drops_a_mutating_tool_even_when_the_allowlist_names_it():
     names = _names(loop._tools_for_step())
     assert "shell" not in names  # backstop won, despite the allowlist
     assert "file_write" not in names
-    assert names == {"file_read", "search", "submit_plan"}
+    # ask_user is the virtual planning escape hatch (read-only-safe; the loop
+    # intercepts it, never executes it) — present alongside the readonly set.
+    assert names == {"file_read", "search", "submit_plan", "ask_user"}
 
 
 def test_planning_with_no_allowlist_shows_only_readonly_tools():
     ex = ReadonlyExecutor(readonly={"file_read", "search", "submit_plan"})
     loop = _loop(ex, mode=OperatingMode.PLANNING)  # no allowlist
     names = _names(loop._tools_for_step())
-    assert names == {"file_read", "search", "submit_plan"}
+    assert names == {"file_read", "search", "submit_plan", "ask_user"}
     assert "shell" not in names and "file_write" not in names
 
 
 def test_allowlist_restricts_further_within_readonly():
     # Both guards compose: readonly = {file_read, search, submit_plan}; allowlist
-    # narrows to {submit_plan, file_read}. Intersection wins.
+    # narrows to {submit_plan, file_read}. Intersection wins (+ the ask_user hatch).
     ex = ReadonlyExecutor(readonly={"file_read", "search", "submit_plan"})
     loop = _loop(
         ex,
         mode=OperatingMode.PLANNING,
         planning_tools=frozenset({"submit_plan", "file_read"}),
     )
-    assert _names(loop._tools_for_step()) == {"submit_plan", "file_read"}
+    assert _names(loop._tools_for_step()) == {"submit_plan", "file_read", "ask_user"}
 
 
 # ---- back-compat: an executor that can't report capabilities ----------------
@@ -111,8 +113,8 @@ def test_legacy_executor_without_readonly_falls_back_to_allowlist_only():
         mode=OperatingMode.PLANNING,
         planning_tools=frozenset({"submit_plan", "shell"}),
     )
-    # No backstop → the allowlist (incl. shell) is honored verbatim.
-    assert _names(loop._tools_for_step()) == {"submit_plan", "shell"}
+    # No backstop → the allowlist (incl. shell) is honored verbatim (+ ask_user).
+    assert _names(loop._tools_for_step()) == {"submit_plan", "shell", "ask_user"}
 
 
 # ---- execution mode is untouched --------------------------------------------

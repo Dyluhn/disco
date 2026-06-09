@@ -626,6 +626,54 @@ async def test_planning_mode_preserves_acknowledgment_prose():
     assert len(acks) == 1
 
 
+async def test_planning_mode_can_ask_user_before_proposing_a_plan():
+    """An under-specified task most needs clarification BEFORE a plan is
+    committed. In PLANNING mode the model can call `ask_user` (free-form) to get a
+    detail only the user knows; the loop halts at AWAITING_USER_QUESTION instead of
+    forcing a guessed plan. (Regression for the live finding: the planner WANTED to
+    ask for the brand color but was forced to submit_plan.)"""
+    from loop_fakes import AgentStep
+    from perpleximanus.core import ConversationStatus, MessageEvent, ToolCall
+    from perpleximanus.core.llm import OperatingMode
+
+    ask = AgentStep(
+        thought="The task names an exact brand color I don't have — I should ask.",
+        tool_call=ToolCall(
+            tool_name="ask_user",
+            arguments={"question": "What is your brand's exact primary color (hex)?"},
+        ),
+        finished=False,
+    )
+    agent = ScriptedAgent([ask, finish_step()])
+    loop, store = build_loop(agent, mode=OperatingMode.PLANNING)
+    loop._planning_tools = frozenset({"submit_plan"})
+
+    # ask_user is offered to the planner now (not just in execution).
+    tool_names = {getattr(t, "name", None) for t in loop._tools_for_step()}
+    assert "ask_user" in tool_names
+
+    await loop.send_message("Build a landing page using my brand's exact primary color")
+    await loop.run()
+
+    state = await store.get_state(CID)
+    # the planner asked → halted at the free-form Ask-gate (NOT a forced plan)
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
+    events = await store.get_events(CID)
+    questions = [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source.value == "agent"
+        and "primary color" in (e.message.content if e.message else "")
+    ]
+    assert len(questions) == 1
+    assert state.pending_question_id == questions[0].id
+    # and no plan was committed on a guess
+    from perpleximanus.core import PlanEvent
+
+    assert not any(isinstance(e, PlanEvent) for e in events)
+
+
 # ---- the soft plan-step nudge (the "auditor") --------------------------------
 
 

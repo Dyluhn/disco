@@ -106,16 +106,21 @@ _TERMINAL_FOR_NOW = frozenset(
 )
 
 # Injected (as an implicit system-reminder) when the planner answers in prose
-# instead of calling submit_plan: in PLANNING mode the only terminal move is to
-# PROPOSE a structured plan. Reads (file_list/file_read/search/extract) fall
-# through and never trigger this — only a tool-less prose response does.
+# instead of calling submit_plan: in PLANNING mode the terminal moves are to
+# PROPOSE a structured plan OR ask the user for a detail you genuinely need
+# first. Reads (file_list/file_read/search/extract) fall through and never
+# trigger this — only a tool-less prose response does.
 _PLAN_NUDGE = (
     "<system-reminder>\n"
-    "Still in PLANNING mode — no plan has been proposed yet. The only terminal "
-    "move here is to call the `submit_plan` tool with a summary, ordered steps, "
-    "and a markdown `context` block. You may continue to read (file_list, "
-    "file_read, search, extract) for more context first, but a prose reply alone "
-    "doesn't advance the conversation.\n"
+    "Still in PLANNING mode — no plan has been proposed yet. To advance, either "
+    "(a) call the `submit_plan` tool with a summary, ordered steps, and a markdown "
+    "`context` block, or (b) if a required detail is genuinely missing and you "
+    "cannot plan well without it (the user named something only they know — a "
+    "color, a credential, a target, a file that isn't here), call `ask_user` with "
+    "a clear `question` to get it BEFORE planning. Prefer asking over guessing on "
+    "details the user explicitly required. You may also keep reading (file_list, "
+    "file_read, search, extract) for more context, but a prose reply alone doesn't "
+    "advance the conversation.\n"
     "</system-reminder>"
 )
 
@@ -726,7 +731,14 @@ class AgentLoop:
                     return name in allow  # allowlist restricts further
                 return True
 
-            return [t for t in tools if _planner_ok(getattr(t, "name", None))]
+            planner_tools = [t for t in tools if _planner_ok(getattr(t, "name", None))]
+            # Append the VIRTUAL ask_user even while planning: an under-specified
+            # task most needs clarification BEFORE a plan is committed (the user
+            # named a detail only they know). ask_user is read-only-safe — the loop
+            # intercepts it (never executes it against the sandbox) and halts at the
+            # Ask-gate, same as in execution. Without this the planner is forced to
+            # guess and bury the unknown in the plan instead of just asking.
+            return planner_tools + [_ask_user_tool_singleton()]
         if self._planning_tools:
             tools = [t for t in tools if getattr(t, "name", None) not in self._planning_tools]
         # Append the virtual ask_user + propose_plan_update tools in execution
