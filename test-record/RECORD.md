@@ -64,8 +64,15 @@ Summary ACCURATE: "caused by the 23.5-degree axial tilt… NOT variations in dis
 ### Mode 3/4 — Deep Research STANDARD-DEEP — ✅ VERIFIED (conv_00b1fc)
 Query: Li-ion vs solid-state batteries. 3 sections, 14 cited / 114 discovered, bounded_by=rounds.
 Summary ACCURATE: "As of early 2026, solid-state batteries remain confined to pilot lines… Toyota, Honda…". Screenshot dr-standard-report.png.
-### Mode 4/4 — Deep Research EXHAUSTIVE — running (conv_47d386, 12 sub-questions confirmed)
-Query: grid-scale energy storage comparison. Plan = 12 steps (highest tier). ~15-30 min, persists server-side.
+### Mode 4/4 — Deep Research EXHAUSTIVE — ✅ VERIFIED (conv_47d386)
+Query: grid-scale energy storage comparison. 12-step plan; 6 sections completed (bounded_by=rounds), 41 cited / 410 discovered sources.
+Summary ACCURATE: "Pumped-storage hydropower remains dominant by capacity, yet lithium-ion captured new deployments…". Screenshot dr-exhaustive-report.png.
+
+**PHASE 4 COMPLETE — all 4 search modes verified live (Standard, DR Quick/Standard/Exhaustive), all accurate + grounded. 2 real bugs found+fixed (ddgs retry, depth_tier wiring).**
+
+## Phase 5 — Build two sites (live, 3 iterations each)
+Driver: WS build (auto-approve plan, auto-confirm risky, wait FINISHED). Sites persist in agent-projects/.
+### Site 1 — macOS clone (interactive) — v1 building…
 
 ### 🐞 REAL BUG FOUND + FIXED (live): depth_tier was IGNORED
 POST /conversations set surface + model but DROPPED depth_tier → EVERY Deep Research run used
