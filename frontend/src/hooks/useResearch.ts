@@ -44,6 +44,10 @@ export function useResearch() {
     reScope,
     reset: () => setScope(null),
     ...stream,
+    // Surface a failed submit/re-scope request (was silent: a failed mutation
+    // left the user with an un-disabled button and no message). Distinct from the
+    // stream `error` (which covers failures AFTER a run has started).
+    submitError: action.error ?? null,
   };
 }
 

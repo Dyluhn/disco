@@ -107,5 +107,7 @@ export function useDeepResearch(resumeCid?: string | null) {
     reset,
     exportReport,
     ...stream,
+    // A failed create was silent (empty state, no message). Expose it to the UI.
+    submitError: create.error ?? null,
   };
 }

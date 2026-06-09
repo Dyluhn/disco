@@ -129,6 +129,13 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
             <p className="mt-inline text-center font-ui text-[0.78rem] text-text-faint">
               The agent works in a sandbox and shows its plan. Risky steps pause for your approval.
             </p>
+            {b.submitError && (
+              <p role="alert" className="mt-inline text-center font-ui text-[0.8rem] text-unsupported">
+                {b.submitError instanceof Error
+                  ? b.submitError.message
+                  : "Couldn't start the build — the server didn't respond. Try again."}
+              </p>
+            )}
           </div>
         </main>
       </div>
@@ -152,17 +159,24 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
             {/* Export the saved project as a zip — only available for resumed
                 projects and finished builds (a snapshot must exist on disk). */}
             {b.cid && (b.resumed || b.status === "FINISHED") && (
-              <button
-                type="button"
-                onClick={() => b.cid && download.mutate(b.cid)}
-                disabled={download.isPending}
-                aria-label="Download the project as a zip"
-                title="Download a zip of the project files"
-                className="flex shrink-0 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text disabled:opacity-40"
-              >
-                <Download className="size-3.5" aria-hidden />
-                {download.isPending ? "Preparing…" : "Export"}
-              </button>
+              <div className="flex shrink-0 flex-col items-end gap-hair">
+                <button
+                  type="button"
+                  onClick={() => b.cid && download.mutate(b.cid)}
+                  disabled={download.isPending}
+                  aria-label="Download the project as a zip"
+                  title="Download a zip of the project files"
+                  className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text disabled:opacity-40"
+                >
+                  <Download className="size-3.5" aria-hidden />
+                  {download.isPending ? "Preparing…" : "Export"}
+                </button>
+                {download.error && (
+                  <span role="alert" className="font-ui text-[0.7rem] text-unsupported">
+                    Download failed — try again
+                  </span>
+                )}
+              </div>
             )}
           </div>
         </div>

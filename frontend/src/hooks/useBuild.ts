@@ -57,5 +57,8 @@ export function useBuild(resumeCid?: string | null) {
     kill,
     reset,
     ...stream,
+    // A failed create (e.g. backend unreachable) was silent — the surface stayed
+    // on the empty state with no signal. Expose it so the UI can show an error.
+    submitError: create.error ?? null,
   };
 }

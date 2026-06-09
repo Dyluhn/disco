@@ -120,6 +120,14 @@ export function ModelMatrix() {
         )}
       </div>
 
+      {update.error && (
+        <p role="alert" className="font-ui text-[0.8rem] text-unsupported">
+          Couldn't save the assignment —{" "}
+          {update.error instanceof Error ? update.error.message : "the server didn't respond"}. Your
+          change wasn't applied.
+        </p>
+      )}
+
       <ModelCatalogue />
       <OpenRouterSection />
     </section>

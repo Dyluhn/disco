@@ -153,6 +153,12 @@ export function SkillsSection() {
         Saved across reloads.
       </p>
 
+      {(create.error || update.error || remove.error) && (
+        <p role="alert" className="font-ui text-[0.8rem] text-unsupported">
+          Couldn't save that change — the server didn't respond. Your skills are unchanged.
+        </p>
+      )}
+
       {creating && (
         <SkillEditor
           initial={EMPTY_DRAFT}

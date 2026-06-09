@@ -57,6 +57,13 @@ export function ResearchSurface() {
           <EmptyState />
           <div className="w-full max-w-measure">
             <QueryInput onSubmit={submit} busy={r.submitting} autoFocus {...clusterProps} />
+            {r.submitError && (
+              <p role="alert" className="mt-inline font-ui text-[0.8rem] text-unsupported">
+                {r.submitError instanceof Error
+                  ? r.submitError.message
+                  : "Couldn't start the search — the server didn't respond. Try again."}
+              </p>
+            )}
           </div>
           <ExampleQueries onPick={submit} />
         </main>

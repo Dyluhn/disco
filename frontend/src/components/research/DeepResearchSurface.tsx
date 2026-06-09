@@ -81,6 +81,13 @@ export function DeepResearchSurface({ resumeCid, onScopeChange }: Props) {
                 Deep runs take minutes. The leader pill picks the driver model.
               </p>
             </div>
+            {r.submitError && (
+              <p role="alert" className="font-ui text-[0.8rem] text-unsupported">
+                {r.submitError instanceof Error
+                  ? r.submitError.message
+                  : "Couldn't start deep research — the server didn't respond. Try again."}
+              </p>
+            )}
           </div>
         </main>
       </div>
