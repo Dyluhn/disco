@@ -64,7 +64,9 @@ class ScriptedAgent:
         self._steps = list(steps)
         self.calls = 0
 
-    async def step(self, view, tools, *, mode, overflow_signal, on_stream=None) -> AgentStep:
+    async def step(
+        self, view, tools, *, mode, overflow_signal, on_stream=None, temperature=None
+    ) -> AgentStep:
         i = self.calls
         self.calls += 1
         return self._steps[min(i, len(self._steps) - 1)]
