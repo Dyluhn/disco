@@ -52,6 +52,37 @@ def test_sigmoid_squashes_logits_to_probabilities():
     assert 0.0 < _sigmoid(-8) < _sigmoid(0) < _sigmoid(8) < 1.0
 
 
+async def test_rerank_truncates_and_batches_to_bound_memory(monkeypatch):
+    """Regression: a cross-encoder's attention is O(seq^2)*batch; scoring full-page
+    passages all at once blew rerank to ~16GB and OOM-froze the box. The reranker
+    must truncate each scoring input AND score in bounded batches."""
+    from perpleximanus.retrieval import local_encoders as le
+
+    calls: list[list[str]] = []
+
+    class _FakeCE:
+        def rerank(self, query, docs):
+            docs = list(docs)
+            calls.append(docs)
+            return [float(len(d)) for d in docs]
+
+    monkeypatch.setattr(le, "_reranker", lambda: _FakeCE())
+
+    passages = [
+        Passage(id=f"p{i}", source_url=f"http://e/{i}", source_title="t", text="x" * 10_000)
+        for i in range(20)
+    ]
+    out = await le.FastEmbedReranker().rerank("q", passages, top_k=5)
+
+    # Every doc handed to the cross-encoder was truncated to the cap...
+    assert all(len(d) <= le._RERANK_MAX_CHARS for batch in calls for d in batch)
+    # ...and scored in batches no larger than the bound (memory is O(batch), not O(N))...
+    assert all(len(batch) <= le._RERANK_BATCH for batch in calls)
+    # ...while still scoring all 20 passages and returning top_k.
+    assert sum(len(b) for b in calls) == 20
+    assert len(out) == 5
+
+
 # ---- live model behavior (gated: needs the ONNX models loadable) ------------
 
 

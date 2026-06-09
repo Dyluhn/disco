@@ -21,15 +21,29 @@ and CPU-bound, so async methods offload to a thread to keep the loop responsive.
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 from typing import Any
 
 from .models import Passage
 from .nli import Entailment
 
+_log = logging.getLogger(__name__)
+
 # Equivalent-class multilingual models fastembed ships as ready ONNX.
 EMBED_MODEL = "intfloat/multilingual-e5-large"
 RERANK_MODEL = "jinaai/jina-reranker-v2-base-multilingual"
+
+# A cross-encoder's attention is O(seq_len^2) per (query, passage) pair, and
+# fastembed does NOT truncate inputs to the model's window — so reranking
+# full-page passages (thousands of tokens) blows ONNX attention memory up to
+# ~16 GB and OOMs the box. Cap the SCORING input to ~512 tokens (the relevance
+# signal lives in the head); the returned Passage objects keep their full text.
+_RERANK_MAX_CHARS = 2000
+# Also bound the BATCH: cross-encoder memory scales with batch×seq², so scoring
+# all hits in one shot (unbounded passage count) still spikes. Score in chunks so
+# peak memory is O(batch) regardless of how many passages came back.
+_RERANK_BATCH = 8
 
 # Process-wide single load (downloads once, stays resident).
 _embedding_model: Any | None = None
@@ -84,11 +98,18 @@ class FastEmbedReranker:
             return []
 
         def _run() -> list[float]:
-            return list(_reranker().rerank(query, [p.text for p in passages]))
+            docs = [p.text[:_RERANK_MAX_CHARS] for p in passages]
+            scores: list[float] = []
+            for i in range(0, len(docs), _RERANK_BATCH):
+                scores.extend(_reranker().rerank(query, docs[i : i + _RERANK_BATCH]))
+            return scores
 
         try:
             scores = await asyncio.to_thread(_run)
-        except Exception:  # noqa: BLE001 — degrade to input order, like the remote path
+        except Exception as e:  # noqa: BLE001 — degrade to input order, like the remote path
+            # Degrade gracefully, but NEVER silently: a swallowed rerank failure
+            # means the pipeline ships unranked results with no signal. Log it loud.
+            _log.warning("rerank failed (%s: %s) — degrading to input order", type(e).__name__, e)
             return passages[:top_k]
         order = sorted(range(len(passages)), key=lambda i: scores[i], reverse=True)
         return [passages[i] for i in order[:top_k]]
