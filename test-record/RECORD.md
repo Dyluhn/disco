@@ -75,7 +75,26 @@ Driver: WS build (auto-approve plan, auto-confirm risky, wait FINISHED). Sites p
 ### Site 1 — macOS clone (interactive) — agent-projects/conv_318b722c…
 **v1 ✅ BUILT + TESTED** (28KB index.html, 0 page errors): menu bar (Finder/File/Edit…) + live clock, gradient wallpaper, desktop icons (Notes/Calculator), dock. Interaction test: double-click opened a real Notes WINDOW (traffic-light buttons, B/I/U/Clear/Save toolbar, line/word count, Ctrl+S) + Calculator. Screenshots: site1-v1-macos.png, site1-v1-apps-open.png, site1-v1-calc-open.png.
 FEEDBACK→v2: (1) functional menu-bar dropdowns; (2) add a working Terminal app; (3) window minimize-to-dock (yellow) + maximize (green); (4) dock icons launch apps on click.
-**v2 building…**
+**v2 (in-place continuation) — REVEALED A REAL LIMITATION:**
+The local Qwen3.6-27B CANNOT reliably EDIT the existing 28KB index.html in place: across 3 continuation
+attempts it did only file_reads (5×, then 0, then repeated reads → tripped the STUCK-escape) and
+finished WITHOUT a single file_edit — it re-summarizes the existing build and declares done. This is a
+model-capability limit (large-file in-place edit + multi-turn continuation), not a harness bug.
+- The build-finish gate fix (reads aren't 'productive') correctly REFUSED the no-op finishes + nudged,
+  but a model that won't act eventually lands FINISHED via the auto-continue cap (no infinite grind).
+- DeepSeek-via-OpenRouter (the model Dylan's original build work used, which handles in-place iteration)
+  is UNAVAILABLE here: the OpenRouter key is Fernet-encrypted in secrets and PMX_SECRET_KEY isn't set.
+**Decision (honest, not a cheap-out):** deliver the 3 iterations as PROGRESSIVE FRESH BUILDS — each a
+new build whose spec = prior features + new ones (the 27B builds rich sites from scratch well, as v1
+proved). Tested + screenshotted each round; feedback drives the next spec.
+
+**3 real bugs found+fixed during Phase 4/5 (all committed):**
+1. ddgs search rate-limit → retry-with-backoff
+2. depth_tier ignored at conversation create → wired to set_depth (Quick/Standard/Exhaustive now correct)
+3. build-finish gate counted file_read as productive → require a state-changing action
+
+### Site 1 macOS clone — iteration plan (progressive fresh builds)
+v1 ✅ (Notes + Calculator). v2 = + Terminal + menu dropdowns. v3 = + window min/max + Files app.
 
 ### 🐞 REAL BUG FOUND + FIXED (live): depth_tier was IGNORED
 POST /conversations set surface + model but DROPPED depth_tier → EVERY Deep Research run used
