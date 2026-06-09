@@ -110,8 +110,12 @@ backend-coherence 🔴s (GAP A S3 microcompact, persistent CodeAct kernel, GAP H
   `ExecutionCanvas.tsx:235-261` iframe, updates per `file_write`
 - [ ] 🟡 DeliverablePanel handoff — `DeliverablePanel.tsx:16-56` hero exists; missing
   `deployment_url` on `Project` (`project.ts:17-28`), manifest export, auto-switch-to-preview
-- [ ] 🔴 Ask-gate (two-way) — no `AWAITING_USER_QUESTION` status (`types/agent.ts:8-17`);
-  `ask_user` is muted-grey `agent_message`, `attention:false` (`buildTrace.ts:156-169`); no `AskPanel`
+- [x] ✅ Ask-gate (two-way) — `b1e0772`: dedicated `AWAITING_USER_QUESTION` status (core enum +
+  `state.py` `pending_question_id`); the engine's free-form `ask_user` branch emits it with the
+  question message id as detail; the loop re-kicks on the user's reply (same as the decision gate).
+  Frontend: `useBuildStream.pendingQuestion`/`awaitingQuestion`/`answer()` + a new `AskPanel`
+  (Markdown question + focused answer box, Enter sends) wired into `BuildSurface`; `deriveLiveSignal`
+  narrates it; feed auto-scrolls. Tests: core loop-step, AskPanel, useBuildStream wiring, live-signal.
 - [ ] 🟡 Graceful Stop / Kill confirm / Pause — `cancel()` wired to Stop (`useBuildStream.ts:208`,
   `AgentStatusBar.tsx:88-97`); missing "Stopping…" pending, Kill confirm; PAUSED phantom
 - [ ] 🟡 Aggregate progress + sticky plan — done/total + bar (`PlanPanel.tsx:80-91`) but PlanPanel
