@@ -716,18 +716,27 @@ class ConversationRuntime:
 
         state = await loop.run()
 
-        # Snapshot hook: if the run ended in FINISHED, capture the workspace.
-        if (
-            surface == "build"
-            and state.execution_status == ConversationStatus.FINISHED
-        ):
+        # Snapshot hook: capture the workspace whenever a build run ENDS — not only
+        # on FINISHED. A run that ends STUCK/ERROR/PAUSED still wrote real files (the
+        # model may have built most of the deliverable before getting stuck); snapshot
+        # so that work is NOT lost (it was — a stuck iteration silently discarded a
+        # whole feature it had written). Snapshot is idempotent + cheap.
+        _ENDED = {
+            ConversationStatus.FINISHED,
+            ConversationStatus.STUCK,
+            ConversationStatus.ERROR,
+            ConversationStatus.PAUSED,
+        }
+        if surface == "build" and state.execution_status in _ENDED:
             await self._maybe_snapshot(conversation_id)
-            # G (safe leak fix): a FINISHED build's container is pure waste — tear it
-            # down to free the port/memory/GPU + the idle preview server. ONLY when a
-            # snapshot was durably written (storage configured); otherwise keep it so
-            # resuming can't lose unsnapshotted files. A resume re-creates the sandbox
-            # and rehydrates from the snapshot.
-            if self._config_store.load().projects.projects_root.strip():
+            # G (safe leak fix): tear the container down to free the port/memory/GPU
+            # + the idle preview server ONLY on a clean FINISH (and only when the
+            # snapshot was durably written). A STUCK/ERROR/PAUSED build keeps its
+            # sandbox so a resume can pick up exactly where it left off.
+            if (
+                state.execution_status == ConversationStatus.FINISHED
+                and self._config_store.load().projects.projects_root.strip()
+            ):
                 await self._teardown_sandbox(conversation_id)
         return state
 
