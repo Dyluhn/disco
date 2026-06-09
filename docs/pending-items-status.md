@@ -8,16 +8,29 @@
 
 ## Roll-up
 
-~25 tracked items: **~10 complete · ~9 partial · ~6 not-done.** Not-done is
-concentrated in **session lifecycle** (suspend/resume/reconcile, Build resume,
-checkpointed DR resume, persistence) and the **Ask-gate** — a coherent next
+Not-done is concentrated in **session lifecycle** (suspend/resume/reconcile, Build
+resume, checkpointed DR resume, persistence) and the **Ask-gate** — a coherent next
 milestone. Backend coherence (GAP A–H) is largely landed.
+
+**Closed this session (2026-06-08, second pass):** all harness/feature work COMMITTED
+(7 themed commits + fixes); test suite complete (Phase 2 `--replay`, Phase 3
+ReplaySandbox, Phase 7 E2E/visual); the **rerank 16 GB→2.3 GB memory fix** (the
+machine-freeze root cause, `4669a76`); **UI now surfaces failures** instead of silent
+spinners (`74a8661`); the **build-continuation bug** — second iteration ran in an empty
+sandbox because the rehydrate flag wasn't cleared on teardown (`06f0dbe`, VERIFIED live
+through the real UI: 3 iterations, workspace accumulated); and the **research-grounding
+empty-prose** bug — reasoning model burned its budget thinking + the canary checked the
+wrong frame shape (`2188d0f`, canary now PASS). NEXT: the session-lifecycle cluster.
 
 ---
 
 ## Cluster 1 — Session lifecycle (GPU-leak / stale-RUNNING arc)
 
 - [x] ✅ Teardown sandbox on FINISHED — `runtime.py:711-722` `_teardown_sandbox`
+- [x] ✅ Continue a build after FINISHED restores the workspace — `06f0dbe`: `_teardown_sandbox`
+  now clears the `_rehydrated` flag so the next iteration rehydrates the snapshot (was: empty
+  sandbox, lost prior work). VERIFIED live (3 iterations accumulated). Regression test added.
+  (NOTE: only active when `projects_root` is configured — the snapshot/teardown/rehydrate path.)
 - [ ] 🟡 Auto-suspend on WS-disconnect / idle-TTL — `app.py:378-403` catches
   `WebSocketDisconnect` but finally-block only cancels pump tasks; no teardown, no idle timer
 - [ ] 🟡 Auto-resume on reconnect — rehydrate exists (`runtime.py:1004-1035`
@@ -97,7 +110,7 @@ milestone. Backend coherence (GAP A–H) is largely landed.
 
 - [ ] Synthetic-fake harnesses (streaming, providers, Deep Research lifecycle) used
   `_ScriptedRouter`/hand-made docs — violate the real-captured-samples rule; rebuild from captures
-- [ ] All harness work + UI/server mods are UNCOMMITTED — commit before further change
+- [x] ✅ All work COMMITTED — was uncommitted; now 7 themed commits + the session's fixes
 - [x] ✅ Phase 2 `--replay` e2e — DONE. The OOM blocker was a real bug: the cross-encoder rerank
   ballooned to 16 GB on full-page passages (fixed in commit 4669a76 — truncate+batch → 2.3 GB).
   Captured `research_demo.jsonl`; `make eval` passes (faithfulness 1.0, no baseline regression, 3.5 GB peak)
