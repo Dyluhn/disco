@@ -116,6 +116,36 @@ export async function downloadProject(cid: string): Promise<void> {
   URL.revokeObjectURL(objectUrl);
 }
 
+/** Fetch + download the project's manifest JSON (files + deliverable metadata). */
+export async function exportProjectManifest(cid: string): Promise<void> {
+  if (!agentLive()) {
+    await fixtureDelay();
+    return;
+  }
+  const url = `${agentHttpBase()}/api/projects/${encodeURIComponent(cid)}/manifest`;
+  const res = await fetch(url, { headers: { accept: "application/json" } });
+  if (!res.ok) {
+    let reason = `${res.status}`;
+    try {
+      const body = await res.json();
+      reason = body?.detail?.reason ?? reason;
+    } catch {
+      /* opaque; keep status */
+    }
+    throw new Error(`manifest export failed: ${reason}`);
+  }
+  const text = JSON.stringify(await res.json(), null, 2);
+  const blob = new Blob([text], { type: "application/json" });
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objectUrl;
+  a.download = `${cid}-manifest.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+
 export async function deleteProject(cid: string): Promise<{ id: string }> {
   if (!agentLive()) {
     await fixtureDelay();

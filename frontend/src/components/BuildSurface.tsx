@@ -24,7 +24,7 @@ import { EmptyState, ErrorState } from "@/components/states";
 import { Markdown } from "@/components/Markdown";
 import { QueryInput } from "@/components/QueryInput";
 import { Download, Loader2 } from "lucide-react";
-import { useDownloadProject } from "@/hooks/useProjects";
+import { useDownloadProject, useExportManifest } from "@/hooks/useProjects";
 import { ActivityFeed } from "@/components/build/ActivityFeed";
 import { LiveSignalBar } from "@/components/build/LiveSignalBar";
 import { ResizableSplit } from "@/components/build/ResizableSplit";
@@ -52,6 +52,7 @@ const ISOLATION: IsolationInfo = {
 export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) {
   const b = useBuild(resumeCid);
   const download = useDownloadProject();
+  const exportManifest = useExportManifest();
   const activity = useMemo(
     () => deriveActivity(b.events, b.pendingActionId, b.status),
     [b.events, b.pendingActionId, b.status],
@@ -293,6 +294,7 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
               )
             }
             onDownload={() => b.cid && download.mutate(b.cid)}
+            onExportManifest={() => b.cid && exportManifest.mutate(b.cid)}
           />
           {b.pendingAction && (
             <ConfirmationPanel action={b.pendingAction} onApprove={b.confirm} onReject={b.reject} />

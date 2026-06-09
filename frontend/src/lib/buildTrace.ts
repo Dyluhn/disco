@@ -301,6 +301,8 @@ export interface DeliverableView {
   title: string;
   path: string;
   kind: "app" | "files";
+  /** Canonical URL the deliverable is reachable at, if the agent served one. */
+  deploymentUrl?: string;
 }
 
 /** The latest finished-artifact handoff the agent declared via `serve` (a
@@ -312,7 +314,13 @@ export function deriveDeliverable(events: AgentEvent[]): DeliverableView | null 
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i];
     if (e.kind === "deliverable") {
-      return { id: e.id, title: e.title, path: e.path, kind: e.artifact_kind };
+      return {
+        id: e.id,
+        title: e.title,
+        path: e.path,
+        kind: e.artifact_kind,
+        deploymentUrl: e.deployment_url || undefined,
+      };
     }
   }
   return null;

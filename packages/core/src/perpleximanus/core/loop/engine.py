@@ -400,6 +400,13 @@ _SERVE_SCHEMA = {
             "enum": ["app", "files"],
             "description": "'app' = open in live preview; 'files' = download. Default 'app'.",
         },
+        "url": {
+            "type": "string",
+            "description": (
+                "Optional: the canonical URL the deliverable is reachable at (a deploy "
+                "target / tunnel / live address). Surfaced as an 'Open deployed app' link."
+            ),
+        },
     },
     "required": ["title", "path"],
 }
@@ -1607,6 +1614,7 @@ class AgentLoop:
                     title = str(step.tool_call.arguments.get("title") or "").strip()
                     path = str(step.tool_call.arguments.get("path") or "").strip()
                     kind = str(step.tool_call.arguments.get("kind") or "app").strip()
+                    url = str(step.tool_call.arguments.get("url") or "").strip()
                     if kind not in ("app", "files"):
                         kind = "app"
                     if title and path:
@@ -1616,6 +1624,7 @@ class AgentLoop:
                                 title=title,
                                 path=path,
                                 artifact_kind=kind,  # type: ignore[arg-type]
+                                deployment_url=url,
                             )
                         )
                     continue  # non-blocking — keep working

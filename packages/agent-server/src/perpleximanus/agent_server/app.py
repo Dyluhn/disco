@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from perpleximanus.core import (
     DEFAULT_OWNER_ID,
+    DeliverableEvent,
     EventSource,
     LLMMessage,
     MessageEvent,
@@ -285,6 +286,50 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             media_type="application/zip",
             headers=headers,
         )
+
+    @app.get("/api/projects/{conversation_id}/manifest")
+    async def project_manifest(conversation_id: str) -> dict:
+        """Export a JSON manifest of the project: metadata, the file tree (path +
+        bytes), and the agent's last deliverable handoff (title/path/kind +
+        deployment_url). The honest, portable description of what the run produced —
+        the companion to the workspace zip download."""
+        ps = runtime.project_store() if runtime is not None else None
+        if ps is None or ps.status() != StorageStatus.OK:
+            raise HTTPException(status_code=404, detail={"reason": "storage_unavailable"})
+        record = ps.get(conversation_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail={"reason": "project_not_found"})
+        # file tree (workspace-relative path + size), skipping the codeact scratch files
+        files: list[dict] = []
+        workspace = ps.path_for(conversation_id)
+        if workspace and workspace.is_dir():
+            for p in sorted(workspace.rglob("*")):
+                if p.is_file() and not p.name.startswith("_codeact"):
+                    files.append(
+                        {"path": str(p.relative_to(workspace)), "bytes": p.stat().st_size}
+                    )
+        # the agent's last deliverable handoff, if any
+        deliverable = None
+        with contextlib.suppress(Exception):
+            for e in reversed(await store.get_events(conversation_id)):
+                if isinstance(e, DeliverableEvent):
+                    deliverable = {
+                        "title": e.title,
+                        "path": e.path,
+                        "kind": e.artifact_kind,
+                        "deployment_url": e.deployment_url,
+                    }
+                    break
+        return {
+            "conversation_id": conversation_id,
+            "title": record.title or "(untitled)",
+            "created_at": record.created_at,
+            "last_snapshot_at": record.last_snapshot_at,
+            "file_count": record.file_count,
+            "total_bytes": record.total_bytes,
+            "files": files,
+            "deliverable": deliverable,
+        }
 
     @app.delete("/api/projects/{conversation_id}")
     async def delete_project(conversation_id: str) -> dict:

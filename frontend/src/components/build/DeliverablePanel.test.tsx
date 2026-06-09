@@ -84,6 +84,37 @@ describe("DeliverablePanel", () => {
         deliverable={{ id: "d", title: "Thing", path: "x", kind: "app" }}
       />,
     );
-    expect(screen.getByRole("button")).toBeDisabled();
+    expect(screen.getByRole("button", { name: /open the deliverable/i })).toBeDisabled();
+  });
+
+  it("exports the manifest + surfaces a deployed-URL link when present", async () => {
+    const onExportManifest = vi.fn();
+    render(
+      <DeliverablePanel
+        deliverable={{
+          id: "d",
+          title: "Landing page",
+          path: "index.html",
+          kind: "app",
+          deploymentUrl: "https://example.test/app",
+        }}
+        onOpen={vi.fn()}
+        onExportManifest={onExportManifest}
+      />,
+    );
+    const link = screen.getByRole("link", { name: /open the deployed app/i });
+    expect(link).toHaveAttribute("href", "https://example.test/app");
+    await userEvent.click(screen.getByRole("button", { name: /export the project manifest/i }));
+    expect(onExportManifest).toHaveBeenCalledOnce();
+  });
+
+  it("shows no Deployed link when the agent served no URL (no false affordance)", () => {
+    render(
+      <DeliverablePanel
+        deliverable={{ id: "d", title: "Thing", path: "x", kind: "app" }}
+        onOpen={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("link", { name: /deployed/i })).not.toBeInTheDocument();
   });
 });

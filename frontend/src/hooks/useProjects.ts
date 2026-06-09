@@ -5,7 +5,12 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { deleteProject, downloadProject, listProjects } from "@/api/projects";
+import {
+  deleteProject,
+  downloadProject,
+  exportProjectManifest,
+  listProjects,
+} from "@/api/projects";
 import type { ProjectsList } from "@/types/project";
 
 export const PROJECTS_KEY = ["projects"] as const;
@@ -29,5 +34,11 @@ export function useDeleteProject() {
 export function useDownloadProject() {
   return useMutation({
     mutationFn: (id: string) => downloadProject(id),
+  });
+}
+
+export function useExportManifest() {
+  return useMutation({
+    mutationFn: (id: string) => exportProjectManifest(id),
   });
 }

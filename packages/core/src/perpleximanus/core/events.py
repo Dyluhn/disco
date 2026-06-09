@@ -543,6 +543,10 @@ class DeliverableEvent(BaseEvent, LLMConvertible):
     title: str  # short human label, e.g. "Landing page" / "Sales report"
     path: str  # workspace-relative path (dir for an app root, file/dir for files)
     artifact_kind: Literal["app", "files"] = "app"
+    # Optional canonical URL the deliverable is reachable at (a deploy target, a
+    # tunnel, or the live preview). When the agent serves to a known address it
+    # passes it on `serve(url=…)`; the UI surfaces an "Open deployed app" link.
+    deployment_url: str = ""
 
     def to_llm_message(self) -> LLMMessage:
         return LLMMessage(

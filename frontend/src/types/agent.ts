@@ -160,6 +160,8 @@ export interface DeliverableEvent extends EventBase {
   title: string;
   path: string;
   artifact_kind: "app" | "files";
+  /** Canonical URL the deliverable is reachable at (deploy target / tunnel / preview). */
+  deployment_url?: string;
 }
 
 export type AgentEvent =
