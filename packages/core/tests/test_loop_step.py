@@ -779,3 +779,26 @@ def test_plan_step_lag_signal_fires_once_per_episode():
     )
     # The nudge is more recent than the last plan_step (there is none) → silent.
     assert AgentLoop._plan_step_lag_signal(events) is False
+
+
+def test_productive_gate_rejects_read_only_then_finish():
+    """The build-finish gate must require a STATE-CHANGING action since plan
+    approval — reading the files and declaring done delivers nothing (caught live:
+    a build iteration 'finished' after only file_reads with zero edits)."""
+    from perpleximanus.core import ActionEvent, StatusEvent, ToolCall
+    from perpleximanus.core.events import ConversationStatus
+    from perpleximanus.core.loop.engine import AgentLoop
+
+    def _seqd(evs):
+        return [e.model_copy(update={"seq": i}) for i, e in enumerate(evs, 1)]
+
+    approved = StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
+    rd = ActionEvent(thought="read it", tool_call=ToolCall(tool_name="file_read", arguments={"path": "index.html"}))
+    wr = ActionEvent(thought="edit it", tool_call=ToolCall(tool_name="file_write", arguments={"path": "index.html", "content": "x"}))
+
+    # only reads after approval → NOT productive (finish would be refused)
+    assert AgentLoop._productive_action_since_approval(_seqd([approved, rd, rd])) is False
+    # a write after approval → productive (finish allowed)
+    assert AgentLoop._productive_action_since_approval(_seqd([approved, rd, wr])) is True
+    # no plan-approval marker → gate inert (don't block)
+    assert AgentLoop._productive_action_since_approval(_seqd([rd])) is True

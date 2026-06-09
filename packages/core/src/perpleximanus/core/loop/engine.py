@@ -153,8 +153,12 @@ _EXECUTION_NUDGE = (
 # reminder fired.
 
 # The tool names that don't count as "productive work" for the execution gate:
-# meta tools that don't change workspace state. plan_step is informational; the
-# planning tool would have been intercepted upstream but is named for clarity.
+# meta tools + READ-ONLY/inspection tools that don't change workspace state. The
+# build-finish gate must require a STATE-CHANGING action since plan approval — a
+# model that only READ the files (file_read/list/search/extract/preview/browser)
+# and then declared done has delivered nothing (caught live: a macOS-clone
+# iteration "finished" after 5 file_reads with zero edits). plan_step is
+# informational; the planning tool would have been intercepted upstream.
 _NON_PRODUCTIVE_TOOLS = frozenset(
     {
         "submit_plan",
@@ -165,6 +169,13 @@ _NON_PRODUCTIVE_TOOLS = frozenset(
         "finish",
         "remember",  # bookkeeping — recording a fact isn't task progress on its own
         "serve",  # a handoff marker, not task work itself
+        # read-only / inspection: gather context but never change the deliverable
+        "file_read",
+        "file_list",
+        "search",
+        "extract",
+        "preview_status",
+        "browser",
     }
 )
 
