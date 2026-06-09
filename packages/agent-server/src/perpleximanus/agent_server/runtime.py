@@ -231,6 +231,12 @@ class ConversationRuntime:
         # the engine polls it at each sub-question/section boundary and halts,
         # keeping the partial report (resumable). See _execute_deep_research.
         self._cancel_flags: dict[str, asyncio.Event] = {}
+        # Auto-suspend (lifecycle G): a build session is live only while a UI is
+        # watching it. Track open WS connections per conversation; when the last one
+        # closes, free the idle sandbox after a grace period (a quick reconnect — or
+        # the WS-reconnect backoff — cancels it).
+        self._connections: dict[str, int] = {}
+        self._suspend_tasks: dict[str, asyncio.Task] = {}
 
     # The generative (text-producing) roles a model PICK drives. NLI_VERIFIER is a
     # cross-encoder (entailment scorer), NOT a chat model — pointing it at a picked
@@ -795,6 +801,60 @@ class ConversationRuntime:
         if reconciled:
             _LOG.info("reconciled %d orphaned RUNNING conversation(s) on startup", reconciled)
         return reconciled
+
+    # ---- auto-suspend (lifecycle G): live only while a UI is watching ----------
+
+    def on_connect(self, conversation_id: str) -> None:
+        """A UI WebSocket connected — track it and cancel any pending idle-suspend
+        (the user is back before the grace elapsed, or the WS reconnected)."""
+        self._connections[conversation_id] = self._connections.get(conversation_id, 0) + 1
+        task = self._suspend_tasks.pop(conversation_id, None)
+        if task is not None:
+            task.cancel()
+
+    def on_disconnect(self, conversation_id: str, *, grace_s: float = 60.0) -> None:
+        """A UI WebSocket closed. When the LAST connection for a conversation goes,
+        schedule an idle-suspend after `grace_s` — long enough that a brief blip (the
+        WS-reconnect backoff) reconnects and cancels it before it fires."""
+        n = self._connections.get(conversation_id, 0) - 1
+        if n > 0:
+            self._connections[conversation_id] = n
+            return
+        self._connections.pop(conversation_id, None)
+        old = self._suspend_tasks.pop(conversation_id, None)
+        if old is not None:
+            old.cancel()
+        self._suspend_tasks[conversation_id] = asyncio.create_task(
+            self._suspend_after_grace(conversation_id, grace_s)
+        )
+
+    async def _suspend_after_grace(self, conversation_id: str, grace_s: float) -> None:
+        try:
+            await asyncio.sleep(grace_s)
+        except asyncio.CancelledError:
+            return
+        if self._connections.get(conversation_id, 0) <= 0:
+            await self._suspend(conversation_id)
+        self._suspend_tasks.pop(conversation_id, None)
+
+    async def _suspend(self, conversation_id: str) -> None:
+        """Free an IDLE build's sandbox (its last UI closed): snapshot first, then
+        tear down the container/port/memory/preview-server. Skips when there's no
+        live sandbox, when storage isn't configured (no durable snapshot → keep the
+        sandbox so nothing is lost), or when the loop is actively RUNNING (don't
+        interrupt in-flight work — that run continues in the background). Resume (or
+        the next message) re-creates the sandbox and rehydrates from the snapshot."""
+        if conversation_id not in self._executors:
+            return
+        if not self._config_store.load().projects.projects_root.strip():
+            return
+        state = await self._store.get_state(conversation_id)
+        if state.execution_status is ConversationStatus.RUNNING:
+            return
+        with contextlib.suppress(Exception):
+            await self._maybe_snapshot(conversation_id)
+            await self._teardown_sandbox(conversation_id)
+            _LOG.info("auto-suspended idle conversation %s (no UI connected)", conversation_id)
 
     async def _maybe_run_deep_research(self, conversation_id: str) -> None:
         """The Deep Research driver. Inspects the conversation state to decide

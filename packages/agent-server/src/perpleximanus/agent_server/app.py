@@ -357,6 +357,8 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         last_seq: int = Query(default=0),
     ) -> None:
         await websocket.accept()
+        if runtime is not None:
+            runtime.on_connect(conversation_id)
 
         # (1) On connect: one state snapshot, then replay events after last_seq,
         #     then live — all via the store's subscribe (history-then-live).
@@ -413,6 +415,10 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
                 await sender
             with contextlib.suppress(asyncio.CancelledError):
                 await eph_sender
+            # Last viewer left → after a grace window, free an idle sandbox
+            # (an in-flight RUNNING loop is left alone; see runtime._suspend).
+            if runtime is not None:
+                runtime.on_disconnect(conversation_id)
 
     # ---- research-answer stream (Stage 4) -----------------------------------
 

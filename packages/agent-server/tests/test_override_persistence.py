@@ -139,3 +139,99 @@ async def test_reconcile_marks_orphaned_running_paused_and_notes(tmp_path, monke
         and "interrupted" in getattr(getattr(e, "message", None), "content", "")
         for e in events
     )
+
+
+# ---- auto-suspend on tab-close (lifecycle G) --------------------------------
+
+
+async def _runtime_with_projects(tmp_path, monkeypatch, root: str = ""):
+    """A runtime whose config has projects_root set (or not) — auto-suspend only
+    fires when storage is configured (otherwise the snapshot wouldn't be durable)."""
+    from perpleximanus.core.llm import ProjectStorageSettings
+
+    monkeypatch.setenv("PMX_DB", str(tmp_path / "c.db"))
+    store = SqliteEventStore(":memory:")
+    cfg = ConfigStore(tmp_path / "config.json")
+    if root:
+        cfg.save_projects(ProjectStorageSettings(projects_root=root))
+    rt = ConversationRuntime(
+        store,
+        config_store=cfg,
+        secret_store=SecretStore(tmp_path / "s.json", box=SecretBox(None)),
+    )
+    return rt, store
+
+
+async def _set_status(store, cid, status):
+    from perpleximanus.core import StatusEvent
+
+    store.create_conversation(cid, surface="build")
+    await store.append(cid, StatusEvent(status=status))
+
+
+async def test_suspend_frees_idle_sandbox_but_not_a_running_one(tmp_path, monkeypatch):
+    """The core auto-suspend policy: when the last viewer leaves, a build that is NOT
+    actively RUNNING has its sandbox torn down (freeing container/port/memory) after
+    snapshotting; an in-flight RUNNING run is left alone to finish in the background."""
+    from perpleximanus.core import ConversationStatus
+
+    rt, store = await _runtime_with_projects(tmp_path, monkeypatch, root=str(tmp_path / "ws"))
+
+    # an IDLE (finished) build with a live sandbox → suspend tears it down
+    idle = _FakeExecutor()
+    rt._executors["conv_idle"] = idle
+    await _set_status(store, "conv_idle", ConversationStatus.FINISHED)
+    await rt._suspend("conv_idle")
+    assert idle.killed is True
+    assert "conv_idle" not in rt._executors  # sandbox freed
+
+    # a RUNNING build → left alone (don't interrupt in-flight work)
+    running = _FakeExecutor()
+    rt._executors["conv_run"] = running
+    await _set_status(store, "conv_run", ConversationStatus.RUNNING)
+    await rt._suspend("conv_run")
+    assert running.killed is False
+    assert "conv_run" in rt._executors  # still live
+
+
+async def test_suspend_is_a_noop_without_durable_storage(tmp_path, monkeypatch):
+    """No projects_root → no durable snapshot, so tearing the sandbox down would LOSE
+    work. Auto-suspend must keep the sandbox in that config (resume has nothing to
+    restore from otherwise)."""
+    from perpleximanus.core import ConversationStatus
+
+    rt, store = await _runtime_with_projects(tmp_path, monkeypatch, root="")  # not configured
+    ex = _FakeExecutor()
+    rt._executors["conv_x"] = ex
+    await _set_status(store, "conv_x", ConversationStatus.FINISHED)
+    await rt._suspend("conv_x")
+    assert ex.killed is False
+    assert "conv_x" in rt._executors  # kept — nothing to restore from
+
+
+async def test_on_disconnect_grace_fires_suspend_but_reconnect_cancels_it(tmp_path, monkeypatch):
+    """Tab-close scheduling: the last on_disconnect schedules a suspend after the grace;
+    an on_connect within the grace (a reconnect/blip) cancels it so the sandbox survives.
+    A real disconnect with no reconnect lets the suspend fire."""
+    import asyncio
+
+    from perpleximanus.core import ConversationStatus
+
+    rt, store = await _runtime_with_projects(tmp_path, monkeypatch, root=str(tmp_path / "ws"))
+    await _set_status(store, "conv_a", ConversationStatus.FINISHED)
+
+    # reconnect within the grace → the pending suspend is cancelled, sandbox kept
+    keep = _FakeExecutor()
+    rt._executors["conv_a"] = keep
+    rt.on_connect("conv_a")
+    rt.on_disconnect("conv_a", grace_s=0.05)
+    rt.on_connect("conv_a")  # a blip reconnected before the grace elapsed
+    await asyncio.sleep(0.12)
+    assert keep.killed is False
+    assert "conv_a" in rt._executors
+
+    # now the viewer really leaves and nothing reconnects → suspend fires
+    rt.on_disconnect("conv_a", grace_s=0.05)
+    await asyncio.sleep(0.12)
+    assert keep.killed is True
+    assert "conv_a" not in rt._executors
