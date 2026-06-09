@@ -91,33 +91,67 @@ export async function killConversation(cid: string): Promise<void> {
 
 // ---- live: the conversation WebSocket (history-then-live) -------------------
 
-function subscribeLive(cid: string, onFrame: (f: WSServerFrame) => void): AgentHandle {
+// Reconnect with exponential backoff. A dropped socket (network blip, server
+// restart) used to send a FATAL error frame and die — a transient drop became a
+// permanent failure. Now we reconnect silently: on reopen the server replays
+// history-then-live and the reducers dedup events by id, so no work is lost. Only
+// after exhausting retries do we surface the error.
+const _RECONNECT_MAX_ATTEMPTS = 6;
+
+// exported for the reconnect test; not part of the public api (use subscribeConversation)
+export function subscribeLive(cid: string, onFrame: (f: WSServerFrame) => void): AgentHandle {
   let closed = false;
+  let ws: WebSocket | null = null;
+  let attempt = 0;
+  let timer: ReturnType<typeof setTimeout> | null = null;
   const queue: WSClientFrame[] = [];
-  const ws = new WebSocket(agentWsUrl(`/ws/conversations/${cid}`)!);
-  ws.onopen = () => {
-    for (const f of queue) ws.send(JSON.stringify(f));
-    queue.length = 0;
-  };
-  ws.onmessage = (ev) => {
-    if (closed) return;
-    try {
-      onFrame(JSON.parse(ev.data) as WSServerFrame);
-    } catch {
-      onFrame({ type: "error", error: { detail: "malformed frame from server" } });
-    }
-  };
-  ws.onerror = () => {
-    if (!closed) onFrame({ type: "error", error: { detail: "connection to the agent server failed" } });
-  };
+
+  function connect() {
+    ws = new WebSocket(agentWsUrl(`/ws/conversations/${cid}`)!);
+    ws.onopen = () => {
+      attempt = 0; // a successful connection resets the backoff
+      for (const f of queue) ws?.send(JSON.stringify(f));
+      queue.length = 0;
+    };
+    ws.onmessage = (ev) => {
+      if (closed) return;
+      try {
+        onFrame(JSON.parse(ev.data) as WSServerFrame);
+      } catch {
+        onFrame({ type: "error", error: { detail: "malformed frame from server" } });
+      }
+    };
+    // onclose is the definitive "connection ended" signal (onerror fires first but
+    // a close always follows); reconnect from here.
+    ws.onclose = () => {
+      if (closed) return;
+      attempt += 1;
+      if (attempt > _RECONNECT_MAX_ATTEMPTS) {
+        onFrame({
+          type: "error",
+          error: { detail: "lost connection to the agent server (couldn't reconnect)" },
+        });
+        return;
+      }
+      const delay = Math.min(1000 * 2 ** (attempt - 1), 15000); // 1s,2s,…capped 15s
+      timer = setTimeout(connect, delay);
+    };
+    ws.onerror = () => {
+      /* onclose handles teardown + reconnect */
+    };
+  }
+
+  connect();
+
   return {
     send: (f) => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(f));
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(f));
       else queue.push(f);
     },
     cancel: () => {
       closed = true;
-      ws.close();
+      if (timer) clearTimeout(timer);
+      ws?.close();
     },
   };
 }
