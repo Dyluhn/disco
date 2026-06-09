@@ -22,11 +22,13 @@ through the real UI: 3 iterations, workspace accumulated); and the **research-gr
 empty-prose** bug — reasoning model burned its budget thinking + the canary checked the
 wrong frame shape (`2188d0f`, canary now PASS).
 
-**Lifecycle cluster (in progress, 2026-06-09):** **auto-suspend on tab-close** landed
-(`a98d224`) — idle build sandboxes free after a 60s disconnect grace, RUNNING runs left
-alone, no-op without durable storage. Cluster 1 is now all-✅ except **checkpointed Deep
-Research resume** (the one remaining 🔴 — engine is stateless and redoes completed
-sub-questions). NEXT.
+**Lifecycle cluster (2026-06-09):** Cluster 1 (session lifecycle) is now **all-✅**.
+**Auto-suspend on tab-close** landed (`a98d224`) — idle build sandboxes free after a 60s
+disconnect grace, RUNNING runs left alone, no-op without durable storage. **Checkpointed
+Deep Research resume** landed (`e6b31a8`) — the engine interleaves gather→synthesize so
+completed sections survive a Stop, and resume carries them forward instead of redoing
+finished sub-questions. NEXT milestone: the **Ask-gate** (Cluster 4, two-way) or remaining
+backend-coherence 🔴s (GAP A S3 microcompact, persistent CodeAct kernel, GAP H cache markers).
 
 ---
 
@@ -53,8 +55,13 @@ sub-questions). NEXT.
 - [x] ✅ Build explicit Resume button — `e0bd746`: `useBuildStream.resume()` (sends the existing
   surface-agnostic `resume` frame) + a Resume button on `AgentStatusBar` when PAUSED (replaces Stop).
   Pairs with orphan-reconciliation (reconciled→PAUSED runs get one-click Resume). Regression test.
-- [ ] 🔴 Checkpointed Deep Research resume — `runtime.py:757-768` re-runs the same plan;
-  engine stateless (`deep_research/engine.py:119-235`) → redoes completed sub-questions
+- [x] ✅ Checkpointed Deep Research resume — `e6b31a8`: the engine now interleaves
+  gather→synthesize PER sub-question (each completed section is a durable checkpoint that
+  survives Stop, vs. the old gather-all-then-synth-all that left zero sections on Stop).
+  `run()` takes `resume_sections`/`resume_passages`/`resume_all_hits`; matching plan steps
+  are skipped, only un-done sub-questions run, coherence re-runs over the full set. The
+  runtime PAUSED branch rebuilds the partial ReportEvent into retrieval types + passes it as
+  `resume_from`. Tests: engine (done subq not re-searched) + runtime wiring + stronger Stop test.
 - [x] ✅ Build session persistence — NON-ISSUE (by design): builds persist as server resources
   reached via History + the `/build/:cid` route (read-only-on-open, `useBuild.ts:30-39`). A
   localStorage stash was the "trap" Deep Research deliberately REMOVED — don't re-introduce it.
