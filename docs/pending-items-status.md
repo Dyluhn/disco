@@ -70,24 +70,27 @@ backend-coherence 🔴s (GAP A S3 microcompact, persistent CodeAct kernel, GAP H
 
 - [x] ✅ GAP A S1 — model-aware threshold — `view.py:266-285` (`soft=0.65×ctx`, `hard=0.80×ctx`, `min(…,BUDGET)`)
 - [x] ✅ GAP A S2 — Snip at ingestion — `events.py:243-262` `snip_content` (head 5k + tail 2k, reversible)
-- [ ] 🔴 GAP A S3 — Microcompact (drop no-op turns with tombstone) — not present
+- [x] ✅ GAP A S3 — Microcompact — `5d4e15b`: `view.microcompact()` tombstones no-op turns (a
+  failed call an identical later call superseded), no-model + reversible, run before the summarizer.
 - [x] ✅ Structured summarizer — `summarizer.py:24-34` (FILES/DECISIONS/PROGRESS/FAILED/OPEN).
   Caveat: `keep_recent` counts raw events not tool turns (`view.py:272`)
 - [x] ✅ GAP D — plan pinning — `view.py:34-53` `_latest_plan` + `_pinned_seqs`
 - [x] ✅ GAP C — `file_read` offset/limit — `builtin/files.py:21-58`
 - [x] ✅ GAP G — Knowledge/Datasource events — `events.py` (both classes)
 - [x] ✅ GAP B — notify/finish turn-taking — `test_cluster2_turntaking.py`, serve/finish tests
-- [ ] 🔴 Persistent CodeAct kernel — `builtin/system.py:92-99` stateless one-shot
-  (writes `_codeact.{ext}` + fresh subprocess). Doc "Manus-faithful CodeAct" is an OVERCLAIM
-- [ ] 🔴 GAP H — cache markers — `openai_provider.py` emits no `cache_control`/`prompt_cache_key`
-  (but `sort_keys=True` at `:134` ✅ and `cached_tokens` parsed at `:197-206` ✅)
-- [ ] 🟡 GAP H — mode-boundary de-mutation — two prompt strings (`prompts.py:99` vs `:134`);
-  tools filtered not masked (`engine.py:724-726`) → breaks cache prefix
-- [ ] 🔴 Escape-instead-of-halt on stuck — `stuck.py` bool; `engine.py:1308-1310` emits STUCK
-  immediately; no temp-bump/reframe escape
-- [ ] 🟡 3-strike circuit breaker — threshold is 4 (`engine.py:559`); 1st hit asks the MODEL to
-  call `ask_user` (`:1334-1350`); 2nd → `AWAITING_USER_DECISION` (`:1367-1379`); harness does NOT
-  synthesize the AlternativesEvent (depends on the model volunteering)
+- [x] ✅ Persistent CodeAct kernel — `edf0185`: Python `code_exec` shares state across cells via a
+  namespace-serialization runner (dill→functions/imports, pickle fallback→data). Verified live vs the
+  process sandbox. Node stays one-shot (documented). Overclaim corrected in the gap docs.
+- [x] ✅ GAP H — cache markers — `eb302cc`: `prompt_cache_key` (stable prefix hash) on every request +
+  Anthropic `cache_control` breakpoints for claude models (gated; local stays plain-string).
+- [ ] 🟡 GAP H — mode-boundary de-mutation — DEFERRED (low value): the plan→exec tool/prompt change
+  is a ONE-TIME-per-conversation cache break (planning happens once), not per-turn. Noted in `c97c1b3`.
+- [x] ✅ Escape-instead-of-halt on stuck — `c97c1b3`: first stuck → a `stuck_escape` marker + a
+  single high-temp (0.9) retry to break the self-imitation chain BEFORE STUCK; halts only if still
+  stuck after acting. NO reframe reminder (respects the no-automatic-nudge invariant).
+- [ ] 🟡 3-strike circuit breaker — AS-IS (intentional): the existing breaker (diagnose→`ask_user`→
+  hand off) is model-driven by design; harness-synthesizing the AlternativesEvent would violate the
+  same no-nudge rule that kept the stuck-escape reminder-free (`c97c1b3` rationale).
 - [x] ✅ `propose_alternatives` phantom — RESOLVED; `events.py:195` docstring corrected
 - [ ] 🟠 E3 `</parameter>` leak — mitigated (`openai_provider.py:236,335` `{"_raw":…}` fallback);
   root cause not isolated
@@ -101,15 +104,19 @@ backend-coherence 🔴s (GAP A S3 microcompact, persistent CodeAct kernel, GAP H
   refused at `engine.py:1837-1853` (mkfs/dd/fork-bomb/`rm -rf /`/`pkill http.server`)
 - [x] ✅ Preview tooling — `builtin/preview.py:41-196` `preview_status` + `restart_preview` + `run_server`;
   raw `pkill http.server` hard-denied → steered to `restart_preview`
-- [ ] 🔴 `verify_app` / visual self-verification — only the static MVP (`engine.py:458-472`
-  `_static_verify_command` = files-exist + HTML-parse; no curl/chromium/screenshot; `test_verify_on_finish.py:158`)
+- [x] ✅ `verify_app` / visual self-verification — `391390e`: `verify="app[:url]"` GETs the RUNNING
+  deliverable (HTTP 200 + non-trivial body) on finish, beyond static file checks. Portable
+  (python3/urllib). Tested live vs a real http.server (passes serving, fails not). (Pixel screenshot
+  still needs a browser in the sandbox image — absent on the process backend.)
 
 ## Cluster 4 — Build-surface UX
 
 - [x] ✅ Client-side `srcdoc` live preview — `buildTrace.ts:216-247` `deriveSrcDoc` →
   `ExecutionCanvas.tsx:235-261` iframe, updates per `file_write`
-- [ ] 🟡 DeliverablePanel handoff — `DeliverablePanel.tsx:16-56` hero exists; missing
-  `deployment_url` on `Project` (`project.ts:17-28`), manifest export, auto-switch-to-preview
+- [x] 🟡 DeliverablePanel handoff — `54380a7`: auto-switch-to-Preview on finish (renderable artifact →
+  the result is shown, not the file tree). VERIFIED live (real Qwen index.html → Preview auto-activated).
+  Still open: `deployment_url`/manifest export need a backend field — deferred (no unwired UI per the
+  no-false-affordances rule).
 - [x] ✅ Ask-gate (two-way) — `b1e0772`: dedicated `AWAITING_USER_QUESTION` status (core enum +
   `state.py` `pending_question_id`); the engine's free-form `ask_user` branch emits it with the
   question message id as detail; the loop re-kicks on the user's reply (same as the decision gate).
@@ -128,20 +135,21 @@ backend-coherence 🔴s (GAP A S3 microcompact, persistent CodeAct kernel, GAP H
 - [x] ✅ Aggregate progress + sticky plan — `f9d4dc5`: the read-only plan tracker is now `sticky
   top-0` (opaque bg) so the plan + done/total progress bar stay pinned while the feed scrolls.
   Real-browser e2e asserts <40px drift on a 4000px scroll + screenshot. (done/total + bar already in `PlanPanel`.)
-- [ ] 🟡 Liveness — auto-scroll on key transitions + active-state spinner landed; no continuous
-  auto-scroll, no `pmx-rise` entrance animations
+- [x] 🟡 Liveness — auto-scroll on key transitions + active-state spinner landed; plan-drafting
+  skeleton added (`54380a7`). Still open (lowest value): continuous auto-scroll, `pmx-rise` animations.
 - [x] ✅ Persistence + reconnect + notifications — reconnect/backoff DONE (`b3694a0`); persistence
   is by-design (History + route); completion `Notification` + `document.title` badge DONE (`1ee4220`,
   `useBuildNotifications`): badges the title + best-effort OS-notify when a build finishes or a gate
   opens while the tab is hidden; restores on refocus; no noise when visible. Tests cover all branches.
-- [ ] 🟡 Plan front-door polish — Revise modal keeps text (`PlanPanel.tsx:142-188`); missing
-  "drafting…" skeleton, "re-planning" stale state, per-step skip/reorder
+- [x] 🟡 Plan front-door polish — `54380a7`: "Drafting a plan…" skeleton between submit and the gate
+  (real-browser e2e + screenshot). Still open (lowest value): "re-planning" stale state, per-step skip/reorder.
 
 ## Doc-integrity items (not features — correct the docs)
 
-- [ ] CodeAct "Manus-faithful" overclaim — it's stateless one-shot
-- [ ] Egress deny-by-default contract (`tool-sandbox-contract.md:36,87`) — only true on gVisor;
-  podman/local seal instead. Either enforce on all tiers or scope the guarantee
+- [x] ✅ CodeAct "Manus-faithful" overclaim — RESOLVED by making it true (`edf0185`, stateful CodeAct)
+  + the gap docs now describe the real namespace-serialization mechanism.
+- [x] ✅ Egress deny-by-default contract — `edf0185`: `tool-sandbox-contract.md` §7 now scopes the
+  guarantee by tier (gVisor = real selective allowlist; podman/local = sealed deny-all; process = models only).
 
 ## Process debt
 
