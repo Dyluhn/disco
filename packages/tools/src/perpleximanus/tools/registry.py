@@ -57,6 +57,9 @@ AGENT_TOOLS = frozenset(
         "file_write",
         "file_append",
         "file_edit",
+        # line-number-targeted edits — the reliable way to edit LARGE files (any model)
+        "file_replace_lines",
+        "file_insert_lines",
         "file_list",
         "shell",
         "code_exec",

@@ -36,7 +36,7 @@ async def test_file_read_whole_file_unchanged():
     ctx, inst = await _ctx()
     await inst.write_file("a.txt", b"line1\nline2\nline3")
     out = await FileReadTool().run(FileReadTool().definition.args_model(path="a.txt"), ctx)
-    assert out.content == "line1\nline2\nline3"
+    assert all(f"\t{ln}" in out.content for ln in ("line1", "line2", "line3"))  # numbered
     await inst.destroy()
 
 

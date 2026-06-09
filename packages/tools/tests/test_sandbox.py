@@ -59,7 +59,8 @@ async def test_backend_swap_identical_results_process_vs_fake():
 
     svc = ProcessSandboxService()
     proc = await svc.create(SandboxSpec(), owner_id="local", conversation_id="c")
-    assert await round_trip(proc) == await round_trip(FakeSandboxInstance()) == "same-bytes"
+    a, b = await round_trip(proc), await round_trip(FakeSandboxInstance())
+    assert a == b and "same-bytes" in a  # identical across backends (numbered read)
     await proc.destroy()
 
 

@@ -7,11 +7,42 @@ instance's jailed workspace (the instance rejects path escapes).
 
 from __future__ import annotations
 
+import re
+
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 
 _FS = frozenset({Capability.FILESYSTEM})
+
+# A line-number prefix the model may have copied out of a numbered file_read
+# ("  123\t<code>"). file_edit strips it defensively so a paste-back still matches.
+_LINENO_PREFIX = re.compile(r"(?m)^\s*\d+\t")
+
+
+def _number_lines(text: str, start: int = 1) -> str:
+    """Render text with right-aligned 1-based line numbers + a tab, so the model
+    can target precise ranges with file_replace_lines / file_insert_lines — the
+    robust way to edit a large file without reproducing its exact bytes."""
+    lines = text.splitlines()
+    if not lines:
+        return ""
+    width = len(str(start + len(lines) - 1))
+    return "\n".join(f"{start + i:>{width}}\t{ln}" for i, ln in enumerate(lines))
+
+
+def _strip_line_numbers(s: str) -> str:
+    """Remove accidental `N\\t` line-number prefixes the model copied from a read."""
+    return _LINENO_PREFIX.sub("", s)
+
+
+def _norm_ws(s: str) -> str:
+    """Whitespace-normalized form for forgiving matching: strip BOTH ends of each
+    line + drop blank leading/trailing lines. Tolerates the #1 cause of failed exact
+    matches — indentation and trailing-space drift — which small models get wrong
+    constantly. The replacement still uses the caller's `new` verbatim, so the edit's
+    own indentation is whatever the model intended."""
+    return "\n".join(ln.strip() for ln in s.strip("\n").splitlines())
 
 
 class FileReadArgs(BaseModel):
@@ -30,10 +61,11 @@ class FileReadTool:
     definition = ToolDef(
         name="file_read",
         description=(
-            "Read a UTF-8 text file from the workspace. For large files, pass "
-            "`offset` (1-based start line) and `limit` (line count) to read a "
-            "slice — navigate by path + selective read rather than dumping the "
-            "whole file into context."
+            "Read a UTF-8 text file from the workspace, with 1-based LINE NUMBERS. "
+            "For large files pass `offset` (1-based start line) + `limit` (line "
+            "count) to read a slice. Use the line numbers to edit precisely with "
+            "`file_replace_lines` / `file_insert_lines` — far more reliable than "
+            "reproducing exact text for `file_edit` on a big file."
         ),
         args_model=FileReadArgs,
         needs=_FS,
@@ -45,20 +77,27 @@ class FileReadTool:
         assert ctx.sandbox is not None  # sandbox tools always receive an instance
         data = await ctx.sandbox.read_file(args.path)
         text = data.decode("utf-8", errors="replace")
-        if args.offset is None and args.limit is None:
-            return ToolOutcome(success=True, content=text)
-        # Line-range slice. offset is 1-based; clamp to bounds.
         lines = text.splitlines()
+        total = len(lines)
+        if args.offset is None and args.limit is None:
+            # number the whole file so the model can reference ranges for editing
+            return ToolOutcome(
+                success=True,
+                content=f"[{total} lines]\n{_number_lines(text)}",
+            )
+        # Line-range slice. offset is 1-based; clamp to bounds.
         start = max((args.offset or 1) - 1, 0)
-        end = start + args.limit if args.limit is not None else len(lines)
+        end = start + args.limit if args.limit is not None else total
         sliced = lines[start:end]
         shown_to = start + len(sliced)
         note = (
-            f"[lines {start + 1}-{shown_to} of {len(lines)}"
-            + ("; more below — increase offset" if shown_to < len(lines) else "")
+            f"[lines {start + 1}-{shown_to} of {total}"
+            + ("; more below — increase offset" if shown_to < total else "")
             + "]\n"
         )
-        return ToolOutcome(success=True, content=note + "\n".join(sliced))
+        return ToolOutcome(
+            success=True, content=note + _number_lines("\n".join(sliced), start=start + 1)
+        )
 
 
 class FileWriteArgs(BaseModel):
@@ -147,14 +186,60 @@ class FileListTool:
 
 class FileEditArgs(BaseModel):
     path: str = Field(description="Workspace-relative path to edit.")
-    old: str = Field(description="Exact text to replace (first occurrence).")
+    old: str = Field(description="Text to replace (the first occurrence).")
     new: str = Field(description="Replacement text.")
+
+
+def _forgiving_replace(text: str, old: str, new: str) -> tuple[str | None, str]:
+    """Replace the first occurrence of `old` with `new`, FORGIVINGLY — small models
+    (and large ones) rarely reproduce a long substring byte-perfectly. Tries, in
+    order: exact match; with accidental line-number prefixes stripped from `old`;
+    whitespace-normalized match (per-line rstrip, drop blank edges) located back in
+    the original text. Returns (updated_text_or_None, note). None ⇒ not found."""
+    if old in text:
+        return text.replace(old, new, 1), "exact"
+    old2 = _strip_line_numbers(old)
+    if old2 != old and old2 in text:
+        return text.replace(old2, new, 1), "stripped line numbers"
+    # whitespace-normalized: find the contiguous line span whose rstrip'd form
+    # equals the rstrip'd `old`, then splice the ORIGINAL lines out.
+    target = _norm_ws(old2)
+    if target:
+        doc = text.splitlines(keepends=True)
+        norm = [x.strip() for x in doc]
+        tgt = target.split("\n")
+        for i in range(0, len(norm) - len(tgt) + 1):
+            if norm[i : i + len(tgt)] == tgt:
+                updated = "".join(doc[:i]) + new + ("" if new.endswith("\n") else "\n") + "".join(
+                    doc[i + len(tgt) :]
+                )
+                return updated, "whitespace-normalized"
+    return None, "not found"
+
+
+def _nearest_anchor(text: str, old: str) -> str:
+    """A short hint for a failed edit: the line in the file most similar to the
+    first non-blank line of `old`, so the model can re-aim."""
+    first = next((ln.strip() for ln in _strip_line_numbers(old).splitlines() if ln.strip()), "")
+    if not first:
+        return ""
+    token = first[:24]
+    for n, ln in enumerate(text.splitlines(), 1):
+        if token and token in ln:
+            return f" (similar text near line {n}: {ln.strip()[:60]!r})"
+    return ""
 
 
 class FileEditTool:
     definition = ToolDef(
         name="file_edit",
-        description="Replace the first occurrence of `old` with `new` in a workspace file.",
+        description=(
+            "Replace the first occurrence of `old` with `new` in a workspace file. "
+            "Matching is forgiving (tolerates indentation / trailing-space drift and "
+            "pasted-in line numbers). For a LARGE file, prefer `file_replace_lines` / "
+            "`file_insert_lines` (target by line number) — far more reliable than "
+            "reproducing a long exact `old`."
+        ),
         args_model=FileEditArgs,
         needs=_FS,
         runs_in="sandbox",
@@ -163,12 +248,121 @@ class FileEditTool:
     async def run(self, args: FileEditArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
         text = (await ctx.sandbox.read_file(args.path)).decode("utf-8", errors="replace")
-        if args.old not in text:
+        updated, how = _forgiving_replace(text, args.old, _strip_line_numbers(args.new))
+        if updated is None:
             return ToolOutcome(
                 success=False,
-                content=f"`old` text not found in {args.path}; no change made",
+                content=(
+                    f"`old` not found in {args.path} (tried exact + whitespace-tolerant)."
+                    + _nearest_anchor(text, args.old)
+                    + " Tip: read the file for line numbers, then use file_replace_lines."
+                ),
                 error="old_text_not_found",
             )
-        updated = text.replace(args.old, args.new, 1)
         await ctx.sandbox.write_file(args.path, updated.encode("utf-8"))
-        return ToolOutcome(success=True, content=f"edited {args.path}", artifacts=[args.path])
+        return ToolOutcome(
+            success=True, content=f"edited {args.path} ({how})", artifacts=[args.path]
+        )
+
+
+class FileReplaceLinesArgs(BaseModel):
+    path: str = Field(description="Workspace-relative path to edit.")
+    start_line: int = Field(description="First line to replace (1-based, inclusive).")
+    end_line: int = Field(description="Last line to replace (1-based, inclusive).")
+    new_text: str = Field(description="Replacement text for that line range (can be multi-line).")
+
+
+class FileReplaceLinesTool:
+    """Surgical, large-file-friendly edit: replace an inclusive 1-based LINE RANGE
+    with new text. The model reads the numbered file, picks the range, and writes
+    the replacement — no need to reproduce the old bytes. Works for any model/size."""
+
+    definition = ToolDef(
+        name="file_replace_lines",
+        description=(
+            "Replace lines [start_line, end_line] (1-based, inclusive) of a file with "
+            "`new_text`. Read the file first for line numbers. The robust way to edit a "
+            "large file — no exact-text reproduction needed. Use start_line>end_line via "
+            "file_insert_lines to insert without replacing."
+        ),
+        args_model=FileReplaceLinesArgs,
+        needs=_FS,
+        runs_in="sandbox",
+    )
+
+    async def run(self, args: FileReplaceLinesArgs, ctx: ToolContext) -> ToolOutcome:
+        assert ctx.sandbox is not None
+        text = (await ctx.sandbox.read_file(args.path)).decode("utf-8", errors="replace")
+        lines = text.splitlines()
+        n = len(lines)
+        if args.start_line < 1 or args.end_line < args.start_line or args.start_line > n + 1:
+            return ToolOutcome(
+                success=False,
+                content=(
+                    f"bad range [{args.start_line},{args.end_line}] for {args.path} "
+                    f"({n} lines). start_line must be 1..{n + 1}, end_line >= start_line."
+                ),
+                error="bad_range",
+            )
+        new_lines = _strip_line_numbers(args.new_text).split("\n")
+        end = min(args.end_line, n)
+        result = lines[: args.start_line - 1] + new_lines + lines[end:]
+        out = "\n".join(result)
+        if text.endswith("\n"):
+            out += "\n"
+        await ctx.sandbox.write_file(args.path, out.encode("utf-8"))
+        replaced = max(0, end - args.start_line + 1)
+        return ToolOutcome(
+            success=True,
+            content=f"replaced lines {args.start_line}-{end} of {args.path} "
+            f"({replaced}→{len(new_lines)} lines)",
+            artifacts=[args.path],
+        )
+
+
+class FileInsertLinesArgs(BaseModel):
+    path: str = Field(description="Workspace-relative path to edit.")
+    after_line: int = Field(
+        description="Insert AFTER this 1-based line (0 = at the very top of the file)."
+    )
+    text: str = Field(description="Text to insert (can be multi-line).")
+
+
+class FileInsertLinesTool:
+    """Insert text after a given line WITHOUT replacing anything — the clean way to
+    ADD a block (a new section/app) to a large file by line number."""
+
+    definition = ToolDef(
+        name="file_insert_lines",
+        description=(
+            "Insert `text` AFTER line `after_line` (1-based; 0 = top) of a file, without "
+            "replacing anything. Read the file for line numbers first. The reliable way "
+            "to ADD a block to a large file."
+        ),
+        args_model=FileInsertLinesArgs,
+        needs=_FS,
+        runs_in="sandbox",
+    )
+
+    async def run(self, args: FileInsertLinesArgs, ctx: ToolContext) -> ToolOutcome:
+        assert ctx.sandbox is not None
+        text = (await ctx.sandbox.read_file(args.path)).decode("utf-8", errors="replace")
+        lines = text.splitlines()
+        n = len(lines)
+        if args.after_line < 0 or args.after_line > n:
+            return ToolOutcome(
+                success=False,
+                content=f"after_line {args.after_line} out of range for {args.path} (0..{n}).",
+                error="bad_line",
+            )
+        ins = _strip_line_numbers(args.text).split("\n")
+        result = lines[: args.after_line] + ins + lines[args.after_line :]
+        out = "\n".join(result)
+        if text.endswith("\n"):
+            out += "\n"
+        await ctx.sandbox.write_file(args.path, out.encode("utf-8"))
+        return ToolOutcome(
+            success=True,
+            content=f"inserted {len(ins)} lines after line {args.after_line} of {args.path}",
+            artifacts=[args.path],
+        )

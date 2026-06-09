@@ -793,8 +793,13 @@ def test_productive_gate_rejects_read_only_then_finish():
         return [e.model_copy(update={"seq": i}) for i, e in enumerate(evs, 1)]
 
     approved = StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
-    rd = ActionEvent(thought="read it", tool_call=ToolCall(tool_name="file_read", arguments={"path": "index.html"}))
-    wr = ActionEvent(thought="edit it", tool_call=ToolCall(tool_name="file_write", arguments={"path": "index.html", "content": "x"}))
+    rd = ActionEvent(
+        thought="read it", tool_call=ToolCall(tool_name="file_read", arguments={"path": "i.html"})
+    )
+    wr = ActionEvent(
+        thought="edit it",
+        tool_call=ToolCall(tool_name="file_write", arguments={"path": "i.html", "content": "x"}),
+    )
 
     # only reads after approval → NOT productive (finish would be refused)
     assert AgentLoop._productive_action_since_approval(_seqd([approved, rd, rd])) is False

@@ -13,8 +13,10 @@ from .browser import BrowserTool
 from .files import (
     FileAppendTool,
     FileEditTool,
+    FileInsertLinesTool,
     FileListTool,
     FileReadTool,
+    FileReplaceLinesTool,
     FileWriteTool,
 )
 from .plan import PlanStepTool, SubmitPlanTool
@@ -27,8 +29,10 @@ __all__ = [
     "CodeExecTool",
     "ExtractTool",
     "FileEditTool",
+    "FileInsertLinesTool",
     "FileListTool",
     "FileReadTool",
+    "FileReplaceLinesTool",
     "FileWriteTool",
     "PlanStepTool",
     "PreviewStatusTool",
@@ -50,6 +54,8 @@ def build_default_registry() -> ToolRegistry:
         FileWriteTool(),
         FileAppendTool(),
         FileEditTool(),
+        FileReplaceLinesTool(),
+        FileInsertLinesTool(),
         FileListTool(),
         ShellTool(),
         CodeExecTool(),

@@ -27,7 +27,7 @@ async def test_file_edit_replaces_and_reports_missing():
     ok = await ex.execute(call("file_edit", path="doc.txt", old="quick", new="slow"))
     assert ok.success
     read = await ex.execute(call("file_read", path="doc.txt"))
-    assert read.content == "the slow brown fox"
+    assert "the slow brown fox" in read.content  # numbered read
 
     missing = await ex.execute(call("file_edit", path="doc.txt", old="zebra", new="x"))
     assert missing.success is False and missing.error == "old_text_not_found"

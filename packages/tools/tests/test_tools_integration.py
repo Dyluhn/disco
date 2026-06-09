@@ -109,7 +109,7 @@ async def test_loop_drives_real_tools_with_secrets_held_out():
     # The agent read back exactly what it wrote (file_write → file_read round-trip).
     read_obs = observations[1]
     assert read_obs.tool_result.success
-    assert read_obs.tool_result.content == "hello world"
+    assert "hello world" in read_obs.tool_result.content  # numbered read
 
     # The search resolved via the capability; the provider key never appears.
     search_obs = observations[2]

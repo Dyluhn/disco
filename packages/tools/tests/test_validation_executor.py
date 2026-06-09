@@ -64,7 +64,7 @@ async def test_repair_loop_then_success():
     good = await ex.execute(call("file_read", path="note.txt"))
     assert bad1.structured["kind"] == bad2.structured["kind"] == "invalid_arguments"
     assert bad1.content == bad2.content  # identical → stuck-detectable
-    assert good.success and good.content == "hello"
+    assert good.success and "hello" in good.content  # numbered read
 
 
 # ---- §11.2 executor ↔ loop boundary -----------------------------------------
