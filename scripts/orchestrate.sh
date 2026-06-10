@@ -76,7 +76,7 @@ live_orders() {
   awk '/^[a-z0-9-]+:/ { if ($2 != "committed" && $2 != "staged") print substr($1, 1, length($1)-1) }' "$MANIFEST"
 }
 
-order_known() { all_orders | grep -qx "$1"; }
+order_known() { grep -qxF -- "$1" <<<"$(all_orders)"; }  # same SIGPIPE hazard as is_dirty
 
 # -uall: list untracked files INDIVIDUALLY (default collapses an untracked dir to
 # "dir/", which can never match a manifest's exact file paths — evidence files in
@@ -96,7 +96,7 @@ other_claimant() { # <file> <this-order>
   local f="$1" me="$2" o
   for o in $(live_orders); do
     [ "$o" = "$me" ] && continue
-    if order_files "$o" | grep -qx "$f"; then
+    if grep -qxF -- "$f" <<<"$(order_files "$o")"; then  # not `| grep -q` — see is_dirty
       # claimant if that order has an active dispatch, or the shared file is
       # dirty (the hunks cannot be attributed mechanically)
       if [ -e "$ACTIVE/$o.env" ] || is_dirty "$f"; then
@@ -278,7 +278,7 @@ cmd_commit() {
     is_dirty "$f" || continue
     for o in $(live_orders); do
       [ "$o" = "$order" ] && continue
-      if order_files "$o" | grep -qx "$f"; then
+      if grep -qxF -- "$f" <<<"$(order_files "$o")"; then  # not `| grep -q` — see is_dirty
         fail_reason "$order" "shared-file-uncommitted" \
           "Commit refused: '$f' has uncommitted changes and sits in both $order's and live order $o's manifests — the hunks cannot be attributed to one order mechanically. Commit '$o' first (or mark it committed in orders.yaml if it already is) before committing $order."
       fi
