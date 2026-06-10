@@ -113,6 +113,7 @@ class LLMMessage(BaseModel):
     # router owns provider-specific shaping.
     tool_calls: list[dict[str, Any]] | None = None
     tool_call_id: str | None = None  # VOLATILE
+    images: list[str] | None = None  # data-URL base64 (data:image/png;base64,...)
 
 
 class ToolCall(BaseModel):

@@ -1,0 +1,71 @@
+{
+  "date": "2026-06-10 07:12:08",
+  "vram_idle": {
+    "vram_used_mib": 27515,
+    "gtt_used_mib": 1768
+  },
+  "daemon": {
+    "source": "pmx-sandbox:base @ VM-201 (gVisor, runsc) via bp00-shot-remote.sh",
+    "title": "PMX Status Dashboard"
+  },
+  "image_turn": {
+    "answer": "Based on the screenshot provided, here is a description of the page:\n\n**Header**\nAt the very top is a bright orange horizontal bar containing the title text **\"PMX Status Dashboard\"** in black, aligned to the left.\n\n**Layout**\nBelow the header, the background is a very dark grey or black. There are three rectangular \"cards\" or panels arranged horizontally in a row near the top. The rest of the page below these cards is empty dark space.\n\n**Content and Numbers**\nEach card contains a label in small, light grey text and a large number in light green text. From left to right, they read:\n\n1.  **First Card:**\n    *   Label: \"Builds today\"\n    *   Number: **42**\n2.  **Second Card:**\n    *   Label: \"Tests passing\"\n    *   Number: **668**\n3.  **Third Card:**\n    *   Label: \"Driver speed\"\n    *   Number: **50 t/s**",
+    "usage": {
+      "completion_tokens": 791,
+      "prompt_tokens": 1040,
+      "total_tokens": 1831,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      }
+    },
+    "timings": {
+      "cache_n": 0,
+      "prompt_n": 1040,
+      "prompt_ms": 1855.31,
+      "prompt_per_token_ms": 1.783951923076923,
+      "prompt_per_second": 560.5532229115349,
+      "predicted_n": 791,
+      "predicted_ms": 16034.831,
+      "predicted_per_token_ms": 20.271594184576486,
+      "predicted_per_second": 49.33011143054767,
+      "draft_n": 798,
+      "draft_n_accepted": 527
+    },
+    "peak": {
+      "vram_used_mib": 27515,
+      "gtt_used_mib": 1769
+    }
+  },
+  "long_ctx_image_turn": {
+    "answer": "The page header says \"PMX Status Dashboard\", and the log lines report a status of \"OK\".",
+    "usage": {
+      "completion_tokens": 176,
+      "prompt_tokens": 14851,
+      "total_tokens": 15027,
+      "prompt_tokens_details": {
+        "cached_tokens": 12797
+      }
+    },
+    "timings": {
+      "cache_n": 12797,
+      "prompt_n": 2054,
+      "prompt_ms": 3654.309,
+      "prompt_per_token_ms": 1.779118305744888,
+      "prompt_per_second": 562.0761681620245,
+      "predicted_n": 176,
+      "predicted_ms": 3735.234,
+      "predicted_per_token_ms": 21.222920454545456,
+      "predicted_per_second": 47.11886859029448,
+      "draft_n": 174,
+      "draft_n_accepted": 120
+    },
+    "peak": {
+      "vram_used_mib": 27515,
+      "gtt_used_mib": 1769
+    }
+  },
+  "vram_after": {
+    "vram_used_mib": 27515,
+    "gtt_used_mib": 1769
+  }
+}

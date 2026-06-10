@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from typing import Literal, Protocol
 
 from pydantic import BaseModel
@@ -251,6 +252,23 @@ class View(BaseModel):
                 return False
             return seq is not None and any(a <= seq <= b for a, b in forgotten)
 
+        # BP-00: when the driver has VISION, only the LATEST browser screenshot
+        # renders as an image; older ones render as text only to save context.
+        # Computed on the post-condensation sequence.
+        driver_has_vision = os.environ.get("PMX_DRIVER_VISION") == "1"
+        latest_screenshot_seq = None
+        if driver_has_vision:
+            for e in reversed(events):
+                if (
+                    isinstance(e, ObservationEvent)
+                    and e.seq is not None
+                    and not is_forgotten(e.seq)
+                    and e.tool_result.tool_name == "browser"
+                    and (e.tool_result.structured or {}).get("screenshot_b64")
+                ):
+                    latest_screenshot_seq = e.seq
+                    break
+
         # BP-06: the newest _MASK_KEEP_RECENT visible observations render in
         # full; every older one above _MASK_MIN_CHARS elides to a restorable
         # stub. Computed on the post-condensation sequence, so the window never
@@ -308,7 +326,17 @@ class View(BaseModel):
                 )
                 visible.append(e.seq)
             else:
-                msgs.append(e.to_llm_message())
+                msg = e.to_llm_message()
+                # BP-00: attach image ONLY to the latest browser screenshot.
+                if (
+                    isinstance(e, ObservationEvent)
+                    and e.seq == latest_screenshot_seq
+                    and latest_screenshot_seq is not None
+                ):
+                    b64 = e.tool_result.structured.get("screenshot_b64")
+                    msg = msg.model_copy(update={"images": [f"data:image/png;base64,{b64}"]})
+
+                msgs.append(msg)
                 if e.seq is not None:
                     visible.append(e.seq)
 
@@ -328,9 +356,13 @@ class View(BaseModel):
 
     def fingerprint(self) -> list[str]:
         """[CONTRACT BP-06/B5] Stable per-message hashes for KV-prefix verification.
-        Role + content only; pure and deterministic across processes."""
+        Role + content + images (BP-00: an attached image changes the wire shape —
+        content-parts vs plain string — so it MUST change the hash; messages without
+        images hash exactly as before). Pure and deterministic across processes."""
         return [
-            hashlib.sha256(f"{m.role}{m.content}".encode()).hexdigest()[:16]
+            hashlib.sha256(
+                f"{m.role}{m.content}{''.join(m.images) if m.images else ''}".encode()
+            ).hexdigest()[:16]
             for m in self.messages
         ]
 

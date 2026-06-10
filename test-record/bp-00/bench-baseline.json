@@ -1,0 +1,183 @@
+{
+  "label": "baseline",
+  "date": "2026-06-10 07:01:00",
+  "model_path": "/var/home/dylan/models/Qwen3.6-27B-UD-Q5_K_XL.gguf",
+  "modalities": {
+    "vision": false,
+    "audio": false
+  },
+  "n_predict": 256,
+  "vram_before": {
+    "vram_used_mib": 26385,
+    "gtt_used_mib": 1822
+  },
+  "runs": [
+    {
+      "round": 1,
+      "prompt": "code-py",
+      "predicted_n": 256,
+      "tps": 54.7,
+      "pp_tps": 192.1,
+      "draft_n": 232,
+      "draft_accepted": 176,
+      "accept": 0.759,
+      "wall_s": 4.9,
+      "vram_used_mib": 26385,
+      "gtt_used_mib": 1822
+    },
+    {
+      "round": 1,
+      "prompt": "code-js",
+      "predicted_n": 256,
+      "tps": 49.4,
+      "pp_tps": 148.3,
+      "draft_n": 258,
+      "draft_accepted": 168,
+      "accept": 0.651,
+      "wall_s": 5.4,
+      "vram_used_mib": 26387,
+      "gtt_used_mib": 1824
+    },
+    {
+      "round": 1,
+      "prompt": "prose",
+      "predicted_n": 256,
+      "tps": 44.7,
+      "pp_tps": 136.5,
+      "draft_n": 286,
+      "draft_accepted": 159,
+      "accept": 0.556,
+      "wall_s": 6.0,
+      "vram_used_mib": 26387,
+      "gtt_used_mib": 1824
+    },
+    {
+      "round": 1,
+      "prompt": "json-tool",
+      "predicted_n": 183,
+      "tps": 61.0,
+      "pp_tps": 312.9,
+      "draft_n": 150,
+      "draft_accepted": 132,
+      "accept": 0.88,
+      "wall_s": 3.3,
+      "vram_used_mib": 26385,
+      "gtt_used_mib": 1822
+    },
+    {
+      "round": 1,
+      "prompt": "plan",
+      "predicted_n": 256,
+      "tps": 43.6,
+      "pp_tps": 172.1,
+      "draft_n": 292,
+      "draft_accepted": 157,
+      "accept": 0.538,
+      "wall_s": 6.1,
+      "vram_used_mib": 26387,
+      "gtt_used_mib": 1824
+    },
+    {
+      "round": 1,
+      "prompt": "long-ctx",
+      "predicted_n": 256,
+      "tps": 52.6,
+      "pp_tps": 878.3,
+      "draft_n": 239,
+      "draft_accepted": 175,
+      "accept": 0.732,
+      "wall_s": 7.7,
+      "vram_used_mib": 26387,
+      "gtt_used_mib": 1824
+    },
+    {
+      "round": 2,
+      "prompt": "code-py",
+      "predicted_n": 256,
+      "tps": 54.0,
+      "pp_tps": 180.0,
+      "draft_n": 232,
+      "draft_accepted": 176,
+      "accept": 0.759,
+      "wall_s": 5.1,
+      "vram_used_mib": 26387,
+      "gtt_used_mib": 1824
+    },
+    {
+      "round": 2,
+      "prompt": "code-js",
+      "predicted_n": 256,
+      "tps": 49.0,
+      "pp_tps": 152.1,
+      "draft_n": 258,
+      "draft_accepted": 168,
+      "accept": 0.651,
+      "wall_s": 5.4,
+      "vram_used_mib": 26387,
+      "gtt_used_mib": 1824
+    },
+    {
+      "round": 2,
+      "prompt": "prose",
+      "predicted_n": 256,
+      "tps": 44.2,
+      "pp_tps": 142.5,
+      "draft_n": 286,
+      "draft_accepted": 159,
+      "accept": 0.556,
+      "wall_s": 5.9,
+      "vram_used_mib": 26385,
+      "gtt_used_mib": 1822
+    },
+    {
+      "round": 2,
+      "prompt": "json-tool",
+      "predicted_n": 183,
+      "tps": 60.5,
+      "pp_tps": 319.0,
+      "draft_n": 150,
+      "draft_accepted": 132,
+      "accept": 0.88,
+      "wall_s": 3.2,
+      "vram_used_mib": 26385,
+      "gtt_used_mib": 1822
+    },
+    {
+      "round": 2,
+      "prompt": "plan",
+      "predicted_n": 256,
+      "tps": 43.3,
+      "pp_tps": 178.0,
+      "draft_n": 292,
+      "draft_accepted": 157,
+      "accept": 0.538,
+      "wall_s": 6.1,
+      "vram_used_mib": 26385,
+      "gtt_used_mib": 1822
+    },
+    {
+      "round": 2,
+      "prompt": "long-ctx",
+      "predicted_n": 256,
+      "tps": 52.4,
+      "pp_tps": 59.6,
+      "draft_n": 239,
+      "draft_accepted": 175,
+      "accept": 0.732,
+      "wall_s": 5.0,
+      "vram_used_mib": 26385,
+      "gtt_used_mib": 1822
+    }
+  ],
+  "vram_after": {
+    "vram_used_mib": 26385,
+    "gtt_used_mib": 1822
+  },
+  "summary": {
+    "warm_tg_tps_mean": 50.6,
+    "warm_accept_mean": 0.686,
+    "warm_pp_tps_mean": 171.9,
+    "peak_vram_mib": 26387,
+    "peak_gtt_mib": 1824
+  }
+}

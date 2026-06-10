@@ -87,6 +87,52 @@ bp-05: committed
   - test-record/bp-05/verify-gate-witness.json
   - test-record/screenshots/bp-05/verify-clean-finish.png
   - test-record/screenshots/bp-05/verify-warned-finish.png
+bp-00: committed
+  - packages/core/src/perpleximanus/core/events.py
+  - packages/core/src/perpleximanus/core/llm/openai_provider.py
+  - packages/core/src/perpleximanus/core/llm/config.py
+  - packages/core/src/perpleximanus/core/llm/config_store.py
+  - packages/core/src/perpleximanus/core/llm/routing.py
+  - packages/core/src/perpleximanus/core/llm/prompts.py
+  - packages/core/src/perpleximanus/core/view.py
+  - packages/tools/src/perpleximanus/tools/builtin/_browser_daemon.py
+  - packages/tools/src/perpleximanus/tools/builtin/browser.py
+  - packages/tools/src/perpleximanus/tools/sandbox/_container.py
+  - packages/tools/src/perpleximanus/tools/sandbox/podman.py
+  - packages/tools/src/perpleximanus/tools/sandbox/gvisor.py
+  - packages/core/tests/test_serialization.py
+  - packages/core/tests/test_vision_wiring.py
+  - packages/core/tests/test_view_kv_stability.py
+  - packages/tools/tests/test_browser.py
+  - packages/tools/tests/test_browser_daemon.py
+  - packages/tools/tests/test_gvisor.py
+  - frontend/e2e-live/bp-00-vision.spec.ts
+  - test-record/bp-00/bench.md
+  - test-record/bp-00/bench_v2.py
+  - test-record/bp-00/bench-baseline.json
+  - test-record/bp-00/bench-vision.json
+  - test-record/bp-00/image_turn_v2.py
+  - test-record/bp-00/image-turn.json
+  - test-record/bp-00/screenshot-image-turn.png
+  - test-record/bp-00/bp00-shot-remote.sh
+  - test-record/bp-00/soak_v2.py
+  - test-record/bp-00/soak.log
+  - test-record/bp-00/soak.json
+  - test-record/bp-00/run_behavioral.py
+  - test-record/bp-00/behavioral-run.log
+  - test-record/bp-00/events-conv_3b9402aa654b4a43b715db10ce7b6550.json
+  - test-record/bp-00/events-conv_bc8596a9ac3f43b484aaa47ad8b83372.json
+  - test-record/bp-00/events-conv_2927ed545aa347069428766a8514c8fa.json
+  - test-record/bp-00/events-conv_c5f4f81c22624a2fac545769f6b300e9.json
+  - test-record/bp-00/run4-shot-seq22.png
+  - test-record/bp-00/run4-shot-seq26.png
+  - test-record/bp-00/run5-shot-seq18.png
+  - test-record/bp-00/run5-shot-seq22.png
+  - test-record/bp-00/ui-spec.log
+  - test-record/bp-00/vision-witness.json
+  - test-record/bp-00/vision-ui-witness.json
+  - test-record/screenshots/bp-00/defect-before.png
+  - test-record/screenshots/bp-00/fixed-after.png
 bp-08: committed
   - packages/tools/src/perpleximanus/tools/sandbox/kernel.py
   - packages/tools/src/perpleximanus/tools/sandbox/session.py

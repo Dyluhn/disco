@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -154,15 +155,22 @@ class BrowserHandler(BaseHTTPRequestHandler):
             page.screenshot(path=screenshot_full_path, full_page=params.get("full_page", False))
             screenshot_path = screenshot_rel_path
 
-            return {
+            res = {
                 "ok": True,
                 "url": page.url,
                 "title": page.title(),
                 "console": state.console_logs,
                 "elements": elements,
                 "text": text,
-                "screenshot_path": screenshot_path
+                "screenshot_path": screenshot_path,
             }
+
+            if params.get("include_screenshot_b64"):
+                with open(screenshot_full_path, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode("utf-8")
+                res["screenshot_b64"] = b64
+
+            return res
 
     def _get_elements(self, page):
         # JS walker to find interactive elements and index them

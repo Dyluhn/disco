@@ -1,0 +1,11 @@
+conversation: conv_c5f4f81c22624a2fac545769f6b300e9
+approve gate if needed:  .venv/bin/python test-record/bp-06/send_frame.py conv_c5f4f81c22624a2fac545769f6b300e9 approve_plan
+prompt sent (seq 1)
+status=RUNNING t+0s
+status=AWAITING_PLAN_APPROVAL t+15s
+NEEDS ATTENTION: AWAITING_PLAN_APPROVAL — intervene via UI/API
+status=RUNNING t+75s
+status=FINISHED t+135s
+saved 28 events
+telemetry: obs=2 with_b64=2 console_err=0 visual_thoughts=2 fixing_actions=1
+BEHAVIORAL RUN PASS

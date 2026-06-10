@@ -14,6 +14,7 @@ import asyncio
 import io
 import posixpath
 import tarfile
+import time
 from typing import Any
 
 from ..anatomy import Capability
@@ -230,6 +231,12 @@ class ContainerInstance:
                 info.size = len(data)
                 # Own the file as the container's run-user (not root) so it's editable.
                 info.uid = info.gid = self._workspace_uid
+                # [BP-00 root-cause] TarInfo defaults mtime to 0 (epoch 1970), and
+                # put_archive preserves it. Every agent write then lands with an
+                # mtime that NEVER changes, so anything mtime-based lies: HTTP
+                # If-Modified-Since answers 304 forever (the browser re-renders its
+                # first cached copy of an edited file), make/vite see "unchanged".
+                info.mtime = int(time.time())
                 tar.addfile(info, io.BytesIO(data))
             if not self._container.put_archive(parent, buf.getvalue()):
                 raise SandboxError(f"write_file {path!r} failed")

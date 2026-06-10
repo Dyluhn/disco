@@ -20,12 +20,33 @@ from conftest import (
 from perpleximanus.core import (
     ConversationStatus,
     EventAdapter,
+    LLMMessage,
     StatusEvent,
     event_from_json_dict,
     event_to_json_dict,
     migrate_event,
 )
 from pydantic import ValidationError
+
+
+def test_llm_message_serialization_with_images():
+    """LLMMessage with images survives round-trip (model_dump -> model_validate)."""
+    m = LLMMessage(role="user", content="look", images=["data:image/png;base64,abc"])
+    raw = m.model_dump(mode="json")
+    assert raw["images"] == ["data:image/png;base64,abc"]
+    restored = LLMMessage.model_validate(raw)
+    assert restored == m
+
+
+def test_llm_message_serialization_defaults():
+    """LLMMessage images default to None."""
+    m = LLMMessage(role="user", content="hello")
+    raw = m.model_dump(mode="json")
+    assert "images" in raw
+    assert raw["images"] is None
+    restored = LLMMessage.model_validate(raw)
+    assert restored.images is None
+
 
 # One instance of every concrete event type.
 ALL_EVENT_SAMPLES = [

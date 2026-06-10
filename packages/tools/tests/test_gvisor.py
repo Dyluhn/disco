@@ -37,6 +37,7 @@ class FakeContainer:
         # queued (exit_code, stdout_bytes, stderr_bytes) for shell execs; else echoes ok
         self.exec_results: list[tuple[int, bytes, bytes]] = []
         self.fs: dict[str, bytes] = {}  # in-container files, by absolute path
+        self.tar_mtimes: dict[str, int] = {}  # mtime of each put_archive'd member
 
     def start(self):
         self.started = True
@@ -75,6 +76,7 @@ class FakeContainer:
             for m in tar.getmembers():
                 f = tar.extractfile(m)
                 self.fs[path.rstrip("/") + "/" + m.name] = f.read() if f else b""
+                self.tar_mtimes[path.rstrip("/") + "/" + m.name] = m.mtime
         return True
 
     def stop(self, timeout=None):
@@ -294,6 +296,22 @@ async def test_file_round_trip_and_escape_rejection_via_docker_exec(tmp_path):
         await inst.read_file("../../etc/passwd")
     with pytest.raises(SandboxError):
         await inst.write_file("/etc/evil", b"x")
+
+
+async def test_write_file_stamps_real_mtime(tmp_path):
+    # [BP-00 root-cause regression] TarInfo defaults mtime to 0 (epoch 1970) and
+    # put_archive preserves it: every agent write then lands "older" than any
+    # browser/build cache, so If-Modified-Since answers 304 forever and the
+    # preview shows the FIRST version of an edited file for the rest of the run.
+    import time as _time
+
+    client = FakeDockerClient()
+    svc = _svc(tmp_path, client)
+    inst = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+    before = int(_time.time())
+    await inst.write_file("site/style.css", b"body { color: #111; }")
+    (mtime,) = [v for k, v in client.last.tar_mtimes.items() if k.endswith("style.css")]
+    assert mtime >= before, f"tar member mtime {mtime} is stale (epoch-1970 regression)"
 
 
 async def test_runsc_missing_is_a_typed_error(tmp_path):

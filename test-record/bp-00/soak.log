@@ -1,0 +1,235 @@
+soak start 2026-06-10 07:13:34 invocation=ec7ef7d1d77b4994a1314793ba94c226 duration=1800s
+[   3s] req  1 tool-json  55.1 t/s accept=105/135 vram=27515 gtt=1769 OK
+[   8s] req  2 image      51.7 t/s accept=115/165 vram=27515 gtt=1769 OK
+[  17s] req  3 code       55.6 t/s accept=350/447 vram=27515 gtt=1769 OK
+[  41s] req  4 long-ctx   51.4 t/s accept=415/547 vram=27515 gtt=1769 OK
+[  62s] req  5 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[  65s] req  6 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[  69s] req  7 image      51.2 t/s accept=115/165 vram=27515 gtt=1769 OK
+[  78s] req  8 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[  90s] req  9 long-ctx   51.7 t/s accept=416/544 vram=27515 gtt=1769 OK
+[ 103s] req 10 image+ctx  51.6 t/s accept=482/650 vram=27515 gtt=1769 OK
+[ 107s] req 11 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[ 110s] req 12 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[ 119s] req 13 code       55.3 t/s accept=350/447 vram=27515 gtt=1769 OK
+[ 131s] req 14 long-ctx   51.7 t/s accept=416/544 vram=27515 gtt=1769 OK
+[ 145s] req 15 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[ 148s] req 16 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[ 152s] req 17 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[ 161s] req 18 code       55.3 t/s accept=350/447 vram=27515 gtt=1769 OK
+[ 173s] req 19 long-ctx   51.7 t/s accept=416/544 vram=27515 gtt=1769 OK
+[ 187s] req 20 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[ 190s] req 21 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[ 193s] req 22 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[ 202s] req 23 code       55.3 t/s accept=350/447 vram=27515 gtt=1769 OK
+[ 214s] req 24 long-ctx   51.8 t/s accept=416/544 vram=27515 gtt=1769 OK
+[ 228s] req 25 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[ 231s] req 26 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[ 235s] req 27 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[ 244s] req 28 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[ 256s] req 29 long-ctx   51.8 t/s accept=416/544 vram=27515 gtt=1769 OK
+[ 269s] req 30 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[ 273s] req 31 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[ 276s] req 32 image      51.2 t/s accept=115/165 vram=27515 gtt=1769 OK
+[ 285s] req 33 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[ 297s] req 34 long-ctx   51.8 t/s accept=416/544 vram=27515 gtt=1769 OK
+[ 311s] req 35 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[ 314s] req 36 tool-json  54.4 t/s accept=105/135 vram=27515 gtt=1769 OK
+[ 318s] req 37 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[ 327s] req 38 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[ 339s] req 39 long-ctx   51.8 t/s accept=416/544 vram=27515 gtt=1769 OK
+[ 352s] req 40 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[ 356s] req 41 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[ 359s] req 42 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[ 368s] req 43 code       55.3 t/s accept=350/447 vram=27515 gtt=1769 OK
+[ 380s] req 44 long-ctx   51.8 t/s accept=416/544 vram=27515 gtt=1769 OK
+[ 394s] req 45 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[ 397s] req 46 tool-json  54.4 t/s accept=105/135 vram=27515 gtt=1769 OK
+[ 400s] req 47 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[ 410s] req 48 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[ 422s] req 49 long-ctx   51.8 t/s accept=416/544 vram=27515 gtt=1769 OK
+[ 435s] req 50 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[ 438s] req 51 tool-json  54.4 t/s accept=105/135 vram=27515 gtt=1769 OK
+[ 442s] req 52 image      51.2 t/s accept=115/165 vram=27515 gtt=1769 OK
+[ 451s] req 53 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[ 463s] req 54 long-ctx   51.7 t/s accept=416/544 vram=27515 gtt=1769 OK
+[ 477s] req 55 image+ctx  51.6 t/s accept=482/650 vram=27515 gtt=1769 OK
+[ 480s] req 56 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[ 483s] req 57 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[ 493s] req 58 code       55.3 t/s accept=350/447 vram=27515 gtt=1769 OK
+[ 505s] req 59 long-ctx   51.7 t/s accept=416/544 vram=27515 gtt=1769 OK
+[ 518s] req 60 image+ctx  51.6 t/s accept=482/650 vram=27515 gtt=1769 OK
+[ 521s] req 61 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[ 525s] req 62 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[ 534s] req 63 code       55.3 t/s accept=350/447 vram=27515 gtt=1769 OK
+[ 546s] req 64 long-ctx   51.7 t/s accept=416/544 vram=27515 gtt=1769 OK
+[ 560s] req 65 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[ 563s] req 66 tool-json  54.2 t/s accept=105/135 vram=27515 gtt=1769 OK
+[ 566s] req 67 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[ 576s] req 68 code       55.3 t/s accept=350/447 vram=27515 gtt=1769 OK
+[ 588s] req 69 long-ctx   51.7 t/s accept=416/544 vram=27515 gtt=1769 OK
+[ 601s] req 70 image+ctx  51.6 t/s accept=482/650 vram=27515 gtt=1769 OK
+[ 604s] req 71 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[ 608s] req 72 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[ 617s] req 73 code       55.3 t/s accept=350/447 vram=27515 gtt=1769 OK
+[ 629s] req 74 long-ctx   51.7 t/s accept=416/544 vram=27515 gtt=1769 OK
+[ 643s] req 75 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[ 646s] req 76 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[ 649s] req 77 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[ 659s] req 78 code       55.3 t/s accept=350/447 vram=27515 gtt=1769 OK
+[ 671s] req 79 long-ctx   51.7 t/s accept=416/544 vram=27515 gtt=1769 OK
+[ 684s] req 80 image+ctx  51.6 t/s accept=482/650 vram=27515 gtt=1769 OK
+[ 688s] req 81 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[ 691s] req 82 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[ 700s] req 83 code       55.3 t/s accept=350/447 vram=27515 gtt=1769 OK
+[ 712s] req 84 long-ctx   51.7 t/s accept=416/544 vram=27515 gtt=1769 OK
+[ 726s] req 85 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[ 729s] req 86 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[ 732s] req 87 image      51.2 t/s accept=115/165 vram=27515 gtt=1769 OK
+[ 742s] req 88 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[ 754s] req 89 long-ctx   51.8 t/s accept=416/544 vram=27515 gtt=1769 OK
+[ 767s] req 90 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[ 770s] req 91 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[ 774s] req 92 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[ 783s] req 93 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[ 795s] req 94 long-ctx   51.8 t/s accept=416/544 vram=27515 gtt=1769 OK
+[ 809s] req 95 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[ 812s] req 96 tool-json  54.4 t/s accept=105/135 vram=27515 gtt=1769 OK
+[ 815s] req 97 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[ 825s] req 98 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[ 836s] req 99 long-ctx   51.8 t/s accept=416/544 vram=27515 gtt=1769 OK
+[ 850s] req100 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[ 853s] req101 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[ 857s] req102 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[ 866s] req103 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[ 878s] req104 long-ctx   51.8 t/s accept=416/544 vram=27515 gtt=1769 OK
+[ 892s] req105 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[ 895s] req106 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[ 898s] req107 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[ 908s] req108 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[ 919s] req109 long-ctx   51.8 t/s accept=416/544 vram=27515 gtt=1769 OK
+[ 933s] req110 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[ 936s] req111 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[ 940s] req112 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[ 949s] req113 code       55.3 t/s accept=350/447 vram=27515 gtt=1769 OK
+[ 961s] req114 long-ctx   51.7 t/s accept=416/544 vram=27515 gtt=1769 OK
+[ 975s] req115 image+ctx  51.6 t/s accept=482/650 vram=27515 gtt=1769 OK
+[ 978s] req116 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[ 981s] req117 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[ 991s] req118 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[1002s] req119 long-ctx   51.8 t/s accept=416/544 vram=27515 gtt=1769 OK
+[1016s] req120 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[1019s] req121 tool-json  54.4 t/s accept=105/135 vram=27515 gtt=1769 OK
+[1023s] req122 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[1032s] req123 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[1044s] req124 long-ctx   51.8 t/s accept=416/544 vram=27515 gtt=1769 OK
+[1058s] req125 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[1061s] req126 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[1064s] req127 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[1074s] req128 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[1085s] req129 long-ctx   51.7 t/s accept=416/544 vram=27515 gtt=1769 OK
+[1099s] req130 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[1102s] req131 tool-json  54.4 t/s accept=105/135 vram=27515 gtt=1769 OK
+[1106s] req132 image      51.2 t/s accept=115/165 vram=27515 gtt=1769 OK
+[1115s] req133 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[1127s] req134 long-ctx   51.8 t/s accept=416/544 vram=27515 gtt=1769 OK
+[1141s] req135 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[1144s] req136 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[1147s] req137 image      51.2 t/s accept=115/165 vram=27515 gtt=1769 OK
+[1157s] req138 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[1168s] req139 long-ctx   51.8 t/s accept=416/544 vram=27515 gtt=1769 OK
+[1182s] req140 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[1185s] req141 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[1189s] req142 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[1198s] req143 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[1210s] req144 long-ctx   51.7 t/s accept=416/544 vram=27515 gtt=1769 OK
+[1224s] req145 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[1227s] req146 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[1230s] req147 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[1239s] req148 code       55.3 t/s accept=350/447 vram=27515 gtt=1769 OK
+[1251s] req149 long-ctx   51.7 t/s accept=416/544 vram=27515 gtt=1769 OK
+[1265s] req150 image+ctx  51.6 t/s accept=482/650 vram=27515 gtt=1769 OK
+[1268s] req151 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[1272s] req152 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[1281s] req153 code       55.3 t/s accept=350/447 vram=27515 gtt=1769 OK
+[1293s] req154 long-ctx   51.7 t/s accept=416/544 vram=27515 gtt=1769 OK
+[1307s] req155 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[1310s] req156 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[1313s] req157 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[1322s] req158 code       55.3 t/s accept=350/447 vram=27515 gtt=1769 OK
+[1334s] req159 long-ctx   51.7 t/s accept=416/544 vram=27515 gtt=1769 OK
+[1348s] req160 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[1351s] req161 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[1355s] req162 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[1364s] req163 code       55.3 t/s accept=350/447 vram=27515 gtt=1769 OK
+[1376s] req164 long-ctx   51.7 t/s accept=416/544 vram=27515 gtt=1769 OK
+[1390s] req165 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[1393s] req166 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[1396s] req167 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[1405s] req168 code       55.3 t/s accept=350/447 vram=27515 gtt=1769 OK
+[1417s] req169 long-ctx   51.7 t/s accept=416/544 vram=27515 gtt=1769 OK
+[1431s] req170 image+ctx  51.6 t/s accept=482/650 vram=27515 gtt=1769 OK
+[1434s] req171 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[1438s] req172 image      51.2 t/s accept=115/165 vram=27515 gtt=1769 OK
+[1447s] req173 code       55.3 t/s accept=350/447 vram=27515 gtt=1769 OK
+[1459s] req174 long-ctx   51.8 t/s accept=416/544 vram=27515 gtt=1769 OK
+[1473s] req175 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[1476s] req176 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[1479s] req177 image      51.2 t/s accept=115/165 vram=27515 gtt=1769 OK
+[1488s] req178 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[1500s] req179 long-ctx   51.8 t/s accept=416/544 vram=27515 gtt=1769 OK
+[1514s] req180 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[1517s] req181 tool-json  54.4 t/s accept=105/135 vram=27515 gtt=1769 OK
+[1521s] req182 image      51.2 t/s accept=115/165 vram=27515 gtt=1769 OK
+[1530s] req183 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[1542s] req184 long-ctx   51.7 t/s accept=416/544 vram=27515 gtt=1769 OK
+[1555s] req185 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[1559s] req186 tool-json  54.4 t/s accept=105/135 vram=27515 gtt=1769 OK
+[1562s] req187 image      51.2 t/s accept=115/165 vram=27515 gtt=1769 OK
+[1571s] req188 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[1583s] req189 long-ctx   51.8 t/s accept=416/544 vram=27515 gtt=1769 OK
+[1597s] req190 image+ctx  51.6 t/s accept=482/650 vram=27515 gtt=1769 OK
+[1600s] req191 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[1603s] req192 image      51.1 t/s accept=115/165 vram=27518 gtt=1769 OK
+[1613s] req193 code       55.3 t/s accept=350/447 vram=27515 gtt=1769 OK
+[1625s] req194 long-ctx   51.7 t/s accept=416/544 vram=27515 gtt=1769 OK
+[1638s] req195 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[1642s] req196 tool-json  54.4 t/s accept=105/135 vram=27515 gtt=1769 OK
+[1645s] req197 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[1654s] req198 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[1666s] req199 long-ctx   51.8 t/s accept=416/544 vram=27515 gtt=1769 OK
+[1680s] req200 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[1683s] req201 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[1686s] req202 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[1696s] req203 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[1707s] req204 long-ctx   51.8 t/s accept=416/544 vram=27515 gtt=1769 OK
+[1721s] req205 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[1724s] req206 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[1728s] req207 image      51.1 t/s accept=115/165 vram=27515 gtt=1769 OK
+[1737s] req208 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[1749s] req209 long-ctx   51.8 t/s accept=416/544 vram=27515 gtt=1769 OK
+[1763s] req210 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+[1766s] req211 tool-json  54.3 t/s accept=105/135 vram=27515 gtt=1769 OK
+[1769s] req212 image      51.2 t/s accept=115/165 vram=27515 gtt=1769 OK
+[1779s] req213 code       55.4 t/s accept=350/447 vram=27515 gtt=1769 OK
+[1790s] req214 long-ctx   51.8 t/s accept=416/544 vram=27515 gtt=1769 OK
+[1804s] req215 image+ctx  51.7 t/s accept=482/650 vram=27515 gtt=1769 OK
+{
+  "date": "2026-06-10 07:43:39",
+  "duration_s": 1804,
+  "requests": 215,
+  "succeeded": 215,
+  "failures": [],
+  "invocation_unchanged": true,
+  "peak_vram_mib": 27518,
+  "peak_gtt_mib": 1769,
+  "mean_tps_by_workload": {
+    "tool-json": 54.3,
+    "image": 51.1,
+    "code": 55.4,
+    "long-ctx": 51.7,
+    "image+ctx": 51.7
+  },
+  "pass": true
+}
+SOAK PASS

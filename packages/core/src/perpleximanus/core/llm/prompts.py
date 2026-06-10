@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from .types import ModelRole, OperatingMode
+from .types import ModelRole, OperatingMode, Requirement
 
 # Per-role default operating mode when the caller doesn't specify one (§8).
 _DEFAULT_MODE_BY_ROLE: dict[ModelRole, OperatingMode] = {
@@ -56,7 +56,12 @@ class PromptProvider(Protocol):
     this only resolves WHICH one."""
 
     def system_prompt(
-        self, *, model_family: str, mode: OperatingMode | None, role: ModelRole
+        self,
+        *,
+        model_family: str,
+        mode: OperatingMode | None,
+        role: ModelRole,
+        capabilities: frozenset[Requirement] | None = None,
     ) -> str: ...
 
 
@@ -81,7 +86,12 @@ class StaticPromptProvider:
         self._fallback = fallback
 
     def system_prompt(
-        self, *, model_family: str, mode: OperatingMode | None, role: ModelRole
+        self,
+        *,
+        model_family: str,
+        mode: OperatingMode | None,
+        role: ModelRole,
+        capabilities: frozenset[Requirement] | None = None,
     ) -> str:
         for key in (
             (model_family, mode, role),
@@ -270,16 +280,34 @@ class DriverPrompts:
         self._execution = execution_prompt
         self._skills_block = skills_block.strip()
 
-    def _with_skills(self, prompt: str) -> str:
+    def _with_skills(self, prompt: str, capabilities: frozenset[Requirement] | None = None) -> str:
+        # [BP-00] Vision bullet: rendered ONLY when the driver has VISION.
+        vision_bullet = ""
+        if capabilities and Requirement.VISION in capabilities:
+            vision_bullet = (
+                "  • You can SEE your latest browser screenshot. After navigating, look at it: "
+                "check layout, styling, and that the page is not blank or broken before "
+                "moving on.\n"
+            )
+
         if not self._skills_block:
-            return prompt
+            return f"{vision_bullet}\n{prompt}" if vision_bullet else prompt
+        if vision_bullet:
+            return f"{self._skills_block}\n\n---\n\n{vision_bullet}\n{prompt}"
         return f"{self._skills_block}\n\n---\n\n{prompt}"
 
     def system_prompt(
-        self, *, model_family: str, mode: OperatingMode | None, role: ModelRole
+        self,
+        *,
+        model_family: str,
+        mode: OperatingMode | None,
+        role: ModelRole,
+        capabilities: frozenset[Requirement] | None = None,
     ) -> str:
         if role == ModelRole.AGENT_DRIVER:
             if mode == OperatingMode.PLANNING:
-                return self._with_skills(self._planning)
-            return self._with_skills(self._execution)
-        return self._base.system_prompt(model_family=model_family, mode=mode, role=role)
+                return self._with_skills(self._planning, capabilities)
+            return self._with_skills(self._execution, capabilities)
+        return self._base.system_prompt(
+            model_family=model_family, mode=mode, role=role, capabilities=capabilities
+        )

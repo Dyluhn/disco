@@ -1,0 +1,18 @@
+{
+  "date": "2026-06-10 07:43:39",
+  "duration_s": 1804,
+  "requests": 215,
+  "succeeded": 215,
+  "failures": [],
+  "invocation_unchanged": true,
+  "peak_vram_mib": 27518,
+  "peak_gtt_mib": 1769,
+  "mean_tps_by_workload": {
+    "tool-json": 54.3,
+    "image": 51.1,
+    "code": 55.4,
+    "long-ctx": 51.7,
+    "image+ctx": 51.7
+  },
+  "pass": true
+}

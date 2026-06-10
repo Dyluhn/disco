@@ -28,6 +28,7 @@ from .config import (
     RouterConfig,
     SandboxSettings,
     SearchSettings,
+    apply_runtime_capabilities,
     default_config,
 )
 from .types import ModelRole
@@ -54,17 +55,22 @@ class ConfigStore:
 
     def load(self) -> RouterConfig:
         """The persisted config, or the seed if absent/corrupt. A legacy overlay
-        file (assignments only) is applied over the seed catalogue."""
+        file (assignments only) is applied over the seed catalogue. Runtime
+        capability overlays (PMX_DRIVER_VISION, [BP-00]) apply over EVERY path —
+        the file is authoritative for user edits, the env for live deployment
+        facts, so a pre-vision file cannot pin the driver text-only."""
         base = self._base_factory()
         data = self._read()
         if data is None:
-            return base
-        if "models" in data:  # full config
+            cfg = base
+        elif "models" in data:  # full config
             try:
-                return RouterConfig.model_validate(data)
+                cfg = RouterConfig.model_validate(data)
             except Exception:  # noqa: BLE001 — a corrupt/stale file must not crash routing
-                return base
-        return self._apply_overlay(base, data)  # legacy {default_model, assignments}
+                cfg = base
+        else:
+            cfg = self._apply_overlay(base, data)  # legacy {default_model, assignments}
+        return apply_runtime_capabilities(cfg)
 
     def save(self, config: RouterConfig) -> RouterConfig:
         """Persist the full config (atomically) and return it."""

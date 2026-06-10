@@ -116,7 +116,14 @@ class OpenAIProvider:
 
     @staticmethod
     def _message(m: LLMMessage) -> dict:
-        d: dict = {"role": m.role, "content": m.content}
+        content: str | list = m.content
+        if getattr(m, "images", None):
+            parts = [{"type": "text", "text": m.content}]
+            for img_url in m.images:
+                parts.append({"type": "image_url", "image_url": {"url": img_url}})
+            content = parts
+
+        d: dict = {"role": m.role, "content": content}
         if getattr(m, "tool_call_id", None):
             d["tool_call_id"] = m.tool_call_id
         tool_calls = m.tool_calls

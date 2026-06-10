@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from html.parser import HTMLParser
 from typing import Any, Literal
 
@@ -190,6 +191,7 @@ class BrowserTool:
                 "index": args.index,
                 "text": args.text,
                 "full_page": args.full_page,
+                "include_screenshot_b64": os.environ.get("PMX_DRIVER_VISION") == "1",
             }
             await ctx.sandbox.write_file(
                 "/workspace/.pmx/job.json", json.dumps(job).encode("utf-8")

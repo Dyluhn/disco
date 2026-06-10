@@ -1,11 +1,12 @@
-import sys
-import subprocess
 import json
+import subprocess
+import sys
 
 import pytest
-from conftest import action, observation, user_msg, agent_msg, with_seqs
-from perpleximanus.core import View, PlanEvent
+from conftest import action, agent_msg, observation, user_msg, with_seqs
+from perpleximanus.core import PlanEvent, View
 from perpleximanus.core.events import PlanStep
+
 
 def test_view_append_stability():
     # Build 60 synthetic events
@@ -50,7 +51,10 @@ def test_view_append_stability():
             if fp_prev[i] != fp_next[i]:
                 changes += 1
         
-        assert changes <= 1, f"Too many changes at k={k}: {changes}. Prev len: {len(fp_prev)}, Next len: {len(fp_next)}"
+        assert changes <= 1, (
+            f"Too many changes at k={k}: {changes}. "
+            f"Prev len: {len(fp_prev)}, Next len: {len(fp_next)}"
+        )
 
 def test_view_subprocess_roundtrip():
     # Test that View.fingerprint is stable across processes
@@ -84,6 +88,91 @@ except Exception as e:
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(f"Subprocess failed: {result.stderr}")
-    
+
     fp_child = json.loads(result.stdout)
     assert fp_parent == fp_child
+
+
+# ---- BP-00: latest-image-only view rule --------------------------------------
+
+from perpleximanus.core.events import ObservationEvent, ToolResult  # noqa: E402
+
+
+def _browser_obs(b64: str | None, n: int) -> ObservationEvent:
+    """A successful browser observation; carries screenshot_b64 iff b64 is set."""
+    structured: dict = {
+        "url": "http://127.0.0.1:8000",
+        "screenshot_path": f".pmx/screenshots/{n:04d}-navigate.png",
+    }
+    if b64 is not None:
+        structured["screenshot_b64"] = b64
+    return ObservationEvent(
+        tool_result=ToolResult(
+            call_id="c",
+            tool_name="browser",
+            success=True,
+            content=(
+                f"URL: http://127.0.0.1:8000\nscreenshot: .pmx/screenshots/{n:04d}-navigate.png"
+            ),
+            structured=structured,
+        ),
+        action_id="evt_x",
+    )
+
+
+def _image_messages(view):
+    return [m for m in view.messages if m.images]
+
+
+def test_latest_image_only(monkeypatch):
+    """Only the LATEST screenshot-bearing browser observation renders an image;
+    older ones render as path text only (images=None)."""
+    monkeypatch.setenv("PMX_DRIVER_VISION", "1")
+    events = with_seqs([
+        user_msg("Start"),
+        action(thought="browse 1", tool="browser", args={"action": "navigate"}),
+        _browser_obs("AAA", 1),
+        action(thought="browse 2", tool="browser", args={"action": "navigate"}),
+        _browser_obs("BBB", 2),
+    ])
+    view = View.of(events)
+    imaged = _image_messages(view)
+    assert len(imaged) == 1, f"expected exactly one image-bearing message, got {len(imaged)}"
+    assert imaged[0].images == ["data:image/png;base64,BBB"]
+    # The OLDER observation still renders, text-only, with its screenshot path.
+    older = [m for m in view.messages if "0001-navigate.png" in m.content]
+    assert older and older[0].images is None
+
+
+def test_no_images_when_gate_off(monkeypatch):
+    """With the vision gate off, no rendered message carries images."""
+    monkeypatch.delenv("PMX_DRIVER_VISION", raising=False)
+    events = with_seqs([
+        user_msg("Start"),
+        action(thought="browse", tool="browser", args={"action": "navigate"}),
+        _browser_obs("AAA", 1),
+    ])
+    assert _image_messages(View.of(events)) == []
+
+
+def test_image_flip_fingerprint_stability(monkeypatch):
+    """BP-00 invariant: appending a NEW screenshot observation changes at most ONE
+    existing fingerprint element (the old image-bearing message flips image->text).
+    Appends without a new screenshot change zero existing elements."""
+    monkeypatch.setenv("PMX_DRIVER_VISION", "1")
+    events = [user_msg("Start")]
+    for i in range(12):
+        events.append(action(thought=f"browse {i}", tool="browser", args={"action": "navigate"}))
+        # Every other browse produces a screenshot; the rest are plain observations.
+        events.append(_browser_obs("B64" + str(i) if i % 2 == 0 else None, i))
+    events = with_seqs(events)
+
+    for k in range(3, len(events)):
+        fp_prev = View.of(events[:k]).fingerprint()
+        fp_next = View.of(events[:k + 1]).fingerprint()
+        common = min(len(fp_prev), len(fp_next))
+        changes = sum(1 for i in range(common) if fp_prev[i] != fp_next[i])
+        assert changes <= 1, (
+            f"k={k}: {changes} mid-list fingerprint changes — the latest-image-only "
+            "rule must flip at most one message per new screenshot"
+        )

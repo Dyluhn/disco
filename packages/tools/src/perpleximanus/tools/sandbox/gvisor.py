@@ -55,11 +55,14 @@ def _put_file(container: Any, dir_path: str, name: str, data: bytes) -> None:
     stdlib-only egress proxy script into the sidecar (no image rebuild)."""
     import io
     import tarfile
+    import time
 
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as tar:
         info = tarfile.TarInfo(name=name)
         info.size = len(data)
+        # [BP-00 root-cause] TarInfo defaults mtime to 0 (epoch 1970) — stamp reality.
+        info.mtime = int(time.time())
         tar.addfile(info, io.BytesIO(data))
     if not container.put_archive(dir_path, buf.getvalue()):
         raise SandboxUnavailableError("failed to inject egress proxy script into sidecar")

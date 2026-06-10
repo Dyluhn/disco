@@ -175,3 +175,56 @@ def test_submit_is_high_and_gated_read_is_not():
     read_risk = _risk({"action": "navigate", "url": "http://news.example"})
     assert submit_risk == SecurityRisk.HIGH and gate.should_confirm(submit_risk) is True
     assert read_risk == SecurityRisk.LOW and gate.should_confirm(read_risk) is False
+
+
+# ---- BP-00: vision screenshot transport --------------------------------------
+
+
+async def test_vision_gate_requests_and_passes_through_b64(monkeypatch):
+    """PMX_DRIVER_VISION=1: the job carries include_screenshot_b64, the daemon's
+    b64 lands in structured — and NEVER leaks into the observation text."""
+    monkeypatch.setenv("PMX_DRIVER_VISION", "1")
+    b64 = "iVBORw0KGgoFAKEB64PAYLOAD"
+    data = {
+        "ok": True,
+        "url": "http://127.0.0.1:8000",
+        "title": "App",
+        "console": [],
+        "elements": [],
+        "text": "hello",
+        "screenshot_path": ".pmx/screenshots/0001-navigate.png",
+        "screenshot_b64": b64,
+    }
+    sandbox = _PageSandbox(data)
+    res = await _exec(sandbox).execute(
+        call("browser", action="navigate", url="http://127.0.0.1:8000")
+    )
+    assert res.success
+    job = json.loads(sandbox.files["/workspace/.pmx/job.json"])
+    assert job["include_screenshot_b64"] is True
+    assert res.structured["screenshot_b64"] == b64
+    # The KV-survival property: bytes ride the structured channel only.
+    assert b64 not in res.content
+    assert "screenshot: .pmx/screenshots/0001-navigate.png" in res.content
+
+
+async def test_vision_gate_off_does_not_request_b64(monkeypatch):
+    """Gate off: the job must not ask the daemon for inline bytes."""
+    monkeypatch.delenv("PMX_DRIVER_VISION", raising=False)
+    data = {
+        "ok": True,
+        "url": "http://127.0.0.1:8000",
+        "title": "App",
+        "console": [],
+        "elements": [],
+        "text": "hello",
+        "screenshot_path": ".pmx/screenshots/0001-navigate.png",
+    }
+    sandbox = _PageSandbox(data)
+    res = await _exec(sandbox).execute(
+        call("browser", action="navigate", url="http://127.0.0.1:8000")
+    )
+    assert res.success
+    job = json.loads(sandbox.files["/workspace/.pmx/job.json"])
+    assert job["include_screenshot_b64"] is False
+    assert "screenshot_b64" not in (res.structured or {})

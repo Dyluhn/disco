@@ -20,6 +20,7 @@ ids or OpenRouter strings, which are [VERIFY] and filled in at wiring time.
 
 from __future__ import annotations
 
+import os
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -200,6 +201,11 @@ def default_config() -> RouterConfig:
     """
     _QWEN = "http://192.168.1.231:18080/v1"
     _GEMMA = "http://192.168.1.81:8087/v1"
+    # [BP-00] Vision gate: the driver is vision-capable ONLY if enabled via env.
+    driver_caps = {Requirement.TOOL_CALLING, Requirement.JSON_MODE, Requirement.LONG_CONTEXT}
+    if os.environ.get("PMX_DRIVER_VISION") == "1":
+        driver_caps.add(Requirement.VISION)
+
     models = {
         # AGENT_DRIVER + RAG_ANSWERER → Qwen 27B (reasoning, 128K ctx).
         "driver-local": ModelEntry(
@@ -207,9 +213,7 @@ def default_config() -> RouterConfig:
             provider="qwen",
             base_url=_QWEN,
             context_window=131_072,
-            capabilities=frozenset(
-                {Requirement.TOOL_CALLING, Requirement.JSON_MODE, Requirement.LONG_CONTEXT}
-            ),
+            capabilities=frozenset(driver_caps),
             quantization="Q5_K_XL",
             family="qwen",
         ),
@@ -284,3 +288,32 @@ def default_config() -> RouterConfig:
         default_model="driver-local",
         assignments=assignments,
     )
+
+
+def apply_runtime_capabilities(config: RouterConfig) -> RouterConfig:
+    """[BP-00] Overlay deployment-runtime capabilities onto a loaded config.
+
+    PMX_DRIVER_VISION describes the LIVE llama-server (is an mmproj loaded right
+    now?), not a user catalogue preference — so it is applied over whatever the
+    persisted file says, in BOTH directions, on every load. Without this, a
+    config file persisted before the vision rollout silently pins the driver
+    text-only (the routing guard then rejects its own driver's images); and a
+    file that persisted VISION keeps advertising it after the deployment loses
+    the mmproj. The env var is authoritative for `driver-local` only.
+    """
+    entry = config.models.get("driver-local")
+    if entry is None:
+        return config
+    vision_on = os.environ.get("PMX_DRIVER_VISION") == "1"
+    if vision_on == (Requirement.VISION in entry.capabilities):
+        return config
+    caps = set(entry.capabilities)
+    if vision_on:
+        caps.add(Requirement.VISION)
+    else:
+        caps.discard(Requirement.VISION)
+    models = {
+        **config.models,
+        "driver-local": entry.model_copy(update={"capabilities": frozenset(caps)}),
+    }
+    return config.model_copy(update={"models": models})

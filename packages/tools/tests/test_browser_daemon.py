@@ -149,6 +149,8 @@ async def test_browser_daemon_integration_real_chromium(tmp_path):
         # screenshot_path is workspace-relative; PMX_WORKSPACE=tmp_path, so it must exist there
         assert data["screenshot_path"]
         assert (tmp_path / data["screenshot_path"]).is_file()
+        # BP-00: without the flag, the response must NOT carry inline image bytes.
+        assert "screenshot_b64" not in data
 
         # (b) click by index, then screenshot WITHOUT navigate → updated counter text
         # Find index of button
@@ -171,6 +173,19 @@ async def test_browser_daemon_integration_real_chromium(tmp_path):
         res = await client.post("/", json={"action": "navigate", "url": fixture_url})
         data = res.json()
         assert "testcookie=456" in data["text"]
+
+        # (d) BP-00: include_screenshot_b64 → response carries base64 that decodes
+        # byte-for-byte to the PNG the daemon wrote on disk.
+        import base64
+        res = await client.post(
+            "/",
+            json={"action": "navigate", "url": fixture_url, "include_screenshot_b64": True},
+        )
+        data = res.json()
+        assert data["ok"]
+        assert data.get("screenshot_b64")
+        on_disk = (tmp_path / data["screenshot_path"]).read_bytes()
+        assert base64.b64decode(data["screenshot_b64"]) == on_disk
 
     finally:
         daemon_proc.terminate()

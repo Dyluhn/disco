@@ -58,6 +58,7 @@ from .types import (
     CompletionRequest,
     CompletionResponse,
     ModelRole,
+    Requirement,
     RoutingDecision,
     StreamChunk,
 )
@@ -248,6 +249,25 @@ class DefaultLLMRouter:
                 f"— fix the assignment in Settings"
             )
 
+        # [BP-00] Vision capability guard: if the request carries images, the
+        # model MUST support VISION.
+        if any(getattr(m, "images", None) for m in req.messages):
+            if Requirement.VISION not in (entry.capabilities or []):
+                self._sink.record(
+                    RoutingDecision(
+                        profile=profile,
+                        chosen_model=key,
+                        provider=entry.provider,
+                        path=path,
+                        reason=f"model '{key}' does not support vision",
+                        overflow_triggers=["capability_gap"],
+                    )
+                )
+                raise NoEligibleModel(
+                    f"Request contains images but model '{key}' does not support VISION. "
+                    f"Check PMX_DRIVER_VISION env and driver-local config."
+                )
+
         return entry, path, "config"
 
     # -- prompt injection (RT3, §8) -------------------------------------------
@@ -257,7 +277,9 @@ class DefaultLLMRouter:
             return req  # caller supplied its own system prompt; do not override
         family = entry.family or derive_family(entry.model_id)
         mode = req.profile.mode or default_mode_for_role(req.profile.role)
-        system = self._prompts.system_prompt(model_family=family, mode=mode, role=req.profile.role)
+        system = self._prompts.system_prompt(
+            model_family=family, mode=mode, role=req.profile.role, capabilities=entry.capabilities
+        )
         new_messages = [LLMMessage(role="system", content=system), *req.messages]
         return req.model_copy(update={"messages": new_messages})
 
