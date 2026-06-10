@@ -28,6 +28,7 @@ from .registry import (
     research_scope,
 )
 from .sandbox import (
+    REGISTRY_EGRESS_ALLOW,
     ExecResult,
     ProcessSandboxInstance,
     ProcessSandboxService,
@@ -57,6 +58,7 @@ __all__ = [
     "InMemorySecretsStore",
     "ProcessSandboxInstance",
     "ProcessSandboxService",
+    "REGISTRY_EGRESS_ALLOW",
     "SandboxError",
     "SandboxInstance",
     "SandboxService",

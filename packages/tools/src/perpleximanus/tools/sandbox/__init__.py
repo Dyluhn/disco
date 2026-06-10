@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .base import (
+    REGISTRY_EGRESS_ALLOW,
     ExecResult,
     SandboxError,
     SandboxInstance,
@@ -34,6 +35,7 @@ __all__ = [
     "PodmanSandboxService",
     "ProcessSandboxInstance",
     "ProcessSandboxService",
+    "REGISTRY_EGRESS_ALLOW",
     "SandboxConfig",
     "SandboxError",
     "SandboxInstance",

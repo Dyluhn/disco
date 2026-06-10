@@ -71,6 +71,7 @@ from perpleximanus.retrieval.deep_research import (
 )
 from perpleximanus.retrieval.wiring import retrieval_capability_handlers
 from perpleximanus.tools import (
+    REGISTRY_EGRESS_ALLOW,
     Capability,
     CapabilityBroker,
     DefaultToolExecutor,
@@ -93,8 +94,8 @@ from perpleximanus.tools.sandbox import (
     PodmanSandboxService,
     SandboxConfig,
 )
-from perpleximanus.tools.sandbox.port_owner import port_owner, port_owners
 from perpleximanus.tools.sandbox._container import PREVIEW_PORT, USER_PORTS
+from perpleximanus.tools.sandbox.port_owner import port_owners
 
 _LOG = logging.getLogger(__name__)
 
@@ -506,11 +507,17 @@ class ConversationRuntime:
         executor is held so the kill switch can revoke caps + tear down the sandbox."""
         broker = self._build_broker()
         # The Agent toolset includes the `browser`, which needs egress — so the Build
-        # sandbox GRANTS network (the cost-legible coupling: selecting Build is visible as
-        # network-granting; the gate + analyzer, not the seal, control risky egress here).
-        build_spec = self._sandbox_spec.model_copy(
-            update={"permitted": self._sandbox_spec.permitted | {Capability.NETWORK}}
-        )
+        # sandbox GRANTS network by default (open). If PMX_BUILD_EGRESS=filtered,
+        # it gets registry-only access instead (Capability.NETWORK is NOT granted).
+        egress = os.environ.get("PMX_BUILD_EGRESS", "open").lower().strip()
+        if egress == "filtered":
+            build_spec = self._sandbox_spec.model_copy(
+                update={"egress_allow": REGISTRY_EGRESS_ALLOW}
+            )
+        else:
+            build_spec = self._sandbox_spec.model_copy(
+                update={"permitted": self._sandbox_spec.permitted | {Capability.NETWORK}}
+            )
         session = SandboxSession(
             self._sandbox_service_now(), build_spec, conversation_id=conversation_id
         )
@@ -1408,11 +1415,15 @@ class ConversationRuntime:
     async def request_plan(self, conversation_id: str, text: str = "") -> None:
         """(Re-)enter plan mode with the user's instruction — the first plan AND the
         re-plan after a build, so focused diff-style changes are planned and re-approved
-        instead of free-form steered."""
-        loop = self._loops.get(conversation_id)
-        if loop is not None:
-            await loop.enter_planning(text)
-            self.kick(conversation_id)  # produce the (revised) plan
+        instead of free-form steered.
+
+        Composes the loop lazily (`_loop_for`, same as `kick`) — a fresh
+        conversation or one whose loop died with a server restart has no entry in
+        `_loops`, and the old `.get()` guard silently dropped the frame: the
+        composer showed "sending…" forever while the server did nothing."""
+        loop = self._loop_for(conversation_id)
+        await loop.enter_planning(text)
+        self.kick(conversation_id)  # produce the (revised) plan
 
     async def pick_alternative(self, conversation_id: str, option_id: str) -> None:
         """Resume from AWAITING_USER_DECISION by selecting the agent's proposed

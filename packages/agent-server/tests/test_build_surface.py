@@ -404,6 +404,37 @@ async def test_request_plan_after_finish_reopens_plan_mode_with_a_new_revision()
     assert len(plans) == 2 and plans[-1].revision == 2  # the re-plan is revision 2
 
 
+async def test_request_plan_on_a_fresh_conversation_composes_the_loop():
+    """Regression: `request_plan` on a conversation with NO live loop (fresh, or any
+    conversation after a server restart) must lazily compose one — the old
+    `_loops.get()` guard silently dropped the frame, leaving the UI's optimistic
+    echo at "sending…" forever while the server stayed IDLE at seq 0."""
+    from perpleximanus.core.events import PlanEvent
+
+    store = SqliteEventStore(":memory:")
+    store.create_conversation(CID, owner_id="local")
+    runtime = _runtime(store, [("here's the plan", [_plan(["build it"])])])
+    runtime.set_surface(CID, "build")
+    assert CID not in runtime._loops  # never kicked — the no-op precondition
+
+    await runtime.request_plan(CID, "build an express server")
+    await _await_task(runtime)
+
+    events = await store.get_events(CID)
+    # the user's instruction was echoed to the log (what un-sticks "sending…")
+    assert any(
+        isinstance(e, MessageEvent)
+        and e.source == EventSource.USER
+        and e.message.content == "build an express server"
+        for e in events
+    )
+    # and the loop actually ran planning: a revision-1 plan, halted for approval
+    state = await store.get_state(CID)
+    assert state.execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+    plans = [e for e in events if isinstance(e, PlanEvent)]
+    assert len(plans) == 1 and plans[0].revision == 1
+
+
 # ---- ConfirmRisky vs NeverConfirm: the surfaces differ ----------------------
 
 

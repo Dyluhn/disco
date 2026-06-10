@@ -7,9 +7,11 @@ the active backend); a change is picked up per-request; and an explicit injectio
 
 from __future__ import annotations
 
+import pytest
 from perpleximanus.agent_server.runtime import ConversationRuntime, build_sandbox_service
 from perpleximanus.core import SqliteEventStore
-from perpleximanus.core.llm import ConfigStore, SandboxSettings
+from perpleximanus.core.llm import ConfigStore, DefaultLLMRouter, SandboxSettings
+from perpleximanus.core.loop import RouterAgent
 from perpleximanus.tools.sandbox import (
     GvisorSandboxService,
     LocalSandboxService,
@@ -51,8 +53,6 @@ def test_injected_sandbox_overrides_the_persisted_config(tmp_path):
     )
     assert isinstance(rt._sandbox_service_now(), ProcessSandboxService)  # override wins
 
-
-import pytest
 
 class _FakeSession:
     def __init__(self, backend: str, url: str | None) -> None:
@@ -99,7 +99,6 @@ async def test_preview_is_backend_aware_and_honest():
     # raw upstream is kept server-side (the browser hits the agent-server proxy).
     rt._executors["loc"] = _FakeExecutor(_FakeSession("local", "http://localhost:32768"))
     # Mock port_owners for this test
-    import perpleximanus.agent_server.runtime as runtime_mod
     from perpleximanus.tools.sandbox.port_owner import PortOwner
 
     async def mock_port_owners(inst, ports):
@@ -111,7 +110,9 @@ async def test_preview_is_backend_aware_and_honest():
 
     import unittest.mock
 
-    with unittest.mock.patch("perpleximanus.agent_server.runtime.port_owners", side_effect=mock_port_owners):
+    with unittest.mock.patch(
+        "perpleximanus.agent_server.runtime.port_owners", side_effect=mock_port_owners
+    ):
         loc = await rt.preview("loc")
         assert loc["available"] is True and loc.get("proxy") is True and "url" not in loc
         assert rt.preview_upstream("loc") == "http://localhost:32768"
@@ -131,8 +132,10 @@ async def test_multi_port_upstream_resolution():
 
     class _MultiPortSession(_FakeSession):
         def expose_port(self, port: int) -> str | None:
-            if port == 8000: return "http://h:8000"
-            if port == 3000: return "http://h:3000"
+            if port == 8000:
+                return "http://h:8000"
+            if port == 3000:
+                return "http://h:3000"
             return None
 
     rt._executors["c"] = _FakeExecutor(_MultiPortSession("local", "http://h:8000"))
@@ -145,6 +148,7 @@ async def test_multi_port_upstream_resolution():
 async def test_port_proxy_route_auth_and_defense():
     # BP-10: app-route proxy defends USER_PORTS set
     import unittest.mock
+
     from fastapi.testclient import TestClient
     from perpleximanus.agent_server import create_app
     from perpleximanus.tools.sandbox._container import USER_PORTS
@@ -245,3 +249,44 @@ def test_sandbox_settings_round_trip_on_disk(tmp_path):
     assert reloaded.sandbox.backend == "gvisor"
     assert reloaded.sandbox.docker_socket == "ssh://sandbox@host"
     assert reloaded.sandbox.runtime == "runsc"
+
+
+@pytest.mark.asyncio
+async def test_compose_build_loop_egress_modes():
+    # BP-09: env-flag dispatch for open/filtered Build sandboxes
+    import os
+    from unittest import mock
+
+    from perpleximanus.tools import REGISTRY_EGRESS_ALLOW, Capability
+
+    rt = ConversationRuntime(SqliteEventStore(":memory:"))
+    router = mock.MagicMock(spec=DefaultLLMRouter)
+    agent = mock.MagicMock(spec=RouterAgent)
+
+    # 1. Default (open)
+    with mock.patch.dict(os.environ, {}, clear=False):
+        with mock.patch.object(rt, "_sandbox_service_now"):
+            loop = rt._compose_build_loop("c1", router, agent)
+            spec = loop.executor._sandbox.spec
+            assert Capability.NETWORK in spec.permitted
+            assert not spec.egress_allow
+
+    # 2. Filtered
+    with mock.patch.dict(os.environ, {"PMX_BUILD_EGRESS": "filtered"}):
+        with mock.patch.object(rt, "_sandbox_service_now"):
+            loop = rt._compose_build_loop("c2", router, agent)
+            spec = loop.executor._sandbox.spec
+            assert Capability.NETWORK not in spec.permitted
+            assert spec.egress_allow == REGISTRY_EGRESS_ALLOW
+
+
+def test_registry_egress_allow_semantics():
+    # BP-09: REGISTRY_EGRESS_ALLOW matches exact and .suffix
+    from perpleximanus.tools import REGISTRY_EGRESS_ALLOW, SandboxSpec
+
+    spec = SandboxSpec(egress_allow=REGISTRY_EGRESS_ALLOW)
+    assert spec.egress_allowed("registry.npmjs.org") is True
+    assert spec.egress_allowed("pypi.org") is True
+    assert spec.egress_allowed("anything.npmjs.org") is True
+    assert spec.egress_allowed("example.com") is False
+    assert spec.egress_allowed("raw.githubusercontent.com") is True

@@ -76,6 +76,24 @@ class SandboxSpec(BaseModel):
         return False
 
 
+REGISTRY_EGRESS_ALLOW: frozenset[str] = frozenset({
+    "registry.npmjs.org",
+    ".npmjs.org",
+    "pypi.org",
+    "files.pythonhosted.org",
+    "github.com",
+    "codeload.github.com",
+    ".githubusercontent.com",
+    "deb.debian.org",
+    "security.debian.org",
+    "cdn.jsdelivr.net",
+    "unpkg.com",
+    "esm.sh",
+    "fonts.googleapis.com",
+    "fonts.gstatic.com",
+})
+
+
 @runtime_checkable
 class SandboxInstance(Protocol):
     """[CONTRACT] A running, isolated environment. Tools execute against it.

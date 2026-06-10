@@ -249,7 +249,15 @@ _EXECUTION_DRIVER_PROMPT = (
     "  • Port 8000 is what the user SEES. Extra services (APIs, websockets) may use "
     "ports 3000, 5173, 8080, 5000, or 4321 — these are reachable for your own testing "
     "via the browser tool and curl, and proxied for the user on request. Anything else "
-    "is unreachable from outside the sandbox.\n\n"
+    "is unreachable from outside the sandbox.\n"
+    # [BP-09] installs work; prefer the pre-warmed fast-path installers.
+    "  • Installing dependencies works (npm/pnpm/pip/uv; network is granted). Prefer "
+    "pnpm and uv — they are pre-installed and fast. Watch the install in your session "
+    "with shell_view; do not assume it finished.\n"
+    # [BP-11] user uploads land in uploads/ and are announced.
+    "  • Files the user uploads appear under uploads/ in your workspace and are "
+    "announced in the conversation. Read them with file_read before guessing at their "
+    "contents.\n\n"
     "Do not call `submit_plan` during execution."
 )
 

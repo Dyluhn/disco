@@ -9,7 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && corepack enable \
-    && npm install -g npm@latest \
+    && npm install -g npm@latest pnpm --force \
+    && pip3 install --break-system-packages uv \
     && rm -rf /var/lib/apt/lists/* /root/.npm
 
 # BP-08: Persistent IPython kernel stack. No matplotlib in the image (gVisor

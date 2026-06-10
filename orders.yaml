@@ -133,6 +133,63 @@ bp-00: committed
   - test-record/bp-00/vision-ui-witness.json
   - test-record/screenshots/bp-00/defect-before.png
   - test-record/screenshots/bp-00/fixed-after.png
+bp-09: committed
+  - packages/tools/src/perpleximanus/tools/sandbox/base.py
+  - packages/tools/src/perpleximanus/tools/sandbox/gvisor.py
+  - packages/tools/src/perpleximanus/tools/sandbox/__init__.py
+  - packages/tools/src/perpleximanus/tools/__init__.py
+  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/pyproject.toml
+  - packages/agent-server/tests/test_sandbox_config.py
+  - packages/agent-server/tests/test_build_surface.py
+  - packages/tools/tests/test_sandbox.py
+  - packages/core/src/perpleximanus/core/llm/prompts.py
+  - deploy/sandbox/Dockerfile
+  - uv.lock
+  - frontend/e2e-live/bp-09-install.spec.ts
+  - test-record/bp-09/install-matrix.md
+  - test-record/bp-09/filtered-profile.log
+  - test-record/bp-09/integration_filtered_positive.py
+  - test-record/bp-09/integration-filtered-positive.log
+  - test-record/bp-09/run_behavioral.py
+  - test-record/bp-09/behavioral-run.log
+  - test-record/bp-09/install-witness.json
+  - test-record/bp-09/install-ui-witness.json
+  - test-record/bp-09/ui-spec.log
+  - test-record/screenshots/bp-09/install-and-serve.png
+  - agent-projects/gemini/bp-09-report.md
+bp-12: staged
+  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/agent-server/tests/test_resume.py
+  - frontend/src/api/agent.ts
+  - frontend/src/components/build/AgentStatusBar.tsx
+  - frontend/src/components/build/AgentStatusBar.resume.test.tsx
+  - frontend/src/api/agent.resume.test.ts
+  - frontend/src/types/agent.ts
+  - frontend/e2e-live/bp-12-resume.spec.ts
+  - test-record/bp-12/integration-resume.log
+  - test-record/bp-12/restart-survival.log
+  - agent-projects/gemini/bp-12-report.md
+bp-11: in-flight
+  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/agent-server/tests/test_upload.py
+  - frontend/src/api/agent.ts
+  - frontend/src/components/BuildSurface.tsx
+  - frontend/src/components/build/BuildSurface.tsx
+  - frontend/src/components/build/BuildSurface.upload.test.tsx
+  - frontend/src/api/agent.upload.test.ts
+  - frontend/e2e-live/bp-11-upload.spec.ts
+  - test-record/bp-11/integration-upload.log
+  - test-record/bp-11/run_behavioral.py
+  - test-record/bp-11/behavioral-run.log
+  - test-record/bp-11/upload-witness.json
+  - test-record/bp-11/upload-ui-witness.json
+  - test-record/bp-11/bp00-behavioral-runs.csv
+  - test-record/bp-11/ui-spec.log
+  - test-record/screenshots/bp-11/upload-toast.png
+  - test-record/screenshots/bp-11/preview-table.png
+  - agent-projects/gemini/bp-11-report.md
 bp-08: committed
   - packages/tools/src/perpleximanus/tools/sandbox/kernel.py
   - packages/tools/src/perpleximanus/tools/sandbox/session.py

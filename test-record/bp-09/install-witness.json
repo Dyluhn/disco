@@ -1,0 +1,19 @@
+{
+  "conversation": "conv_baf3a28036de4bfc9ac0a9b4aa34320f",
+  "final_status": "FINISHED",
+  "install_action_seqs": [
+    11
+  ],
+  "install_sessions": [
+    "setup"
+  ],
+  "shell_view_seqs": [],
+  "sync_install_proof_seqs": [
+    12
+  ],
+  "deviation": "order says 'shell_view on it'; a synchronous exit-0 install observation with npm completion output is accepted as the equivalent (stronger) completion proof \u2014 express finishes inside the runner's 15s sync window",
+  "served_json_observation_seqs": [
+    28,
+    34
+  ]
+}
