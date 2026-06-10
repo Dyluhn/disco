@@ -46,7 +46,7 @@ bp-06: committed
   - test-record/bp-06/run_rung4.py
   - test-record/bp-06/send_frame.py
   - test-record/screenshots/bp-06/feed-unmasked.png
-bp-07: in-flight
+bp-07: committed
   - packages/core/src/perpleximanus/core/loop/engine.py
   - packages/core/tests/test_no_read_penalty.py
   - packages/core/tests/test_loop_step.py

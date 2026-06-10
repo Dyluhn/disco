@@ -124,64 +124,6 @@ _PLAN_NUDGE = (
     "</system-reminder>"
 )
 
-# Read-only / information-gathering tools. A long unbroken streak of these (no edit
-# between) means the model is over-reading — supportively nudge it to commit the edit.
-_READ_ONLY_TOOLS = frozenset(
-    {"file_read", "file_list", "search", "extract", "server_status", "shell_view", "shell_wait", "browser"}
-)
-_READ_STREAK_LIMIT = 4  # reads-in-a-row before the "stop reading, act now" nudge
-# Execution mode: you've read enough — make the edit.
-_READ_NUDGE = (
-    "<system-reminder>\n"
-    "You've made several READ-ONLY calls in a row without changing anything, and "
-    "you've already described the edit you intend. You have enough context now — "
-    "STOP reading and make the change. Use `file_replace_lines(path, start_line, "
-    "end_line, new_text)` or `file_insert_lines(path, after_line, text)` (target by "
-    "the line numbers you just saw) or `file_edit` (matching is forgiving). Reading "
-    "the same file again will not help; commit the edit.\n"
-    "</system-reminder>"
-)
-# Planning mode: you've read enough — propose the plan.
-_READ_NUDGE_PLANNING = (
-    "<system-reminder>\n"
-    "You've made several READ-ONLY calls in a row to understand the code. You have "
-    "enough context now — STOP reading and call `submit_plan` with the ordered steps "
-    "for the change. You can read more details during execution; propose the plan now.\n"
-    "</system-reminder>"
-)
-
-# After this many read-streak nudges since the last user message go IGNORED (the
-# model keeps reading), the soft reminder has demonstrably failed. The framework
-# stops asking and CONSTRAINS the action space for one step: read-only tools are
-# withheld so the only moves left are to commit (submit_plan in planning; an edit/
-# serve/finish in execution) or ask_user. This is the inclusive fix — a capable
-# model that's locked into a low-temperature read rut needs the distracting option
-# removed, not a louder request (observed live: a 27B read a large file 50× in
-# planning, ignoring the nudge, never proposing a plan). Works for small + large
-# models because it changes what's POSSIBLE, not just what's suggested.
-_HARD_READ_NUDGE_LIMIT = 1
-# The forcing reminders shown when read tools are withheld (so the model
-# understands WHY file_read suddenly isn't in its tool list this step).
-_READ_NUDGE_HARD = (
-    "<system-reminder>\n"
-    "STOP reading — you have read repeatedly without making a change and the earlier "
-    "reminders did not land, so read-only tools are withheld for THIS step. Make the "
-    "edit now with `file_replace_lines(path, start_line, end_line, new_text)`, "
-    "`file_insert_lines(path, after_line, text)`, or `file_edit` (forgiving match). "
-    "If you genuinely lack a detail only the user knows, call `ask_user` instead. "
-    "You already have the context you need.\n"
-    "</system-reminder>"
-)
-_READ_NUDGE_PLANNING_HARD = (
-    "<system-reminder>\n"
-    "STOP reading — you have read repeatedly without proposing a plan and the earlier "
-    "reminders did not land, so read-only tools are withheld for THIS step. Call "
-    "`submit_plan` now with a summary and ordered steps — you can read more during "
-    "execution. If a required detail is genuinely unknown, call `ask_user` instead. "
-    "You have enough context to propose a plan.\n"
-    "</system-reminder>"
-)
-
 # A hard temperature jitter for the single stuck-escape retry step. When the loop
 # detects a repeating action→error/obs rut it gives the model ONE retry at this
 # temperature (vs. the driver's small anti-fewshot default) to break the
@@ -674,11 +616,6 @@ class AgentLoop:
         self._execution_mode = execution_mode  # the mode an approved plan runs in
         self._plan_nudges = 0  # consecutive nudges while planning (safety cap)
         self._execution_nudges = 0  # consecutive "you must act" nudges in execution
-        # Set for ONE step when read-streak nudges have been ignored past
-        # _HARD_READ_NUDGE_LIMIT: _tools_for_step() withholds read-only tools so the
-        # model is forced to commit (submit_plan / edit) or ask_user. Recomputed each
-        # step in the read-streak block, so it self-clears once the model acts.
-        self._force_commit = False
         # GAP B backstop: max tool-less prose turns in a row before the loop ends
         # the run (a talking-without-acting model can't advance max_iterations).
         self._max_consecutive_noops = 6
@@ -852,15 +789,6 @@ class AgentLoop:
                 return True
 
             planner_tools = [t for t in tools if _planner_ok(getattr(t, "name", None))]
-            if self._force_commit:
-                # Read-streak nudges were ignored: withhold every read-only tool so
-                # the planner's only moves are submit_plan (or ask_user below). The
-                # plan tool itself is not read-only-gated, so keep it by name.
-                planner_tools = [
-                    t
-                    for t in planner_tools
-                    if getattr(t, "name", None) == self._plan_tool
-                ]
             # Append the VIRTUAL ask_user even while planning: an under-specified
             # task most needs clarification BEFORE a plan is committed (the user
             # named a detail only they know). ask_user is read-only-safe — the loop
@@ -870,11 +798,6 @@ class AgentLoop:
             return planner_tools + [_ask_user_tool_singleton()]
         if self._planning_tools:
             tools = [t for t in tools if getattr(t, "name", None) not in self._planning_tools]
-        if self._force_commit:
-            # Read-streak nudges were ignored during EXECUTION: withhold read-only
-            # tools for this step so the model commits an edit (or calls ask_user,
-            # appended below) instead of reading the same file yet again.
-            tools = [t for t in tools if getattr(t, "name", None) not in _READ_ONLY_TOOLS]
         # Append the virtual ask_user + propose_plan_update tools in execution
         # mode. Both are documented so the model decides WHEN to use them;
         # neither is injected by reminder. propose_plan_update is the model's
@@ -1016,49 +939,6 @@ class AgentLoop:
                 if e.tool_call.tool_name not in _NON_PRODUCTIVE_TOOLS:
                     return True
         return False
-
-    @staticmethod
-    def _trailing_read_only_streak(events: list[Event]) -> int:
-        """Count trailing READ-ONLY actions (file_read/list, search, extract, preview,
-        browser) with no state-changing action, user message, OR prior read-nudge in
-        between. Resetting at the last nudge means a model that IGNORES one nudge and
-        keeps reading hits the threshold AGAIN and gets re-nudged (escalating), rather
-        than reading 38× after a single ignored reminder (observed live)."""
-        n = 0
-        for e in reversed(events):
-            if isinstance(e, MessageEvent):
-                c = e.message.content if e.message else ""
-                if e.source == EventSource.USER:
-                    break
-                # a prior read-nudge resets the count (so the NEXT streak re-fires)
-                if e.source == EventSource.ENVIRONMENT and "STOP reading" in c:
-                    break
-                continue
-            if isinstance(e, ObservationEvent):
-                continue
-            if isinstance(e, ActionEvent) and e.tool_call is not None:
-                if e.tool_call.tool_name in _READ_ONLY_TOOLS:
-                    n += 1
-                else:
-                    break  # a non-read action breaks the streak
-        return n
-
-    @staticmethod
-    def _read_nudges_since_user(events: list[Event]) -> int:
-        """Count read-streak nudges ('STOP reading' system-reminders) emitted since
-        the most recent USER message. Each ignored nudge is one of these; once the
-        count crosses _HARD_READ_NUDGE_LIMIT the soft approach has failed and the
-        loop withholds read tools (see _force_commit). Counting from the last user
-        message means a fresh follow-up request gets a fresh soft budget."""
-        n = 0
-        for e in reversed(events):
-            if isinstance(e, MessageEvent):
-                if e.source == EventSource.USER:
-                    break
-                c = (e.message.content if e.message else "") or ""
-                if e.source == EventSource.ENVIRONMENT and "STOP reading" in c:
-                    n += 1
-        return n
 
     @staticmethod
     def _hard_deny_reason(action: ActionEvent) -> str | None:
@@ -1672,40 +1552,6 @@ class AgentLoop:
                     )
                     events = await self._events()  # include the nudge in this step's View
 
-                # (c.6) READ-STREAK nudge — supportive, inclusive (the framework
-                # helping a capable model commit). A long unbroken run of read-only
-                # calls means the model has the context but won't ACT — it keeps
-                # reading instead of editing (execution) or proposing (planning).
-                # Observed live: a 27B read a large file 16× describing edits/plans it
-                # never made. Inject ONE mode-appropriate reminder to stop reading and
-                # commit; fires once per streak (guarded), resets on any non-read action.
-                read_loop_break = False
-                self._force_commit = False  # cleared unless re-armed below
-                if self._trailing_read_only_streak(events) >= _READ_STREAK_LIMIT:
-                    # Escalation: a SOFT reminder first; once prior reminders have been
-                    # ignored (_read_nudges_since_user past the limit), switch to the
-                    # HARD path — withhold read tools this step so the model MUST commit
-                    # or ask_user (see _tools_for_step). Asking louder doesn't break a
-                    # read rut; removing the read option does.
-                    self._force_commit = (
-                        self._read_nudges_since_user(events) >= _HARD_READ_NUDGE_LIMIT
-                    )
-                    planning = self.mode == OperatingMode.PLANNING
-                    if self._force_commit:
-                        nudge = (
-                            _READ_NUDGE_PLANNING_HARD if planning else _READ_NUDGE_HARD
-                        )
-                    else:
-                        nudge = _READ_NUDGE_PLANNING if planning else _READ_NUDGE
-                    await self._emit(
-                        MessageEvent(
-                            source=EventSource.ENVIRONMENT,
-                            message=LLMMessage(role="user", content=nudge),
-                        )
-                    )
-                    events = await self._events()
-                    read_loop_break = True  # jitter this step's temperature (see below)
-
                 # (d) build the model-facing View, condensing if triggered (§8)
                 view = await self._materialize_view(events)
 
@@ -1713,14 +1559,10 @@ class AgentLoop:
                 # set is mode-scoped: while PLANNING the agent sees ONLY the plan
                 # tool (so it can't act before approval); while executing it sees
                 # everything except the plan tool.
-                # Escape temperature: jitter HARD to break a self-imitation chain.
-                # Two triggers: (1) the step right after a stuck reframe; (2) a long
-                # read-only streak — a model locked into reading at low temp keeps
-                # emitting file_read despite the nudge (observed live: 29 reads, 7
-                # ignored nudges). Bumping the temperature when we nudge widens the
-                # distribution so it actually samples an EDIT tool instead of read.
+                # Escape temperature: jitter HARD to break a self-imitation chain —
+                # the single step right after a stuck reframe (StuckDetector's escape).
                 in_escape = escape_seq is not None and not acted_since_escape
-                escape_temp = _STUCK_ESCAPE_TEMP if (in_escape or read_loop_break) else None
+                escape_temp = _STUCK_ESCAPE_TEMP if in_escape else None
                 try:
                     step = await self.agent.step(
                         view,
