@@ -33,13 +33,36 @@ bp-03: committed
   - frontend/e2e-live/bp-03-contract.spec.ts
 
 # --- in flight ----------------------------------------------------------------
-bp-06: in-flight
+bp-06: committed
   - packages/core/src/perpleximanus/core/view.py
   - packages/core/tests/test_observation_masking.py
   - packages/core/tests/test_view_kv_stability.py
+  - frontend/e2e-live/bp-06-feed-unmasked.spec.ts
+  - frontend/vite.config.ts
+  - test-record/bp-06/eequest-prompts.json
+  - test-record/bp-06/events-conv_c84a4834aa9544d2b5b358556702ac97.json
+  - test-record/bp-06/feed-unmasked-witness.json
+  - test-record/bp-06/replay_ab.py
+  - test-record/bp-06/run_rung4.py
+  - test-record/bp-06/send_frame.py
+  - test-record/screenshots/bp-06/feed-unmasked.png
 bp-07: in-flight
   - packages/core/src/perpleximanus/core/loop/engine.py
   - packages/core/tests/test_no_read_penalty.py
+  - packages/core/tests/test_loop_step.py
+  - packages/core/tests/test_planner_gate.py
+bp-08: staged
+  - packages/tools/src/perpleximanus/tools/sandbox/kernel.py
+  - packages/tools/src/perpleximanus/tools/sandbox/session.py
+  - packages/tools/src/perpleximanus/tools/sandbox/_container.py
+  - packages/tools/src/perpleximanus/tools/builtin/system.py
+  - packages/tools/src/perpleximanus/tools/anatomy.py
+  - packages/tools/src/perpleximanus/tools/executor.py
+  - packages/tools/pyproject.toml
+  - deploy/sandbox/Dockerfile
+  - packages/core/src/perpleximanus/core/llm/prompts.py
+  - packages/tools/tests/test_agent_tools.py
+  - packages/tools/tests/test_kernel_session.py
 bp-10: in-flight
   - packages/tools/src/perpleximanus/tools/sandbox/_container.py
   - packages/tools/src/perpleximanus/tools/sandbox/gvisor.py
@@ -49,7 +72,7 @@ bp-10: in-flight
   - packages/tools/src/perpleximanus/tools/sandbox/port_owner.py
   - packages/tools/src/perpleximanus/tools/builtin/server.py
   - packages/tools/tests/test_preview.py
-  - packages/tools/tests/test_process_backend.py
+  - packages/tools/tests/test_sandbox.py
   - packages/tools/tests/test_server_status.py
   - packages/agent-server/src/perpleximanus/agent_server/app.py
   - packages/agent-server/src/perpleximanus/agent_server/runtime.py
