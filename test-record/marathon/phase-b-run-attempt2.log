@@ -1,0 +1,133 @@
+no server running on /tmp/tmux-1000/default
+
+[phase-b] cid=conv_f794f52f68644e5abef0a3669ef4b8d3 — approved, watching for the install step
+[phase-b] agent-server SIGTERM'd mid-install (seq 37)
+F
+=================================== FAILURES ===================================
+_________________________________ test_phase_b _________________________________
+
+firefox = <Page url='http://localhost:5174/'>
+
+    def test_phase_b(firefox):
+        page = firefox
+        witness: dict = {}
+    
+        cid = create_submit_upload_approve(page, shot_prefix="phase-b")
+        witness["cid"] = cid
+        save_state(phase_b={"cid": cid})
+        print(f"\n[phase-b] cid={cid} — approved, watching for the install step")
+    
+        # ── 5. kill -TERM the agent-server the moment an install action lands ────
+        install_seq = None
+        deadline = time.monotonic() + 1800
+        while time.monotonic() < deadline and install_seq is None:
+            for a in actions(full_events(cid)):
+                if tool_of(a) in ("shell_exec", "shell", "server_start") and _INSTALL.search(
+                    json.dumps((a.get("tool_call") or {}).get("arguments"))
+                ):
+                    install_seq = a["seq"]
+                    break
+            if install_seq is None:
+                answer_gates(page, cid)  # soft-confirms must not stall the run
+                time.sleep(4)
+        assert install_seq, "no install action ever appeared in the event log"
+    
+        pre_files = sorted(f["path"] for f in manifest_files(cid))
+        pre_seq = max(e["seq"] for e in full_events(cid))
+        pid = _server_pid()
+        assert pid, "could not find the agent-server pid"
+        subprocess.run(["kill", "-TERM", str(pid)], check=True)
+        down_deadline = time.monotonic() + 60
+        while time.monotonic() < down_deadline and _health():
+            time.sleep(1)
+        assert not _health(), "agent-server still healthy after SIGTERM"
+        witness["killed"] = {"pid": pid, "install_seq": install_seq, "pre_seq": pre_seq,
+                             "pre_file_count": len(pre_files)}
+        print(f"[phase-b] agent-server SIGTERM'd mid-install (seq {install_seq})")
+    
+        # ── restart + reconciliation ──────────────────────────────────────────────
+>       subprocess.run(RESPAWN.format(root=ROOT), shell=True, check=True)
+
+harness/marathon/test_phase_b.py:117: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+input = None, capture_output = False, timeout = None, check = True
+popenargs = ('tmux respawn-pane -k -t pmx-agent-server "cd \'/var/home/dylan/projects/perpleximanus build\' && PMX_LOG_JSON=1 PMX_...runsc PMX_DB=test-record/pmx-run.db uv run python -m perpleximanus.agent_server 2>&1 | tee -a /tmp/pmx-marathon.log"',)
+kwargs = {'shell': True}
+process = <Popen: returncode: 1 args: 'tmux respawn-pane -k -t pmx-agent-server "cd \'...>
+stdout = None, stderr = None, retcode = 1
+
+    def run(*popenargs,
+            input=None, capture_output=False, timeout=None, check=False, **kwargs):
+        """Run command with arguments and return a CompletedProcess instance.
+    
+        The returned instance will have attributes args, returncode, stdout and
+        stderr. By default, stdout and stderr are not captured, and those attributes
+        will be None. Pass stdout=PIPE and/or stderr=PIPE in order to capture them,
+        or pass capture_output=True to capture both.
+    
+        If check is True and the exit code was non-zero, it raises a
+        CalledProcessError. The CalledProcessError object will have the return code
+        in the returncode attribute, and output & stderr attributes if those streams
+        were captured.
+    
+        If timeout (seconds) is given and the process takes too long,
+         a TimeoutExpired exception will be raised.
+    
+        There is an optional argument "input", allowing you to
+        pass bytes or a string to the subprocess's stdin.  If you use this argument
+        you may not also use the Popen constructor's "stdin" argument, as
+        it will be used internally.
+    
+        By default, all communication is in bytes, and therefore any "input" should
+        be bytes, and the stdout and stderr will be bytes. If in text mode, any
+        "input" should be a string, and stdout and stderr will be strings decoded
+        according to locale encoding, or by "encoding" if set. Text mode is
+        triggered by setting any of text, encoding, errors or universal_newlines.
+    
+        The other arguments are the same as for the Popen constructor.
+        """
+        if input is not None:
+            if kwargs.get('stdin') is not None:
+                raise ValueError('stdin and input arguments may not both be used.')
+            kwargs['stdin'] = PIPE
+    
+        if capture_output:
+            if kwargs.get('stdout') is not None or kwargs.get('stderr') is not None:
+                raise ValueError('stdout and stderr arguments may not be used '
+                                 'with capture_output.')
+            kwargs['stdout'] = PIPE
+            kwargs['stderr'] = PIPE
+    
+        with Popen(*popenargs, **kwargs) as process:
+            try:
+                stdout, stderr = process.communicate(input, timeout=timeout)
+            except TimeoutExpired as exc:
+                process.kill()
+                if _mswindows:
+                    # Windows accumulates the output in a single blocking
+                    # read() call run on child threads, with the timeout
+                    # being done in a join() on those threads.  communicate()
+                    # _after_ kill() is required to collect that and add it
+                    # to the exception.
+                    exc.stdout, exc.stderr = process.communicate()
+                else:
+                    # POSIX _communicate already populated the output so
+                    # far into the TimeoutExpired exception.
+                    process.wait()
+                raise
+            except:  # Including KeyboardInterrupt, communicate handled that.
+                process.kill()
+                # We don't call process.wait() as .__exit__ does that for us.
+                raise
+            retcode = process.poll()
+            if check and retcode:
+>               raise CalledProcessError(retcode, process.args,
+                                         output=stdout, stderr=stderr)
+E               subprocess.CalledProcessError: Command 'tmux respawn-pane -k -t pmx-agent-server "cd '/var/home/dylan/projects/perpleximanus build' && PMX_LOG_JSON=1 PMX_DRIVER_VISION=1 PMX_SANDBOX=gvisor PMX_LOCAL_SOCKET=ssh://sandbox@100.81.82.115 PMX_LOCAL_RUNTIME=runsc PMX_DB=test-record/pmx-run.db uv run python -m perpleximanus.agent_server 2>&1 | tee -a /tmp/pmx-marathon.log"' returned non-zero exit status 1.
+
+../../.local/share/uv/python/cpython-3.13.13-linux-x86_64-gnu/lib/python3.13/subprocess.py:577: CalledProcessError
+=========================== short test summary info ============================
+FAILED harness/marathon/test_phase_b.py::test_phase_b - subprocess.CalledProc...
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed in 90.80s (0:01:30)

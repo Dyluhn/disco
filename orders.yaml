@@ -321,3 +321,59 @@ bp-15: committed
   - test-record/screenshots/bp-15/feed-thumbnail.png
   - test-record/screenshots/bp-15/thumbnail-suspended.png
   - agent-projects/gemini/bp-15-report.md
+bp-16: committed
+  # manifest reconciled at close-out: Phase B SYSTEM-FAILed (DEFECT-4), so the
+  # planned phase-b-witness/finished/battery artifacts never existed; the
+  # 13-attempt adjudication history (logs + event archives + DEFECTS.md) is
+  # the actual evidence package the order mandates.
+  - harness/marathon/README.md
+  - harness/marathon/common.py
+  - harness/marathon/conftest.py
+  - harness/marathon/drive.py
+  - harness/marathon/test_phase_a.py
+  - harness/marathon/test_phase_b.py
+  - harness/marathon/test_phase_c.py
+  - harness/marathon/make_csv.py
+  - harness/marathon/sensor_readings.csv
+  - harness/marathon/provenance.json
+  - harness/marathon/data/PROVENANCE.md
+  - harness/marathon/data/sensor_readings.csv
+  - test-record/marathon/RECORD.md
+  - test-record/marathon/DEFECTS.md
+  - test-record/marathon/state.json
+  - test-record/marathon/phase-a-witness.json
+  - test-record/marathon/phase-c-witness.json
+  - test-record/marathon/events-conv_2d96fd065eb84a809eed5a1c85ce14ee.json
+  - test-record/marathon/events-conv_52681dc934bb40519bb77983b17a7839-attempt3.json
+  - test-record/marathon/events-conv_9c3f0ed082274f32837c500d6154151e-attempt7.json
+  - test-record/marathon/events-conv_a8e17d46521649c98a1d2564f5e0a10e-attempt5.json
+  - test-record/marathon/events-conv_a8e17d46521649c98a1d2564f5e0a10e.json
+  - test-record/marathon/events-conv_b0ff9034c35b4119a9b77edb74ec7564-attempt6.json
+  - test-record/marathon/events-conv_bbf8ed78225e424b8215ef3302c884c6.json
+  - test-record/marathon/events-conv_c1b4675689484c63b1f45d92d45b95be-attempt3-loop-snapshot.json
+  - test-record/marathon/events-conv_c1b4675689484c63b1f45d92d45b95be.json
+  - test-record/marathon/events-conv_e1467239c9d841c89cd5da9b94cc7c65-attempt5.json
+  - test-record/marathon/events-conv_f8e98e9fc5794991a188cd8007920135-attempt4.json
+  - test-record/marathon/phase-a-run-attempt1.log
+  - test-record/marathon/phase-a-run-attempt2.log
+  - test-record/marathon/phase-a-run-attempt3.log
+  - test-record/marathon/phase-a-run-attempt4.log
+  - test-record/marathon/phase-a-run-attempt5.log
+  - test-record/marathon/phase-a-run-attempt6.log
+  - test-record/marathon/phase-a-run-attempt7.log
+  - test-record/marathon/phase-a-run-attempt8.log
+  - test-record/marathon/phase-b-run-attempt1.log
+  - test-record/marathon/phase-b-run-attempt2.log
+  - test-record/marathon/phase-b-run-attempt3.log
+  - test-record/marathon/phase-b-run-attempt4.log
+  - test-record/marathon/phase-b-run-attempt5.log
+  - test-record/marathon/phase-c-run.log
+  - test-record/screenshots/marathon/attempt1-terminal-dead-server.png
+  - test-record/screenshots/marathon/phase-a-plan-approval.png
+  - test-record/screenshots/marathon/phase-a-terminal-dead-server.png
+  - test-record/screenshots/marathon/phase-a-recovery-feed.png
+  - test-record/screenshots/marathon/phase-a-final-preview-table.png
+  - test-record/screenshots/marathon/phase-a-port-3000-json.png
+  - test-record/screenshots/marathon/phase-a-gate-manual.png
+  - test-record/screenshots/marathon/phase-b-plan-approval.png
+  - test-record/screenshots/marathon/phase-b-resume-control.png

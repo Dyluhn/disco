@@ -1,0 +1,81 @@
+{
+  "cid": "conv_2d96fd065eb84a809eed5a1c85ce14ee",
+  "fault": {
+    "port": 3000,
+    "owners": {
+      "365": "python3 server.py"
+    },
+    "container": "pmx-sbx-sbx_ac48f2882041461fad2ffec61bfc979e",
+    "sessions": [
+      "backend",
+      "preview"
+    ],
+    "agent_launch_in_log": true,
+    "pre_seq": 40,
+    "first_seen_seq": 23,
+    "ts": 1781131317.9042742,
+    "kill_log": "killing pid 365: python3 server.py"
+  },
+  "terminal_death_excerpt": ".py\n * Serving Flask app 'server'\n * Debug mode: off\nWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.\n * Running on all addresses (0.0.0.0)\n * Running on http://127.0.0.1:3000\n * Running on http://172.17.0.2:3000\nPress CTRL+C to quit\n127.0.0.1 - - [10/Jun/2026 22:41:36] \"GET /api/readings HTTP/1.1\" 200 -\nKilled\n__PMX_PS1__137__$",
+  "deliverables": {
+    "known": {
+      "count": 200,
+      "min": "32.75",
+      "max": "62.85",
+      "cells": [
+        "32.75",
+        "43.85",
+        "62.85"
+      ]
+    },
+    "checks": {
+      "live_view": {
+        "pass": true
+      },
+      "port_pills": {
+        "pass": true,
+        "info": {
+          "ports": [
+            "8000",
+            "3000"
+          ]
+        }
+      },
+      "api_json": {
+        "pass": true,
+        "info": {
+          "rows": 200
+        }
+      },
+      "preview_cells": {
+        "pass": false,
+        "error": "preview never showed the data (last text: '')",
+        "exec_status_at_failure": "FINISHED"
+      },
+      "terminal": {
+        "pass": true,
+        "info": {
+          "chars": 498
+        }
+      },
+      "feed_thumbnail": {
+        "pass": true,
+        "info": {
+          "thumbnails": 2
+        }
+      },
+      "json_screenshot": {
+        "pass": true
+      }
+    },
+    "deliverables_pass": false
+  },
+  "final_status": "FINISHED",
+  "confirmation_approvals": [],
+  "noticed_seq": 67,
+  "noticed_excerpt": "SERVER STATUS\nsessions:\n  - backend: idle \u2014 last: __PMX_PS1__137__$\n  - frontend: idle \u2014 last: __PMX_PS1__130__$\n  - preview: running \u2014 last: 100.94.219.2 - - [10/Jun/2026 22:43:18] \"GET / HTTP/1.1\" 200 -\nports:\n  - 3000: FREE\n  - 4321: FREE\n  - 5000: FREE\n  - 5173: FREE\n  - 8000: OWNED by pid 53 (python3 -m http.server 8000 -d /workspace) [session: preview]\n  - 8080: FREE",
+  "recovery_seq": 78,
+  "recovery_excerpt": "{\"command\": \"cd /home/user/frontend && npx vite --port 8000 --host 0.0.0.0\", \"session\": \"frontend\"}",
+  "verification_seq": 101,
+  "assertions": "ALL PASS"
+}

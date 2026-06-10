@@ -1,0 +1,161 @@
+
+[phase-a] cid=conv_b0ff9034c35b4119a9b77edb74ec7564 — approved, build running
+[phase-a] :3000 owned by agent server {916: 'python3 server.py'} (seq 75) — settling 30s
+[phase-a] FAULT injected on :3000 — 'killing pid 916: python3 server.py'
+F
+=================================== FAILURES ===================================
+_________________________________ test_phase_a _________________________________
+
+firefox = <Page url='http://localhost:5174/'>
+
+    def test_phase_a(firefox):
+        page = firefox
+        witness: dict = {}
+    
+        # ── 1. create + upload + approve through the real UI ─────────────────────
+        cid = create_submit_upload_approve(page, shot_prefix="phase-a")
+        witness["cid"] = cid
+        save_state(phase_a={"cid": cid})
+        print(f"\n[phase-a] cid={cid} — approved, build running")
+    
+        # ── 2. fault injection: wait for the AGENT's server to own a port ────────
+        # Attempt-1 lesson: killing at the FIRST instant of port ownership lands
+        # while the launch shell_exec is still the pending action — the death shows
+        # up as that command's own exit-137 observation and there is nothing for
+        # instruments to discover. A MID-RUN fault needs the launch to settle and
+        # the agent to have moved on: port owned ≥ SETTLE_S, AND ≥2 new events
+        # since first detection (the launch obs landed + the agent acted again).
+        # Attempt-5 lesson: the PLATFORM preview server owns :8000 from container
+        # start — a valid target must be a non-preview owner that is demonstrably
+        # the agent's (cmdline looks like a server launch, or the event log shows
+        # the agent launching one). Killing the preview server tests nothing.
+        SETTLE_S = 30
+        fault = None
+        first_seen = None  # {"port", "seq", "t"} at first valid-target detection
+        deadline = time.monotonic() + 1800  # 30 min for the agent to bring a server up
+        while time.monotonic() < deadline and fault is None:
+            full_sessions = _sessions(cid)
+            sessions = [
+                s
+                for s in full_sessions
+                if s.get("name") != "preview" and not str(s.get("name", "")).startswith("__")
+            ]
+            if sessions:
+                container = container_for(cid)
+                if container:
+                    events_now = full_events(cid)
+                    launched = _agent_launched_server(events_now)
+                    for port in FAULT_PORTS:
+                        owners = {
+                            pid: cmd
+                            for pid, cmd in port_owners(container, port).items()
+                            if not _PREVIEW_CMD.search(cmd)
+                        }
+                        if not owners:
+                            continue
+                        if not (launched or any(_LAUNCH.search(c) for c in owners.values())):
+                            # something non-preview is listening but nothing ties it
+                            # to the agent yet — keep watching, don't kill blind
+                            print(f"[phase-a] :{port} owner not provably agent-launched yet: {owners}")
+                            continue
+                        cur_seq = max((e["seq"] for e in events_now), default=0)
+                        if first_seen is None or first_seen["port"] != port:
+                            first_seen = {"port": port, "seq": cur_seq, "t": time.monotonic()}
+                            print(
+                                f"[phase-a] :{port} owned by agent server {owners} "
+                                f"(seq {cur_seq}) — settling {SETTLE_S}s"
+                            )
+                            break
+                        settled = time.monotonic() - first_seen["t"] >= SETTLE_S
+                        moved_on = cur_seq >= first_seen["seq"] + 2
+                        if settled and moved_on:
+                            fault = {
+                                "port": port,
+                                "owners": {str(k): v for k, v in owners.items()},
+                                "container": container,
+                                "sessions": [s.get("name") for s in full_sessions],
+                                "agent_launch_in_log": launched,
+                                "pre_seq": cur_seq,
+                                "first_seen_seq": first_seen["seq"],
+                                "ts": time.time(),
+                            }
+                        break
+            if fault is None:
+                answer_gates(page, cid)  # rm -rf-style soft-confirms must not stall the run
+                time.sleep(5)
+        assert fault, "the agent's own server never owned a fault port (3000/8000)"
+    
+        kill_log = kill_port_process(fault["container"], fault["port"])
+        assert not _PREVIEW_CMD.search(kill_log), (
+            f"fault would have hit the platform preview server, not the agent's: {kill_log!r}"
+        )
+        fault["kill_log"] = kill_log
+        witness["fault"] = fault
+        save_state(phase_a=witness)
+        print(f"[phase-a] FAULT injected on :{fault['port']} — {kill_log!r}")
+    
+        # Terminal evidence: the surviving session shows the death output.
+        page.get_by_role("tab", name="Terminal").click(timeout=30_000)
+        pane = page.get_by_role("tabpanel").locator("pre")
+        death_deadline = time.monotonic() + 180
+        death_seen = ""
+        while time.monotonic() < death_deadline:
+            text = pane.inner_text(timeout=10_000) if pane.count() else ""
+            if re.search(r"Killed|Terminated|exited|exit code", text, re.I):
+                death_seen = text[-400:]
+                break
+            answer_gates(page, cid)
+            time.sleep(3)
+        page.screenshot(path=str(SHOT_DIR / "phase-a-terminal-dead-server.png"))
+        witness["terminal_death_excerpt"] = death_seen
+    
+        # ── 3. deliverables LIVE, as the user, once recovery brings both ports
+        # back (attempt-4 lesson: the sandbox reaps at FINISHED, so pills/preview/
+        # proxy/live-terminal are only witnessable while the run is alive) ────────
+        wait_ports_live(page, cid, deadline_s=1200)
+>       witness["deliverables"] = deliverable_battery(page, cid, shot_prefix="phase-a")
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+harness/marathon/test_phase_a.py:171: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+harness/marathon/drive.py:191: in deliverable_battery
+    pill.wait_for(state="visible", timeout=120_000)
+.venv/lib/python3.13/site-packages/playwright/sync_api/_generated.py:20048: in wait_for
+    self._sync(
+.venv/lib/python3.13/site-packages/playwright/_impl/_locator.py:741: in wait_for
+    await self._frame.wait_for_selector(
+.venv/lib/python3.13/site-packages/playwright/_impl/_frame.py:372: in wait_for_selector
+    await self._channel.send(
+.venv/lib/python3.13/site-packages/playwright/_impl/_connection.py:69: in send
+    return await self._connection.wrap_api_call(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <playwright._impl._connection.Connection object at 0x7f627221dbe0>
+cb = <function Channel.send.<locals>.<lambda> at 0x7f6271e23880>
+is_internal = False, title = None
+
+    async def wrap_api_call(
+        self, cb: Callable[[], Any], is_internal: bool = False, title: str = None
+    ) -> Any:
+        if self._api_zone.get():
+            return await cb()
+        task = asyncio.current_task(self._loop)
+        st: List[inspect.FrameInfo] = getattr(
+            task, "__pw_stack__", None
+        ) or inspect.stack(0)
+    
+        parsed_st = _extract_stack_trace_information_from_stack(st, is_internal, title)
+        self._api_zone.set(parsed_st)
+        try:
+            return await cb()
+        except Exception as error:
+>           raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+E           playwright._impl._errors.TimeoutError: Locator.wait_for: Timeout 120000ms exceeded.
+E           Call log:
+E             - waiting for get_by_role("tablist", name="Bound ports").get_by_role("tab", name=re.compile(r":8000")) to be visible
+
+.venv/lib/python3.13/site-packages/playwright/_impl/_connection.py:559: TimeoutError
+=========================== short test summary info ============================
+FAILED harness/marathon/test_phase_a.py::test_phase_a - playwright._impl._err...
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed in 385.65s (0:06:25)

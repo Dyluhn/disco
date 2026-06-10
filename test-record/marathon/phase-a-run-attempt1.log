@@ -1,0 +1,98 @@
+
+[phase-a] cid=conv_bbf8ed78225e424b8215ef3302c884c6 — approved, build running
+[phase-a] FAULT injected on :3000 — 'killing pid 762: python3 api/server.py'
+F
+=================================== FAILURES ===================================
+_________________________________ test_phase_a _________________________________
+
+firefox = <Page url='http://localhost:5174/'>
+
+    def test_phase_a(firefox):
+        page = firefox
+        witness: dict = {}
+    
+        # ── 1. create + upload + approve through the real UI ─────────────────────
+        cid = create_submit_upload_approve(page, shot_prefix="phase-a")
+        witness["cid"] = cid
+        save_state(phase_a={"cid": cid})
+        print(f"\n[phase-a] cid={cid} — approved, build running")
+    
+        # ── 2. fault injection: wait for a non-preview session owning a port ─────
+        fault = None
+        deadline = time.monotonic() + 1800  # 30 min for the agent to bring a server up
+        while time.monotonic() < deadline and fault is None:
+            full_sessions = _sessions(cid)
+            sessions = [
+                s
+                for s in full_sessions
+                if s.get("name") != "preview" and not str(s.get("name", "")).startswith("__")
+            ]
+            if sessions:
+                container = container_for(cid)
+                if container:
+                    for port in FAULT_PORTS:
+                        pids = port_pids(container, port)
+                        if pids:
+                            pre_events = full_events(cid)
+                            fault = {
+                                "port": port,
+                                "pids": pids,
+                                "container": container,
+                                "sessions": [s.get("name") for s in full_sessions],
+                                "pre_seq": max((e["seq"] for e in pre_events), default=0),
+                                "ts": time.time(),
+                            }
+                            break
+            if fault is None:
+                time.sleep(5)
+        assert fault, "no non-preview session ever owned a fault port (3000/8000)"
+    
+        kill_log = kill_port_process(fault["container"], fault["port"])
+        fault["kill_log"] = kill_log
+        witness["fault"] = fault
+        save_state(phase_a=witness)
+        print(f"[phase-a] FAULT injected on :{fault['port']} — {kill_log!r}")
+    
+        # Terminal evidence: the surviving session shows the death output.
+        page.get_by_role("tab", name="Terminal").click(timeout=30_000)
+        pane = page.get_by_role("tabpanel").locator("pre")
+        death_deadline = time.monotonic() + 180
+        death_seen = ""
+        while time.monotonic() < death_deadline:
+            text = pane.inner_text(timeout=10_000) if pane.count() else ""
+            if re.search(r"Killed|Terminated|exited|exit code", text, re.I):
+                death_seen = text[-400:]
+                break
+            time.sleep(3)
+        page.screenshot(path=str(SHOT_DIR / "phase-a-terminal-dead-server.png"))
+        witness["terminal_death_excerpt"] = death_seen
+    
+        # ── 3. run to FINISHED, then assert the recovery evidence ────────────────
+        st = wait_status(cid, {"FINISHED", "ERROR"}, deadline_s=2700)
+        witness["final_status"] = st
+        events = full_events(cid)
+        (RECORD_DIR / f"events-{cid}.json").write_text(json.dumps(events, indent=2))
+        save_state(phase_a=witness)
+        assert st == "FINISHED", f"build ended {st}, not FINISHED"
+    
+        after_fault = [e for e in events if e["seq"] > fault["pre_seq"]]
+    
+        # 3a. the agent NOTICED through its instruments (shell_view/server_status).
+        noticed = [
+            o
+            for o in observations(after_fault)
+            if tool_of(o) in ("shell_view", "server_status")
+            and re.search(
+                rf"(- {fault['port']}: FREE|Killed|Terminated|exited|exit code|not running)",
+                obs_content(o),
+                re.I,
+            )
+        ]
+>       assert noticed, "no shell_view/server_status observation reflects the dead server"
+E       AssertionError: no shell_view/server_status observation reflects the dead server
+E       assert []
+
+harness/marathon/test_phase_a.py:124: AssertionError
+=========================== short test summary info ============================
+FAILED harness/marathon/test_phase_a.py::test_phase_a - AssertionError: no sh...
+1 failed in 244.31s (0:04:04)

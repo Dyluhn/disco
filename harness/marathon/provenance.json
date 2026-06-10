@@ -1,0 +1,21 @@
+{
+  "source": "live /sys/class/hwmon temperature sampling on the dev workstation",
+  "sensors": [
+    "amdgpu/edge",
+    "amdgpu/junction",
+    "amdgpu/mem",
+    "k10temp/Tccd1",
+    "k10temp/Tctl",
+    "nvme/Composite",
+    "nvme/Sensor 1",
+    "nvme/Sensor 2",
+    "spd5118/temp1_input"
+  ],
+  "rows": 200,
+  "sampled_at_utc": "2026-06-10T21:09:09.685+00:00 .. 2026-06-10T21:09:16.563+00:00",
+  "stats": {
+    "count": 200,
+    "min": 32.75,
+    "max": 62.85
+  }
+}
