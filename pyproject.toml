@@ -37,6 +37,11 @@ dev = [
     # the decided option in deploy/sandbox/Dockerfile).
     "matplotlib>=3.9",
     "numpy>=2.0",
+    # BP-04 browser daemon: the host-side integration test runs the REAL
+    # _browser_daemon.py as a subprocess, which imports playwright and drives
+    # Chromium (one-time `playwright install chromium` fetches the browser).
+    # The container image installs its own in deploy/sandbox/Dockerfile.
+    "playwright>=1.45",
 ]
 
 [tool.pytest.ini_options]

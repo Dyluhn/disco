@@ -16,6 +16,11 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 # integration covers state + interrupt; plot tests run on the process backend).
 RUN pip3 install --break-system-packages ipykernel jupyter_kernel_gateway
 
+# BP-04: Real rendering browser (Playwright + Chromium)
+RUN pip3 install --break-system-packages playwright \
+    && playwright install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
+
 # Non-root user available (gVisor is the isolation boundary; app may pick --user)
 RUN useradd -m -u 1000 -s /bin/bash agent && mkdir -p /workspace && chown agent:agent /workspace
 WORKDIR /workspace

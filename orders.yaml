@@ -53,7 +53,7 @@ bp-07: committed
   - packages/core/tests/test_no_read_penalty.py
   - packages/core/tests/test_loop_step.py
   - packages/core/tests/test_planner_gate.py
-bp-04: staged
+bp-04: committed
   - packages/tools/src/perpleximanus/tools/builtin/_browser_daemon.py
   - packages/tools/src/perpleximanus/tools/builtin/browser.py
   - packages/tools/pyproject.toml
@@ -61,6 +61,22 @@ bp-04: staged
   - packages/tools/tests/test_browser.py
   - packages/tools/tests/test_browser_daemon.py
   - frontend/e2e-live/bp-04-browser.spec.ts
+  - uv.lock
+  - pyproject.toml
+  - test-record/bp-04/integration_browser_gvisor.py
+  - test-record/bp-04/integration-gvisor-browser.log
+  - test-record/bp-04/run_behavioral.py
+  - test-record/bp-04/behavioral-run.log
+  - test-record/bp-04/browser-observation-witness.json
+  - test-record/bp-04/events-conv_60644f823f24471cbaa1f7f8bc685560.json
+  - test-record/screenshots/bp-04/feed-browser-observation.png
+  - test-record/screenshots/bp-04/feed-browser-observation-expanded.png
+bp-05: staged
+  - packages/core/src/perpleximanus/core/loop/engine.py
+  - packages/core/src/perpleximanus/core/llm/prompts.py
+  - packages/core/tests/test_finish_browser_gate.py
+  - packages/core/src/perpleximanus/core/events.py
+  - packages/core/tests/test_serialization.py
 bp-08: committed
   - packages/tools/src/perpleximanus/tools/sandbox/kernel.py
   - packages/tools/src/perpleximanus/tools/sandbox/session.py
