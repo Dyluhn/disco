@@ -15,6 +15,7 @@ Phase 1 deliverable, BoD §22).
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Literal, Protocol
 
@@ -31,6 +32,13 @@ from .events import (
     ObservationEvent,
     PlanEvent,
 )
+
+# BP-06 observation masking (arXiv 2508.21433): old tool-output bodies elide to a
+# restorable stub; reasoning/actions stay verbatim. Render-time only — the event
+# log always keeps full bodies.
+_MASK_KEEP_RECENT = 8  # newest N observation events render in full
+_MASK_MIN_CHARS = 600  # smaller bodies are never masked (cheap, often load-bearing)
+
 
 # Tools that DO change durable state (the workspace / the plan), so their turns are
 # never microcompacted even when an attempt failed — a failed file write still may
@@ -243,6 +251,19 @@ class View(BaseModel):
                 return False
             return seq is not None and any(a <= seq <= b for a, b in forgotten)
 
+        # BP-06: the newest _MASK_KEEP_RECENT visible observations render in
+        # full; every older one above _MASK_MIN_CHARS elides to a restorable
+        # stub. Computed on the post-condensation sequence, so the window never
+        # counts forgotten events.
+        visible_obs = [
+            e.seq
+            for e in events
+            if isinstance(e, ObservationEvent)
+            and e.seq is not None
+            and not is_forgotten(e.seq)
+        ]
+        recent_obs_seqs = set(visible_obs[-_MASK_KEEP_RECENT:])
+
         # 2. Walk events in seq order. When we reach the start of a forgotten
         #    span, emit its summary (once) in place; drop forgotten and
         #    non-LLMConvertible events; keep the rest.
@@ -264,9 +285,32 @@ class View(BaseModel):
                 continue  # status/error: never shown to the LLM
             if is_forgotten(e.seq):
                 continue  # forgotten by a tombstone
-            msgs.append(e.to_llm_message())
-            if e.seq is not None:
+
+            if (
+                isinstance(e, ObservationEvent)  # exact class — AgentErrorEvent is NOT masked (B4)
+                and e.seq is not None
+                and e.seq not in recent_obs_seqs
+                and e.seq not in pinned
+                and len(e.tool_result.content) > _MASK_MIN_CHARS
+            ):
+                digest = hashlib.sha256(e.tool_result.content.encode()).hexdigest()[:12]
+                msgs.append(
+                    LLMMessage(
+                        role="tool",
+                        content=(
+                            f"[masked output: {e.tool_result.tool_name} #{e.seq} — "
+                            f"{len(e.tool_result.content):,} chars, sha256:{digest}. "
+                            "Re-run the tool (or file_read the same path) to see it again.]"
+                        ),
+                        # keep the pairing valid: provider-side tool_call ↔ tool message
+                        tool_call_id=e.tool_result.call_id,
+                    )
+                )
                 visible.append(e.seq)
+            else:
+                msgs.append(e.to_llm_message())
+                if e.seq is not None:
+                    visible.append(e.seq)
 
         # GAP D recency recitation: append the ephemeral objective+checklist at
         # the TAIL so the goal sits in the high-attention recent window.
@@ -281,6 +325,14 @@ class View(BaseModel):
             total_events=len(events),
             forgotten_count=forgotten_n,
         )
+
+    def fingerprint(self) -> list[str]:
+        """[CONTRACT BP-06/B5] Stable per-message hashes for KV-prefix verification.
+        Role + content only; pure and deterministic across processes."""
+        return [
+            hashlib.sha256(f"{m.role}{m.content}".encode()).hexdigest()[:16]
+            for m in self.messages
+        ]
 
 
 # ---- Condenser / Summarizer seams (§5.2) ------------------------------------
