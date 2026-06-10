@@ -64,9 +64,13 @@ all_orders() {
   awk '/^[a-z0-9-]+:/ { print substr($1, 1, length($1)-1) }' "$MANIFEST"
 }
 
-# Orders not marked "committed" are live: their files are contested territory.
+# Orders with work on disk are live: their files are contested territory.
+# "committed" is done. "staged" is declared-but-untouched (manifest + brief exist,
+# NEVER dispatched — by definition zero hunks on disk, so it claims nothing; found
+# the hard way when staged bp-08 blocked bp-10's commit over hunks that were all
+# bp-10's). Dispatch flips staged -> in-flight. Anything else = live.
 live_orders() {
-  awk '/^[a-z0-9-]+:/ { if ($2 != "committed") print substr($1, 1, length($1)-1) }' "$MANIFEST"
+  awk '/^[a-z0-9-]+:/ { if ($2 != "committed" && $2 != "staged") print substr($1, 1, length($1)-1) }' "$MANIFEST"
 }
 
 order_known() { all_orders | grep -qx "$1"; }
@@ -136,6 +140,10 @@ cmd_dispatch() {
 
   local cmd; cmd=$(worker_cmd "$worker" "$brief") || fail_reason "$order" "unknown-worker" \
     "Dispatch refused: unknown worker preset '$worker'. Valid presets: flash, pi-minimax, pi-free."
+
+  # a staged (declared-but-untouched) order becomes live the moment a worker is
+  # let loose on its files — flip BEFORE launch so the gates see it immediately
+  sed -i "s/^$order: staged\$/$order: in-flight/" "$MANIFEST"
 
   local log="$LOGS/$order.log" sess="wkr-$order"
   : >"$log"
