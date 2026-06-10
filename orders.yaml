@@ -282,3 +282,37 @@ bp-10: committed
   - test-record/bp-10/port-pills-witness.json
   - test-record/screenshots/bp-10/port-pills-8000.png
   - test-record/screenshots/bp-10/port-pills-3000.png
+
+# --- staged (declared; dispatch flips to in-flight) ----------------------------
+bp-14: committed
+  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/tests/test_sessions_routes.py
+  - frontend/src/hooks/useSessions.ts
+  - frontend/src/hooks/useSessions.test.ts
+  - frontend/src/api/agent.ts
+  - frontend/src/components/build/ExecutionCanvas.tsx
+  - frontend/src/components/build/ExecutionCanvas.terminal.test.tsx
+  - frontend/src/components/build/StreamingFile.test.tsx
+  - frontend/e2e-live/bp-14-terminal.spec.ts
+  - test-record/bp-14/integration-sessions.log
+  - test-record/bp-14/ui-spec.log
+  - test-record/bp-14/terminal-ui-witness.json
+  - test-record/screenshots/bp-14/terminal-live.png
+  - test-record/screenshots/bp-14/terminal-history.png
+  - agent-projects/gemini/bp-14-report.md
+bp-15: staged
+  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/tests/test_workspace_route.py
+  - frontend/src/lib/buildTrace.ts
+  - frontend/src/lib/isolation.ts
+  - frontend/src/lib/isolation.test.ts
+  - frontend/src/components/build/ActivityFeed.tsx
+  - frontend/src/components/build/ActivityFeed.screenshot.test.tsx
+  - frontend/src/components/BuildSurface.tsx
+  - frontend/src/components/build/AgentStatusBar.tsx
+  - frontend/src/types/agent.ts
+  - frontend/e2e-live/bp-15-screenshots.spec.ts
+  - test-record/bp-15/integration-workspace-route.log
+  - agent-projects/gemini/bp-15-report.md

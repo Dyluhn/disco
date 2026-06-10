@@ -116,6 +116,35 @@ export async function killConversation(cid: string): Promise<void> {
   await agentSend("POST", `/conversations/${cid}/kill`);
 }
 
+export interface SessionInfo {
+  name: string;
+  busy: boolean;
+  last_line: string;
+}
+
+export interface SessionView {
+  name: string;
+  busy: boolean;
+  content: string;
+}
+
+/** List live tmux sessions for a conversation's sandbox (BP-14). */
+export async function getSessions(cid: string): Promise<{ sessions: SessionInfo[] }> {
+  if (!agentLive()) return { sessions: [] };
+  return agentGet<{ sessions: SessionInfo[] }>(`/conversations/${cid}/sessions`);
+}
+
+/** Capture-pane tail for one named session (BP-14). */
+export async function getSessionView(
+  cid: string,
+  name: string,
+  tailChars = 10_000,
+): Promise<SessionView> {
+  return agentGet<SessionView>(
+    `/conversations/${cid}/sessions/${encodeURIComponent(name)}/view?tail_chars=${tailChars}`,
+  );
+}
+
 /** Resume a PAUSED or interrupted-with-unfinished-plan conversation (BP-12). */
 export async function resumeConversation(
   cid: string,

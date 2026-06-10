@@ -98,6 +98,7 @@ from perpleximanus.tools.sandbox import (
 )
 from perpleximanus.tools.sandbox._container import PREVIEW_PORT, USER_PORTS
 from perpleximanus.tools.sandbox.port_owner import port_owners
+from perpleximanus.tools.sandbox.shell_sessions import SessionInfo, SessionView
 
 _LOG = logging.getLogger(__name__)
 
@@ -255,6 +256,9 @@ class ConversationRuntime:
         # the WS-reconnect backoff — cancels it).
         self._connections: dict[str, int] = {}
         self._suspend_tasks: dict[str, asyncio.Task] = {}
+        # BP-14: per-(cid, name) coalescing cache for capture-pane calls.
+        self._session_view_cache: dict[tuple[str, str], tuple[float, SessionView]] = {}
+        self._session_view_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
     # The generative (text-producing) roles a model PICK drives. NLI_VERIFIER is a
     # cross-encoder (entailment scorer), NOT a chat model — pointing it at a picked
@@ -811,6 +815,13 @@ class ConversationRuntime:
             with contextlib.suppress(Exception):
                 await pending.destroy()
         self._loops.pop(conversation_id, None)  # force a fresh sandbox on the next run
+        # BP-14: drop the capture-pane coalescing cache + locks for this conversation —
+        # each cache entry pins up to 100KB of captured output and would otherwise
+        # accumulate for the life of the server process.
+        for key in [k for k in self._session_view_cache if k[0] == conversation_id]:
+            del self._session_view_cache[key]
+        for key in [k for k in self._session_view_locks if k[0] == conversation_id]:
+            del self._session_view_locks[key]
         # The sandbox (and its files) are gone, so the NEXT run must rehydrate the
         # snapshot into a fresh sandbox. Clear the rehydrate-once flag — otherwise
         # `_maybe_rehydrate` skips it and the continuation runs in an EMPTY workspace,
@@ -1474,6 +1485,47 @@ class ConversationRuntime:
         if getattr(getattr(session, "_service", None), "name", "?") == "podman":
             return None  # stub here
         return session.expose_port(port)
+
+    def live_session(self, conversation_id: str) -> SandboxSession | None:
+        """Read-only sandbox accessor (BP-14). Does NOT create a session — a GET must
+        have no creation side-effects. Returns None when no executor/sandbox exists."""
+        executor = self._executors.get(conversation_id)
+        return getattr(executor, "_sandbox", None) if executor is not None else None
+
+    async def sessions_list(self, conversation_id: str) -> list[SessionInfo]:
+        """Return the non-internal sessions for a conversation's sandbox.
+        Empty list when no sandbox exists (finished/suspended/not started)."""
+        session = self.live_session(conversation_id)
+        if session is None:
+            return []
+        all_sessions = await session.sessions.list()
+        return [s for s in all_sessions if not s.name.startswith("__")]
+
+    _SESSION_VIEW_CACHE_TTL: float = 0.5
+    _SESSION_VIEW_MAX_CHARS: int = 100_000
+
+    async def session_view(
+        self, conversation_id: str, name: str, tail_chars: int
+    ) -> SessionView | None:
+        """Coalesced capture-pane: at most one in-flight call per (cid, name),
+        result cached 0.5s so concurrent polls share one exec_shell round-trip."""
+        session = self.live_session(conversation_id)
+        if session is None:
+            return None
+        key = (conversation_id, name)
+        lock = self._session_view_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            loop = asyncio.get_running_loop()
+            now = loop.time()
+            cached = self._session_view_cache.get(key)
+            if cached is not None and (now - cached[0]) < self._SESSION_VIEW_CACHE_TTL:
+                view = cached[1]
+            else:
+                view = await session.sessions.view(name, tail_chars=self._SESSION_VIEW_MAX_CHARS)
+                self._session_view_cache[key] = (now, view)
+        if len(view.output) > tail_chars:
+            return SessionView(running=view.running, output=view.output[-tail_chars:])
+        return view
 
     async def preview(self, conversation_id: str) -> dict[str, Any]:
         """Backend-aware live preview availability. The browser iframes the agent-server's

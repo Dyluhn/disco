@@ -1,0 +1,6 @@
+
+Running 1 test using 1 worker
+
+  ✓  1 [firefox] › e2e-live/bp-14-terminal.spec.ts:77:1 › Terminal tab shows live tmux sessions mid-build, history fallback after suspend (live) (1.3m)
+
+  1 passed (1.4m)

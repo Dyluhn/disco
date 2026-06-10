@@ -3,10 +3,16 @@
  * RIGHT NOW (the `streamingFile` buffer), live, before the authoritative
  * ActionEvent lands. Proves the streamed content shows with its filename and a
  * writing indicator — the "I can see it's not hung" guarantee.
+ *
+ * BP-14 moved the useSessions polling hook to the ExecutionCanvas level (the
+ * Terminal tab badge needs canvas-level polling), so rendering the canvas now
+ * requires a QueryClientProvider. agentLive() is false under vitest (empty
+ * AGENT_BASE) → getSessions short-circuits to the fixture, no network.
  */
 
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { StreamingFile } from "@/hooks/useBuildStream";
 import { ExecutionCanvas } from "@/components/build/ExecutionCanvas";
 
@@ -16,9 +22,18 @@ const streaming: StreamingFile = {
   content: "/* dark theme */\nbody { background: #0b0b0f; }",
 };
 
+function renderCanvas(streamingFile: StreamingFile | null) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <ExecutionCanvas events={[]} status="RUNNING" cid="c1" streamingFile={streamingFile} />
+    </QueryClientProvider>,
+  );
+}
+
 describe("ExecutionCanvas — watch-it-write", () => {
   it("shows the streaming file's content + filename while it writes", () => {
-    render(<ExecutionCanvas events={[]} status="RUNNING" cid="c1" streamingFile={streaming} />);
+    renderCanvas(streaming);
     // the live content is on screen (not waiting for the final event)
     expect(screen.getByText(/background: #0b0b0f/)).toBeInTheDocument();
     // the filename is shown whole (the path-completeness fix), more than once is fine
@@ -28,7 +43,7 @@ describe("ExecutionCanvas — watch-it-write", () => {
   });
 
   it("falls back to the empty files state when nothing is streaming", () => {
-    render(<ExecutionCanvas events={[]} status="RUNNING" cid="c1" streamingFile={null} />);
+    renderCanvas(null);
     expect(screen.getByText(/No files written yet/i)).toBeInTheDocument();
   });
 });

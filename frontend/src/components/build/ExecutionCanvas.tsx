@@ -15,6 +15,8 @@ import { deriveFiles, deriveSrcDoc, deriveTerminal } from "@/lib/buildTrace";
 import { agentHttpBase } from "@/api/client";
 import { restartPreview } from "@/api/agent";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
+import { useSessions } from "@/hooks/useSessions";
+import type { SessionInfo, SessionView } from "@/hooks/useSessions";
 import type { StreamingFile } from "@/hooks/useBuildStream";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
@@ -97,7 +99,7 @@ function FilesPane({
   );
 }
 
-function TerminalPane({ events }: { events: AgentEvent[] }) {
+function TerminalHistoryView({ events }: { events: AgentEvent[] }) {
   const entries = useMemo(() => deriveTerminal(events), [events]);
   if (entries.length === 0)
     return <Empty>No commands run yet. Shell + code output streams here.</Empty>;
@@ -122,6 +124,94 @@ function TerminalPane({ events }: { events: AgentEvent[] }) {
           )}
         </div>
       ))}
+    </div>
+  );
+}
+
+function TerminalPane({
+  events,
+  sessions,
+  selectedName,
+  setSelectedName,
+  view,
+}: {
+  events: AgentEvent[];
+  sessions: SessionInfo[];
+  selectedName: string | null;
+  setSelectedName: (name: string) => void;
+  view: SessionView | null;
+}) {
+  // Purely presentational: the useSessions hook lives in ExecutionCanvas (NOT
+  // here) because Radix unmounts inactive tab content — if polling lived in
+  // this pane, the tab-label busy dot could never light up while the user is
+  // on another tab (its whole purpose), and would freeze stale on switch-away.
+
+  // Near-bottom autoscroll: only follow the tail when the user hasn't scrolled away.
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const atBottomRef = useRef(true);
+  function onScroll() {
+    const el = scrollRef.current;
+    if (!el) return;
+    atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  }
+  useEffect(() => {
+    if (atBottomRef.current && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [view?.content]);
+
+  if (sessions.length === 0) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="min-h-0 flex-1">
+          <TerminalHistoryView events={events} />
+        </div>
+        <div className="shrink-0 border-t border-hairline px-body py-hair font-mono text-[0.72rem] text-text-faint">
+          history (no live sessions)
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-[oklch(0.15_0.005_260)]">
+      {/* Session chips */}
+      <div className="flex shrink-0 items-center gap-hair overflow-x-auto border-b border-white/10 px-body py-hair">
+        {sessions.map((s) => (
+          <button
+            key={s.name}
+            type="button"
+            onClick={() => setSelectedName(s.name)}
+            className={cn(
+              "flex shrink-0 items-center gap-hair rounded px-inline py-px font-mono text-[0.72rem] transition-colors",
+              s.name === selectedName
+                ? "bg-white/10 text-text"
+                : "text-text-faint hover:text-text",
+            )}
+          >
+            <span
+              className={cn(
+                "size-1.5 rounded-full",
+                s.busy
+                  ? "animate-pulse bg-[oklch(0.75_0.18_150)]"
+                  : "bg-[oklch(0.55_0.08_150)]",
+              )}
+              aria-label={s.busy ? "running" : "idle"}
+            />
+            {s.name}
+          </button>
+        ))}
+      </div>
+      {/* Live content pane */}
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        className="min-h-0 flex-1 overflow-auto px-body py-inline"
+      >
+        <pre className="whitespace-pre-wrap font-mono text-[0.78rem] leading-relaxed text-[oklch(0.78_0.005_260)]">
+          {view?.content ?? ""}
+        </pre>
+      </div>
     </div>
   );
 }
@@ -401,6 +491,26 @@ export function ExecutionCanvas({
     }
     wasFinished.current = finished;
   }, [status, events]);
+
+  const active =
+    status === "RUNNING" ||
+    status === "WAITING_FOR_CONFIRMATION" ||
+    status === "FINISHED" ||
+    status === "STUCK";
+
+  // Sessions polling lives HERE, not in TerminalPane: Radix unmounts inactive
+  // tab content, and the tab-label busy dot must keep updating while the user
+  // is on Files/Preview (that's the dot's entire job — pane-local polling
+  // would freeze it at its last-seen value on switch-away). The cheap
+  // /sessions list polls whenever the build is active; the heavier /view
+  // capture-pane polls only while the Terminal tab is actually shown.
+  const { sessions, selectedName, setSelectedName, view } = useSessions(
+    cid,
+    active,
+    tab === "terminal",
+  );
+  const anySessionBusy = sessions.some((s) => s.busy);
+
   return (
     <Tabs.Root
       value={tab}
@@ -426,6 +536,12 @@ export function ExecutionCanvas({
                 aria-label="writing"
               />
             )}
+            {t.id === "terminal" && anySessionBusy && (
+              <span
+                className="size-1.5 animate-pulse rounded-full bg-accent"
+                aria-label="session running"
+              />
+            )}
           </Tabs.Trigger>
         ))}
       </Tabs.List>
@@ -434,7 +550,13 @@ export function ExecutionCanvas({
           <FilesPane events={events} streamingFile={streamingFile} />
         </Tabs.Content>
         <Tabs.Content value="terminal" className="h-full focus:outline-none">
-          <TerminalPane events={events} />
+          <TerminalPane
+            events={events}
+            sessions={sessions}
+            selectedName={selectedName}
+            setSelectedName={setSelectedName}
+            view={view}
+          />
         </Tabs.Content>
         <Tabs.Content value="preview" className="h-full focus:outline-none">
           <PreviewPane status={status} cid={cid} events={events} />

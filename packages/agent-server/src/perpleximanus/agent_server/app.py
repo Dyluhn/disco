@@ -321,6 +321,49 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             return {"ok": False}
         return {"ok": await runtime.ensure_preview(conversation_id)}
 
+    _MAX_SESSION_TAIL_CHARS = 100_000
+
+    @app.get("/conversations/{conversation_id}/sessions")
+    async def list_sessions(conversation_id: str) -> dict:
+        """Live tmux session list for the conversation's sandbox (BP-14).
+        No sandbox / finished conversation → empty list (200, not 404)."""
+        if runtime is None:
+            return {"sessions": []}
+        sessions = await runtime.sessions_list(conversation_id)
+        return {
+            "sessions": [
+                {
+                    "name": s.name,
+                    "busy": s.busy,
+                    "last_line": next(
+                        (line for line in reversed(s.last_lines.splitlines()) if line.strip()),
+                        "",
+                    ),
+                }
+                for s in sessions
+            ]
+        }
+
+    @app.get("/conversations/{conversation_id}/sessions/{name}/view")
+    async def get_session_view(
+        conversation_id: str,
+        name: str,
+        tail_chars: int = Query(default=10_000, ge=1, le=_MAX_SESSION_TAIL_CHARS),
+    ) -> dict:
+        """Live capture-pane tail for one named session (BP-14).
+        Internal __-prefixed sessions → 404. Unknown name → 404."""
+        if name.startswith("__"):
+            raise HTTPException(status_code=404, detail="session not found")
+        if runtime is None:
+            raise HTTPException(status_code=404, detail="no runtime")
+        sessions = await runtime.sessions_list(conversation_id)
+        if not any(s.name == name for s in sessions):
+            raise HTTPException(status_code=404, detail="session not found")
+        view = await runtime.session_view(conversation_id, name, tail_chars)
+        if view is None:
+            raise HTTPException(status_code=404, detail="no sandbox")
+        return {"name": name, "busy": view.running, "content": view.output}
+
     @app.get("/conversations/{conversation_id}/preview-app/{path:path}")
     @app.get("/conversations/{conversation_id}/preview-app/")
     async def preview_app(conversation_id: str, path: str = "") -> Response:
