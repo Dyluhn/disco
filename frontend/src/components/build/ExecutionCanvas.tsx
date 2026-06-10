@@ -198,7 +198,14 @@ function PreviewPane({
     return (
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex shrink-0 items-center justify-between gap-inline border-b border-hairline px-body py-hair">
-          <span className="truncate font-mono text-[0.74rem] text-text-faint">live server</span>
+          <div className="flex flex-col min-w-0">
+            <span className="truncate font-mono text-[0.74rem] text-text-faint">live server</span>
+            {data?.owner && (
+              <span className="truncate font-mono text-[0.68rem] text-text-faint italic" title={data.owner.cmdline}>
+                Serving: {data.owner.cmdline}
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-inline">
             {RefreshButton}
             {srcDoc != null && (

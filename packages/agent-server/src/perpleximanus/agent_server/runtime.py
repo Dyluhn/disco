@@ -93,6 +93,7 @@ from perpleximanus.tools.sandbox import (
     PodmanSandboxService,
     SandboxConfig,
 )
+from perpleximanus.tools.sandbox.port_owner import port_owner
 from perpleximanus.tools.sandbox._container import PREVIEW_PORT
 
 _LOG = logging.getLogger(__name__)
@@ -1281,7 +1282,7 @@ class ConversationRuntime:
             return None  # stub here
         return session.expose_port(PREVIEW_PORT)
 
-    def preview(self, conversation_id: str) -> dict[str, Any]:
+    async def preview(self, conversation_id: str) -> dict[str, Any]:
         """Backend-aware live preview availability. The browser iframes the agent-server's
         proxy (/conversations/{id}/preview-app/), which forwards to the active backend's
         dev server — so previews work over the tailnet via the one reachable origin, with no
@@ -1297,41 +1298,76 @@ class ConversationRuntime:
                 "reason": "Preview isn't wired for the Podman backend in this environment "
                 "— it's completed at deployment.",
             }
-        if session.expose_port(PREVIEW_PORT) is None:
+        # Passive probe ONLY: this GET is polled by the UI, and a read path must not
+        # create a sandbox (that's _ensure()'s side effect) or surface its failures
+        # as a 500. No live instance → no preview, plainly stated.
+        inst = getattr(session, "_instance", None)
+        if inst is None:
+            return {
+                "available": False,
+                "reason": "The agent's sandbox isn't running yet.",
+                "owner": None,
+            }
+        try:
+            owner = await port_owner(inst, PREVIEW_PORT)
+        except Exception:  # noqa: BLE001 — a probe must never 500 the preview endpoint
+            owner = None
+
+        if owner is None or owner.pid is None:
             return {
                 "available": False,
                 "reason": f"No dev server detected. Run one on port {PREVIEW_PORT} inside the "
                 "sandbox to see a live preview.",
+                "owner": None,
             }
-        # the browser iframes the agent-server proxy path (built frontend-side from the
-        # agent base + this conversation id) — not a raw container port.
-        return {"available": True, "proxy": True}
 
-    async def restart_preview(self, conversation_id: str) -> bool:
+        # Session name normalization — strip the manager's own prefix (source of
+        # truth: sessions.namespace), never a re-derived copy of its format.
+        sess_name = owner.session
+        ns = f"pmx-{session.sessions.namespace}"
+        if sess_name and sess_name.startswith(ns):
+            sess_name = sess_name[len(ns):]
+
+        return {
+            "available": True,
+            "proxy": True,
+            "owner": {
+                "pid": owner.pid,
+                "cmdline": owner.cmdline,
+                "session": sess_name,
+            },
+        }
+
+    async def ensure_preview(self, conversation_id: str) -> bool:
         """Backend half of the UI 'Restart preview' button (§E7). Bounded + safe: the
-        same idempotent restart as the agent's `restart_preview` tool, run directly on
-        the conversation's sandbox session — kill any stale http.server (the supervised
-        keepalive respawns it; else we start one detached) so a down preview is always
-        user-fixable in one click. False if there's no live sandbox to act on."""
+        same idempotent restart as SandboxSession.ensure_preview.
+
+        After a clean FINISH the sandbox is torn down (the G safe-leak fix in `_run`),
+        which would make this button a dead affordance. Instead, re-materialize through
+        the documented resume path: re-compose the loop/executor (lazy sandbox),
+        rehydrate the snapshot, then start the preview — the user explicitly asked to
+        see the artifact again, and that's exactly what the snapshot is for."""
         executor = self._executors.get(conversation_id)
+        if executor is None:
+            store = self._project_store_now()
+            if store is None or store.status() != StorageStatus.OK:
+                return False
+            try:
+                record = store.get(conversation_id)
+            except Exception:  # noqa: BLE001 — manifest unreadable: nothing to revive
+                return False
+            if record is None or record.files_missing:
+                return False  # never had a build snapshot (e.g. research) — no preview
+            self._loop_for(conversation_id)  # registers a fresh executor + lazy sandbox
+            await self._maybe_rehydrate(conversation_id)
+            executor = self._executors.get(conversation_id)
         session = getattr(executor, "_sandbox", None) if executor is not None else None
         if session is None:
             return False
-        probe = (
-            "python3 -c \"import socket,sys; sys.exit(0 if socket.socket()"
-            f".connect_ex(('127.0.0.1',{PREVIEW_PORT}))==0 else 1)\""
-        )
-        script = (
-            "pkill -f 'http.server' 2>/dev/null || true; sleep 1; "
-            f"if ! {probe}; then setsid nohup python3 -m http.server {PREVIEW_PORT} "
-            ">/tmp/pmx-preview.log 2>&1 & fi; sleep 1; "
-            f"if {probe}; then echo ok; else echo failed; fi"
-        )
         try:
-            res = await session.exec_shell(script, timeout_s=20)
-        except Exception:  # noqa: BLE001 — a restart attempt must never raise to the API
+            return await session.ensure_preview()
+        except Exception:  # noqa: BLE001
             return False
-        return res.stdout.strip().endswith("ok")
 
     # ---- control ops: the confirmation gate + kill switch (BoD §13.4/§13.6) -----
 

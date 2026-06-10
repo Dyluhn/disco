@@ -22,7 +22,7 @@ from .base import ExecResult, SandboxError, SandboxSpec, SandboxUnavailableError
 # Exit codes the `timeout` coreutil reports when it fires (SIGTERM / then SIGKILL).
 TIMEOUT_EXIT_CODES = frozenset({124, 137})
 
-# The single in-container port a previewable session publishes (the agent runs its dev
+# The single in-container port the session publishes (the agent runs its dev
 # server here). ONLY this port is ever exposed — containment: nothing else is reachable.
 PREVIEW_PORT = 8000
 

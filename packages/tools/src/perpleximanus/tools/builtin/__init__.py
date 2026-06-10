@@ -20,8 +20,8 @@ from .files import (
     FileWriteTool,
 )
 from .plan import PlanStepTool, SubmitPlanTool
-from .preview import PreviewStatusTool, RestartPreviewTool, RunServerTool
 from .retrieval import ExtractTool, SearchTool
+from .server import ServerStatusTool
 from .shell_sessions import ShellExecTool, ShellKillTool, ShellViewTool, ShellWaitTool, ShellWriteTool
 from .system import CodeExecTool, ShellTool
 
@@ -36,10 +36,8 @@ __all__ = [
     "FileReplaceLinesTool",
     "FileWriteTool",
     "PlanStepTool",
-    "PreviewStatusTool",
-    "RestartPreviewTool",
     "SearchTool",
-    "RunServerTool",
+    "ServerStatusTool",
     "ShellTool",
     "ShellExecTool",
     "ShellKillTool",
@@ -49,7 +47,6 @@ __all__ = [
     "SubmitPlanTool",
     "build_default_registry",
 ]
-
 
 def build_default_registry() -> ToolRegistry:
     """Register the core toolset. `deploy_preview` is intentionally absent (deferred);
@@ -73,9 +70,7 @@ def build_default_registry() -> ToolRegistry:
         SearchTool(),
         ExtractTool(),
         BrowserTool(),
-        PreviewStatusTool(),  # read-only preview health (§E6)
-        RestartPreviewTool(),  # bounded preview restart (§E6)
-        RunServerTool(),  # detached dev server on :8000 (§E1)
+        ServerStatusTool(),
         SubmitPlanTool(),  # plan-mode: proposed plan (intercepted by the loop)
         PlanStepTool(),  # plan-mode: capstone progress reports
     ):

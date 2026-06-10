@@ -18,6 +18,7 @@ and the tools use it UNCHANGED — it's a drop-in, self-healing instance.
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from .base import (
     ExecResult,
@@ -27,6 +28,8 @@ from .base import (
     SandboxSpec,
     SandboxUnavailableError,
 )
+
+_LOG = logging.getLogger(__name__)
 
 
 class SandboxSession:
@@ -51,7 +54,7 @@ class SandboxSession:
         self._closed = False
         self._generation = 0  # bumped on every (re)create — telemetry + tests
         self._lock = asyncio.Lock()
-
+        
         from .shell_sessions import ShellSessionManager
         # Process backend shares the host tmux server across conversations, so
         # session names need a per-conversation namespace; container backends get
@@ -74,12 +77,16 @@ class SandboxSession:
     async def _ensure(self) -> SandboxInstance:
         if self._closed:
             raise SandboxError("sandbox session is closed")
+        created = False
         async with self._lock:
             if self._instance is None:
                 self._instance = await self._service.create(
                     self._spec, owner_id=self.owner_id, conversation_id=self.conversation_id
                 )
                 self._generation += 1
+                created = True
+        if created:
+            self._spawn_auto_preview()
         return self._instance
 
     async def _recreate(self, dead: SandboxInstance) -> None:
@@ -100,6 +107,23 @@ class SandboxSession:
             )
             self._generation += 1
             self.sessions.reset_known_sessions()
+        # the old box took the 'preview' session down with it — bring it back up
+        self._spawn_auto_preview()
+
+    def _spawn_auto_preview(self) -> None:
+        """Fire-and-forget the static auto-serve (BP-02): every fresh box comes up with
+        the workspace served as session 'preview'. Idempotent and polite — if anything
+        already owns the port (e.g. the process backend's host, where :8000 is the
+        agent-server itself), ensure_preview() backs off with False. Failures are
+        logged, never raised: preview is a convenience, not a dependency of the box."""
+
+        async def _auto() -> None:
+            try:
+                await self.ensure_preview()
+            except Exception:  # noqa: BLE001 — best-effort; the box must not care
+                _LOG.debug("auto preview start failed", exc_info=True)
+
+        asyncio.create_task(_auto())
 
     async def _resilient(self, op):
         """Run one instance op; on a typed mid-session death, re-create and raise a
@@ -132,6 +156,27 @@ class SandboxSession:
 
     def expose_port(self, port: int) -> str | None:
         return self._instance.expose_port(port) if self._instance is not None else None
+
+    async def ensure_preview(self, port: int = 8000) -> bool:
+        """Start (idempotently) the static preview as visible session 'preview'.
+        Returns False without side effects if :port is already bound (someone — maybe
+        the agent's own dev server — owns it; that is fine and not ours to fight)."""
+        from .port_owner import port_owner
+
+        inst = await self._ensure()
+        owner = await port_owner(inst, port)
+        if owner is not None and owner.pid is not None:
+            return False
+
+        res = await inst.exec_shell("pwd", timeout_s=5)
+        workspace = res.stdout.strip()
+        
+        await self.sessions.exec(
+            "preview",
+            f"python3 -m http.server {port} -d {workspace}",
+            exec_dir=workspace
+        )
+        return True
 
     async def destroy(self) -> None:
         """Close the session at task end: no further use, and the live box torn down."""

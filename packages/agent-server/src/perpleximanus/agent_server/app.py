@@ -178,15 +178,15 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         """Backend-aware live preview availability (the browser iframes the proxy below)."""
         if runtime is None:
             return {"available": False, "reason": "no runtime"}
-        return runtime.preview(conversation_id)
+        return await runtime.preview(conversation_id)
 
     @app.post("/conversations/{conversation_id}/preview/restart")
-    async def restart_preview(conversation_id: str) -> dict:
+    async def ensure_preview(conversation_id: str) -> dict:
         """Bring a down preview back on demand (§E7) — the UI 'Restart preview' button.
-        Bounded + safe (same path as the agent's restart_preview tool)."""
+        Bounded + safe (same path as SandboxSession.ensure_preview)."""
         if runtime is None:
             return {"ok": False}
-        return {"ok": await runtime.restart_preview(conversation_id)}
+        return {"ok": await runtime.ensure_preview(conversation_id)}
 
     @app.get("/conversations/{conversation_id}/preview-app/{path:path}")
     @app.get("/conversations/{conversation_id}/preview-app/")

@@ -249,4 +249,9 @@ export interface PreviewInfo {
   proxy?: boolean; // served via the agent-server proxy (the browser builds the URL)
   reason?: string;
   stub?: boolean;
+  owner?: {
+    pid: number;
+    cmdline: string;
+    session: string | null;
+  } | null;
 }

@@ -35,21 +35,9 @@ from .config import SandboxConfig, default_sandbox_config
 from .isolation import IsolationProfile, isolation_for
 
 
-def _keepalive_command(workspace: str, *, previewable: bool) -> list[str]:
-    """The container's main process. Sealed → just a keepalive. Previewable → also start a
-    static file server on PREVIEW_PORT serving the workspace, so whatever the agent writes
-    is live in the preview immediately (the agent need not run a server itself).
-
-    E5: the static server is SUPERVISED — a `while true` loop restarts it within ~1s if
-    it exits (the agent killed it, a crash, etc.). So a stray `pkill http.server` or a
-    dead server self-heals and the preview comes back, instead of going permanently
-    'unreachable' (the exact failure that stuck a build)."""
-    if not previewable:
-        return ["sleep", "infinity"]
-    serve = (
-        f"while true; do python3 -m http.server {PREVIEW_PORT} >/dev/null 2>&1; sleep 1; done"
-    )
-    return ["sh", "-c", f"cd {workspace}; ({serve}) & exec sleep infinity"]
+def _keepalive_command() -> list[str]:
+    """The container's main process. Always sleep infinity."""
+    return ["sleep", "infinity"]
 
 
 def _preview_host(docker_socket: str) -> str:
@@ -274,10 +262,8 @@ class GvisorSandboxService:
         mode = egress_mode(spec)
         # Publish ONLY the dev-server port, and only when network is granted (a sealed box
         # has no port to reach) — the preview is the forcing function for that posture.
-        # Previewable boxes also auto-serve the workspace on PREVIEW_PORT so a built page is
-        # live the moment the agent writes it (no need for the agent to run a server itself).
         ports = None if sealed(spec) else {f"{PREVIEW_PORT}/tcp": None}
-        command = _keepalive_command(self._cfg.container_workspace, previewable=not sealed(spec))
+        command = _keepalive_command()
 
         # Per-mode network config (the three-way egress posture; egress_mode docstring).
         net_kwargs: dict[str, Any] = {}
@@ -297,7 +283,7 @@ class GvisorSandboxService:
         try:
             container = client.containers.run(
                 image=self._cfg.image,
-                command=command,  # keepalive (+ a static preview server when previewable)
+                command=command,  # keepalive
                 runtime=self._cfg.runtime,  # gVisor
                 ports=ports,  # preview exposure (dev-server port only)
                 mem_limit=f"{mem_mb}m",

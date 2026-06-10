@@ -70,10 +70,7 @@ AGENT_TOOLS = frozenset(
         "code_exec",
         "browser",
         "deploy_preview",
-        # preview lifecycle (§E): read-only health + bounded restart + detached serve.
-        "preview_status",
-        "restart_preview",
-        "run_server",
+        "server_status",
         # plan-mode meta tools: propose a plan (planning) + report capstones (execution).
         "submit_plan",
         "plan_step",

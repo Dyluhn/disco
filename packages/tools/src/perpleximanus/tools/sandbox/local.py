@@ -64,8 +64,8 @@ class LocalSandboxService(GvisorSandboxService):
             client.volumes.create(name=vol_name)  # auto-created; persists across the box
             container = client.containers.run(
                 image=self._cfg.image,
-                # keepalive (+ a static preview server on PREVIEW_PORT when previewable)
-                command=_keepalive_command(self._cfg.container_workspace, previewable=open_net),
+                # keepalive
+                command=_keepalive_command(),
                 runtime=self._cfg.runtime,  # runc (a value, not a branch)
                 network_mode="bridge" if open_net else "none",
                 # Publish ONLY the dev-server port (preview), and only when network is
