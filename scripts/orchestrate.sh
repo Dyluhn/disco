@@ -296,6 +296,23 @@ cmd_commit() {
   fi
 
   git -C "$REPO_ROOT" commit -m "$msg"
+
+  # post-commit invariant: every manifest file must now be CLEAN. The staging
+  # loop adds every dirty manifest file, so a file still dirty here means it
+  # was silently missed — the BP-06/07/10 incident: commits landed without
+  # view.py (the masking implementation!), the port-pills frontend, and a test
+  # removal, and nothing noticed until dangling diffs surfaced two orders
+  # later. Loud failure; the commit stands but the campaign STOPS here.
+  local still_dirty="" f2
+  while IFS= read -r f2; do
+    if [ -n "$(git -C "$REPO_ROOT" status --porcelain -uall -- "$f2")" ]; then
+      still_dirty="$still_dirty $f2"
+    fi
+  done < <(order_files "$order")
+  if [ -n "$still_dirty" ]; then
+    fail_reason "$order" "manifest-file-dirty-after-commit" \
+      "Commit $order LANDED but these manifest files are still dirty afterwards:$still_dirty — the staging loop missed them (or a writer raced the commit). History is incomplete for this order until a completion commit stages them. Do that NOW, then find out who wrote to them mid-commit."
+  fi
   echo "committed $order ($staged files + manifest state flip)"
 }
 
