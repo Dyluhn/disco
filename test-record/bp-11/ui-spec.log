@@ -1,0 +1,6 @@
+
+Running 1 test using 1 worker
+
+  ✓  1 [firefox] › e2e-live/bp-11-upload.spec.ts:44:1 › upload → announce → build renders the real csv as a table (live) (1.3m)
+
+  1 passed (1.3m)

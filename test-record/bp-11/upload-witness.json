@@ -1,0 +1,33 @@
+{
+  "conversation": "conv_c148416ac8334b0ab709dcbfac76ffe7",
+  "final_status": "FINISHED",
+  "upload_response": {
+    "saved": [
+      {
+        "name": "bp00-behavioral-runs.csv",
+        "bytes": 293
+      }
+    ],
+    "rejected": []
+  },
+  "announce_seqs": [
+    1
+  ],
+  "announce_text": [
+    "User uploaded: uploads/bp00-behavioral-runs.csv (293 bytes)"
+  ],
+  "file_read_seqs": [
+    4
+  ],
+  "cells_in_written_action_seqs": [
+    12
+  ],
+  "cells_in_observation_seqs": [
+    5,
+    23
+  ],
+  "cells": [
+    "conv_bc8596a9ac3f43b484aaa47ad8b83372",
+    "135"
+  ]
+}

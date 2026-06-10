@@ -35,6 +35,7 @@ import { ExecutionCanvas } from "@/components/build/ExecutionCanvas";
 import { PlanPanel } from "@/components/build/PlanPanel";
 import { DeliverablePanel } from "@/components/build/DeliverablePanel";
 import { SteerInput } from "@/components/build/SteerInput";
+import { UploadComposer } from "@/components/build/BuildSurface";
 import { AlternativesGate } from "@/components/build/AlternativesGate";
 import { AskPanel } from "@/components/build/AskPanel";
 
@@ -322,12 +323,17 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
               onAnswer={b.answer}
             />
           )}
+          {/* BP-11: uploads are legal whenever the conversation exists — INCLUDING
+              a fresh IDLE one (upload-then-build is the order's primary flow), so
+              this renders outside the steerable gate. ERROR is the one exclusion:
+              the backend 409s uploads into a dead sandbox. */}
+          {b.cid && b.status !== "ERROR" && <UploadComposer cid={b.cid} />}
           {steerable && (
             <div className="flex flex-col gap-hair">
               {terminalIncomplete && (
                 <p className="font-ui text-[0.74rem] text-warn">
                   The run stopped before the plan was complete. Send a message to
-                  steer the agent back in, or use “Plan a change…” below to
+                  steer the agent back in, or use "Plan a change…" below to
                   re-enter plan mode.
                 </p>
               )}

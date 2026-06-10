@@ -171,8 +171,30 @@ bp-12: staged
   - test-record/bp-12/integration-resume.log
   - test-record/bp-12/restart-survival.log
   - agent-projects/gemini/bp-12-report.md
-bp-11: in-flight
+bp-13: staged
+  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
   - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/agent-server/tests/test_lifecycle.py
+  - packages/tools/src/perpleximanus/tools/sandbox/base.py
+  - packages/tools/src/perpleximanus/tools/sandbox/_container.py
+  - packages/tools/src/perpleximanus/tools/sandbox/gvisor.py
+  - packages/tools/src/perpleximanus/tools/sandbox/podman.py
+  - packages/tools/src/perpleximanus/tools/sandbox/local.py
+  - packages/tools/tests/test_sandbox.py
+  - frontend/src/types/agent.ts
+  - frontend/src/components/build/AgentStatusBar.tsx
+  - frontend/src/components/build/AgentStatusBar.suspend.test.tsx
+  - frontend/e2e-live/bp-13-suspend.spec.ts
+  - test-record/bp-13/integration-suspend.log
+  - test-record/bp-13/orphan-sweep.log
+  - test-record/screenshots/bp-13/badge-suspended.png
+  - test-record/screenshots/bp-13/badge-active-again.png
+  - agent-projects/gemini/bp-13-report.md
+bp-11: committed
+  - frontend/src/lib/buildTrace.ts
+  - frontend/src/components/build/ActivityFeed.tsx
+  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
   - packages/agent-server/tests/test_upload.py
   - frontend/src/api/agent.ts
   - frontend/src/components/BuildSurface.tsx

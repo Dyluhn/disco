@@ -191,6 +191,7 @@ class ConversationRuntime:
         # so the kill switch can revoke them.
         self._surface: dict[str, str] = {}
         self._executors: dict[str, DefaultToolExecutor] = {}
+        self._pending_sessions: dict[str, SandboxSession] = {}
         self._cap_handlers: dict[str, Any] | None = None
         # per-conversation driver model override (the Build chat model picker → the
         # AGENT_DRIVER for that conversation; RouterAgent applies it).
@@ -498,6 +499,31 @@ class ConversationRuntime:
             self._loops[conversation_id] = loop
         return loop
 
+    def _build_sandbox_spec(self) -> SandboxSpec:
+        """The egress-posture spec for a Build sandbox. Open by default; filtered
+        (registry-only) when PMX_BUILD_EGRESS=filtered. Used both by _compose_build_loop
+        and upload_session so pending sessions and build sessions share the same spec."""
+        egress = os.environ.get("PMX_BUILD_EGRESS", "open").lower().strip()
+        if egress == "filtered":
+            return self._sandbox_spec.model_copy(update={"egress_allow": REGISTRY_EGRESS_ALLOW})
+        return self._sandbox_spec.model_copy(
+            update={"permitted": self._sandbox_spec.permitted | {Capability.NETWORK}}
+        )
+
+    def upload_session(self, conversation_id: str) -> SandboxSession:
+        """Session uploads write through. The executor's live session when a
+        loop exists; otherwise a pending session the NEXT build loop adopts."""
+        executor = self._executors.get(conversation_id)
+        if executor is not None:
+            return executor._sandbox
+        if conversation_id not in self._pending_sessions:
+            self._pending_sessions[conversation_id] = SandboxSession(
+                self._sandbox_service_now(),
+                self._build_sandbox_spec(),
+                conversation_id=conversation_id,
+            )
+        return self._pending_sessions[conversation_id]
+
     def _compose_build_loop(
         self, conversation_id: str, router: DefaultLLMRouter, agent: RouterAgent
     ) -> AgentLoop:
@@ -506,21 +532,16 @@ class ConversationRuntime:
         ConfirmRisky gate (NOT Research's NeverConfirm), and the real condenser. The
         executor is held so the kill switch can revoke caps + tear down the sandbox."""
         broker = self._build_broker()
-        # The Agent toolset includes the `browser`, which needs egress — so the Build
-        # sandbox GRANTS network by default (open). If PMX_BUILD_EGRESS=filtered,
-        # it gets registry-only access instead (Capability.NETWORK is NOT granted).
-        egress = os.environ.get("PMX_BUILD_EGRESS", "open").lower().strip()
-        if egress == "filtered":
-            build_spec = self._sandbox_spec.model_copy(
-                update={"egress_allow": REGISTRY_EGRESS_ALLOW}
+        # Adopt a pending session (created by upload_session for a pre-kick upload) so
+        # the build's workspace IS the one uploads landed in — object identity, not a
+        # re-read of the directory. Create a fresh session only when there is none.
+        session = self._pending_sessions.pop(conversation_id, None)
+        if session is None:
+            session = SandboxSession(
+                self._sandbox_service_now(),
+                self._build_sandbox_spec(),
+                conversation_id=conversation_id,
             )
-        else:
-            build_spec = self._sandbox_spec.model_copy(
-                update={"permitted": self._sandbox_spec.permitted | {Capability.NETWORK}}
-            )
-        session = SandboxSession(
-            self._sandbox_service_now(), build_spec, conversation_id=conversation_id
-        )
         executor = DefaultToolExecutor(
             build_default_registry(),
             agent_scope(),
@@ -757,6 +778,10 @@ class ConversationRuntime:
         if executor is not None:
             with contextlib.suppress(Exception):
                 await executor.kill()  # destroys the sandbox instance (§6.4)
+        pending = self._pending_sessions.pop(conversation_id, None)
+        if pending is not None:
+            with contextlib.suppress(Exception):
+                await pending.destroy()
         self._loops.pop(conversation_id, None)  # force a fresh sandbox on the next run
         # The sandbox (and its files) are gone, so the NEXT run must rehydrate the
         # snapshot into a fresh sandbox. Clear the rehydrate-once flag — otherwise
@@ -1470,6 +1495,10 @@ class ConversationRuntime:
         executor = self._executors.pop(conversation_id, None)
         if executor is not None:
             await executor.kill()
+        pending = self._pending_sessions.pop(conversation_id, None)
+        if pending is not None:
+            with contextlib.suppress(Exception):
+                await pending.destroy()
         self._loops.pop(conversation_id, None)
         # 3. record the stop so subscribers see it (no STOPPED status in the enum; IDLE
         #    + a 'killed' detail is the contract's terminal-for-now shape).
@@ -1486,3 +1515,6 @@ class ConversationRuntime:
         for executor in self._executors.values():
             with contextlib.suppress(Exception):
                 await executor.kill()
+        for session in self._pending_sessions.values():
+            with contextlib.suppress(Exception):
+                await session.destroy()

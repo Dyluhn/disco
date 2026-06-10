@@ -11,15 +11,28 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
+import unicodedata
 import uuid
 from pathlib import Path
+from typing import Annotated
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    File,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from perpleximanus.core import (
     DEFAULT_OWNER_ID,
+    ConversationStatus,
     DeliverableEvent,
     EventSource,
     LLMMessage,
@@ -37,6 +50,19 @@ from perpleximanus.tools.sandbox._container import USER_PORTS
 from pydantic import BaseModel, ValidationError
 
 from .runtime import ConversationRuntime
+
+_MAX_FILE_BYTES = 25 * 1024 * 1024      # 25 MB per file
+_MAX_FILES_PER_REQUEST = 20
+_MAX_CONV_BYTES = 100 * 1024 * 1024    # 100 MB per conversation (uploads/ total)
+
+
+def _sanitize_name(raw: str) -> str | None:
+    """Return a safe filename for uploads/, or None if the result is empty."""
+    name = Path(raw).name            # kills traversal (../../etc/passwd → passwd)
+    name = unicodedata.normalize("NFC", name)
+    name = name.lstrip(".")          # strip leading dots (dotfiles)
+    name = re.sub(r"\s+", "-", name.strip())  # strip surrounding whitespace, runs → hyphen
+    return name or None
 
 
 class CreateConversationBody(BaseModel):
@@ -159,6 +185,99 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         if runtime is not None:
             runtime.kick(conversation_id)
         return {"event_id": stored.id, "seq": stored.seq}
+
+    @app.post("/conversations/{conversation_id}/files")
+    async def upload_files(
+        conversation_id: str,
+        files: Annotated[list[UploadFile], File()],
+    ) -> JSONResponse:
+        """Upload files into the conversation's sandbox under uploads/.
+
+        Returns 200 {"saved": [...], "rejected": [...]} unless ALL files are
+        rejected (413).  Allowed in every state except terminal ERROR.
+        """
+        state = await store.get_state(conversation_id)
+        if state.execution_status == ConversationStatus.ERROR:
+            raise HTTPException(status_code=409, detail={"reason": "conversation_in_error_state"})
+
+        if len(files) > _MAX_FILES_PER_REQUEST:
+            raise HTTPException(
+                status_code=413,
+                detail={"reason": f"too_many_files_per_request (max {_MAX_FILES_PER_REQUEST})"},
+            )
+
+        if runtime is None:
+            raise HTTPException(status_code=409, detail={"reason": "no_active_sandbox"})
+        session = runtime.upload_session(conversation_id)
+
+        # Existing uploads/ contents for quota and collision detection.
+        try:
+            existing_names: set[str] = set(await session.list_dir("uploads"))
+        except Exception:  # noqa: BLE001 — uploads/ may not exist yet
+            existing_names = set()
+
+        existing_bytes = 0
+        for fname in existing_names:
+            try:
+                existing_bytes += len(await session.read_file(f"uploads/{fname}"))
+            except Exception:  # noqa: BLE001 — best effort
+                pass
+
+        saved: list[dict] = []
+        rejected: list[dict] = []
+        running_total = existing_bytes
+
+        for upload in files:
+            raw_name = upload.filename or ""
+            clean = _sanitize_name(raw_name)
+            if clean is None:
+                rejected.append({"name": raw_name, "reason": "empty filename after sanitization"})
+                continue
+
+            data = await upload.read()
+            if len(data) > _MAX_FILE_BYTES:
+                rejected.append({
+                    "name": raw_name,
+                    "reason": f"file exceeds 25 MB limit ({len(data):,} bytes)",
+                })
+                continue
+
+            if running_total + len(data) > _MAX_CONV_BYTES:
+                rejected.append({
+                    "name": raw_name,
+                    "reason": "conversation upload quota (100 MB) would be exceeded",
+                })
+                continue
+
+            # Collision: suffix -2, -3, …
+            stem = Path(clean).stem
+            suffix = Path(clean).suffix
+            candidate = clean
+            counter = 2
+            while candidate in existing_names:
+                candidate = f"{stem}-{counter}{suffix}"
+                counter += 1
+            final_name = candidate
+
+            await session.write_file(f"uploads/{final_name}", data)
+            existing_names.add(final_name)
+            running_total += len(data)
+            saved.append({"name": final_name, "bytes": len(data)})
+
+        if saved:
+            parts = ", ".join(f"uploads/{s['name']} ({s['bytes']:,} bytes)" for s in saved)
+            announcement = f"User uploaded: {parts}"
+            await store.append(
+                conversation_id,
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(role="user", content=announcement),
+                ),
+            )
+
+        if not saved and rejected:
+            return JSONResponse({"saved": saved, "rejected": rejected}, status_code=413)
+        return JSONResponse({"saved": saved, "rejected": rejected}, status_code=200)
 
     @app.get("/conversations/{conversation_id}/events")
     async def get_events(

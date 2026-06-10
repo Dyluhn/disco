@@ -19,9 +19,13 @@ export interface ActivityItem {
    * finish-message, etc.); "system_warning" is a ⚠-prefixed ENVIRONMENT
    * message addressed to the human (BP-05's release valve: "finished WITHOUT
    * a clean browser verification") — gate truths are surfaced, other
-   * environment meta (nudges, reminders) stays hidden. The feed becomes a
-   * unified chat-and-actions log rather than an action-only ledger. */
-  kind: "action" | "user" | "agent_message" | "system_warning";
+   * environment meta (nudges, reminders) stays hidden; "system_note" is a
+   * NEUTRAL environment line the human caused and should see confirmed
+   * (BP-11's upload announcement) — informational, not an alarm, so it gets
+   * its own kind rather than borrowing system_warning's ⚠ styling. The feed
+   * becomes a unified chat-and-actions log rather than an action-only
+   * ledger. */
+  kind: "action" | "user" | "agent_message" | "system_warning" | "system_note";
   label: string; // plain language ("Wrote fizzbuzz.py" / "You: skip the cleanup")
   /** The agent's natural-language THOUGHT — its reasoning + plain-English
    * explanation of what it's doing. NEVER truncated; rendered wrapped. This
@@ -174,8 +178,21 @@ export function deriveActivity(
       // Environment messages are loop meta (nudges, reminders) — hidden, EXCEPT
       // ⚠-prefixed warnings, which the loop explicitly addresses to the human
       // (BP-05 release valve: the run finished WITHOUT a clean browser
-      // verification). Truths about delivered work must reach the feed.
+      // verification), and BP-11 upload announcements, which confirm an action
+      // the HUMAN took. Truths about delivered work must reach the feed.
       const content = e.message?.content ?? "";
+      if (content.startsWith("User uploaded:")) {
+        // Neutral note, not a warning — the user did this on purpose, and
+        // ⚠-styling a routine confirmation would be a false alarm.
+        out.push({
+          id: e.id,
+          kind: "system_note",
+          label: content,
+          status: "done",
+          attention: false,
+        });
+        continue;
+      }
       if (!content.startsWith("⚠")) continue;
       out.push({
         id: e.id,

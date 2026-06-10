@@ -1,0 +1,12 @@
+conversation: conv_c148416ac8334b0ab709dcbfac76ffe7
+approve gate if needed:  .venv/bin/python test-record/bp-06/send_frame.py conv_c148416ac8334b0ab709dcbfac76ffe7 approve_plan
+upload: HTTP 200 -> {"saved": [{"name": "bp00-behavioral-runs.csv", "bytes": 293}], "rejected": []}
+prompt sent (seq 2)
+status=RUNNING t+0s
+status=AWAITING_PLAN_APPROVAL t+15s
+NEEDS ATTENTION: AWAITING_PLAN_APPROVAL — intervene via UI/API
+status=RUNNING t+270s
+status=FINISHED t+330s
+saved 29 events
+telemetry: announce=1 reads=1 written=1 observed=2
+BEHAVIORAL RUN PASS

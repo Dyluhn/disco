@@ -35,7 +35,7 @@ import type {
   WSClientFrame,
   WSServerFrame,
 } from "@/types/agent";
-import { agentGet, agentLive, agentSend, agentWsUrl, fixtureDelay } from "./client";
+import { agentGet, agentHttpBase, agentLive, agentSend, agentWsUrl, fixtureDelay } from "./client";
 
 export interface AgentHandle {
   /** Send a client frame (send_message / confirm / reject / cancel). */
@@ -83,6 +83,31 @@ export async function restartPreview(cid: string): Promise<boolean> {
   if (!agentLive()) return false;
   const r = await agentSend<{ ok: boolean }>("POST", `/conversations/${cid}/preview/restart`);
   return Boolean(r?.ok);
+}
+
+export interface UploadResult {
+  saved: { name: string; bytes: number }[];
+  rejected: { name: string; reason: string }[];
+}
+
+/** Upload files into the conversation's sandbox under uploads/ (BP-11). */
+export async function uploadFiles(cid: string, files: File[]): Promise<UploadResult> {
+  if (!agentLive()) return { saved: [], rejected: [] };
+  const fd = new FormData();
+  for (const f of files) fd.append("files", f);
+  const res = await fetch(`${agentHttpBase()}/conversations/${cid}/files`, {
+    method: "POST",
+    body: fd,
+  });
+  const body = (await res.json()) as UploadResult & { detail?: unknown };
+  if (!res.ok && res.status !== 413) {
+    throw new Error(
+      typeof body?.detail === "string"
+        ? body.detail
+        : `Upload failed (${res.status})`,
+    );
+  }
+  return body as UploadResult;
 }
 
 /** The kill switch (BoD §13.6): halt, tear down the sandbox, revoke capabilities. */

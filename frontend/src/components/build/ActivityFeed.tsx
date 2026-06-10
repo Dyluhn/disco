@@ -19,6 +19,7 @@ import {
   Circle,
   Loader2,
   MessageSquare,
+  Paperclip,
   User,
   X,
 } from "lucide-react";
@@ -32,6 +33,10 @@ function StatusDot({ item }: { item: ActivityItem }) {
     return <MessageSquare className="size-3.5 text-text-muted" aria-label="agent message" />;
   if (item.kind === "system_warning")
     return <AlertTriangle className="size-3.5 text-warn" aria-label="warning" />;
+  if (item.kind === "system_note")
+    // Neutral confirmation (e.g. BP-11 upload announcement) — informational
+    // paperclip, NOT the warning triangle: this is not an alarm.
+    return <Paperclip className="size-3.5 text-text-muted" aria-label="note" />;
   if (item.status === "running")
     return <Loader2 className="size-3.5 animate-spin text-text-muted" aria-label="running" />;
   if (item.status === "pending_send")
@@ -122,7 +127,10 @@ export function ActivityFeed({ items }: { items: ActivityItem[] }) {
     <ol className="flex flex-col">
       {items.map((item, i) => {
         const isMessage =
-          item.kind === "user" || item.kind === "agent_message" || item.kind === "system_warning";
+          item.kind === "user" ||
+          item.kind === "agent_message" ||
+          item.kind === "system_warning" ||
+          item.kind === "system_note";
         return (
           <li
             key={item.id}
@@ -158,6 +166,11 @@ export function ActivityFeed({ items }: { items: ActivityItem[] }) {
               {item.kind === "system_warning" && (
                 <span className="font-ui text-[0.7rem] uppercase tracking-wide text-warn">
                   Warning
+                </span>
+              )}
+              {item.kind === "system_note" && (
+                <span className="font-ui text-[0.7rem] uppercase tracking-wide text-text-muted">
+                  Note
                 </span>
               )}
               <span
