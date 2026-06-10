@@ -16,9 +16,12 @@ export interface ActivityItem {
   /** Discriminates the row's visual style. "action" is the agent's tool call;
    * "user" is the human's message (steer, send_message, revise instruction);
    * "agent_message" is a prose reply from the agent (ask_user free-form,
-   * finish-message, etc.). The feed becomes a unified chat-and-actions log
-   * rather than an action-only ledger. */
-  kind: "action" | "user" | "agent_message";
+   * finish-message, etc.); "system_warning" is a ⚠-prefixed ENVIRONMENT
+   * message addressed to the human (BP-05's release valve: "finished WITHOUT
+   * a clean browser verification") — gate truths are surfaced, other
+   * environment meta (nudges, reminders) stays hidden. The feed becomes a
+   * unified chat-and-actions log rather than an action-only ledger. */
+  kind: "action" | "user" | "agent_message" | "system_warning";
   label: string; // plain language ("Wrote fizzbuzz.py" / "You: skip the cleanup")
   /** The agent's natural-language THOUGHT — its reasoning + plain-English
    * explanation of what it's doing. NEVER truncated; rendered wrapped. This
@@ -166,6 +169,20 @@ export function deriveActivity(
         label: content,
         status: "done",
         attention: false,
+      });
+    } else if (e.kind === "message" && e.source === "environment") {
+      // Environment messages are loop meta (nudges, reminders) — hidden, EXCEPT
+      // ⚠-prefixed warnings, which the loop explicitly addresses to the human
+      // (BP-05 release valve: the run finished WITHOUT a clean browser
+      // verification). Truths about delivered work must reach the feed.
+      const content = e.message?.content ?? "";
+      if (!content.startsWith("⚠")) continue;
+      out.push({
+        id: e.id,
+        kind: "system_warning",
+        label: content,
+        status: "done",
+        attention: true,
       });
     }
   }

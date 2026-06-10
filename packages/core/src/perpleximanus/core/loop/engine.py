@@ -573,6 +573,109 @@ def _serve_tool_singleton():
     return _SERVE_TOOL_SPEC
 
 
+def _last_productive_seq(events: list[Event]) -> int:
+    """Seq of the last state-changing action (not in _NON_PRODUCTIVE_TOOLS).
+    If no productive action found, returns 0."""
+    for ev in reversed(events):
+        if isinstance(ev, ActionEvent):
+            if ev.tool_call.tool_name not in _NON_PRODUCTIVE_TOOLS:
+                return ev.seq or 0
+    return 0
+
+
+def _is_web_deliverable(events: list[Event]) -> bool:
+    """Web deliverable if index.html was written/edited OR port 8000 owned by non-preview.
+    Derived from events to keep the check pure (event-list in, verdict out)."""
+    for ev in reversed(events):
+        if isinstance(ev, ActionEvent):
+            if ev.tool_call.tool_name in (
+                "file_write",
+                "file_edit",
+                "file_append",
+                "file_replace_lines",
+                "file_insert_lines",
+            ):
+                path = ev.tool_call.arguments.get("path")
+                # Canonical workspace-root paths
+                if path in ("index.html", "./index.html"):
+                    return True
+        elif isinstance(ev, ObservationEvent) and ev.tool_result.tool_name == "server_status":
+            content = ev.tool_result.content
+            # "  - 8000: OWNED by pid 123 (python) [session: dev]"
+            for line in content.splitlines():
+                if "8000: OWNED" in line and "[session: " in line:
+                    session = line.split("[session: ")[1].split("]")[0]
+                    if session != "preview":
+                        return True
+    return False
+
+
+def _browser_verified(events: list[Event], since_seq: int) -> tuple[bool, str | None]:
+    """Scan browser observations since since_seq. Returns (ok, first_error_line).
+    An observation is valid if it's from the browser tool, against port 8000,
+    and has zero console errors. If not ok, returns the first error from the
+    LATEST qualifying observation."""
+    valid_obs = []
+    for ev in events:
+        if ev.seq is None or ev.seq <= since_seq:
+            continue
+        if isinstance(ev, ObservationEvent) and ev.tool_result.tool_name == "browser":
+            res = ev.tool_result
+            if res.success and res.structured:
+                url = str(res.structured.get("url", ""))
+                if url.startswith("http://127.0.0.1:8000") or url.startswith(
+                    "http://localhost:8000"
+                ):
+                    valid_obs.append(res.structured)
+
+    if not valid_obs:
+        return False, None
+
+    # ok = at least one observation with zero console errors
+    ok = any(
+        not any(c.get("level") == "error" for c in obs.get("console", [])) for obs in valid_obs
+    )
+
+    # first_error_line = from the LATEST qualifying-URL observation that has error-level entries
+    first_error_line = None
+    for obs in reversed(valid_obs):
+        errors = [
+            str(c.get("text", "")) for c in obs.get("console", []) if c.get("level") == "error"
+        ]
+        if errors:
+            first_error_line = errors[0]
+            break
+
+    return ok, first_error_line
+
+
+def _latest_browser_error(events: list[Event]) -> str | None:
+    """First error-level console line of the LATEST qualifying browser observation
+    (any seq — full history). None if the agent never browsed :8000 or its last
+    look was clean. This feeds the gate's human-facing messages: the verdict is
+    scoped to since-last-edit (_browser_verified), but "last console errors"
+    must report what was actually last SEEN — a post-browse edit moves since_seq
+    past the observation and would otherwise erase a real, observed error."""
+    for ev in reversed(events):
+        if not (isinstance(ev, ObservationEvent) and ev.tool_result.tool_name == "browser"):
+            continue
+        res = ev.tool_result
+        if not (res.success and res.structured):
+            continue
+        url = str(res.structured.get("url", ""))
+        if not (
+            url.startswith("http://127.0.0.1:8000") or url.startswith("http://localhost:8000")
+        ):
+            continue
+        errors = [
+            str(c.get("text", ""))
+            for c in res.structured.get("console", [])
+            if c.get("level") == "error"
+        ]
+        return errors[0] if errors else None
+    return None
+
+
 class AgentLoop:
     """[CONTRACT] The orchestrator. See module docstring + §2 state machine."""
 
@@ -616,6 +719,7 @@ class AgentLoop:
         self._execution_mode = execution_mode  # the mode an approved plan runs in
         self._plan_nudges = 0  # consecutive nudges while planning (safety cap)
         self._execution_nudges = 0  # consecutive "you must act" nudges in execution
+        self._browser_verify_refusals = 0  # consecutive browser-verification refusals
         # GAP B backstop: max tool-less prose turns in a row before the loop ends
         # the run (a talking-without-acting model can't advance max_iterations).
         self._max_consecutive_noops = 6
@@ -1754,6 +1858,60 @@ class AgentLoop:
                             )
                         )
                         continue
+
+                    # BROWSER-VERIFY GATE — §BP-05. If web deliverable holds, refuse finish
+                    # until a clean browser observation (zero console errors) exists
+                    # since the last state-changing edit.
+                    if (
+                        self._planning_tools
+                        and self.mode != OperatingMode.PLANNING
+                        and _is_web_deliverable(events)
+                    ):
+                        since_seq = _last_productive_seq(events)
+                        ok, _ = _browser_verified(events, since_seq)
+                        # Messaging reads the FULL history: a post-browse edit
+                        # invalidates the verification but not what was seen.
+                        first_error = _latest_browser_error(events)
+                        if ok:
+                            self._browser_verify_refusals = 0  # reset on clean pass
+                        elif self._browser_verify_refusals < 3:
+                            self._browser_verify_refusals += 1
+                            if first_error:
+                                # Variant (2): quote the error
+                                nudge = (
+                                    "Before finishing: verify your app the way a user would. "
+                                    "Use the browser tool to navigate to http://127.0.0.1:8000/, "
+                                    "read the CONSOLE output, and fix any errors you see. "
+                                    f"The last load had errors: {first_error}"
+                                )
+                            else:
+                                # Variant (1): verbatim from order
+                                nudge = (
+                                    "Before finishing: verify your app the way a user would. "
+                                    "Use the browser tool to navigate to http://127.0.0.1:8000/, "
+                                    "read the CONSOLE output, and fix any errors you see. "
+                                    "Finish only after a clean load."
+                                )
+                            await self._emit(
+                                MessageEvent(
+                                    source=EventSource.ENVIRONMENT,
+                                    message=LLMMessage(role="user", content=nudge),
+                                )
+                            )
+                            continue
+                        else:
+                            # 3-refusal release valve (3): allow but warn visibly
+                            warn_msg = (
+                                "⚠ finished WITHOUT a clean browser verification — "
+                                f"last console errors: {first_error or 'none seen'}"
+                            )
+                            await self._emit(
+                                MessageEvent(
+                                    source=EventSource.ENVIRONMENT,
+                                    message=LLMMessage(role="user", content=warn_msg),
+                                )
+                            )
+
                     if await self._stop_allowed(state, events):
                         # Record the agent's final message (the answer) before
                         # finishing — the deliverable text belongs on the log, not

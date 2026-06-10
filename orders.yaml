@@ -71,12 +71,22 @@ bp-04: committed
   - test-record/bp-04/events-conv_60644f823f24471cbaa1f7f8bc685560.json
   - test-record/screenshots/bp-04/feed-browser-observation.png
   - test-record/screenshots/bp-04/feed-browser-observation-expanded.png
-bp-05: staged
+bp-05: committed
   - packages/core/src/perpleximanus/core/loop/engine.py
   - packages/core/src/perpleximanus/core/llm/prompts.py
   - packages/core/tests/test_finish_browser_gate.py
   - packages/core/src/perpleximanus/core/events.py
   - packages/core/tests/test_serialization.py
+  - frontend/src/lib/buildTrace.ts
+  - frontend/src/components/build/ActivityFeed.tsx
+  - frontend/e2e-live/bp-05-verify-gate.spec.ts
+  - test-record/bp-05/run_behavioral.py
+  - test-record/bp-05/events-conv_ac357a5c168746bfab82d5dad4c93bfd.json
+  - test-record/bp-05/events-conv_0e8d19d8e4df4bf593bd1fecda664414.json
+  - test-record/bp-05/events-conv_5985a60d1e6e4758b34161d1e6d069c3.json
+  - test-record/bp-05/verify-gate-witness.json
+  - test-record/screenshots/bp-05/verify-clean-finish.png
+  - test-record/screenshots/bp-05/verify-warned-finish.png
 bp-08: committed
   - packages/tools/src/perpleximanus/tools/sandbox/kernel.py
   - packages/tools/src/perpleximanus/tools/sandbox/session.py
