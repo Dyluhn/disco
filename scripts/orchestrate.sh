@@ -122,7 +122,10 @@ worker_cmd() { # <preset> <brief-file> -> command string on stdout
     sonnet)
       # Sonnet = Dylan's designated backup when Gemini flakes (+ vision). Headless
       # Claude Code; skip-permissions mirrors gemini --yolo for unattended work.
-      printf 'claude --model sonnet --dangerously-skip-permissions -p %q' "$ptr" ;;
+      # stream-json: bare `claude -p` BUFFERS all stdout until completion, so the
+      # log stays 0B for the whole run and the stall detector kills the worker
+      # mid-work (bp-11 near-miss, 2026-06-10). Streaming gives real log growth.
+      printf 'claude --model sonnet --dangerously-skip-permissions --output-format stream-json --verbose -p %q' "$ptr" ;;
     pi-free)
       printf 'pi --provider openrouter --model openai/gpt-oss-120b:free -p --no-session -nt -ne -ns -nc %q' "$ptr" ;;
     *) return 1 ;;
