@@ -71,7 +71,10 @@ live_orders() {
 
 order_known() { all_orders | grep -qx "$1"; }
 
-dirty_files() { git -C "$REPO_ROOT" status --porcelain | awk '{print $2}'; }
+# -uall: list untracked files INDIVIDUALLY (default collapses an untracked dir to
+# "dir/", which can never match a manifest's exact file paths — evidence files in
+# fresh test-record/ subdirs were silently unstageable).
+dirty_files() { git -C "$REPO_ROOT" status --porcelain -uall | awk '{print $2}'; }
 
 # Which OTHER LIVE order (active dispatch, or sharing this dirty file) claims <file>?
 other_claimant() { # <file> <this-order>
@@ -139,19 +142,23 @@ cmd_dispatch() {
   tmux new-session -d -s "$sess" \
     "cd $(printf %q "$REPO_ROOT") && $cmd 2>&1 | tee $(printf %q "$log"); echo \"EXIT=\$?\" >> $(printf %q "$log")"
 
+  # Values QUOTED — this file is `source`d, and the repo path contains a space
+  # ("perpleximanus build"); unquoted values word-split and break every consumer.
   cat >"$ACTIVE/$order.env" <<EOF
-ORDER=$order
-WORKER=$worker
-BRIEF=$brief
-ARTIFACT=$artifact
-SESSION=$sess
-LOG=$log
+ORDER="$order"
+WORKER="$worker"
+BRIEF="$brief"
+ARTIFACT="$artifact"
+SESSION="$sess"
+LOG="$log"
 START_EPOCH=$(date +%s)
 TIMEOUT_MIN=$timeout_min
 STALL_MIN=$stall_min
 EOF
   echo "dispatched $order -> tmux:$sess worker:$worker log:${log#"$REPO_ROOT"/} (timeout ${timeout_min}m, stall ${stall_min}m)"
-  [ "$do_watch" = 1 ] && cmd_watch "$order"
+  # NOT bare `[ ... ] && cmd_watch` — as the function's last command that makes a
+  # plain (non-watch) dispatch return exit 1.
+  if [ "$do_watch" = 1 ]; then cmd_watch "$order"; fi
 }
 
 # ----------------------------------------------------------------------------- watch
