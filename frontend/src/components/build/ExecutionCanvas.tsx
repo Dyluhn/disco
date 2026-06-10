@@ -158,6 +158,17 @@ function PreviewPane({
   // is NOT reachable, also ask the backend to restart the static serve, then
   // re-poll availability. So a hung/down preview is always user-fixable here.
   const [reloadKey, setReloadKey] = useState(0);
+  const [previewPort, setPreviewPort] = useState(8000);
+  const boundPorts = (data?.ports ?? [])
+    .filter((p) => p.owner != null)
+    .map((p) => p.port);
+  // a selected extra port that died falls back to the primary
+  useEffect(() => {
+    if (previewPort !== 8000 && !boundPorts.includes(previewPort)) {
+      setPreviewPort(8000);
+    }
+  }, [boundPorts, previewPort]);
+
   const [restarting, setRestarting] = useState(false);
   async function refresh() {
     setReloadKey((k) => k + 1);
@@ -183,7 +194,11 @@ function PreviewPane({
       {restarting ? "Restarting…" : "Refresh"}
     </button>
   );
-  const proxySrc = cid ? `${agentHttpBase()}/conversations/${cid}/preview-app/?r=${reloadKey}` : null;
+  const proxySrc = cid
+    ? previewPort === 8000
+      ? `${agentHttpBase()}/conversations/${cid}/preview-app/?r=${reloadKey}`
+      : `${agentHttpBase()}/conversations/${cid}/port/${previewPort}/?r=${reloadKey}`
+    : null;
 
   // PRIORITY (the fix): default to the RENDERED view, because the backend's bare
   // `python -m http.server` shows a useless directory LISTING (file paths) when
@@ -194,16 +209,42 @@ function PreviewPane({
   const [mode, setMode] = useState<"rendered" | "live">("rendered");
   const showLive = proxyAvailable && (mode === "live" || srcDoc == null);
 
+  const selectedOwner =
+    previewPort === 8000
+      ? data?.owner
+      : (data?.ports ?? []).find((p) => p.port === previewPort)?.owner;
+
   if (showLive && proxySrc) {
     return (
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex shrink-0 items-center justify-between gap-inline border-b border-hairline px-body py-hair">
           <div className="flex flex-col min-w-0">
             <span className="truncate font-mono text-[0.74rem] text-text-faint">live server</span>
-            {data?.owner && (
-              <span className="truncate font-mono text-[0.68rem] text-text-faint italic" title={data.owner.cmdline}>
-                Serving: {data.owner.cmdline}
+            {selectedOwner && (
+              <span className="truncate font-mono text-[0.68rem] text-text-faint italic" title={selectedOwner.cmdline}>
+                Serving: {selectedOwner.cmdline}
               </span>
+            )}
+            {boundPorts.length > 1 && (
+              <div className="flex items-center gap-hair pt-hair" role="tablist" aria-label="Bound ports">
+                {boundPorts.map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    role="tab"
+                    aria-selected={previewPort === p}
+                    onClick={() => setPreviewPort(p)}
+                    className={cn(
+                      "rounded-full border border-hairline px-inline font-mono text-[0.68rem] transition-colors",
+                      previewPort === p
+                        ? "bg-text text-bg"
+                        : "text-text-muted hover:text-text",
+                    )}
+                  >
+                    :{p}
+                  </button>
+                ))}
+              </div>
             )}
           </div>
           <div className="flex items-center gap-inline">

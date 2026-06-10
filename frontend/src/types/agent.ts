@@ -254,4 +254,8 @@ export interface PreviewInfo {
     cmdline: string;
     session: string | null;
   } | null;
+  ports?: Array<{
+    port: number;
+    owner: { pid: number; cmdline: string; session: string | null } | null;
+  }>;
 }
