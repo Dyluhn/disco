@@ -41,6 +41,7 @@ export interface ActivityItem {
     arguments: Record<string, unknown>;
     output?: string; // observation content (truncated to ~2KB)
     error?: string; // error message if the action failed
+    screenshot_path?: string; // BP-15: relative .pmx/screenshots/… path from structured
   };
   status: "done" | "running" | "pending" | "failed" | "pending_send";
   attention: boolean; // confidence gradient: risky/novel steps float up, routine recede
@@ -106,11 +107,16 @@ export function deriveActivity(
   // Index observations + errors by action id so we can attach the raw output
   // to each action's expandable detail (the user explicitly asked to be able
   // to drill into commands + results — hiding them is poor design).
-  const observationByActionId = new Map<string, { output?: string; error?: string }>();
+  const observationByActionId = new Map<
+    string,
+    { output?: string; error?: string; screenshotPath?: string }
+  >();
   for (const e of events) {
     if (e.kind === "observation") {
+      const sp = e.tool_result.structured?.screenshot_path;
       observationByActionId.set(e.action_id, {
         output: (e.tool_result.content || "").slice(0, 2000),
+        screenshotPath: typeof sp === "string" ? sp : undefined,
       });
     } else if (e.kind === "agent_error" && e.action_id) {
       observationByActionId.set(e.action_id, { error: e.error });
@@ -141,6 +147,7 @@ export function deriveActivity(
           arguments: tc.arguments,
           output: obs?.output,
           error: obs?.error,
+          screenshot_path: obs?.screenshotPath,
         },
         status: st,
         attention: isPending || risk === "HIGH" || risk === "UNKNOWN" || st === "failed",

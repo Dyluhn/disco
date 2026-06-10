@@ -24,7 +24,36 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { agentHttpBase } from "@/api/client";
 import type { ActivityItem } from "@/lib/buildTrace";
+
+function ScreenshotThumbnail({
+  path,
+  conversationId,
+}: {
+  path: string;
+  conversationId: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  const src = `${agentHttpBase()}/conversations/${conversationId}/workspace/${path}`;
+  if (failed) {
+    return (
+      <span className="font-ui text-[0.74rem] text-text-faint italic">
+        screenshot no longer available
+      </span>
+    );
+  }
+  return (
+    <a href={src} target="_blank" rel="noreferrer" className="mt-hair block">
+      <img
+        src={src}
+        alt="browser screenshot"
+        onError={() => setFailed(true)}
+        className="max-h-[200px] w-auto rounded border border-hairline object-contain"
+      />
+    </a>
+  );
+}
 
 function StatusDot({ item }: { item: ActivityItem }) {
   if (item.kind === "user")
@@ -114,7 +143,13 @@ function ExpandableDetail({ item }: { item: ActivityItem }) {
   );
 }
 
-export function ActivityFeed({ items }: { items: ActivityItem[] }) {
+export function ActivityFeed({
+  items,
+  conversationId,
+}: {
+  items: ActivityItem[];
+  conversationId?: string;
+}) {
   if (items.length === 0) {
     return (
       <p className="flex items-center gap-hair px-px font-ui text-[0.82rem] text-text-faint">
@@ -201,6 +236,14 @@ export function ActivityFeed({ items }: { items: ActivityItem[] }) {
                 <span className="truncate font-ui text-[0.78rem] leading-snug text-text-faint">
                   {item.detail}
                 </span>
+              )}
+              {/* BP-15: screenshot thumbnail — always visible (not gated by expand).
+                  Rendered below the label/thought so it reads inline in the feed. */}
+              {item.expandable?.screenshot_path && conversationId && (
+                <ScreenshotThumbnail
+                  path={item.expandable.screenshot_path}
+                  conversationId={conversationId}
+                />
               )}
               {/* Expandable raw command + output drill-down. */}
               {item.expandable && <ExpandableDetail item={item} />}

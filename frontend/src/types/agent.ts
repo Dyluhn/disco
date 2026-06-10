@@ -190,6 +190,9 @@ export interface ConversationState {
   pending_question_id?: string | null;
   // Runtime-overlaid sandbox liveness; absent for non-build surfaces.
   extras?: { sandbox?: "active" | "suspended" };
+  // BP-15: the active sandbox backend name ('gvisor'|'podman'|'local'|'process').
+  // Absent until the first state frame; wire value only — never guessed client-side.
+  sandbox_backend?: string;
 }
 
 // ---- WS frames (event-state §7) ---------------------------------------------

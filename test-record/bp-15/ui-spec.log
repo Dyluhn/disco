@@ -1,0 +1,6 @@
+
+Running 1 test using 1 worker
+
+  ✓  1 [firefox] › e2e-live/bp-15-screenshots.spec.ts:78:1 › feed renders real screenshot thumbnails; tier badge reports the wire backend (live) (1.0m)
+
+  1 passed (1.1m)

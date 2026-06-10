@@ -54,7 +54,8 @@ export function AgentStatusBar({
   onResume,
 }: {
   status: ConversationStatus;
-  isolation: IsolationInfo;
+  /** BP-15: null until the first state frame — renders muted '…'. */
+  isolation: IsolationInfo | null;
   /** Runtime sandbox liveness overlay ('active' | 'suspended' | undefined). */
   sandboxState?: "active" | "suspended";
   onKill: () => void;
@@ -74,7 +75,7 @@ export function AgentStatusBar({
     status === "AWAITING_USER_DECISION" ||
     status === "AWAITING_USER_QUESTION" ||
     status === "PAUSED";
-  const Shield = isolation.adversarialSafe ? ShieldCheck : ShieldHalf;
+  const Shield = isolation?.adversarialSafe ? ShieldCheck : ShieldHalf;
 
   // "Stopping…" pending: Stop is cooperative — the loop honors the cancel only at
   // its next checkpoint, so the click would otherwise feel dead. Show pending from
@@ -104,16 +105,25 @@ export function AgentStatusBar({
           {STATUS_LABEL[status]}
         </span>
         {/* the isolation tier — honest about a shared-kernel tier not being adversarial-safe */}
-        <span
-          title={isolation.label}
-          className={cn(
-            "flex items-center gap-hair rounded-full border border-hairline px-inline py-px font-ui text-[0.7rem]",
-            isolation.adversarialSafe ? "text-text-muted" : "text-weak",
-          )}
-        >
-          <Shield className="size-3" aria-hidden />
-          {isolation.tier}
-        </span>
+        {isolation === null ? (
+          <span
+            aria-label="isolation tier loading"
+            className="flex items-center gap-hair rounded-full border border-hairline px-inline py-px font-ui text-[0.7rem] text-text-faint"
+          >
+            …
+          </span>
+        ) : (
+          <span
+            title={isolation.label}
+            className={cn(
+              "flex items-center gap-hair rounded-full border border-hairline px-inline py-px font-ui text-[0.7rem]",
+              isolation.adversarialSafe ? "text-text-muted" : "text-weak",
+            )}
+          >
+            <Shield className="size-3" aria-hidden />
+            {isolation.tier}
+          </span>
+        )}
         {sandboxState === "suspended" && (
           <span
             title="Sandbox suspended — workspace is saved; it will resume on your next message"

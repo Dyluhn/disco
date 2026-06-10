@@ -1492,6 +1492,14 @@ class ConversationRuntime:
         executor = self._executors.get(conversation_id)
         return getattr(executor, "_sandbox", None) if executor is not None else None
 
+    def sandbox_backend_name(self) -> str | None:
+        """Name of the active sandbox backend ('gvisor', 'podman', 'local', 'process').
+        Returns None on any lookup failure."""
+        try:
+            return self._sandbox_service_now().name
+        except Exception:  # noqa: BLE001
+            return None
+
     async def sessions_list(self, conversation_id: str) -> list[SessionInfo]:
         """Return the non-internal sessions for a conversation's sandbox.
         Empty list when no sandbox exists (finished/suspended/not started)."""

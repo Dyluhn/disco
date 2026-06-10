@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import posixpath
 import re
 import unicodedata
 import uuid
@@ -173,6 +174,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             "conversation_id": conversation_id,
             "conversation_url": f"/ws/conversations/{conversation_id}",
             "surface": body.surface,
+            "sandbox_backend": runtime.sandbox_backend_name() if runtime is not None else None,
         }
 
     @app.get("/models")
@@ -304,7 +306,13 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             sstate = runtime.sandbox_state(conversation_id)
             if sstate is not None:
                 state.extras["sandbox"] = sstate
-        return state.model_dump(mode="json")
+        result = state.model_dump(mode="json")
+        # BP-15: overlay the real sandbox backend name so the UI shows the live tier.
+        if runtime is not None:
+            sbackend = runtime.sandbox_backend_name()
+            if sbackend is not None:
+                result["sandbox_backend"] = sbackend
+        return result
 
     @app.get("/conversations/{conversation_id}/preview")
     async def get_preview(conversation_id: str) -> dict:
@@ -363,6 +371,35 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         if view is None:
             raise HTTPException(status_code=404, detail="no sandbox")
         return {"name": name, "busy": view.running, "content": view.output}
+
+    # ---- Workspace-file route (BP-15) -----------------------------------------------
+
+    _WORKSPACE_PREFIXES = (".pmx/screenshots/", ".pmx/plots/")
+
+    @app.get("/conversations/{conversation_id}/workspace/{path:path}")
+    async def workspace_file(conversation_id: str, path: str) -> Response:
+        """Serve immutable workspace images (screenshots + plots) from the sandbox.
+        Allowlist: .pmx/screenshots/ and .pmx/plots/ ONLY — never user code.
+        No sandbox / file absent / path outside allowlist → 404 (never 403)."""
+        norm = posixpath.normpath(path)
+        if posixpath.isabs(norm) or norm.startswith(".."):
+            raise HTTPException(status_code=404)
+        if not any(norm.startswith(pfx) for pfx in _WORKSPACE_PREFIXES):
+            raise HTTPException(status_code=404)
+        if runtime is None:
+            raise HTTPException(status_code=404)
+        session = runtime.live_session(conversation_id)
+        if session is None:
+            raise HTTPException(status_code=404)
+        try:
+            data = await session.read_file(norm)
+        except Exception:  # noqa: BLE001 — file absent or sandbox error → 404
+            raise HTTPException(status_code=404) from None
+        return Response(
+            content=data,
+            media_type="image/png",
+            headers={"Cache-Control": "private, max-age=31536000, immutable"},
+        )
 
     @app.get("/conversations/{conversation_id}/preview-app/{path:path}")
     @app.get("/conversations/{conversation_id}/preview-app/")
@@ -637,7 +674,14 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             sstate = runtime.sandbox_state(conversation_id)
             if sstate is not None:
                 state.extras["sandbox"] = sstate
-        await websocket.send_json(WSServerFrame(type="state", state=state).model_dump(mode="json"))
+        # BP-15: inject sandbox_backend at the top level of the state dict (same
+        # parity as the HTTP /state overlay — the live spec polls HTTP for this).
+        state_dict = state.model_dump(mode="json")
+        if runtime is not None:
+            sbackend = runtime.sandbox_backend_name()
+            if sbackend is not None:
+                state_dict["sandbox_backend"] = sbackend
+        await websocket.send_json({"type": "state", "state": state_dict})
         stream = await store.subscribe(conversation_id, after_seq=last_seq)
 
         async def pump_events() -> None:

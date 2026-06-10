@@ -8,7 +8,7 @@
  * Data-flow discipline: reads only the useBuild() hook; never fetches.
  */
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useBuild } from "@/hooks/useBuild";
 import { useBuildNotifications } from "@/hooks/useBuildNotifications";
 import { cn } from "@/lib/cn";
@@ -18,8 +18,8 @@ import {
   deriveLiveSignal,
   latestAgentMessage,
 } from "@/lib/buildTrace";
-import { agentHttpBase } from "@/api/client";
-import type { IsolationInfo } from "@/types/agent";
+import { isolationForBackend } from "@/lib/isolation";
+import { agentHttpBase, agentLive } from "@/api/client";
 import { EmptyState, ErrorState } from "@/components/states";
 import { Markdown } from "@/components/Markdown";
 import { QueryInput } from "@/components/QueryInput";
@@ -39,19 +39,20 @@ import { UploadComposer } from "@/components/build/BuildSurface";
 import { AlternativesGate } from "@/components/build/AlternativesGate";
 import { AskPanel } from "@/components/build/AskPanel";
 
-// The active isolation tier, surfaced honestly at the point of use (the local container
-// backend the Build surface runs on — shared host kernel, not for adversarial workloads).
-// [GAP] the server should send the live tier over the wire; this reflects the deployed
-// default until then.
-const ISOLATION: IsolationInfo = {
-  tier: "local container",
-  label:
-    "Container-grade isolation (shared host kernel) — appropriate for trusted local use, not adversarial workloads.",
-  adversarialSafe: false,
-};
-
 export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) {
   const b = useBuild(resumeCid);
+
+  // BP-15: fetch the real sandbox backend name from the server state endpoint.
+  // useBuildStream doesn't expose sandbox_backend yet, so we read it once via HTTP
+  // when the conversation id is known. The backend name is stable for a run's lifetime.
+  const [sandboxBackend, setSandboxBackend] = useState<string | null>(null);
+  useEffect(() => {
+    if (!b.cid || !agentLive()) return;
+    void fetch(`${agentHttpBase()}/conversations/${b.cid}/state`)
+      .then((r) => r.json())
+      .then((s: { sandbox_backend?: string }) => setSandboxBackend(s.sandbox_backend ?? null))
+      .catch(() => {});
+  }, [b.cid]);
   const download = useDownloadProject();
   const exportManifest = useExportManifest();
   const activity = useMemo(
@@ -172,7 +173,7 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
         <div className="flex flex-col gap-inline px-body pt-section">
           <AgentStatusBar
             status={b.status}
-            isolation={ISOLATION}
+            isolation={isolationForBackend(sandboxBackend)}
             sandboxState={b.sandboxState ?? undefined}
             onKill={b.kill}
             onStop={b.cancel}
@@ -234,7 +235,7 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
                   onApprove={b.approvePlan}
                   onRevise={b.requestPlan}
                 />
-                {activity.length > 0 && <ActivityFeed items={activity} />}
+                {activity.length > 0 && <ActivityFeed items={activity} conversationId={b.cid ?? undefined} />}
               </div>
             ) : (
               <>
@@ -263,7 +264,7 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
                     <PlanPanel plan={b.plan} progress={b.planProgress} />
                   </div>
                 )}
-                <ActivityFeed items={activity} />
+                <ActivityFeed items={activity} conversationId={b.cid ?? undefined} />
                 <div className="mt-inline">
                   <LiveSignalBar signal={liveSignal} />
                 </div>
