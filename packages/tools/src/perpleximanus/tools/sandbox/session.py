@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 from ._container import PREVIEW_PORT
 from .base import (
@@ -62,6 +63,7 @@ class SandboxSession:
         # an isolated tmux server each (service.name per SandboxService protocol).
         ns = f"{conversation_id[:8]}-" if service.name == "process" else ""
         self.sessions = ShellSessionManager(self._ensure, namespace=ns)
+        self._kernel: Any | None = None
 
     @property
     def id(self) -> str:
@@ -74,6 +76,21 @@ class SandboxSession:
         """How many underlying instances this session has created (1 after the first
         use; >1 means it survived a death)."""
         return self._generation
+
+    @property
+    async def kernel(self) -> Any:
+        """The persistent IPython kernel for this session. Lazily created on first
+        use; transport chosen by backend."""
+        if self._kernel is None:
+            inst = await self._ensure()
+            if self._service.name == "process":
+                from .kernel import ProcessKernel
+                res = await inst.exec_shell("pwd", timeout_s=5)
+                self._kernel = ProcessKernel(res.stdout.strip())
+            else:
+                from .kernel import GatewayKernel
+                self._kernel = GatewayKernel(inst, self.sessions)
+        return self._kernel
 
     async def _ensure(self) -> SandboxInstance:
         if self._closed:
@@ -108,6 +125,7 @@ class SandboxSession:
             )
             self._generation += 1
             self.sessions.reset_known_sessions()
+            self._kernel = None
         # the old box took the 'preview' session down with it — bring it back up
         self._spawn_auto_preview()
 

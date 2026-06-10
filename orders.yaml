@@ -53,7 +53,15 @@ bp-07: committed
   - packages/core/tests/test_no_read_penalty.py
   - packages/core/tests/test_loop_step.py
   - packages/core/tests/test_planner_gate.py
-bp-08: staged
+bp-04: staged
+  - packages/tools/src/perpleximanus/tools/builtin/_browser_daemon.py
+  - packages/tools/src/perpleximanus/tools/builtin/browser.py
+  - packages/tools/pyproject.toml
+  - deploy/sandbox/Dockerfile
+  - packages/tools/tests/test_browser.py
+  - packages/tools/tests/test_browser_daemon.py
+  - frontend/e2e-live/bp-04-browser.spec.ts
+bp-08: committed
   - packages/tools/src/perpleximanus/tools/sandbox/kernel.py
   - packages/tools/src/perpleximanus/tools/sandbox/session.py
   - packages/tools/src/perpleximanus/tools/sandbox/_container.py
@@ -65,6 +73,20 @@ bp-08: staged
   - packages/core/src/perpleximanus/core/llm/prompts.py
   - packages/tools/tests/test_agent_tools.py
   - packages/tools/tests/test_kernel_session.py
+  - packages/tools/tests/test_sandbox.py
+  - packages/tools/tests/test_validation_executor.py
+  - packages/tools/tests/conftest.py
+  - pyproject.toml
+  - uv.lock
+  - frontend/e2e-live/bp-08-kernel.spec.ts
+  - test-record/bp-08/integration_kernel_gvisor.py
+  - test-record/bp-08/integration-gvisor-kernel.log
+  - test-record/bp-08/integration-process-kernel.log
+  - test-record/bp-08/run_behavioral.py
+  - test-record/bp-08/behavioral-run.log
+  - test-record/bp-08/events-conv_f0fa7a9b6ee4440eb875d37b4624af71.json
+  - test-record/bp-08/kernel-cells-witness.json
+  - test-record/screenshots/bp-08/kernel-cells.png
 bp-10: committed
   - packages/tools/src/perpleximanus/tools/sandbox/_container.py
   - packages/tools/src/perpleximanus/tools/sandbox/gvisor.py

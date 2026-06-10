@@ -79,74 +79,14 @@ class CodeExecArgs(BaseModel):
     code: str = Field(description="Source code to execute.")
 
 
-# The CodeAct PERSISTENCE harness (Python). The sandbox only exposes
-# write_file + exec_shell — there's no long-running stdin channel to host a true
-# in-process kernel — so we make CodeAct *stateful across calls* by serializing
-# the snippet's namespace to a workspace file between runs:
-#   - restore the prior namespace (if any) before running the new cell,
-#   - run the cell in that namespace (so names defined earlier are in scope),
-#   - persist the still-serializable names back out.
-# With `dill` present this is genuinely kernel-like (functions, classes, and even
-# imported modules carry across cells). Without it, it falls back to stdlib
-# `pickle`, which carries plain data values (numbers/strings/lists/dicts/arrays)
-# but not functions or live module handles — those get re-defined/re-imported per
-# cell. Unserializable handles (open files, sockets) never carry, by design.
-# A cell that raises still persists the names bound before the error (kernel-like),
-# then surfaces the traceback + a nonzero exit.
-_CODEACT_STATE = "_codeact_state.pkl"
-_CODEACT_CELL = "_codeact_cell.py"
-_CODEACT_RUNNER = "_codeact_runner.py"
-_CODEACT_RUNNER_SRC = '''\
-import sys, traceback
-_STATE = "_codeact_state.pkl"
-try:
-    import dill as _ser
-except Exception:
-    import pickle as _ser
-_ns = {"__name__": "__main__"}
-try:
-    with open(_STATE, "rb") as _f:
-        _ns.update(_ser.load(_f))
-except FileNotFoundError:
-    pass
-except Exception:
-    pass  # corrupt / incompatible prior state -> start this cell fresh
-_exc = None
-try:
-    with open("_codeact_cell.py", "r") as _f:
-        _src = _f.read()
-    exec(compile(_src, "<codeact>", "exec"), _ns)
-except BaseException as _e:  # noqa: BLE001 - surface ANY cell error as a traceback
-    _exc = _e
-    traceback.print_exc()
-# Persist the still-serializable names (best-effort; skip dunders + anything the
-# serializer can't handle so one unpicklable object never wipes the session).
-_out = {}
-for _k, _v in list(_ns.items()):
-    if _k.startswith("__"):
-        continue
-    try:
-        _ser.dumps(_v)
-        _out[_k] = _v
-    except Exception:
-        pass
-try:
-    with open(_STATE, "wb") as _f:
-        _ser.dump(_out, _f)
-except Exception:
-    pass
-if _exc is not None:
-    sys.exit(1)
-'''
-
-
 class CodeExecTool:
     definition = ToolDef(
         name="code_exec",
         description=(
             "Execute a Python or Node snippet in the sandbox (CodeAct). Python cells "
-            "share state across calls (names defined in an earlier cell are in scope "
-            "in later ones), like a notebook kernel."
+            "run in a persistent IPython kernel: variables, imports, sockets, and "
+            "open files persist across calls. A timeout interrupts the cell but "
+            "keeps state."
         ),
         args_model=CodeExecArgs,
         needs=frozenset({Capability.CODE_EXEC}),
@@ -158,12 +98,20 @@ class CodeExecTool:
         assert ctx.sandbox is not None
         inner = _inner_timeout(ctx.timeout_s)
         if args.language == "python":
-            # Stateful CodeAct: persist the namespace between cells (see the harness
-            # docstring above). Write the cell + the runner, run the runner.
-            await ctx.sandbox.write_file(_CODEACT_CELL, args.code.encode("utf-8"))
-            await ctx.sandbox.write_file(_CODEACT_RUNNER, _CODEACT_RUNNER_SRC.encode("utf-8"))
-            res = await ctx.sandbox.exec_shell(f"python3 {_CODEACT_RUNNER}", timeout_s=inner)
-            return _exec_outcome(res, what="python3", timeout_s=inner)
+            # Persistent IPython kernel (BP-08)
+            assert ctx.kernel is not None
+            # Cap the kernel timeout to slightly less than the tool timeout
+            # (floored: a tiny tool timeout must not go zero/negative on the kernel)
+            kernel_timeout = max(5, min(ctx.timeout_s - 5, 120))
+            res = await ctx.kernel.execute(args.code, timeout_s=kernel_timeout)
+            
+            return ToolOutcome(
+                success=res.ok,
+                content=str(res),
+                structured=res.__dict__,
+                artifacts=res.images
+            )
+
         # Node: one-shot (no cross-cell state — documented).
         fname = "_codeact.js"
         await ctx.sandbox.write_file(fname, args.code.encode("utf-8"))

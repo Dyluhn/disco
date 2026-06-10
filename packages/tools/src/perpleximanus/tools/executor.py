@@ -94,7 +94,7 @@ class DefaultToolExecutor:
             )
 
         # 3. build context (sandbox handle + scoped capabilities; NO secrets)
-        ctx = self._build_context(tool.definition)
+        ctx = await self._build_context(tool.definition)
 
         # 4. execute with a timeout; map every failure mode to a failed ToolResult
         try:
@@ -129,12 +129,23 @@ class DefaultToolExecutor:
 
     # ---- helpers ------------------------------------------------------------
 
-    def _build_context(self, tool_def: ToolDef) -> ToolContext:
+    async def _build_context(self, tool_def: ToolDef) -> ToolContext:
         sandbox = self._sandbox if tool_def.runs_in == "sandbox" else None
-        sessions = getattr(self._sandbox, "sessions", None) if tool_def.runs_in == "sandbox" else None
+        in_sandbox = tool_def.runs_in == "sandbox"
+        sessions = getattr(self._sandbox, "sessions", None) if in_sandbox else None
+        
+        kernel = None
+        if tool_def.runs_in == "sandbox" and self._sandbox is not None:
+            # SandboxSession.kernel is a property whose getter is async — accessing
+            # it yields a coroutine to await. Raw instances (no kernel attr) -> None.
+            kernel_coro = getattr(self._sandbox, "kernel", None)
+            if kernel_coro is not None:
+                kernel = await kernel_coro
+
         return ToolContext(
             sandbox=sandbox,
             sessions=sessions,
+            kernel=kernel,
             workspace_path=".",  # relative to the sandbox instance's jailed workspace
             timeout_s=self._default_timeout_s,
             capabilities=self._broker.grant(tool_def.uses_capabilities),

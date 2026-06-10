@@ -1,0 +1,8 @@
+Kernel execution timed out, interrupting...
+sandbox up: sbx_33428e79054146fcba01c8e52ea2d349
+expose_port(8899) -> None (internal plumbing stays internal)
+kernel transport: GatewayKernel
+2(a) state PASS: x=41 then x+1 -> 42
+2(c) interrupt PASS: timed_out=True restarted=False, then x+1 -> 42 (state preserved)
+sandbox destroyed
+BP-08 GVISOR INTEGRATION PASS: state + interrupt over the kernel gateway

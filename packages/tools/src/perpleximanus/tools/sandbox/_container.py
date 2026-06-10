@@ -257,23 +257,35 @@ class ContainerInstance:
     def expose_port(self, port: int) -> str | None:
         """Return a browser-reachable URL for a published USER port (containment:
         only the curated USER_PORTS set is ever exposed; INTERNAL_PORTS are the
-        agent-server's own plumbing and never become user URLs). The container
-        publishes PUBLISHED_PORTS to host ports at create; we read the assignment
-        + form the URL for THIS backend's host (localhost locally; the remote
-        Docker host's tailnet IP for gVisor — reachable over the proven keyless
-        tailnet)."""
+        agent-server's own plumbing and never become user URLs)."""
         if port not in USER_PORTS:
-            return None  # unpublished or internal → never a user URL
+            return None
+        mapping = self._resolve_mapping(port)
+        if not mapping:
+            return None
+        return f"http://{mapping[0]}:{mapping[1]}"
+
+    def internal_port_mapping(self, port: int) -> tuple[str, int] | None:
+        """Resolve the published host mapping for an INTERNAL port only (BP-08).
+        SECURITY: it must REFUSE USER_PORTS (the inverse gate) so it can never
+        become a backdoor preview path."""
+        if port not in INTERNAL_PORTS:
+            return None
+        return self._resolve_mapping(port)
+
+    def _resolve_mapping(self, port: int) -> tuple[str, int] | None:
+        """Internal helper to read the Docker/Podman port binding."""
+        if port not in PUBLISHED_PORTS:
+            return None
         try:
             self._container.reload()
             ports = self._container.attrs.get("NetworkSettings", {}).get("Ports") or {}
             binding = ports.get(f"{port}/tcp")
             if not binding:
-                return None  # not published (sealed session) → no preview
-            host_port = binding[0]["HostPort"]
-        except Exception:  # noqa: BLE001 — no mapping yet / box gone → no preview
+                return None
+            return self._preview_host, int(binding[0]["HostPort"])
+        except Exception:  # noqa: BLE001 — no mapping yet / box gone
             return None
-        return f"http://{self._preview_host}:{host_port}"
 
     async def destroy(self) -> None:
         """Stop + remove the container. The workspace persists on the daemon host
