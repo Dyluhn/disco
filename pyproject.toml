@@ -27,12 +27,23 @@ dev = [
     "ruff>=0.6",
     "httpx>=0.27",  # Starlette TestClient (WebSocket + REST testing, headless)
     "hypothesis>=6.155.2",
+    # BP-08 process backend: ProcessKernel launches the host `python3` kernelspec
+    # via jupyter_client.AsyncKernelManager — ipykernel provides that kernelspec.
+    # Without it every host-side kernel test fails at launch (the container image
+    # installs its own ipykernel in deploy/sandbox/Dockerfile).
+    "ipykernel>=6.29",
+    # BP-08 acceptance 2(e): the plots integration test renders a real matplotlib
+    # figure on the PROCESS backend (the container image stays matplotlib-free —
+    # the decided option in deploy/sandbox/Dockerfile).
+    "matplotlib>=3.9",
+    "numpy>=2.0",
 ]
 
 [tool.pytest.ini_options]
 # Async tests (the EventStore is async) run without per-test decorators.
 asyncio_mode = "auto"
 testpaths = ["packages"]
+markers = ["integration"]
 addopts = "-q"
 
 [tool.ruff]

@@ -10,6 +10,26 @@ from __future__ import annotations
 from perpleximanus.core import ToolCall
 from perpleximanus.core.loop import AgentStep
 from perpleximanus.tools.sandbox.base import ExecResult, SandboxError, SandboxSpec
+from perpleximanus.tools.sandbox.kernel import KernelResult
+
+
+class FakeKernel:
+    def __init__(self):
+        self.restarts = 0
+
+    async def execute(self, code: str, *, timeout_s: int) -> KernelResult:
+        if "while True" in code:
+            return KernelResult(ok=False, stdout="", stderr="", timed_out=True)
+        return KernelResult(ok=True, stdout=f"[fake-kernel] {code}", stderr="")
+
+    async def interrupt(self) -> None:
+        pass
+
+    async def restart(self) -> None:
+        self.restarts += 1
+
+    async def shutdown(self) -> None:
+        pass
 
 
 class FakeSandboxInstance:
@@ -23,10 +43,15 @@ class FakeSandboxInstance:
         self.spec = SandboxSpec()
         self._fs: dict[str, bytes] = {}
         self._destroyed = False
+        self._kernel = FakeKernel()
+
+    @property
+    async def kernel(self) -> FakeKernel:
+        return self._kernel
 
     def _alive(self) -> None:
         if self._destroyed:
-            raise SandboxError("destroyed")
+            raise SandboxError("instance is destroyed")
 
     async def exec_shell(self, cmd: str, *, timeout_s: int) -> ExecResult:
         self._alive()

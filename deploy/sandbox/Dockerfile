@@ -11,6 +11,11 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && corepack enable \
     && npm install -g npm@latest \
     && rm -rf /var/lib/apt/lists/* /root/.npm
+
+# BP-08: Persistent IPython kernel stack. No matplotlib in the image (gVisor
+# integration covers state + interrupt; plot tests run on the process backend).
+RUN pip3 install --break-system-packages ipykernel jupyter_kernel_gateway
+
 # Non-root user available (gVisor is the isolation boundary; app may pick --user)
 RUN useradd -m -u 1000 -s /bin/bash agent && mkdir -p /workspace && chown agent:agent /workspace
 WORKDIR /workspace

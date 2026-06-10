@@ -111,45 +111,61 @@ async def test_shell_timeout_is_surfaced_legibly():
 
 
 async def test_code_exec_timeout_is_surfaced():
-    ex = DefaultToolExecutor(build_default_registry(), agent_scope(), sandbox=TimeoutInstance())
+    # FakeSandboxInstance now has a kernel property
+    ex = DefaultToolExecutor(build_default_registry(), agent_scope(), sandbox=FakeSandboxInstance())
     res = await ex.execute(call("code_exec", language="python", code="while True: pass"))
     assert res.success is False and res.structured["timed_out"] is True
 
 
 async def test_code_exec_python_state_persists_across_cells(tmp_path):
     """Stateful CodeAct (the 'persistent kernel' contract): a name defined in one
-    Python cell is in scope in the next, via the namespace-serialization harness —
-    proven against the REAL process sandbox (actual python3 subprocesses)."""
-    from perpleximanus.tools.sandbox.process import ProcessSandboxInstance
+    Python cell is in scope in the next — proven against the REAL process sandbox."""
+    from perpleximanus.tools.sandbox.process import ProcessSandboxInstance, ProcessSandboxService
 
     ws = tmp_path / "ws"
     ws.mkdir()
-    sbx = ProcessSandboxInstance("i1", "o", "c", SandboxSpec(), ws)
-    ex = DefaultToolExecutor(build_default_registry(), agent_scope(), sandbox=sbx)
+    # SandboxSession owns the kernel; DefaultToolExecutor accepts it as 'sandbox'.
+    svc = ProcessSandboxService(root=str(tmp_path))
+    session = SandboxSession(svc, owner_id="o", conversation_id="c")
 
-    r1 = await ex.execute(call("code_exec", language="python", code="x = 21 * 2"))
-    assert r1.success, r1.content
-    # the next cell sees `x` from the previous one — not a fresh interpreter
-    r2 = await ex.execute(call("code_exec", language="python", code="print(x)"))
-    assert r2.success and "42" in r2.content, r2.content
+    ex = DefaultToolExecutor(build_default_registry(), agent_scope(), sandbox=session)
+
+    # Mock the pwd for the session
+    from unittest.mock import patch
+    with patch.object(ProcessSandboxInstance, "exec_shell") as mock_exec:
+        mock_exec.return_value = ExecResult(exit_code=0, stdout=str(ws), stderr="")
+
+        r1 = await ex.execute(call("code_exec", language="python", code="x = 21 * 2"))
+        assert r1.success, r1.content
+        # the next cell sees `x` from the previous one — not a fresh interpreter
+        r2 = await ex.execute(call("code_exec", language="python", code="print(x)"))
+        assert r2.success and "42" in r2.content, r2.content
 
 
 async def test_code_exec_erroring_cell_keeps_prior_state(tmp_path):
     """A cell that raises surfaces the traceback + a failure, but does NOT wipe the
     session — names bound before it remain available (kernel-like)."""
-    from perpleximanus.tools.sandbox.process import ProcessSandboxInstance
-
+    from perpleximanus.tools.sandbox.process import ProcessSandboxInstance, ProcessSandboxService
     ws = tmp_path / "ws"
     ws.mkdir()
-    sbx = ProcessSandboxInstance("i2", "o", "c", SandboxSpec(), ws)
-    ex = DefaultToolExecutor(build_default_registry(), agent_scope(), sandbox=sbx)
+    
+    svc = ProcessSandboxService(root=str(tmp_path))
+    session = SandboxSession(svc, owner_id="o", conversation_id="c")
+    
+    ex = DefaultToolExecutor(build_default_registry(), agent_scope(), sandbox=session)
 
-    await ex.execute(call("code_exec", language="python", code="counter = 7"))
-    err = await ex.execute(call("code_exec", language="python", code="raise ValueError('boom')"))
-    assert err.success is False and "ValueError" in err.content
-    # state survived the error
-    ok = await ex.execute(call("code_exec", language="python", code="print(counter + 1)"))
-    assert ok.success and "8" in ok.content, ok.content
+    from unittest.mock import patch
+    with patch.object(ProcessSandboxInstance, "exec_shell") as mock_exec:
+        mock_exec.return_value = ExecResult(exit_code=0, stdout=str(ws), stderr="")
+
+        await ex.execute(call("code_exec", language="python", code="counter = 7"))
+        err = await ex.execute(
+            call("code_exec", language="python", code="raise ValueError('boom')")
+        )
+        assert err.success is False and "ValueError" in err.content
+        # state survived the error
+        ok = await ex.execute(call("code_exec", language="python", code="print(counter + 1)"))
+        assert ok.success and "8" in ok.content, ok.content
 
 
 # ---- agent-vs-research scoping (the registry split) --------------------------

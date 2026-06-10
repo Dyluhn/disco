@@ -12,6 +12,8 @@ dependencies = [
     # still authenticates via the system ssh, e.g. keyless Tailscale SSH).
     "docker[ssh]>=7",
     "podman>=5",  # Podman SDK — the Podman backend drives the rootless socket native-remote
+    "jupyter_client",
+    "websockets",
 ]
 
 [build-system]

@@ -8,6 +8,7 @@ from perpleximanus.tools import (
     DefaultToolExecutor,
     ProcessSandboxService,
     SandboxError,
+    SandboxSession,
     SandboxSpec,
     ToolScope,
     build_default_registry,
@@ -66,13 +67,35 @@ async def test_backend_swap_identical_results_process_vs_fake():
 
 async def test_shell_and_code_exec_run_in_process_sandbox():
     svc = ProcessSandboxService()
-    inst = await svc.create(SandboxSpec(), owner_id="local", conversation_id="c")
+    session = SandboxSession(svc, owner_id="local", conversation_id="c")
     reg = build_default_registry()
     ex = DefaultToolExecutor(
-        reg, ToolScope(allowed_tools=frozenset({"shell", "code_exec"})), sandbox=inst
+        reg, ToolScope(allowed_tools=frozenset({"shell", "code_exec"})), sandbox=session
     )
     sh = await ex.execute(call("shell", command="echo hi"))
     assert sh.success and "hi" in sh.content
     code = await ex.execute(call("code_exec", language="python", code="print(6*7)"))
     assert code.success and "42" in code.content
-    await inst.destroy()
+    await session.destroy()
+
+
+async def test_process_backend_expose_port_defense():
+    # BP-10: process backend expose_port stays within USER_PORTS and checks binding
+    import tempfile
+    from pathlib import Path
+
+    from perpleximanus.tools.sandbox.process import ProcessSandboxInstance
+
+    with tempfile.TemporaryDirectory() as tmp:
+        inst = ProcessSandboxInstance("i", "o", "c", SandboxSpec(), Path(tmp))
+
+        # 1. Not in USER_PORTS -> None
+        assert inst.expose_port(9999) is None
+
+        # 2. In USER_PORTS but not bound -> None
+        assert inst.expose_port(3000) is None
+
+        # 3. INTERNAL_PORTS (8899) -> None
+        assert inst.expose_port(8899) is None
+
+        await inst.destroy()
