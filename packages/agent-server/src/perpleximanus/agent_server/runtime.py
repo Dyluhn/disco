@@ -93,8 +93,8 @@ from perpleximanus.tools.sandbox import (
     PodmanSandboxService,
     SandboxConfig,
 )
-from perpleximanus.tools.sandbox.port_owner import port_owner
-from perpleximanus.tools.sandbox._container import PREVIEW_PORT
+from perpleximanus.tools.sandbox.port_owner import port_owner, port_owners
+from perpleximanus.tools.sandbox._container import PREVIEW_PORT, USER_PORTS
 
 _LOG = logging.getLogger(__name__)
 
@@ -1274,13 +1274,18 @@ class ConversationRuntime:
         """The URL the AGENT-SERVER can reach the conversation's dev server at (the backend
         owns how — localhost for local, the remote host's tailnet IP for gVisor). The
         browser never touches this; the agent-server proxies it (single origin)."""
+        return self.port_upstream(conversation_id, PREVIEW_PORT)
+
+    def port_upstream(self, conversation_id: str, port: int) -> str | None:
+        """Generalized upstream resolution for any curated USER port (BP-10).
+        expose_port itself refuses non-USER ports — defense stays in the backend."""
         executor = self._executors.get(conversation_id)
         session = getattr(executor, "_sandbox", None) if executor is not None else None
         if session is None:
             return None
         if getattr(getattr(session, "_service", None), "name", "?") == "podman":
             return None  # stub here
-        return session.expose_port(PREVIEW_PORT)
+        return session.expose_port(port)
 
     async def preview(self, conversation_id: str) -> dict[str, Any]:
         """Backend-aware live preview availability. The browser iframes the agent-server's
@@ -1309,9 +1314,24 @@ class ConversationRuntime:
                 "owner": None,
             }
         try:
-            owner = await port_owner(inst, PREVIEW_PORT)
+            owners = await port_owners(inst, sorted(USER_PORTS))
         except Exception:  # noqa: BLE001 — a probe must never 500 the preview endpoint
-            owner = None
+            owners = {}
+        owner = owners.get(PREVIEW_PORT)
+
+        ns = f"pmx-{session.sessions.namespace}"
+
+        def _owner_json(o):  # bound ports only; normalized session name
+            sess = o.session
+            if sess and sess.startswith(ns):
+                sess = sess[len(ns):]
+            return {"pid": o.pid, "cmdline": o.cmdline, "session": sess}
+
+        ports_payload = [
+            {"port": p, "owner": _owner_json(o)}
+            for p, o in sorted(owners.items())
+            if o is not None and o.pid is not None
+        ]
 
         if owner is None or owner.pid is None:
             return {
@@ -1319,23 +1339,14 @@ class ConversationRuntime:
                 "reason": f"No dev server detected. Run one on port {PREVIEW_PORT} inside the "
                 "sandbox to see a live preview.",
                 "owner": None,
+                "ports": ports_payload,
             }
-
-        # Session name normalization — strip the manager's own prefix (source of
-        # truth: sessions.namespace), never a re-derived copy of its format.
-        sess_name = owner.session
-        ns = f"pmx-{session.sessions.namespace}"
-        if sess_name and sess_name.startswith(ns):
-            sess_name = sess_name[len(ns):]
 
         return {
             "available": True,
             "proxy": True,
-            "owner": {
-                "pid": owner.pid,
-                "cmdline": owner.cmdline,
-                "session": sess_name,
-            },
+            "owner": _owner_json(owner),
+            "ports": ports_payload,
         }
 
     async def ensure_preview(self, conversation_id: str) -> bool:

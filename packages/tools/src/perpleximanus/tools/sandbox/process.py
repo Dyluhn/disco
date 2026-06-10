@@ -105,7 +105,21 @@ class ProcessSandboxInstance:
         return None  # the process backend has no display
 
     def expose_port(self, port: int) -> str | None:
-        return None  # the dev (host process) backend doesn't isolate ports to expose
+        """Dev-mode usability: host processes bind host ports directly, so hand
+        back the local URL when the port is actually bound. No isolation boundary
+        to defend on this backend, but stay within the curated USER set."""
+        from ._container import USER_PORTS
+
+        if port not in USER_PORTS:
+            return None
+        import socket
+
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.25):
+                pass
+        except OSError:
+            return None
+        return f"http://127.0.0.1:{port}"
 
     async def destroy(self) -> None:
         self._destroyed = True

@@ -22,7 +22,7 @@ from typing import Any
 from . import egress_proxy as _egress_proxy_mod
 from ._container import (
     EGRESS_PROXY_PORT,
-    PREVIEW_PORT,
+    PUBLISHED_PORTS,
     ContainerInstance,
     egress_mode,
     format_allow,
@@ -260,9 +260,10 @@ class GvisorSandboxService:
         mem_mb = spec.memory_mb or self._cfg.default_memory_mb
         cpu = spec.cpu or self._cfg.default_cpu
         mode = egress_mode(spec)
-        # Publish ONLY the dev-server port, and only when network is granted (a sealed box
-        # has no port to reach) — the preview is the forcing function for that posture.
-        ports = None if sealed(spec) else {f"{PREVIEW_PORT}/tcp": None}
+        # Publish the curated port set (Docker can't add mappings to a running
+        # container, so the set is declared here), and only when network is
+        # granted — a sealed box has no port to reach.
+        ports = None if sealed(spec) else {f"{p}/tcp": None for p in sorted(PUBLISHED_PORTS)}
         command = _keepalive_command()
 
         # Per-mode network config (the three-way egress posture; egress_mode docstring).

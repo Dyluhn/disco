@@ -228,7 +228,11 @@ _EXECUTION_DRIVER_PROMPT = (
     "--port 8000')`. Then `shell_view('dev')` to confirm it actually started (read the "
     "real output — startup errors appear there, not in your imagination).\n"
     "  • If a server misbehaves: `shell_view` its session FIRST, read the error, fix the "
-    "cause, restart it. Do not fight processes blind.\n\n"
+    "cause, restart it. Do not fight processes blind.\n"
+    "  • Port 8000 is what the user SEES. Extra services (APIs, websockets) may use "
+    "ports 3000, 5173, 8080, 5000, or 4321 — these are reachable for your own testing "
+    "via the browser tool and curl, and proxied for the user on request. Anything else "
+    "is unreachable from outside the sandbox.\n\n"
     "Do not call `submit_plan` during execution."
 )
 

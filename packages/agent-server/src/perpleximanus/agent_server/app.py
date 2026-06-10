@@ -33,6 +33,7 @@ from perpleximanus.tools.projects import (
     aiter_zip_workspace,
     validate_root,
 )
+from perpleximanus.tools.sandbox._container import USER_PORTS
 from pydantic import BaseModel, ValidationError
 
 from .runtime import ConversationRuntime
@@ -196,6 +197,28 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         reached server-side, so no random container port is exposed and previews work over
         the tailnet. Forwards GET; good for a built page (single-origin assets)."""
         upstream = runtime.preview_upstream(conversation_id) if runtime is not None else None
+        if upstream is None:
+            return Response("preview not available", status_code=503, media_type="text/plain")
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+                r = await client.get(f"{upstream}/{path}")
+        except Exception:  # noqa: BLE001 — upstream not up yet / unreachable
+            return Response("preview upstream unreachable", status_code=502, media_type="text/plain")  # noqa: E501
+        return Response(
+            content=r.content,
+            status_code=r.status_code,
+            media_type=r.headers.get("content-type", "text/html"),
+        )
+
+    @app.get("/conversations/{conversation_id}/port/{port}/{path:path}")
+    @app.get("/conversations/{conversation_id}/port/{port}/")
+    async def port_app(conversation_id: str, port: int, path: str = "") -> Response:
+        """Per-port proxy (BP-10): same single-origin forwarding as preview-app for
+        the curated USER port set. Arbitrary ints and INTERNAL plumbing ports are
+        never proxied (404 — not 503: the port does not exist as a surface)."""
+        if port not in USER_PORTS:
+            return Response("unknown port", status_code=404, media_type="text/plain")
+        upstream = runtime.port_upstream(conversation_id, port) if runtime is not None else None
         if upstream is None:
             return Response("preview not available", status_code=503, media_type="text/plain")
         try:

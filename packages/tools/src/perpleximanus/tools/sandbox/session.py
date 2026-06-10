@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from ._container import PREVIEW_PORT
 from .base import (
     ExecResult,
     SandboxError,
@@ -157,7 +158,7 @@ class SandboxSession:
     def expose_port(self, port: int) -> str | None:
         return self._instance.expose_port(port) if self._instance is not None else None
 
-    async def ensure_preview(self, port: int = 8000) -> bool:
+    async def ensure_preview(self, port: int = PREVIEW_PORT) -> bool:
         """Start (idempotently) the static preview as visible session 'preview'.
         Returns False without side effects if :port is already bound (someone — maybe
         the agent's own dev server — owns it; that is fine and not ours to fight)."""

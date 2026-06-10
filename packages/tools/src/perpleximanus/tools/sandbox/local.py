@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._container import PREVIEW_PORT, ContainerInstance, egress_mode
+from ._container import PUBLISHED_PORTS, ContainerInstance, egress_mode
 from .base import SandboxSpec, SandboxUnavailableError
 from .config import SandboxConfig, default_local_config
 from .gvisor import GvisorSandboxService, _keepalive_command
@@ -68,9 +68,9 @@ class LocalSandboxService(GvisorSandboxService):
                 command=_keepalive_command(),
                 runtime=self._cfg.runtime,  # runc (a value, not a branch)
                 network_mode="bridge" if open_net else "none",
-                # Publish ONLY the dev-server port (preview), and only when network is
-                # granted — reachable at localhost:<host port> on this same host.
-                ports={f"{PREVIEW_PORT}/tcp": None} if open_net else None,
+                # Publish the curated port set (declared at create — Docker can't
+                # add mappings later), only when network is granted.
+                ports={f"{p}/tcp": None for p in sorted(PUBLISHED_PORTS)} if open_net else None,
                 # The limit goes through the LOCAL socket/daemon → it actually bites.
                 mem_limit=f"{mem_mb}m",
                 nano_cpus=int(cpu * 1_000_000_000),

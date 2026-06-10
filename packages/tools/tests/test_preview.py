@@ -8,15 +8,19 @@ the local backend publishes the port only when network is granted; Podman is a c
 from __future__ import annotations
 
 from perpleximanus.tools.anatomy import Capability
-from perpleximanus.tools.sandbox._container import PREVIEW_PORT, ContainerInstance
+from perpleximanus.tools.sandbox._container import PREVIEW_PORT, PUBLISHED_PORTS, USER_PORTS, ContainerInstance
 from perpleximanus.tools.sandbox.base import SandboxSpec
 from perpleximanus.tools.sandbox.gvisor import _preview_host
 
 
 class _Container:
-    def __init__(self, host_port: str | None) -> None:
+    def __init__(self, port_map: dict[int, str | None] | str | None = None) -> None:
         self.status = "running"
-        ports = {f"{PREVIEW_PORT}/tcp": [{"HostPort": host_port}]} if host_port else {}
+        if isinstance(port_map, str) or port_map is None:
+            # maintain compatibility with existing tests that pass a single host port string
+            port_map = {PREVIEW_PORT: port_map} if port_map else {}
+
+        ports = {f"{p}/tcp": [{"HostPort": hp}] for p, hp in port_map.items() if hp}
         self.attrs = {"NetworkSettings": {"Ports": ports}}
 
     def reload(self) -> None:
@@ -40,9 +44,31 @@ def test_expose_port_returns_the_published_url():
     assert _inst(_Container("32768")).expose_port(PREVIEW_PORT) == "http://localhost:32768"
 
 
-def test_only_the_dev_server_port_is_exposed():
-    # containment: any other port is NOT reachable
-    assert _inst(_Container("32768")).expose_port(9999) is None
+def test_expose_extra_user_ports():
+    # BP-10: curated USER_PORTS are also exposed
+    c = _Container({8000: "32768", 3000: "32769", 5173: "32770"})
+    inst = _inst(c)
+    assert inst.expose_port(8000) == "http://localhost:32768"
+    assert inst.expose_port(3000) == "http://localhost:32769"
+    assert inst.expose_port(5173) == "http://localhost:32770"
+
+
+def test_internal_ports_are_never_exposed_to_user():
+    # security-critical: INTERNAL_PORTS (8899) must NEVER become user URLs,
+    # even if the backend publishes them.
+    from perpleximanus.tools.sandbox._container import INTERNAL_PORTS
+
+    assert 8899 in INTERNAL_PORTS
+
+    c = _Container({8899: "32771"})
+    inst = _inst(c)
+    assert inst.expose_port(8899) is None
+
+
+def test_only_curated_user_ports_are_exposed():
+    # containment: any other port is NOT reachable as a user URL
+    assert 9999 not in USER_PORTS
+    assert _inst(_Container({9999: "32772"})).expose_port(9999) is None
 
 
 def test_no_url_when_the_port_is_not_published():
@@ -63,7 +89,7 @@ def test_gvisor_preview_host_parsing():
     assert _preview_host("unix:///var/run/docker.sock") == "localhost"
 
 
-def test_local_publishes_only_when_network_granted():
+def test_local_publishes_curated_port_set_when_network_granted():
     from conftest import FakeSandboxInstance  # noqa: F401 — ensures conftest path
     from perpleximanus.tools.sandbox import LocalSandboxService, SandboxConfig
     from test_local import FakeLocalClient  # reuse the local backend's fake docker client
@@ -77,7 +103,7 @@ def test_local_publishes_only_when_network_granted():
     import asyncio
 
     granted = asyncio.run(_run(SandboxSpec(permitted=frozenset({Capability.NETWORK}))))
-    assert granted["ports"] == {f"{PREVIEW_PORT}/tcp": None}  # dev-server port published
+    assert granted["ports"] == {f"{p}/tcp": None for p in sorted(PUBLISHED_PORTS)}
     sealed = asyncio.run(_run(SandboxSpec()))
     assert sealed["ports"] is None  # sealed box exposes nothing
 

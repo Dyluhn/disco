@@ -49,81 +49,99 @@ def read_tcp_listen(port_hex):
     return inodes
 
 def main():
-    target_port = int(sys.argv[1])
-    port_hex = f"{target_port:04X}"
-    inodes = read_tcp_listen(port_hex)
-    
-    if not inodes:
-        print(json.dumps({"port": target_port, "pid": None}))
-        sys.exit(0)
+    ports = [int(a) for a in sys.argv[1:]]
+    inode_to_port = {}
+    for target_port in ports:
+        for ino in read_tcp_listen(f"{target_port:04X}"):
+            inode_to_port.setdefault(ino, target_port)
 
-    found_pid = None
-    for pid_str in os.listdir('/proc'):
-        if not pid_str.isdigit():
+    port_to_pid = {}
+    if inode_to_port:
+        for pid_str in os.listdir('/proc'):
+            if not pid_str.isdigit():
+                continue
+            fd_dir = f'/proc/{pid_str}/fd'
+            if not os.path.isdir(fd_dir):
+                continue
+            try:
+                for fd in os.listdir(fd_dir):
+                    try:
+                        link = os.readlink(f'{fd_dir}/{fd}')
+                        if link.startswith('socket:['):
+                            ino = link[8:-1]
+                            if ino in inode_to_port:
+                                port_to_pid.setdefault(inode_to_port[ino], int(pid_str))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+    panes = get_tmux_panes()
+    results = []
+    for target_port in ports:
+        found_pid = port_to_pid.get(target_port)
+        if not found_pid:
+            results.append({"port": target_port, "pid": None})
             continue
-        fd_dir = f'/proc/{pid_str}/fd'
-        if not os.path.isdir(fd_dir):
-            continue
+
+        cmdline = ""
         try:
-            for fd in os.listdir(fd_dir):
-                try:
-                    link = os.readlink(f'{fd_dir}/{fd}')
-                    if link.startswith('socket:[') and link[8:-1] in inodes:
-                        found_pid = int(pid_str)
-                        break
-                except Exception:
-                    pass
-            if found_pid:
-                break
+            with open(f'/proc/{found_pid}/cmdline', 'rb') as f:
+                cmdline = f.read().replace(b'\\x00', b' ').decode('utf-8').strip()
         except Exception:
             pass
 
-    if not found_pid:
-        print(json.dumps({"port": target_port, "pid": None}))
-        sys.exit(0)
+        current_pid = found_pid
+        session = None
+        for _ in range(6):
+            if current_pid in panes:
+                session = panes[current_pid]
+                break
+            try:
+                with open(f'/proc/{current_pid}/stat') as f:
+                    stat_data = f.read().split()
+                    if len(stat_data) >= 4:
+                        current_pid = int(stat_data[3])
+                    else:
+                        break
+            except Exception:
+                break
 
-    cmdline = ""
-    try:
-        with open(f'/proc/{found_pid}/cmdline', 'rb') as f:
-            cmdline = f.read().replace(b'\\x00', b' ').decode('utf-8').strip()
-    except Exception:
-        pass
+        results.append({"port": target_port, "pid": found_pid, "cmdline": cmdline, "session": session})
 
-    panes = get_tmux_panes()
-    current_pid = found_pid
-    session = None
-    for _ in range(6):
-        if current_pid in panes:
-            session = panes[current_pid]
-            break
-        try:
-            with open(f'/proc/{current_pid}/stat') as f:
-                stat_data = f.read().split()
-                if len(stat_data) >= 4:
-                    current_pid = int(stat_data[3])
-                else:
-                    break
-        except Exception:
-            break
-
-    print(json.dumps({"port": target_port, "pid": found_pid, "cmdline": cmdline, "session": session}))
+    print(json.dumps(results))
 
 if __name__ == "__main__":
     main()
 """
 
 
-async def port_owner(instance: SandboxInstance, port: int) -> PortOwner | None:
-    res = await instance.exec_shell(f"python3 -c {shlex.quote(_PROBE_SRC)} {port}", timeout_s=15)
+async def port_owners(
+    instance: SandboxInstance, ports: list[int]
+) -> dict[int, PortOwner | None]:
+    """Probe many ports in ONE in-container exec (single /proc pass) — the UI
+    polls this; per-port execs would multiply SSH round-trips."""
+    if not ports:
+        return {}
+    arg = " ".join(str(p) for p in ports)
+    res = await instance.exec_shell(
+        f"python3 -c {shlex.quote(_PROBE_SRC)} {arg}", timeout_s=15
+    )
+    out: dict[int, PortOwner | None] = {p: None for p in ports}
     if res.exit_code != 0:
-        return None
+        return out
     try:
-        data = json.loads(res.stdout)
-        return PortOwner(
-            port=data.get("port", port),
-            pid=data.get("pid"),
-            cmdline=data.get("cmdline"),
-            session=data.get("session")
-        )
-    except Exception:
-        return None
+        for data in json.loads(res.stdout):
+            out[data["port"]] = PortOwner(
+                port=data["port"],
+                pid=data.get("pid"),
+                cmdline=data.get("cmdline"),
+                session=data.get("session"),
+            )
+    except Exception:  # noqa: BLE001 — malformed probe output → no owners
+        return {p: None for p in ports}
+    return out
+
+
+async def port_owner(instance: SandboxInstance, port: int) -> PortOwner | None:
+    return (await port_owners(instance, [port])).get(port)

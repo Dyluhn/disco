@@ -13,7 +13,7 @@ class ServerStatusArgs(BaseModel):
 class ServerStatusTool:
     definition = ToolDef(
         name="server_status",
-        description="Show running background sessions and the ownership status of exposed ports (e.g. 8000).",
+        description="Show running background sessions and who owns each exposed port (8000 user-visible; 3000/5173/8080/5000/4321 also reachable).",
         args_model=ServerStatusArgs,
         needs=frozenset({Capability.SHELL}),
         base_risk=SecurityRisk.LOW,
@@ -23,7 +23,8 @@ class ServerStatusTool:
 
     async def run(self, args: ServerStatusArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
-        from ..sandbox.port_owner import port_owner
+        from ..sandbox._container import USER_PORTS
+        from ..sandbox.port_owner import port_owners
         
         # Get sessions
         sessions = await ctx.sandbox.sessions.list()
@@ -39,12 +40,12 @@ class ServerStatusTool:
             
         out_lines.append("ports:")
         
-        # Currently just 8000
-        ports = [8000]
+        ports = sorted(USER_PORTS)
+        owners = await port_owners(ctx.sandbox, ports)
         prefix = f"pmx-{ctx.sandbox.sessions.namespace}" if ctx.sandbox.sessions.namespace else "pmx-"
         
         for p in ports:
-            owner = await port_owner(ctx.sandbox, p)
+            owner = owners.get(p)
             if owner is not None and owner.pid is not None:
                 sess_name = owner.session
                 if sess_name and sess_name.startswith(prefix):

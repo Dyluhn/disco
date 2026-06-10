@@ -1,0 +1,16 @@
+conversation: conv_9baa69b65ac24b05b2f8514f33358615
+approve gate if needed:  .venv/bin/python test-record/bp-06/send_frame.py conv_9baa69b65ac24b05b2f8514f33358615 approve_plan
+prompt sent (seq 1)
+status=RUNNING t+0s
+status=AWAITING_PLAN_APPROVAL t+20s
+NEEDS ATTENTION: AWAITING_PLAN_APPROVAL — intervene via UI/API
+status=RUNNING t+51s
+both ports live t+82s — probing proxies
+  probe page_8000: HTTP 200 (629B)
+  probe status_3000: HTTP 200 (33B)
+  probe internal_8899: HTTP 404 (12B)
+  probe unknown_9999: HTTP 404 (12B)
+status=FINISHED t+162s
+saved 59 events
+BEHAVIORAL PASS: both ports live+proxied, internal/unknown ports 404, run FINISHED
+EXIT=0

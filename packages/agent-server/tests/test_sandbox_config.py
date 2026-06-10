@@ -98,25 +98,83 @@ async def test_preview_is_backend_aware_and_honest():
     # local with a reachable dev server → available (proxied through this origin); the
     # raw upstream is kept server-side (the browser hits the agent-server proxy).
     rt._executors["loc"] = _FakeExecutor(_FakeSession("local", "http://localhost:32768"))
-    # Mock port_owner for this test
+    # Mock port_owners for this test
     import perpleximanus.agent_server.runtime as runtime_mod
     from perpleximanus.tools.sandbox.port_owner import PortOwner
-    
-    async def mock_port_owner(inst, port):
-        return PortOwner(port=port, pid=1234, cmdline="test", session="preview")
-        
+
+    async def mock_port_owners(inst, ports):
+        return {
+            p: PortOwner(port=p, pid=1234, cmdline="test", session="pmx-preview")
+            if p == 8000 else None
+            for p in ports
+        }
+
     import unittest.mock
-    with unittest.mock.patch("perpleximanus.agent_server.runtime.port_owner", side_effect=mock_port_owner):
+
+    with unittest.mock.patch("perpleximanus.agent_server.runtime.port_owners", side_effect=mock_port_owners):
         loc = await rt.preview("loc")
         assert loc["available"] is True and loc.get("proxy") is True and "url" not in loc
         assert rt.preview_upstream("loc") == "http://localhost:32768"
 
     # local with no dev server up → a reason, not a fake URL
     rt._executors["bare"] = _FakeExecutor(_FakeSession("local", None))
-    with unittest.mock.patch("perpleximanus.agent_server.runtime.port_owner", return_value=None):
+    with unittest.mock.patch("perpleximanus.agent_server.runtime.port_owners", return_value={}):
         bare = await rt.preview("bare")
         assert bare["available"] is False
         assert rt.preview_upstream("bare") is None
+
+
+@pytest.mark.asyncio
+async def test_multi_port_upstream_resolution():
+    # BP-10: port_upstream resolves curated USER_PORTS
+    rt = ConversationRuntime(SqliteEventStore(":memory:"))
+
+    class _MultiPortSession(_FakeSession):
+        def expose_port(self, port: int) -> str | None:
+            if port == 8000: return "http://h:8000"
+            if port == 3000: return "http://h:3000"
+            return None
+
+    rt._executors["c"] = _FakeExecutor(_MultiPortSession("local", "http://h:8000"))
+    assert rt.port_upstream("c", 8000) == "http://h:8000"
+    assert rt.port_upstream("c", 3000) == "http://h:3000"
+    assert rt.port_upstream("c", 9999) is None  # expose_port (backend) defends this
+
+
+@pytest.mark.asyncio
+async def test_port_proxy_route_auth_and_defense():
+    # BP-10: app-route proxy defends USER_PORTS set
+    import unittest.mock
+    from fastapi.testclient import TestClient
+    from perpleximanus.agent_server import create_app
+    from perpleximanus.tools.sandbox._container import USER_PORTS
+
+    rt = ConversationRuntime(SqliteEventStore(":memory:"))
+    app = create_app(rt._store, runtime=rt)
+    client = TestClient(app)
+
+    # 404 for ports NOT in USER_PORTS (defense stays in the app layer)
+    assert 9999 not in USER_PORTS
+    assert client.get("/conversations/x/port/9999/").status_code == 404
+    # 404 for INTERNAL_PORTS (8899)
+    assert 8899 not in USER_PORTS
+    assert client.get("/conversations/x/port/8899/").status_code == 404
+
+    # 503 if the upstream isn't available (box down / no executor)
+    assert client.get("/conversations/x/port/3000/").status_code == 503
+
+    # 200 (proxied) if available. Mock runtime.port_upstream to return a stub
+    with unittest.mock.patch.object(rt, "port_upstream", return_value="http://localhost:32769"):
+        # We need a real-ish response from the stubbed upstream or httpx will fail.
+        # Use a mock for httpx.AsyncClient.get
+        with unittest.mock.patch("httpx.AsyncClient.get") as mock_get:
+            mock_get.return_value = unittest.mock.MagicMock(
+                status_code=200, content=b"hello", headers={"content-type": "text/plain"}
+            )
+            resp = client.get("/conversations/x/port/3000/api/data")
+            assert resp.status_code == 200
+            assert resp.text == "hello"
+            mock_get.assert_called_with("http://localhost:32769/api/data")
 
 
 @pytest.mark.asyncio

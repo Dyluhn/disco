@@ -1,0 +1,18 @@
+{
+  "page_8000": {
+    "status": 200,
+    "body": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <title>BP10 multi-port</title>\n</head>\n<body>\n  <h1>BP10 multi-port</h1>\n  <pre id=\"status\">loading...</pre>\n\n  <script>\n    fetch(\"http://localhost:3000/status.json\")\n      .then(function (res) { return res.json(); })\n      .then(function (data) {\n        document.getElementById(\"status\").textContent = JSON.stringify(data, null, 2);\n      })\n      .catch(fu"
+  },
+  "status_3000": {
+    "status": 200,
+    "body": "{\"service\": \"status\", \"ok\": true}"
+  },
+  "internal_8899": {
+    "status": 404,
+    "body": "unknown port"
+  },
+  "unknown_9999": {
+    "status": 404,
+    "body": "unknown port"
+  }
+}

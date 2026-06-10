@@ -1,7 +1,9 @@
 # orders.yaml — commit-sequencing manifest for the BP work-order campaign.
 #
 # Consumed by scripts/orchestrate.sh (parsed with awk — keep the format STRICT):
-#   <order-id>: <state>    # state: committed | in-flight (anything but "committed" = live)
+#   <order-id>: <state>    # committed = done | staged = declared, NO work on disk,
+#                          #   claims nothing (dispatch flips it to in-flight)
+#                          # | in-flight/anything else = live (files contested)
 #     - <repo-relative path>
 #
 # Rules the orchestrator enforces from this data (bakeoff/SUMMARY.md: orchestration
@@ -63,7 +65,7 @@ bp-08: staged
   - packages/core/src/perpleximanus/core/llm/prompts.py
   - packages/tools/tests/test_agent_tools.py
   - packages/tools/tests/test_kernel_session.py
-bp-10: in-flight
+bp-10: committed
   - packages/tools/src/perpleximanus/tools/sandbox/_container.py
   - packages/tools/src/perpleximanus/tools/sandbox/gvisor.py
   - packages/tools/src/perpleximanus/tools/sandbox/local.py
@@ -80,3 +82,16 @@ bp-10: in-flight
   - packages/core/src/perpleximanus/core/llm/prompts.py
   - frontend/src/components/build/ExecutionCanvas.tsx
   - frontend/src/types/agent.ts
+  - frontend/e2e-live/bp-10-port-pills.spec.ts
+  - test-record/bp-10/integration_ports.py
+  - test-record/bp-10/integration-ports-PASS.txt
+  - test-record/bp-10/run_behavioral.py
+  - test-record/bp-10/behavioral-PASS-conv_09c91f29.log
+  - test-record/bp-10/behavioral-PASS2-conv_9baa69b6.log
+  - test-record/bp-10/events-conv_09c91f29aa8d49eb957f3db4a15947e0.json
+  - test-record/bp-10/preview-conv_09c91f29aa8d49eb957f3db4a15947e0.json
+  - test-record/bp-10/proxy-probes-conv_09c91f29aa8d49eb957f3db4a15947e0.json
+  - test-record/bp-10/ui-spec.log
+  - test-record/bp-10/port-pills-witness.json
+  - test-record/screenshots/bp-10/port-pills-8000.png
+  - test-record/screenshots/bp-10/port-pills-3000.png

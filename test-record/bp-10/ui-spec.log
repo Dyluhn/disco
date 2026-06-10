@@ -1,0 +1,7 @@
+
+Running 1 test using 1 worker
+
+  ✓  1 [firefox] › e2e-live/bp-10-port-pills.spec.ts:28:1 › port pills switch the live preview between bound USER ports (live) (1.4m)
+
+  1 passed (1.4m)
+EXIT=0

@@ -22,9 +22,16 @@ from .base import ExecResult, SandboxError, SandboxSpec, SandboxUnavailableError
 # Exit codes the `timeout` coreutil reports when it fires (SIGTERM / then SIGKILL).
 TIMEOUT_EXIT_CODES = frozenset({124, 137})
 
-# The single in-container port the session publishes (the agent runs its dev
-# server here). ONLY this port is ever exposed — containment: nothing else is reachable.
+# The user-facing dev-server port (the primary preview) plus a curated set of
+# framework-default ports a build may legitimately bind (API on 3000, Vite's
+# native 5173, …). Docker cannot add mappings to a RUNNING container, so the
+# publishable set is declared at create time. Containment: nothing outside
+# PUBLISHED_PORTS is ever reachable, and INTERNAL_PORTS (agent-server plumbing,
+# e.g. the BP-08 kernel gateway) are never handed out as user URLs.
 PREVIEW_PORT = 8000
+USER_PORTS: frozenset[int] = frozenset({8000, 3000, 5173, 8080, 5000, 4321})
+INTERNAL_PORTS: frozenset[int] = frozenset({8899})
+PUBLISHED_PORTS: frozenset[int] = USER_PORTS | INTERNAL_PORTS
 
 
 def sealed(spec: SandboxSpec) -> bool:
@@ -248,17 +255,19 @@ class ContainerInstance:
         return None  # no noVNC display on these backends (yet)
 
     def expose_port(self, port: int) -> str | None:
-        """Return a browser-reachable URL for the published preview port (ONLY the
-        dev-server port is exposed — containment). The container publishes PREVIEW_PORT
-        to a host port at create; we read the assignment + form the URL for THIS backend's
-        host (localhost locally; the remote Docker host's tailnet IP for gVisor — that
-        host is reachable over the proven keyless tailnet)."""
-        if port != PREVIEW_PORT:
-            return None  # nothing but the dev-server port is reachable
+        """Return a browser-reachable URL for a published USER port (containment:
+        only the curated USER_PORTS set is ever exposed; INTERNAL_PORTS are the
+        agent-server's own plumbing and never become user URLs). The container
+        publishes PUBLISHED_PORTS to host ports at create; we read the assignment
+        + form the URL for THIS backend's host (localhost locally; the remote
+        Docker host's tailnet IP for gVisor — reachable over the proven keyless
+        tailnet)."""
+        if port not in USER_PORTS:
+            return None  # unpublished or internal → never a user URL
         try:
             self._container.reload()
             ports = self._container.attrs.get("NetworkSettings", {}).get("Ports") or {}
-            binding = ports.get(f"{PREVIEW_PORT}/tcp")
+            binding = ports.get(f"{port}/tcp")
             if not binding:
                 return None  # not published (sealed session) → no preview
             host_port = binding[0]["HostPort"]
