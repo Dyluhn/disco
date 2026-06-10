@@ -34,14 +34,12 @@ def test_hard_deny_allows_ordinary_commands():
     assert hard_deny_reason("dd if=in.txt of=out.txt") is None  # files, not a device
 
 
-def test_hard_deny_protects_the_preview_server():
-    # E6: the agent must not kill the :8000 preview server (the cause of the stuck
-    # build) — it's refused, with a pointer to the controlled restart_preview path.
-    assert hard_deny_reason("pkill -f http.server") is not None
-    assert hard_deny_reason("pkill -9 -f 'python3.*http.server'") is not None
-    assert hard_deny_reason("killall http.server") is not None
-    assert "restart_preview" in (hard_deny_reason("pkill -f http.server") or "")
-    # but killing the agent's OWN unrelated process is fine
+def test_hard_deny_allows_preview_termination():
+    # BP-03: pkill http.server is no longer hard-denied (the agent owns its sessions)
+    assert hard_deny_reason("pkill -f http.server") is None
+    assert hard_deny_reason("pkill -9 -f 'python3.*http.server'") is None
+    assert hard_deny_reason("killall http.server") is None
+    # but killing unrelated processes remains allowed as always
     assert hard_deny_reason("pkill -f my_worker.py") is None
 
 

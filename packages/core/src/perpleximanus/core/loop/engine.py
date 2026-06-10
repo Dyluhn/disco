@@ -127,7 +127,7 @@ _PLAN_NUDGE = (
 # Read-only / information-gathering tools. A long unbroken streak of these (no edit
 # between) means the model is over-reading — supportively nudge it to commit the edit.
 _READ_ONLY_TOOLS = frozenset(
-    {"file_read", "file_list", "search", "extract", "preview_status", "browser"}
+    {"file_read", "file_list", "search", "extract", "server_status", "shell_view", "shell_wait", "browser"}
 )
 _READ_STREAK_LIMIT = 4  # reads-in-a-row before the "stop reading, act now" nudge
 # Execution mode: you've read enough — make the edit.
@@ -232,7 +232,9 @@ _NON_PRODUCTIVE_TOOLS = frozenset(
         "file_list",
         "search",
         "extract",
-        "preview_status",
+        "server_status",
+        "shell_view",
+        "shell_wait",
         "browser",
     }
 )
@@ -447,11 +449,11 @@ _SERVE_DESCRIPTION = (
     "Hand off a finished deliverable to the user. Call this when you've produced "
     "something they should open or download. Set `kind`='app' for a runnable "
     "result they open in the live preview (a built site / running dev server "
-    "rooted at `path`) — make sure a server is actually serving it (the workspace "
-    "auto-serves on the preview port; for a subfolder like dist/ start a server "
-    "yourself first). Set `kind`='files' for artifacts to download (`path` = the "
-    "file or folder). Give a short human `title`. This does NOT end the run — "
-    "serve the deliverable, verify it, THEN call finish."
+    "rooted at `path`) — make sure your server is serving on port 8000 (the "
+    "workspace auto-serves the 'preview' session there by default). Set "
+    "`kind`='files' for artifacts to download (`path` = the file or folder). "
+    "Give a short human `title`. This does NOT end the run — serve the "
+    "deliverable, verify it, THEN call finish."
 )
 _SERVE_SCHEMA = {
     "type": "object",
@@ -500,8 +502,8 @@ _FINISH_SCHEMA = {
                 "the literal `static` (checks index.html exists + parses) or "
                 "`static:<path>`; or for a RUNNING web app the literal `app` (GETs "
                 "http://localhost:8000/ and requires HTTP 200 + a non-empty body) or "
-                "`app:<url>` for another address — make sure the server is serving "
-                "first. If it fails, the finish is refused and you must fix the problem."
+                "`app:<url>` for another address — make sure your server is serving on "
+                "port 8000 first. If it fails, the finish is refused and you must fix the problem."
             ),
         },
     },
@@ -1066,7 +1068,7 @@ class AgentLoop:
         from ..security.analyzers import hard_deny_reason
 
         tc = action.tool_call
-        if tc is None or tc.tool_name not in ("shell", "code_exec"):
+        if tc is None or tc.tool_name not in ("shell", "shell_exec", "code_exec"):
             return None
         command = str(tc.arguments.get("command") or tc.arguments.get("code") or "")
         return hard_deny_reason(command)

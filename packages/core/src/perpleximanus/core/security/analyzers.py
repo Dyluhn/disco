@@ -98,17 +98,6 @@ _SHELL_DENY: list[tuple[re.Pattern[str], str]] = [
         re.compile(r"\brm\b[^\n;|&]*\s-[rfRF]*\s*(/|/\*)(\s|$)"),
         "recursive delete of the root filesystem",
     ),
-    # E6: protect the live preview. Killing the server on :8000 (the user's preview)
-    # is what broke the stuck build — the agent must not pkill/kill it. Use the
-    # controlled restart_preview path instead.
-    (
-        re.compile(r"\b(pkill|killall)\b[^\n;|&]*http\.server"),
-        "killing the preview server on :8000 (use restart_preview instead)",
-    ),
-    (
-        re.compile(r"\b(pkill|killall)\b[^\n;|&]*\b(8000|preview)\b"),
-        "killing the preview server on :8000 (use restart_preview instead)",
-    ),
 ]
 
 
@@ -176,8 +165,8 @@ class RuleBasedAnalyzer:
 
     def _score(self, action: ActionEvent) -> tuple[SecurityRisk, str]:
         tc = action.tool_call
-        if tc.tool_name == "shell":
-            # The tool contract guarantees the shell tool surfaces its raw command.
+        if tc.tool_name in {"shell", "shell_exec"}:
+            # The tool contract guarantees the shell tools surface their raw command.
             return _score_shell(str(tc.arguments.get("command", "")))
         return self._score_other(tc.tool_name, tc.arguments)
 
@@ -193,9 +182,9 @@ class RuleBasedAnalyzer:
         inferred = _L
         why = f"tool '{tool_name}'"
 
-        if any(k in name for k in ("read", "search", "fetch", "list", "view", "get")):
+        if any(k in name for k in ("read", "search", "fetch", "list", "view", "get", "status", "wait")):
             inferred, why = _L, f"read-only tool '{tool_name}'"
-        if any(k in name for k in ("write", "create", "edit", "save", "append")):
+        if any(k in name for k in ("write", "create", "edit", "save", "append", "kill")):
             inferred, why = _M, f"state-changing tool '{tool_name}'"
             path = str(args.get("path") or args.get("file") or args.get("filename") or "")
             if path.startswith("/") or ".." in path:
