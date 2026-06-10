@@ -1478,6 +1478,28 @@ class AgentLoop:
             # FINISHED/STUCK/ERROR/AWAITING_USER_*/no new work → idle.
             if not self._has_unprocessed_user_message(await self._events()):
                 return state
+        # Restore execution mode after a server restart. `self.mode` is in-memory only;
+        # a fresh loop always starts in PLANNING mode regardless of what the event log
+        # says. Scan the event log to determine whether the current lifecycle is in
+        # execution mode (plan was approved and not subsequently re-entered planning).
+        # This fixes post-restart resumes: without it, finish triggers PLAN_NUDGE.
+        if self.mode == OperatingMode.PLANNING and self._execution_mode != OperatingMode.PLANNING:
+            _boot_events = await self._events()
+            _plan_approved_seq: int | None = None
+            _reenter_planning_seq: int | None = None
+            for _e in _boot_events:
+                if isinstance(_e, StatusEvent):
+                    if _e.detail == "plan_approved":
+                        _plan_approved_seq = _e.seq or 0
+                    elif _e.detail == "planning":  # request_plan re-enters planning mode
+                        _reenter_planning_seq = _e.seq or 0
+            # In execution mode if: plan approved AND not re-entered planning after that.
+            if _plan_approved_seq is not None and (
+                _reenter_planning_seq is None
+                or _plan_approved_seq > _reenter_planning_seq
+            ):
+                self.mode = self._execution_mode
+
         await self._emit(StatusEvent(status=ConversationStatus.RUNNING))
 
         while True:

@@ -1,0 +1,6 @@
+
+Running 1 test using 1 worker
+
+  ✓  1 [firefox] › e2e-live/bp-12-resume.spec.ts:55:1 › stop → resume continues the same run to FINISHED (live) (1.9m)
+
+  1 passed (1.9m)

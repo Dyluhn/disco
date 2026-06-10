@@ -1,0 +1,40 @@
+============================================================
+BP-12 Integration Test: Build → Stop → Resume
+============================================================
+
+[1] Planning phase…
+  [model call 1] → ['submit_plan']
+    Status: AWAITING_PLAN_APPROVAL
+
+[2] Approving plan (loop will run step A then block on step B)…
+  [model call 2] → ['file_write']
+  [model call 3] → ['plan_step']  [signaled step_a_done]
+  [model call 4] → ['file_write']  [blocking on resume_gate…]
+    Step A file_write events in log: 1
+    Plan steps done before PAUSED injection: 1
+    Injecting StatusEvent(PAUSED)…
+  [model call 4] unblocked
+    Status after Stop: PAUSED
+    file_write events before resume: 2
+    plan_step(done) events before resume: 1
+
+[3] Calling resume_conversation()…
+    resume_conversation() → {'ok': True, 'status': 'RUNNING'}
+
+[4] Waiting for resumed loop to reach FINISHED…
+  [model call 5] → ['plan_step']
+  [model call 6] → ['finish']
+    Final status: FINISHED
+    file_write events final: 2
+    plan_step(done) events final: 2
+
+[5] Assertions…
+    PASS: final status is FINISHED
+    PASS: file_write count is 2 (no duplicates)
+    PASS: plan_step(done) 1 → 2 (no reset)
+    PASS: all plan steps marked done
+    PASS: exactly one 'Resumed by user.' environment message
+
+============================================================
+INTEGRATION TEST PASSED in 0.02s
+============================================================

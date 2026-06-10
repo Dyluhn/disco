@@ -158,18 +158,26 @@ bp-09: committed
   - test-record/bp-09/ui-spec.log
   - test-record/screenshots/bp-09/install-and-serve.png
   - agent-projects/gemini/bp-09-report.md
-bp-12: staged
+bp-12: committed
   - packages/agent-server/src/perpleximanus/agent_server/runtime.py
   - packages/agent-server/src/perpleximanus/agent_server/app.py
   - packages/agent-server/tests/test_resume.py
+  - packages/core/src/perpleximanus/core/loop/engine.py
   - frontend/src/api/agent.ts
+  - frontend/src/hooks/useBuildStream.ts
+  - frontend/src/components/BuildSurface.tsx
   - frontend/src/components/build/AgentStatusBar.tsx
   - frontend/src/components/build/AgentStatusBar.resume.test.tsx
-  - frontend/src/api/agent.resume.test.ts
   - frontend/src/types/agent.ts
   - frontend/e2e-live/bp-12-resume.spec.ts
+  - test-record/bp-12/_integration_runner.py
+  - test-record/bp-12/_restart_survival_runner.py
   - test-record/bp-12/integration-resume.log
   - test-record/bp-12/restart-survival.log
+  - test-record/bp-12/ui-spec.log
+  - test-record/bp-12/resume-ui-witness.json
+  - test-record/screenshots/bp-12/resume-paused.png
+  - test-record/screenshots/bp-12/resume-running.png
   - agent-projects/gemini/bp-12-report.md
 bp-13: staged
   - packages/agent-server/src/perpleximanus/agent_server/runtime.py

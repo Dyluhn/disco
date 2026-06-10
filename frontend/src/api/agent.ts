@@ -116,6 +116,17 @@ export async function killConversation(cid: string): Promise<void> {
   await agentSend("POST", `/conversations/${cid}/kill`);
 }
 
+/** Resume a PAUSED or interrupted-with-unfinished-plan conversation (BP-12). */
+export async function resumeConversation(
+  cid: string,
+): Promise<{ ok: boolean; status?: string; reason?: string }> {
+  if (!agentLive()) return { ok: true, status: "RUNNING" };
+  return agentSend<{ ok: boolean; status?: string; reason?: string }>(
+    "POST",
+    `/conversations/${cid}/resume`,
+  );
+}
+
 // ---- live: the conversation WebSocket (history-then-live) -------------------
 
 // Reconnect with exponential backoff. A dropped socket (network blip, server

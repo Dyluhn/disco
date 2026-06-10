@@ -100,6 +100,19 @@ from perpleximanus.tools.sandbox.port_owner import port_owners
 _LOG = logging.getLogger(__name__)
 
 
+def _has_unfinished_plan(events: list) -> bool:
+    """True when an approved plan exists but FINISHED was never recorded — the
+    conversation was interrupted mid-execution (server crash, manual cancel)."""
+    has_plan = any(isinstance(e, PlanEvent) for e in events)
+    if not has_plan:
+        return False
+    has_finished = any(
+        isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED
+        for e in events
+    )
+    return not has_finished
+
+
 def build_sandbox_service(settings: SandboxSettings) -> SandboxService:
     """Map the persisted SandboxSettings → the concrete SandboxBackend — the ONE place
     that knows the backend↔config mapping (settings drive the active backend). Podman is
@@ -1473,6 +1486,66 @@ class ConversationRuntime:
         execution to completion (the new full report supersedes the partial)."""
         self._cancel_flags.pop(conversation_id, None)
         self.kick(conversation_id)
+
+    async def resume_conversation(self, conversation_id: str) -> dict:
+        """Mode-agnostic, event-log-driven resume. Legal from PAUSED and IDLE-with-
+        unfinished-plan (an approved PlanEvent exists but FINISHED was never reached).
+
+        Returns {"ok": True, "status": "RUNNING"} on success or {"ok": False, "reason": …}
+        for illegal transitions — the HTTP route converts non-ok to 409.
+
+        Deep Research conversations dispatch to the EXISTING DR resume behavior unchanged
+        (mode check). Build/Research: flip PAUSED/IDLE → RUNNING in the event log so
+        loop.run() doesn't early-return on PAUSED, then kick via the standard task-spawn
+        path (same as send-message). kick() is idempotent — no second loop if one is live.
+        """
+        state = await self._store.get_state(conversation_id)
+        status = state.execution_status
+
+        if status == ConversationStatus.RUNNING:
+            return {"ok": False, "reason": "already_running"}
+        if status == ConversationStatus.FINISHED:
+            return {"ok": False, "reason": "conversation_finished"}
+        if status == ConversationStatus.ERROR:
+            return {"ok": False, "reason": "conversation_error"}
+
+        legal = status == ConversationStatus.PAUSED
+        if not legal and status == ConversationStatus.IDLE:
+            events = await self._store.get_events(conversation_id)
+            legal = _has_unfinished_plan(events)
+
+        if not legal:
+            return {"ok": False, "reason": f"illegal_state_{status.value}"}
+
+        # Append environment message exactly once so the model knows time passed and
+        # can re-orient from the plan recitation (GAP D's pinned objective+checklist
+        # is the re-orientation mechanism — no new machinery needed here).
+        await self._store.append(
+            conversation_id,
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(role="user", content="Resumed by user."),
+            ),
+        )
+
+        # Clear any lingering cancel flag from a prior Stop.
+        self._cancel_flags.pop(conversation_id, None)
+
+        surface = self._surface_of(conversation_id)
+        if surface == "deep_research":
+            # DR: _maybe_run_deep_research detects PAUSED and re-runs from the partial
+            # ReportEvent checkpoint — dispatch unchanged, do not touch DR internals.
+            pass
+        else:
+            # Build/Research: flip to RUNNING so loop.run() doesn't early-return on PAUSED.
+            # The loop emits another RUNNING at the top of run() — idempotent.
+            await self._store.append(
+                conversation_id,
+                StatusEvent(status=ConversationStatus.RUNNING, detail="resumed"),
+            )
+
+        self.kick(conversation_id)
+        return {"ok": True, "status": "RUNNING"}
 
     async def kill(self, conversation_id: str) -> None:
         """The KILL SWITCH (BoD §13.6) — the ultimate stop above the three security

@@ -1,0 +1,44 @@
+============================================================
+BP-12 Restart-Survival Test: Build → kill -TERM → restart → Resume
+============================================================
+
+[1] Starting build (planning phase)…
+  [model call 1] → ['submit_plan']
+    Status: AWAITING_PLAN_APPROVAL
+
+[2] Approving plan; loop will execute file_write step A then BLOCK…
+  [model call 2] → ['file_write']  [blocking — awaiting kill_gate…]
+    Status while model call is blocked: RUNNING
+    Status after simulated kill: RUNNING
+    Event log status (last) = RUNNING
+    file_write events at kill time: 0
+
+[3] Simulating server restart (fresh ConversationRuntime, same store)…
+
+[4] Running reconcile_orphaned_runs()…
+    Conversations reconciled: 1
+    Status after reconcile: PAUSED
+    PASS: status is PAUSED after reconcile
+
+[5] Calling resume_conversation()…
+    resume_conversation() → {'ok': True, 'status': 'RUNNING'}
+  [model call 2] → ['file_write']  [blocking — awaiting kill_gate…]
+  [model call 2] kill_gate released (this call may be cancelled)
+  [model call 3] → ['plan_step']
+  [model call 4] → ['file_write']
+  [model call 5] → ['plan_step']
+  [model call 6] → ['finish']
+
+[6] Assertions…
+    Final status: FINISHED
+    file_write events: 2
+    plan_step(done) events: 2
+    PASS: final status is FINISHED
+    PASS: file_write count is 2 (no runaway re-execution)
+    PASS: both plan steps marked done
+    PASS: plan-step count did not decrease after restart
+    PASS: resume environment message present
+
+============================================================
+RESTART-SURVIVAL TEST PASSED in 0.10s
+============================================================

@@ -114,7 +114,7 @@ export function AgentStatusBar({
       </div>
 
       <div className="flex items-center gap-hair">
-        {onResume && status === "PAUSED" && (
+        {onResume && (status === "PAUSED" || status === "IDLE") && (
           <button
             type="button"
             onClick={onResume}

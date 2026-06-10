@@ -360,6 +360,24 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         state = await store.get_state(conversation_id)
         return {"killed": True, "state": state.model_dump(mode="json")}
 
+    @app.post("/conversations/{conversation_id}/resume")
+    async def post_resume_conversation(conversation_id: str) -> dict:
+        """Resume a PAUSED or interrupted-with-unfinished-plan conversation.
+
+        Returns {"ok": true, "status": "RUNNING"} on success.
+        Returns 409 {"ok": false, "reason": …} when the transition is illegal
+        (RUNNING, FINISHED, ERROR, or any other non-resumable state).
+        """
+        if runtime is None:
+            raise HTTPException(
+                status_code=409,
+                detail={"ok": False, "reason": "runtime_unavailable"},
+            )
+        result = await runtime.resume_conversation(conversation_id)
+        if not result["ok"]:
+            raise HTTPException(status_code=409, detail=result)
+        return result
+
     @app.get("/conversations")
     async def list_conversations(
         owner_id: str = Query(default=DEFAULT_OWNER_ID),
@@ -711,7 +729,7 @@ async def _handle_frame(
         # Cooperative stop (the hard kill is POST /conversations/{id}/kill).
         await runtime.cancel(conversation_id)
     elif frame.type == "resume" and runtime is not None:
-        # Continue a stopped/incomplete run (explicit — never automatic on open).
-        # Re-kicks the loop; the deep-research driver re-runs the execution.
-        await runtime.resume(conversation_id)
+        # Continue a stopped/incomplete run — re-points at resume_conversation, the
+        # same mode-agnostic path the HTTP POST /resume route uses.
+        await runtime.resume_conversation(conversation_id)
     # pause: loop-level control, accepted here; wired with the UI later.

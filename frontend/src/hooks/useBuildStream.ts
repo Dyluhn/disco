@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
-import { subscribeConversation, type AgentHandle } from "@/api/agent";
+import { resumeConversation, subscribeConversation, type AgentHandle } from "@/api/agent";
 import { derivePlan, derivePlanProgress, type PlanView, type StepState } from "@/lib/buildTrace";
 import type {
   ActionEvent,
@@ -200,6 +200,10 @@ export interface BuildStream extends BuildStreamState {
   requestPlan: (text: string) => void;
   pickAlternative: (optionId: string) => void;
   resume: () => void;
+  /** True when the conversation is in a resumable state (PAUSED, or IDLE with an
+   *  unfinished approved plan). Used by the parent to decide whether to show the
+   *  Resume button for the interrupted-with-unfinished-plan case (BP-12). */
+  canResume: boolean;
 }
 
 export function useBuildStream(session: BuildSession | null): BuildStream {
@@ -241,10 +245,23 @@ export function useBuildStream(session: BuildSession | null): BuildStream {
       handle.current?.send({ type: "pick_alternative", option_id: optionId }),
     [],
   );
-  // Resume a PAUSED build (e.g. stopped, or interrupted by a server restart and
-  // reconciled to PAUSED). The backend clears the cancel flag, rehydrates the
-  // workspace, and re-kicks the loop — continuation, not a fresh run.
-  const resume = useCallback(() => handle.current?.send({ type: "resume" }), []);
+  // Resume a PAUSED or IDLE-with-unfinished-plan build (BP-12). Calls the HTTP
+  // POST /resume endpoint (mode-agnostic, legality-checked) — continuation, not
+  // a fresh run. The WS subscription replays history-then-live on subscribe, so
+  // events after the resume appear without a page reload.
+  const resume = useCallback(() => {
+    if (!session?.cid) return;
+    void resumeConversation(session.cid);
+  }, [session?.cid]);
+
+  // True when the conversation is resumable: PAUSED always; IDLE only when the
+  // event log contains an approved plan that was never finished (interrupted run).
+  const canResume = useMemo(
+    () =>
+      state.status === "PAUSED" ||
+      (state.status === "IDLE" && state.events.some((e) => e.kind === "plan")),
+    [state.status, state.events],
+  );
 
   const pendingAction =
     (state.pendingActionId &&
@@ -295,5 +312,6 @@ export function useBuildStream(session: BuildSession | null): BuildStream {
     requestPlan,
     pickAlternative,
     resume,
+    canResume,
   };
 }
