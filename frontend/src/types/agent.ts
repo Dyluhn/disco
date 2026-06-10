@@ -188,6 +188,8 @@ export interface ConversationState {
   pending_alternatives_id?: string | null;
   // The agent's free-form question message id, if status is AWAITING_USER_QUESTION.
   pending_question_id?: string | null;
+  // Runtime-overlaid sandbox liveness; absent for non-build surfaces.
+  extras?: { sandbox?: "active" | "suspended" };
 }
 
 // ---- WS frames (event-state §7) ---------------------------------------------

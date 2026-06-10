@@ -179,24 +179,30 @@ bp-12: committed
   - test-record/screenshots/bp-12/resume-paused.png
   - test-record/screenshots/bp-12/resume-running.png
   - agent-projects/gemini/bp-12-report.md
-bp-13: staged
+bp-13: committed
   - packages/agent-server/src/perpleximanus/agent_server/runtime.py
   - packages/agent-server/src/perpleximanus/agent_server/app.py
   - packages/agent-server/tests/test_lifecycle.py
   - packages/tools/src/perpleximanus/tools/sandbox/base.py
-  - packages/tools/src/perpleximanus/tools/sandbox/_container.py
   - packages/tools/src/perpleximanus/tools/sandbox/gvisor.py
   - packages/tools/src/perpleximanus/tools/sandbox/podman.py
   - packages/tools/src/perpleximanus/tools/sandbox/local.py
+  - packages/tools/src/perpleximanus/tools/sandbox/process.py
+  - packages/tools/src/perpleximanus/tools/sandbox/session.py
   - packages/tools/tests/test_sandbox.py
   - frontend/src/types/agent.ts
+  - frontend/src/hooks/useBuildStream.ts
+  - frontend/src/hooks/useBuildStream.suspend.test.ts
+  - frontend/src/components/BuildSurface.tsx
   - frontend/src/components/build/AgentStatusBar.tsx
   - frontend/src/components/build/AgentStatusBar.suspend.test.tsx
   - frontend/e2e-live/bp-13-suspend.spec.ts
   - test-record/bp-13/integration-suspend.log
   - test-record/bp-13/orphan-sweep.log
-  - test-record/screenshots/bp-13/badge-suspended.png
-  - test-record/screenshots/bp-13/badge-active-again.png
+  - test-record/bp-13/ui-spec.log
+  - test-record/bp-13/suspend-ui-witness.json
+  - test-record/screenshots/bp-13/suspend-badge.png
+  - test-record/screenshots/bp-13/suspend-resumed.png
   - agent-projects/gemini/bp-13-report.md
 bp-11: committed
   - frontend/src/lib/buildTrace.ts

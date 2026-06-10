@@ -21,6 +21,7 @@ import asyncio
 import shlex
 import shutil
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -167,3 +168,31 @@ class ProcessSandboxService:
 
     async def get(self, instance_id: str) -> SandboxInstance | None:
         return self._instances.get(instance_id)
+
+    async def list_live_instances(self) -> list[str]:
+        """Process backend has no container layer — returns empty."""
+        return []
+
+    async def destroy_by_conversation(self, conversation_id: str) -> None:
+        """Process backend has no containers — no-op."""
+
+    async def sweep_stale_workspaces(self, max_age_s: float = 7 * 86400) -> int:
+        """Delete per-instance workspace dirs under _root that haven't been touched in
+        max_age_s seconds (default 7 days). Returns the count removed. Safe to call at
+        startup — only removes dirs that are genuinely old (not fresh instances)."""
+        removed = 0
+        now = time.time()
+        try:
+            for child in self._root.iterdir():
+                if not child.is_dir():
+                    continue
+                try:
+                    age_s = now - child.stat().st_mtime
+                    if age_s >= max_age_s:
+                        shutil.rmtree(child, ignore_errors=True)
+                        removed += 1
+                except Exception:  # noqa: BLE001 — one bad dir must not abort the sweep
+                    pass
+        except Exception:  # noqa: BLE001 — root may not exist
+            pass
+        return removed

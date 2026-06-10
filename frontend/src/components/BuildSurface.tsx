@@ -173,6 +173,7 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
           <AgentStatusBar
             status={b.status}
             isolation={ISOLATION}
+            sandboxState={b.sandboxState ?? undefined}
             onKill={b.kill}
             onStop={b.cancel}
             onResume={b.canResume ? b.resume : undefined}

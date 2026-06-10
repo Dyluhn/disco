@@ -1,0 +1,13 @@
+=== BP-13 Integration: process backend suspend/resume ===
+[1] Created sandbox instance id=sbx_77f931ff9636492a901494cdf69d3035, wrote output.txt
+[1] _rehydrated contains cid: True
+[2] Running idle sweep (TTL=0s)...
+[2] Sweep suspended count=1
+[2] executor removed from _executors: OK
+[2] _rehydrated flag cleared: OK (regression test for conv_f3bdc842 bug class)
+[3] sandbox_state = None (None — no project record in mock)
+[4] workspace dirs after teardown: ['sbx_77f931ff9636492a901494cdf69d3035']
+[5] sweep_stale_workspaces removed=1
+[5] remaining dirs: []
+
+All assertions passed.

@@ -48,12 +48,15 @@ const ACTIVE: ConversationStatus[] = [
 export function AgentStatusBar({
   status,
   isolation,
+  sandboxState,
   onKill,
   onStop,
   onResume,
 }: {
   status: ConversationStatus;
   isolation: IsolationInfo;
+  /** Runtime sandbox liveness overlay ('active' | 'suspended' | undefined). */
+  sandboxState?: "active" | "suspended";
   onKill: () => void;
   /** Cluster 6: graceful stop (cooperative cancel — no sandbox teardown). */
   onStop?: () => void;
@@ -111,6 +114,14 @@ export function AgentStatusBar({
           <Shield className="size-3" aria-hidden />
           {isolation.tier}
         </span>
+        {sandboxState === "suspended" && (
+          <span
+            title="Sandbox suspended — workspace is saved; it will resume on your next message"
+            className="flex items-center gap-hair rounded-full border border-hairline px-inline py-px font-ui text-[0.7rem] text-text-muted"
+          >
+            suspended
+          </span>
+        )}
       </div>
 
       <div className="flex items-center gap-hair">

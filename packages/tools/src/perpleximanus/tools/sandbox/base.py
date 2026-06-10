@@ -129,3 +129,13 @@ class SandboxService(Protocol):
     ) -> SandboxInstance: ...
 
     async def get(self, instance_id: str) -> SandboxInstance | None: ...
+
+    async def list_live_instances(self) -> list[str]:
+        """Return the conversation_ids of all live sandbox containers on this backend.
+        Container backends return conversation_ids of running pmx-sbx-* containers;
+        process backend returns [] (no containers to inspect after restart)."""
+        return []
+
+    async def destroy_by_conversation(self, conversation_id: str) -> None:
+        """Destroy all containers (sandbox + egress sidecar) whose
+        pmx.conversation_id label matches. No-op on process backend."""

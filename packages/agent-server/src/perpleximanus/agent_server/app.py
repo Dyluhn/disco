@@ -98,10 +98,16 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         # On startup, reconcile orphaned RUNNING conversations — loops that died with
         # a previous server process. Without this they show 'RUNNING' forever in
         # History / the Deep Research read-only view (and may have leaked a sandbox).
+        idle_sweep_task: asyncio.Task | None = None
         if runtime is not None:
             with contextlib.suppress(Exception):  # never block boot on reconciliation
                 await runtime.reconcile_orphaned_runs()
+            idle_sweep_task = asyncio.create_task(runtime._idle_sweep_loop())
         yield
+        if idle_sweep_task is not None:
+            idle_sweep_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await idle_sweep_task
 
     app = FastAPI(
         title="perpleximanus agent-server", version="0.1.0", lifespan=lifespan
@@ -291,6 +297,13 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     @app.get("/conversations/{conversation_id}/state")
     async def get_state(conversation_id: str) -> dict:
         state = await store.get_state(conversation_id)
+        # Same sandbox-liveness overlay as the WS state frame (bp-13): the HTTP
+        # surface (agentLive fallback, polling clients, the live specs) must
+        # tell the same suspended/active story as the socket.
+        if runtime is not None:
+            sstate = runtime.sandbox_state(conversation_id)
+            if sstate is not None:
+                state.extras["sandbox"] = sstate
         return state.model_dump(mode="json")
 
     @app.get("/conversations/{conversation_id}/preview")
@@ -576,6 +589,11 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         # (1) On connect: one state snapshot, then replay events after last_seq,
         #     then live — all via the store's subscribe (history-then-live).
         state = await store.get_state(conversation_id)
+        # Overlay sandbox liveness so the UI can show "suspended" vs "active" badge.
+        if runtime is not None:
+            sstate = runtime.sandbox_state(conversation_id)
+            if sstate is not None:
+                state.extras["sandbox"] = sstate
         await websocket.send_json(WSServerFrame(type="state", state=state).model_dump(mode="json"))
         stream = await store.subscribe(conversation_id, after_seq=last_seq)
 

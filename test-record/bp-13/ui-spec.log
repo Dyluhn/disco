@@ -1,0 +1,8 @@
+
+Running 1 test using 1 worker
+
+  ✓  1 [firefox] › e2e-live/bp-13-suspend.spec.ts:88:1 › clean finish suspends the sandbox (badge) → follow-up rehydrates and continues (live) (5.2m)
+
+  Slow test file: [firefox] › e2e-live/bp-13-suspend.spec.ts (5.2m)
+  Consider running tests from slow files in parallel. See: https://playwright.dev/docs/test-parallel
+  1 passed (5.2m)

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from ._container import PREVIEW_PORT
@@ -46,11 +47,17 @@ class SandboxSession:
         *,
         owner_id: str = "local",
         conversation_id: str = "conv",
+        on_recreate: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._service = service
         self._spec = spec or SandboxSpec()
         self.owner_id = owner_id
         self.conversation_id = conversation_id
+        # Called (best-effort) AFTER a mid-session death is replaced by a fresh
+        # instance — the runtime hooks workspace rehydration here so the agent's
+        # retry lands on its files, not an empty dir (bp-13 §2: the conv_f3bdc842
+        # "all files were lost" production incident).
+        self._on_recreate = on_recreate
         self.spec = self._spec
         self._instance: SandboxInstance | None = None
         self._closed = False
@@ -128,6 +135,18 @@ class SandboxSession:
             self._kernel = None
         # the old box took the 'preview' session down with it — bring it back up
         self._spawn_auto_preview()
+        # Rehydrate the fresh (empty) workspace from the last snapshot, if the
+        # owner wired a hook. Outside the lock — the hook writes files back
+        # through this session, which must be able to _ensure() freely. Failures
+        # are logged, never raised: the agent can always rebuild by hand, which
+        # is exactly the (worse) status quo this hook exists to avoid.
+        if self._on_recreate is not None:
+            try:
+                await self._on_recreate()
+            except Exception:  # noqa: BLE001 — best-effort restore
+                _LOG.warning(
+                    "post-recreate rehydrate failed for %s", self.conversation_id, exc_info=True
+                )
 
     def _spawn_auto_preview(self) -> None:
         """Fire-and-forget the static auto-serve (BP-02): every fresh box comes up with

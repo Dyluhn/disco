@@ -43,7 +43,13 @@ class LocalSandboxService(GvisorSandboxService):
     def __init__(self, config: SandboxConfig | None = None, *, client: Any | None = None) -> None:
         super().__init__(config or default_local_config(), client=client)
 
-    def _start_container(self, spec: SandboxSpec, instance_id: str, host_workspace: str) -> Any:
+    def _start_container(
+        self,
+        spec: SandboxSpec,
+        instance_id: str,
+        host_workspace: str,
+        conversation_id: str = "",
+    ) -> Any:
         """Same Docker create as the parent, but the workspace is a per-run NAMED VOLUME
         (not the daemon bind-mount). `host_workspace` is unused on this tier — the
         volume is the portable choice across local Docker and rootless Podman."""
@@ -54,6 +60,7 @@ class LocalSandboxService(GvisorSandboxService):
         vol_name = f"{self._cfg.workspace_volume_prefix}-{instance_id}"
         mem_mb = spec.memory_mb or self._cfg.default_memory_mb
         cpu = spec.cpu or self._cfg.default_cpu
+        labels = {"pmx.conversation_id": conversation_id} if conversation_id else {}
 
         # FAIL-SAFE egress: the allowlisting proxy is wired for gVisor only so far, so
         # on this lowest-isolation tier a filtered box (an allowlist we can't enforce
@@ -79,6 +86,7 @@ class LocalSandboxService(GvisorSandboxService):
                 working_dir=self._cfg.container_workspace,
                 detach=True,
                 name=f"pmx-sbx-{instance_id}",
+                labels=labels,
             )
         except SandboxUnavailableError:
             raise

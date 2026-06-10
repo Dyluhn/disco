@@ -217,7 +217,9 @@ class PodmanSandboxService:
             self._client_cache = client
         return self._client_cache
 
-    def _start_container(self, spec: SandboxSpec, instance_id: str) -> tuple[Any, str]:
+    def _start_container(
+        self, spec: SandboxSpec, instance_id: str, conversation_id: str = ""
+    ) -> tuple[Any, str]:
         """The blocking Podman work for `create`, in a thread. Image-by-load (never
         pull); limits via the socket; typed errors on failure. Returns (container,
         name)."""
@@ -240,6 +242,7 @@ class PodmanSandboxService:
 
         try:
             client.volumes.create(name=vol_name)  # auto-created; persists past the container
+            labels = {"pmx.conversation_id": conversation_id} if conversation_id else {}
             container = client.containers.create(
                 image=self._cfg.image,
                 command=["sleep", "infinity"],  # keepalive
@@ -257,6 +260,7 @@ class PodmanSandboxService:
                 environment={},  # NO host env leaks in
                 working_dir=self._cfg.container_workspace,
                 name=name,
+                labels=labels,
                 detach=True,
             )
             container.start()
@@ -276,7 +280,9 @@ class PodmanSandboxService:
         self, spec: SandboxSpec, *, owner_id: str, conversation_id: str
     ) -> SandboxInstance:
         instance_id = f"sbx_{uuid.uuid4().hex}"
-        container, name = await asyncio.to_thread(self._start_container, spec, instance_id)
+        container, name = await asyncio.to_thread(
+            self._start_container, spec, instance_id, conversation_id
+        )
         instance = PodmanSandboxInstance(
             id=instance_id,
             owner_id=owner_id,
@@ -295,3 +301,52 @@ class PodmanSandboxService:
 
     async def get(self, instance_id: str) -> SandboxInstance | None:
         return self._instances.get(instance_id)
+
+    async def list_live_instances(self) -> list[str]:
+        """Return conversation_ids of all live pmx-sbx-* containers on this Podman backend.
+
+        Side effect (documented, deliberate — mirrors the gVisor backend): an
+        unlabeled pmx-sbx-* container predates the label scheme and cannot be
+        correlated to any conversation — unreachable garbage by construction,
+        reaped on sight."""
+        def _list() -> list[str]:
+            try:
+                client = self._client()
+                containers = client.containers.list(filters={"name": "pmx-sbx-"})
+                result = []
+                for c in containers:
+                    labels = getattr(c, "labels", None) or {}
+                    cid = labels.get("pmx.conversation_id")
+                    if cid:
+                        result.append(cid)
+                        continue
+                    try:  # legacy/unlabeled: reap on sight (see docstring)
+                        c.stop(timeout=2)
+                        c.remove(force=True)
+                    except Exception:  # noqa: BLE001 — best-effort
+                        pass
+                return result
+            except Exception:  # noqa: BLE001 — Podman unreachable: non-fatal
+                return []
+        return await asyncio.to_thread(_list)
+
+    async def destroy_by_conversation(self, conversation_id: str) -> None:
+        """Destroy all pmx-sbx-* containers labelled with this conversation_id."""
+        def _destroy() -> None:
+            try:
+                client = self._client()
+                for c in client.containers.list(
+                    all=True,
+                    filters={"label": f"pmx.conversation_id={conversation_id}"},
+                ):
+                    try:
+                        c.stop(timeout=2)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    try:
+                        c.remove(force=True)
+                    except Exception:  # noqa: BLE001
+                        pass
+            except Exception:  # noqa: BLE001 — best-effort
+                pass
+        await asyncio.to_thread(_destroy)

@@ -14,6 +14,7 @@ run via `asyncio.to_thread`.
 from __future__ import annotations
 
 import asyncio
+import logging
 import pathlib
 import posixpath
 import uuid
@@ -33,6 +34,8 @@ from ._container import (
 from .base import SandboxInstance, SandboxSpec, SandboxUnavailableError
 from .config import SandboxConfig, default_sandbox_config
 from .isolation import IsolationProfile, isolation_for
+
+_LOG = logging.getLogger(__name__)
 
 
 def _keepalive_command() -> list[str]:
@@ -180,7 +183,9 @@ class GvisorSandboxService:
         except Exception as exc:  # noqa: BLE001
             raise SandboxUnavailableError(f"could not query the sandbox image: {exc}") from exc
 
-    def _setup_filtered_egress(self, client: Any, spec: SandboxSpec, instance_id: str) -> Any:
+    def _setup_filtered_egress(
+        self, client: Any, spec: SandboxSpec, instance_id: str, conversation_id: str = ""
+    ) -> Any:
         """[HARDWARE-UNVERIFIED — live-verify on VM 201] Stand up the allowlisting
         egress for a "filtered" box and return (network, sidecar, env, network_name).
 
@@ -214,7 +219,10 @@ class GvisorSandboxService:
            read the sidecar's internal-net IP and hand the sandbox HTTP(S)_PROXY by
            IP."""
         net_name = f"pmx-egr-{instance_id}"
-        network = client.networks.create(net_name, driver="bridge", internal=True)
+        labels = {"pmx.conversation_id": conversation_id} if conversation_id else {}
+        # The network carries the same label as the containers so the orphan
+        # sweep can find it — its NAME is instance-keyed, not conversation-keyed.
+        network = client.networks.create(net_name, driver="bridge", internal=True, labels=labels)
         # (1) create on bridge → connect internal → start, so runsc sees BOTH NICs.
         sidecar = client.containers.create(
             image=self._cfg.image,
@@ -224,6 +232,7 @@ class GvisorSandboxService:
             mem_limit="256m",
             detach=True,
             name=net_name,
+            labels=labels,
         )
         network.connect(sidecar)  # the internal net the sandbox shares with it
         sidecar.start()
@@ -248,7 +257,9 @@ class GvisorSandboxService:
         env = proxy_env(proxy_ip, EGRESS_PROXY_PORT)
         return network, sidecar, env, net_name
 
-    def _start_container(self, spec: SandboxSpec, instance_id: str, host_workspace: str) -> Any:
+    def _start_container(
+        self, spec: SandboxSpec, instance_id: str, host_workspace: str, conversation_id: str = ""
+    ) -> Any:
         """All the blocking Docker work for `create`, run in a thread. Maps infra
         failures to typed errors with the real cause. `host_workspace` is a path on
         the DAEMON host (not necessarily local). Returns (container, egress_aux),
@@ -273,9 +284,10 @@ class GvisorSandboxService:
         net_kwargs: dict[str, Any] = {}
         environment: dict[str, str] = {}
         egress_network = egress_sidecar = None
+        labels = {"pmx.conversation_id": conversation_id} if conversation_id else {}
         if mode == "filtered":
             egress_network, egress_sidecar, environment, net_name = self._setup_filtered_egress(
-                client, spec, instance_id
+                client, spec, instance_id, conversation_id
             )
             net_kwargs = {"network": net_name}  # internal no-NAT net; proxy is the only route
             ports = None  # inbound preview not published on an internal net (live-verify TODO)
@@ -299,6 +311,7 @@ class GvisorSandboxService:
                 working_dir=self._cfg.container_workspace,
                 detach=True,
                 name=f"pmx-sbx-{instance_id}",
+                labels=labels,
                 **net_kwargs,
             )
         except SandboxUnavailableError:
@@ -328,7 +341,7 @@ class GvisorSandboxService:
         instance_id = f"sbx_{uuid.uuid4().hex}"
         host_workspace = posixpath.join(self._cfg.workspace_root, instance_id)
         container, egress_network, egress_sidecar = await asyncio.to_thread(
-            self._start_container, spec, instance_id, host_workspace
+            self._start_container, spec, instance_id, host_workspace, conversation_id
         )
         instance = self._instance_cls(
             id=instance_id,
@@ -349,3 +362,67 @@ class GvisorSandboxService:
 
     async def get(self, instance_id: str) -> SandboxInstance | None:
         return self._instances.get(instance_id)
+
+    async def list_live_instances(self) -> list[str]:
+        """Return conversation_ids of all live pmx-sbx-* containers on this backend.
+
+        Side effect (documented, deliberate): a pmx-sbx-* container WITHOUT a
+        pmx.conversation_id label predates the label scheme — it cannot be
+        correlated to any conversation, so it is unreachable garbage by
+        construction (session handles are in-memory; recreation always builds a
+        fresh instance). These legacy orphans are reaped on sight — they are
+        exactly the population that OOM-wedged VM-201 (34 unlabeled containers,
+        2026-06-10); a label-only sweep would skip every one of them."""
+        def _list() -> list[str]:
+            try:
+                client = self._client()
+                containers = client.containers.list(filters={"name": "pmx-sbx-"})
+                result = []
+                for c in containers:
+                    cid = (c.labels or {}).get("pmx.conversation_id")
+                    if cid:
+                        result.append(cid)
+                        continue
+                    try:  # legacy/unlabeled: reap on sight (see docstring)
+                        _LOG.info("reaping unlabeled legacy sandbox container %s", c.name)
+                        c.stop(timeout=2)
+                        c.remove(force=True)
+                    except Exception:  # noqa: BLE001 — best-effort
+                        pass
+                return result
+            except Exception:  # noqa: BLE001 — docker unreachable at startup is non-fatal
+                return []
+        return await asyncio.to_thread(_list)
+
+    async def destroy_by_conversation(self, conversation_id: str) -> None:
+        """Destroy all pmx-sbx-* and pmx-egr-* containers labelled with this conversation_id."""
+        def _destroy() -> None:
+            try:
+                client = self._client()
+                for c in client.containers.list(
+                    all=True,
+                    filters={"label": f"pmx.conversation_id={conversation_id}"},
+                ):
+                    try:
+                        c.stop(timeout=2)
+                    except Exception:  # noqa: BLE001 — already stopped is fine
+                        pass
+                    try:
+                        c.remove(force=True)
+                    except Exception:  # noqa: BLE001 — already gone is fine
+                        pass
+                # Clean up the egress internal network(s) by LABEL — networks are
+                # named pmx-egr-{instance_id}, which has NO relation to the
+                # conversation_id, so a name match can never work. Labels are set
+                # at create time (same pmx.conversation_id as the containers);
+                # containers were removed above, so the network is detachable.
+                for net in client.networks.list(
+                    filters={"label": f"pmx.conversation_id={conversation_id}"}
+                ):
+                    try:
+                        net.remove()
+                    except Exception:  # noqa: BLE001 — in-use or gone
+                        pass
+            except Exception:  # noqa: BLE001 — docker unreachable: best-effort
+                pass
+        await asyncio.to_thread(_destroy)

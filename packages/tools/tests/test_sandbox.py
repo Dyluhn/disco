@@ -99,3 +99,60 @@ async def test_process_backend_expose_port_defense():
         assert inst.expose_port(8899) is None
 
         await inst.destroy()
+
+
+async def test_session_recreate_fires_rehydrate_hook():
+    """bp-13 §2 (orchestrator fix): a mid-session death forces _recreate, which
+    must invoke the owner's on_recreate hook AFTER the fresh instance is up —
+    the runtime hangs workspace rehydration on it (the conv_f3bdc842 'all files
+    were lost' incident). The hook writes back THROUGH the session, so this also
+    proves the hook can't deadlock against the session's own lock."""
+    from perpleximanus.tools.sandbox.base import SandboxUnavailableError
+
+    svc = ProcessSandboxService()
+    hook_runs: list[int] = []
+
+    async def rehydrate() -> None:
+        hook_runs.append(1)
+        # Write through the session itself — like rehydrate_workspace does.
+        await session.write_file("rehydrated.txt", b"restored-from-snapshot")
+
+    session = SandboxSession(
+        svc, owner_id="local", conversation_id="c-recreate", on_recreate=rehydrate
+    )
+    await session.write_file("pre.txt", b"x")  # generation 1 is live
+    gen1 = session.generation
+
+    # Kill the box out from under the session: the next op sees the typed death.
+    async def _dead(*_a, **_k):
+        raise SandboxUnavailableError("box died mid-session")
+
+    session._instance.read_file = _dead  # type: ignore[method-assign]
+
+    with pytest.raises(SandboxError, match="re-created"):
+        await session.read_file("pre.txt")
+
+    assert session.generation == gen1 + 1  # a fresh instance was created
+    assert hook_runs == [1]  # the hook fired exactly once
+    # ...and its write landed on the NEW instance (rehydration round trip).
+    assert await session.read_file("rehydrated.txt") == b"restored-from-snapshot"
+    await session.destroy()
+
+
+async def test_session_no_hook_recreate_still_works():
+    """Without a hook (research surface / tests), recreate behaves exactly as
+    before — no new failure mode introduced."""
+    from perpleximanus.tools.sandbox.base import SandboxUnavailableError
+
+    svc = ProcessSandboxService()
+    session = SandboxSession(svc, owner_id="local", conversation_id="c-nohook")
+    await session.write_file("pre.txt", b"x")
+
+    async def _dead(*_a, **_k):
+        raise SandboxUnavailableError("box died mid-session")
+
+    session._instance.read_file = _dead  # type: ignore[method-assign]
+    with pytest.raises(SandboxError, match="re-created"):
+        await session.read_file("pre.txt")
+    assert session.generation == 2
+    await session.destroy()

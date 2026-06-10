@@ -20,12 +20,14 @@ import json
 import logging
 import os
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import Any
 
 from perpleximanus.core import (
     DEFAULT_OWNER_ID,
     ActionEvent,
     ConversationStatus,
+    EventFilter,
     EventSource,
     LLMMessage,
     LLMSummarizingCondenser,
@@ -534,6 +536,7 @@ class ConversationRuntime:
                 self._sandbox_service_now(),
                 self._build_sandbox_spec(),
                 conversation_id=conversation_id,
+                on_recreate=lambda: self._rehydrate_after_recreate(conversation_id),
             )
         return self._pending_sessions[conversation_id]
 
@@ -554,6 +557,9 @@ class ConversationRuntime:
                 self._sandbox_service_now(),
                 self._build_sandbox_spec(),
                 conversation_id=conversation_id,
+                # Mid-run death (transport drop / OOM): restore the last snapshot
+                # into the fresh instance before the agent retries (bp-13 §2).
+                on_recreate=lambda: self._rehydrate_after_recreate(conversation_id),
             )
         executor = DefaultToolExecutor(
             build_default_registry(),
@@ -775,11 +781,20 @@ class ConversationRuntime:
             # + the idle preview server ONLY on a clean FINISH (and only when the
             # snapshot was durably written). A STUCK/ERROR/PAUSED build keeps its
             # sandbox so a resume can pick up exactly where it left off.
-            if (
-                state.execution_status == ConversationStatus.FINISHED
-                and self._config_store.load().projects.projects_root.strip()
-            ):
-                await self._teardown_sandbox(conversation_id)
+            if state.execution_status == ConversationStatus.FINISHED:
+                if self._config_store.load().projects.projects_root.strip():
+                    await self._teardown_sandbox(conversation_id)
+                else:
+                    # Canary, not an error: without durable storage we must NOT
+                    # destroy the only copy of the work — but a silently-live
+                    # sandbox looks identical to a suspend bug (it cost two live
+                    # spec runs to find this). Say it plainly in the log.
+                    _LOG.warning(
+                        "suspend skipped for %s: projects_root unconfigured — "
+                        "sandbox stays live (configure Build project storage in "
+                        "Settings to enable suspend-on-finish)",
+                        conversation_id,
+                    )
         return state
 
     async def _teardown_sandbox(self, conversation_id: str) -> None:
@@ -855,7 +870,60 @@ class ConversationRuntime:
             cursor = str((int(cursor) if cursor else 0) + len(ids))
         if reconciled:
             _LOG.info("reconciled %d orphaned RUNNING conversation(s) on startup", reconciled)
+
+        # Orphan container sweep: destroy backend containers for conversations that are
+        # terminal or suspended. These accumulate when sandboxes are not torn down cleanly
+        # (transport drops, crashes, etc.) and consume memory/GPU on the sandbox host.
+        # The sweep also covers pmx-egr-* egress sidecars (same label).
+        _TERMINAL = {
+            ConversationStatus.FINISHED,
+            ConversationStatus.STUCK,
+            ConversationStatus.ERROR,
+            ConversationStatus.PAUSED,
+            # IDLE = stopped-by-user (the PRIMARY live stop path — bp-12). After a
+            # restart its container is unreachable garbage like any other: handles
+            # are in-memory and a resume always builds a FRESH instance.
+            ConversationStatus.IDLE,
+        }
+        await self._sweep_orphan_containers(owner_id=owner_id, terminal_statuses=_TERMINAL)
+
         return reconciled
+
+    async def _sweep_orphan_containers(
+        self,
+        *,
+        owner_id: str,
+        terminal_statuses: set,
+    ) -> int:
+        """Destroy containers for conversations that are terminal or suspended.
+        Called from reconcile_orphaned_runs at startup. Returns count destroyed."""
+        service = self._sandbox_service_now()
+        live_cids = await service.list_live_instances()
+        destroyed = 0
+        for cid in live_cids:
+            with contextlib.suppress(Exception):
+                if not await self._store.conversation_exists(cid):
+                    await service.destroy_by_conversation(cid)
+                    destroyed += 1
+                    continue
+                state = await self._store.get_state(cid)
+                if state.execution_status in terminal_statuses:
+                    await service.destroy_by_conversation(cid)
+                    _LOG.info(
+                        "swept orphan container cid=%s status=%s",
+                        cid,
+                        state.execution_status.value,
+                    )
+                    destroyed += 1
+        # Process backend: sweep workspace dirs older than 7 days (no container layer).
+        if isinstance(service, ProcessSandboxService):
+            with contextlib.suppress(Exception):
+                stale = await service.sweep_stale_workspaces()
+                if stale:
+                    _LOG.info("swept %d stale process workspace dir(s)", stale)
+        if destroyed:
+            _LOG.info("swept %d orphan container(s) at startup", destroyed)
+        return destroyed
 
     # ---- auto-suspend (lifecycle G): live only while a UI is watching ----------
 
@@ -910,6 +978,67 @@ class ConversationRuntime:
             await self._maybe_snapshot(conversation_id)
             await self._teardown_sandbox(conversation_id)
             _LOG.info("auto-suspended idle conversation %s (no UI connected)", conversation_id)
+
+    def sandbox_state(self, conversation_id: str) -> str | None:
+        """Return 'active' when a live executor or pending session exists for
+        conversation_id. Return 'suspended' when a snapshot record exists (the sandbox
+        was torn down but is restorable). Return None when no sandbox context exists
+        (research surface / no snapshot)."""
+        if conversation_id in self._executors or conversation_id in self._pending_sessions:
+            return "active"
+        store = self._project_store_now()
+        if store is None:
+            return None
+        try:
+            record = store.get(conversation_id)
+        except Exception:  # noqa: BLE001 — unreadable manifest: treat as absent
+            return None
+        return "suspended" if record is not None else None
+
+    async def sweep_idle_once(self) -> int:
+        """Single idle-TTL sweep pass: suspend all tracked sandboxes that are not
+        RUNNING, have no live UI connections, and whose last event is older than
+        PMX_IDLE_SUSPEND_S (default 1800 s). Returns the count suspended.
+
+        Exposed so unit tests can drive it directly without sleeping."""
+        ttl_s = float(os.environ.get("PMX_IDLE_SUSPEND_S", "1800"))
+        suspended = 0
+        for cid in list(self._executors):
+            with contextlib.suppress(Exception):
+                state = await self._store.get_state(cid)
+                if state.execution_status is ConversationStatus.RUNNING:
+                    continue
+                if self._connections.get(cid, 0) > 0:
+                    continue
+                # Use the last event's timestamp from the store — no parallel clock.
+                events = await self._store.get_events(
+                    cid,
+                    EventFilter(after_seq=state.last_seq - 1) if state.last_seq > 0 else None,
+                )
+                if not events:
+                    continue
+                last_ts = events[-1].timestamp
+                if last_ts.tzinfo is None:
+                    last_ts = last_ts.replace(tzinfo=UTC)
+                idle_s = (datetime.now(tz=UTC) - last_ts).total_seconds()
+                if idle_s < ttl_s:
+                    continue
+                await self._suspend(cid)
+                _LOG.info("suspended idle sandbox cid=%s idle_s=%.0f", cid, idle_s)
+                suspended += 1
+        return suspended
+
+    async def _idle_sweep_loop(self) -> None:
+        """Background task: periodically sweep idle sandboxes. Created by the app
+        lifespan alongside reconcile_orphaned_runs; cancelled cleanly on shutdown."""
+        while True:
+            interval_s = float(os.environ.get("PMX_IDLE_SWEEP_INTERVAL_S", "60"))
+            try:
+                await asyncio.sleep(interval_s)
+            except asyncio.CancelledError:
+                return
+            with contextlib.suppress(Exception):
+                await self.sweep_idle_once()
 
     async def _maybe_run_deep_research(self, conversation_id: str) -> None:
         """The Deep Research driver. Inspects the conversation state to decide
@@ -1247,6 +1376,20 @@ class ConversationRuntime:
                 conversation_id,
                 f"Could not restore project files: {exc}",
             )
+
+    async def _rehydrate_after_recreate(self, conversation_id: str) -> None:
+        """Mid-run recreate (transport drop / OOM-killed box): SandboxSession
+        replaced a dead instance with a FRESH one whose workspace is EMPTY — the
+        conv_f3bdc842 production incident ("all files were lost"). Clear the
+        idempotency flag and rehydrate so the agent's retry lands on its files,
+        not a bare dir. _maybe_rehydrate writes through the executor's session,
+        which already points at the new instance — no extra plumbing needed.
+        Best-effort: with no snapshot yet (first run), there is nothing to
+        restore and the agent rebuilds, exactly as before."""
+        rehydrated = getattr(self, "_rehydrated", None)
+        if rehydrated is not None:
+            rehydrated.discard(conversation_id)
+        await self._maybe_rehydrate(conversation_id)
 
     async def _maybe_snapshot(self, conversation_id: str) -> None:
         """Mirror the live workspace out to disk + update the manifest."""

@@ -56,6 +56,15 @@ export interface BuildStreamState {
   pendingPlanId: string | null;
   pendingAlternativesId: string | null;
   pendingQuestionId: string | null;
+  /** Runtime sandbox liveness from the state frame's extras overlay (bp-13):
+   *  'suspended' = container torn down, workspace saved (badge);
+   *  'active' = live; null = unknown / no sandbox context. */
+  sandboxState: "active" | "suspended" | null;
+  /** The state frame's last_seq at (re)connect. Events replayed from history
+   *  have seq <= this; only GENUINELY NEW status events (seq beyond the frame)
+   *  may clear the suspended badge — a fresh page load replays the whole run,
+   *  and its historical RUNNING events must not erase what the frame just said. */
+  frameSeq: number;
   error: string | null;
 }
 
@@ -67,6 +76,8 @@ const initial: BuildStreamState = {
   pendingPlanId: null,
   pendingAlternativesId: null,
   pendingQuestionId: null,
+  sandboxState: null,
+  frameSeq: 0,
   error: null,
 };
 
@@ -100,6 +111,8 @@ function reducer(state: BuildStreamState, action: Action): BuildStreamState {
       pendingPlanId: f.state.pending_plan_id,
       pendingAlternativesId: f.state.pending_alternatives_id ?? null,
       pendingQuestionId: f.state.pending_question_id ?? null,
+      sandboxState: f.state.extras?.sandbox ?? null,
+      frameSeq: f.state.last_seq ?? 0,
     };
   }
   if (f.type === "file_stream") {
@@ -144,6 +157,16 @@ function reducer(state: BuildStreamState, action: Action): BuildStreamState {
         ...state,
         events,
         status,
+        // A LIVE RUNNING transition means the sandbox is live (or being
+        // created) — never let a stale "suspended" badge sit over a working
+        // build. But a fresh connect REPLAYS history (seq <= frameSeq): those
+        // RUNNING events are the past, and must not erase the state frame's
+        // overlay (the badge vanished on every page reload until run 3 of the
+        // live spec caught it). Events without a seq are live by definition.
+        sandboxState:
+          status === "RUNNING" && (f.event.seq == null || f.event.seq > state.frameSeq)
+            ? null
+            : state.sandboxState,
         pendingActionId:
           status === "WAITING_FOR_CONFIRMATION"
             ? (f.event.detail ?? state.pendingActionId)
