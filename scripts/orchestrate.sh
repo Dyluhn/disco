@@ -30,10 +30,13 @@
 #   status
 #       One line per active order: age, log size, last-growth, tmux liveness.
 #
-# Worker presets (model choice per bakeoff/SUMMARY.md):
-#   flash       gemini -m gemini-3-flash-preview --yolo   (implementation)
-#   pi-minimax  pi … minimax/minimax-m3                   (spec drafts / triage fallback)
-#   pi-free     pi … openai/gpt-oss-120b:free             (recon)
+# Worker presets (allowed worker set, Dylan 2026-06-10: free models / Gemini /
+# Sonnet / Claude — paid OpenRouter models via pi are REVOKED):
+#   flash       gemini -m gemini-3-flash-preview --yolo   (implementation, POINTER brief)
+#   sonnet      claude --model sonnet headless            (backup implementation + vision)
+#   pi-free     pi … openai/gpt-oss-120b:free             (recon / low-stakes chores)
+# Briefs are delivered as POINTER prompts (worker told to READ the brief file):
+# Flash silently returns EMPTY output on ~9KB inline -p prompts (bp-08 saga).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -80,6 +83,14 @@ order_known() { all_orders | grep -qx "$1"; }
 # fresh test-record/ subdirs were silently unstageable).
 dirty_files() { git -C "$REPO_ROOT" status --porcelain -uall | awk '{print $2}'; }
 
+# NEVER `dirty_files | grep -q` under pipefail: -q exits at the first match and
+# closes the pipe, awk dies with SIGPIPE (141), and pipefail turns the SUCCESSFUL
+# match into pipeline failure — so a dirty file randomly reads as clean. That race
+# is how bp-08's commit silently dropped 8 manifest files (and the likely mechanism
+# behind the BP-06/07/10 dangling-diff incidents). Consume the whole stream first
+# (command substitution), THEN match. -F: paths are literals, not regexes.
+is_dirty() { grep -qxF -- "$1" <<<"$(dirty_files)"; }
+
 # Which OTHER LIVE order (active dispatch, or sharing this dirty file) claims <file>?
 other_claimant() { # <file> <this-order>
   local f="$1" me="$2" o
@@ -88,7 +99,7 @@ other_claimant() { # <file> <this-order>
     if order_files "$o" | grep -qx "$f"; then
       # claimant if that order has an active dispatch, or the shared file is
       # dirty (the hunks cannot be attributed mechanically)
-      if [ -e "$ACTIVE/$o.env" ] || dirty_files | grep -qx "$f"; then
+      if [ -e "$ACTIVE/$o.env" ] || is_dirty "$f"; then
         echo "$o"; return 0
       fi
     fi
@@ -96,15 +107,24 @@ other_claimant() { # <file> <this-order>
   return 1
 }
 
+# POINTER prompt (not the brief inlined): Flash exits 0 with EMPTY output on ~9KB
+# inline -p prompts — bp-08 stalled twice on the inline form, succeeded immediately
+# on the pointer form. The worker reads the brief with its own file tool.
+pointer_prompt() { # <brief-file> -> pointer text on stdout
+  printf 'Read the file %s in this repo NOW — it is your FULL task brief. Execute it completely, including writing the report file it specifies. Do not ask questions; do not stop until every item in the brief is done.' "$1"
+}
+
 worker_cmd() { # <preset> <brief-file> -> command string on stdout
-  local brief="$2"
+  local brief="$2" ptr; ptr="$(pointer_prompt "$brief")"
   case "$1" in
     flash)
-      printf 'gemini -m gemini-3-flash-preview --yolo -p "$(cat %q)"' "$brief" ;;
-    pi-minimax)
-      printf 'pi --provider openrouter --model minimax/minimax-m3 -p --no-session -nt -ne -ns -nc "$(cat %q)"' "$brief" ;;
+      printf 'gemini -m gemini-3-flash-preview --yolo -p %q' "$ptr" ;;
+    sonnet)
+      # Sonnet = Dylan's designated backup when Gemini flakes (+ vision). Headless
+      # Claude Code; skip-permissions mirrors gemini --yolo for unattended work.
+      printf 'claude --model sonnet --dangerously-skip-permissions -p %q' "$ptr" ;;
     pi-free)
-      printf 'pi --provider openrouter --model openai/gpt-oss-120b:free -p --no-session -nt -ne -ns -nc "$(cat %q)"' "$brief" ;;
+      printf 'pi --provider openrouter --model openai/gpt-oss-120b:free -p --no-session -nt -ne -ns -nc %q' "$ptr" ;;
     *) return 1 ;;
   esac
 }
@@ -139,7 +159,7 @@ cmd_dispatch() {
   done < <(order_files "$order")
 
   local cmd; cmd=$(worker_cmd "$worker" "$brief") || fail_reason "$order" "unknown-worker" \
-    "Dispatch refused: unknown worker preset '$worker'. Valid presets: flash, pi-minimax, pi-free."
+    "Dispatch refused: unknown worker preset '$worker'. Valid presets: flash, sonnet, pi-free."
 
   # a staged (declared-but-untouched) order becomes live the moment a worker is
   # let loose on its files — flip BEFORE launch so the gates see it immediately
@@ -255,7 +275,7 @@ cmd_commit() {
 
   local f o
   while IFS= read -r f; do
-    dirty_files | grep -qx "$f" || continue
+    is_dirty "$f" || continue
     for o in $(live_orders); do
       [ "$o" = "$order" ] && continue
       if order_files "$o" | grep -qx "$f"; then
@@ -273,7 +293,7 @@ cmd_commit() {
 
   local staged=0
   while IFS= read -r f; do
-    if dirty_files | grep -qx "$f"; then
+    if is_dirty "$f"; then
       git -C "$REPO_ROOT" add -- "$f"
       staged=$((staged + 1))
     fi

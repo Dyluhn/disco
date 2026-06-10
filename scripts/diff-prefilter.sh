@@ -49,10 +49,10 @@ $diff_text"
 errf="$(mktemp)"; trap 'rm -f "$errf"' EXIT
 export PMX_PREFILTER_PROMPT="$prompt"   # consumed by the local-Qwen fallback
 
-# ---- primary: MiniMax M3 via pi -----------------------------------------------
-leads="$(pi --provider openrouter --model minimax/minimax-m3 -p --no-session -nt -ne -ns -nc \
+# ---- primary: gpt-oss-120b:free via pi (paid pi models REVOKED 2026-06-10) -----
+leads="$(pi --provider openrouter --model openai/gpt-oss-120b:free -p --no-session -nt -ne -ns -nc \
         "$prompt" 2>"$errf" | grep -v '^Warning: No models match' || true)"
-model="minimax-m3"
+model="gpt-oss-120b:free"
 
 # ---- fallback: local Qwen 27B (keyless, llama-server :18080) --------------------
 if [ -z "$(printf '%s' "$leads" | tr -d '[:space:]')" ]; then
@@ -71,7 +71,7 @@ PY
 fi
 
 if [ -z "$(printf '%s' "$leads" | tr -d '[:space:]')" ]; then
-  echo "PREFILTER ERROR: neither MiniMax nor local Qwen returned output" >&2
+  echo "PREFILTER ERROR: neither gpt-oss-120b:free nor local Qwen returned output" >&2
   sed 's/^/  stderr: /' "$errf" >&2 || true
   exit 1
 fi

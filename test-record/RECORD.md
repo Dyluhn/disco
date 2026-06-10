@@ -145,3 +145,20 @@ All iterations made REAL in-place edits to the existing file (the framework fix 
 ## Site 2 — EE gamified ("EE Quest") (conv_c35043df)
 - v1 ✅ BUILT (47KB, 0 errors): Games/Leaderboard/Lessons tabs; Ohm's Law Challenge (V/I/R triangle, solve-the-missing-value, score+streak+timer — TESTED playable) + Resistor Colors game; XP/Level system; localStorage leaderboard. Screenshots: site2-v1.png, site2-v1-game.png, site2-v1-leaderboard.png, site2-v1-lessons.png.
 - v2 iterating (add a 3rd game + name-entry leaderboard)…
+
+## Site 2 — EE Quest: 3 ITERATIONS COMPLETE (clean rebuild conv_d4789c6e / lineage 7820b3ef→v2→d4789c6e)
+Re-ran cleanly under the 3 newly-committed framework fixes (plan-scoping, snapshot-on-terminal, force-commit).
+
+- **v1** built from scratch (41868 B, FINISHED): Games/Leaderboard/Lessons; Ohm's Law + Resistor Colors games; XP/Level; localStorage leaderboard.
+- **v2** iterated → +Series-vs-Parallel game + initials high-score leaderboard. **18 file_replace_lines edits, ZERO nudges** — the model edited a 1000+-line file in place entirely on its own. Also FIXED a v1 JS bug ("lexical declaration 'v' before initialization"). Renders 0 errors. (s2f-v2-AFTER.png; deliverable backed up at test-record/site2-deliverable/index-v2.html)
+- **v3** iterated → +Daily Challenge (random question, double XP, celebratory anim) + Difficulty selector (Easy/Medium/Hard → timer + multiplier). 39835→53146 B. **9 file_replace_lines edits, 1 soft nudge (obeyed), 0 code_exec.** Clean lifecycle RUNNING→AWAITING_PLAN_APPROVAL→RUNNING→FINISHED → snapshotted. Renders 0 errors. (s2f-v3-AFTER.png, s2f-v3-games.png — shows all 3 games + difficulty + Daily Challenge live)
+
+All three iterations made REAL in-place line-targeted edits. Combined with Site 1's 3 iterations, the framework editing fix is proven on BOTH sites, small-model-friendly.
+
+### NEW framework finding this session (logged, not yet fixed)
+The stateful CodeAct runner re-serializes its ENTIRE accumulated dill namespace every cell. After ~43 code_exec calls in one conversation the pickle ballooned 41KB→346KB and each call crept toward the 295s exec timeout — making a build look "hung" (it was alive, just thrashing on serialization). The EDITING path was never at fault. Clean workarounds proven: (a) a fresh conversation resets codeact state; (b) steering edits toward file_* tools (not code_exec) avoids feeding the snowball. Real fix candidate: cap/prune the pickled namespace (drop large data objects; keep funcs/imports), or LRU-evict.
+
+### Framework fixes committed this session
+- c430275 scope plan-step tracking to the current plan (3 readers) — fixes post-re-plan "all done" confusion → STUCK
+- 56526be snapshot workspace on ANY terminal state (not only FINISHED) — a STUCK/ERROR/PAUSED build no longer silently discards written files
+- e48c5bc withhold read tools after ignored read-streak nudges (force-commit) — escalate from asking to constraining the action space; +4 tests

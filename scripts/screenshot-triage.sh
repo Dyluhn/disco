@@ -2,10 +2,12 @@
 # scripts/screenshot-triage.sh — first-pass screenshot triage on a cheap vision model.
 #
 # Implements the Job 2 cut from the bake-off (bakeoff/RESULTS-vision.md: Gemini 3
-# Flash 4/4, MiniMax M3 4/4, including both adversarial failure shots). The cheap
-# model judges every screenshot against an EXPLICIT expected state; Claude sees only
-# escalations. The MiniMax-via-pi fallback is MANDATORY, not optional — Flash's
-# sibling Pro tier hit a hard quota wall mid-bake-off (TerminalQuotaError).
+# Flash 4/4). The cheap model judges every screenshot against an EXPLICIT expected
+# state; the orchestrator sees only escalations. A fallback is MANDATORY, not
+# optional — Flash's sibling Pro tier hit a hard quota wall mid-bake-off
+# (TerminalQuotaError). Fallback = Sonnet (headless Claude Code, Read-only): the
+# MiniMax-via-pi route was REVOKED 2026-06-10 (no paid OpenRouter models via pi;
+# Dylan: "for vision, you can utilize sonnet").
 #
 # Usage:
 #   scripts/screenshot-triage.sh <shot.png> "<expected-state sentence>" [--name slug]
@@ -48,16 +50,17 @@ trap 'rm -f "$errf"' EXIT
 out="$(gemini -m gemini-3-flash-preview -p "@$shot $prompt" 2>"$errf" || true)"
 model="gemini-3-flash-preview"
 
-# ---- mandatory fallback: MiniMax M3 via pi (quota wall is a proven event) ------
+# ---- mandatory fallback: Sonnet via headless claude (quota wall is a proven event)
 if [ -z "$(printf '%s' "$out" | tr -d '[:space:]')" ] \
    || grep -Eqi 'TerminalQuotaError|RESOURCE_EXHAUSTED|MODEL_CAPACITY_EXHAUSTED|status (429|5[0-9][0-9])' "$errf"; then
-  out="$(pi --provider openrouter --model minimax/minimax-m3 -p --no-session -nt -ne -ns -nc \
-        "@$shot $prompt" 2>"$errf" | grep -v '^Warning: No models match' || true)"
-  model="minimax-m3 (fallback)"
+  out="$(claude --model sonnet --allowedTools Read -p \
+        "Read the screenshot image at $shot, then answer exactly as instructed: $prompt" \
+        2>"$errf" || true)"
+  model="sonnet (fallback)"
 fi
 
 if [ -z "$(printf '%s' "$out" | tr -d '[:space:]')" ]; then
-  echo "TRIAGE ERROR: neither Flash nor MiniMax returned output for $shot" >&2
+  echo "TRIAGE ERROR: neither Flash nor Sonnet returned output for $shot" >&2
   sed 's/^/  stderr: /' "$errf" >&2 || true
   exit 1
 fi

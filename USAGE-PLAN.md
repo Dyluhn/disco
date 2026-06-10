@@ -22,12 +22,13 @@ self-preserve.
   was always the expensive part.
 
 ### 2. Screenshot triage
-- **Who now:** Gemini 3 Flash, with MiniMax M3 via pi as mandatory quota fallback
-  (`scripts/screenshot-triage.sh`). Judged against an explicit expected-state string
-  written by the spec author, never "does this look ok".
-- **Why:** RESULTS-vision.md — Flash **4/4**, MiniMax **4/4**, both catching the two
-  adversarial cases (caption-vs-blank contradiction, NOT-WIRED banner vs decoy
-  "Connected" dots).
+- **Who now (REWIRED 2026-06-10):** Gemini 3 Flash, with **Sonnet (headless claude)**
+  as mandatory quota fallback (`scripts/screenshot-triage.sh`). The MiniMax-via-pi
+  fallback is REVOKED — no paid OpenRouter models via pi. Judged against an explicit
+  expected-state string written by the spec author, never "does this look ok".
+- **Why:** RESULTS-vision.md — Flash **4/4** (MiniMax also went 4/4, retained as data
+  only), catching the two adversarial cases (caption-vs-blank contradiction,
+  NOT-WIRED banner vs decoy "Connected" dots).
 - **Escalation to me** (`review-queue/screenshots/`): FAIL verdict, LOW confidence,
   malformed output, or PASS-with-no-visible-cues. Auto-passes are logged, not shown.
 - **Involvement removed: ~80% of screenshot reviewing.** I previously viewed every
@@ -40,14 +41,15 @@ self-preserve.
   unchanged — that rule was never about me.
 
 ### 3. Live-spec drafting vs iteration
-- **Who now:** MiniMax M3 drafts from a brief (`scripts/spec-draft.sh`, template
+- **Who now (REWIRED 2026-06-10):** Gemini Flash drafts from a brief via pointer
+  prompt, fallback gpt-oss-120b:free (`scripts/spec-draft.sh`, template
   `agent-projects/spec-briefs/TEMPLATE.md`); five deterministic gates reject drafts
   that would mechanically false-fail BEFORE a ~25-minute live run is spent. I keep
-  the iterate-against-reality loop and final sign-off.
-- **Why:** RESULTS-spec.md — MiniMax was the strongest drafter (its cid-discovery
-  pattern beat my baseline and is now a gate), but all three candidates false-failed
-  every real passing run on a fact (`shell` vs `shell_exec`) that only live
-  iteration had surfaced. Drafting is delegable; convergence against reality is not.
+  the iterate-against-reality loop and final sign-off. (MiniMax was the bake-off's
+  strongest drafter but is paid-via-pi — REVOKED; the gates carry its lessons.)
+- **Why:** RESULTS-spec.md — all three candidates false-failed every real passing
+  run on a fact (`shell` vs `shell_exec`) that only live iteration had surfaced.
+  Drafting is delegable; convergence against reality is not.
 - **Escalation to me:** every gated-pass draft, for live iteration; every gate
   failure is a brief-or-draft fix, also mine (cheap retry first).
 - **Involvement removed: ~30% of spec work.** Drafting is the smaller half;

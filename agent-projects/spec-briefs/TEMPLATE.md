@@ -2,8 +2,9 @@
 
 <!--
 USAGE (the Job 3 split, bakeoff/RESULTS-spec.md): copy this template, fill the
-{{...}} slots, then run scripts/spec-draft.sh <brief> <name>. MiniMax M3 (the
-strongest drafter in the bake-off) writes the draft; the draft lands in
+{{...}} slots, then run scripts/spec-draft.sh <brief> <name>. Gemini Flash writes
+the draft (pointer prompt; fallback gpt-oss-120b:free — the paid MiniMax route was
+revoked 2026-06-10); the draft lands in
 agent-projects/spec-candidates/ and is checked against the deterministic
 checklist BEFORE any live run is spent. Iteration against the real stack and
 final sign-off stay with Claude — all three bake-off candidates false-failed

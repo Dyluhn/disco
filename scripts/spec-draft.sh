@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
-# scripts/spec-draft.sh — MiniMax M3 drafts a live spec; deterministic checks gate it.
+# scripts/spec-draft.sh — a cheap worker drafts a live spec; deterministic checks gate it.
 #
-# Implements the Job 3 split from the bake-off (bakeoff/RESULTS-spec.md): MiniMax M3
-# was the strongest spec drafter (one pattern beat the Claude baseline), but ALL
-# three candidates false-failed every real passing run on the shell-vs-shell_exec
-# tool-name fact. Drafting moves to MiniMax; the iterate-against-reality loop and
-# final sign-off stay with Claude. This script makes the draft and then runs the
-# checks that are CHEAPER THAN A LIVE RUN, so a ~25-minute real build is never spent
-# on a draft that would false-fail mechanically.
+# Implements the Job 3 split from the bake-off (bakeoff/RESULTS-spec.md): drafting is
+# delegable, but ALL candidates false-failed every real passing run on the
+# shell-vs-shell_exec tool-name fact — so the iterate-against-reality loop and final
+# sign-off stay with Claude. This script makes the draft and then runs the checks
+# that are CHEAPER THAN A LIVE RUN, so a ~25-minute real build is never spent on a
+# draft that would false-fail mechanically.
+#
+# Drafter routing (REWIRED 2026-06-10 — paid pi models REVOKED; allowed set is
+# free/Gemini/Sonnet/Claude): primary Gemini Flash (pointer prompt — it READS the
+# brief file; inline ~9KB prompts silently return empty), fallback gpt-oss-120b:free.
 #
 # Usage:
-#   scripts/spec-draft.sh <brief.md> <name>          draft via MiniMax, then gate
+#   scripts/spec-draft.sh <brief.md> <name>          draft via worker, then gate
 #   scripts/spec-draft.sh --check <file.spec.ts>     gate an existing draft only
 #
 # Artifacts:
@@ -42,10 +45,14 @@ else
   spec="$CAND/$name.spec.ts"
   checklist="$CAND/$name.checklist.txt"
 
-  # ---- 1. draft via MiniMax M3 (pi) --------------------------------------------
-  pi --provider openrouter --model minimax/minimax-m3 -p --no-session -nt -ne -ns -nc \
-    "$(cat "$brief")" 2>/dev/null | grep -v '^Warning: No models match' >"$raw" || true
-  [ -s "$raw" ] || { echo "DRAFT ERROR: MiniMax returned nothing" >&2; exit 1; }
+  # ---- 1. draft via Gemini Flash (pointer), fallback gpt-oss-120b:free ----------
+  ptr="Read the file $brief NOW — it is the full drafting brief. Produce the Playwright spec it requests and print it to stdout as ONE fenced \`\`\`typescript code block. Print only the code block; do not write any files."
+  gemini -m gemini-3-flash-preview --yolo -p "$ptr" 2>/dev/null >"$raw" || true
+  if [ ! -s "$raw" ]; then
+    pi --provider openrouter --model openai/gpt-oss-120b:free -p --no-session -nt -ne -ns -nc \
+      "$ptr" 2>/dev/null | grep -v '^Warning: No models match' >"$raw" || true
+  fi
+  [ -s "$raw" ] || { echo "DRAFT ERROR: neither Flash nor gpt-oss-120b:free returned output" >&2; exit 1; }
 
   # extract the first fenced code block (```typescript / ```ts / bare ```)
   awk '/^```(typescript|ts)?[[:space:]]*$/ { if (!inb) { inb=1; next } else exit } inb' "$raw" >"$spec"
