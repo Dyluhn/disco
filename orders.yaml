@@ -1,0 +1,59 @@
+# orders.yaml — commit-sequencing manifest for the BP work-order campaign.
+#
+# Consumed by scripts/orchestrate.sh (parsed with awk — keep the format STRICT):
+#   <order-id>: <state>    # state: committed | in-flight (anything but "committed" = live)
+#     - <repo-relative path>
+#
+# Rules the orchestrator enforces from this data (bakeoff/SUMMARY.md: orchestration
+# plumbing moves to bash):
+#   * two orders that touch the same file may never be dispatched concurrently
+#   * an order may not be committed while another order's changes are uncommitted
+#     in any file the two share
+#   * a commit for an order stages ONLY that order's files
+#
+# Maintenance: add an order's file list when its surgical brief is authored (the
+# brief is the source of truth for what it touches). Remove nothing — committed
+# orders are kept for the record; the script only enforces against orders with
+# uncommitted changes or an active dispatch.
+
+# --- committed (kept for the record) -----------------------------------------
+bp-01: committed
+  - packages/tools/src/perpleximanus/tools/sandbox/session.py
+  - packages/tools/src/perpleximanus/tools/sandbox/_container.py
+bp-02: committed
+  - packages/tools/src/perpleximanus/tools/sandbox/port_owner.py
+  - packages/tools/src/perpleximanus/tools/builtin/server.py
+  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+bp-03: committed
+  - packages/core/src/perpleximanus/core/llm/prompts.py
+  - packages/core/src/perpleximanus/core/security/analyzers.py
+  - packages/core/src/perpleximanus/core/loop/engine.py
+  - packages/core/tests/test_bp03_acceptance.py
+  - packages/core/tests/test_cluster3_security.py
+  - frontend/e2e-live/bp-03-contract.spec.ts
+
+# --- in flight ----------------------------------------------------------------
+bp-06: in-flight
+  - packages/core/src/perpleximanus/core/view.py
+  - packages/core/tests/test_observation_masking.py
+  - packages/core/tests/test_view_kv_stability.py
+bp-07: in-flight
+  - packages/core/src/perpleximanus/core/loop/engine.py
+  - packages/core/tests/test_no_read_penalty.py
+bp-10: in-flight
+  - packages/tools/src/perpleximanus/tools/sandbox/_container.py
+  - packages/tools/src/perpleximanus/tools/sandbox/gvisor.py
+  - packages/tools/src/perpleximanus/tools/sandbox/local.py
+  - packages/tools/src/perpleximanus/tools/sandbox/process.py
+  - packages/tools/src/perpleximanus/tools/sandbox/session.py
+  - packages/tools/src/perpleximanus/tools/sandbox/port_owner.py
+  - packages/tools/src/perpleximanus/tools/builtin/server.py
+  - packages/tools/tests/test_preview.py
+  - packages/tools/tests/test_process_backend.py
+  - packages/tools/tests/test_server_status.py
+  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/tests/test_sandbox_config.py
+  - packages/core/src/perpleximanus/core/llm/prompts.py
+  - frontend/src/components/build/ExecutionCanvas.tsx
+  - frontend/src/types/agent.ts

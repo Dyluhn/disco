@@ -29,3 +29,7 @@ perpleximanus-secrets.json
 *.swp
 .idea/
 .vscode/
+
+# orchestration runtime state (scripts/orchestrate.sh) + Claude review queue
+.orchestrate/
+review-queue/
