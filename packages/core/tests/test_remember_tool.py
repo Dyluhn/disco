@@ -34,6 +34,8 @@ async def test_remember_emits_a_pinned_knowledge_event_and_continues():
     # run and must NOT execute against the executor — it becomes a KnowledgeEvent.
     agent, _ = _router(
         [
+            # Real work first — the fresh-session backstop refuses a zero-work remember.
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={})]},
             {
                 "tool_calls": [
                     ProposedToolCall(
@@ -53,7 +55,7 @@ async def test_remember_emits_a_pinned_knowledge_event_and_continues():
 
     assert state.execution_status == ConversationStatus.FINISHED
     # The remember call was INTERCEPTED — the executor never saw it.
-    assert executor.calls == []
+    assert all(c.tool_name != "remember" for c in executor.calls)
     # ...and no ActionEvent was recorded for `remember` (it's not an action).
     events = await store.get_events(CID)
     assert not any(
@@ -72,6 +74,8 @@ async def test_remembered_fact_survives_condensation_via_pinning():
     # even when the surrounding transcript is condensed away.
     agent, _ = _router(
         [
+            # Real work first — the fresh-session backstop refuses a zero-work remember.
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={})]},
             {
                 "tool_calls": [
                     ProposedToolCall(

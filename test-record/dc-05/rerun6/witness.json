@@ -1,0 +1,30 @@
+{
+  "rerun": 6,
+  "date": "2026-06-11",
+  "cid": "conv_cc12f0bf4219434988cf3e0754bcf2e2",
+  "designed_fail": true,
+  "shape": "predicted shape #5 (premature finish on empty workspace) + NEW probe-unlock leak",
+  "what_happened": [
+    "seq 20-21: reality block + resume marker",
+    "seq 23: first post-resume turn = finish with a verify command (shape #5, predicted in rerun5 witness). Verify-on-finish ran the probe as a shell ActionEvent",
+    "seq 24: probe failed ('no tools are available on this surface' - sandbox reclaimed)",
+    "seq 25: finish REFUSED with the verify failure as feedback - the existing gate HELD, exactly as designed",
+    "seq 26: agent prose 'Sandbox was reclaimed - rebuilding everything from scratch now' (noop 1)",
+    "seq 29 + 33: remember spam returned - duplicate CSV facts (noops 2-3). Meta tools were OFFERED again because the verify PROBE at seq 23 is an ActionEvent that _actions_since_last_resume counted as the session's first real action, flipping fresh_session and unlocking the withheld set",
+    "seq 35-36: graduated valve landed it - PAUSED (actionless) after exactly 3 actionless turns"
+  ],
+  "gates_held": {
+    "verify_on_finish": "HELD - refused the empty-workspace finish (shape #5 needs no new fix)",
+    "meta_tool_withholding_e299ef6": "worked until the probe unlocked it - the leak, not the design",
+    "valve": "HELD - bounded the post-unlock spam at 3, zero token burn beyond"
+  },
+  "diagnosis": "The verify-on-finish probe is the GATE'S action, not the agent's. Counting it as 'real work' in _actions_since_last_resume let a refused first-move finish unlock the withheld meta tools.",
+  "fix": [
+    "engine.py _finish_verify_passed: probe ActionEvent now carries meta={'verify_probe': True}",
+    "engine.py _actions_since_last_resume: skips verify_probe-marked actions",
+    "engine.py remember intercept: fresh-session refusal backstop (mirrors serve gate) - a hallucinated remember POLLUTES pinned knowledge and reads as success, so unlike notify_user (which degrades into the bounded prose channel) it must be refused with actionable feedback",
+    "tests: probe exclusion asserted in test_actions_since_last_resume_resets_at_marker; new integration test test_failed_verify_probe_does_not_unlock_meta_tools reproduces the live leak end-to-end; 4 remember-first tests seeded with real work"
+  ],
+  "tests": "packages/core 433 passed, packages/agent-server 197 passed, ruff clean",
+  "next": "Phase B re-run #7. Remaining escape channels post-fix: real tools (productive), finish (verify-gated, probe no longer unlocks), prose (valve-capped at 3), hallucinated meta calls (refused: serve/ask_user/propose_plan_update/remember; notify_user degrades to bounded prose)"
+}

@@ -1233,7 +1233,8 @@ class AgentLoop:
 
     @staticmethod
     def _actions_since_last_resume(events: list[Event]) -> int:
-        """Count ActionEvents (excluding meta/bookkeeping tools) since the last
+        """Count ActionEvents (excluding meta/bookkeeping tools and the
+        verify-on-finish probe) since the last
         StatusEvent(RUNNING, detail="resumed") or since start."""
         count = 0
         for e in reversed(events):
@@ -1244,6 +1245,10 @@ class AgentLoop:
             ):
                 break
             if isinstance(e, ActionEvent) and e.tool_call is not None:
+                if e.meta.get("verify_probe"):
+                    # The finish gate's own probe — running it is not evidence
+                    # the AGENT did real work (re-run #6 leak).
+                    continue
                 if e.tool_call.tool_name not in _BOOKKEEPING_TOOLS:
                     count += 1
         return count
@@ -1545,7 +1550,16 @@ class AgentLoop:
         ordinary, gated action first. Ordinary test/build/lint checks assess as
         MEDIUM and run unimpeded. Returns True iff the check ran and passed."""
         call = ToolCall(tool_name="shell", arguments={"command": command})
-        action = ActionEvent(thought=f"Verifying completion: {command}", tool_call=call)
+        # meta marker: this shell action is the GATE'S probe, not the agent's
+        # work. Phase-B re-run #6 (2026-06-10): an unmarked probe counted as a
+        # real action in _actions_since_last_resume, so a refused first-move
+        # finish UNLOCKED the withheld meta tools and the model remember-spammed
+        # straight into the valve. The probe must never flip fresh-session.
+        action = ActionEvent(
+            thought=f"Verifying completion: {command}",
+            tool_call=call,
+            meta={"verify_probe": True},
+        )
 
         deny = self._hard_deny_reason(action)
         if deny is not None:
@@ -1955,6 +1969,42 @@ class AgentLoop:
                     # survives condensation and is re-injected into context every
                     # step. Non-blocking — like notify_user, the agent keeps
                     # working right after. A blank fact is ignored (no-op).
+                    #
+                    # FRESH-SESSION BACKSTOP (Phase-B re-run #6, 2026-06-11):
+                    # remember is withheld from the offered set until the
+                    # session's first real action, but a weak model can
+                    # hallucinate calls to unoffered tools — re-run #6's model
+                    # remember-spammed duplicate CSV facts right after its
+                    # first-move finish was refused. Unlike notify_user (which
+                    # degrades into the bounded prose channel), an executed
+                    # remember POLLUTES pinned knowledge and reads as success,
+                    # so the model keeps picking it. Refuse with actionable
+                    # feedback: pinned facts must come from THIS session's work.
+                    if (
+                        self.mode != OperatingMode.PLANNING
+                        and self._actions_since_last_resume(events) == 0
+                    ):
+                        self._invisible_steps += 1
+                        await self._emit(
+                            MessageEvent(
+                                source=EventSource.ENVIRONMENT,
+                                message=LLMMessage(
+                                    role="user",
+                                    content=(
+                                        "remember refused: no real work has happened "
+                                        "yet in this session. Facts worth pinning come "
+                                        "from real observations — execute the next plan "
+                                        "step with real tool calls first, then remember "
+                                        "what you learned."
+                                    ),
+                                ),
+                            )
+                        )
+                        events = await self._events()
+                        noops = self._consecutive_noops(events) + self._invisible_steps
+                        if await self._actionless_valve(events, noops):
+                            return await self.get_state()
+                        continue  # non-blocking — let the model act on the feedback
                     fact = str(step.tool_call.arguments.get("fact") or "").strip()
                     if fact:
                         import hashlib

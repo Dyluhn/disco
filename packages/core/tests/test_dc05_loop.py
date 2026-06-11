@@ -187,6 +187,8 @@ async def test_valve_auto_continue_with_actions_finishes():
 async def test_dedup_remember():
     """Same fact × multiple calls → exactly 1 KnowledgeEvent; dups get 'Already recorded'."""
     agent = ScriptedAgent([
+        # Real work first — the fresh-session backstop refuses a zero-work remember.
+        action_step("shell", {}),
         action_step("remember", {"fact": "foo", "scope": "bar"}),
         action_step("remember", {"fact": "foo", "scope": "bar"}),       # dup
         action_step("remember", {"fact": "foo  ", "scope": "bar"}),     # dup (trailing space)
@@ -379,6 +381,8 @@ async def test_duplicate_remember_spam_trips_valve():
     actionless streak instead of resetting it."""
     agent = ScriptedAgent([
         action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+        # Real work first — the fresh-session backstop refuses a zero-work remember.
+        action_step("shell", {}),
         action_step("remember", {"fact": "foo", "scope": "s"}),   # fresh → neutral
         action_step("remember", {"fact": "foo", "scope": "s"}),   # dup → counts
         action_step("remember", {"fact": "foo", "scope": "s"}),   # dup → counts
@@ -509,11 +513,19 @@ def test_actions_since_last_resume_resets_at_marker():
     shell = ActionEvent(thought="t", tool_call=ToolCall(tool_name="shell", arguments={}))
     plan = ActionEvent(thought="t", tool_call=ToolCall(tool_name="submit_plan", arguments={}))
     resumed = StatusEvent(status=ConversationStatus.RUNNING, detail="resumed")
+    # The verify-on-finish probe is the GATE's action, not the agent's (re-run #6).
+    probe = ActionEvent(
+        thought="Verifying completion: pytest -q",
+        tool_call=ToolCall(tool_name="shell", arguments={}),
+        meta={"verify_probe": True},
+    )
 
     assert AgentLoop._actions_since_last_resume([shell, shell]) == 2
     assert AgentLoop._actions_since_last_resume([shell, resumed]) == 0
     assert AgentLoop._actions_since_last_resume([shell, resumed, plan]) == 0
     assert AgentLoop._actions_since_last_resume([shell, resumed, shell]) == 1
+    assert AgentLoop._actions_since_last_resume([resumed, probe]) == 0
+    assert AgentLoop._actions_since_last_resume([resumed, probe, shell]) == 1
 
 
 # ---- meta-tool suppression until first real action (Phase-B re-run #4) ----------
@@ -597,4 +609,42 @@ async def test_ask_user_before_any_work_refused():
         and e.source == EventSource.AGENT
         and "should I rebuild?" in (e.message.content if e.message else "")
         for e in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_failed_verify_probe_does_not_unlock_meta_tools():
+    """Phase-B re-run #6 leak: first move = finish with a FAILING verify. The
+    gate's probe runs as a shell ActionEvent — which must NOT count as the
+    session's first real action, or the refused finish unlocks the withheld
+    meta tools and the model can remember-spam (exactly what happened live)."""
+    from loop_fakes import FakeExecutor
+    from perpleximanus.core import ToolResult
+    agent = ScriptedAgent([
+        action_step("finish", {"summary": "done", "verify": "pytest -q"}),
+        action_step("remember", {"fact": "csv columns"}),  # turn 2: still lean
+        action_step("shell", {}),                          # real work at last
+        finish_step(),
+    ])
+    failing = ToolResult(
+        call_id="c", tool_name="shell", success=False, content="2 failed", error="exit 1"
+    )
+    loop, store = build_loop(agent, executor=FakeExecutor(result=failing))
+    await loop.send_message("go")
+    await loop.run()
+
+    # Turn 2's offered tool set is STILL lean — the probe didn't flip it.
+    assert not (_META_VIRTUALS & set(agent.seen_tools[1]))
+    # And the hallucinated remember was intercepted, not executed: no
+    # KnowledgeEvent landed before the real shell action.
+    events = await store.get_events(CID)
+    shell_seq = next(
+        e.seq for e in events
+        if isinstance(e, ActionEvent)
+        and e.tool_call is not None
+        and e.tool_call.tool_name == "shell"
+        and not e.meta.get("verify_probe")
+    )
+    assert not any(
+        isinstance(e, KnowledgeEvent) and e.seq < shell_seq for e in events
     )

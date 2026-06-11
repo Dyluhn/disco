@@ -475,3 +475,51 @@ E=output truncation, F=status/format discipline.
 dispatch; #3 is the E-order blueprint; #5/#8 feed the reality-block /
 re-grounding line of work; #9 feeds the valve; #10 feeds status
 write-through (rp-14).
+
+## 8. OpenCode (sst/opencode) survey addendum (source-verified 2026-06-11)
+
+Surveyed because Suna/Kortix deleted their own loop and bet the product on
+OpenCode — the strongest market signal in the field. Clone:
+/tmp/harvest/opencode (HEAD bf05e8a). Verdict: **the moat is everything
+AROUND the loop** (25-endpoint headless control plane + SSE; 1400 lines of
+provider-quirk scar tissue in transform.ts; production hardening where every
+failure degrades to feedback or escalation). The loop itself is comparable
+or behind ours (mid-migration to event-sourced V2; we are natively
+event-sourced). Their hard problems are NOT ours: environment assumed
+durable (no wiped-sandbox story), no llama.cpp prefix-cache discipline,
+no weak-model FC work beyond a qwen sampling pin.
+
+**Tool-withholding novelty: CONFIRMED a 4th time.** All OpenCode gating is
+static (agent config / model / client / permissions). No state- or
+progress-dependent withholding anywhere. No contradictions with any shipped
+choice.
+
+**Steals worth adding to the harvest list (file refs in survey report):**
+- Reroute-to-hidden-`invalid`-tool repair: malformed/unknown tool calls become
+  an ordinary error tool_result via a registered-but-unoffered `invalid`
+  tool — the turn never aborts, message invariants stay intact (A, S).
+  Composes with Pi's repair ladder (#1 in §7) for RP-12.
+- Anchored-summary UPDATE compaction: fixed Markdown template
+  (Goal/Constraints/Progress/Key Decisions/Next Steps/Critical Context/Files)
+  + merge-previous-summary instead of regenerate — long-running facts can't
+  evaporate across N compactions (D, M). Same shape as Pi's #5 in §7;
+  OpenCode's merge prompt is the better reference.
+- Interrupted-tool reconciliation rendering: dangling running tool calls
+  render as `[Tool execution was interrupted]` error tool_results + orphan
+  exclusion from pending-work detection (B, S). Complement to our reality
+  block for crash-mid-tool turns.
+- Max-steps cap = forced TEXT-ONLY wrap-up turn (all tools off, mandated
+  summary + remaining tasks) instead of a dead stop (F, S) — upgrade idea
+  for our valve's cap rung.
+- Doom-loop detector: 3x identical (tool name + serialized args) →
+  escalate to a permission ask, not a kill (F, S).
+- Finish-reason distrust: loop exit requires finish AND no pending tool-call
+  parts ("some providers return 'stop' even when the message contains tool
+  calls") (A/C, S) — audit our driver's exit condition for this.
+- Capability-adaptive truncation hints on spill-to-file: the marker tells the
+  model WHAT TO DO next, varying by whether it has a delegate tool (E, S).
+- Qwen sampling pin (temp 0.55 / topP 1) — cross-check our llama.cpp
+  serving defaults (A, S).
+- Caution reinforced: their prune mutates rendered history in place —
+  hostile to llama.cpp prefix caching; if adopted, fire only at compaction
+  boundaries. Aligns with the never-mask-per-step rule.
