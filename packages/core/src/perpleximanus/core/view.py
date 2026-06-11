@@ -144,8 +144,20 @@ def _pinned_seqs(events: list[Event]) -> set[int]:
     plan = _latest_plan(events)
     if plan is not None and plan.seq is not None:
         pinned.add(plan.seq)
+    seen_knowledge: set[tuple[str, str]] = set()
     for e in events:
-        if isinstance(e, KnowledgeEvent | DatasourceEvent) and e.seq is not None:
+        if isinstance(e, KnowledgeEvent):
+            # Decision 3: KnowledgeEvent spam is exempted from pinning protection
+            # ONLY when the events are exact duplicates (same scope + same snippet).
+            # The first instance stays pinned; subsequent ones are forgettable.
+            h = hashlib.sha256(e.snippet.strip().encode()).hexdigest()
+            key = (e.scope, h)
+            if key in seen_knowledge:
+                continue
+            seen_knowledge.add(key)
+            if e.seq is not None:
+                pinned.add(e.seq)
+        elif isinstance(e, DatasourceEvent) and e.seq is not None:
             pinned.add(e.seq)
     return pinned
 

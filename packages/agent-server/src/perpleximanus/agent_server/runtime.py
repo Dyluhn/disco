@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import os
@@ -27,9 +28,11 @@ from perpleximanus.core import (
     DEFAULT_OWNER_ID,
     ActionEvent,
     AgentErrorEvent,
+    CondensationEvent,
     ConversationStatus,
     EventFilter,
     EventSource,
+    KnowledgeEvent,
     LLMMessage,
     LLMSummarizingCondenser,
     MessageEvent,
@@ -65,6 +68,7 @@ from perpleximanus.core.loop import (
     ResearchAgent,
     RouterAgent,
 )
+from perpleximanus.core.loop.engine import _BOOKKEEPING_TOOLS
 from perpleximanus.core.security import RuleBasedAnalyzer
 from perpleximanus.core.store.sqlite import SqliteEventStore
 from perpleximanus.retrieval.deep_research import (
@@ -1753,6 +1757,116 @@ class ConversationRuntime:
         self._cancel_flags.pop(conversation_id, None)
         self.kick(conversation_id)
 
+    def _condense_trailing_degeneracy(
+        self, events: list
+    ) -> CondensationEvent | None:
+        """Pure-on-the-event-list detector for trailing degenerate segments.
+        No model call (call-site: resume_conversation).
+        
+        DC-05c Design:
+        1. Detection: scan tail backwards to first real Action (non-bookkeeping)
+           or USER Message. Count agent messages, duplicate knowledge, plan revisions.
+        2. Degenerate iff: segment >= 6 AND zero real actions AND (>=3 agent messages
+           OR any knowledge fact >= 3 times).
+        3. Pinning: the FIRST instance of any duplicated knowledge fact stays
+           OUTSIDE the span.
+        """
+        # Scan backwards to define the segment boundary
+        # "stopping at the first real ActionEvent (non-bookkeeping tool) or USER MessageEvent"
+        segment_events = []
+        for e in reversed(events):
+            if isinstance(e, MessageEvent) and e.source == EventSource.USER:
+                break
+            if isinstance(e, ActionEvent):
+                # A real (non-bookkeeping) action ends the degenerate segment.
+                # Same set the engine's noop counter exempts — single source
+                # of truth, NOT a local copy.
+                if e.tool_call.tool_name not in _BOOKKEEPING_TOOLS:
+                    break
+            segment_events.append(e)
+
+        if len(segment_events) < 6:
+            return None
+
+        segment_events.reverse()
+
+        # count degeneracy signals
+        agent_prose_count = 0
+        knowledge_counts: dict[tuple[str, str], int] = {}  # (scope, hash) -> count
+        plan_revision_count = 0
+
+        for e in segment_events:
+            if isinstance(e, MessageEvent) and e.message.role == "assistant":
+                agent_prose_count += 1
+            elif isinstance(e, KnowledgeEvent):
+                snippet_hash = hashlib.sha256(e.snippet.strip().encode()).hexdigest()
+                key = (e.scope, snippet_hash)
+                knowledge_counts[key] = knowledge_counts.get(key, 0) + 1
+            elif isinstance(e, PlanEvent):
+                plan_revision_count += 1
+
+        is_degenerate = agent_prose_count >= 3 or any(
+            count >= 3 for count in knowledge_counts.values()
+        )
+
+        if not is_degenerate:
+            return None
+
+        # Pinning exemption: FIRST instance stays OUTSIDE.
+        # Find all knowledge facts that appeared BEFORE this segment.
+        seen_knowledge: set[tuple[str, str]] = set()
+        first_event_seq = segment_events[0].seq
+        for e in events:
+            if e.seq == first_event_seq:
+                break
+            if isinstance(e, KnowledgeEvent):
+                h = hashlib.sha256(e.snippet.strip().encode()).hexdigest()
+                seen_knowledge.add((e.scope, h))
+
+        # Move the span start forward past any "first instances" of knowledge in the segment.
+        # We only need to clear the start to respect "stays OUTSIDE" for the first half.
+        # Interleaved first-instances in the middle are protected by View.of pinning.
+        span_start_idx = 0
+        while span_start_idx < len(segment_events):
+            e = segment_events[span_start_idx]
+            if isinstance(e, KnowledgeEvent):
+                h = hashlib.sha256(e.snippet.strip().encode()).hexdigest()
+                key = (e.scope, h)
+                if key not in seen_knowledge:
+                    seen_knowledge.add(key)
+                    span_start_idx += 1
+                    continue
+            break
+
+        final_span = segment_events[span_start_idx:]
+        if not final_span:
+            return None
+
+        start_seq = final_span[0].seq
+        end_seq = final_span[-1].seq
+
+        if start_seq is None or end_seq is None:
+            return None
+
+        # Summary counts (for the tombstone text)
+        m_dupes = sum(1 for e in final_span if isinstance(e, KnowledgeEvent))
+        k_plans = sum(1 for e in final_span if isinstance(e, PlanEvent))
+
+        summary = (
+            f"[Condensed {len(final_span)} degenerate turns: the agent repeated itself "
+            f"without calling any tools ({m_dupes} duplicate knowledge entries, "
+            f"{k_plans} plan revisions). No work was performed in this span. "
+            "Do not imitate this pattern — proceed by calling tools.]"
+        )
+
+        return CondensationEvent(
+            forgotten_start_seq=start_seq,
+            forgotten_end_seq=end_seq,
+            summary=summary,
+            summary_role="user",
+            reason="hard_reset",
+        )
+
     async def _reconstruct_resume_context(
         self, conversation_id: str, events: list
     ) -> list:
@@ -1915,6 +2029,12 @@ class ConversationRuntime:
             return {"ok": False, "reason": "conversation_error"}
 
         events = await self._store.get_events(conversation_id)
+
+        # DC-05c: condense trailing degeneracy before reconstruction
+        tombstone = self._condense_trailing_degeneracy(events)
+        if tombstone is not None:
+            await self._store.append(conversation_id, tombstone)
+            events = await self._store.get_events(conversation_id)
 
         legal = status == ConversationStatus.PAUSED
         if not legal and status == ConversationStatus.IDLE:
