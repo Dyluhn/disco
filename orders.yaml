@@ -446,3 +446,8 @@ dc-05b: committed
   - packages/agent-server/tests/test_resume_reconstruction.py
   - test-record/dc-05/units-server.log
   - agent-projects/sonnet/dc-05b-report.md
+dc-05c: in-flight
+  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/tests/test_resume_condensation.py
+  - test-record/dc-05/units-c.log
+  - agent-projects/gemini/dc-05c-report.md
