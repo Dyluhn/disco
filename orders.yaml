@@ -452,3 +452,55 @@ dc-05c: committed
   - packages/agent-server/tests/test_resume_condensation.py
   - test-record/dc-05/units-c.log
   - agent-projects/gemini/dc-05c-report.md
+rp-01: staged
+  - packages/core/src/perpleximanus/core/store/sqlite.py
+  - packages/core/tests/test_store_status.py
+  - packages/app-server/src/perpleximanus/app_server/app.py
+  - packages/app-server/tests/test_routes.py
+  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - frontend/src/types/conversation.ts
+  - frontend/src/api/conversations.ts
+  - frontend/src/views/HistoryView.tsx
+  - frontend/src/views/HistoryView.status.test.tsx
+  - test-record/rp-01/units-core.log
+  - test-record/rp-01/units-server.log
+  - test-record/rp-01/units-frontend.log
+  - agent-projects/gemini/rp-01-report.md
+rp-02: staged
+  - packages/retrieval/src/perpleximanus/retrieval/streaming.py
+  - packages/retrieval/tests/test_table_blocks.py
+  - frontend/src/components/research/DeepReportView.tsx
+  - frontend/src/components/research/DeepReportView.table.test.tsx
+  - test-record/rp-02/units-retrieval.log
+  - test-record/rp-02/units-frontend.log
+  - agent-projects/gemini/rp-02-report.md
+rp-12: staged
+  - packages/tools/src/perpleximanus/tools/sandbox/kernel.py
+  - packages/tools/tests/test_kernel_session.py
+  - packages/core/src/perpleximanus/core/llm/prompts.py
+  - packages/core/src/perpleximanus/core/llm/types.py
+  - packages/core/src/perpleximanus/core/llm/openai_provider.py
+  - packages/core/src/perpleximanus/core/view.py
+  - packages/core/src/perpleximanus/core/loop/engine.py
+  - packages/core/tests/test_tail_variation.py
+  - packages/core/tests/test_prefill_masking.py
+  - packages/core/tests/test_toolcall_defense.py
+  - test-record/rp-12/units-tools.log
+  - test-record/rp-12/units-core.log
+  - agent-projects/gemini/rp-12-report.md
+rp-14: staged
+  - frontend/src/lib/useTheme.ts
+  - frontend/src/lib/useTheme.test.ts
+  - frontend/src/main.tsx
+  - frontend/index.html
+  - frontend/src/shell/Shell.tsx
+  - frontend/src/components/CommandPalette.tsx
+  - frontend/src/components/CommandPalette.test.tsx
+  - frontend/src/views/HistoryView.tsx
+  - frontend/src/views/history.test.tsx
+  - frontend/src/components/build/AgentStatusBar.tsx
+  - frontend/src/components/build/AgentStatusBar.cost.test.tsx
+  - frontend/src/lib/cost.ts
+  - frontend/src/lib/cost.test.ts
+  - test-record/rp-14/units-frontend.log
+  - agent-projects/gemini/rp-14-report.md

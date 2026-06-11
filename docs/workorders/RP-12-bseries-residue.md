@@ -58,6 +58,76 @@ original hardening series; none got a BP order (R4 audit confirmed).
   carries prefill only when flag on + PLANNING; provider serializes the
   partial assistant message; flag off → byte-identical requests to today.
 
+## Amendment (2026-06-11) — OSS-harvest weak-model FC kit (rungs 4-7)
+
+Folded from docs/next-fix-set-plan.md §7 steals #1/#6/#7 + §8 (OpenCode
+invalid-tool reroute), per the ratified order-impact note. Defense-in-depth
+ordering: grammar (4) prevents most syntax errors at decode time → reroute (7)
+catches tool-NAME hallucinations that are valid JSON → repair (5) salvages
+malformed JSON when grammar is off/unavailable → requery (6) is the bounded
+last resort. Build 5 → 7 → 6 → 4 (each is independently shippable; 4 last
+because it's flagged-off mechanism only).
+
+### Rung 4 — grammar-constrained tool calls (llama.cpp json_schema), flagged OFF
+
+- In `openai_provider.py`: when a new config flag (follow Rung 3's flag
+  pattern; default OFF) is set and the request carries tools, translate the
+  tool schemas into the llama.cpp `json_schema`/grammar request field so
+  invalid tool-call JSON is rejected at DECODE time. Both complete and
+  stream_complete.
+- Mechanism only — NO live llama.cpp validation (reviewer's, same posture as
+  Rung 3). Flag off → byte-identical requests to today (assert in tests).
+
+### Rung 5 — layered tool-call repair (Pi pattern)
+
+- At the provider's tool-call parse seam in `openai_provider.py`: before
+  rejecting a malformed tool-call payload, attempt (a) strict parse, (b)
+  mechanical JSON repair — strip markdown fences, balance braces/brackets,
+  escape bare control chars, (c) type-coercing validation against the tool's
+  schema (string "42" → int 42, "true" → bool; NEVER coerce across
+  incompatible types). Each stage only runs if the previous failed; log which
+  stage rescued the call (structured log field, for later eval counts).
+- Unrecoverable → surface the existing parse failure unchanged (Rung 6 takes
+  over in the engine).
+
+### Rung 6 — bounded requery-outside-log (SWE-agent pattern)
+
+- In `engine.py`, at the seam where a model response fails to yield a valid
+  action: retry the SAME query up to 2 times WITHOUT persisting the malformed
+  attempt to the event store — the malformed text + a one-line corrective
+  hint go only into the TRANSIENT retry request, never into durable history
+  (post-resume re-reads must not see the garbage).
+- After the bound: ONE refusal-with-feedback enters the log (the existing
+  failure path), so the valve/stuck machinery sees exactly one event, not
+  three.
+
+### Rung 7 — invalid-tool reroute (OpenCode pattern)
+
+- In `engine.py`, at action validation: a syntactically-valid call naming a
+  tool that is NOT in the current step's offered toolset routes to an
+  internal handler that emits a normal failed ToolResult with actionable
+  feedback ("tool 'search_web' does not exist; available now: ...the offered
+  list..."), instead of an agent_error loop.
+- MUST respect DC-05 withholding: the suggestion list is `_tools_for_step()`'s
+  CURRENT offer — a withheld tool's name must never appear in the feedback
+  (it would advertise the meta tools the withholding hides).
+- Interplay: this replaces neither the serve/remember/ask backstops (those
+  intercept OFFERED virtuals) nor the withholding itself — it only converts
+  unknown-name errors into feedback.
+
+### Amendment tests
+
+NEW `packages/core/tests/test_toolcall_defense.py`:
+- repair: fenced JSON → parsed; unbalanced brace → parsed; "42" vs int schema
+  → coerced; garbage → rejected unchanged.
+- requery: malformed → no new store event + same-query retry; 2 failures then
+  valid → only the valid action persisted; 3 failures → exactly ONE refusal
+  event.
+- reroute: unknown tool name → failed ToolResult naming only currently-offered
+  tools; under a fresh post-resume session (withheld set) the feedback lists
+  the LEAN toolset only.
+- grammar flag: on → request carries the schema field; off → byte-identical.
+
 ## Run ONLY
 
 `uv run pytest packages/tools -q` and `uv run pytest packages/core -q`,
@@ -83,6 +153,7 @@ Do NOT start servers or run e2e — a harness may be live on :8000.
 - packages/core/src/perpleximanus/core/loop/engine.py
 - packages/core/tests/test_tail_variation.py
 - packages/core/tests/test_prefill_masking.py
+- packages/core/tests/test_toolcall_defense.py
 - test-record/rp-12/units-tools.log
 - test-record/rp-12/units-core.log
 - agent-projects/gemini/rp-12-report.md
