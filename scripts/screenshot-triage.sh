@@ -15,6 +15,12 @@
 # Exit codes:  0 = auto-passed (logged)   3 = ESCALATED to review-queue/screenshots/
 #              1 = pipeline error (no model reachable / unreadable input)
 #
+# GENERAL ROUTING RULE (bakeoff/ROUTING.md): Fable 5 (2x) is ONLY for code
+# verification + review of Opus-authored briefs. Screenshot triage is a VISION
+# CHECK, not verification — it must NEVER ride Fable. Ladder: Gemini 3 Flash
+# (primary, cheapest-capable) -> Sonnet 1x (fallback). DeepSeek is text-only
+# and not in this ladder.
+#
 # Escalation triggers (any one):
 #   - model verdict FAIL
 #   - model confidence LOW
