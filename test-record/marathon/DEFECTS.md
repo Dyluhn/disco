@@ -253,3 +253,28 @@ orders, never to bp-16 itself.
   agent persists the data inside its workspace deliverables.
 - **Owner direction**: rides the resume/lifecycle work (wave 2); pair with the
   checkpointed-DR-resume gap in the open-gaps list.
+
+## DEFECT-7b: upload copy-back not wired on the post-restart lazy-compose path
+
+- **Found**: 2026-06-11 dc-07 live acceptance (`test-record/dc-07/repro-witness.json`,
+  conv_f985cb34). Sidecar store WORKS (data.csv held server-side); reality block
+  promised restoration; agent acted; sandbox recreated (container label verified)
+  — but `/workspace/uploads/` does not exist and data.csv is nowhere in the
+  container. The reality block's promise is now a FALSE one (worse than honest
+  absence). Units passed because they simulate recreation directly; the REAL
+  post-restart resume creates the fresh sandbox via the lazy compose path
+  ("created on your next action"), which never fires the on_recreate hooks
+  dc-07 wired (runtime.py ~595/~644). Also: re-materialization has no log line
+  (zero observability — the witness grep found nothing because nothing exists).
+
+## DEFECT-8: free text-only driver dies at the BP-05 verify gate (vision)
+
+- **Found**: same run, seq 39: `NoEligibleModel: Request contains images but
+  model 'or-gpt-oss-120b-free' does not support VISION` — terminal ERROR.
+  The build verify gate REQUIRES a browser screenshot observation; on the
+  OpenRouter-free driver (text-only) every build that reaches verification
+  dies. PMX_DRIVER_VISION applies to driver-local only. Options: route the
+  VISION requirement to a vision-capable model (catalog has
+  or-gemma-4-31b-free, tools+vision) per the build-parity "VISION role"
+  recommendation; or degrade gracefully (text-only verify) instead of
+  terminal NoEligibleModel. Blocks all build live-rungs in the free-driver era.
