@@ -65,6 +65,11 @@ _LOG = logging.getLogger("perpleximanus.loop")
 _sleep = asyncio.sleep
 _DRIVER_RETRY_BACKOFFS_S: tuple = (10.0, 30.0, 90.0)
 
+# Plan/meta tools that mutate bookkeeping state but do no real work. Excluded
+# from "did the agent act?" accounting everywhere (valve taxonomy + the
+# actionless streak) so a model can't look productive by shuffling plan state.
+_BOOKKEEPING_TOOLS = frozenset({"submit_plan", "propose_plan_update", "plan_step", "finish"})
+
 # D2: the reserved AlternativesEvent option id for "Continue anyway" — the bypass the
 # user can always pick at the circuit-breaker gate to reset the failure streak and let
 # the agent keep going. The frontend renders it as a distinct button; pick_alternative
@@ -727,6 +732,12 @@ class AgentLoop:
         self._browser_verify_refusals = 0  # consecutive browser-verification refusals
         # Actionless-step breaker cap (DEFECT-4)
         self._ACTIONLESS_BREAK_CAP: int = 3
+        # Steps consumed with NOTHING persisted to the log (empty-args serve,
+        # blank remember fact, empty-thought noop, duplicate deliverable) —
+        # invisible to every event-derived detector incl. the stuck detector,
+        # so an instance counter is the only honest way to see the spin.
+        # Reset when a real ActionEvent is built (site h) and at run() entry.
+        self._invisible_steps = 0
         # GAP B backstop: max tool-less prose turns in a row before the loop ends
         # the run (a talking-without-acting model can't advance max_iterations).
         self._max_consecutive_noops = 6
@@ -1112,17 +1123,37 @@ class AgentLoop:
 
     @staticmethod
     def _consecutive_noops(events: list[Event]) -> int:
-        """Count trailing agent prose MessageEvents not separated by an
-        ActionEvent or a USER message. Resets when the agent acts or the user
-        speaks. The GAP B backstop reads this to stop a talk-without-acting loop."""
+        """Count trailing agent steps consumed WITHOUT a real executed action:
+        prose MessageEvents, DeliverableEvents (the serve intercept), and
+        duplicate-`remember` ActionEvents (the dedup pair). Resets on any real
+        ActionEvent or a USER message; plan bookkeeping and fresh
+        KnowledgeEvents are neutral (neither break nor count).
+
+        The original version counted only prose messages and broke on ANY
+        ActionEvent — so a model spamming `serve` emitted 50+ DeliverableEvents
+        through the intercept `continue` path and never tripped a valve
+        (Phase-B re-run, 2026-06-10); only the stuck detector, 95 events
+        later, stopped it."""
         count = 0
         for e in reversed(events):
+            if isinstance(e, ObservationEvent):
+                continue  # paired with its action — judge the action instead
             if isinstance(e, ActionEvent):
+                tool = e.tool_call.tool_name if e.tool_call is not None else None
+                if tool == "remember":
+                    count += 1  # only the duplicate path emits remember actions
+                    continue
+                if tool in _BOOKKEEPING_TOOLS:
+                    continue  # plan shuffling: neither real work nor spam signal
                 break
             if isinstance(e, MessageEvent) and e.source == EventSource.USER:
                 break
             if isinstance(e, MessageEvent) and e.source == EventSource.AGENT:
                 count += 1
+                continue
+            if isinstance(e, DeliverableEvent):
+                count += 1
+                continue
         return count
 
     @staticmethod
@@ -1191,7 +1222,6 @@ class AgentLoop:
         """Count ActionEvents (excluding meta/bookkeeping tools) since the last
         StatusEvent(RUNNING, detail="resumed") or since start."""
         count = 0
-        bookkeeping = {"submit_plan", "propose_plan_update", "plan_step", "finish"}
         for e in reversed(events):
             if (
                 isinstance(e, StatusEvent)
@@ -1200,9 +1230,105 @@ class AgentLoop:
             ):
                 break
             if isinstance(e, ActionEvent) and e.tool_call is not None:
-                if e.tool_call.tool_name not in bookkeeping:
+                if e.tool_call.tool_name not in _BOOKKEEPING_TOOLS:
                     count += 1
         return count
+
+    async def _actionless_valve(self, events: list[Event], noops: int) -> bool:
+        """Shared circuit-breaker ladder for steps that consumed a model turn
+        without doing real work — the tool-less noop path AND the non-blocking
+        intercepts (notify_user / remember / serve). Returns True when the run
+        was landed (PAUSED/FINISHED) — the caller must
+        `return await self.get_state()`. Emits the warning nudge in place and
+        returns False otherwise.
+
+        The Phase-B re-run (2026-06-10) is why the intercepts must share this:
+        their bare `continue` skipped the noop bookkeeping entirely, so ~50
+        serve spams and ~20 prose messages sailed past every DC-05a cap until
+        the stuck detector fired ~95 events later."""
+        incomplete, _ = self._plan_is_incomplete(events)
+        if incomplete and noops >= self._ACTIONLESS_BREAK_CAP:
+            await self._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "The agent produced 3 consecutive responses"
+                            " without doing any real work while plan steps"
+                            " remain undone — pausing instead of burning"
+                            " tokens. Resume to continue."
+                        ),
+                    ),
+                )
+            )
+            await self._emit(
+                StatusEvent(status=ConversationStatus.PAUSED, detail="actionless")
+            )
+            return True
+
+        if noops >= self._max_consecutive_noops:
+            # The model is spinning without acting and won't stop — end
+            # cleanly rather than burn. (A real run resumes on a user steer;
+            # the prompt steers toward finish/act.)
+            actions_since = self._actions_since_last_resume(events)
+            if incomplete and actions_since == 0:
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                "<system-reminder>\n⚠ finishing was"
+                                " blocked: plan steps remain undone and"
+                                " no work happened in this run segment."
+                                "\n</system-reminder>"
+                            ),
+                        ),
+                    )
+                )
+                await self._emit(
+                    StatusEvent(status=ConversationStatus.PAUSED, detail="noop_limit")
+                )
+            else:
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                "<system-reminder>\n"
+                                f"You have produced {noops} turns in a row without "
+                                "performing real work. Ending the run. To continue, "
+                                "the user can send a new instruction; otherwise call "
+                                "a tool to act or `finish` to complete.\n"
+                                "</system-reminder>"
+                            ),
+                        ),
+                    )
+                )
+                await self._emit(
+                    StatusEvent(status=ConversationStatus.FINISHED, detail="noop_limit")
+                )
+            return True
+
+        if noops == self._max_consecutive_noops - 1:
+            await self._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "<system-reminder>\n"
+                            "You've sent several messages without acting. Call a "
+                            "tool to make progress, or `finish` if the task is "
+                            "complete.\n"
+                            "</system-reminder>"
+                        ),
+                    ),
+                )
+            )
+        return False
 
     @staticmethod
     def _plan_step_lag_signal(events: list[Event]) -> bool:
@@ -1483,6 +1609,9 @@ class AgentLoop:
     async def run(self) -> ConversationState:
         """Drive until a terminal-for-now status. Idempotent to call again after
         a pause/confirmation. [CONTRACT] returns the resulting ConversationState."""
+        # Fresh run segment → fresh invisible-step accounting (the counter only
+        # measures spin WITHIN a segment; a resume/steer is a clean slate).
+        self._invisible_steps = 0
         state = await self.get_state()
         if state.execution_status in _TERMINAL_FOR_NOW and state.execution_status != (
             ConversationStatus.IDLE
@@ -1791,6 +1920,15 @@ class AgentLoop:
                                 message=LLMMessage(role="assistant", content=msg),
                             )
                         )
+                    else:
+                        self._invisible_steps += 1
+                    # Non-blocking, but NOT exempt from the actionless valve —
+                    # a bare `continue` here let prose spam bypass every cap
+                    # (Phase-B re-run, 2026-06-10).
+                    events = await self._events()
+                    noops = self._consecutive_noops(events) + self._invisible_steps
+                    if await self._actionless_valve(events, noops):
+                        return await self.get_state()
                     continue  # non-blocking — keep working
                 if step.tool_call is not None and step.tool_call.tool_name == "remember":
                     # Durable memory: emit a PINNED KnowledgeEvent so the fact
@@ -1826,31 +1964,60 @@ class AgentLoop:
                             await self._emit(
                                 KnowledgeEvent(source=EventSource.AGENT, scope=scope, snippet=fact)
                             )
+                    else:
+                        # Blank fact persists NOTHING — count it or it's an
+                        # unbounded silent token burn.
+                        self._invisible_steps += 1
+                    events = await self._events()
+                    noops = self._consecutive_noops(events) + self._invisible_steps
+                    if await self._actionless_valve(events, noops):
+                        return await self.get_state()
                     continue  # non-blocking — keep working
                 if step.tool_call is not None and step.tool_call.tool_name == "serve":
                     # Finished-artifact HANDOFF: emit a DeliverableEvent the UI renders
                     # as Open-the-app / Download-the-files. Non-blocking — the agent
-                    # serves, verifies, then finishes. A missing path/title is ignored
-                    # (no-op) rather than emitting a useless handoff.
+                    # serves, verifies, then finishes. A missing path/title or a
+                    # re-serve of an already-handed-off artifact is ignored (no-op)
+                    # rather than emitting a useless handoff — and every ignored
+                    # form is COUNTED, because each is invisible in the event log
+                    # and was the unbounded serve-spam vector (Phase-B, 2026-06-10).
                     if not step.tool_call.arguments:
                         _LOG.debug("Skipping deliverable emission: empty payload from agent")
-                        continue
-                    title = str(step.tool_call.arguments.get("title") or "").strip()
-                    path = str(step.tool_call.arguments.get("path") or "").strip()
-                    kind = str(step.tool_call.arguments.get("kind") or "app").strip()
-                    url = str(step.tool_call.arguments.get("url") or "").strip()
-                    if kind not in ("app", "files"):
-                        kind = "app"
-                    if title and path:
-                        await self._emit(
-                            DeliverableEvent(
-                                source=EventSource.AGENT,
-                                title=title,
-                                path=path,
-                                artifact_kind=kind,  # type: ignore[arg-type]
-                                deployment_url=url,
+                        self._invisible_steps += 1
+                    else:
+                        title = str(step.tool_call.arguments.get("title") or "").strip()
+                        path = str(step.tool_call.arguments.get("path") or "").strip()
+                        kind = str(step.tool_call.arguments.get("kind") or "app").strip()
+                        url = str(step.tool_call.arguments.get("url") or "").strip()
+                        if kind not in ("app", "files"):
+                            kind = "app"
+                        if not (title and path):
+                            self._invisible_steps += 1
+                        elif any(
+                            isinstance(e, DeliverableEvent)
+                            and e.path == path
+                            and e.artifact_kind == kind
+                            for e in events
+                        ):
+                            # Same artifact already handed off — an identical
+                            # card adds nothing for the user; re-emitting it is
+                            # the few-shot spam prompt for the next one.
+                            _LOG.debug("Skipping duplicate deliverable: %s (%s)", path, kind)
+                            self._invisible_steps += 1
+                        else:
+                            await self._emit(
+                                DeliverableEvent(
+                                    source=EventSource.AGENT,
+                                    title=title,
+                                    path=path,
+                                    artifact_kind=kind,  # type: ignore[arg-type]
+                                    deployment_url=url,
+                                )
                             )
-                        )
+                    events = await self._events()
+                    noops = self._consecutive_noops(events) + self._invisible_steps
+                    if await self._actionless_valve(events, noops):
+                        return await self.get_state()
                     continue  # non-blocking — keep working
                 if step.tool_call is not None and step.tool_call.tool_name == "finish":
                     # VERIFY-ON-FINISH (post-condition gate). If the agent attached
@@ -2147,98 +2314,14 @@ class AgentLoop:
                                 message=LLMMessage(role="assistant", content=step.thought),
                             )
                         )
+                    else:
+                        # Nothing persisted — invisible to every event-derived
+                        # detector, so the instance counter has to carry it.
+                        self._invisible_steps += 1
                     events = await self._events()
-                    noops = self._consecutive_noops(events)
-                    if not step.thought.strip():
-                        noops += 1
-
-                    incomplete, _ = self._plan_is_incomplete(events)
-                    if incomplete and noops >= self._ACTIONLESS_BREAK_CAP:
-                        await self._emit(
-                            MessageEvent(
-                                source=EventSource.ENVIRONMENT,
-                                message=LLMMessage(
-                                    role="user",
-                                    content=(
-                                        "The agent produced 3 consecutive responses"
-                                        " without any tool call while plan steps remain"
-                                        " undone — pausing instead of burning tokens."
-                                        " Resume to continue."
-                                    ),
-                                )
-                            )
-                        )
-                        await self._emit(
-                            StatusEvent(
-                                status=ConversationStatus.PAUSED, detail="actionless"
-                            )
-                        )
+                    noops = self._consecutive_noops(events) + self._invisible_steps
+                    if await self._actionless_valve(events, noops):
                         return await self.get_state()
-
-                    if noops >= self._max_consecutive_noops:
-                        # The model is talking without acting and won't stop —
-                        # end cleanly rather than spin. (A real run resumes on a
-                        # user steer; the prompt steers toward finish/act.)
-                        actions_since = self._actions_since_last_resume(events)
-                        if incomplete and actions_since == 0:
-                            await self._emit(
-                                MessageEvent(
-                                    source=EventSource.ENVIRONMENT,
-                                    message=LLMMessage(
-                                        role="user",
-                                        content=(
-                                            "<system-reminder>\n⚠ finishing was"
-                                            " blocked: plan steps remain undone and"
-                                            " no work happened in this run segment."
-                                            "\n</system-reminder>"
-                                        ),
-                                    )
-                                )
-                            )
-                            await self._emit(
-                                StatusEvent(
-                                    status=ConversationStatus.PAUSED, detail="noop_limit"
-                                )
-                            )
-                        else:
-                            await self._emit(
-                                MessageEvent(
-                                    source=EventSource.ENVIRONMENT,
-                                    message=LLMMessage(
-                                        role="user",
-                                        content=(
-                                            "<system-reminder>\n"
-                                            f"You have sent {noops} messages in a row without "
-                                            "calling a tool. Ending the run. To continue, the "
-                                            "user can send a new instruction; otherwise call a "
-                                            "tool to act or `finish` to complete.\n"
-                                            "</system-reminder>"
-                                        ),
-                                    ),
-                                )
-                            )
-                            await self._emit(
-                                StatusEvent(
-                                    status=ConversationStatus.FINISHED, detail="noop_limit"
-                                )
-                            )
-                        return await self.get_state()
-                    if noops == self._max_consecutive_noops - 1:
-                        await self._emit(
-                            MessageEvent(
-                                source=EventSource.ENVIRONMENT,
-                                message=LLMMessage(
-                                    role="user",
-                                    content=(
-                                        "<system-reminder>\n"
-                                        "You've sent several messages without acting. Call a "
-                                        "tool to make progress, or `finish` if the task is "
-                                        "complete.\n"
-                                        "</system-reminder>"
-                                    ),
-                                ),
-                            )
-                        )
                     continue
 
                 # (g.5) ASK-USER GATE — `ask_user` is a MODEL-CHOSEN escape
@@ -2321,6 +2404,8 @@ class AgentLoop:
                     return await self.get_state()
 
                 # (h) build the ActionEvent
+                # A real action is being taken — the invisible-step streak is over.
+                self._invisible_steps = 0
                 action = ActionEvent(
                     thought=step.thought,
                     tool_call=step.tool_call,

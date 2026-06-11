@@ -59,7 +59,8 @@ async def test_actionless_breaker_halts():
         if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
     ]
     assert any(
-        "3 consecutive responses without any tool call" in (m.message.content if m.message else "")
+        "3 consecutive responses without doing any real work"
+        in (m.message.content if m.message else "")
         for m in msgs
     )
 
@@ -281,3 +282,159 @@ async def test_deliverable_guard():
     deliverables = [e for e in events if isinstance(e, DeliverableEvent)]
     assert len(deliverables) == 1
     assert deliverables[0].title == "x"
+
+
+# ---- intercept bypass holes (Phase-B re-run defect, 2026-06-10) -----------------
+#
+# The non-blocking intercepts (notify_user / remember / serve) used to end with
+# a bare `continue`, skipping ALL actionless bookkeeping — so a model spamming
+# them post-resume burned ~50 DeliverableEvents + ~20 prose messages before the
+# stuck detector (95 events later) stopped it. Each intercept now feeds the
+# shared `_actionless_valve`, and log-invisible steps (empty payloads,
+# duplicates) are carried by an instance counter.
+
+
+async def _approved_plan_loop(agent):
+    """Build a loop with an approved 1-step plan (incomplete) — the
+    cap-3 actionless breaker is armed in this state."""
+    loop, store = build_loop(agent)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    await loop.send_message("go")
+    await loop.run()
+    await loop.approve_plan()
+    return loop, store
+
+
+@pytest.mark.asyncio
+async def test_serve_spam_trips_valve():
+    """Distinct serve calls with no real action in between → PAUSED actionless
+    at the cap (3 DeliverableEvents max), not a 50-event spam run."""
+    agent = ScriptedAgent([
+        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+        action_step("serve", {"title": "a", "path": "pa"}),
+        action_step("serve", {"title": "b", "path": "pb"}),
+        action_step("serve", {"title": "c", "path": "pc"}),
+        action_step("serve", {"title": "d", "path": "pd"}),  # must never run
+        finish_step(),
+    ])
+    loop, store = await _approved_plan_loop(agent)
+
+    state = await loop.run()
+    assert state.execution_status == ConversationStatus.PAUSED
+    events = await store.get_events(CID)
+    assert _last_status_detail(events) == "actionless"
+    deliverables = [e for e in events if isinstance(e, DeliverableEvent)]
+    assert len(deliverables) == 3
+
+
+@pytest.mark.asyncio
+async def test_duplicate_serve_suppressed_and_trips_valve():
+    """Re-serving the same (path, kind) → ONE DeliverableEvent total; the
+    invisible-step counter still trips the valve."""
+    agent = ScriptedAgent([
+        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+        action_step("serve", {"title": "app", "path": "p"}),
+        action_step("serve", {"title": "app", "path": "p"}),       # dup → invisible
+        action_step("serve", {"title": "app again", "path": "p"}),  # dup (title spin) → invisible
+        finish_step(),
+    ])
+    loop, store = await _approved_plan_loop(agent)
+
+    state = await loop.run()
+    assert state.execution_status == ConversationStatus.PAUSED
+    events = await store.get_events(CID)
+    assert _last_status_detail(events) == "actionless"
+    deliverables = [e for e in events if isinstance(e, DeliverableEvent)]
+    assert len(deliverables) == 1
+
+
+@pytest.mark.asyncio
+async def test_empty_serve_spam_trips_valve():
+    """Empty-args serve persists NOTHING to the log — the instance counter is
+    the only witness, and it must still trip the valve."""
+    agent = ScriptedAgent([
+        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+        action_step("serve", {}),
+        action_step("serve", {}),
+        action_step("serve", {}),
+        finish_step(),
+    ])
+    loop, store = await _approved_plan_loop(agent)
+
+    state = await loop.run()
+    assert state.execution_status == ConversationStatus.PAUSED
+    events = await store.get_events(CID)
+    assert _last_status_detail(events) == "actionless"
+    assert not any(isinstance(e, DeliverableEvent) for e in events)
+
+
+@pytest.mark.asyncio
+async def test_duplicate_remember_spam_trips_valve():
+    """Duplicate remember calls (the dedup ActionEvent pair) count toward the
+    actionless streak instead of resetting it."""
+    agent = ScriptedAgent([
+        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+        action_step("remember", {"fact": "foo", "scope": "s"}),   # fresh → neutral
+        action_step("remember", {"fact": "foo", "scope": "s"}),   # dup → counts
+        action_step("remember", {"fact": "foo", "scope": "s"}),   # dup → counts
+        action_step("remember", {"fact": "foo", "scope": "s"}),   # dup → trips cap
+        finish_step(),
+    ])
+    loop, store = await _approved_plan_loop(agent)
+
+    state = await loop.run()
+    assert state.execution_status == ConversationStatus.PAUSED
+    events = await store.get_events(CID)
+    assert _last_status_detail(events) == "actionless"
+    knowledges = [e for e in events if isinstance(e, KnowledgeEvent)]
+    assert len(knowledges) == 1
+
+
+@pytest.mark.asyncio
+async def test_notify_user_spam_trips_valve():
+    """notify_user prose spam (the 'I'm back!' degeneration) → PAUSED
+    actionless at the cap — the intercept no longer bypasses the valve."""
+    agent = ScriptedAgent([
+        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+        action_step("notify_user", {"message": "I'm back after the restart!"}),
+        action_step("notify_user", {"message": "Resuming work now!"}),
+        action_step("notify_user", {"message": "Picking up where I left off!"}),
+        finish_step(),
+    ])
+    loop, store = await _approved_plan_loop(agent)
+
+    state = await loop.run()
+    assert state.execution_status == ConversationStatus.PAUSED
+    events = await store.get_events(CID)
+    assert _last_status_detail(events) == "actionless"
+
+
+@pytest.mark.asyncio
+async def test_real_action_resets_intercept_streak():
+    """Serves interleaved with real actions never trip the valve — the streak
+    (event-derived AND invisible counter) resets on a real ActionEvent."""
+    agent = ScriptedAgent([
+        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+        action_step("serve", {"title": "a", "path": "pa"}),
+        action_step("serve", {"title": "a", "path": "pa"}),  # dup → invisible +1
+        action_step("shell", {}),                            # real action → reset
+        action_step("serve", {"title": "b", "path": "pb"}),
+        action_step("serve", {"title": "c", "path": "pc"}),
+        action_step("shell", {}),
+        finish_step(),
+    ])
+    loop, store = await _approved_plan_loop(agent)
+
+    state = await loop.run()
+    events = await store.get_events(CID)
+    statuses = [e.detail for e in events if isinstance(e, StatusEvent)]
+    assert "actionless" not in statuses
+    deliverables = [e for e in events if isinstance(e, DeliverableEvent)]
+    assert len(deliverables) == 3  # pa, pb, pc — the dup suppressed
+    # Lands via the finish path (partial_plan taxonomy), not a valve trip.
+    assert state.execution_status in (
+        ConversationStatus.FINISHED,
+        ConversationStatus.PAUSED,
+    )
+    assert _last_status_detail(events) == "partial_plan"
