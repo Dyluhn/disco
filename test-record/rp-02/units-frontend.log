@@ -1,0 +1,11 @@
+
+ RUN  v3.2.4 /var/home/dylan/projects/perpleximanus build/frontend
+
+ ✓ src/components/Markdown.test.tsx (5 tests) 59ms
+ ✓ src/components/research/DeepReportView.table.test.tsx (3 tests) 77ms
+
+ Test Files  2 passed (2)
+      Tests  8 passed (8)
+   Start at  02:30:54
+   Duration  628ms (transform 88ms, setup 54ms, collect 244ms, tests 136ms, environment 332ms, prepare 100ms)
+

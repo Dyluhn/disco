@@ -9,6 +9,7 @@
 
 import { AlertTriangle, CircleDot, Loader2 } from "lucide-react";
 import { CitedText } from "@/components/blocks";
+import { Markdown } from "@/components/Markdown";
 import { cn } from "@/lib/cn";
 import type { AssemblingSection } from "@/lib/deepResearchTrace";
 import type { GroundedAnswer, Passage, SearchHit } from "@/types/grounded";
@@ -144,18 +145,7 @@ function SectionView({
       )}
 
       <div className="prose-reading">
-        {/* The section body is markdown with [[id]] citations. We render
-            paragraph by paragraph (a real markdown parser would be nicer,
-            but the engine already keeps section bodies prose-only — no
-            tables/code — so split-on-blank-line is sufficient). */}
-        {real.markdown
-          .split(/\n\s*\n/)
-          .filter((p) => p.trim())
-          .map((para, i) => (
-            <p key={i} className="mb-inline last:mb-0">
-              <CitedText text={para} answer={answer} />
-            </p>
-          ))}
+        <Markdown answer={answer}>{real.markdown}</Markdown>
       </div>
     </section>
   );
@@ -182,14 +172,7 @@ export function DeepReportView({ query, summary, assembling, report }: Props) {
               </h2>
             </header>
             <div className="prose-reading">
-              {summary
-                .split(/\n\s*\n/)
-                .filter((p) => p.trim())
-                .map((para, i) => (
-                  <p key={i} className="mb-inline last:mb-0">
-                    {para}
-                  </p>
-                ))}
+              <Markdown answer={answer}>{summary}</Markdown>
             </div>
           </section>
         )}

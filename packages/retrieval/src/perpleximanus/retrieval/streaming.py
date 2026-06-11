@@ -131,8 +131,20 @@ def _to_blocks(text: str) -> list[dict]:
             )
             n += 1
 
+    def is_table_divider(line: str) -> bool:
+        line = line.strip()
+        if not line.startswith("|") or not line.endswith("|"):
+            return False
+        # Must contain at least one dash/colon per cell
+        parts = [p.strip() for p in line.split("|")][1:-1]
+        return all(re.match(r"^[:\- ]+$", p) and "-" in p for p in parts)
+
+    def parse_table_row(line: str) -> list[str]:
+        return [p.strip() for p in line.strip().split("|")][1:-1]
+
     while i < len(lines):
         line = lines[i]
+        # 1. Fenced code
         if line.strip().startswith("```"):
             flush_prose()
             lang = line.strip().lstrip("`").strip() or "text"
@@ -147,6 +159,45 @@ def _to_blocks(text: str) -> list[dict]:
             )
             n += 1
             continue
+        # 2. GFM Table
+        if line.strip().startswith("|") and i + 2 < len(lines):
+            # Potential table: header | divider | data
+            if is_table_divider(lines[i + 1]):
+                header = parse_table_row(lines[i])
+                if header:
+                    j = i + 2
+                    rows = []
+                    while j < len(lines) and lines[j].strip().startswith("|"):
+                        row = parse_table_row(lines[j])
+                        if len(row) > 0:
+                            # Pad or truncate row to match header length
+                            if len(row) < len(header):
+                                row += [""] * (len(header) - len(row))
+                            else:
+                                row = row[: len(header)]
+                            rows.append(row)
+                            j += 1
+                        else:
+                            break
+                    if rows:
+                        flush_prose()
+                        # Extract citations from all cells (header + all rows)
+                        cells = header + [c for r in rows for c in r]
+                        table_text = " ".join(cells)
+                        cited_ids = sorted(set(_CITE.findall(table_text)))
+                        blocks.append(
+                            {
+                                "kind": "table",
+                                "id": f"b{n}",
+                                "columns": header,
+                                "rows": rows,
+                                "cited_passage_ids": cited_ids,
+                            }
+                        )
+                        n += 1
+                        i = j
+                        continue
+        # 3. Headings
         m = re.match(r"^(#{1,3})\s+(.*)", line.strip())
         if m:
             flush_prose()

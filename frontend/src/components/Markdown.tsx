@@ -4,9 +4,41 @@
  * maps every element to the design tokens so it reads as part of the product, dark + light.
  */
 
+import React, { useMemo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/cn";
+import { CitationMarker } from "./blocks";
+import type { GroundedAnswer } from "@/types/grounded";
+
+const CITE = /\[\[(\w+)\]\]/g;
+
+/** Recursively traverse React children to find string nodes and replace [[id]] with CitationMarker. */
+function processCitations(children: React.ReactNode, answer: GroundedAnswer | null): React.ReactNode {
+  return React.Children.map(children, (child) => {
+    if (typeof child === "string") {
+      const parts = child.split(CITE);
+      if (parts.length === 1) return child;
+      const result: React.ReactNode[] = [];
+      for (let i = 0; i < parts.length; i++) {
+        if (i % 2 === 0) {
+          if (parts[i]) result.push(parts[i]);
+        } else {
+          result.push(<CitationMarker key={i} id={parts[i]} answer={answer} />);
+        }
+      }
+      return result;
+    }
+    if (React.isValidElement(child) && child.props.children) {
+      // Skip recursion for code/pre blocks
+      if (child.type === "code" || child.type === "pre") return child;
+      return React.cloneElement(child, {
+        children: processCitations(child.props.children, answer),
+      } as any);
+    }
+    return child;
+  });
+}
 
 const COMPONENTS: Components = {
   p: ({ children }) => <p className="my-inline leading-relaxed first:mt-0 last:mb-0">{children}</p>,
@@ -55,10 +87,32 @@ const COMPONENTS: Components = {
   td: ({ children }) => <td className="border border-hairline px-inline py-hair">{children}</td>,
 };
 
-export function Markdown({ children, className }: { children: string; className?: string }) {
+interface MarkdownProps {
+  children: string;
+  className?: string;
+  /** When provided, [[id]] markers in prose/tables render as Citation chips. */
+  answer?: GroundedAnswer | null;
+}
+
+export function Markdown({ children, className, answer = null }: MarkdownProps) {
+  const components = useMemo(() => {
+    if (!answer) return COMPONENTS;
+    const wrapped: Components = { ...COMPONENTS };
+    const tagsToWrap = ["p", "li", "td", "th", "h1", "h2", "h3", "blockquote"];
+    for (const tag of tagsToWrap) {
+      const Original = (COMPONENTS as any)[tag];
+      if (Original) {
+        wrapped[tag as keyof Components] = (props: any) => (
+          <Original {...props}>{processCitations(props.children, answer)}</Original>
+        );
+      }
+    }
+    return wrapped;
+  }, [answer]);
+
   return (
     <div className={cn("text-text", className)}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={COMPONENTS}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {children}
       </ReactMarkdown>
     </div>

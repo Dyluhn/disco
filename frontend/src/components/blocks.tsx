@@ -41,11 +41,32 @@ function inlineMd(text: string, keyBase: number): ReactNode[] {
   return out;
 }
 
+/** Individual citation marker (the [n] chip or a placeholder). */
+export function CitationMarker({ id, answer }: { id: string; answer: GroundedAnswer | null }) {
+  const numbers = answer ? citationNumbers(answer) : null;
+  const passage = answer ? passageById(answer, id) : undefined;
+  if (answer && passage && numbers) {
+    return (
+      <Citation
+        n={numbers.get(id) ?? 0}
+        passage={passage}
+        verdict={verdictForPassage(answer, id)}
+      />
+    );
+  }
+  return (
+    <sup>
+      <span className="mx-px inline-flex min-w-4 justify-center rounded-[0.25rem] border border-hairline px-1 align-super font-ui text-[0.62rem] leading-none text-text-faint">
+        ·
+      </span>
+    </sup>
+  );
+}
+
 /** Render prose text, replacing inline `[[id]]` markers with anchored citations.
  * Before the final answer arrives, render same-sized neutral placeholders so the
  * chips don't shift when provenance resolves (zero CLS). */
 export function CitedText({ text, answer }: { text: string; answer: GroundedAnswer | null }) {
-  const numbers = answer ? citationNumbers(answer) : null;
   const out: ReactNode[] = [];
   let last = 0;
   let key = 0;
@@ -54,25 +75,7 @@ export function CitedText({ text, answer }: { text: string; answer: GroundedAnsw
   while ((m = CITE.exec(text))) {
     out.push(<Fragment key={key++}>{inlineMd(text.slice(last, m.index), key * 1000)}</Fragment>);
     const id = m[1];
-    const passage = answer ? passageById(answer, id) : undefined;
-    if (answer && passage && numbers) {
-      out.push(
-        <Citation
-          key={key++}
-          n={numbers.get(id) ?? 0}
-          passage={passage}
-          verdict={verdictForPassage(answer, id)}
-        />,
-      );
-    } else {
-      out.push(
-        <sup key={key++}>
-          <span className="mx-px inline-flex min-w-4 justify-center rounded-[0.25rem] border border-hairline px-1 align-super font-ui text-[0.62rem] leading-none text-text-faint">
-            ·
-          </span>
-        </sup>,
-      );
-    }
+    out.push(<CitationMarker key={key++} id={id} answer={answer} />);
     last = m.index + m[0].length;
   }
   out.push(<Fragment key={key++}>{inlineMd(text.slice(last), key * 1000)}</Fragment>);

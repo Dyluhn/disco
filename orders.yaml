@@ -467,10 +467,12 @@ rp-01: committed
   - test-record/rp-01/units-frontend.log
   - agent-projects/gemini/rp-01-report.md
   - agent-projects/gemini/rp-01-fix1-report.md
-rp-02: in-flight
+rp-02: committed
   - packages/retrieval/src/perpleximanus/retrieval/streaming.py
   - packages/retrieval/tests/test_table_blocks.py
   - frontend/src/components/Markdown.tsx
+  - frontend/src/components/Markdown.test.tsx
+  - frontend/src/components/blocks.tsx
   - frontend/src/components/research/DeepReportView.tsx
   - frontend/src/components/research/DeepReportView.table.test.tsx
   - test-record/rp-02/units-retrieval.log
