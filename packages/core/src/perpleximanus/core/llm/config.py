@@ -70,6 +70,8 @@ class SandboxSettings(BaseModel):
     secrets here, only host/socket/runtime detail.
     """
 
+    # seconds a non-RUNNING sandbox may sit idle before suspend
+    idle_ttl_s: int = 1800
     # which backend is active. "process" (dev, host) | "gvisor" (strong, remote) |
     # "local" (container, same host) | "podman" (remote; a STUB in this environment).
     backend: str = "local"

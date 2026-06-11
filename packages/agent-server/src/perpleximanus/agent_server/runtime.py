@@ -259,6 +259,7 @@ class ConversationRuntime:
         # BP-14: per-(cid, name) coalescing cache for capture-pane calls.
         self._session_view_cache: dict[tuple[str, str], tuple[float, SessionView]] = {}
         self._session_view_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._wake_locks: dict[str, asyncio.Lock] = {}
 
     # The generative (text-producing) roles a model PICK drives. NLI_VERIFIER is a
     # cross-encoder (entailment scorer), NOT a chat model — pointing it at a picked
@@ -781,24 +782,8 @@ class ConversationRuntime:
         }
         if surface == "build" and state.execution_status in _ENDED:
             await self._maybe_snapshot(conversation_id)
-            # G (safe leak fix): tear the container down to free the port/memory/GPU
-            # + the idle preview server ONLY on a clean FINISH (and only when the
-            # snapshot was durably written). A STUCK/ERROR/PAUSED build keeps its
-            # sandbox so a resume can pick up exactly where it left off.
-            if state.execution_status == ConversationStatus.FINISHED:
-                if self._config_store.load().projects.projects_root.strip():
-                    await self._teardown_sandbox(conversation_id)
-                else:
-                    # Canary, not an error: without durable storage we must NOT
-                    # destroy the only copy of the work — but a silently-live
-                    # sandbox looks identical to a suspend bug (it cost two live
-                    # spec runs to find this). Say it plainly in the log.
-                    _LOG.warning(
-                        "suspend skipped for %s: projects_root unconfigured — "
-                        "sandbox stays live (configure Build project storage in "
-                        "Settings to enable suspend-on-finish)",
-                        conversation_id,
-                    )
+            # FINISHED now rides the idle sweep like STUCK/ERROR/PAUSED;
+            # suspend = sweep_idle_once -> _suspend
         return state
 
     async def _teardown_sandbox(self, conversation_id: str) -> None:
@@ -822,6 +807,7 @@ class ConversationRuntime:
             del self._session_view_cache[key]
         for key in [k for k in self._session_view_locks if k[0] == conversation_id]:
             del self._session_view_locks[key]
+        self._wake_locks.pop(conversation_id, None)
         # The sandbox (and its files) are gone, so the NEXT run must rehydrate the
         # snapshot into a fresh sandbox. Clear the rehydrate-once flag — otherwise
         # `_maybe_rehydrate` skips it and the continuation runs in an EMPTY workspace,
@@ -1012,7 +998,11 @@ class ConversationRuntime:
         PMX_IDLE_SUSPEND_S (default 1800 s). Returns the count suspended.
 
         Exposed so unit tests can drive it directly without sleeping."""
-        ttl_s = float(os.environ.get("PMX_IDLE_SUSPEND_S", "1800"))
+        ttl_env = os.environ.get("PMX_IDLE_SUSPEND_S")
+        if ttl_env is not None:
+            ttl_s = float(ttl_env)
+        else:
+            ttl_s = float(self._config_store.load().sandbox.idle_ttl_s)
         suspended = 0
         for cid in list(self._executors):
             with contextlib.suppress(Exception):
@@ -1493,6 +1483,40 @@ class ConversationRuntime:
         if getattr(getattr(session, "_service", None), "name", "?") == "podman":
             return None  # stub here
         return session.expose_port(port)
+
+    async def wake_for_preview(self, cid8: str, port: int) -> str | None:
+        """Wake a suspended sandbox if a preview request hits it.
+        Restores the workspace and the built-in static preview server on 8000.
+        It does NOT restart agent-started dev servers (vite/express) — requests
+        for ports nothing listens on after wake will proxy to a 502.
+        """
+        cid = self.resolve_cid_prefix(cid8)
+        if cid is not None:
+            return self.port_upstream(cid, port)
+
+        try:
+            summaries = await self._store.list_conversation_summaries(
+                owner_id=DEFAULT_OWNER_ID, limit=500, cursor=None
+            )
+            matches = [
+                s.conversation_id
+                for s in summaries
+                if s.conversation_id.removeprefix("conv_").startswith(cid8)
+            ]
+            if len(matches) != 1:
+                return None
+            cid = matches[0]
+        except Exception:
+            return None
+
+        lock = self._wake_locks.setdefault(cid, asyncio.Lock())
+        async with lock:
+            if cid in self._executors:
+                return self.port_upstream(cid, port)
+            woke = await self.ensure_preview(cid)
+            if woke:
+                return self.port_upstream(cid, port)
+            return None
 
     def live_session(self, conversation_id: str) -> SandboxSession | None:
         """Read-only sandbox accessor (BP-14). Does NOT create a session — a GET must

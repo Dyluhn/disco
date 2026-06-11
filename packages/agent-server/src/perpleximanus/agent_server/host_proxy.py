@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import inspect
 import logging
 import re
 import urllib.parse
@@ -63,7 +64,12 @@ class HostPreviewProxyMiddleware:
                 await send({"type": "websocket.close", "code": 1008, "reason": "unknown port"})
             return
 
-        upstream = self.upstream_resolver(cid8, port)
+        upstream_res = self.upstream_resolver(cid8, port)
+        if inspect.isawaitable(upstream_res):
+            upstream = await upstream_res
+        else:
+            upstream = upstream_res
+
         if not upstream:
             if scope["type"] == "http":
                 await send({

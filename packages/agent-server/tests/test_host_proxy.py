@@ -220,3 +220,23 @@ async def test_websocket_proxy(proxy_app_server, real_ws_server):
         await ws.send(b"hello bytes")
         resp = await ws.recv()
         assert resp == b"hello bytes"
+
+@pytest.mark.asyncio
+async def test_async_resolver_awaited():
+    async def async_resolver(cid8, port):
+        await asyncio.sleep(0.01)
+        if cid8 == "aaaaaaaa" and port == 8000:
+            return "http://fake-upstream"
+        return None
+
+    app = Starlette()
+    app.add_middleware(HostPreviewProxyMiddleware, upstream_resolver=async_resolver)
+
+    transport = httpx.ASGITransport(app=app)
+    base = "http://aaaaaaaa-8000.localhost"
+    async with httpx.AsyncClient(transport=transport, base_url=base) as client:
+        resp = await client.get("/")
+        # If the middleware didn't await the coroutine, the resolver would read as
+        # falsy -> 503. The awaited (dead) fake-upstream gives 502 instead.
+        assert resp.status_code == 502
+        assert b"preview upstream unreachable" in resp.content

@@ -404,7 +404,7 @@ dc-04a: committed
   - packages/tools/tests/test_session_diagnostics.py
   - test-record/dc-04a/units.log
   - agent-projects/sonnet/dc-04a-report.md
-dc-02: staged
+dc-02: committed
   - packages/agent-server/src/perpleximanus/agent_server/runtime.py
   - packages/agent-server/src/perpleximanus/agent_server/app.py
   - packages/agent-server/src/perpleximanus/agent_server/host_proxy.py

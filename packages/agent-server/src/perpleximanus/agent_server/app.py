@@ -121,12 +121,11 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    def _preview_upstream_resolver(cid8: str, port: int) -> str | None:
+    async def _preview_upstream_resolver(cid8: str, port: int) -> str | None:
         """DC-01: {cid8}-{port}.localhost → the conversation's sandbox upstream."""
         if runtime is None:
             return None
-        cid = runtime.resolve_cid_prefix(cid8)
-        return runtime.port_upstream(cid, port) if cid else None
+        return await runtime.wake_for_preview(cid8, port)
 
     app.add_middleware(HostPreviewProxyMiddleware, upstream_resolver=_preview_upstream_resolver)
 
