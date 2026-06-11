@@ -15,6 +15,8 @@ to the conversation log.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -171,52 +173,91 @@ class DeepResearchRun:
         # allowance to make progress on its remaining sub-questions.
         results: list[SubQuestionResult] = []
         remaining = self._bound.max_sources
-        for subq in pending:
+
+        # RP-04: Pipeline restructure.
+        # 1. Partition budget upfront (Race Fix).
+        n_pending = len(pending)
+        budget_per = remaining // n_pending if n_pending > 0 else 0
+        extra_budget = remaining % n_pending if n_pending > 0 else 0
+
+        # 2. Start all GATHER tasks concurrently (Producer).
+        # Retrieval work (search, fetch, extract, embed, rerank) runs concurrently.
+        gather_tasks = []
+        for i, subq in enumerate(pending):
+            subq_budget = budget_per + (1 if i < extra_budget else 0)
+
+            # Race Fix: section_id and namespace collision defense. Stability for resume.
+            subq_hash = hashlib.sha256(subq.title.encode()).hexdigest()[:8]
+            subq_namespace = f"{self._namespace}/{subq_hash}"
+            subq_id = f"s{subq_hash}"
+
+            task = asyncio.create_task(
+                gather_for_subquestion(
+                    subq,
+                    engine=self._engine,
+                    router=self._router,
+                    embedder=self._embedder,
+                    vector_store=self._vector_store,
+                    namespace=subq_namespace,
+                    bound=self._bound,
+                    emit=emit,
+                    remaining_source_budget=subq_budget,
+                )
+            )
+            gather_tasks.append((subq, task, subq_id, subq_namespace))
+
+        # 3. Consume results serially (Consumer).
+        # LLM work (synthesis) MUST stay a single-depth queue (one at a time).
+        for subq, task, subq_id, subq_namespace in gather_tasks:
             if should_cancel is not None and should_cancel():
-                bounded_by = "stopped"  # user pressed Stop — halt at this checkpoint
+                bounded_by = "stopped"
+                for _, t, _, _ in gather_tasks:
+                    t.cancel()
                 break
             if (time.monotonic() - started) > self._bound.max_wall_clock_s:
                 bounded_by = bounded_by or "wall_clock"
+                for _, t, _, _ in gather_tasks:
+                    t.cancel()
                 break
-            if remaining <= 0:
-                bounded_by = bounded_by or "sources"
+
+            try:
+                sub_result = await task
+            except asyncio.CancelledError:
                 break
-            sub_result = await gather_for_subquestion(
-                subq,
-                engine=self._engine,
-                router=self._router,
-                embedder=self._embedder,
-                vector_store=self._vector_store,
-                namespace=self._namespace,
-                bound=self._bound,
-                emit=emit,
-                remaining_source_budget=remaining,
-            )
+            except Exception:
+                for _, t, _, _ in gather_tasks:
+                    t.cancel()
+                raise
+
             results.append(sub_result)
-            remaining -= len(sub_result.passages)
             if sub_result.bounded_by_rounds and bounded_by is None:
                 bounded_by = "rounds"
-            # Synthesize THIS section immediately so it survives a later Stop. The
-            # section id is positional over the full (resumed + new) set so ids
-            # stay unique + stable across a resume.
+
+            # Synthesize THIS section immediately so it survives a later Stop.
             await emit(
                 "phase",
                 {"phase": "synthesize", "section": len(sections) + 1},
             )
-            section = await synthesize_section(
-                sub_result,
-                router=self._router,
-                embedder=self._embedder,
-                vector_store=self._vector_store,
-                namespace=self._namespace,
-                nli=self._nli,
-                section_id=f"s{len(sections)}",
-                top_k_for_section=self._bound.rerank_top_k,
-                emit=emit,
-            )
+            try:
+                section = await synthesize_section(
+                    sub_result,
+                    router=self._router,
+                    embedder=self._embedder,
+                    vector_store=self._vector_store,
+                    namespace=subq_namespace,
+                    nli=self._nli,
+                    section_id=subq_id,
+                    top_k_for_section=self._bound.rerank_top_k,
+                    emit=emit,
+                )
+            except Exception:
+                # A synthesis failure must not leak the still-running retrieval
+                # tasks into the long-lived server loop.
+                for _, t, _, _ in gather_tasks:
+                    t.cancel()
+                raise
             sections.append(section)
-            # A checkpoint signal the agent-server persists as incremental progress,
-            # so even a hard crash mid-run leaves completed sections recoverable.
+            # A checkpoint signal the agent-server persists as incremental progress.
             await emit(
                 "section_done",
                 {"section_id": section.id, "title": section.title, "done": len(sections)},

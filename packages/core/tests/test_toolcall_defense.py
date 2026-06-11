@@ -92,6 +92,22 @@ async def test_tool_calls_sanitization_both_ways():
     assert len(parsed_calls) == 1
     assert parsed_calls[0].tool_name == "sandbox.shell" # Mapped back!
 
+def test_tool_call_xml_leak_defense():
+    """E3: Regression test for stray </parameter> (or other XML tags) at the end of JSON."""
+    provider = OpenAIProvider("http://localhost")
+    raw_json = '{"command": "ls"}</parameter>'
+    
+    # Verify _repair_json handles it
+    repaired = provider._repair_json(raw_json)
+    import json
+    parsed = json.loads(repaired)
+    assert parsed == {"command": "ls"}
+
+    # Verify _tool_calls handles it (integrated test)
+    raw_calls = [{"function": {"name": "shell", "arguments": raw_json}}]
+    calls = provider._tool_calls(raw_calls)
+    assert calls[0].arguments == {"command": "ls"}
+
 @pytest.mark.asyncio
 async def test_exhausted_scripted_agent_during_requery():
     """DC-05: an exhausted ScriptedAgent in a requery must not hang.

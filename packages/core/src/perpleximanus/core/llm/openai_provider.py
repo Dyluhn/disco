@@ -330,12 +330,15 @@ class OpenAIProvider:
     @staticmethod
     def _repair_json(raw: str) -> str:
         """Rung 5: Mechanical JSON repair. Strip fences, fix trailing commas,
-        escape control characters."""
+        escape control characters, and strip XML-like closing tags."""
         raw = raw.strip()
         if raw.startswith("```"):
             raw = re.sub(r"^```(?:json)?\n?", "", raw)
             raw = re.sub(r"\n?```$", "", raw)
             raw = raw.strip()
+
+        # DEFECT E3: Strip XML-like closing tags that leak from some models (e.g. </parameter>)
+        raw = re.sub(r"</?[a-zA-Z0-9_]+>$", "", raw).strip()
 
         # Structural fixes: trailing commas
         raw = re.sub(r",\s*([\]}])", r"\1", raw)

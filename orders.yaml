@@ -520,7 +520,7 @@ rp-14: committed
   - test-record/rp-14/units-frontend.log
   - agent-projects/gemini/rp-14-report.md
 
-rp-03: staged
+rp-03: in-flight
   - frontend/src/types/grounded.ts
   - frontend/src/components/blocks.tsx
   - frontend/src/components/ChartBlock.test.tsx
@@ -531,7 +531,7 @@ rp-03: staged
   - test-record/rp-03/units-retrieval.log
   - test-record/rp-03/units-frontend.log
   - agent-projects/gemini/rp-03-report.md
-rp-04: staged
+rp-04: committed
   - packages/core/src/perpleximanus/core/llm/openai_provider.py
   - packages/core/tests/test_toolcall_defense.py
   - packages/retrieval/src/perpleximanus/retrieval/deep_research/engine.py
@@ -539,7 +539,7 @@ rp-04: staged
   - test-record/rp-04/units-core.log
   - test-record/rp-04/units-retrieval.log
   - agent-projects/gemini/rp-04-report.md
-dc-07: staged
+dc-07: in-flight
   - packages/agent-server/src/perpleximanus/agent_server/runtime.py
   - packages/agent-server/src/perpleximanus/agent_server/app.py
   - packages/core/src/perpleximanus/core/llm/prompts.py

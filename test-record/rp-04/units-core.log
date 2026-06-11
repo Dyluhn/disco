@@ -1,0 +1,153 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.13, pytest-9.0.3, pluggy-1.6.0
+rootdir: /var/home/dylan/projects/perpleximanus build
+configfile: pyproject.toml
+plugins: asyncio-1.4.0, anyio-4.13.0, hypothesis-6.155.2
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 448 items / 1 skipped
+
+packages/core/tests/test_agent_isolation.py .....                        [  1%]
+packages/core/tests/test_bp03_acceptance.py .....                        [  2%]
+packages/core/tests/test_cluster1_context.py ..........                  [  4%]
+packages/core/tests/test_cluster2_turntaking.py .......                  [  6%]
+packages/core/tests/test_cluster3_security.py ......                     [  7%]
+packages/core/tests/test_cluster7_knowledge.py ....                      [  8%]
+packages/core/tests/test_cluster8_kvcache.py .........                   [ 10%]
+packages/core/tests/test_cluster9_errors.py .....                        [ 11%]
+packages/core/tests/test_condenser.py .....                              [ 12%]
+packages/core/tests/test_config_store.py ........                        [ 14%]
+packages/core/tests/test_context_budget.py ......                        [ 15%]
+packages/core/tests/test_dc05_loop.py ......................             [ 20%]
+packages/core/tests/test_equality.py ............                        [ 23%]
+packages/core/tests/test_finish_browser_gate.py .........                [ 25%]
+packages/core/tests/test_gate_scoping.py ...............F.               [ 29%]
+packages/core/tests/test_loop_concurrency.py ....                        [ 29%]
+packages/core/tests/test_loop_condensation.py ....                       [ 30%]
+packages/core/tests/test_loop_confirmation.py ....                       [ 31%]
+packages/core/tests/test_loop_extra.py .........                         [ 33%]
+packages/core/tests/test_loop_integration.py .F                          [ 34%]
+packages/core/tests/test_loop_state_machine.py ...                       [ 34%]
+packages/core/tests/test_loop_step.py .......................            [ 39%]
+packages/core/tests/test_loop_stophooks.py ..                            [ 40%]
+packages/core/tests/test_loop_stuck.py ........                          [ 42%]
+packages/core/tests/test_no_read_penalty.py ..                           [ 42%]
+packages/core/tests/test_observation_masking.py F......                  [ 44%]
+packages/core/tests/test_openai_provider.py .......                      [ 45%]
+packages/core/tests/test_planner_gate.py .....                           [ 46%]
+packages/core/tests/test_prefill_masking.py .                            [ 47%]
+packages/core/tests/test_remember_tool.py ....                           [ 47%]
+packages/core/tests/test_router_errors.py ......                         [ 49%]
+packages/core/tests/test_router_extra.py .......                         [ 50%]
+packages/core/tests/test_router_integration.py .                         [ 51%]
+packages/core/tests/test_router_prompts.py ...........                   [ 53%]
+packages/core/tests/test_router_routing.py ...........                   [ 56%]
+packages/core/tests/test_router_summarizer_stream.py ...                 [ 56%]
+packages/core/tests/test_secrets.py .......                              [ 58%]
+packages/core/tests/test_security_analyzer.py .......................... [ 64%]
+.....                                                                    [ 65%]
+packages/core/tests/test_security_integration.py ....                    [ 66%]
+packages/core/tests/test_security_policy.py ......                       [ 67%]
+packages/core/tests/test_security_vocab.py .......................       [ 72%]
+packages/core/tests/test_serialization.py ..............                 [ 75%]
+packages/core/tests/test_serve_tool.py .....                             [ 76%]
+packages/core/tests/test_skills.py ...................                   [ 81%]
+packages/core/tests/test_state.py ........                               [ 82%]
+packages/core/tests/test_store.py ...........                            [ 85%]
+packages/core/tests/test_store_filters.py ..........                     [ 87%]
+packages/core/tests/test_store_status.py .....                           [ 88%]
+packages/core/tests/test_tail_variation.py ..                            [ 89%]
+packages/core/tests/test_toolcall_defense.py .......                     [ 90%]
+packages/core/tests/test_verify_on_finish.py ..........                  [ 92%]
+packages/core/tests/test_view.py ...........                             [ 95%]
+packages/core/tests/test_view_kv_stability.py .....                      [ 96%]
+packages/core/tests/test_vision_wiring.py ......                         [ 97%]
+packages/core/tests/test_watch_it_write.py ..........                    [100%]
+
+=================================== FAILURES ===================================
+___________ test_auto_approved_not_stamped_when_base_would_not_gate ____________
+
+    async def test_auto_approved_not_stamped_when_base_would_not_gate():
+        """auto_approved is NOT stamped for LOW-risk sandboxed ops — ConfirmRisky
+        would not have gated these anyway, so the stamp would be misleading."""
+        agent = ScriptedAgent(
+            [action_step(tool="file_read", args={"path": "README.md"}), finish_step()]
+        )
+        loop, store = build_loop(
+            agent,
+            executor=_SandboxScopedExecutor(),
+            analyzer=FakeAnalyzer(L),
+            policy=BlastRadiusConfirm(),
+        )
+        await loop.send_message("read a file")
+        state = await loop.run()
+        assert state.execution_status == ConversationStatus.FINISHED
+        events = await store.get_events("conv")
+        action_events = [e for e in events if isinstance(e, ActionEvent)]
+>       assert action_events
+E       assert []
+
+packages/core/tests/test_gate_scoping.py:235: AssertionError
+____________ test_provider_error_reaches_the_user_with_real_content ____________
+
+    async def test_provider_error_reaches_the_user_with_real_content():
+        """Reactive error surfacing acceptance gate: when the driver model's provider
+        rejects the call, the loop does NOT crash or flatten it — it emits a terminal
+        ErrorEvent whose detail carries the PROVIDER's real reason, and the agent
+        server streams that event to the UI. No capability check happened first; the
+        request was sent and the provider's 'no' is what surfaced."""
+        real_reason = "image input not supported by local-driver-q4"
+        # The assigned driver provider rejects the call with a typed provider error.
+        rejecting = FakeModelProvider("ollama", raises=LLMContentFiltered(real_reason))
+        router = DefaultLLMRouter(
+            simple_config(), {"ollama": rejecting, "openrouter": FakeModelProvider("openrouter")}
+        )
+        agent = RouterAgent(router, conversation_id=CID)
+        loop, store = build_loop(agent, executor=FakeExecutor(), policy=NeverConfirm())
+    
+        await loop.send_message("describe the attached image")
+        state = await loop.run()
+    
+        # The loop terminated as ERROR rather than raising out / hanging in RUNNING.
+        assert state.execution_status == ConversationStatus.ERROR
+    
+        # Exactly one legible ErrorEvent reached the log (→ streamed to the UI).
+        errors = [e for e in await store.get_events(CID) if isinstance(e, ErrorEvent)]
+        assert len(errors) == 1
+        err = errors[0]
+        assert err.code == "model_error"
+        # The REAL provider reason is intact — not flattened to "model call failed".
+        assert real_reason in err.detail
+        # The typed classification is preserved alongside the real reason.
+        assert "LLMContentFiltered" in err.detail
+        assert "model call failed" not in err.detail  # not a generic message
+        # The provider WAS actually called (no pre-call capability gating).
+>       assert rejecting.calls == 1
+E       assert 3 == 1
+E        +  where 3 = <llm_fakes.FakeModelProvider object at 0x7f93c84b23c0>.calls
+
+packages/core/tests/test_loop_integration.py:109: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  perpleximanus.loop:engine.py:2008 Provider rejected request: image input not supported by local-driver-q4, requerying...
+WARNING  perpleximanus.loop:engine.py:2008 Provider rejected request: image input not supported by local-driver-q4, requerying...
+______________________ test_small_old_observation_is_full ______________________
+
+    def test_small_old_observation_is_full():
+        # _MASK_MIN_CHARS = 600
+        obs = observation(content="small")
+        # Make it old by adding many observations after it
+        # _MASK_KEEP_RECENT = 8
+        events = with_seqs([user_msg(), obs] + [observation(content="recent") for _ in range(10)])
+        view = View.of(events)
+        # obs is at index 1 (seq 2)
+>       assert view.messages[1].content == "small"
+E       AssertionError: assert 'Output: small' == 'small'
+E         
+E         - small
+E         + Output: small
+
+packages/core/tests/test_observation_masking.py:15: AssertionError
+=========================== short test summary info ============================
+FAILED packages/core/tests/test_gate_scoping.py::test_auto_approved_not_stamped_when_base_would_not_gate
+FAILED packages/core/tests/test_loop_integration.py::test_provider_error_reaches_the_user_with_real_content
+FAILED packages/core/tests/test_observation_masking.py::test_small_old_observation_is_full
+================== 3 failed, 445 passed, 1 skipped in 11.13s ===================
