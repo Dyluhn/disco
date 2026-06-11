@@ -201,3 +201,89 @@ async def test_zip_contains_real_files(tmp_path: Path) -> None:
         assert names == ["a.txt", "sub/b.txt"]
         assert zf.read("a.txt") == b"alpha"
         assert zf.read("sub/b.txt") == b"beta-binary"
+
+
+# ---- snapshot resilience (the dc-02 live-rung defect) ------------------------
+
+
+class _FlakySandbox(_FakeSandbox):
+    """_FakeSandbox plus scripted per-path failures: any path listed in
+    `broken` fails BOTH read_file and list_dir (the dropped-transport shape —
+    the probe can neither read it nor descend into it)."""
+
+    def __init__(self, files: dict[str, bytes], broken: set[str]) -> None:
+        super().__init__(files)
+        self.broken = set(broken)
+
+    async def list_dir(self, path: str) -> list[str]:
+        if path in self.broken:
+            raise OSError(32, "Broken pipe")
+        return await super().list_dir(path)
+
+    async def read_file(self, path: str) -> bytes:
+        if path in self.broken:
+            raise OSError(32, "Broken pipe")
+        return await super().read_file(path)
+
+
+async def test_snapshot_excludes_dependency_caches(tmp_path: Path) -> None:
+    """node_modules/.pnpm-store/__pycache__ are never walked — the lockfile is
+    the snapshot of the dependency tree, the store itself is reproducible (and
+    walking it per-file over ssh is what broke the dc-02 live rung)."""
+    payload = {
+        "index.html": b"<h1>ok</h1>",
+        "package.json": b"{}",
+        "node_modules/react/index.js": b"module.exports = {}",
+        ".pnpm-store/v11/files/00/abc": b"blob",
+        "src/__pycache__/app.cpython-313.pyc": b"\x00",
+        "src/app.py": b"print('hi')",
+    }
+    result = await snapshot_workspace(_FakeSandbox(payload), tmp_path / "snap")
+    assert set(result.paths) == {"index.html", "package.json", "src/app.py"}
+    assert result.skipped == []
+    assert not (tmp_path / "snap" / "node_modules").exists()
+    assert not (tmp_path / "snap" / ".pnpm-store").exists()
+
+
+async def test_snapshot_tolerates_unreadable_entries(tmp_path: Path) -> None:
+    """One unreadable file no longer aborts the snapshot: everything else is
+    mirrored, the casualty is recorded in result.skipped, and the caller can
+    still write the manifest (the project stays revivable)."""
+    payload = {
+        "index.html": b"<h1>ok</h1>",
+        "data/readings.csv": b"a,b\n1,2\n",
+        "data/locked.bin": b"unreadable",
+    }
+    flaky = _FlakySandbox(payload, broken={"data/locked.bin"})
+    result = await snapshot_workspace(flaky, tmp_path / "snap")
+    assert set(result.paths) == {"index.html", "data/readings.csv"}
+    assert len(result.skipped) == 1
+    assert "data/locked.bin" in result.skipped[0]
+    assert "Broken pipe" in result.skipped[0]
+
+
+async def test_snapshot_dead_transport_aborts(tmp_path: Path) -> None:
+    """A dropped pipe fails EVERY call — after the consecutive-failure cap the
+    snapshot aborts loudly instead of grinding through thousands of doomed
+    round-trips. (Distinct from the one-bad-file case above.)"""
+    from perpleximanus.tools.projects.archive import (
+        _SNAPSHOT_MAX_CONSECUTIVE_FAILURES,
+        WorkspaceArchiveError,
+    )
+
+    n = _SNAPSHOT_MAX_CONSECUTIVE_FAILURES + 2
+    payload = {f"dir/f{i:03}": b"x" for i in range(n)}
+    flaky = _FlakySandbox(payload, broken={f"dir/f{i:03}" for i in range(n)})
+    with pytest.raises(WorkspaceArchiveError, match="transport presumed dead"):
+        await snapshot_workspace(flaky, tmp_path / "snap")
+
+
+async def test_snapshot_oversized_file_skipped_not_fatal(tmp_path: Path) -> None:
+    """An oversized artifact is skipped + recorded, not a snapshot-killer: the
+    cap's job is to bound disk usage, not to hold the whole project hostage."""
+    payload = {"small.txt": b"ok", "huge.bin": b"x" * 64}
+    result = await snapshot_workspace(
+        _FakeSandbox(payload), tmp_path / "snap", max_file_bytes=32
+    )
+    assert result.paths == ["small.txt"]
+    assert len(result.skipped) == 1 and "huge.bin" in result.skipped[0]

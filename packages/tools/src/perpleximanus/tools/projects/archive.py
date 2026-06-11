@@ -17,7 +17,7 @@ from __future__ import annotations
 import io
 import zipfile
 from collections.abc import AsyncIterator, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
@@ -26,6 +26,31 @@ from typing import Protocol
 # only by the caller if a project legitimately needs more headroom.
 _DEFAULT_MAX_DEPTH = 16
 _DEFAULT_MAX_FILE_BYTES = 32 * 1024 * 1024  # 32 MiB
+
+# Dependency/cache directories are never snapshotted: they are reproducible from
+# the source tree (package.json / lockfiles ARE snapshotted), and walking them
+# one exec round-trip per file is what broke the dc-02 live rung — a .pnpm-store
+# holds thousands of content-addressed files, the walk took minutes over the ssh
+# transport and died with a broken pipe, and the manifest was never written.
+_SNAPSHOT_EXCLUDED_DIRS = frozenset(
+    {
+        "node_modules",
+        ".pnpm-store",
+        ".npm",
+        ".yarn",
+        ".cache",
+        ".venv",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+    }
+)
+
+# After this many CONSECUTIVE per-entry failures the transport is presumed dead
+# (a dropped ssh pipe fails every subsequent call) — abort instead of grinding
+# through thousands of doomed round-trips.
+_SNAPSHOT_MAX_CONSECUTIVE_FAILURES = 10
 
 
 class _WorkspaceIO(Protocol):
@@ -50,6 +75,7 @@ class SnapshotResult:
     file_count: int
     total_bytes: int
     paths: list[str]  # workspace-relative POSIX paths, sorted
+    skipped: list[str] = field(default_factory=list)  # unreadable entries we tolerated
 
 
 # ---- snapshot OUT ----------------------------------------------------------
@@ -68,23 +94,48 @@ async def snapshot_workspace(
     interface doesn't expose recursion, so we do it client-side). Every leaf is
     read with read_file and written to disk under the corresponding relative
     path. Existing files at dest are overwritten; existing dirs are reused.
+
+    Resilience (dc-02 live-rung lesson): dependency/cache dirs
+    (_SNAPSHOT_EXCLUDED_DIRS) are skipped outright, and a single unreadable
+    entry no longer aborts the snapshot — it's recorded in `result.skipped`
+    and the walk continues, so the manifest still gets written and the project
+    stays revivable. Only a presumed-dead transport
+    (_SNAPSHOT_MAX_CONSECUTIVE_FAILURES consecutive failures) or an unlistable
+    workspace ROOT raises — those mean "we saved nothing trustworthy".
     """
     dest.mkdir(parents=True, exist_ok=True)
 
     paths: list[str] = []
+    skipped: list[str] = []
     total_bytes = 0
+    consecutive_failures = 0
+
+    def _skip(child: str, reason: str) -> None:
+        nonlocal consecutive_failures
+        skipped.append(f"{child}: {reason}")
+        consecutive_failures += 1
+        if consecutive_failures >= _SNAPSHOT_MAX_CONSECUTIVE_FAILURES:
+            raise WorkspaceArchiveError(
+                f"{consecutive_failures} consecutive failures (last: {child!r}: "
+                f"{reason}) — transport presumed dead, aborting snapshot"
+            )
 
     async def _walk(rel: str, depth: int) -> None:
-        nonlocal total_bytes
+        nonlocal total_bytes, consecutive_failures
         if depth > max_depth:
             raise WorkspaceArchiveError(
                 f"workspace depth exceeded the {max_depth}-level cap at {rel!r}"
             )
         try:
             entries = await sandbox.list_dir(rel or ".")
-        except Exception as exc:  # noqa: BLE001 — surface the real cause
-            raise WorkspaceArchiveError(f"list_dir {rel!r} failed: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 — tolerated per-entry, fatal at root
+            if not rel:
+                raise WorkspaceArchiveError(f"list_dir {rel!r} failed: {exc}") from exc
+            _skip(rel, f"list_dir failed: {exc}")
+            return
         for name in entries:
+            if name in _SNAPSHOT_EXCLUDED_DIRS:
+                continue  # reproducible dependency/cache tree — never snapshot
             child = f"{rel}/{name}" if rel else name
             # Distinguish files from directories with a probe: list_dir on a file
             # raises SandboxError. We try read_file first (the common case is a
@@ -97,25 +148,25 @@ async def snapshot_workspace(
                 try:
                     await sandbox.list_dir(child)
                 except Exception as exc:  # noqa: BLE001
-                    raise WorkspaceArchiveError(
-                        f"could not read or descend into {child!r}: {exc}"
-                    ) from exc
+                    _skip(child, f"could not read or descend: {exc}")
+                    continue
                 await _walk(child, depth + 1)
                 continue
             if len(data) > max_file_bytes:
-                raise WorkspaceArchiveError(
-                    f"file {child!r} is {len(data)} bytes, exceeds the "
-                    f"{max_file_bytes}-byte cap"
-                )
+                _skip(child, f"{len(data)} bytes exceeds the {max_file_bytes}-byte cap")
+                continue
             target = dest / child
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
             paths.append(child)
             total_bytes += len(data)
+            consecutive_failures = 0  # a success proves the transport is alive
 
     await _walk("", 0)
     paths.sort()
-    return SnapshotResult(file_count=len(paths), total_bytes=total_bytes, paths=paths)
+    return SnapshotResult(
+        file_count=len(paths), total_bytes=total_bytes, paths=paths, skipped=skipped
+    )
 
 
 # ---- rehydrate IN ----------------------------------------------------------
