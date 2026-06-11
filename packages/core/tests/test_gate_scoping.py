@@ -221,9 +221,18 @@ async def test_auto_approved_not_stamped_when_base_would_not_gate():
     agent = ScriptedAgent(
         [action_step(tool="file_read", args={"path": "README.md"}), finish_step()]
     )
+    # rp-12 registry-aware requery: a tool absent from available_tools() is
+    # treated as unknown and requeried — the test executor must register what
+    # the script calls, like a real registry would.
+    from perpleximanus.core.llm.types import ToolSpec
     loop, store = build_loop(
         agent,
-        executor=_SandboxScopedExecutor(),
+        executor=_SandboxScopedExecutor(
+            tools=[
+                ToolSpec(name="shell", description="run a shell command", parameters_schema={}),
+                ToolSpec(name="file_read", description="read a file", parameters_schema={}),
+            ]
+        ),
         analyzer=FakeAnalyzer(L),
         policy=BlastRadiusConfirm(),
     )

@@ -12,7 +12,10 @@ def test_small_old_observation_is_full():
     events = with_seqs([user_msg(), obs] + [observation(content="recent") for _ in range(10)])
     view = View.of(events)
     # obs is at index 1 (seq 2)
-    assert view.messages[1].content == "small"
+    # rp-12 B3 tail variation rotates observation surface wrappers by seq —
+    # the masking contract is "content present, unmasked", not an exact format.
+    assert "small" in view.messages[1].content
+    assert "[older observation" not in view.messages[1].content
 
 def test_large_recent_observation_is_full_but_snipped():
     # _MASK_KEEP_RECENT = 8

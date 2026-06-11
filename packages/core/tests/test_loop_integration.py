@@ -106,4 +106,6 @@ async def test_provider_error_reaches_the_user_with_real_content():
     assert "LLMContentFiltered" in err.detail
     assert "model call failed" not in err.detail  # not a generic message
     # The provider WAS actually called (no pre-call capability gating).
-    assert rejecting.calls == 1
+    # rp-12 bounded requery: a provider rejection enters the requery ladder
+    # (initial + 2 corrective attempts) before surfacing — 3 calls, one error.
+    assert rejecting.calls == 3
