@@ -16,7 +16,7 @@ from typing import Literal
 
 from perpleximanus.core import SkillStore
 from perpleximanus.core.llm import ConfigStore, ModelRole, RouterConfig, SecretStore
-from perpleximanus.core.llm.config import ModelEntry
+from perpleximanus.core.llm.config import McpSettings, ModelEntry
 from perpleximanus.core.llm.types import Requirement
 from pydantic import BaseModel
 
@@ -165,11 +165,33 @@ class SkillCreate(BaseModel):
     enabled: bool = True
 
 
+class McpServerConfigDTO(BaseModel):
+    """POST/PATCH body for creating or updating an MCP server."""
+
+    name: str
+    url: str
+    transport: str = "stdio"  # "stdio" | "streamable_http"
+    enabled: bool = True
+    allowed_tools: list[str] | None = None
+    risk_tier: str = "medium"
+
+
+class McpServerApproveDTO(BaseModel):
+    """POST body for approve/re-approve — carries the new description hash."""
+
+    description_hash: str
+
+
 class McpConnectionDTO(BaseModel):
     id: str
     name: str
     url: str
     status: str  # "connected" | "disconnected" | "error"
+    transport: str | None = None  # "stdio" | "streamable_http"
+    risk_tier: str | None = None
+    description_hash: str | None = None  # SHA-256 of approved tool descriptions
+    approved_at: str | None = None  # ISO-8601
+    enabled: bool | None = None
 
 
 # ---- derivation from the core RouterConfig ----------------------------------
@@ -397,6 +419,7 @@ class ConfigState:
         store: ConfigStore | None = None,
         secrets: SecretStore | None = None,
         skills: SkillStore | None = None,
+        db_conn: object = None,
     ) -> None:
         if store is not None:
             self._store = store
@@ -408,14 +431,9 @@ class ConfigState:
         # Real, persistent skills (.md files under PMX_SKILLS_DIR). Replaces the
         # old fixture list — skills now survive restarts and feed the agent.
         self._skills_store = skills or SkillStore()
-        self._mcp: list[McpConnectionDTO] = [
-            McpConnectionDTO(
-                id="fs", name="Filesystem", url="stdio://mcp-server-filesystem", status="connected"
-            ),
-            McpConnectionDTO(
-                id="gh", name="GitHub", url="https://mcp.github.local", status="disconnected"
-            ),
-        ]
+        # DB connection for mcp_approvals table (shared with agent-server).
+        # When None (tests without a DB), MCP config persists to ConfigStore only.
+        self._db_conn = db_conn
 
     # models + assignments (the absolute manual model story) ------------------
 
@@ -616,7 +634,176 @@ class ConfigState:
     def delete_skill(self, skill_id: str) -> bool:
         return self._skills_store.delete(skill_id)
 
-    # mcp (wiring-pending) ----------------------------------------------------
+    # mcp (live, persistent CRUD) — rung B ----------------------------------
+
+    def _mcp_config(self) -> McpSettings:
+        return self._store.load().mcp
+
+    def _mcp_approvals(self) -> dict[str, dict]:
+        """Read all approval rows keyed by server name."""
+        if self._db_conn is None:
+            return {}
+        try:
+            from perpleximanus.tools.mcp.migrations import list_mcp_approvals
+
+            rows = list_mcp_approvals(self._db_conn)
+            return {r["server"]: r for r in rows}
+        except Exception:
+            return {}
 
     def mcp_connections(self) -> list[McpConnectionDTO]:
-        return [c.model_copy() for c in self._mcp]
+        """Live pool projection: every configured server + its approval status."""
+        cfg = self._mcp_config()
+        approvals = self._mcp_approvals()
+        out: list[McpConnectionDTO] = []
+        for name, srv in cfg.servers.items():
+            url = srv.get("url", "") or srv.get("command", [""])[0] if srv.get("command") else srv.get("url", "")
+            ap = approvals.get(name)
+            out.append(
+                McpConnectionDTO(
+                    id=name,
+                    name=name,
+                    url=url,
+                    status=_mcp_live_status(ap),
+                    transport=srv.get("transport"),
+                    risk_tier=srv.get("risk_tier"),
+                    description_hash=ap["description_hash"] if ap else None,
+                    approved_at=ap["approved_at"] if ap else None,
+                    enabled=srv.get("enabled", True),
+                )
+            )
+        return out
+
+    def create_mcp_server(self, body: McpServerConfigDTO) -> McpConnectionDTO:
+        cfg = self._mcp_config()
+        if body.name in cfg.servers:
+            raise ValueError(f"server {body.name!r} already exists")
+        srv: dict = {
+            "transport": body.transport,
+            "url": body.url,
+            "enabled": body.enabled,
+            "allowed_tools": body.allowed_tools,
+            "risk_tier": body.risk_tier,
+        }
+        if body.transport == "stdio":
+            srv["command"] = [body.url]
+        servers = {**cfg.servers, body.name: srv}
+        new_cfg = cfg.model_copy(update={"servers": servers})
+        self._store.save(
+            self._store.load().model_copy(update={"mcp": new_cfg})
+        )
+        return McpConnectionDTO(
+            id=body.name,
+            name=body.name,
+            url=body.url,
+            status="disconnected",
+            transport=body.transport,
+            risk_tier=body.risk_tier,
+            enabled=body.enabled,
+        )
+
+    def update_mcp_server(self, name: str, patch: McpServerConfigDTO) -> McpConnectionDTO | None:
+        cfg = self._mcp_config()
+        if name not in cfg.servers:
+            return None
+        existing = cfg.servers[name]
+        updated = {**existing}
+        if patch.transport:
+            updated["transport"] = patch.transport
+        if patch.url:
+            updated["url"] = patch.url
+        if patch.enabled is not None:
+            updated["enabled"] = patch.enabled
+        if patch.allowed_tools is not None:
+            updated["allowed_tools"] = patch.allowed_tools
+        if patch.risk_tier:
+            updated["risk_tier"] = patch.risk_tier
+        servers = {**cfg.servers, name: updated}
+        new_cfg = cfg.model_copy(update={"servers": servers})
+        self._store.save(
+            self._store.load().model_copy(update={"mcp": new_cfg})
+        )
+        approvals = self._mcp_approvals()
+        ap = approvals.get(name)
+        return McpConnectionDTO(
+            id=name,
+            name=name,
+            url=updated.get("url", ""),
+            status=_mcp_live_status(ap),
+            transport=updated.get("transport"),
+            risk_tier=updated.get("risk_tier"),
+            description_hash=ap["description_hash"] if ap else None,
+            approved_at=ap["approved_at"] if ap else None,
+            enabled=updated.get("enabled", True),
+        )
+
+    def delete_mcp_server(self, name: str) -> bool:
+        cfg = self._mcp_config()
+        if name not in cfg.servers:
+            return False
+        servers = {k: v for k, v in cfg.servers.items() if k != name}
+        new_cfg = cfg.model_copy(update={"servers": servers})
+        self._store.save(
+            self._store.load().model_copy(update={"mcp": new_cfg})
+        )
+        # Also remove the approval row.
+        if self._db_conn is not None:
+            try:
+                from perpleximanus.tools.mcp.migrations import delete_mcp_approval
+
+                delete_mcp_approval(self._db_conn, name)
+            except Exception:
+                pass
+        return True
+
+    def approve_mcp_server(self, name: str, body: McpServerApproveDTO) -> McpConnectionDTO:
+        """Approve or re-approve — mutates the single row, never inserts a second."""
+        cfg = self._mcp_config()
+        if name not in cfg.servers:
+            raise KeyError(f"unknown server {name!r}")
+        if self._db_conn is None:
+            raise RuntimeError("no DB connection for approval persistence")
+        from perpleximanus.tools.mcp.migrations import create_mcp_approval, get_mcp_approval
+
+        create_mcp_approval(self._db_conn, name, body.description_hash)
+        ap = get_mcp_approval(self._db_conn, name)
+        srv = cfg.servers[name]
+        return McpConnectionDTO(
+            id=name,
+            name=name,
+            url=srv.get("url", ""),
+            status=_mcp_live_status(ap),
+            transport=srv.get("transport"),
+            risk_tier=srv.get("risk_tier"),
+            description_hash=ap["description_hash"] if ap else None,
+            approved_at=ap["approved_at"] if ap else None,
+            enabled=srv.get("enabled", True),
+        )
+
+    def mcp_approval_diff(self, name: str, new_hash: str) -> dict | None:
+        """Return old-vs-new hash diff for the approve UI. None = no diff or no
+        stored approval."""
+        if self._db_conn is None:
+            return None
+        from perpleximanus.tools.mcp.migrations import get_mcp_approval
+
+        old = get_mcp_approval(self._db_conn, name)
+        if old is None:
+            return None
+        old_hash = old["description_hash"]
+        if old_hash == new_hash:
+            return None
+        return {
+            "server": name,
+            "old_hash": old_hash,
+            "new_hash": new_hash,
+            "approved_at": old["approved_at"],
+            "approved_by": old["approved_by"],
+        }
+
+
+def _mcp_live_status(approval: dict | None) -> str:
+    """Derive the live status for a server. In the app-server projection:
+    'connected' = approved exists; 'disconnected' = no approval yet.
+    The agent-server is what actually dials and may surface 'error'."""
+    return "connected" if approval else "disconnected"

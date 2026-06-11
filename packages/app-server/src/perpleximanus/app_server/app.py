@@ -26,6 +26,8 @@ from .config_state import (
     DataSourcesConfigDTO,
     EncodersConfigDTO,
     McpConnectionDTO,
+    McpServerApproveDTO,
+    McpServerConfigDTO,
     ModelDTO,
     ModelUpsert,
     OpenRouterKeyBody,
@@ -57,7 +59,14 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
     """Build the app-server over a shared store. The store is injected so tests
     drive it headlessly and so it shares conversations with the agent-server."""
     app = FastAPI(title="perpleximanus app-server", version="0.1.0")
-    state = config or ConfigState()
+    # Default-construct ConfigState wired to the SHARED store connection so MCP
+    # approvals persist to the mcp_approvals table in the deployed app — not only
+    # when a test injects an explicit ConfigState. `__main__.create_app(store)`
+    # takes this branch; without the db_conn, POST /api/mcp/servers/{name}/approve
+    # 500s ("no DB connection for approval persistence") and GET /api/mcp can never
+    # project an approved/connected server. The store's _conn already carries the
+    # mcp_approvals table (core SqliteEventStore schema).
+    state = config or ConfigState(db_conn=store._conn)
 
     app.add_middleware(
         CORSMiddleware,
@@ -208,11 +217,39 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
         if not state.delete_skill(skill_id):
             raise HTTPException(status_code=404, detail=f"unknown skill {skill_id!r}")
 
-    # ---- mcp connections (wiring-pending scaffold) --------------------------
+    # ---- mcp connections (live, persistent CRUD — rung B) -------------------
 
     @app.get("/api/mcp")
     async def get_mcp() -> list[McpConnectionDTO]:
         return state.mcp_connections()
+
+    @app.post("/api/mcp/servers", status_code=201)
+    async def create_mcp_server(body: McpServerConfigDTO) -> McpConnectionDTO:
+        try:
+            return state.create_mcp_server(body)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.patch("/api/mcp/servers/{name}")
+    async def update_mcp_server(name: str, body: McpServerConfigDTO) -> McpConnectionDTO:
+        result = state.update_mcp_server(name, body)
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"unknown server {name!r}")
+        return result
+
+    @app.delete("/api/mcp/servers/{name}", status_code=204)
+    async def delete_mcp_server(name: str) -> None:
+        if not state.delete_mcp_server(name):
+            raise HTTPException(status_code=404, detail=f"unknown server {name!r}")
+
+    @app.post("/api/mcp/servers/{name}/approve")
+    async def approve_mcp_server(name: str, body: McpServerApproveDTO) -> McpConnectionDTO:
+        try:
+            return state.approve_mcp_server(name, body)
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"unknown server {name!r}")
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     # ---- library: owner-scoped conversation list + delete (§6.1) ------------
 

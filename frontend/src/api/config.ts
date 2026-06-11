@@ -1,5 +1,5 @@
 import { MCP_CONNECTIONS } from "@/fixtures/config";
-import type { McpConnection, Skill, SkillCreate, SkillPatch } from "@/types/config";
+import type { McpConnection, McpServerApprove, McpServerConfig, Skill, SkillCreate, SkillPatch } from "@/types/config";
 import { apiGet, apiSend, fixtureDelay, isLive } from "./client";
 
 /**
@@ -97,4 +97,72 @@ export async function listMcpConnections(): Promise<McpConnection[]> {
   if (isLive()) return apiGet<McpConnection[]>("/api/mcp");
   await fixtureDelay();
   return fixtureMcp.map((c) => ({ ...c }));
+}
+
+export async function createMcpServer(config: McpServerConfig): Promise<McpConnection> {
+  if (isLive()) return apiSend<McpConnection>("POST", "/api/mcp/servers", config);
+  await fixtureDelay();
+  const conn: McpConnection = {
+    id: config.name,
+    name: config.name,
+    url: config.url,
+    status: "disconnected",
+    transport: config.transport,
+    risk_tier: config.risk_tier,
+    enabled: config.enabled,
+  };
+  fixtureMcp.push(conn);
+  return conn;
+}
+
+export async function updateMcpServer(
+  name: string,
+  patch: McpServerConfig,
+): Promise<McpConnection> {
+  if (isLive())
+    return apiSend<McpConnection>(
+      "PATCH",
+      `/api/mcp/servers/${encodeURIComponent(name)}`,
+      patch,
+    );
+  await fixtureDelay();
+  const idx = fixtureMcp.findIndex((c) => c.id === name);
+  if (idx === -1) throw new Error(`unknown server ${name}`);
+  const updated = { ...fixtureMcp[idx], ...patch };
+  fixtureMcp[idx] = updated;
+  return updated;
+}
+
+export async function deleteMcpServer(name: string): Promise<void> {
+  if (isLive()) {
+    await apiSend<void>("DELETE", `/api/mcp/servers/${encodeURIComponent(name)}`);
+    return;
+  }
+  await fixtureDelay();
+  const idx = fixtureMcp.findIndex((c) => c.id === name);
+  if (idx === -1) throw new Error(`unknown server ${name}`);
+  fixtureMcp.splice(idx, 1);
+}
+
+export async function approveMcpServer(
+  name: string,
+  body: McpServerApprove,
+): Promise<McpConnection> {
+  if (isLive())
+    return apiSend<McpConnection>(
+      "POST",
+      `/api/mcp/servers/${encodeURIComponent(name)}/approve`,
+      body,
+    );
+  await fixtureDelay();
+  const idx = fixtureMcp.findIndex((c) => c.id === name);
+  if (idx === -1) throw new Error(`unknown server ${name}`);
+  const updated = {
+    ...fixtureMcp[idx],
+    description_hash: body.description_hash,
+    approved_at: new Date().toISOString(),
+    status: "connected" as const,
+  };
+  fixtureMcp[idx] = updated;
+  return updated;
 }

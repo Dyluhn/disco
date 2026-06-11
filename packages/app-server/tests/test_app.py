@@ -268,10 +268,58 @@ def test_skills_update_missing_is_404(client):
 
 
 def test_mcp_connections(client):
+    # Rung B (RP-05b): the _mcp fixture list is gone — GET /api/mcp now serves
+    # the live pool projection of configured servers, which is empty on a fresh
+    # store. CRUD + populated-projection coverage lives in test_mcp_endpoints.py.
     conns = client.get("/api/mcp").json()
-    fs = next(c for c in conns if c["id"] == "fs")
-    assert fs["name"] == "Filesystem"
-    assert fs["status"] == "connected"
+    assert isinstance(conns, list)
+    assert conns == []
+
+
+def test_mcp_approval_persists_via_production_default_wiring(store, tmp_path, monkeypatch):
+    # REGRESSION (Fable rp-05b-ui REJECT): the DEPLOYED app builds the ASGI app via
+    # `__main__.create_app(store)` with NO explicit ConfigState. That default MUST
+    # wire the store's shared DB connection, or POST /api/mcp/servers/{name}/approve
+    # 500s ("no DB connection for approval persistence") in every real deployment
+    # while the fixture-injected endpoint tests (which always pass db_conn) stay
+    # green. This test constructs the app exactly as production does (config=None)
+    # so the `config or ConfigState(...)` fallback is actually exercised.
+    monkeypatch.setenv("PMX_CONFIG", str(tmp_path / "config.json"))
+    monkeypatch.setenv("PMX_SECRETS", str(tmp_path / "secrets.json"))
+    monkeypatch.setenv("PMX_SKILLS_DIR", str(tmp_path / "skills"))
+
+    client = TestClient(create_app(store))  # production construction — no ConfigState
+
+    created = client.post(
+        "/api/mcp/servers",
+        json={
+            "name": "prod",
+            "url": "https://mcp.prod.example",
+            "transport": "streamable_http",
+            "risk_tier": "medium",
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    h = "a" * 64
+    approved = client.post("/api/mcp/servers/prod/approve", json={"description_hash": h})
+    assert approved.status_code == 200, approved.text  # was a 500 before the fix
+    assert approved.json()["description_hash"] == h
+
+    # The approval actually persisted to the shared SQLite mcp_approvals table
+    # (the table the core SqliteEventStore schema already creates).
+    rows = store._conn.execute(
+        "SELECT description_hash FROM mcp_approvals WHERE server = ?", ("prod",)
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["description_hash"] == h
+
+    # …and the live projection now reports it as approved/connected.
+    listed = client.get("/api/mcp").json()
+    srv = next(c for c in listed if c["name"] == "prod")
+    assert srv["description_hash"] == h
+    assert srv["status"] == "connected"
 
 
 # ---- library: owner-scoped conversation list + delete -----------------------

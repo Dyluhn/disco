@@ -1,12 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  approveMcpServer,
+  createMcpServer as apiCreateMcp,
   createSkill,
+  deleteMcpServer as apiDeleteMcp,
   deleteSkill,
   listMcpConnections,
   listSkills,
+  updateMcpServer as apiUpdateMcp,
   updateSkill,
 } from "@/api/config";
-import type { McpConnection, Skill, SkillCreate, SkillPatch } from "@/types/config";
+import type { McpConnection, McpServerApprove, McpServerConfig, Skill, SkillCreate, SkillPatch } from "@/types/config";
 
 /** Query/mutation hooks for the skills subsystem + the MCP scaffold. The skills
  *  mutations invalidate the list so the UI reflects the persisted state. */
@@ -54,4 +58,38 @@ export function useToggleSkill() {
 
 export function useMcpConnections() {
   return useQuery<McpConnection[]>({ queryKey: MCP_KEY, queryFn: listMcpConnections });
+}
+
+export function useCreateMcpServer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (config: McpServerConfig) => apiCreateMcp(config),
+    onSuccess: () => qc.invalidateQueries({ queryKey: MCP_KEY }),
+  });
+}
+
+export function useUpdateMcpServer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name, patch }: { name: string; patch: McpServerConfig }) =>
+      apiUpdateMcp(name, patch),
+    onSuccess: () => qc.invalidateQueries({ queryKey: MCP_KEY }),
+  });
+}
+
+export function useDeleteMcpServer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => apiDeleteMcp(name),
+    onSuccess: () => qc.invalidateQueries({ queryKey: MCP_KEY }),
+  });
+}
+
+export function useApproveMcpServer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name, body }: { name: string; body: McpServerApprove }) =>
+      approveMcpServer(name, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: MCP_KEY }),
+  });
 }

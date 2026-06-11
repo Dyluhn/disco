@@ -636,12 +636,13 @@ rp-05b-py: committed
   - test-record/rp-05b/units-server.log
   - agent-projects/gemini/rp-05b-py-report.md
   - docs/workorders/RP-05b-orchestrator-proxy-decision.md
-rp-05b-ui: in-flight
+rp-05b-ui: committed
   - packages/app-server/src/perpleximanus/app_server/app.py
   - packages/app-server/src/perpleximanus/app_server/config_state.py
   - packages/app-server/tests/test_mcp_endpoints.py
   - frontend/src/types/config.ts
   - frontend/src/api/config.ts
+  - frontend/src/api/client.ts  # apiSend method union widened to include PATCH (MCP update); fixes TS2345 introduced by config.ts PATCH call
   - frontend/src/hooks/useConfig.ts
   - frontend/src/components/settings/McpSection.tsx
   - frontend/src/components/settings/McpSection.live.test.tsx

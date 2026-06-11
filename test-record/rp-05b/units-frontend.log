@@ -1,0 +1,126 @@
+# rp-05b-ui frontend units — regenerated 2026-06-11T18:59:56Z (post-Fable-fix)
+# NOTE: --no-file-parallelism. Default parallelism flakes ResearchSurface.test.tsx (streaming-reconcile
+#   integration test, UNRELATED to MCP) on CPU contention; still fails with the MCP files excluded →
+#   pre-existing. Sequential gives the true all-green. cmd: npx vitest run --no-file-parallelism
+
+
+ RUN  v3.2.4 /var/home/dylan/projects/perpleximanus build/frontend
+
+ ✓ src/components/BuildSurface.test.tsx (12 tests) 6892ms
+   ✓ Build surface (plan gate → build → action gate) > after plan approval, shows the activity feed and pauses at the per-action gate  1331ms
+   ✓ Build surface (plan gate → build → action gate) > Approve resumes the loop to a finished answer rendered as markdown  1599ms
+   ✓ Build surface (plan gate → build → action gate) > Reject records a denial without executing the action  1586ms
+   ✓ Build surface (plan gate → build → action gate) > after FINISHED, the bottom input becomes the 'Plan a change' box (re-enter plan mode)  1760ms
+ ✓ src/components/ResearchSurface.test.tsx (2 tests) 3837ms
+   ✓ Research surface (integration + streaming reconcile) > goes empty → query → a finished, grounded, structured answer  2048ms
+   ✓ Research surface (integration + streaming reconcile) > renders verification verdicts as citations (the unsupported claim is marked)  1788ms
+ ✓ src/components/research/DeepResearchSurface.test.tsx (10 tests) 2903ms
+   ✓ Deep Research surface — full lifecycle > after submit, shows the plan gate with editable sub-questions  588ms
+   ✓ Deep Research surface — full lifecycle > after approve, streams the progress + assembles the report + shows bounded notice  2249ms
+ ✓ src/views/settings.test.tsx (10 tests) 1164ms
+ ✓ src/views/history.test.tsx (4 tests) 398ms
+ ✓ src/components/mainSurface.test.tsx (2 tests) 275ms
+ ✓ src/components/settings/McpSection.live.test.tsx (6 tests) 234ms
+ ✓ src/components/controls.test.tsx (5 tests) 206ms
+ ✓ src/components/build/AskPanel.test.tsx (3 tests) 173ms
+ ✓ src/shell/Shell.test.tsx (6 tests) 162ms
+ ✓ src/components/settings/McpSection.approval.test.tsx (4 tests) 138ms
+ ✓ src/components/build/ExecutionCanvas.terminal.test.tsx (7 tests) 142ms
+ ✓ src/components/build/cluster6.test.tsx (12 tests) 127ms
+ ✓ src/components/SourcePanel.test.tsx (3 tests) 123ms
+stderr | src/components/CommandPalette.test.tsx > CommandPalette > should open on Ctrl+K
+`DialogContent` requires a `DialogTitle` for the component to be accessible for screen reader users.
+
+If you want to hide the `DialogTitle`, you can wrap it with our VisuallyHidden component.
+
+For more information, see https://radix-ui.com/primitives/docs/components/dialog
+Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.
+
+stderr | src/components/CommandPalette.test.tsx > CommandPalette > should filter commands
+`DialogContent` requires a `DialogTitle` for the component to be accessible for screen reader users.
+
+If you want to hide the `DialogTitle`, you can wrap it with our VisuallyHidden component.
+
+For more information, see https://radix-ui.com/primitives/docs/components/dialog
+Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.
+
+stderr | src/components/CommandPalette.test.tsx > CommandPalette > should close on Escape
+`DialogContent` requires a `DialogTitle` for the component to be accessible for screen reader users.
+
+If you want to hide the `DialogTitle`, you can wrap it with our VisuallyHidden component.
+
+For more information, see https://radix-ui.com/primitives/docs/components/dialog
+Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.
+
+ ✓ src/components/CommandPalette.test.tsx (3 tests) 85ms
+ ✓ src/components/build/DeliverablePanel.test.tsx (8 tests) 80ms
+ ✓ src/components/build/ExecutionCanvas.preview.test.tsx (6 tests) 82ms
+ ✓ src/components/Citation.test.tsx (2 tests) 86ms
+ ✓ src/components/build/AgentStatusBar.resume.test.tsx (6 tests) 79ms
+ ✓ src/components/research/DeepReportView.table.test.tsx (3 tests) 73ms
+ ✓ src/components/build/ActivityFeed.screenshot.test.tsx (8 tests) 67ms
+stderr | src/components/build/BuildSurface.upload.test.tsx > UploadComposer > calls uploadFiles with dropped files
+An update to UploadComposer inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+ ✓ src/components/build/BuildSurface.upload.test.tsx (8 tests) 67ms
+stderr | src/components/ChartBlock.test.tsx > ChartBlock component > renders table fallback when Chart.js throws (error degrade)
+Chart.js init failed Error: Rendering failed
+    at t.<anonymous> [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39msrc/components/ChartBlock.test.tsx:133:13[90m)[39m
+    at new mockCall [90m(file:///var/home/dylan/projects/perpleximanus%20build/frontend/[39mnode_modules/[4m@vitest/spy[24m/dist/index.js:96:15[90m)[39m
+    at new spy [90m(file:///var/home/dylan/projects/perpleximanus%20build/frontend/[39mnode_modules/[4mtinyspy[24m/dist/index.js:47:34[90m)[39m
+    at [90m/var/home/dylan/projects/perpleximanus build/frontend/[39msrc/components/blocks.tsx:227:15
+    at Object.react_stack_bottom_frame [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:25989:20[90m)[39m
+    at runWithFiberInDEV [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:874:13[90m)[39m
+    at commitHookEffectListMount [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:13249:29[90m)[39m
+    at commitHookPassiveMountEffects [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:13336:11[90m)[39m
+    at commitPassiveMountOnFiber [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:15484:13[90m)[39m
+    at recursivelyTraversePassiveMountEffects [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:15439:11[90m)[39m
+
+stderr | src/components/ChartBlock.test.tsx > ChartBlock component > renders table fallback when Chart.js throws even with partial data
+Chart.js init failed Error: Rendering failed
+    at t.<anonymous> [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39msrc/components/ChartBlock.test.tsx:155:13[90m)[39m
+    at new mockCall [90m(file:///var/home/dylan/projects/perpleximanus%20build/frontend/[39mnode_modules/[4m@vitest/spy[24m/dist/index.js:96:15[90m)[39m
+    at new spy [90m(file:///var/home/dylan/projects/perpleximanus%20build/frontend/[39mnode_modules/[4mtinyspy[24m/dist/index.js:47:34[90m)[39m
+    at [90m/var/home/dylan/projects/perpleximanus build/frontend/[39msrc/components/blocks.tsx:227:15
+    at Object.react_stack_bottom_frame [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:25989:20[90m)[39m
+    at runWithFiberInDEV [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:874:13[90m)[39m
+    at commitHookEffectListMount [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:13249:29[90m)[39m
+    at commitHookPassiveMountEffects [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:13336:11[90m)[39m
+    at commitPassiveMountOnFiber [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:15484:13[90m)[39m
+    at recursivelyTraversePassiveMountEffects [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:15439:11[90m)[39m
+
+ ✓ src/components/ChartBlock.test.tsx (9 tests) 58ms
+ ✓ src/components/states.test.tsx (2 tests) 57ms
+ ✓ src/components/Markdown.test.tsx (5 tests) 57ms
+ ✓ src/components/build/StreamingFile.test.tsx (2 tests) 55ms
+ ✓ src/views/HistoryView.status.test.tsx (2 tests) 50ms
+ ✓ src/hooks/useSessions.test.ts (9 tests) 33ms
+ ✓ src/components/Toast.test.tsx (2 tests) 32ms
+ ✓ src/components/build/AgentStatusBar.cost.test.tsx (3 tests) 30ms
+ ✓ src/components/build/AgentStatusBar.suspend.test.tsx (4 tests) 29ms
+ ✓ src/lib/useReplay.test.ts (14 tests) 20ms
+ ✓ src/hooks/useBuildNotifications.test.ts (5 tests) 17ms
+ ✓ src/hooks/useBuildStream.suspend.test.ts (3 tests) 12ms
+ ✓ src/hooks/useBuildStream.askgate.test.ts (2 tests) 12ms
+ ✓ src/lib/useTheme.test.ts (2 tests) 11ms
+ ✓ src/api/agent.upload.test.ts (5 tests) 5ms
+ ✓ src/api/agent.reconnect.test.ts (2 tests) 3ms
+ ✓ src/lib/srcdoc.test.ts (10 tests) 3ms
+ ✓ src/lib/buildTrace.test.ts (5 tests) 2ms
+ ✓ src/lib/isolation.test.ts (7 tests) 2ms
+ ✓ src/lib/cost.test.ts (4 tests) 2ms
+
+ Test Files  42 passed (42)
+      Tests  227 passed (227)
+   Start at  13:59:56
+   Duration  34.60s (transform 419ms, setup 869ms, collect 3.42s, tests 17.88s, environment 6.47s, prepare 1.17s)
+

@@ -137,11 +137,20 @@ describe("Settings — skills + MCP scaffolds", () => {
     expect(screen.getByRole("button", { name: /Save skill/i })).toBeDisabled();
   });
 
-  it("lists MCP connections with an inert (pending) add affordance", async () => {
+  it("lists MCP connections with a live (wired) add affordance", async () => {
+    const user = userEvent.setup();
     withQuery(<SettingsView />);
     expect(await screen.findByText("Filesystem")).toBeInTheDocument();
     expect(screen.getByText("Connected")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Add connection/i })).toBeDisabled();
+    // Rung B (RP-05b): the NotWired/PendingBadge scaffold is gone; "Add
+    // connection" is a live button that opens the real create form. (Full
+    // CRUD/approval coverage lives in McpSection.live/approval.test.tsx.)
+    const addBtn = screen.getByRole("button", { name: /Add connection/i });
+    expect(addBtn).toBeEnabled();
+    await user.click(addBtn);
+    expect(
+      await screen.findByRole("textbox", { name: /MCP server name/i }),
+    ).toBeInTheDocument();
   });
 });
 
