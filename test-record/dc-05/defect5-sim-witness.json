@@ -1,0 +1,41 @@
+{
+  "sim": "defect-5",
+  "date": "2026-06-10",
+  "cid": "conv_50c22df028054f118afead8c92ecac8c",
+  "pre_kill": {
+    "real_actions": 1,
+    "last_seq": 11
+  },
+  "outage": {
+    "stopped_at_seq": 12,
+    "duration_s": 38.7
+  },
+  "final_status": "FINISHED",
+  "post_outage_real_actions": 5,
+  "conv_error_events": 0,
+  "tool_error_events": 0,
+  "driver_unavailable_paused": false,
+  "status_trail": [
+    [
+      "RUNNING",
+      null
+    ],
+    [
+      "AWAITING_PLAN_APPROVAL",
+      "evt_99de494e2d7e48f7a66321803132f972"
+    ],
+    [
+      "RUNNING",
+      "plan_approved"
+    ],
+    [
+      "RUNNING",
+      null
+    ],
+    [
+      "FINISHED",
+      null
+    ]
+  ],
+  "verdict": "PASS"
+}
