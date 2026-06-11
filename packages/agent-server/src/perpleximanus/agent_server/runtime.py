@@ -845,6 +845,12 @@ class ConversationRuntime:
         # are cheap; the rehydrate only writes if there are files on disk.
         if surface == "build":
             await self._maybe_rehydrate(conversation_id)
+            # DC-07: re-materialize server-side uploads into the fresh sandbox.
+            # This is the SINGLE chokepoint that covers ALL paths:
+            #   - post-restart resume → fresh sandbox via lazy compose
+            #   - first build after upload (pending session adoption or fresh)
+            #   - mid-run recreation (also handled by _rehydrate_after_recreate)
+            await self._rematerialize_uploads(conversation_id)
 
         state = await loop.run()
 
@@ -1667,13 +1673,23 @@ class ConversationRuntime:
             return
 
         # Write them back into the sandbox.
+        written = 0
         for p in uploads_dir.iterdir():
             if p.is_file():
                 try:
                     data = p.read_bytes()
                     await session.write_file(f"uploads/{p.name}", data)
+                    written += 1
                 except Exception:  # noqa: BLE001 — best effort
-                    pass
+                    _LOG.warning(
+                        "[dc-07] failed to re-materialize upload %r for %s",
+                        p.name, conversation_id,
+                    )
+        if written:
+            _LOG.info(
+                "[dc-07] re-materialized %d upload(s) for %s",
+                written, conversation_id,
+            )
 
     async def _maybe_snapshot(self, conversation_id: str) -> None:
         """Mirror the live workspace out to disk + update the manifest."""

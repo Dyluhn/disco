@@ -499,3 +499,81 @@ async def test_upload_survives_recreation() -> None:
 
     # 4. Verify it is back.
     assert await sess.read_file("uploads/data.txt") == data
+
+
+@pytest.mark.asyncio
+async def test_upload_rematerialized_on_lazy_compose_path() -> None:
+    """[DC-07] Regression: post-restart resume path — sidecar has uploads, no
+    executor or pending session exists → compose fresh session (lazy compose) →
+    _rematerialize_uploads runs → files land in the sandbox.
+
+    This is the REAL failing path from DEFECT-7b: after a server restart, the
+    pending-sessions dict is empty, so _compose_build_loop creates a FRESH
+    SandboxSession whose on_recreate hook never fires (it's not a recreation).
+    The fix wires _rematerialize_uploads into _run_with_persistence so it runs
+    on EVERY build path — including the lazy compose."""
+    import tempfile
+    from unittest import mock
+
+    from perpleximanus.agent_server.runtime import ConversationRuntime
+    from perpleximanus.core.llm import DefaultLLMRouter
+    from perpleximanus.core.loop import RouterAgent
+
+    store = SqliteEventStore(":memory:")
+    cid = f"conv_{uuid.uuid4().hex}"
+    store.create_conversation(cid, owner_id="local")
+
+    rt = ConversationRuntime(store)
+    router = mock.MagicMock(spec=DefaultLLMRouter)
+    agent = mock.MagicMock(spec=RouterAgent)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        rt._uploads_base = tmpdir
+        data = b"post-restart data"
+        rt.store_upload(cid, "data.csv", data)
+        assert rt.get_upload_names(cid) == {"data.csv"}
+
+        # Post-restart state: no executor, no pending session.
+        assert cid not in rt._executors
+        assert cid not in rt._pending_sessions
+
+        # Mock a sandbox instance that stores files in memory.
+        mock_files: dict[str, bytes] = {}
+        mock_instance = mock.MagicMock()
+        mock_instance.write_file = mock.AsyncMock(
+            side_effect=lambda path, d: mock_files.__setitem__(path, d)
+        )
+        mock_instance.read_file = mock.AsyncMock(
+            side_effect=lambda path: mock_files.get(path, b"")
+        )
+        mock_instance.list_dir = mock.AsyncMock(
+            side_effect=lambda path: [
+                k[len(path.rstrip("/") + "/"):]
+                for k in mock_files
+                if k.startswith(path.rstrip("/") + "/")
+            ]
+        )
+        mock_instance.id = "mock-sandbox-instance"
+
+        mock_service = mock.MagicMock()
+        mock_service.create = mock.AsyncMock(return_value=mock_instance)
+        mock_service.name = "mock"
+
+        # Simulate the resume path: compose a fresh build loop (the lazy path).
+        with mock.patch.object(rt, "_sandbox_service_now", return_value=mock_service):
+            rt._compose_build_loop(cid, router, agent)
+
+        # Now an executor exists with a fresh sandbox (post-lazy-compose).
+        executor = rt._executors[cid]
+        session = executor._sandbox
+        assert session is not None
+
+        # The sandbox should be empty (no uploads yet — this IS the bug).
+        assert mock_files == {}
+
+        # Trigger re-materialization — this is what _run_with_persistence does
+        # after the chokepoint fix.
+        await rt._rematerialize_uploads(cid)
+
+        # Assert the uploads were written into the sandbox.
+        assert mock_files.get("uploads/data.csv") == data

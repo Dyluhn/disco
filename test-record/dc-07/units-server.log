@@ -4,27 +4,30 @@ rootdir: /var/home/dylan/projects/perpleximanus build
 configfile: pyproject.toml
 plugins: asyncio-1.4.0, anyio-4.13.0, hypothesis-6.155.2
 asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
-collected 192 items
+collected 256 items
 
-packages/agent-server/tests/test_health.py ..                            [  1%]
-packages/agent-server/tests/test_host_proxy.py ..........                [  6%]
-packages/agent-server/tests/test_idle_suspend.py .....                   [  8%]
-packages/agent-server/tests/test_lifecycle.py ..................         [ 18%]
-packages/agent-server/tests/test_model_pick_pipeline.py ...              [ 19%]
-packages/agent-server/tests/test_override_persistence.py .........       [ 24%]
-packages/agent-server/tests/test_projects_endpoints.py .............     [ 31%]
-packages/agent-server/tests/test_research.py .....                       [ 33%]
-packages/agent-server/tests/test_resume.py ............                  [ 40%]
-packages/agent-server/tests/test_resume_condensation.py ......           [ 43%]
-packages/agent-server/tests/test_resume_reconstruction.py .............  [ 50%]
-packages/agent-server/tests/test_runtime.py ...                          [ 51%]
-packages/agent-server/tests/test_sandbox_config.py ..........            [ 56%]
-packages/agent-server/tests/test_sessions_degrade.py ........            [ 60%]
-packages/agent-server/tests/test_sessions_routes.py ..........           [ 66%]
-packages/agent-server/tests/test_upload.py ............................. [ 81%]
-...                                                                      [ 82%]
-packages/agent-server/tests/test_wire.py ...........                     [ 88%]
-packages/agent-server/tests/test_workspace_route.py .................... [ 98%]
+packages/agent-server/tests/test_health.py ..                            [  0%]
+packages/agent-server/tests/test_host_proxy.py ..........                [  4%]
+packages/agent-server/tests/test_idle_suspend.py .....                   [  6%]
+packages/agent-server/tests/test_lifecycle.py ..................         [ 13%]
+packages/agent-server/tests/test_model_pick_pipeline.py ...              [ 14%]
+packages/agent-server/tests/test_override_persistence.py .........       [ 18%]
+packages/agent-server/tests/test_projects_endpoints.py .............     [ 23%]
+packages/agent-server/tests/test_redaction.py .......................... [ 33%]
+...................                                                      [ 41%]
+packages/agent-server/tests/test_research.py .....                       [ 42%]
+packages/agent-server/tests/test_resume.py ............                  [ 47%]
+packages/agent-server/tests/test_resume_condensation.py ......           [ 50%]
+packages/agent-server/tests/test_resume_reconstruction.py .............  [ 55%]
+packages/agent-server/tests/test_runtime.py ...                          [ 56%]
+packages/agent-server/tests/test_sandbox_config.py ..........            [ 60%]
+packages/agent-server/tests/test_sessions_degrade.py ........            [ 63%]
+packages/agent-server/tests/test_sessions_routes.py ..........           [ 67%]
+packages/agent-server/tests/test_share.py ..................             [ 74%]
+packages/agent-server/tests/test_upload.py ............................. [ 85%]
+....                                                                     [ 87%]
+packages/agent-server/tests/test_wire.py ...........                     [ 91%]
+packages/agent-server/tests/test_workspace_route.py .................... [ 99%]
 ..                                                                       [100%]
 
 =============================== warnings summary ===============================
@@ -47,4 +50,4 @@ packages/agent-server/tests/test_host_proxy.py::test_websocket_proxy
     warnings.warn("remove second argument of ws_handler", DeprecationWarning)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================= 192 passed, 6 warnings in 9.20s ========================
+======================= 256 passed, 6 warnings in 9.56s ========================

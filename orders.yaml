@@ -547,6 +547,7 @@ dc-07: committed
   - test-record/dc-07/units-server.log
   - test-record/dc-07/units-core.log
   - agent-projects/gemini/dc-07-report.md
+  - agent-projects/gemini/dc-07-fix2-report.md
 rp-06: committed
   - frontend/src/lib/buildTrace.ts
   - frontend/src/lib/useReplay.ts
