@@ -54,6 +54,30 @@ CREATE TABLE IF NOT EXISTS conversations (
 );
 CREATE INDEX IF NOT EXISTS idx_conversations_owner
     ON conversations (owner_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS share_tokens (
+    -- RP-06: revocable share-link tokens (base62 random) for static-bundle replay.
+    -- The token IS the URL slug; the row points back at the conversation whose
+    -- events the bundle was built from + the bundle's metadata. Revocation =
+    -- setting `revoked_at`; lookups must filter `revoked_at IS NULL`. The
+    -- PRIMARY KEY is the token (random collision-free base62 over a 16-byte
+    -- entropy pool = ~22 chars; the column width is generous to allow future
+    -- entropy bumps without a migration).
+    token          TEXT    PRIMARY KEY,
+    conversation_id TEXT   NOT NULL,
+    owner_id       TEXT    NOT NULL,
+    created_at     TEXT    NOT NULL,
+    revoked_at     TEXT,                  -- NULL = active; ISO-8601 if revoked
+    bundle_seq     INTEGER NOT NULL,      -- the last_seq captured at export time
+    -- The bundle is rebuilt on demand (events are append-only; the share
+    -- selector walks the live log) — this column is the seq boundary the
+    -- future re-export uses to detect "the conversation moved since the link
+    -- was created" and rebuild from scratch (a real-time event on the
+    -- conversation AFTER share creation → the viewer shows a "newer events
+    -- available" hint; we never auto-include them, the user re-exports).
+    FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_share_tokens_conv
+    ON share_tokens (conversation_id);
 """
 
 
@@ -376,6 +400,91 @@ class SqliteEventStore:
             async for ev in await store.subscribe(cid, after_seq=k): ...
         """
         return self._subscribe(conversation_id, after_seq)
+
+    # ---- share tokens (RP-06) ----------------------------------------------
+
+    def create_share_token(
+        self,
+        token: str,
+        conversation_id: str,
+        owner_id: str,
+        *,
+        bundle_seq: int,
+    ) -> None:
+        """Persist a new share token pointing at a conversation. The row
+        records the conversation + the bundle's last_seq at export time. A
+        second call for the SAME (token) is a no-op (`INSERT OR IGNORE`) —
+        the token is the PRIMARY KEY and is server-generated + random; the
+        idempotency is the cheap defense against a double-clicked "Share"
+        button issuing a write twice."""
+        self._conn.execute(
+            "INSERT OR IGNORE INTO share_tokens "
+            "(token, conversation_id, owner_id, created_at, bundle_seq) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                token,
+                conversation_id,
+                owner_id,
+                datetime.now().isoformat(),
+                int(bundle_seq),
+            ),
+        )
+        self._conn.commit()
+
+    def lookup_share_token(self, token: str) -> dict | None:
+        """Fetch a share token row by its public id. Returns None when missing
+        or revoked — the two cases are deliberately conflated in the public
+        API: a revoked link looks IDENTICAL to a non-existent one to the
+        viewer (404, not 410), so revocation cannot be probed to confirm a
+        conversation exists."""
+        row = self._conn.execute(
+            "SELECT token, conversation_id, owner_id, created_at, bundle_seq "
+            "FROM share_tokens WHERE token = ? AND revoked_at IS NULL",
+            (token,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "token": row["token"],
+            "conversation_id": row["conversation_id"],
+            "owner_id": row["owner_id"],
+            "created_at": row["created_at"],
+            "bundle_seq": int(row["bundle_seq"]),
+        }
+
+    def list_share_tokens(self, *, owner_id: str) -> list[dict]:
+        """List the active share tokens for one owner (the History
+        "shared links" affordance). Revoked links are NOT returned by
+        default; pass `include_revoked=True` for an audit view."""
+        rows = self._conn.execute(
+            "SELECT token, conversation_id, owner_id, created_at, bundle_seq "
+            "FROM share_tokens WHERE owner_id = ? AND revoked_at IS NULL "
+            "ORDER BY created_at DESC",
+            (owner_id,),
+        ).fetchall()
+        return [
+            {
+                "token": r["token"],
+                "conversation_id": r["conversation_id"],
+                "owner_id": r["owner_id"],
+                "created_at": r["created_at"],
+                "bundle_seq": int(r["bundle_seq"]),
+            }
+            for r in rows
+        ]
+
+    def revoke_share_token(self, token: str, *, owner_id: str) -> bool:
+        """Revoke a share token. OWNER-SCOPED — a caller can only revoke a
+        token that was issued to it. Returns True if a row was marked
+        revoked, False otherwise (not found, already revoked, or not owned)."""
+        async_marker = datetime.now().isoformat()
+        cur = self._conn.execute(
+            "UPDATE share_tokens SET revoked_at = ? "
+            "WHERE token = ? AND owner_id = ? AND revoked_at IS NULL",
+            (async_marker, token, owner_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
 
     async def _subscribe(self, conversation_id: str, after_seq: int | None) -> AsyncIterator[Event]:
         # Register the live queue FIRST so no append is missed between the

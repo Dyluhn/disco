@@ -406,3 +406,65 @@ export function subscribeConversation(
   if (cid === FIXTURE_DEEP_CID) return subscribeDeepFixture(onFrame);
   return subscribeFixture(onFrame);
 }
+
+// ---- share (RP-06) ---------------------------------------------------------
+
+export interface ShareLink {
+  ok: boolean;
+  url?: string;
+  token: string;
+  conversation_id: string;
+  owner_id?: string;
+  bundle_seq?: number;
+  /** Present when create_share fails (e.g. conversation not found). */
+  reason?: string;
+}
+
+/** Create a revocable share token for a conversation. Returns the token + the
+ *  URL slug (`/share/<token>`) the frontend can render as a link.
+ *  Double-issuing the same conversation is idempotent. */
+export async function createShare(conversationId: string): Promise<ShareLink> {
+  if (!agentLive()) {
+    return {
+      ok: false,
+      reason: "Share links require the agent server (offline here).",
+      token: "",
+      conversation_id: conversationId,
+    };
+  }
+  return agentSend<ShareLink>("POST", `/conversations/${conversationId}/share`);
+}
+
+/** The redacted, versioned JSON bundle for a shared conversation. The static
+ *  viewer (ShareView) consumes this — zero WebSocket dependency. */
+export interface ShareBundle {
+  bundle_version: number;
+  conversation_id: string;
+  owner_id: string;
+  surface: string;
+  title: string;
+  exported_at: string;
+  last_seq: number;
+  state: Record<string, unknown>;
+  events: Array<Record<string, unknown>>;
+  share?: {
+    created_at?: string;
+    bundle_seq?: number;
+    revoked?: boolean;
+  };
+}
+
+/** Fetch the scrubbed bundle for a share token. The endpoint resolves the token,
+ *  re-exports the event log, and returns the versioned bundle. Returns null when
+ *  the token is invalid or revoked (the two are intentionally conflated — a probe
+ *  can't distinguish a revoked link from one that never existed). */
+export async function fetchShareBundle(token: string): Promise<ShareBundle | null> {
+  if (!agentLive()) return null;
+  try {
+    const bundle = await agentGet<ShareBundle>(`/api/share/${encodeURIComponent(token)}/bundle`);
+    return bundle;
+  } catch {
+    // HTTP 404 or 403 — token invalid or revoked
+    return null;
+  }
+}

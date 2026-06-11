@@ -25,3 +25,32 @@ if (!Element.prototype.hasPointerCapture) {
   Element.prototype.setPointerCapture = () => {};
   Element.prototype.releasePointerCapture = () => {};
 }
+
+// jsdom lacks getContext; mock it so Chart.js doesn't crash during init
+Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+  value: () => ({
+    fillRect: () => {},
+    clearRect: () => {},
+    getImageData: (x: number, y: number, w: number, h: number) => ({
+      data: new Uint8ClampedArray(w * h * 4),
+    }),
+    putImageData: () => {},
+    createImageData: () => ({ data: new Uint8ClampedArray(0) }),
+    setTransform: () => {},
+    drawWidget: () => {},
+    measureText: () => ({ width: 0 }),
+    canvas: { width: 0, height: 0 },
+  }),
+});
+
+// Mock Chart.js globally so top-level Chart.register in blocks.tsx doesn't fail
+vi.mock("chart.js", () => {
+  const ChartMock = vi.fn().mockImplementation(() => ({
+    destroy: vi.fn(),
+  }));
+  (ChartMock as any).register = vi.fn();
+  return {
+    Chart: ChartMock,
+    registerables: [],
+  };
+});

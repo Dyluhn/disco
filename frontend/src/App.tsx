@@ -10,6 +10,7 @@ import { useMode } from "@/shell/mode";
 import { HistoryView } from "@/views/HistoryView";
 import { ProjectsView } from "@/views/ProjectsView";
 import { SettingsView } from "@/views/SettingsView";
+import { ShareView } from "@/views/ShareView";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
@@ -57,6 +58,7 @@ export default function App() {
               <Route path="projects" element={<ProjectsView />} />
               <Route path="build/:cid" element={<ResumeProject />} />
               <Route path="deep/:cid" element={<ResumeDeepResearch />} />
+              <Route path="share/:token" element={<ShareView />} />
               <Route path="settings" element={<SettingsView />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>

@@ -18,6 +18,7 @@ import {
   deriveLiveSignal,
   latestAgentMessage,
 } from "@/lib/buildTrace";
+import { useReplay } from "@/lib/useReplay";
 import { isolationForBackend } from "@/lib/isolation";
 import { agentHttpBase, agentLive } from "@/api/client";
 import { EmptyState, ErrorState } from "@/components/states";
@@ -38,6 +39,7 @@ import { SteerInput } from "@/components/build/SteerInput";
 import { UploadComposer } from "@/components/build/BuildSurface";
 import { AlternativesGate } from "@/components/build/AlternativesGate";
 import { AskPanel } from "@/components/build/AskPanel";
+import { ReplayScrubber } from "@/components/build/ReplayScrubber";
 
 export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) {
   const b = useBuild(resumeCid);
@@ -55,16 +57,23 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
   }, [b.cid]);
   const download = useDownloadProject();
   const exportManifest = useExportManifest();
+  // RP-06 replay: when not live (RUNNING), allow stepping through event history.
+  const isReplaying = b.started && b.status !== "RUNNING";
+  const replay = useReplay(b.events, !isReplaying);
+  const visibleEvents = useMemo(
+    () => (isReplaying ? b.events.slice(0, replay.position) : b.events),
+    [b.events, isReplaying, replay.position],
+  );
   const activity = useMemo(
-    () => deriveActivity(b.events, b.pendingActionId, b.status),
-    [b.events, b.pendingActionId, b.status],
+    () => deriveActivity(visibleEvents, b.pendingActionId, b.status),
+    [visibleEvents, b.pendingActionId, b.status],
   );
   const liveSignal = useMemo(
     () => deriveLiveSignal(b.events, b.status),
     [b.events, b.status],
   );
-  const finalMessage = useMemo(() => latestAgentMessage(b.events), [b.events]);
-  const deliverable = useMemo(() => deriveDeliverable(b.events), [b.events]);
+  const finalMessage = useMemo(() => latestAgentMessage(visibleEvents), [visibleEvents]);
+  const deliverable = useMemo(() => deriveDeliverable(visibleEvents), [visibleEvents]);
 
   // Attention when tabbed away: badge the title + (best-effort) OS-notify when the
   // run finishes or needs the user while the tab is hidden.
@@ -222,6 +231,10 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
               live task list
             </span>
           </div>
+          {/* RP-06: replay scrubber — step through the event log when not live. */}
+          {isReplaying && b.events.length > 0 && (
+            <ReplayScrubber replay={replay} />
+          )}
           <div
             ref={feedScrollRef}
             className="mt-inline min-h-0 flex-1 overflow-y-auto pb-inline lg:pr-hair"
@@ -363,7 +376,7 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
       chat={chatPane}
       inspector={
         <ExecutionCanvas
-          events={b.events}
+          events={visibleEvents}
           status={b.status}
           cid={b.cid}
           streamingFile={b.streamingFile}

@@ -547,11 +547,20 @@ dc-07: committed
   - test-record/dc-07/units-server.log
   - test-record/dc-07/units-core.log
   - agent-projects/gemini/dc-07-report.md
-rp-06: staged
+rp-06: committed
   - frontend/src/lib/buildTrace.ts
+  - frontend/src/lib/useReplay.ts
   - frontend/src/lib/useReplay.test.ts
   - frontend/src/api/agent.ts
   - frontend/src/views/ShareView.tsx
+  - frontend/src/components/build/ReplayScrubber.tsx
+  - frontend/src/components/BuildSurface.tsx
+  - frontend/src/App.tsx
+  - frontend/src/test/setup.ts
+  - frontend/package-lock.json
+  - packages/core/src/perpleximanus/core/store/sqlite.py
+  - packages/retrieval/pyproject.toml
+  - uv.lock
   - packages/agent-server/src/perpleximanus/agent_server/app.py
   - packages/agent-server/src/perpleximanus/agent_server/runtime.py
   - packages/agent-server/src/perpleximanus/agent_server/redaction.py
@@ -560,3 +569,4 @@ rp-06: staged
   - test-record/rp-06/units-server.log
   - test-record/rp-06/units-frontend.log
   - agent-projects/gemini/rp-06-report.md
+  - agent-projects/gemini/rp-06-fix1-report.md
