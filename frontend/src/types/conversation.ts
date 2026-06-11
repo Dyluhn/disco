@@ -6,6 +6,8 @@ export interface ConversationSummary {
   owner_id: string;
   /** the conversation's title / first question */
   title: string;
+  /** the conversation's current status (cached library projection) */
+  status?: string;
   /** ISO-8601 creation timestamp */
   created_at: string;
   /** which surface produced it — History routes by this (read-only open). */

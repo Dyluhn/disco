@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { formatDate } from "@/lib/date";
+import { cn } from "@/lib/cn";
 import { useConversations, useDeleteConversation } from "@/hooks/useConversations";
 
 /**
@@ -11,6 +12,45 @@ import { useConversations, useDeleteConversation } from "@/hooks/useConversation
  * the backend. Open routes to the main surface; delete is destructive and gated
  * by a confirm. Loading / error / empty are first-class, not afterthoughts.
  */
+function StatusChip({ status }: { status?: string }) {
+  if (!status) return null;
+
+  const s = status.toUpperCase();
+  if (s === "RUNNING") {
+    return (
+      <span className="shrink-0 animate-pulse rounded-full border border-accent/30 px-hair font-ui text-[0.62rem] uppercase tracking-wide text-accent">
+        Running
+      </span>
+    );
+  }
+  if (s === "PAUSED") {
+    return (
+      <span className="shrink-0 rounded-full border border-weak/30 px-hair font-ui text-[0.62rem] uppercase tracking-wide text-weak">
+        Paused
+      </span>
+    );
+  }
+  if (s === "FINISHED") {
+    return (
+      <span className="shrink-0 rounded-full border border-supported/30 px-hair font-ui text-[0.62rem] uppercase tracking-wide text-supported">
+        Finished
+      </span>
+    );
+  }
+  if (s === "STUCK" || s === "ERROR") {
+    return (
+      <span className="shrink-0 rounded-full border border-unsupported/30 px-hair font-ui text-[0.62rem] uppercase tracking-wide text-unsupported">
+        {s === "STUCK" ? "Stuck" : "Error"}
+      </span>
+    );
+  }
+  return (
+    <span className="shrink-0 rounded-full border border-hairline px-hair font-ui text-[0.62rem] uppercase tracking-wide text-text-muted">
+      {status}
+    </span>
+  );
+}
+
 function SkeletonRows() {
   return (
     <ul aria-hidden className="flex flex-col">
@@ -132,6 +172,7 @@ export function HistoryView() {
                         <span className="truncate font-ui text-[0.9rem] text-text transition-colors group-hover:text-accent">
                           {c.title}
                         </span>
+                        <StatusChip status={c.status} />
                         {c.surface === "deep_research" && (
                           <span className="shrink-0 rounded-full border border-hairline px-hair font-ui text-[0.62rem] uppercase tracking-wide text-text-faint">
                             deep

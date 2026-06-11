@@ -49,6 +49,7 @@ class ConversationSummaryDTO(BaseModel):
     owner_id: str
     title: str | None = None
     created_at: str
+    status: str | None = None
     surface: str = "research"  # "research" | "build" | "deep_research" — History routing
 
 
@@ -230,6 +231,7 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
                 owner_id=s.owner_id,
                 title=s.title,
                 created_at=s.created_at,
+                status=s.status,
                 surface=s.surface,
             )
             for s in summaries

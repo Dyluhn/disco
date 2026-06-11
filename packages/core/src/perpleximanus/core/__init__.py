@@ -42,7 +42,7 @@ from .events import (
 from .migration import migrate_event
 from .skills import Skill, SkillStore, render_skills_for_prompt, slugify
 from .state import ConversationState
-from .store.base import EventFilter, EventStore, Page
+from .store.base import ConversationSummary, EventFilter, EventStore, Page
 from .store.sqlite import DEFAULT_OWNER_ID, SqliteEventStore
 from .view import (
     CondensationRequest,
@@ -66,6 +66,7 @@ __all__ = [
     "Condenser",
     "ConversationState",
     "ConversationStatus",
+    "ConversationSummary",
     "DEFAULT_OWNER_ID",
     "DatasourceEvent",
     "DeliverableEvent",

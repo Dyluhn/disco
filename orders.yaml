@@ -452,29 +452,32 @@ dc-05c: committed
   - packages/agent-server/tests/test_resume_condensation.py
   - test-record/dc-05/units-c.log
   - agent-projects/gemini/dc-05c-report.md
-rp-01: staged
+rp-01: committed
   - packages/core/src/perpleximanus/core/store/sqlite.py
+  - packages/core/src/perpleximanus/core/store/base.py
+  - packages/core/src/perpleximanus/core/__init__.py
   - packages/core/tests/test_store_status.py
   - packages/app-server/src/perpleximanus/app_server/app.py
-  - packages/app-server/tests/test_routes.py
-  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/app-server/tests/test_app.py
   - frontend/src/types/conversation.ts
-  - frontend/src/api/conversations.ts
   - frontend/src/views/HistoryView.tsx
   - frontend/src/views/HistoryView.status.test.tsx
   - test-record/rp-01/units-core.log
   - test-record/rp-01/units-server.log
   - test-record/rp-01/units-frontend.log
   - agent-projects/gemini/rp-01-report.md
-rp-02: staged
+  - agent-projects/gemini/rp-01-fix1-report.md
+rp-02: in-flight
   - packages/retrieval/src/perpleximanus/retrieval/streaming.py
   - packages/retrieval/tests/test_table_blocks.py
+  - frontend/src/components/Markdown.tsx
   - frontend/src/components/research/DeepReportView.tsx
   - frontend/src/components/research/DeepReportView.table.test.tsx
   - test-record/rp-02/units-retrieval.log
   - test-record/rp-02/units-frontend.log
   - agent-projects/gemini/rp-02-report.md
-rp-12: staged
+  - agent-projects/gemini/rp-02-fix1-report.md
+rp-12: in-flight
   - packages/tools/src/perpleximanus/tools/sandbox/kernel.py
   - packages/tools/tests/test_kernel_session.py
   - packages/core/src/perpleximanus/core/llm/prompts.py
@@ -482,6 +485,8 @@ rp-12: staged
   - packages/core/src/perpleximanus/core/llm/openai_provider.py
   - packages/core/src/perpleximanus/core/view.py
   - packages/core/src/perpleximanus/core/loop/engine.py
+  - packages/core/src/perpleximanus/core/loop/agent.py
+  - packages/core/src/perpleximanus/core/loop/boundaries.py
   - packages/core/tests/test_tail_variation.py
   - packages/core/tests/test_prefill_masking.py
   - packages/core/tests/test_toolcall_defense.py

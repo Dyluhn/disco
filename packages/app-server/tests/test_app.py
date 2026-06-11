@@ -299,3 +299,23 @@ def test_delete_is_owner_scoped(client, store):
     resp = client.delete("/api/conversations/c1", params={"owner_id": "me"})
     assert resp.json()["deleted"] is True
     assert client.get("/api/conversations", params={"owner_id": "me"}).json() == []
+
+
+from perpleximanus.core import ConversationStatus, EventSource, StatusEvent
+
+
+async def test_conversations_include_status(client, store):
+    cid = "c1"
+    store.create_conversation(cid, owner_id="me", title="Status Test")
+
+    # Initially status is IDLE (backfilled by read-repair from empty state)
+    mine = client.get("/api/conversations", params={"owner_id": "me"}).json()
+    assert mine[0]["status"] == "IDLE"
+
+    # Append a status event
+    await store.append(
+        cid, StatusEvent(source=EventSource.SYSTEM, status=ConversationStatus.RUNNING)
+    )
+
+    mine = client.get("/api/conversations", params={"owner_id": "me"}).json()
+    assert mine[0]["status"] == "RUNNING"

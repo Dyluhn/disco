@@ -81,6 +81,10 @@ class SqliteEventStore:
             self._conn.execute("ALTER TABLE conversations ADD COLUMN surface TEXT")
         except sqlite3.OperationalError:
             pass  # column already exists
+        try:
+            self._conn.execute("ALTER TABLE conversations ADD COLUMN status TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
         self._conn.commit()
         self._write_lock = asyncio.Lock()
         # conversation_id -> set of live subscriber queues.
@@ -163,6 +167,14 @@ class SqliteEventStore:
                 json.dumps(payload),
             ),
         )
+
+        # RP-01: write-through status update.
+        if payload["kind"] == "status":
+            self._conn.execute(
+                "UPDATE conversations SET status = ? WHERE conversation_id = ?",
+                (payload["status"], conversation_id),
+            )
+
         return stored, True
 
     def _publish(self, conversation_id: str, event: Event) -> None:
@@ -192,9 +204,9 @@ class SqliteEventStore:
 
     async def append(self, conversation_id: str, event: Event) -> Event:
         async with self._write_lock:
-            stored, is_new = self._store_one(conversation_id, event)
+            with self._conn:
+                stored, is_new = self._store_one(conversation_id, event)
             if is_new:
-                self._conn.commit()  # G2: durable before return
                 self._publish(conversation_id, stored)
         return stored
 
@@ -202,12 +214,12 @@ class SqliteEventStore:
         stored_new: list[Event] = []
         results: list[Event] = []
         async with self._write_lock:
-            for event in events:
-                stored, is_new = self._store_one(conversation_id, event)
-                results.append(stored)
-                if is_new:
-                    stored_new.append(stored)
-            self._conn.commit()  # batch durable atomically (G2)
+            with self._conn:
+                for event in events:
+                    stored, is_new = self._store_one(conversation_id, event)
+                    results.append(stored)
+                    if is_new:
+                        stored_new.append(stored)
             for ev in stored_new:
                 self._publish(conversation_id, ev)
         return results
@@ -301,20 +313,40 @@ class SqliteEventStore:
         no cross-owner data, ever."""
         offset = int(cursor) if cursor else 0
         rows = self._conn.execute(
-            "SELECT conversation_id, owner_id, title, created_at, surface FROM conversations "
+            "SELECT conversation_id, owner_id, title, created_at, status, surface FROM conversations "
             "WHERE owner_id = ? ORDER BY created_at DESC, conversation_id DESC LIMIT ? OFFSET ?",
             (owner_id, limit, offset),
         ).fetchall()
-        return [
-            ConversationSummary(
-                conversation_id=r["conversation_id"],
-                owner_id=r["owner_id"],
-                title=r["title"],
-                created_at=r["created_at"],
-                surface=r["surface"] or "research",  # null (pre-migration) → research
+        summaries: list[ConversationSummary] = []
+        repairs: list[tuple[str, str]] = []
+        for r in rows:
+            cid = r["conversation_id"]
+            status = r["status"]
+            if status is None:
+                # RP-01: Read repair. Backfill the status column from the event log.
+                state = await self.get_state(cid)
+                status = state.execution_status.value
+                repairs.append((status, cid))
+
+            summaries.append(
+                ConversationSummary(
+                    conversation_id=cid,
+                    owner_id=r["owner_id"],
+                    title=r["title"],
+                    created_at=r["created_at"],
+                    status=status,
+                    surface=r["surface"] or "research",  # null (pre-migration) → research
+                )
             )
-            for r in rows
-        ]
+
+        if repairs:
+            self._conn.executemany(
+                "UPDATE conversations SET status = ? WHERE conversation_id = ?",
+                repairs,
+            )
+            self._conn.commit()
+
+        return summaries
 
     async def delete_conversation(self, conversation_id: str, *, owner_id: str) -> bool:
         """Delete a conversation and all its events — OWNER-SCOPED (a caller can

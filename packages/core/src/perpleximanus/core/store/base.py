@@ -46,6 +46,7 @@ class ConversationSummary(BaseModel):
     owner_id: str
     title: str | None = None
     created_at: str  # ISO-8601
+    status: str | None = None
     surface: str = "research"  # "research" | "build" | "deep_research" — for History routing
 
 
