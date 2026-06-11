@@ -15,10 +15,19 @@ from .anatomy import Tool
 
 
 class ToolScope(BaseModel):
-    """[CONTRACT] The set of tools a SURFACE exposes (BoD §8)."""
+    """[CONTRACT] The set of tools a SURFACE exposes (BoD §8).
+
+    `allowed_tools` is the SECURITY allowlist — the executor only calls tools
+    in this set. `advertised_tools` (RP-05c) is the VISIBILITY set — what
+    available_tools() returns to the LLM. None means "advertise all allowed"
+    (today's behavior). A tool that is allowed but not advertised is still
+    callable by qualified name; the planner-safety readonly_tool_names backstop
+    always keys off allowed_tools, never the advertised subset.
+    """
 
     model_config = ConfigDict(frozen=True)
     allowed_tools: frozenset[str]
+    advertised_tools: frozenset[str] | None = None  # None = advertise all allowed
     preset: str | None = None  # "research" | "agent" | custom
 
 

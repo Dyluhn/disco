@@ -683,7 +683,7 @@ rp-05b-acceptance: committed
   - test-record/rp-05b/mcp-add-form.png
   # (the pinned-Fable review brief lived at .orchestrate/review/ — gitignored scratch,
   #  intentionally NOT tracked; its full two-round verdict is preserved in ACCEPTANCE.md)
-rp-05c: staged
+rp-05c: committed
   # §6 active-schema cap (tool_search). Carved out of rp-05a round-4: needs an
   # advertised-set / callable-set split in ToolScope+executor (today callability
   # == visibility == allowed_tools∩registry) so the LLM sees tool_search only
@@ -694,11 +694,18 @@ rp-05c: staged
   - packages/tools/src/perpleximanus/tools/anatomy.py
   - packages/tools/src/perpleximanus/tools/mcp/tool_search.py
   - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/core/src/perpleximanus/core/loop/engine.py
   - packages/tools/tests/test_scope_advertise_split.py
   - packages/agent-server/tests/test_mcp_tool_search_cap.py
+  - packages/core/tests/test_mcp_cap_requery.py
   - test-record/rp-05c/units-tools.log
   - test-record/rp-05c/units-server.log
   - agent-projects/gemini/rp-05c-report.md
+  # REWORK (2026-06-11): pinned-Fable review caught a loop-level false affordance —
+  # engine.py:1922 requery gate read available_tools() (now the ADVERTISED subset
+  # post-split), so over-cap qualified-name MCP calls were bounced as "Unknown tool"
+  # + requeried twice. Fix: callable_tool_names() on executor + getattr-fallback in
+  # the requery gate (keys on callability not visibility) + a loop-boundary test.
 fix-confirm-livelock: committed
   # Engine confirm/reject LIVELOCK fix (orchestrator-authored, NOT a Gemini worker;
   # subtle security-loop logic). Two compounding defects: (A) the Rung-7 unknown-tool

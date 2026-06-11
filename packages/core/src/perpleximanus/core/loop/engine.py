@@ -1919,7 +1919,11 @@ class AgentLoop:
                             # The requery applies ONLY to names absent from the
                             # FULL tool registry (truly unknown), never to
                             # known-but-currently-withheld tools.
-                            base_tools = self.executor.available_tools()
+                            _cn = getattr(self.executor, "callable_tool_names", None)
+                            if callable(_cn):
+                                known_tool_names = set(_cn())
+                            else:
+                                known_tool_names = {t.name for t in self.executor.available_tools()}
                             virtual_names = {
                                 "ask_user",
                                 "propose_plan_update",
@@ -1933,7 +1937,7 @@ class AgentLoop:
                             # Include mode-scoped virtuals (planning tools) so
                             # we don't requery for valid exploration turns.
                             all_known_names = (
-                                {t.name for t in base_tools}
+                                known_tool_names
                                 | virtual_names
                                 | set(self._planning_tools)
                             )

@@ -160,16 +160,80 @@ class _MCPToolWrapper:
                 error=str(exc),
             )
 
-# NOTE (rp-05a round-4): the tool_search meta-tool WIRING (_MetaToolSearchWrapper
-# + the over-cap registration branch) is DEFERRED to order rp-05c. The §6
-# active-schema cap requires an advertised-set / callable-set split in
-# ToolScope+executor (today callability == visibility == allowed_tools∩registry,
-# executor.py:65/83), which is a cross-cutting core change beyond rung-A wiring.
-# Registering a tool_search-only schema over-cap WITHOUT that split made every
-# qualified mcp__* call resolve to unknown_tool — a false affordance (round-3
-# reject). Until rp-05c lands, rung A registers ALL MCP tools eagerly so every
-# advertised tool is callable. The tool_search LIBRARY primitive (unit-tested
-# standalone) stays in tools/mcp/tool_search.py awaiting that wiring.
+class _MetaToolSearchWrapper:
+    """Wraps the tool_search meta-tool with the full MCP tool list for searching.
+
+    The LLM calls this when the pool is over the schema cap. It runs an
+    orchestrator-side keyword search over ALL MCP tools (including those hidden
+    from the advertised set) and returns qualified names + descriptions. The
+    active schema set is never mutated — discovery only.
+    """
+
+    def __init__(self, tdef: Any, all_tool_descs: list[dict]) -> None:
+        self.definition = tdef
+        self._all_tool_descs = all_tool_descs
+
+    async def run(self, args: Any, ctx: Any) -> Any:
+        import json
+
+        from perpleximanus.tools.anatomy import ToolOutcome
+        from perpleximanus.tools.mcp.tool_search import _tool_search_handler
+
+        results = await _tool_search_handler(
+            query=args.query,
+            limit=args.limit,
+            all_tools=self._all_tool_descs,
+        )
+        content = json.dumps(results, indent=2) if results else "No matching tools found."
+        return ToolOutcome(success=True, content=content, structured={"results": results})
+
+
+def _apply_mcp_scope(
+    executor: "DefaultToolExecutor",
+    all_mcp_tools: list,
+    call_target: Any,
+    *,
+    max_active_schemas: int = 20,
+) -> None:
+    """Register MCP tools in the executor and apply the §6 advertised/callable split.
+
+    All MCP tools are registered as callable (added to allowed_tools). Over the
+    cap, only non-MCP tools + tool_search are advertised to the LLM; under the
+    cap, advertised_tools stays None so all allowed tools are shown (unchanged
+    behavior). The planner-safety readonly_tool_names backstop always keys off
+    allowed_tools, not the advertised subset.
+    """
+    if not all_mcp_tools:
+        return
+
+    mcp_names = frozenset(t.name for t in all_mcp_tools)
+    non_mcp_allowed = executor._scope.allowed_tools
+
+    # Extend the security allowlist: ALL MCP tools are callable by qualified name.
+    executor._scope = executor._scope.model_copy(
+        update={"allowed_tools": non_mcp_allowed | mcp_names}
+    )
+    for tdef in all_mcp_tools:
+        executor._registry.register(_MCPToolWrapper(tdef, call_target))
+
+    # §6 cap: over the limit, restrict the ADVERTISED set to non-MCP + tool_search.
+    if len(all_mcp_tools) > max_active_schemas:
+        from perpleximanus.tools.mcp.tool_search import meta_tool_search
+
+        ts_def = meta_tool_search()
+        all_tool_descs = [
+            {"name": t.name, "description": t.description}
+            for t in all_mcp_tools
+        ]
+        executor._registry.register(_MetaToolSearchWrapper(ts_def, all_tool_descs))
+        # tool_search must be in allowed_tools (callable) and advertised_tools (visible).
+        executor._scope = executor._scope.model_copy(
+            update={
+                "allowed_tools": executor._scope.allowed_tools | {"tool_search"},
+                "advertised_tools": non_mcp_allowed | {"tool_search"},
+            }
+        )
+    # else: advertised_tools remains None → all allowed tools shown (current behavior)
 
 
 _LOG = logging.getLogger(__name__)
@@ -812,23 +876,14 @@ class ConversationRuntime:
             all_mcp_tools.extend(list(self._mcp_http_tools.values()))
 
         if all_mcp_tools:
-            # rung A+B registers ALL MCP tools eagerly — every advertised tool
-            # is callable. The §6 active-schema cap (advertise tool_search
-            # only, call the rest by qualified name) needs the advertised-set
-            # / callable-set split deferred to rp-05c; do NOT register an
-            # uncallable meta-tool here (round-3 false-affordance reject).
-            mcp_names = frozenset(t.name for t in all_mcp_tools)
-            # Extend the scope so the executor knows these tools are allowed
-            mcp_scope = executor._scope.model_copy(
-                update={"allowed_tools": executor._scope.allowed_tools | mcp_names}
+            # RP-05c: apply advertised/callable split. Over the cap, only
+            # non-MCP tools + tool_search are advertised; all remain callable.
+            cfg = self._config_store.load()
+            max_schemas = cfg.mcp.max_active_schemas if cfg.mcp else 20
+            _apply_mcp_scope(
+                executor, all_mcp_tools, self._mcp_call_target,
+                max_active_schemas=max_schemas,
             )
-            executor._scope = mcp_scope
-            # Build lightweight wrappers and register them.
-            # Stdio tools use the pool; HTTP tools use our merged call_fn.
-            for tdef in all_mcp_tools:
-                executor._registry.register(
-                    _MCPToolWrapper(tdef, self._mcp_call_target)
-                )
 
             # RP-05b §3: the retrieval-tier MCP providers are composed into the
             # bundled search/extraction in `_compose_mcp_retrieval` (consumed by

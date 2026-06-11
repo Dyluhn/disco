@@ -1,0 +1,40 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.13, pytest-9.0.3, pluggy-1.6.0
+rootdir: /var/home/dylan/projects/perpleximanus build
+configfile: pyproject.toml
+plugins: anyio-4.13.0, asyncio-1.4.0, hypothesis-6.155.2
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 209 items
+
+packages/tools/tests/test_agent_tools.py ............                    [  5%]
+packages/tools/tests/test_browser.py .......                             [  9%]
+packages/tools/tests/test_browser_daemon.py ...                          [ 10%]
+packages/tools/tests/test_builtin_extra.py ....                          [ 12%]
+packages/tools/tests/test_cluster4_filesystem.py .....                   [ 14%]
+packages/tools/tests/test_egress_mode.py .....                           [ 17%]
+packages/tools/tests/test_egress_proxy.py .........                      [ 21%]
+packages/tools/tests/test_executor_scope.py ......                       [ 24%]
+packages/tools/tests/test_gvisor.py ............                         [ 30%]
+packages/tools/tests/test_inclusive_editing.py ....                      [ 32%]
+packages/tools/tests/test_kernel_session.py ........                     [ 35%]
+packages/tools/tests/test_local.py ...........                           [ 41%]
+packages/tools/tests/test_mcp_approval.py ........                       [ 44%]
+packages/tools/tests/test_mcp_naming.py ........                         [ 48%]
+packages/tools/tests/test_mcp_tool_search.py ..........                  [ 53%]
+packages/tools/tests/test_mcp_transport.py .....                         [ 55%]
+packages/tools/tests/test_planner_readonly.py ....                       [ 57%]
+packages/tools/tests/test_podman.py ........                             [ 61%]
+packages/tools/tests/test_preview.py .........                           [ 66%]
+packages/tools/tests/test_preview_session.py .                           [ 66%]
+packages/tools/tests/test_projects.py ..............                     [ 73%]
+packages/tools/tests/test_sandbox.py ........                            [ 77%]
+packages/tools/tests/test_scope_advertise_split.py ........              [ 80%]
+packages/tools/tests/test_security.py .......                            [ 84%]
+packages/tools/tests/test_server_status.py ..                            [ 85%]
+packages/tools/tests/test_session_diagnostics.py .........               [ 89%]
+packages/tools/tests/test_shell_sessions.py ......                       [ 92%]
+packages/tools/tests/test_tool_markdown.py ......                        [ 95%]
+packages/tools/tests/test_tools_integration.py .                         [ 95%]
+packages/tools/tests/test_validation_executor.py .........               [100%]
+
+======================= 209 passed in 114.77s (0:01:54) ========================

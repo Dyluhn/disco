@@ -62,7 +62,19 @@ class DefaultToolExecutor:
         return "unknown"
 
     def available_tools(self) -> list[ToolSpec]:
-        return [t.definition.to_spec() for t in self._registry.in_scope(self._scope)]
+        tools = self._registry.in_scope(self._scope)  # registry ∩ allowed_tools
+        if self._scope.advertised_tools is not None:
+            tools = [t for t in tools if t.definition.name in self._scope.advertised_tools]
+        return [t.definition.to_spec() for t in tools]
+
+    def callable_tool_names(self) -> frozenset[str]:
+        """Names of every tool the executor will actually run (registry ∩
+        allowed_tools), IGNORING advertised_tools. The advertise/callable split
+        (RP-05c) hides over-cap MCP tools from available_tools(), but they remain
+        callable by qualified name — callers that need to know 'can this name be
+        executed?' (e.g. the engine's unknown-tool requery gate) must use THIS,
+        not available_tools(), or they will bounce withheld-but-callable tools."""
+        return frozenset(t.definition.name for t in self._registry.in_scope(self._scope))
 
     def readonly_tool_names(self) -> frozenset[str]:
         """Names of in-scope tools that only OBSERVE (ToolDef.read_only). The loop
