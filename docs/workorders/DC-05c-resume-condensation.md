@@ -101,11 +101,11 @@ New private method on ConversationRuntime:
      store before the reconstruction events, both before RUNNING flip.
 2. Run ONLY test_resume_condensation.py + test_resume_reconstruction.py +
    test_resume.py + test_lifecycle.py. Log → test-record/dc-05/units-c.log.
-3. Report → agent-projects/sonnet/dc-05c-report.md. No commits.
+3. Report → agent-projects/gemini/dc-05c-report.md. No commits.
 
 ## Manifest (orders.yaml `dc-05c`)
 
 - packages/agent-server/src/perpleximanus/agent_server/runtime.py
 - packages/agent-server/tests/test_resume_condensation.py
 - test-record/dc-05/units-c.log
-- agent-projects/sonnet/dc-05c-report.md
+- agent-projects/gemini/dc-05c-report.md
