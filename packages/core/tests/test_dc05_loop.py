@@ -1,6 +1,7 @@
 import pytest
 from loop_fakes import ScriptedAgent, action_step, build_loop, finish_step
 from perpleximanus.core import (
+    ActionEvent,
     ConversationStatus,
     DeliverableEvent,
     EventSource,
@@ -270,6 +271,7 @@ async def test_transient_error_persistent_pauses(monkeypatch):
 async def test_deliverable_guard():
     """Empty serve payload → no DeliverableEvent; non-empty → one event."""
     agent = ScriptedAgent([
+        action_step("shell", {}),   # real work first — serve gate requires it
         action_step("serve", {}),                           # empty → skipped
         action_step("serve", {"title": "x", "path": "y"}), # real deliverable
         finish_step(),
@@ -312,6 +314,7 @@ async def test_serve_spam_trips_valve():
     at the cap (3 DeliverableEvents max), not a 50-event spam run."""
     agent = ScriptedAgent([
         action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+        action_step("shell", {}),   # real work first — serve gate requires it
         action_step("serve", {"title": "a", "path": "pa"}),
         action_step("serve", {"title": "b", "path": "pb"}),
         action_step("serve", {"title": "c", "path": "pc"}),
@@ -334,6 +337,7 @@ async def test_duplicate_serve_suppressed_and_trips_valve():
     invisible-step counter still trips the valve."""
     agent = ScriptedAgent([
         action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+        action_step("shell", {}),   # real work first — serve gate requires it
         action_step("serve", {"title": "app", "path": "p"}),
         action_step("serve", {"title": "app", "path": "p"}),       # dup → invisible
         action_step("serve", {"title": "app again", "path": "p"}),  # dup (title spin) → invisible
@@ -416,6 +420,7 @@ async def test_real_action_resets_intercept_streak():
     (event-derived AND invisible counter) resets on a real ActionEvent."""
     agent = ScriptedAgent([
         action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+        action_step("shell", {}),   # real work first — serve gate requires it
         action_step("serve", {"title": "a", "path": "pa"}),
         action_step("serve", {"title": "a", "path": "pa"}),  # dup → invisible +1
         action_step("shell", {}),                            # real action → reset
@@ -438,3 +443,74 @@ async def test_real_action_resets_intercept_streak():
         ConversationStatus.PAUSED,
     )
     assert _last_status_detail(events) == "partial_plan"
+
+
+# ---- post-resume serve gate (Phase-B re-run #3 defect, 2026-06-10) --------------
+#
+# Re-run #3 showed a NEW degeneration shape: the model's FIRST post-resume turn
+# was serve(path=".") on an empty restored workspace — a handoff with zero work
+# behind it. The gate refuses any serve with no real (non-bookkeeping) action
+# since the last resume (or since start), with actionable feedback.
+
+
+@pytest.mark.asyncio
+async def test_serve_before_any_work_refused():
+    """serve as the first move → refused with the actionable ENVIRONMENT
+    message and NO DeliverableEvent; after one real action it goes through."""
+    agent = ScriptedAgent([
+        action_step("serve", {"title": "app", "path": "."}),  # zero work → refused
+        action_step("shell", {}),                              # real work
+        action_step("serve", {"title": "app", "path": "."}),  # now allowed
+        finish_step(),
+    ])
+    loop, store = build_loop(agent)
+    await loop.send_message("go")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    events = await store.get_events(CID)
+    deliverables = [e for e in events if isinstance(e, DeliverableEvent)]
+    assert len(deliverables) == 1   # only the post-work serve landed
+    refusals = [
+        e for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and "serve refused" in (e.message.content if e.message else "")
+    ]
+    assert len(refusals) == 1
+
+
+@pytest.mark.asyncio
+async def test_serve_before_work_spam_trips_valve():
+    """Gate-refused serves count as invisible steps — three in a row trips
+    the actionless valve, zero DeliverableEvents persisted."""
+    agent = ScriptedAgent([
+        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+        action_step("serve", {"title": "a", "path": "pa"}),  # refused (no work)
+        action_step("serve", {"title": "b", "path": "pb"}),  # refused
+        action_step("serve", {"title": "c", "path": "pc"}),  # refused → cap
+        finish_step(),
+    ])
+    loop, store = await _approved_plan_loop(agent)
+
+    state = await loop.run()
+    assert state.execution_status == ConversationStatus.PAUSED
+    events = await store.get_events(CID)
+    assert _last_status_detail(events) == "actionless"
+    assert not any(isinstance(e, DeliverableEvent) for e in events)
+
+
+def test_actions_since_last_resume_resets_at_marker():
+    """The gate's counter ignores pre-resume work: a resume marker zeroes it,
+    and bookkeeping tools never count."""
+    from perpleximanus.core import ToolCall
+    from perpleximanus.core.loop.engine import AgentLoop
+
+    shell = ActionEvent(thought="t", tool_call=ToolCall(tool_name="shell", arguments={}))
+    plan = ActionEvent(thought="t", tool_call=ToolCall(tool_name="submit_plan", arguments={}))
+    resumed = StatusEvent(status=ConversationStatus.RUNNING, detail="resumed")
+
+    assert AgentLoop._actions_since_last_resume([shell, shell]) == 2
+    assert AgentLoop._actions_since_last_resume([shell, resumed]) == 0
+    assert AgentLoop._actions_since_last_resume([shell, resumed, plan]) == 0
+    assert AgentLoop._actions_since_last_resume([shell, resumed, shell]) == 1

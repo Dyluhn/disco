@@ -1,0 +1,33 @@
+{
+  "run": "phase-b-rerun-3",
+  "date": "2026-06-10",
+  "cid": "conv_d1ea66fda5ce497d8d3eb540fc53b115",
+  "verdict": "designed-fail #3 — NEW defect shape, distinct from DEFECT-4",
+  "engine_commit_under_test": "1513070",
+  "shape": {
+    "summary": "Fresh post-resume degeneration from a HEALTHY pre-pause context: the model's first post-resume turn was serve(path='.', kind='app') on an empty restored workspace, then narration prose, tripping the actionless valve at cap 3.",
+    "pre_pause_tail_healthy": true,
+    "evidence": [
+      "seq 14 file_write server.py (Flask) + seq 16 shell pip install = real pre-pause work",
+      "seq 19 PAUSED 'reconciled: orphaned RUNNING after server restart'",
+      "seq 20 reality block: 'No saved files — the workspace starts empty... Next actionable step (1): Create Python backend API on port 3000. Do not re-plan and do not summarize'",
+      "seq 23 DeliverableEvent path='.' kind=app title='Sensor Dashboard' — serve as FIRST post-resume turn, zero actions since resume",
+      "seq 24 agent prose 'Sandbox was reclaimed — I'm rebuilding everything from scratch...'",
+      "seq 25 valve cap-3 warning, seq 26 PAUSED actionless"
+    ]
+  },
+  "dc05c_condensation_behavior": "CORRECT — _condense_trailing_degeneracy returned None because the trailing pre-pause history was healthy (real ActionEvents). Condensation targets degenerate tails; this defect is fresh post-resume degeneration, out of its scope by design.",
+  "fix": {
+    "name": "post-resume serve gate",
+    "where": "packages/core/src/perpleximanus/core/loop/engine.py serve intercept (~line 1992)",
+    "mechanism": "serve with _actions_since_last_resume(events) == 0 is refused with an actionable ENVIRONMENT message (B4), counts as an invisible step, and feeds the shared actionless valve. Covers conversation-start serves too (helper counts from list start when no resume marker exists).",
+    "tests": [
+      "test_dc05_loop.py::test_serve_before_any_work_refused",
+      "test_dc05_loop.py::test_serve_before_work_spam_trips_valve",
+      "test_dc05_loop.py::test_actions_since_last_resume_resets_at_marker"
+    ]
+  },
+  "artifacts": {
+    "events": "test-record/dc-05/rerun3/events.json (26 events)"
+  }
+}

@@ -28,6 +28,9 @@ def _agent(scripted):
 async def test_serve_emits_a_deliverable_event_and_continues():
     agent = _agent(
         [
+            # Real work first — the post-resume serve gate refuses a serve
+            # with zero non-bookkeeping actions this session.
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "build"})]},
             {
                 "tool_calls": [
                     ProposedToolCall(
@@ -47,7 +50,7 @@ async def test_serve_emits_a_deliverable_event_and_continues():
 
     assert state.execution_status == ConversationStatus.FINISHED
     # serve was INTERCEPTED — the executor never saw it, no ActionEvent for it.
-    assert executor.calls == []
+    assert all(c.tool_name != "serve" for c in executor.calls)
     events = await store.get_events(CID)
     assert not any(
         isinstance(e, ActionEvent) and e.tool_call.tool_name == "serve" for e in events
@@ -64,6 +67,7 @@ async def test_serve_emits_a_deliverable_event_and_continues():
 async def test_serve_defaults_kind_to_app_and_validates_enum():
     agent = _agent(
         [
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "make"})]},
             {
                 "tool_calls": [
                     ProposedToolCall(
@@ -85,6 +89,7 @@ async def test_serve_defaults_kind_to_app_and_validates_enum():
 async def test_serve_missing_path_or_title_is_a_noop():
     agent = _agent(
         [
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "ls"})]},
             {"tool_calls": [ProposedToolCall(tool_name="serve", arguments={"title": "x"})]},
             {"tool_calls": [ProposedToolCall(tool_name="finish", arguments={"summary": "x"})]},
         ]

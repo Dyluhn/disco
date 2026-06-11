@@ -366,3 +366,32 @@ models via pi, ever; no Sonnet subagents.
    MTP+parallel together.
 4. **Audio voices (RP-09): af_heart + af_bella** — the two top-graded voices
    (quality over gender contrast). Config string; swappable anytime.
+
+---
+
+## 5. Post-RP candidate (requested by Dylan 2026-06-10, not yet ordered)
+
+**Design-reference pack for the build surface** — make agent-built UIs
+beautiful by default (Lovable/Manus parity). Three tiers, cheapest first:
+
+1. **Style-preset skill pack (S):** named design specs (glass-minimal,
+   editorial, dense-dashboard, brutalist, ...) as SkillStore entries injected
+   via the existing `render_skills_for_prompt` seam when the build task is a
+   UI. Each spec: palette + semantic tokens, type scale, spacing, component
+   idioms (e.g. backdrop-filter glassmorphism recipes), anti-patterns. The
+   Lovable lesson: quality comes from CONSTRAINING the model to a curated
+   token vocabulary ("the design system is everything; never write custom
+   styles"), not from freestyle CSS.
+2. **Template scaffolds (M):** license-clean starter trees (vite+tailwind with
+   tokens preconfigured; optionally shadcn/ui) shipped in the sandbox image or
+   workspace-seeded; the agent copies-then-customizes instead of generating
+   from zero. The Manus pattern: pick style at creation, then prompt-based
+   group edits.
+3. **Reference-image matching (S-M):** user drops a reference screenshot
+   (BP-11 upload machinery) → vision driver (PMX_DRIVER_VISION, BP-00)
+   receives it with "match this aesthetic" guidance. Mostly wiring; the
+   machinery exists.
+
+Verification rides the existing screenshot-evidence pipeline (vision triage →
+pixel review). Slot after wave 4; tier 1 could ride RP-10's slides design-pack
+work if convenient.

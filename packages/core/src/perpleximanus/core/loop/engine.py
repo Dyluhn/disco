@@ -1981,6 +1981,36 @@ class AgentLoop:
                     # rather than emitting a useless handoff — and every ignored
                     # form is COUNTED, because each is invisible in the event log
                     # and was the unbounded serve-spam vector (Phase-B, 2026-06-10).
+                    #
+                    # POST-RESUME SERVE GATE (Phase-B re-run #3, 2026-06-10): the
+                    # model's FIRST post-resume turn was serve(path=".") on an empty
+                    # restored workspace — a handoff with zero work behind it, which
+                    # then seeded a prose/noop streak into the valve. A serve is only
+                    # meaningful after at least one real action this session (since
+                    # the last resume, or since start). Refuse with ACTIONABLE
+                    # feedback (B4: the model must see why, or it just retries).
+                    if self._actions_since_last_resume(events) == 0:
+                        self._invisible_steps += 1
+                        await self._emit(
+                            MessageEvent(
+                                source=EventSource.ENVIRONMENT,
+                                message=LLMMessage(
+                                    role="user",
+                                    content=(
+                                        "serve refused: no real work has happened yet in "
+                                        "this session — the sandbox is fresh and nothing "
+                                        "is running. Execute the next plan step with real "
+                                        "tool calls (write files, run commands, start your "
+                                        "server), then serve the result."
+                                    ),
+                                ),
+                            )
+                        )
+                        events = await self._events()
+                        noops = self._consecutive_noops(events) + self._invisible_steps
+                        if await self._actionless_valve(events, noops):
+                            return await self.get_state()
+                        continue  # non-blocking — let the model act on the feedback
                     if not step.tool_call.arguments:
                         _LOG.debug("Skipping deliverable emission: empty payload from agent")
                         self._invisible_steps += 1
