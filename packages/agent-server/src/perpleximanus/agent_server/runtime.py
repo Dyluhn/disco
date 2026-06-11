@@ -107,6 +107,71 @@ from perpleximanus.tools.sandbox._container import PREVIEW_PORT, USER_PORTS
 from perpleximanus.tools.sandbox.port_owner import port_owners
 from perpleximanus.tools.sandbox.shell_sessions import SessionInfo, SessionView
 
+# MCP client pool (RP-05 rung A) — built once at start, snapshotted per conversation.
+from perpleximanus.tools.mcp import McpPool, McpSettings
+
+
+class _MCPToolWrapper:
+    """Thin Tool-protocol wrapper that adapts an MCP ToolDef for the registry.
+    MCP tools run through the pool's per-server client (routed by qualified name),
+    not through the default executor's sandbox path. The definition is the ToolDef
+    built at pool start; run() invokes the real tool via the pool."""
+
+    def __init__(self, tdef: Any, pool: McpPool) -> None:
+        self.definition = tdef
+        self._pool = pool
+
+    async def run(self, args: Any, ctx: Any) -> Any:
+        from perpleximanus.tools.anatomy import ToolOutcome
+        from perpleximanus.tools.mcp.naming import split_qualified_name
+
+        qn = self.definition.name
+        parts = split_qualified_name(qn)
+        if parts is None:
+            return ToolOutcome(
+                success=False,
+                content=f"MCP tool {qn!r}: not a valid qualified name",
+                error="invalid qualified name",
+            )
+        server, tool = parts
+        try:
+            # Convert validated pydantic model back to plain dict
+            if hasattr(args, "model_dump"):
+                raw_args = args.model_dump()
+            else:
+                raw_args = dict(args)
+            result = await self._pool.call_tool(server, tool, raw_args)
+            # Extract text content from MCP result
+            text_parts = []
+            for item in result.get("content", []):
+                if hasattr(item, "text"):
+                    text_parts.append(item.text)
+                elif isinstance(item, dict) and "text" in item:
+                    text_parts.append(item["text"])
+            content = "\n".join(text_parts) if text_parts else str(result)
+            return ToolOutcome(
+                success=not result.get("isError", False),
+                content=content,
+            )
+        except Exception as exc:
+            return ToolOutcome(
+                success=False,
+                content=f"MCP tool {qn!r} call failed: {exc}",
+                error=str(exc),
+            )
+
+# NOTE (rp-05a round-4): the tool_search meta-tool WIRING (_MetaToolSearchWrapper
+# + the over-cap registration branch) is DEFERRED to order rp-05c. The §6
+# active-schema cap requires an advertised-set / callable-set split in
+# ToolScope+executor (today callability == visibility == allowed_tools∩registry,
+# executor.py:65/83), which is a cross-cutting core change beyond rung-A wiring.
+# Registering a tool_search-only schema over-cap WITHOUT that split made every
+# qualified mcp__* call resolve to unknown_tool — a false affordance (round-3
+# reject). Until rp-05c lands, rung A registers ALL MCP tools eagerly so every
+# advertised tool is callable. The tool_search LIBRARY primitive (unit-tested
+# standalone) stays in tools/mcp/tool_search.py awaiting that wiring.
+
+
 _LOG = logging.getLogger(__name__)
 
 
@@ -279,6 +344,11 @@ class ConversationRuntime:
         self._wake_locks: dict[str, asyncio.Lock] = {}
         # DC-04b: last-known session list per cid for stale-on-failure degradation.
         self._last_sessions: dict[str, list[SessionInfo]] = {}
+        # RP-05 rung A: MCP client pool — built once at start from RouterConfig.mcp.
+        self._mcp_pool: McpPool | None = None
+        # Servers that need re-approval (ApprovalRequired at startup). Emitted to
+        # WS clients as mcp_approval_required frames.
+        self._mcp_approval_pending: dict[str, dict] = {}
 
     # The generative (text-producing) roles a model PICK drives. NLI_VERIFIER is a
     # cross-encoder (entailment scorer), NOT a chat model — pointing it at a picked
@@ -650,6 +720,40 @@ class ConversationRuntime:
             broker=broker,
             conversation_id=conversation_id,
         )
+        # RP-05 rung A: extend the registry with MCP tools from the pool snapshot.
+        # The snapshot is frozen per conversation — list_changed notifications do
+        # NOT mutate this list.
+        if self._mcp_pool is not None and self._mcp_pool.started:
+            mcps = self._mcp_pool.snapshot()
+            if mcps:
+                # rung A registers ALL MCP tools eagerly — every advertised tool
+                # is callable. The §6 active-schema cap (advertise tool_search
+                # only, call the rest by qualified name) needs the advertised-set
+                # / callable-set split deferred to rp-05c; do NOT register an
+                # uncallable meta-tool here (round-3 false-affordance reject).
+                mcp_names = frozenset(t.name for t in mcps)
+                # Extend the scope so the executor knows these tools are allowed
+                mcp_scope = executor._scope.model_copy(
+                    update={"allowed_tools": executor._scope.allowed_tools | mcp_names}
+                )
+                executor._scope = mcp_scope
+                # Build lightweight wrappers and register them (pool ref for D5 invocation)
+                for tdef in mcps:
+                    executor._registry.register(_MCPToolWrapper(tdef, self._mcp_pool))
+            # Emit mcp_approval_required frames for any servers that need re-approval
+            for server, info in self._mcp_approval_pending.items():
+                try:
+                    self._store.publish_ephemeral(
+                        conversation_id,
+                        {
+                            "type": "mcp_approval_required",
+                            "server": server,
+                            "description_hash": info.get("new_hash", ""),
+                            "old_description_hash": info.get("old_hash", ""),
+                        },
+                    )
+                except Exception:
+                    pass  # best-effort; WS frame emission is not critical
         self._executors[conversation_id] = executor
         return AgentLoop(
             conversation_id,
@@ -1007,6 +1111,65 @@ class ConversationRuntime:
         if destroyed:
             _LOG.info("swept %d orphan container(s) at startup", destroyed)
         return destroyed
+
+    # ---- MCP pool lifecycle (RP-05 rung A) ---------------------------------
+
+    async def _start_mcp_pool(self) -> None:
+        """Start the MCP client pool if mcp.enabled + servers are configured.
+        Called once at runtime startup (from the app lifespan). Loads approvals
+        from the mcp_approvals table. On ApprovalRequired, the affected server
+        is refused and the WS frame is dispatched; other servers still start."""
+        cfg = self._config_store.load()
+        mcp_cfg = cfg.mcp
+        if not mcp_cfg.enabled or not mcp_cfg.servers:
+            return
+
+        from perpleximanus.tools.mcp.config import McpSettings as TypedMcpSettings
+        from perpleximanus.tools.mcp.migrations import list_mcp_approvals
+
+        # Read existing approvals from the DB (D1: security gate production path)
+        approvals: dict[str, str] = {}
+        try:
+            conn = getattr(self._store, "_conn", None)
+            if conn is not None:
+                for row in list_mcp_approvals(conn):
+                    approvals[row["server"]] = row["description_hash"]
+        except Exception:
+            _LOG.warning("MCP pool: failed to read approvals from DB", exc_info=True)
+
+        typed = TypedMcpSettings(
+            enabled=mcp_cfg.enabled,
+            servers=mcp_cfg.servers,
+            max_active_schemas=mcp_cfg.max_active_schemas,
+        )
+        self._mcp_pool = McpPool(typed, secrets=self._secret_store, approvals=approvals)
+        try:
+            await self._mcp_pool.start()
+        except Exception:
+            _LOG.warning("MCP pool: failed to start", exc_info=True)
+
+        # D1/D3: collect servers that need re-approval from the pool status
+        if self._mcp_pool is not None:
+            for name, info in self._mcp_pool.approval_pending().items():
+                self._mcp_approval_pending[name] = {
+                    "old_hash": info.get("old_hash", ""),
+                    "new_hash": info.get("new_hash", ""),
+                }
+                _LOG.warning(
+                    "MCP pool: server %r refused — re-approval required", name
+                )
+
+    async def _close_mcp_pool(self) -> None:
+        if self._mcp_pool is not None:
+            await self._mcp_pool.aclose()
+            self._mcp_pool = None
+
+    def mcp_approval_state(self) -> dict[str, dict]:
+        """Return the pending approval state for WS frame dispatch (D3).
+
+        Each key is a server name; value has 'old_hash' and 'new_hash'.
+        """
+        return dict(self._mcp_approval_pending)
 
     # ---- auto-suspend (lifecycle G): live only while a UI is watching ----------
 

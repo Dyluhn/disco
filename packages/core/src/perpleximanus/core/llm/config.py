@@ -139,6 +139,17 @@ class ExtractionSettings(BaseModel):
     api_key_env: str = ""  # secrets key name for firecrawl (never the key itself)
 
 
+class McpSettings(BaseModel):
+    """[settings] MCP (Model Context Protocol) client settings — RP-05.
+    The explicit McpServerConfig typed dict lives in tools/mcp; this is the
+    top-level toggle + server map the Settings surface reads/writes. Off by
+    default so a fresh install is unchanged."""
+
+    enabled: bool = False  # off by default — opt-in
+    servers: dict[str, dict] = Field(default_factory=dict)  # name -> {transport, command, url, ...}
+    max_active_schemas: int = 20  # cap; beyond this, tool_search is exposed
+
+
 class RouterConfig(BaseModel):
     models: dict[str, ModelEntry]  # key -> entry (the assignable catalogue)
     # the active sandbox backend + connection (settings-driven; agent-server maps it).
@@ -151,6 +162,9 @@ class RouterConfig(BaseModel):
     # install works with no keys; upgradeable to self-host or paid in Settings.
     search: SearchSettings = Field(default_factory=SearchSettings)
     extraction: ExtractionSettings = Field(default_factory=ExtractionSettings)
+    # MCP (Model Context Protocol) — external tool servers (RP-05).
+    # Off by default; the pool is built at agent-server start when enabled.
+    mcp: McpSettings = Field(default_factory=McpSettings)
     # v1.2 deterministic assignment — the source of truth (R10):
     default_model: str  # AGENT_DRIVER's model + fallback for any unassigned role
     assignments: dict[ModelRole, str] = Field(default_factory=dict)  # explicit per-role

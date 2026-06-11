@@ -1,12 +1,14 @@
-# The `tools` package — the action space (BoD §5). Empty placeholder in Phase 0;
-# the Tool/Sandbox contract fills it in a later phase.
+# The `tools` package — the action space (BoD §5).
 [project]
 name = "perpleximanus-tools"
 version = "0.1.0"
-description = "Tool/action space for the perpleximanus platform (placeholder)."
+description = "Tool/action space for the perpleximanus platform."
 requires-python = ">=3.12"
 dependencies = [
     "perpleximanus-core",
+    # MCP client (RP-05) — Model Context Protocol v1 (stateless, per-conversation-pool).
+    # Pin <2: v2 is unreleased + breaking; the 2026-07-28 RC moves to a stateless core.
+    "mcp>=1.27.2,<2",
     # Docker SDK — the gVisor backend drives the daemon over the local socket OR
     # Docker-over-SSH (the [ssh] extra makes ssh:// importable; use_ssh_client=True
     # still authenticates via the system ssh, e.g. keyless Tailscale SSH).

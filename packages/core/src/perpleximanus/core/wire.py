@@ -21,7 +21,7 @@ class WSServerFrame(BaseModel):
     """[CONTRACT] One server→client frame. Discriminated by `type`."""
 
     model_config = ConfigDict(frozen=True)
-    type: Literal["event", "token", "file_stream", "state", "error", "pong"]
+    type: Literal["event", "token", "file_stream", "state", "error", "pong", "mcp_approval_required"]
     # type == "event": a newly-appended Event (full object, §2). PRIMARY signal.
     event: Event | None = None
     # type == "token": an incremental token for typewriter rendering. Tokens are
@@ -38,6 +38,9 @@ class WSServerFrame(BaseModel):
     state: ConversationState | None = None
     # type == "error": a transport/protocol error (NOT an agent error).
     error: dict[str, Any] | None = None
+    # type == "mcp_approval_required": MCP server needs re-approval (RP-05 D3).
+    # Carries {server, description_hash, old_description_hash}.
+    mcp_approval: dict[str, Any] | None = None
 
 
 class WSClientFrame(BaseModel):

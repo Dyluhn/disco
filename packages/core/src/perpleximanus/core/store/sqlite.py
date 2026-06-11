@@ -78,6 +78,17 @@ CREATE TABLE IF NOT EXISTS share_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_share_tokens_conv
     ON share_tokens (conversation_id);
+CREATE TABLE IF NOT EXISTS mcp_approvals (
+    -- RP-05: per-server MCP tool-description approvals. One row per server;
+    -- the description_hash is the SHA-256 fingerprint of the canonicalized
+    -- tool descriptions the operator approved. A hash mismatch on pool
+    -- start raises ApprovalRequired (the server refuses to start until
+    -- re-approval). The PK is the server name (matching McpServerConfig.name).
+    server          TEXT PRIMARY KEY,
+    description_hash TEXT NOT NULL,
+    approved_at     TEXT NOT NULL,  -- ISO-8601
+    approved_by     TEXT NOT NULL   -- operator username
+);
 """
 
 

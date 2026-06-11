@@ -17,6 +17,7 @@ from __future__ import annotations
 from .config import (
     EncodersSettings,
     ExtractionSettings,
+    McpSettings,
     ModelEntry,
     ProjectStorageSettings,
     RoleRouting,
@@ -95,6 +96,7 @@ __all__ = [
     "ModelEntry",
     "ModelProvider",
     "ModelRole",
+    "McpSettings",
     "NLIVerifier",
     "NoEligibleModel",
     "NullRoutingSink",

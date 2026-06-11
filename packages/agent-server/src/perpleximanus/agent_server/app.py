@@ -97,11 +97,20 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     2); pass None in tests that only exercise the wire layer (the loop won't run)."""
     @contextlib.asynccontextmanager
     async def lifespan(_app: FastAPI):
-        # On startup, reconcile orphaned RUNNING conversations — loops that died with
-        # a previous server process. Without this they show 'RUNNING' forever in
-        # History / the Deep Research read-only view (and may have leaked a sandbox).
+        # On startup, start the MCP pool (RP-05) and reconcile orphaned RUNNING
+        # conversations — loops that died with a previous server process. Without
+        # this they show 'RUNNING' forever in History / the Deep Research read-only
+        # view (and may have leaked a sandbox).
         idle_sweep_task: asyncio.Task | None = None
         if runtime is not None:
+            try:
+                await runtime._start_mcp_pool()
+            except Exception:
+                # D1: _start_mcp_pool handles ApprovalRequired internally;
+                # unexpected errors are logged but must not block boot.
+                import logging
+                _LOG = logging.getLogger(__name__)
+                _LOG.warning("MCP pool startup failed", exc_info=True)
             with contextlib.suppress(Exception):  # never block boot on reconciliation
                 await runtime.reconcile_orphaned_runs()
             idle_sweep_task = asyncio.create_task(runtime._idle_sweep_loop())
@@ -110,6 +119,9 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             idle_sweep_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await idle_sweep_task
+        if runtime is not None:
+            with contextlib.suppress(Exception):
+                await runtime._close_mcp_pool()
 
     app = FastAPI(
         title="perpleximanus agent-server", version="0.1.0", lifespan=lifespan
@@ -718,9 +730,18 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
 
         async def pump_ephemeral() -> None:
             async for frame in eph_stream:
-                await websocket.send_json(
-                    WSServerFrame(type="file_stream", file_stream=frame).model_dump(mode="json")
-                )
+                # D3: route mcp_approval_required frames via the typed WS event
+                if isinstance(frame, dict) and frame.get("type") == "mcp_approval_required":
+                    await websocket.send_json(
+                        WSServerFrame(
+                            type="mcp_approval_required",
+                            mcp_approval=frame,
+                        ).model_dump(mode="json")
+                    )
+                else:
+                    await websocket.send_json(
+                        WSServerFrame(type="file_stream", file_stream=frame).model_dump(mode="json")
+                    )
 
         sender = asyncio.create_task(pump_events())
         eph_sender = asyncio.create_task(pump_ephemeral())
