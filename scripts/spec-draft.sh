@@ -45,14 +45,21 @@ else
   spec="$CAND/$name.spec.ts"
   checklist="$CAND/$name.checklist.txt"
 
-  # ---- 1. draft via Gemini Flash (pointer), fallback gpt-oss-120b:free ----------
-  ptr="Read the file $brief NOW — it is the full drafting brief. Produce the Playwright spec it requests and print it to stdout as ONE fenced \`\`\`typescript code block. Print only the code block; do not write any files."
-  gemini -m gemini-3-flash-preview --yolo -p "$ptr" 2>/dev/null >"$raw" || true
+  # ---- 1. draft: DeepSeek V4 Pro primary (ROUTING.md item 2), Gemini Flash secondary.
+  # Claude never writes the first draft — it does only iterate-against-reality + final
+  # review. The two SHARED-BUG FACTS below are injected so drafts stop repeating them
+  # (every bake-off candidate independently made both mistakes).
+  ptr="Read the file $brief NOW — it is the full drafting brief. Produce the Playwright spec it requests and print it to stdout as ONE fenced \`\`\`typescript code block. Print only the code block; do not write any files.
+KNOWN SHARED BUGS — do NOT repeat these in the draft:
+(a) HTTP-probe matching must accept tool name 'shell', not just 'shell_exec'.
+(b) Conversation-id discovery = snapshot the KNOWN ids first, then poll for NEW ones (never grab-latest)."
+  DEEPSEEK_API_KEY=$(cat ~/.config/deepseek/api_key 2>/dev/null) \
+    pi --provider deepseek --model deepseek-v4-pro -p --no-session -ne -ns -a \
+    "$ptr" 2>/dev/null | grep -v '^Warning: No models match' >"$raw" || true
   if [ ! -s "$raw" ]; then
-    pi --provider openrouter --model openai/gpt-oss-120b:free -p --no-session -nt -ne -ns -nc \
-      "$ptr" 2>/dev/null | grep -v '^Warning: No models match' >"$raw" || true
+    gemini -m gemini-3-flash-preview --yolo -p "$ptr" 2>/dev/null >"$raw" || true
   fi
-  [ -s "$raw" ] || { echo "DRAFT ERROR: neither Flash nor gpt-oss-120b:free returned output" >&2; exit 1; }
+  [ -s "$raw" ] || { echo "DRAFT ERROR: neither DeepSeek V4 Pro nor Gemini Flash returned output" >&2; exit 1; }
 
   # extract the first fenced code block (```typescript / ```ts / bare ```)
   awk '/^```(typescript|ts)?[[:space:]]*$/ { if (!inb) { inb=1; next } else exit } inb' "$raw" >"$spec"
