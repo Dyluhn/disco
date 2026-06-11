@@ -133,6 +133,18 @@ worker_cmd() { # <preset> <brief-file> -> command string on stdout
       printf 'claude --model sonnet --dangerously-skip-permissions --output-format stream-json --verbose -p %q' "$ptr" ;;
     pi-free)
       printf 'pi --provider openrouter --model openai/gpt-oss-120b:free -p --no-session -nt -ne -ns -nc %q' "$ptr" ;;
+    m3-trial)
+      # MiniMax M3 metered via OpenRouter — ONE-ROUND quality trial (Dylan
+      # 2026-06-11 ~06:00, deciding the $20/mo sub question). Same tool-enabled
+      # shape as pro-dsk.
+      printf 'pi --provider openrouter --model minimax/minimax-m3 -p --no-session -ne -ns -a %q' "$ptr" ;;
+    pro-direct)
+      # DeepSeek V4 Pro via the DIRECT API (api.deepseek.com) — automatic
+      # context caching makes repeated-prefix worker traffic ~4x cheaper than
+      # the same model through OpenRouter (cache-hit input $0.003625/M vs
+      # $0.435/M miss). Key: ~/.config/deepseek/api_key (600). A/B vs pro-dsk
+      # 2026-06-11; native pi provider, tools on.
+      printf 'DEEPSEEK_API_KEY=$(cat ~/.config/deepseek/api_key) pi --provider deepseek --model deepseek-v4-pro -p --no-session -ne -ns -a %q' "$ptr" ;;
     pro-dsk)
       # DeepSeek V4 Pro via OpenRouter (Dylan authorized paid lane 2026-06-11
       # "do it all on pro"). TOOLS ON (no -nt — that flag is why pi-free can
@@ -173,7 +185,7 @@ cmd_dispatch() {
   done < <(order_files "$order")
 
   local cmd; cmd=$(worker_cmd "$worker" "$brief") || fail_reason "$order" "unknown-worker" \
-    "Dispatch refused: unknown worker preset '$worker'. Valid presets: pro, flash, sonnet, pi-free, pro-dsk."
+    "Dispatch refused: unknown worker preset '$worker'. Valid presets: pro, flash, sonnet, pi-free, pro-dsk, pro-direct, m3-trial."
 
   # a staged (declared-but-untouched) order becomes live the moment a worker is
   # let loose on its files — flip BEFORE launch so the gates see it immediately
@@ -275,7 +287,7 @@ cmd_verify() {
       if tail -n 30 "$REPO_ROOT/$ev" | grep -qE "[1-9][0-9]* (failed|error)|ERROR |Traceback"; then
         echo "EVIDENCE RED $ev (failures in tail — review before commit)"; rc=2
       fi
-    done < <(awk -v o="$order" '$0 ~ "^"o":" {f=1; next} /^[a-z0-9-]+:/ {f=0} f && /test-record\/.*units.*\.log/ {gsub(/^ *- /,""); print}' "$ORDERS")
+    done < <(awk -v o="$order" '$0 ~ "^"o":" {f=1; next} /^[a-z0-9-]+:/ {f=0} f && /test-record\/.*units.*\.log/ {gsub(/^ *- /,""); print}' "$MANIFEST")
     echo "VERIFIED $order: artifact ${ARTIFACT#"$REPO_ROOT"/} present, non-empty, fresh."
     return $rc
   fi
