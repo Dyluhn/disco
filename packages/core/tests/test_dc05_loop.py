@@ -524,19 +524,22 @@ def test_actions_since_last_resume_resets_at_marker():
 # session's first real action, notify_user / remember / serve are WITHHELD.
 
 
+_META_VIRTUALS = {"serve", "remember", "notify_user", "ask_user", "propose_plan_update"}
+
+
 def test_tools_for_step_suppresses_meta_tools():
-    """suppress_meta_tools drops the three meta virtuals but keeps the
-    legitimate escapes (ask_user / propose_plan_update / finish)."""
+    """suppress_meta_tools drops every virtual except finish — the first turn
+    of a session must be a real tool call (finish stays, gated by verify)."""
     agent = ScriptedAgent([finish_step()])
     loop, _ = build_loop(agent)
 
     full = {getattr(t, "name", None) for t in loop._tools_for_step()}
-    assert {"serve", "remember", "notify_user"} <= full
+    assert _META_VIRTUALS <= full
 
     lean = {getattr(t, "name", None) for t in
             loop._tools_for_step(suppress_meta_tools=True)}
-    assert not ({"serve", "remember", "notify_user"} & lean)
-    assert {"ask_user", "propose_plan_update", "finish", "shell"} <= lean
+    assert not (_META_VIRTUALS & lean)
+    assert {"finish", "shell"} <= lean
 
 
 @pytest.mark.asyncio
@@ -553,7 +556,45 @@ async def test_meta_tools_withheld_until_first_real_action():
     await loop.run()
 
     first, second = agent.seen_tools[0], agent.seen_tools[1]
-    assert "serve" not in first and "remember" not in first
-    assert "notify_user" not in first
-    assert "ask_user" in first and "finish" in first
-    assert {"serve", "remember", "notify_user"} <= set(second)
+    assert not (_META_VIRTUALS & set(first))
+    assert "finish" in first and "shell" in first
+    assert _META_VIRTUALS <= set(second)
+
+
+@pytest.mark.asyncio
+async def test_ask_user_before_any_work_refused():
+    """ask_user as the session's first move (re-run #5's hallucinated-call
+    shape) → refused with actionable feedback, NO question gate; after one
+    real action the Ask-gate works normally."""
+    agent = ScriptedAgent([
+        action_step("ask_user", {"question": "should I rebuild?"}),  # refused
+        action_step("shell", {}),                                     # real work
+        action_step("ask_user", {"question": "sudo or not?"}),        # gated normally
+        finish_step(),
+    ])
+    loop, store = build_loop(agent)
+    await loop.send_message("go")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
+    events = await store.get_events(CID)
+    refusals = [
+        e for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and "ask_user refused" in (e.message.content if e.message else "")
+    ]
+    assert len(refusals) == 1
+    questions = [
+        e for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.AGENT
+        and "sudo or not?" in (e.message.content if e.message else "")
+    ]
+    assert len(questions) == 1   # only the post-work question reached the gate
+    assert not any(
+        isinstance(e, MessageEvent)
+        and e.source == EventSource.AGENT
+        and "should I rebuild?" in (e.message.content if e.message else "")
+        for e in events
+    )

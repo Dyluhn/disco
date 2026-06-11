@@ -1994,8 +1994,9 @@ class ConversationRuntime:
                 step_title = latest_plan.steps[first_undone - 1].title
                 parts.append(
                     f"Next actionable step ({first_undone}): '{step_title}'."
-                    " Do not re-plan and do not summarize — execute this step now using"
-                    " tools."
+                    " Do not re-plan, do not summarize, and do not ask the user"
+                    " anything — everything you need is in this message. Execute"
+                    " this step now using tools."
                 )
 
         result.append(

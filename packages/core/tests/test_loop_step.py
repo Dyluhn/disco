@@ -244,7 +244,8 @@ async def test_ask_user_intercepts_and_halts_at_decision_gate():
             ],
         },
     )
-    agent = ScriptedAgent([alt_call, finish_step()])
+    # Real work first — the fresh-session backstop refuses a zero-work ask_user.
+    agent = ScriptedAgent([action_step("shell", {}), alt_call, finish_step()])
     loop, store = build_loop(agent)
     await loop.send_message("clean up tmp")
     await loop.run()
@@ -295,7 +296,8 @@ async def test_pick_alternative_runs_the_selected_option():
     # After the alternatives are emitted + the gate hits, picking will inject a
     # new ActionEvent and the loop resumes. The next agent step (finish_step)
     # cleanly ends the run.
-    agent = ScriptedAgent([alt_call, finish_step()])
+    # Real work first — the fresh-session backstop refuses a zero-work ask_user.
+    agent = ScriptedAgent([action_step("shell", {}), alt_call, finish_step()])
     loop, store = build_loop(agent)
     await loop.send_message("clean up")
     await loop.run()
@@ -345,7 +347,8 @@ async def test_pick_alternative_with_unknown_id_does_not_resume():
             ],
         },
     )
-    agent = ScriptedAgent([alt_call, finish_step()])
+    # Real work first — the fresh-session backstop refuses a zero-work ask_user.
+    agent = ScriptedAgent([action_step("shell", {}), alt_call, finish_step()])
     loop, store = build_loop(agent)
     await loop.send_message("go")
     await loop.run()
@@ -389,7 +392,8 @@ async def test_propose_plan_update_intercepts_and_halts_at_plan_approval():
         },
         thought="my current plan is wrong; here's a course correction",
     )
-    agent = ScriptedAgent([update_call, finish_step()])
+    # Real work first — the fresh-session backstop refuses a zero-work re-plan.
+    agent = ScriptedAgent([action_step("shell", {}), update_call, finish_step()])
     loop, store = build_loop(agent)
     await loop.send_message("build a stock tracker")
     await loop.run()
@@ -429,7 +433,8 @@ async def test_ask_user_without_options_pauses_as_free_form_question():
         args={"question": "Should I use sudo for the cleanup, or run as the current user?"},
         thought="I need to decide between two privilege levels",
     )
-    agent = ScriptedAgent([free_form, finish_step()])
+    # Real work first — the fresh-session backstop refuses a zero-work ask_user.
+    agent = ScriptedAgent([action_step("shell", {}), free_form, finish_step()])
     loop, store = build_loop(agent)
     await loop.send_message("clean up tmp")
     await loop.run()

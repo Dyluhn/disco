@@ -428,3 +428,50 @@ targeted condensation; wiped-sandbox resume reality-check (their sandbox
 survives restarts — pure event replay suffices for them); per-state action-
 space gating; meta-tool rate limiting. One string worth stealing: V0's
 ERROR_ACTION_NOT_EXECUTED_ERROR phrasing for crashed-runtime messaging.
+
+## 7. Multi-project OSS harvest survey (source-verified 2026-06-10, requested by Dylan)
+
+Broadened process rule (Dylan): before inventing for ANY order class, survey
+the open-source field — OpenHands agent-sdk (§6), Pi/pi-mono, Aider,
+SWE-agent, smolagents, OpenManus, Suna. Research clones: /tmp/harvest/.
+Full survey report archived in the session; ranked list below is the
+actionable distillate. Problem areas: A=tool-call robustness,
+B=post-restart grounding, C=deliverable verification, D=context/caching,
+E=output truncation, F=status/format discipline.
+
+**Ranked top-10 harvest list:**
+
+| # | Mechanism (source) | Area | Effort |
+|---|---|---|---|
+| 1 | Arg coercion + 3-stage JSON repair before refusal — pi `validation.ts` coercion ladder + `json-parse.ts` (strict→repair→partial→repair+partial, never throws) into the driver tool-call path | A | M |
+| 2 | Observation masking with batched (`polling`) boundary updates + keep/remove tags — SWE-agent `LastNObservations`; epochal masking keeps llama.cpp KV prefix stable between mask epochs | D | S/M |
+| 3 | Shell spill-to-file: rolling tail buffer + full-output temp file + path in result — pi `executeShellWithCapture` (50KB threshold; tail-keep for shell, head-keep for reads) | E | S |
+| 4 | Failure-feedback kit: "did you mean these actual lines" + "REPLACE lines already in file!" + "other N applied, don't re-send" — aider `apply_edits`; already-applied check counters post-restart "I already did that" | A+B | S |
+| 5 | Structured checkpoint format + turn-boundary-only cut points + iterative summary update — pi `compaction.ts` (Goal/Constraints/Progress/Key Decisions/Next Steps/Critical Context); template for the reality block | B+D | M |
+| 6 | Requery-outside-the-log with typed error codes + bounded retries + deliverable salvage — SWE-agent `forward_with_handling`; malformed attempts never pollute the event log's LLM view | A+C | M |
+| 7 | Grammar-constrained tool calls via llama.cpp json_schema — smolagents `use_structured_outputs_internally` precedent; we own the server, reject malformed calls at decode time | A | M |
+| 8 | Scheduled facts-survey re-grounding every N steps — smolagents `planning_interval`; also fire once immediately after restart | B+D | S |
+| 9 | Duplicate-content stuck detector + strategy-change injection — OpenManus `is_stuck`/`handle_stuck_state`, upgrade exact-match to n-gram/format similarity | A+F | S |
+| 10 | Session status enum incl. provisioning/branching states + CR-style deliverable record — Suna `project_session_status` + `change_requests` | F+C | M |
+
+**Cross-cutting verdicts on shipped/planned choices:**
+- Refusal-with-feedback: validated by all six (best: pi, aider, SWE-agent).
+- Write-outputs-to-file: validated verbatim (pi; SWE-agent adds a
+  prescriptive truncation marker — say WHAT TO DO next, not just "truncated").
+- Graduated valve: validated (SWE-agent max_requeries→autosubmission ladder;
+  aider max_reflections=3).
+- Tool withholding (DC-05 re-run #5 fix): NO project does it, none
+  contradicts it — genuinely ours. Pi's nearest analog: toolset changes are
+  themselves logged session events (`active_tools_change`) — copy that for
+  replay determinism.
+- Design tension to respect: per-step observation masking vs KV-cache
+  stability are in direct conflict. SWE-agent batches mask updates into
+  epochs; pi avoids masking entirely (boundary-aligned compaction only).
+  Pick one; never mask per-step.
+- Meta-finding (Suna): a funded Manus clone deleted its own loop and runs
+  OpenCode in-sandbox — supports harvest-don't-reinvent.
+
+**Order impact:** #1/#6/#7 fold into RP-12 (weak-model FC kit) before
+dispatch; #3 is the E-order blueprint; #5/#8 feed the reality-block /
+re-grounding line of work; #9 feeds the valve; #10 feeds status
+write-through (rp-14).

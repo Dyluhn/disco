@@ -1,0 +1,26 @@
+{
+  "rerun": 5,
+  "date": "2026-06-10",
+  "cid": "conv_5247aeb7ca75400a95378e057ca384bb",
+  "designed_fail": true,
+  "shape": "ask_user-as-narration (4th distinct post-resume degeneration)",
+  "what_happened": [
+    "seq 21-25: pause -> sandbox wipe -> resume with reality block (StatusEvent RUNNING detail=resumed)",
+    "seq 27: first post-resume turn was an ask_user tool call with an EMPTY question argument; the Ask-gate's free-form fallback (question or step.thought) promoted the model's narration thought ('I see the plan says step 2 is done, but the sandbox was reclaimed. Let me verify the current state of the workspace and continue from where we left off.') into an AGENT MessageEvent",
+    "seq 28: state -> AWAITING_USER_QUESTION; run halts waiting on a human who was never actually asked anything actionable"
+  ],
+  "prior_gates_held": {
+    "serve_gate_5472f82": "held - no serve attempt",
+    "meta_tool_suppression_c3d4fd2": "held for remember/notify_user/serve - but ask_user and propose_plan_update were NOT in the suppressed set, leaving ask_user as the one remaining open meta channel",
+    "valve": "never reached - AWAITING_USER_QUESTION is a hard halt, not a noop loop",
+    "condensation": "correctly None - no degenerate span existed"
+  },
+  "diagnosis": "Pattern across re-runs #2/#3/#4/#5: a weak model's first post-resume turn escapes through ANY meta channel still offered. Per-channel refusal gates converge one tool at a time; the structural fix is action-space shaping: withhold the channel entirely.",
+  "fix": [
+    "engine.py _tools_for_step: until the session's first real (non-bookkeeping) action, ALL virtuals except finish are withheld from the offered tool set (ask_user, propose_plan_update, notify_user, remember, serve). finish stays - verify-on-finish gates it. PLANNING mode exempt.",
+    "engine.py fresh-session backstop before the propose_plan_update/ask_user gates: hallucinated calls to the withheld ask_user/propose_plan_update get an ENVIRONMENT refusal message + _invisible_steps increment + valve check, then continue (non-blocking).",
+    "runtime.py reality block hardened: 'Do not re-plan, do not summarize, and do not ask the user anything - everything you need is in this message. Execute this step now using tools.'"
+  ],
+  "tests": "packages/core 432 passed (incl. new test_ask_user_before_any_work_refused + test_meta_tools_withheld_until_first_real_action), packages/agent-server 197 passed",
+  "next": "Phase B re-run #6 on the new commit; watch for shape #5 (premature finish on empty workspace - verify-on-finish should gate; if it does not, the OpenHands critic frame is the designed fix)"
+}

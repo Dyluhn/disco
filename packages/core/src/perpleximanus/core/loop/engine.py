@@ -884,15 +884,18 @@ class AgentLoop:
         pass-through (Research / default). While PLANNING the agent sees ONLY the
         planning tool(s); while executing it sees everything else.
 
-        suppress_meta_tools (Phase-B re-run #4, 2026-06-10): until the first
-        real action of a session (post-resume or conversation start), the
-        meta/handoff virtuals — notify_user, remember, serve — are WITHHELD
-        from the offered set. Three distinct post-resume degenerations in a
-        row (prose spam, serve-before-work, remember spam) all burned the
-        model's first turns on meta tools; shaping the action space beats
-        refusing after the fact (the model can't pick what isn't offered).
-        ask_user / propose_plan_update / finish stay offered — they're
-        legitimate escapes, each guarded by its own gate.
+        suppress_meta_tools (Phase-B re-runs #4/#5, 2026-06-10): until the
+        first real action of a session (post-resume or conversation start),
+        ALL virtuals except finish — notify_user, remember, serve, ask_user,
+        propose_plan_update — are WITHHELD from the offered set. FOUR
+        distinct post-resume degenerations in a row (prose spam,
+        serve-before-work, remember spam, ask_user-as-narration) each
+        escaped through whatever meta channel remained; shaping the action
+        space beats refusing after the fact (the model can't pick what
+        isn't offered). The first turn of a session must be a real tool
+        call. Asking/re-planning become available after one real attempt —
+        an evidence-backed question beats a preemptive one. finish stays
+        (verify-on-finish gates it).
 
         In execution mode the loop also appends a VIRTUAL `ask_user` tool — a
         clean escape hatch the model can call when it (in its own reasoning)
@@ -935,13 +938,11 @@ class AgentLoop:
         # neither is injected by reminder. propose_plan_update is the model's
         # auto-recovery affordance: when its current plan is wrong, it proposes
         # a revision and the user accepts/refines via the plan-approval gate.
-        virtuals = [
-            _ask_user_tool_singleton(),
-            _propose_plan_update_tool_singleton(),
-            _finish_tool_singleton(),
-        ]
+        virtuals = [_finish_tool_singleton()]
         if not suppress_meta_tools:
             virtuals += [
+                _ask_user_tool_singleton(),
+                _propose_plan_update_tool_singleton(),
                 _notify_user_tool_singleton(),
                 _remember_tool_singleton(),
                 _serve_tool_singleton(),
@@ -2399,6 +2400,45 @@ class AgentLoop:
                 # This is what enables auto-recovery without the user having to
                 # poke the model after every failure — the model proposes a
                 # course correction; the user confirms or refines.
+                # FRESH-SESSION BACKSTOP (Phase-B re-run #5, 2026-06-10):
+                # ask_user / propose_plan_update are withheld from the offered
+                # set until the session's first real action (_tools_for_step),
+                # but a weak model can hallucinate calls to unoffered tools —
+                # re-run #5's model called ask_user with an EMPTY question arg
+                # as its first post-resume move, halting the run on its own
+                # narration. Refuse with the same actionable-feedback shape as
+                # the serve gate: attempt the step first, then ask/re-plan
+                # with evidence in hand. PLANNING is exempt (ask_user before
+                # committing a plan is the legitimate use).
+                if (
+                    step.tool_call is not None
+                    and step.tool_call.tool_name in ("ask_user", "propose_plan_update")
+                    and self.mode != OperatingMode.PLANNING
+                    and self._actions_since_last_resume(events) == 0
+                ):
+                    self._invisible_steps += 1
+                    await self._emit(
+                        MessageEvent(
+                            source=EventSource.ENVIRONMENT,
+                            message=LLMMessage(
+                                role="user",
+                                content=(
+                                    f"{step.tool_call.tool_name} refused: no real "
+                                    "work has happened yet in this session. Attempt "
+                                    "the next plan step with real tool calls first — "
+                                    "if it fails or something is genuinely unclear, "
+                                    "you can then ask or propose a plan change with "
+                                    "the evidence in hand."
+                                ),
+                            ),
+                        )
+                    )
+                    events = await self._events()
+                    noops = self._consecutive_noops(events) + self._invisible_steps
+                    if await self._actionless_valve(events, noops):
+                        return await self.get_state()
+                    continue  # non-blocking — let the model act on the feedback
+
                 if (
                     step.tool_call is not None
                     and step.tool_call.tool_name == "propose_plan_update"
