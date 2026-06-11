@@ -133,6 +133,12 @@ worker_cmd() { # <preset> <brief-file> -> command string on stdout
       printf 'claude --model sonnet --dangerously-skip-permissions --output-format stream-json --verbose -p %q' "$ptr" ;;
     pi-free)
       printf 'pi --provider openrouter --model openai/gpt-oss-120b:free -p --no-session -nt -ne -ns -nc %q' "$ptr" ;;
+    pro-dsk)
+      # DeepSeek V4 Pro via OpenRouter (Dylan authorized paid lane 2026-06-11
+      # "do it all on pro"). TOOLS ON (no -nt — that flag is why pi-free can
+      # only do recon); -a trusts the repo's project-local files; AGENTS.md
+      # conduct rules stay loaded (no -nc).
+      printf 'pi --provider openrouter --model deepseek/deepseek-v4-pro -p --no-session -ne -ns -a %q' "$ptr" ;;
     *) return 1 ;;
   esac
 }
@@ -167,7 +173,7 @@ cmd_dispatch() {
   done < <(order_files "$order")
 
   local cmd; cmd=$(worker_cmd "$worker" "$brief") || fail_reason "$order" "unknown-worker" \
-    "Dispatch refused: unknown worker preset '$worker'. Valid presets: pro, flash, sonnet, pi-free."
+    "Dispatch refused: unknown worker preset '$worker'. Valid presets: pro, flash, sonnet, pi-free, pro-dsk."
 
   # a staged (declared-but-untouched) order becomes live the moment a worker is
   # let loose on its files — flip BEFORE launch so the gates see it immediately
