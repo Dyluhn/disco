@@ -20,10 +20,12 @@ machinery already resolves.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
+import jsonschema
 from perpleximanus.core import LLMMessage, ReportSection
 from perpleximanus.core.llm import (
     CapabilityProfile,
@@ -34,11 +36,84 @@ from perpleximanus.core.llm import (
 
 from ..models import Passage
 from ..ranking import Embedder
-from ..streaming import _verify_claims  # reuse — per-claim NLI verifier
+from ..streaming import _to_blocks, _verify_claims  # reuse — per-claim NLI verifier
 from ..vectorstore import VectorStore
 from .gather import SubQuestionResult
 
 EmitFn = Callable[[str, dict[str, Any]], Awaitable[None]]
+
+CHART_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "chart_type": {"enum": ["bar", "line", "pie", "scatter"]},
+        "data": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "anyOf": [
+                    {
+                        "properties": {
+                            "label": {"type": "string"},
+                            "value": {"type": "number"},
+                        },
+                        "required": ["label", "value"],
+                    },
+                    {
+                        "properties": {
+                            "x": {"type": ["number", "string"]},
+                            "y": {"type": "number"},
+                            "group": {"type": "string"},
+                        },
+                        "required": ["x", "y"],
+                    },
+                ],
+            },
+        },
+        "title": {"type": "string"},
+        "x_label": {"type": "string"},
+        "y_label": {"type": "string"},
+    },
+    "required": ["chart_type", "data"],
+}
+
+
+def _validate_charts(markdown: str) -> str:
+    """Find ```chart blocks, validate their JSON, and if invalid, degrade them
+    to standard markdown tables (or prose if table conversion fails) so the
+    UI never receives a broken chart. Handles multiple charts per section."""
+    blocks = re.split(r"(```chart\n.*?```)", markdown, flags=re.DOTALL)
+    out = []
+    for block in blocks:
+        if block.startswith("```chart\n"):
+            try:
+                code = block[9:-3].strip()
+                payload = json.loads(code)
+                jsonschema.validate(instance=payload, schema=CHART_SCHEMA)
+                out.append(block)
+            except Exception:  # noqa: BLE001
+                # Degrade to table if possible
+                try:
+                    p = json.loads(block[9:-3].strip())
+                    data = p.get("data", [])
+                    if p.get("chart_type") == "scatter":
+                        cols = ["Group", p.get("x_label", "X"), p.get("y_label", "Y")]
+                        rows = [[str(d.get("group", "")), str(d.get("x", "")), str(d.get("y", ""))] for d in data]
+                    else:
+                        cols = [p.get("x_label", "Label"), p.get("y_label", "Value")]
+                        rows = [[str(d.get("label", d.get("x", ""))), str(d.get("value", d.get("y", "")))] for d in data]
+                    
+                    if not rows:
+                        continue
+
+                    table = f"| {' | '.join(cols)} |\n| {' | '.join(['---'] * len(cols))} |\n"
+                    for r in rows:
+                        table += f"| {' | '.join(r)} |\n"
+                    out.append(f"\n{table}\n")
+                except Exception: # noqa: BLE001
+                    continue # just drop the broken chart
+        else:
+            out.append(block)
+    return "".join(out)
 
 
 _SECTION_PROMPT = (
@@ -85,6 +160,19 @@ _SECTION_PROMPT = (
     "assessment is that' — so a reader can distinguish your inference from a "
     "cited fact. The inference still draws on cited sources, but its STATUS "
     "as an inference is flagged.\n\n"
+    "6. VISUALIZE DATA. If sources provide multiple numerical data points "
+    "suitable for comparison (trends, shares, distributions), include a chart. "
+    "Use this exact format:\n"
+    "```chart\n"
+    "{{\n"
+    "  \"chart_type\": \"bar\" | \"line\" | \"pie\" | \"scatter\",\n"
+    "  \"title\": \"Chart Title\",\n"
+    "  \"x_label\": \"Label for X axis\",\n"
+    "  \"y_label\": \"Label for Y axis\",\n"
+    "  \"data\": [{{\"label\": \"A\", \"value\": 10}}, {{\"label\": \"B\", \"value\": 20}}] \n"
+    "  // OR for scatter: \"data\": [{{\"x\": 1, \"y\": 2, \"group\": \"A\"}}]\n"
+    "}}\n"
+    "```\n\n"
     "FORMAT: 4–7 short paragraphs of markdown. No section header (the report "
     "renders one). Every factual sentence ends in [[id]]."
 )
@@ -209,6 +297,47 @@ async def synthesize_section(
             )
         )
         markdown = resp.text.strip()
+
+        # CHART VALIDATION & RETRY
+        chart_matches = re.findall(r"```chart\n(.*?)\n```", markdown, re.DOTALL)
+        if chart_matches:
+            invalid_errors = []
+            for m in chart_matches:
+                try:
+                    p = json.loads(m.strip())
+                    jsonschema.validate(instance=p, schema=CHART_SCHEMA)
+                except Exception as e:
+                    invalid_errors.append(str(e))
+
+            if invalid_errors:
+                # One retry with error trace
+                retry_msg = (
+                    "Your previous output contained invalid chart JSON:\n"
+                    f"{' ; '.join(invalid_errors)}\n\n"
+                    "Please rewrite the section, ensuring all ```chart blocks "
+                    "strictly follow the schema provided in rule 6. If you cannot "
+                    "fix the chart, use a standard markdown table instead."
+                )
+                try:
+                    resp = await router.complete(
+                        CompletionRequest(
+                            profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
+                            messages=[
+                                LLMMessage(role="user", content=instruction),
+                                LLMMessage(role="assistant", content=markdown),
+                                LLMMessage(role="user", content=retry_msg),
+                            ],
+                            temperature=0.0,
+                            max_tokens=1400,
+                        )
+                    )
+                    markdown = resp.text.strip()
+                except Exception:  # noqa: BLE001
+                    pass  # Keep the first version if retry fails
+
+        # Final safety validation (degrade invalid charts to tables)
+        markdown = _validate_charts(markdown)
+
     except Exception as exc:  # noqa: BLE001 — synthesis failure → honest empty
         return ReportSection(
             id=section_id,

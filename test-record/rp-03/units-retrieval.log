@@ -1,0 +1,31 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.13, pytest-9.0.3, pluggy-1.6.0
+rootdir: /var/home/dylan/projects/perpleximanus build
+configfile: pyproject.toml
+plugins: asyncio-1.4.0, anyio-4.13.0, hypothesis-6.155.2
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 81 items
+
+packages/retrieval/tests/test_bundled_providers.py .........             [ 11%]
+packages/retrieval/tests/test_chart_blocks.py .......                    [ 19%]
+packages/retrieval/tests/test_corpora.py ...                             [ 23%]
+packages/retrieval/tests/test_deep_research.py ...........               [ 37%]
+packages/retrieval/tests/test_eval.py ....                               [ 41%]
+packages/retrieval/tests/test_extra.py ...                               [ 45%]
+packages/retrieval/tests/test_grounding.py .....                         [ 51%]
+packages/retrieval/tests/test_live.py ..........                         [ 64%]
+packages/retrieval/tests/test_local_encoders.py ........                 [ 74%]
+packages/retrieval/tests/test_pipeline.py ......                         [ 81%]
+packages/retrieval/tests/test_pipeline_invariants.py ...                 [ 85%]
+packages/retrieval/tests/test_retrieval_integration.py .                 [ 86%]
+packages/retrieval/tests/test_streaming.py ..                            [ 88%]
+packages/retrieval/tests/test_table_blocks.py .......                    [ 97%]
+packages/retrieval/tests/test_wiring.py ..                               [100%]
+
+=============================== warnings summary ===============================
+packages/retrieval/tests/test_local_encoders.py::test_embedder_returns_dense_vectors_and_semantic_order
+  /var/home/dylan/projects/perpleximanus build/packages/retrieval/src/perpleximanus/retrieval/local_encoders.py:58: UserWarning: The model intfloat/multilingual-e5-large now uses mean pooling instead of CLS embedding. In order to preserve the previous behaviour, consider either pinning fastembed version to 0.5.1 or using `add_custom_model` functionality.
+    _embedding_model = TextEmbedding(model_name=EMBED_MODEL)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 81 passed, 1 warning in 2.36s =========================

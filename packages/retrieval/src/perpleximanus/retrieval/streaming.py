@@ -149,13 +149,36 @@ def _to_blocks(text: str) -> list[dict]:
             flush_prose()
             lang = line.strip().lstrip("`").strip() or "text"
             i += 1
-            code: list[str] = []
+            code_lines: list[str] = []
             while i < len(lines) and not lines[i].strip().startswith("```"):
-                code.append(lines[i])
+                code_lines.append(lines[i])
                 i += 1
             i += 1  # skip closing fence
+            code_str = "\n".join(code_lines)
+            if lang == "chart":
+                try:
+                    import json
+
+                    payload = json.loads(code_str)
+                    if isinstance(payload, dict) and "chart_type" in payload:
+                        blocks.append(
+                            {
+                                "kind": "chart",
+                                "id": f"b{n}",
+                                "chart_type": payload.get("chart_type"),
+                                "data": payload.get("data"),
+                                "title": payload.get("title"),
+                                "x_label": payload.get("x_label"),
+                                "y_label": payload.get("y_label"),
+                                "cited_passage_ids": sorted(set(_CITE.findall(code_str))),
+                            }
+                        )
+                        n += 1
+                        continue
+                except Exception:  # noqa: BLE001
+                    pass  # fall back to code block
             blocks.append(
-                {"kind": "code", "id": f"b{n}", "language": lang, "code": "\n".join(code)}
+                {"kind": "code", "id": f"b{n}", "language": lang, "code": code_str}
             )
             n += 1
             continue

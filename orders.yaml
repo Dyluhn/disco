@@ -520,7 +520,7 @@ rp-14: committed
   - test-record/rp-14/units-frontend.log
   - agent-projects/gemini/rp-14-report.md
 
-rp-03: in-flight
+rp-03: committed
   - frontend/src/types/grounded.ts
   - frontend/src/components/blocks.tsx
   - frontend/src/components/ChartBlock.test.tsx

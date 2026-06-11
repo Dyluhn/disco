@@ -51,6 +51,16 @@ export type AnswerBlock =
   | { kind: "table"; id: string; columns: string[]; rows: string[][]; caption?: string }
   | { kind: "code"; id: string; language: string; code: string }
   | {
+      kind: "chart";
+      id: string;
+      chart_type: "bar" | "line" | "pie" | "scatter";
+      data: any; // Narrow per-type schemas handled in component
+      title?: string;
+      x_label?: string;
+      y_label?: string;
+      cited_passage_ids?: string[];
+    }
+  | {
       kind: "callout";
       id: string;
       tone: "note" | "definition" | "warning";
