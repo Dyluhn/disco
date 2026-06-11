@@ -1,0 +1,9 @@
+
+[phase-b] cid=conv_1d576294a1e74f2e807ac5a70629f302 — approved, watching for the install step
+[phase-b] agent-server SIGTERM'd mid-install (seq 16)
+[phase-b] resumed via the UI — running to FINISHED
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! KeyboardInterrupt !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+/var/home/dylan/projects/perpleximanus build/.venv/lib/python3.13/site-packages/httpcore/_backends/sync.py:128: KeyboardInterrupt
+(to show a full traceback on KeyboardInterrupt use --full-trace)
+no tests ran in 1348.64s (0:22:28)

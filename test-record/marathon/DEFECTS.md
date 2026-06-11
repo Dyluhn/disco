@@ -228,3 +228,28 @@ orders, never to bp-16 itself.
   the OpenRouter-only decision); masked on the local 27B (lenient server).
 - **Gate impact**: Phase B FAIL-before-subject; rerun blocked until RP-12
   lands or driver changes.
+
+## DEFECT-7: uploaded files are not re-materialized into a recreated sandbox — post-resume agent is data-orphaned
+
+- **Found**: 2026-06-11, Phase B attempt 3 on the free driver
+  (`conv_1d576294a1e74f2e807ac5a70629f302`, evidence
+  `test-record/marathon/phase-b-rerun-postcrash3.log` + event log).
+- **Chain**: upload announced seq 3 (`uploads/sensor_readings.csv`, 10,368 B,
+  bytes held server-side per the upload-cap design) → SIGTERM mid-first-install
+  (seq ~16, before the agent copied the CSV anywhere) → resume reality-check
+  (seq 20) correctly declares the fresh sandbox → agent rebuilds backend +
+  frontend, then discovers `uploads/` does not exist (seq 140), tells the user
+  it needs the file (seq 138/144 — honest), stuck-escape fires, conversation
+  parks STUCK (seq 147). Deliverable battery cannot pass without the data.
+- **What worked (don't relitigate)**: restart survival, orphan sweep, UI
+  Resume, post-respawn auth (after the `_or_key.py` harness fix), wiped-sandbox
+  reinstalls (seq 60-85), FC kit absorbing 13 agent_errors non-terminally
+  (DEFECT-6 fix acceptance-proven live), valve/stuck protections all correct.
+- **Expected**: resume reconciliation re-injects stored uploads into the
+  recreated sandbox (server still holds the bytes), or at minimum the resume
+  reality block lists uploads as lost-and-recoverable so the agent can request
+  re-injection instead of stalling.
+- **Severity**: HIGH for any upload-dependent build that restarts before the
+  agent persists the data inside its workspace deliverables.
+- **Owner direction**: rides the resume/lifecycle work (wave 2); pair with the
+  checkpointed-DR-resume gap in the open-gaps list.
