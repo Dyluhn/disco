@@ -671,3 +671,22 @@ rp-05c: staged
   - test-record/rp-05c/units-tools.log
   - test-record/rp-05c/units-server.log
   - agent-projects/gemini/rp-05c-report.md
+fix-confirm-livelock: committed
+  # Engine confirm/reject LIVELOCK fix (orchestrator-authored, NOT a Gemini worker;
+  # subtle security-loop logic). Two compounding defects: (A) the Rung-7 unknown-tool
+  # requery swallowed an unregistered publish-class name (`deploy_site`) BEFORE
+  # BlastRadiusConfirm's publish guard could pause → plan read "done" with nothing
+  # executed; (B) the execution-finish gate `continue`d with no real backstop
+  # (max_iterations never advances on a nudge-only turn) → infinite spin. Fix:
+  # publish-class names bypass the requery to reach the confirm gate (new duck-typed
+  # policy.gates_by_name hook); the execution-nudge routes through the shared
+  # _actionless_valve like the (g) no-op path. Unblocks the 2 formerly-livelocking
+  # test_build_surface.py tests (no longer need deselection). pinned-Fable APPROVE
+  # (5/5 items; Fable independently reproduced the Defect-B inverse proof + re-ran
+  # the full sweep 786 passed). Disjoint from df-08 (llm-layer) — no shared files.
+  - packages/core/src/perpleximanus/core/loop/engine.py
+  - packages/core/src/perpleximanus/core/loop/policies.py
+  - packages/core/tests/test_loop_step.py
+  - test-record/fix-confirm-livelock/units.log
+  - .orchestrate/review/fix-confirm-livelock-fable-brief.md
+  - .orchestrate/review/fix-confirm-livelock.diff

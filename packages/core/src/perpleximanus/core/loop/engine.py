@@ -156,11 +156,13 @@ _EXECUTION_NUDGE = (
     "in order. The plan is in your context above.\n"
     "</system-reminder>"
 )
-# No cap on execution nudges. The reminder keeps firing as long as the agent
-# tries to declare done without acting; the loop's own `max_iterations` backstop
-# and the user's kill switch are the ultimate exits — we never error out of the
-# gate itself. Keep the counter so tests + telemetry can observe how often the
-# reminder fired.
+# The reminder keeps firing as long as the agent tries to declare done without
+# acting, BUT the gate is NOT uncapped: a nudge-only turn emits no ActionEvent,
+# so `max_iterations` (reconstructed from action events) never advances on it —
+# it is NOT the backstop here. The gate routes each actionless finish-attempt
+# through `_actionless_valve` (the same circuit breaker the (g) no-op path uses),
+# which lands the run cleanly after `_max_consecutive_noops` turns. The
+# `_execution_nudges` counter is telemetry so tests can observe firing.
 
 # The tool names that don't count as "productive work" for the execution gate:
 # meta tools + READ-ONLY/inspection tools that don't change workspace state. The
@@ -1937,7 +1939,22 @@ class AgentLoop:
                             )
 
                             if step.tool_call and step.tool_call.tool_name not in all_known_names:
-                                if requery_count < 2:
+                                # A tool whose NAME alone trips the confirm policy's
+                                # security gate (publish/deploy/release — it leaves the
+                                # blast radius) must NOT be bounced back to the model by
+                                # the unknown-tool requery: an unregistered publish-class
+                                # name is a real publish intent that has to reach the
+                                # human confirm gate, not a hallucination to retry.
+                                # Without this the requery swallowed `deploy_site` before
+                                # BlastRadiusConfirm's publish guard could pause for
+                                # confirmation — then the plan read "done" with nothing
+                                # executed and the execution-finish gate spun forever
+                                # (the confirm/reject livelock root cause).
+                                _gbn = getattr(self.policy, "gates_by_name", None)
+                                _name_gated = callable(_gbn) and _gbn(
+                                    step.tool_call.tool_name
+                                )
+                                if not _name_gated and requery_count < 2:
                                     requery_count += 1
                                     _LOG.info(
                                         f"Unknown tool {step.tool_call.tool_name}, requerying..."
@@ -2324,13 +2341,44 @@ class AgentLoop:
                         and self.mode != OperatingMode.PLANNING  # we're executing
                         and not self._productive_action_since_approval(events)
                     ):
-                        self._execution_nudges += 1  # telemetry only; not a gate
+                        self._execution_nudges += 1  # telemetry
+                        # Surface the model's reasoning before nudging (don't
+                        # discard it) — mirror the plan-nudge sibling.
+                        if step.thought.strip():
+                            await self._emit(
+                                MessageEvent(
+                                    source=EventSource.AGENT,
+                                    message=LLMMessage(
+                                        role="assistant", content=step.thought
+                                    ),
+                                )
+                            )
+                        else:
+                            # An empty finish-step persists nothing, so it's
+                            # invisible to every event-derived detector; the
+                            # instance counter has to carry it (the (g) no-op
+                            # path does the same).
+                            self._invisible_steps += 1
                         await self._emit(
                             MessageEvent(
                                 source=EventSource.ENVIRONMENT,
                                 message=LLMMessage(role="user", content=_EXECUTION_NUDGE),
                             )
                         )
+                        # BACKSTOP (was missing — the confirm/reject livelock's
+                        # second defect): route through the shared actionless
+                        # valve. A nudge-only turn emits no ActionEvent, so
+                        # `iteration`/max_iterations NEVER advances on it — the
+                        # old "max_iterations is the ultimate exit" claim was
+                        # false and a model that declared done without ever
+                        # acting spun here forever. The valve now lands it
+                        # cleanly (FINISHED/PAUSED:noop_limit) after
+                        # `_max_consecutive_noops` actionless turns; a model that
+                        # recovers and acts resets the streak (engine §h).
+                        events = await self._events()
+                        noops = self._consecutive_noops(events) + self._invisible_steps
+                        if await self._actionless_valve(events, noops):
+                            return await self.get_state()
                         continue
 
                     # BROWSER-VERIFY GATE — §BP-05. If web deliverable holds, refuse finish

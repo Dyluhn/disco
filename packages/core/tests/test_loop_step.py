@@ -812,3 +812,79 @@ def test_productive_gate_rejects_read_only_then_finish():
     assert AgentLoop._productive_action_since_approval(_seqd([approved, rd, wr])) is True
     # no plan-approval marker → gate inert (don't block)
     assert AgentLoop._productive_action_since_approval(_seqd([rd])) is True
+
+
+async def test_execution_nudge_without_action_lands_instead_of_livelocking():
+    """REGRESSION (confirm/reject livelock, Defect B): when the plan is COMPLETE
+    (every step marked done) yet NO productive action happened since approval, a
+    model that keeps declaring `finish` must NOT spin forever on the execution
+    gate. The plan-completeness auto-continue ladder is inert here (nothing is
+    missing), so the execution-finish gate is the only thing standing between the
+    loop and an infinite re-query of `finish`. The gate must route through the
+    shared actionless valve and land the run cleanly at FINISHED:noop_limit.
+
+    Inverse proof: the script caps at an `LLMError` sentinel after 20 finish
+    attempts, so a REVERTED backstop (bare `continue`) terminates into a
+    model_error ERROR state instead of noop_limit — and never lands FINISHED.
+    (It also can't hang the suite.) The FIXED path lands in ~7 turns, well before
+    the cap."""
+    from perpleximanus.core import ActionEvent as AE
+    from perpleximanus.core import (
+        ConversationStatus,
+        EventSource,
+        LLMMessage,
+        PlanEvent,
+        StatusEvent,
+        ToolCall,
+    )
+    from perpleximanus.core import MessageEvent as ME
+    from perpleximanus.core import SqliteEventStore as Store
+    from perpleximanus.core.llm import OperatingMode
+    from perpleximanus.core.llm.errors import LLMError
+
+    store = Store(":memory:")
+    await store.append(
+        CID,
+        ME(source=EventSource.USER, message=LLMMessage(role="user", content="build it")),
+    )
+    await store.append(
+        CID, PlanEvent(summary="p", steps=[{"title": "only step"}], revision=1)
+    )
+    await store.append(
+        CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
+    )
+    # The plan is fully marked done (so _plan_is_incomplete is False and the
+    # auto-continue ladder never engages) — but plan_step is non-productive, so
+    # NOTHING productive has happened since approval. This is the exact livelock
+    # shape: the publish action was swallowed upstream (Defect A) and the only
+    # post-approval action is the bookkeeping mark.
+    await store.append(
+        CID,
+        AE(
+            thought="step 1 done",
+            tool_call=ToolCall(
+                tool_name="plan_step", arguments={"index": 1, "state": "done"}
+            ),
+        ),
+    )
+
+    # finish forever, then a hard LLMError cap so a broken loop can't hang.
+    agent = ScriptedAgent([finish_step()] * 20 + [LLMError("spin-cap reached")])
+    loop, _ = build_loop(agent, store=store, mode=OperatingMode.LONG_HORIZON)
+    loop._planning_tools = frozenset({"submit_plan"})
+    await loop.run()
+
+    state = await store.get_state(CID)
+    events = await store.get_events(CID)
+    # Landed cleanly via the actionless valve — NOT spun to the LLMError cap.
+    assert state.execution_status == ConversationStatus.FINISHED
+    terminal = next(
+        e
+        for e in reversed(events)
+        if isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED
+    )
+    assert terminal.detail == "noop_limit"
+    # The execution gate actually fired (the path under test ran)...
+    assert loop._execution_nudges > 0
+    # ...and it terminated promptly — well short of the 20-finish LLMError cap.
+    assert agent.calls < 15
