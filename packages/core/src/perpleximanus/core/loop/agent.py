@@ -30,6 +30,7 @@ signal (BoD §17.2).
 
 from __future__ import annotations
 
+import os
 import uuid
 
 from ..events import ToolCall
@@ -89,6 +90,13 @@ class RouterAgent:
         on_stream: StreamHook | None = None,
         temperature: float | None = None,
     ) -> AgentStep:
+        # B9: Assistant prefill. In PLANNING mode, force
+        # the model to start its thought with an honest acknowledgment of
+        # the task, reducing the "lazy prose" failure. Gated by flag.
+        prefill = None
+        if mode == OperatingMode.PLANNING and os.environ.get("PMX_PLAN_PREFILL") == "1":
+            prefill = "I've analyzed the request and current workspace state. To advance, I will now"
+
         req = CompletionRequest(
             profile=CapabilityProfile(
                 role=ModelRole.AGENT_DRIVER,
@@ -98,6 +106,7 @@ class RouterAgent:
             ),
             messages=view.messages,
             tools=tools,
+            assistant_prefill=prefill,
             # Cluster 9: a small non-zero temperature for the driver (anti-fewshot).
             # A long uniform run at temp 0.0 is a near-deterministic self-imitation
             # chain — maximally prone to repeating a prior failing pattern. The

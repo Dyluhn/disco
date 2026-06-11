@@ -20,6 +20,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import os
+import re
 from collections.abc import AsyncIterator, Iterable
 from typing import Literal
 
@@ -52,6 +55,8 @@ _FINISH: dict[str, FinishReason] = {
     "content_filter": "content_filter",
 }
 
+_LOG = logging.getLogger("perpleximanus.llm.openai")
+
 
 def _map_finish(raw: str | None) -> FinishReason:
     return _FINISH.get(raw or "stop", "stop")
@@ -79,6 +84,14 @@ def _is_context_overflow(err_type: str, message: str) -> bool:
         or "maximum context" in m
         or "exceeds the available context" in m
     )
+
+
+def _sanitize_tool_name(name: str) -> str:
+    """Sanitize tool names for OpenAI boundary (dots are forbidden).
+    Strip everything before the last dot and filter to [a-zA-Z0-9_-]."""
+    if "." in name:
+        name = name.split(".")[-1]
+    return re.sub(r"[^a-zA-Z0-9_-]", "", name)
 
 
 class OpenAIProvider:
@@ -123,9 +136,20 @@ class OpenAIProvider:
                 parts.append({"type": "image_url", "image_url": {"url": img_url}})
             content = parts
 
-        d: dict = {"role": m.role, "content": content}
-        if getattr(m, "tool_call_id", None):
-            d["tool_call_id"] = m.tool_call_id
+        role = m.role
+        tool_call_id = getattr(m, "tool_call_id", None)
+
+        # DEFECT-6: a role:"tool" message MUST have a tool_call_id on the wire.
+        # If the engine emitted an AgentErrorEvent without one (isolated root cause),
+        # downgrade to user role to avoid a 400 from the provider.
+        if role == "tool" and not tool_call_id:
+            role = "user"
+            content = f"Tool error: {content}"
+
+        d: dict = {"role": role, "content": content}
+        if tool_call_id:
+            d["tool_call_id"] = tool_call_id
+
         tool_calls = m.tool_calls
         if tool_calls:
             # The event layer's internal tool_calls shape is {id, name, arguments(dict)}
@@ -139,7 +163,7 @@ class OpenAIProvider:
                     "id": tc.get("id"),
                     "type": "function",
                     "function": {
-                        "name": tc.get("name"),
+                        "name": _sanitize_tool_name(tc.get("name") or ""),
                         "arguments": (
                             tc["arguments"]
                             if isinstance(tc.get("arguments"), str)
@@ -156,9 +180,16 @@ class OpenAIProvider:
         return d
 
     def _payload(self, req: CompletionRequest, model: str, *, stream: bool) -> dict:
+        msgs = [self._message(m) for m in req.messages]
+        # B9: Assistant prefill. Append as a trailing
+        # assistant message; compatible servers (llama.cpp, vLLM, Anthropic)
+        # will continue from here.
+        if req.assistant_prefill:
+            msgs.append({"role": "assistant", "content": req.assistant_prefill})
+
         body: dict = {
             "model": model,
-            "messages": [self._message(m) for m in req.messages],
+            "messages": msgs,
             "temperature": req.temperature,
             "stream": stream,
         }
@@ -171,7 +202,7 @@ class OpenAIProvider:
                 {
                     "type": "function",
                     "function": {
-                        "name": t.name,
+                        "name": _sanitize_tool_name(t.name),
                         "description": t.description,
                         "parameters": t.parameters_schema,
                     },
@@ -277,9 +308,13 @@ class OpenAIProvider:
         choice = (data.get("choices") or [{}])[0]
         msg = choice.get("message") or {}
         usage = data.get("usage") or {}
+        text = msg.get("content") or ""
+        # B9: Completion is a continuation of the prefill.
+        if req.assistant_prefill:
+            text = req.assistant_prefill + text
         return CompletionResponse(
-            text=msg.get("content") or "",  # reasoning_content (thinking) is NOT the answer
-            tool_calls=self._tool_calls(msg.get("tool_calls")),
+            text=text,
+            tool_calls=self._tool_calls(msg.get("tool_calls"), tools=req.tools),
             usage=TokenUsage(
                 input_tokens=int(usage.get("prompt_tokens", 0) or 0),
                 output_tokens=int(usage.get("completion_tokens", 0) or 0),
@@ -293,18 +328,102 @@ class OpenAIProvider:
         )
 
     @staticmethod
-    def _tool_calls(raw: list | None) -> list[ProposedToolCall]:
+    def _repair_json(raw: str) -> str:
+        """Rung 5: Mechanical JSON repair. Strip fences, fix trailing commas,
+        escape control characters."""
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```(?:json)?\n?", "", raw)
+            raw = re.sub(r"\n?```$", "", raw)
+            raw = raw.strip()
+
+        # Structural fixes: trailing commas
+        raw = re.sub(r",\s*([\]}])", r"\1", raw)
+
+        # Escape raw control characters (0x00-0x1F) which are forbidden in JSON strings
+        def _escape_ctrl(m):
+            return f"\\u{ord(m.group(0)):04x}"
+        return re.sub(r"[\x00-\x1f]", _escape_ctrl, raw)
+
+    @staticmethod
+    def _coerce_args(args: dict, schema: dict | None) -> dict:
+        """Rung 5: Type-coercing validation. Cast strings to expected types."""
+        if not schema or schema.get("type") != "object":
+            return args
+        properties = schema.get("properties", {})
+        coerced = {}
+        for k, v in args.items():
+            prop = properties.get(k)
+            if not prop:
+                coerced[k] = v
+                continue
+            target = prop.get("type")
+            if target == "integer" and isinstance(v, str):
+                try:
+                    coerced[k] = int(v)
+                except ValueError:
+                    coerced[k] = v
+            elif target == "number" and isinstance(v, str):
+                try:
+                    coerced[k] = float(v)
+                except ValueError:
+                    coerced[k] = v
+            elif target == "boolean" and isinstance(v, str):
+                if v.lower() in ("true", "1", "yes"):
+                    coerced[k] = True
+                elif v.lower() in ("false", "0", "no"):
+                    coerced[k] = False
+                else:
+                    coerced[k] = v
+            else:
+                coerced[k] = v
+        return coerced
+
+    @classmethod
+    def _tool_calls(cls, raw: list | None, tools: list[ToolSpec] | None = None) -> list[ProposedToolCall]:
         out: list[ProposedToolCall] = []
+        spec_map = {t.name: t for t in (tools or [])}
+        # Also map by sanitized name for reverse lookup
+        sanitized_map = {_sanitize_tool_name(t.name): t for t in (tools or [])}
+
         for tc in raw or []:
             fn = tc.get("function") or {}
-            args = fn.get("arguments")
-            try:
-                parsed = json.loads(args) if isinstance(args, str) else (args or {})
-            except (json.JSONDecodeError, ValueError):
-                parsed = {"_raw": args}
+            name = fn.get("name", "")
+            
+            # Sanitize echoed name (DEFECT-6: strip prefix/dots)
+            clean_name = _sanitize_tool_name(name)
+            
+            args_raw = fn.get("arguments")
+            parsed = {}
+            if isinstance(args_raw, str):
+                # Rung 5: (a) strict parse
+                try:
+                    parsed = json.loads(args_raw)
+                except (json.JSONDecodeError, ValueError):
+                    # Rung 5: (b) mechanical JSON repair
+                    try:
+                        repaired = cls._repair_json(args_raw)
+                        parsed = json.loads(repaired)
+                        _LOG.info(f"Repaired JSON for tool {clean_name}")
+                    except Exception:
+                        parsed = {"_raw": args_raw}
+            else:
+                parsed = args_raw or {}
+            
+            # Rung 5: (c) type-coercing validation
+            # Find the spec. Match original or sanitized name.
+            spec = spec_map.get(name) or sanitized_map.get(clean_name)
+            if spec:
+                parsed = cls._coerce_args(parsed, spec.parameters_schema)
+                # Use the original canonical name from the spec
+                final_name = spec.name
+            else:
+                # Unknown tool — keep the cleaned name for the reroute path (Rung 7)
+                final_name = clean_name
+
             out.append(
                 ProposedToolCall(
-                    tool_name=fn.get("name", ""), arguments=parsed, provider_call_id=tc.get("id")
+                    tool_name=final_name, arguments=parsed, provider_call_id=tc.get("id")
                 )
             )
         return out
@@ -330,7 +449,7 @@ class OpenAIProvider:
     async def stream_complete(
         self, req: CompletionRequest, *, model: str
     ) -> AsyncIterator[StreamChunk]:
-        content: list[str] = []
+        content: list[str] = [req.assistant_prefill] if req.assistant_prefill else []
         tool_buf: dict[int, dict] = {}
         finish: str | None = None
         usage: dict = {}
@@ -395,17 +514,16 @@ class OpenAIProvider:
         except httpx.HTTPError as exc:
             raise LLMTransientError(f"connection error: {exc}", provider=self.name) from exc
 
-        tool_calls: list[ProposedToolCall] = []
-        for slot in tool_buf.values():
-            try:
-                args = json.loads(slot["args"]) if slot["args"] else {}
-            except (json.JSONDecodeError, ValueError):
-                args = {"_raw": slot["args"]}
-            tool_calls.append(
-                ProposedToolCall(
-                    tool_name=slot["name"], arguments=args, provider_call_id=slot["id"]
-                )
-            )
+        tool_calls: list[ProposedToolCall] = self._tool_calls(
+            [
+                {
+                    "id": slot["id"],
+                    "function": {"name": slot["name"], "arguments": slot["args"]},
+                }
+                for slot in tool_buf.values()
+            ],
+            tools=req.tools,
+        )
         final = CompletionResponse(
             text="".join(content),
             tool_calls=tool_calls,

@@ -1497,14 +1497,24 @@ class AgentLoop:
         except LLMContextWindowExceeded:
             raise  # handled by view-materialization hard-reset (§8)
         except Exception as e:  # noqa: BLE001 — any tool/exec failure is observable
-            await self._emit(AgentErrorEvent(error=str(e), action_id=action.id))
+            await self._emit(
+                AgentErrorEvent(
+                    error=str(e),
+                    action_id=action.id,
+                    tool_call_id=action.tool_call.call_id if action.tool_call else None,
+                )
+            )
             await self._maybe_emit_sandbox_restart(sbx, gen_before)
             return
         if result.success:
             await self._emit(ObservationEvent(tool_result=result, action_id=action.id))
         else:
             await self._emit(
-                AgentErrorEvent(error=result.error or "tool failed", action_id=action.id)
+                AgentErrorEvent(
+                    error=result.error or "tool failed",
+                    action_id=action.id,
+                    tool_call_id=action.tool_call.call_id if action.tool_call else None,
+                )
             )
         await self._maybe_emit_sandbox_restart(sbx, gen_before)
 
@@ -1879,23 +1889,97 @@ class AgentLoop:
                 )
                 try:
                     attempts = 0
+                    requery_count = 0
+                    transient_messages: list[LLMMessage] = []
                     while True:
                         try:
+                            # Apply transient messages (requery-outside-log, Rung 6)
+                            # to the View if we're in a retry loop.
+                            current_view = view
+                            if transient_messages:
+                                current_view = view.model_copy(update={
+                                    "messages": view.messages + transient_messages
+                                })
+
                             step = await self.agent.step(
-                                view,
+                                current_view,
                                 self._tools_for_step(suppress_meta_tools=fresh_session),
                                 mode=self.mode,
                                 overflow_signal=self._overflow_signal(events),
                                 on_stream=self._build_stream_hook(),
                                 temperature=escape_temp,
                             )
-                            break
+
+                            # Rung 7: Invalid-tool reroute (weak-model FC kit).
+                            # Valid JSON but unknown tool name -> if we haven't
+                            # hit the requery bound, inject a hint and retry
+                            # without persisting the failure to the store.
+                            # The requery applies ONLY to names absent from the
+                            # FULL tool registry (truly unknown), never to
+                            # known-but-currently-withheld tools.
+                            base_tools = self.executor.available_tools()
+                            virtual_names = {
+                                "ask_user",
+                                "propose_plan_update",
+                                "plan_step",
+                                "notify_user",
+                                "finish",
+                                "remember",
+                                "serve",
+                                self._plan_tool,
+                            }
+                            # Include mode-scoped virtuals (planning tools) so
+                            # we don't requery for valid exploration turns.
+                            all_known_names = (
+                                {t.name for t in base_tools}
+                                | virtual_names
+                                | set(self._planning_tools)
+                            )
+
+                            if step.tool_call and step.tool_call.tool_name not in all_known_names:
+                                if requery_count < 2:
+                                    requery_count += 1
+                                    _LOG.info(
+                                        f"Unknown tool {step.tool_call.tool_name}, requerying..."
+                                    )
+                                    offered_tools = self._tools_for_step(
+                                        suppress_meta_tools=fresh_session
+                                    )
+                                    offered_names = {t.name for t in offered_tools}
+                                    # Mirror the assistant's turn so the next call's
+                                    # messages list stays balanced for pairing.
+                                    transient_messages.append(
+                                        LLMMessage(
+                                            role="assistant",
+                                            content=step.thought,
+                                            tool_calls=[
+                                                {
+                                                    "id": step.tool_call.call_id,
+                                                    "name": step.tool_call.tool_name,
+                                                    "arguments": step.tool_call.arguments,
+                                                }
+                                            ],
+                                        )
+                                    )
+                                    transient_messages.append(
+                                        LLMMessage(
+                                            role="user",
+                                            content=(
+                                                f"ERROR: Unknown tool '{step.tool_call.tool_name}'. "
+                                                f"Available: {sorted(list(offered_names))}"
+                                            ),
+                                        )
+                                    )
+                                    continue
+
+                            break  # Step is valid or requeries exhausted
                         except LLMContextWindowExceeded:
                             raise  # handled by view-materialization hard-reset (§8)
                         except LLMTransientError:
                             if attempts < len(_DRIVER_RETRY_BACKOFFS_S):
                                 await _sleep(_DRIVER_RETRY_BACKOFFS_S[attempts])
                                 attempts += 1
+                                continue
                             else:
                                 await self._emit(
                                     MessageEvent(
@@ -1916,6 +2000,22 @@ class AgentLoop:
                                     )
                                 )
                                 return await self.get_state()
+                        except LLMError as e:
+                            # DEFECT-6: Provider 4xx "rejected request" must not be
+                            # terminal; enter requery path with a hint.
+                            if requery_count < 2:
+                                requery_count += 1
+                                _LOG.warning(f"Provider rejected request: {e}, requerying...")
+                                transient_messages.append(LLMMessage(
+                                    role="user",
+                                    content=(
+                                        f"The provider rejected the previous request: {e}. "
+                                        "Please adjust your response (check tool names, "
+                                        "JSON structure, or parameters) and try again."
+                                    )
+                                ))
+                                continue
+                            raise
                 except LLMContextWindowExceeded:
                     if await self._hard_reset(await self._events()):
                         continue  # retry the step on the condensed view
@@ -2199,6 +2299,10 @@ class AgentLoop:
                                 message=LLMMessage(role="user", content=_PLAN_NUDGE),
                             )
                         )
+                        events = await self._events()
+                        noops = self._consecutive_noops(events) + self._invisible_steps
+                        if await self._actionless_valve(events, noops):
+                            return await self.get_state()
                         continue
                     # tc is a planning-allowed read tool — productive exploration.
                     # Reset the nudge counter and fall through to the normal action path.

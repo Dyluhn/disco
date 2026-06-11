@@ -90,6 +90,11 @@ class CompletionRequest(BaseModel):
     profile: CapabilityProfile
     messages: list[LLMMessage]
     tools: list[ToolSpec] | None = None
+    # B9: Assistant prefill. When set, the provider
+    # appends a trailing assistant message with this content to the
+    # prompt, and the model continues from there. Used for action-space
+    # masking (e.g. forcing a thought to start with a specific plan).
+    assistant_prefill: str | None = None
     # temperature defaults to 0 for determinism where the role implies
     # structured output; callers may override (BoD §10.3).
     temperature: float = 0.0

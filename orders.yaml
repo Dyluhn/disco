@@ -479,7 +479,7 @@ rp-02: committed
   - test-record/rp-02/units-frontend.log
   - agent-projects/gemini/rp-02-report.md
   - agent-projects/gemini/rp-02-fix1-report.md
-rp-12: in-flight
+rp-12: committed
   - packages/tools/src/perpleximanus/tools/sandbox/kernel.py
   - packages/tools/tests/test_kernel_session.py
   - packages/core/src/perpleximanus/core/llm/prompts.py

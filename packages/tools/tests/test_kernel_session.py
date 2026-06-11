@@ -218,3 +218,61 @@ plt.show()
     finally:
         await pk.shutdown()
         shutil.rmtree(workspace, ignore_errors=True)
+
+@pytest.mark.asyncio
+async def test_kernel_output_discipline():
+    """B2 discipline: big-output -> file + head + marker; small output -> unchanged; traceback -> full."""
+    workspace = "/tmp/test_kernel_discipline"
+    os.makedirs(workspace, exist_ok=True)
+    pk = ProcessKernel(workspace)
+    
+    # Mock kernel client
+    kc = MagicMock()
+    kc.execute = MagicMock(return_value="msg_id")
+    kc.get_iopub_msg = AsyncMock()
+    kc.get_shell_msg = AsyncMock()
+    pk._kc = kc
+    
+    # Mocking successful execution
+    kc.get_shell_msg.return_value = {
+        "parent_header": {"msg_id": "msg_id"},
+        "content": {"status": "ok"},
+    }
+
+    # Case 1: Big stdout
+    big_stdout = "A" * 3000
+    kc.get_iopub_msg.side_effect = [
+        {"header": {"msg_type": "stream"}, "content": {"name": "stdout", "text": big_stdout}, "parent_header": {"msg_id": "msg_id"}},
+        {"header": {"msg_type": "status"}, "content": {"execution_state": "idle"}, "parent_header": {"msg_id": "msg_id"}}
+    ]
+    res = await pk.execute("print('big')", timeout_s=1)
+    assert len(res.stdout) < 3000
+    assert "[full output: /workspace/.outputs/" in res.stdout
+    assert res.stdout.startswith("A" * 500)
+    
+    # Verify file exists
+    outputs_dir = Path(workspace) / ".outputs"
+    files = list(outputs_dir.glob("*-out.txt"))
+    assert len(files) == 1
+    with open(files[0]) as f:
+        assert f.read() == big_stdout
+    
+    # Case 2: Small output
+    small_stdout = "hello"
+    kc.get_iopub_msg.side_effect = [
+        {"header": {"msg_type": "stream"}, "content": {"name": "stdout", "text": small_stdout}, "parent_header": {"msg_id": "msg_id"}},
+        {"header": {"msg_type": "status"}, "content": {"execution_state": "idle"}, "parent_header": {"msg_id": "msg_id"}}
+    ]
+    res = await pk.execute("print('small')", timeout_s=1)
+    assert res.stdout == small_stdout
+    
+    # Case 3: Traceback (never truncated)
+    big_traceback = "E" * 3000
+    kc.get_iopub_msg.side_effect = [
+        {"header": {"msg_type": "error"}, "content": {"traceback": [big_traceback]}, "parent_header": {"msg_id": "msg_id"}},
+        {"header": {"msg_type": "status"}, "content": {"execution_state": "idle"}, "parent_header": {"msg_id": "msg_id"}}
+    ]
+    res = await pk.execute("raise Error()", timeout_s=1)
+    assert res.error_traceback == big_traceback
+    
+    shutil.rmtree(workspace)

@@ -178,7 +178,7 @@ class ProcessKernel(KernelSession):
                             reply = await self._kc.get_shell_msg(timeout=1)
                             if reply.get("parent_header", {}).get("msg_id") == msg_id:
                                 ok = reply.get("content", {}).get("status") == "ok"
-                                return KernelResult(
+                                res = KernelResult(
                                     ok=ok,
                                     stdout="".join(stdout),
                                     stderr="".join(stderr),
@@ -186,6 +186,7 @@ class ProcessKernel(KernelSession):
                                     error_traceback=error_traceback,
                                     images=images
                                 )
+                                return await self._apply_discipline(res)
                             else:
                                 stale = reply.get("parent_header", {}).get("msg_id")
                                 _LOG.debug(f"Skipping stale shell message for {stale}")
@@ -193,7 +194,7 @@ class ProcessKernel(KernelSession):
                     except Exception:
                         # If no reply yet, we might still be waiting for it or it might not come
                         # For now, we return what we have if we got an idle status
-                        return KernelResult(
+                        res = KernelResult(
                             ok=True if not error_traceback else False,
                             stdout="".join(stdout),
                             stderr="".join(stderr),
@@ -201,11 +202,33 @@ class ProcessKernel(KernelSession):
                             error_traceback=error_traceback,
                             images=images
                         )
+                        return await self._apply_discipline(res)
 
         except Exception as e:
             _LOG.exception("Kernel execution failed")
             return KernelResult(ok=False, stdout="".join(stdout), stderr="".join(stderr),
                                error_traceback=str(e))
+
+    async def _apply_discipline(self, res: KernelResult) -> KernelResult:
+        """B2 kernel output discipline: truncate stdout/repr if > 2000 chars."""
+        # Check stdout and result_repr
+        for field_name in ("stdout", "result_repr"):
+            val = getattr(res, field_name)
+            if val and len(val) > 2000:
+                self._seq += 1
+                ts = int(time.time())
+                filename = f"{ts}-{self._seq}-out.txt"
+                rel_path = f".outputs/{filename}"
+                full_path = self._workspace / rel_path
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                with open(full_path, "w", encoding="utf-8") as f:
+                    f.write(val)
+                
+                head = val[:500]
+                truncated = f"{head}\n[full output: /workspace/{rel_path}, {len(val)} bytes]"
+                setattr(res, field_name, truncated)
+        return res
 
     async def interrupt(self) -> None:
         if self._km:
@@ -410,7 +433,7 @@ class GatewayKernel(KernelSession):
                     # Wait for idle status after reply
                     continue
                 elif msg_type == "status" and content.get("execution_state") == "idle":
-                    return KernelResult(
+                    res = KernelResult(
                         ok=ok if 'ok' in locals() else False,
                         stdout="".join(stdout),
                         stderr="".join(stderr),
@@ -418,11 +441,30 @@ class GatewayKernel(KernelSession):
                         error_traceback=error_traceback,
                         images=images
                     )
+                    return await self._apply_discipline(res)
 
         except Exception as e:
             _LOG.exception("Kernel execution failed")
             return KernelResult(ok=False, stdout="".join(stdout), stderr="".join(stderr),
                                error_traceback=str(e))
+
+    async def _apply_discipline(self, res: KernelResult) -> KernelResult:
+        """B2 kernel output discipline: truncate stdout/repr if > 2000 chars."""
+        for field_name in ("stdout", "result_repr"):
+            val = getattr(res, field_name)
+            if val and len(val) > 2000:
+                self._seq += 1
+                ts = int(time.time())
+                filename = f"{ts}-{self._seq}-out.txt"
+                rel_path = f".outputs/{filename}"
+                
+                # Write full content via sandbox API
+                await self._sandbox.write_file(rel_path, val.encode("utf-8"))
+                
+                head = val[:500]
+                truncated = f"{head}\n[full output: /workspace/{rel_path}, {len(val)} bytes]"
+                setattr(res, field_name, truncated)
+        return res
 
     async def interrupt(self) -> None:
         if self._url and self._kernel_id:

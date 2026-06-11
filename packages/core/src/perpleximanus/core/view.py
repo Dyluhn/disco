@@ -350,6 +350,28 @@ class View(BaseModel):
 
                 msgs.append(msg)
                 if e.seq is not None:
+                    # B3: Deterministic-by-seq tail variation (arXiv 2407.10912).
+                    # Rotate the surface form of AGENT thoughts and TOOL results
+                    # to prevent the model from over-fitting to a single fixed
+                    # template, while maintaining KV-cache stability (B5) by
+                    # pinning the form to the seq.
+                    if isinstance(e, ActionEvent):
+                        variants = [
+                            lambda t: t,
+                            lambda t: f"Reasoning: {t}",
+                            lambda t: f"Thought: {t}",
+                        ]
+                        f = variants[e.seq % len(variants)]
+                        msgs[-1] = msgs[-1].model_copy(update={"content": f(msgs[-1].content)})
+                    elif isinstance(e, ObservationEvent):
+                        variants = [
+                            lambda c: c,
+                            lambda c: f"Observation: {c}",
+                            lambda c: f"Output: {c}",
+                        ]
+                        f = variants[e.seq % len(variants)]
+                        msgs[-1] = msgs[-1].model_copy(update={"content": f(msgs[-1].content)})
+
                     visible.append(e.seq)
 
         # GAP D recency recitation: append the ephemeral objective+checklist at
