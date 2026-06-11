@@ -88,6 +88,7 @@ from perpleximanus.tools import (
     SandboxService,
     SandboxSession,
     SandboxSpec,
+    ToolDef,
     agent_scope,
     build_default_registry,
 )
@@ -108,7 +109,7 @@ from perpleximanus.tools.sandbox.port_owner import port_owners
 from perpleximanus.tools.sandbox.shell_sessions import SessionInfo, SessionView
 
 # MCP client pool (RP-05 rung A) — built once at start, snapshotted per conversation.
-from perpleximanus.tools.mcp import McpPool, McpSettings
+from perpleximanus.tools.mcp import McpPool, McpServerConfig, McpSettings
 
 
 class _MCPToolWrapper:
@@ -123,6 +124,7 @@ class _MCPToolWrapper:
 
     async def run(self, args: Any, ctx: Any) -> Any:
         from perpleximanus.tools.anatomy import ToolOutcome
+        from perpleximanus.tools.mcp import fence_mcp_result
         from perpleximanus.tools.mcp.naming import split_qualified_name
 
         qn = self.definition.name
@@ -141,14 +143,12 @@ class _MCPToolWrapper:
             else:
                 raw_args = dict(args)
             result = await self._pool.call_tool(server, tool, raw_args)
-            # Extract text content from MCP result
-            text_parts = []
-            for item in result.get("content", []):
-                if hasattr(item, "text"):
-                    text_parts.append(item.text)
-                elif isinstance(item, dict) and "text" in item:
-                    text_parts.append(item["text"])
-            content = "\n".join(text_parts) if text_parts else str(result)
+            # RP-05b §4: MCP output is UNTRUSTED — every MCP channel is injectable
+            # (CyberArk/MCPTox). Fence the raw result so the model sees it as data,
+            # not instruction; the fenced block is appended as text and is NEVER fed
+            # back into the tool-call parser. THIS is the production call site for
+            # fence_mcp_result — the fence is dead unless it wraps output here.
+            content = fence_mcp_result(server, tool, result)
             return ToolOutcome(
                 success=not result.get("isError", False),
                 content=content,
@@ -349,6 +349,13 @@ class ConversationRuntime:
         # Servers that need re-approval (ApprovalRequired at startup). Emitted to
         # WS clients as mcp_approval_required frames.
         self._mcp_approval_pending: dict[str, dict] = {}
+        # RP-05 rung B: MCP HTTP clients (streamable_http transport). Managed
+        # separately from the stdio pool; tools are merged at compose time.
+        self._mcp_http_clients: dict[str, Any] = {}  # server_name -> McpHttpClient
+        self._mcp_http_tools: dict[str, ToolDef] = {}  # qualified_name -> ToolDef
+        # RP-05 rung B: retrieval-tier MCP providers (search/extract Protocol wrappers).
+        self._mcp_retrieval_searches: list = []
+        self._mcp_retrieval_extractions: list = []
 
     # The generative (text-producing) roles a model PICK drives. NLI_VERIFIER is a
     # cross-encoder (entailment scorer), NOT a chat model — pointing it at a picked
@@ -574,8 +581,26 @@ class ConversationRuntime:
         affordance, without eagerly importing httpx."""
         if self._cap_handlers is None:
             deps = self._research()
-            self._cap_handlers = retrieval_capability_handlers(deps["search"], deps["extraction"])
+            search, extraction = self._compose_mcp_retrieval(deps)
+            self._cap_handlers = retrieval_capability_handlers(search, extraction)
         return self._cap_handlers
+
+    def _compose_mcp_retrieval(self, deps: dict[str, Any]) -> tuple[Any, Any]:
+        """Compose the bundled search/extraction providers with the conversation's
+        MCP retrieval providers (RP-05b §3) so MCP-discovered URLs flow through the
+        SAME GroundingPipeline as bundled hits — reranked, extracted, NLI-verified,
+        cited identically. Inert (returns the primaries unchanged) when no MCP
+        retrieval-shaped tools are configured. THIS is the join that makes the
+        retrieval tier reach the pipeline — registering providers under unconsumed
+        broker names did not."""
+        from perpleximanus.tools.mcp.retrieval_tier import compose_with_mcp
+
+        return compose_with_mcp(
+            deps["search"],
+            deps["extraction"],
+            mcp_searches=self._mcp_retrieval_searches,
+            mcp_extractions=self._mcp_retrieval_extractions,
+        )
 
     def _build_broker(self) -> CapabilityBroker:
         """The orchestrator-side capability broker for a Build conversation. search/
@@ -640,16 +665,72 @@ class ConversationRuntime:
             self._loops[conversation_id] = loop
         return loop
 
-    def _build_sandbox_spec(self) -> SandboxSpec:
+    def _mcp_egress_hosts(self) -> frozenset[str]:
+        """Compute the UNION of MCP HTTP server hosts for egress allowlisting.
+
+        Returns hosts from enabled HTTP servers' URLs + allowed_hosts config.
+        Empty frozenset if no HTTP servers are configured or started.
+        """
+        from perpleximanus.tools.mcp.http_egress import build_egress_union
+
+        url_hosts: list[str] = []
+        allowed_hosts: list[str] = []
+
+        for client in self._mcp_http_clients.values():
+            url_hosts.append(client._url)
+            allowed_hosts.extend(client.allowed_hosts)
+
+        if not url_hosts and not allowed_hosts:
+            return frozenset()
+
+        return build_egress_union(
+            frozenset(),
+            http_server_urls=url_hosts,
+            http_server_allowed_hosts=allowed_hosts,
+        )
+
+    def _mcp_proxy_env(self) -> dict[str, str] | None:
+        """The HTTP(S)_PROXY env the orchestrator-side MCP HTTP client routes
+        through, governed by the SAME PMX_BUILD_EGRESS posture as the sandbox spec
+        (single source of truth — no divergent egress policy).
+
+        filtered → proxy_env(host, EGRESS_PROXY_PORT); a host outside the unioned
+        allowlist is denied 403 by the proxy, so the client cannot bypass the
+        sidecar (workorder §2 "no path bypasses it"). open (default) → None
+        (direct), matching the open sandbox posture. host comes from
+        PMX_MCP_EGRESS_PROXY_HOST (default loopback). See
+        docs/workorders/RP-05b-orchestrator-proxy-decision.md."""
+        posture = os.environ.get("PMX_BUILD_EGRESS", "open").lower().strip()
+        if posture != "filtered":
+            return None
+        from perpleximanus.tools.sandbox._container import EGRESS_PROXY_PORT, proxy_env
+
+        host = os.environ.get("PMX_MCP_EGRESS_PROXY_HOST", "127.0.0.1")
+        return proxy_env(host, EGRESS_PROXY_PORT)
+
+    def _build_sandbox_spec(
+        self,
+        *,
+        mcp_egress_hosts: frozenset[str] | None = None,
+    ) -> SandboxSpec:
         """The egress-posture spec for a Build sandbox. Open by default; filtered
         (registry-only) when PMX_BUILD_EGRESS=filtered. Used both by _compose_build_loop
-        and upload_session so pending sessions and build sessions share the same spec."""
+        and upload_session so pending sessions and build sessions share the same spec.
+
+        When mcp_egress_hosts is provided, they are UNIONed into the egress_allow set
+        (SUPERSET, not replacement) — the pre-existing registry hosts AND the MCP
+        hosts both survive (rung B egress-proxy routing)."""
         egress = os.environ.get("PMX_BUILD_EGRESS", "open").lower().strip()
         if egress == "filtered":
-            return self._sandbox_spec.model_copy(update={"egress_allow": REGISTRY_EGRESS_ALLOW})
-        return self._sandbox_spec.model_copy(
-            update={"permitted": self._sandbox_spec.permitted | {Capability.NETWORK}}
-        )
+            base_allow = REGISTRY_EGRESS_ALLOW
+            if mcp_egress_hosts:
+                base_allow = frozenset(base_allow | mcp_egress_hosts)
+            return self._sandbox_spec.model_copy(update={"egress_allow": base_allow})
+        # Open mode grants full NETWORK — there is no allowlist to union MCP hosts
+        # into; they are already reachable. mcp_egress_hosts only matters under
+        # filtered posture (above).
+        spec_update = {"permitted": self._sandbox_spec.permitted | {Capability.NETWORK}}
+        return self._sandbox_spec.model_copy(update=spec_update)
 
     def upload_session(self, conversation_id: str) -> SandboxSession:
         """Session uploads write through. The executor's live session when a
@@ -660,7 +741,7 @@ class ConversationRuntime:
         if conversation_id not in self._pending_sessions:
             self._pending_sessions[conversation_id] = SandboxSession(
                 self._sandbox_service_now(),
-                self._build_sandbox_spec(),
+                self._build_sandbox_spec(mcp_egress_hosts=self._mcp_egress_hosts()),
                 conversation_id=conversation_id,
                 on_recreate=lambda: self._rehydrate_after_recreate(conversation_id),
             )
@@ -707,7 +788,7 @@ class ConversationRuntime:
         if session is None:
             session = SandboxSession(
                 self._sandbox_service_now(),
-                self._build_sandbox_spec(),
+                self._build_sandbox_spec(mcp_egress_hosts=self._mcp_egress_hosts()),
                 conversation_id=conversation_id,
                 # Mid-run death (transport drop / OOM): restore the last snapshot
                 # into the fresh instance before the agent retries (bp-13 §2).
@@ -720,40 +801,59 @@ class ConversationRuntime:
             broker=broker,
             conversation_id=conversation_id,
         )
-        # RP-05 rung A: extend the registry with MCP tools from the pool snapshot.
+        # RP-05 rung A+B: extend the registry with MCP tools from the pool
+        # snapshot (stdio) AND the HTTP-managed tools (rung B streamable_http).
         # The snapshot is frozen per conversation — list_changed notifications do
         # NOT mutate this list.
+        all_mcp_tools: list[ToolDef] = []
         if self._mcp_pool is not None and self._mcp_pool.started:
-            mcps = self._mcp_pool.snapshot()
-            if mcps:
-                # rung A registers ALL MCP tools eagerly — every advertised tool
-                # is callable. The §6 active-schema cap (advertise tool_search
-                # only, call the rest by qualified name) needs the advertised-set
-                # / callable-set split deferred to rp-05c; do NOT register an
-                # uncallable meta-tool here (round-3 false-affordance reject).
-                mcp_names = frozenset(t.name for t in mcps)
-                # Extend the scope so the executor knows these tools are allowed
-                mcp_scope = executor._scope.model_copy(
-                    update={"allowed_tools": executor._scope.allowed_tools | mcp_names}
+            all_mcp_tools.extend(self._mcp_pool.snapshot())
+        if self._mcp_http_tools:
+            all_mcp_tools.extend(list(self._mcp_http_tools.values()))
+
+        if all_mcp_tools:
+            # rung A+B registers ALL MCP tools eagerly — every advertised tool
+            # is callable. The §6 active-schema cap (advertise tool_search
+            # only, call the rest by qualified name) needs the advertised-set
+            # / callable-set split deferred to rp-05c; do NOT register an
+            # uncallable meta-tool here (round-3 false-affordance reject).
+            mcp_names = frozenset(t.name for t in all_mcp_tools)
+            # Extend the scope so the executor knows these tools are allowed
+            mcp_scope = executor._scope.model_copy(
+                update={"allowed_tools": executor._scope.allowed_tools | mcp_names}
+            )
+            executor._scope = mcp_scope
+            # Build lightweight wrappers and register them.
+            # Stdio tools use the pool; HTTP tools use our merged call_fn.
+            for tdef in all_mcp_tools:
+                executor._registry.register(
+                    _MCPToolWrapper(tdef, self._mcp_call_target)
                 )
-                executor._scope = mcp_scope
-                # Build lightweight wrappers and register them (pool ref for D5 invocation)
-                for tdef in mcps:
-                    executor._registry.register(_MCPToolWrapper(tdef, self._mcp_pool))
-            # Emit mcp_approval_required frames for any servers that need re-approval
-            for server, info in self._mcp_approval_pending.items():
-                try:
-                    self._store.publish_ephemeral(
-                        conversation_id,
-                        {
-                            "type": "mcp_approval_required",
-                            "server": server,
-                            "description_hash": info.get("new_hash", ""),
-                            "old_description_hash": info.get("old_hash", ""),
-                        },
-                    )
-                except Exception:
-                    pass  # best-effort; WS frame emission is not critical
+
+            # RP-05b §3: the retrieval-tier MCP providers are composed into the
+            # bundled search/extraction in `_compose_mcp_retrieval` (consumed by
+            # research_stream, _execute_deep_research, and the Build broker's
+            # search/extract handlers) — so MCP-discovered URLs flow through the
+            # real GroundingPipeline. Registering them here under `mcp_search_*` /
+            # `mcp_extract_*` broker names was DEAD: nothing called those names
+            # (the Build agent calls `search`/`extract`; Research bypasses the
+            # broker). The cap-handler cache is invalidated when the providers are
+            # (re)built so the composition picks up the live set.
+
+        # Emit mcp_approval_required frames for any servers that need re-approval
+        for server, info in self._mcp_approval_pending.items():
+            try:
+                self._store.publish_ephemeral(
+                    conversation_id,
+                    {
+                        "type": "mcp_approval_required",
+                        "server": server,
+                        "description_hash": info.get("new_hash", ""),
+                        "old_description_hash": info.get("old_hash", ""),
+                    },
+                )
+            except Exception:
+                pass  # best-effort; WS frame emission is not critical
         self._executors[conversation_id] = executor
         return AgentLoop(
             conversation_id,
@@ -890,11 +990,14 @@ class ConversationRuntime:
         from perpleximanus.retrieval.streaming import stream_research_answer
 
         deps = self._research()
+        # RP-05b §3: MCP retrieval providers join the citation path here too — the
+        # composite hands MCP-discovered hits to the SAME GroundingPipeline.
+        search, extraction = self._compose_mcp_retrieval(deps)
         return stream_research_answer(
             query,
             router=self._router_now(pick=model_override, enable_thinking=think),
-            search=deps["search"],
-            extraction=deps["extraction"],
+            search=search,
+            extraction=extraction,
             reranker=deps["reranker"],
             nli=deps["nli"],
             domains_deny=domains_deny,
@@ -1118,12 +1221,15 @@ class ConversationRuntime:
         """Start the MCP client pool if mcp.enabled + servers are configured.
         Called once at runtime startup (from the app lifespan). Loads approvals
         from the mcp_approvals table. On ApprovalRequired, the affected server
-        is refused and the WS frame is dispatched; other servers still start."""
+        is refused and the WS frame is dispatched; other servers still start.
+
+        Rung B: also starts streamable_http servers via McpHttpClient."""
         cfg = self._config_store.load()
         mcp_cfg = cfg.mcp
         if not mcp_cfg.enabled or not mcp_cfg.servers:
             return
 
+        from perpleximanus.tools.mcp.approval import ApprovalRequired
         from perpleximanus.tools.mcp.config import McpSettings as TypedMcpSettings
         from perpleximanus.tools.mcp.migrations import list_mcp_approvals
 
@@ -1137,32 +1243,244 @@ class ConversationRuntime:
         except Exception:
             _LOG.warning("MCP pool: failed to read approvals from DB", exc_info=True)
 
-        typed = TypedMcpSettings(
-            enabled=mcp_cfg.enabled,
-            servers=mcp_cfg.servers,
-            max_active_schemas=mcp_cfg.max_active_schemas,
-        )
-        self._mcp_pool = McpPool(typed, secrets=self._secret_store, approvals=approvals)
-        try:
-            await self._mcp_pool.start()
-        except Exception:
-            _LOG.warning("MCP pool: failed to start", exc_info=True)
+        # Split servers: stdio → pool, streamable_http → HTTP clients
+        http_servers: dict[str, McpServerConfig] = {}
+        stdio_servers: dict[str, McpServerConfig] = {}
+        for name, srv in mcp_cfg.servers.items():
+            if srv.transport == "streamable_http":
+                http_servers[name] = srv
+            else:
+                stdio_servers[name] = srv
 
-        # D1/D3: collect servers that need re-approval from the pool status
-        if self._mcp_pool is not None:
-            for name, info in self._mcp_pool.approval_pending().items():
-                self._mcp_approval_pending[name] = {
-                    "old_hash": info.get("old_hash", ""),
-                    "new_hash": info.get("new_hash", ""),
-                }
+        # Start stdio pool
+        if stdio_servers:
+            typed = TypedMcpSettings(
+                enabled=mcp_cfg.enabled,
+                servers=stdio_servers,
+                max_active_schemas=mcp_cfg.max_active_schemas,
+            )
+            self._mcp_pool = McpPool(typed, secrets=self._secret_store, approvals=approvals)
+            try:
+                await self._mcp_pool.start()
+            except Exception:
+                _LOG.warning("MCP pool: failed to start", exc_info=True)
+
+            # D1/D3: collect servers that need re-approval from the pool status
+            if self._mcp_pool is not None:
+                for name, info in self._mcp_pool.approval_pending().items():
+                    self._mcp_approval_pending[name] = {
+                        "old_hash": info.get("old_hash", ""),
+                        "new_hash": info.get("new_hash", ""),
+                    }
+                    _LOG.warning(
+                        "MCP pool: server %r refused — re-approval required", name
+                    )
+
+        # Start HTTP servers (rung B)
+        for name, srv in http_servers.items():
+            if not srv.enabled:
+                _LOG.debug("McpPool: HTTP server %r is disabled — skipping", name)
+                continue
+
+            try:
+                await self._connect_http(name, srv, approvals)
+            except ApprovalRequired as exc:
                 _LOG.warning(
-                    "MCP pool: server %r refused — re-approval required", name
+                    "McpPool: HTTP server %r refused — description_hash changed "
+                    "(%s → %s) — re-approval required",
+                    name, exc.old_hash[:12], exc.new_hash[:12],
                 )
+                self._mcp_approval_pending[name] = {
+                    "old_hash": exc.old_hash,
+                    "new_hash": exc.new_hash,
+                }
+                # Clean up the client
+                client = self._mcp_http_clients.pop(name, None)
+                if client is not None:
+                    with contextlib.suppress(Exception):
+                        await client.close()
+            except Exception as exc:
+                _LOG.warning(
+                    "McpPool: HTTP server %r failed to start: %s", name, exc
+                )
+                if name in self._mcp_http_clients:
+                    client = self._mcp_http_clients.pop(name)
+                    with contextlib.suppress(Exception):
+                        await client.close()
+
+        # Build retrieval-tier MCP providers from the tool list
+        await self._build_mcp_retrieval_providers()
+
+    async def _connect_http(
+        self,
+        name: str,
+        srv: McpServerConfig,
+        approvals: dict[str, str],
+    ) -> None:
+        """Connect one HTTP MCP server, build ToolDefs, verify approval hash."""
+        from perpleximanus.tools.mcp.approval import (
+            ApprovalRequired,
+            compute_description_hash,
+        )
+        from perpleximanus.tools.mcp.http import McpHttpClient
+        from perpleximanus.tools.mcp.naming import qualified_name
+        from perpleximanus.tools.mcp.pool import _UNTRUSTED_DESC_WRAPPER, _schema_to_args_model
+
+        client = McpHttpClient(
+            server=srv,
+            secrets=self._secret_store,
+            call_timeout_s=10.0,
+        )
+
+        # RP-05b §2: route the orchestrator-side MCP client's outbound httpx
+        # through the egress allowlisting proxy when the build posture is
+        # filtered, so a host outside the unioned allowlist is denied 403 — the
+        # client must NOT bypass the sidecar. open posture → None (direct). See
+        # docs/workorders/RP-05b-orchestrator-proxy-decision.md.
+        try:
+            await client.connect(proxy_env=self._mcp_proxy_env())
+        except Exception:
+            self._mcp_http_clients[name] = client  # register for close
+            raise
+
+        self._mcp_http_clients[name] = client
+
+        # List tools and build ToolDefs
+        raw_tools = await client.list_tools()
+
+        # Compute the description hash and check approval
+        tool_descs = [
+            {"name": t.name, "description": t.description or ""}
+            for t in raw_tools
+        ]
+        new_hash = compute_description_hash(tool_descs)
+
+        stored = approvals.get(name)
+        if stored is not None and stored != new_hash:
+            raise ApprovalRequired(name, stored, new_hash)
+
+        # Build ToolDefs
+        allowed = set(srv.allowed_tools) if srv.allowed_tools is not None else None
+
+        for tool in raw_tools:
+            if allowed is not None and tool.name not in allowed:
+                _LOG.debug("McpPool: HTTP tool %r not in allowlist for %r", tool.name, name)
+                continue
+
+            qname = qualified_name(name, tool.name)
+            if qname in self._mcp_http_tools:
+                _LOG.warning("McpPool: HTTP tool %r already registered — skipping", qname)
+                continue
+
+            fenced_desc = _UNTRUSTED_DESC_WRAPPER.format(
+                name=name, desc=tool.description or "(no description)"
+            )
+
+            self._mcp_http_tools[qname] = ToolDef(
+                name=qname,
+                description=fenced_desc,
+                args_model=_schema_to_args_model(tool),
+                needs=frozenset(),
+                base_risk=srv.risk_tier,
+                runs_in="in_process",  # HTTP always runs in_process (orchestrator-side)
+                read_only=False,
+                uses_capabilities=frozenset(),
+            )
+
+        _LOG.info(
+            "McpPool: HTTP server %r connected — %d tool(s) registered",
+            name, len(raw_tools),
+        )
+
+    @property
+    def _mcp_call_target(self) -> Any:
+        """A callable that routes MCP tool invocations to the right transport.
+
+        Stdio tools go through the pool; HTTP tools go through _mcp_http_clients.
+        This is used by _MCPToolWrapper at invocation time.
+        """
+        pool = self._mcp_pool
+        http_clients = self._mcp_http_clients
+
+        class _MergedCallTarget:
+            async def call_tool(self, server, tool, arguments):
+                # Try HTTP first (faster path), then stdio
+                if server in http_clients:
+                    return await http_clients[server].call_tool(tool, arguments)
+                if pool is not None:
+                    return await pool.call_tool(server, tool, arguments)
+                raise RuntimeError(
+                    f"MCP server {server!r} is not connected"
+                )
+
+        return _MergedCallTarget()
+
+    async def _build_mcp_retrieval_providers(self) -> None:
+        """Build retrieval-tier MCP providers from registered MCP tools.
+
+        Scans both the stdio pool snapshot and HTTP tools for search/fetch-shaped
+        tools and wraps them as SearchProvider / ExtractionProvider Protocol
+        instances. These are registered into the broker at compose time.
+        """
+        from perpleximanus.tools.mcp.retrieval_tier import build_retrieval_providers
+
+        # Collect tools from both transports
+        mcp_entries: list[dict[str, Any]] = []
+
+        # Stdio tools from the pool
+        if self._mcp_pool is not None and self._mcp_pool.started:
+            for tdef in self._mcp_pool.snapshot():
+                from perpleximanus.tools.mcp.naming import split_qualified_name
+                parts = split_qualified_name(tdef.name)
+                if parts is None:
+                    continue
+                server, tool_name = parts
+                mcp_entries.append({
+                    "server": server,
+                    "tool_name": tool_name,
+                    "tool": tdef,
+                })
+
+        # HTTP tools
+        for qname, tdef in self._mcp_http_tools.items():
+            from perpleximanus.tools.mcp.naming import split_qualified_name
+            parts = split_qualified_name(qname)
+            if parts is None:
+                continue
+            server, tool_name = parts
+            mcp_entries.append({
+                "server": server,
+                "tool_name": tool_name,
+                "tool": tdef,
+            })
+
+        if mcp_entries:
+            self._mcp_retrieval_searches, self._mcp_retrieval_extractions = \
+                build_retrieval_providers(
+                    mcp_entries,
+                    call_fn=self._mcp_call_target.call_tool,
+                )
+            _LOG.info(
+                "MCP retrieval: built %d search + %d extraction provider(s)",
+                len(self._mcp_retrieval_searches),
+                len(self._mcp_retrieval_extractions),
+            )
+            # Drop any cached Build cap-handlers so the next build composes over
+            # the freshly-built MCP providers (RP-05b §3).
+            self._cap_handlers = None
 
     async def _close_mcp_pool(self) -> None:
         if self._mcp_pool is not None:
             await self._mcp_pool.aclose()
             self._mcp_pool = None
+        for client in list(self._mcp_http_clients.values()):
+            with contextlib.suppress(Exception):
+                await client.close()
+        self._mcp_http_clients.clear()
+        self._mcp_http_tools.clear()
+        self._mcp_retrieval_searches.clear()
+        self._mcp_retrieval_extractions.clear()
+        self._cap_handlers = None
 
     def mcp_approval_state(self) -> dict[str, dict]:
         """Return the pending approval state for WS frame dispatch (D3).
@@ -1462,12 +1780,16 @@ class ConversationRuntime:
         )
 
         deps = self._research()
+        # RP-05b §3: deep research's discovery/extraction also flows MCP providers
+        # through the SAME engine, so deep-research citations can come from the MCP
+        # tier identically to bundled providers.
+        search, extraction = self._compose_mcp_retrieval(deps)
         router = self._router_now(
             pick=self._model_override.get(conversation_id)
         )
         retrieval_engine = DefaultRetrievalEngine(
-            search=deps["search"],
-            extraction=deps["extraction"],
+            search=search,
+            extraction=extraction,
             reranker=deps["reranker"],
             embedder=deps.get("embedder"),
             rewriter=RouterQueryRewriter(router),

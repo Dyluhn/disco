@@ -619,7 +619,7 @@ rp-05a: committed  # done 247b81b — Fable round-4 APPROVE (8/8 PASS)
 #   rp-05b-ui = surface (app-server CRUD endpoints + frontend McpSection)
 # Disjoint: py owns mcp/__init__.py + agent-server/{runtime,app}.py; ui owns
 # app-server/* + frontend/*. No shared file → both run in parallel.
-rp-05b-py: in-flight
+rp-05b-py: committed
   - packages/tools/src/perpleximanus/tools/mcp/__init__.py
   - packages/tools/src/perpleximanus/tools/mcp/http.py
   - packages/tools/src/perpleximanus/tools/mcp/retrieval_tier.py
