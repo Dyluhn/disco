@@ -395,3 +395,36 @@ beautiful by default (Lovable/Manus parity). Three tiers, cheapest first:
 Verification rides the existing screenshot-evidence pipeline (vision triage →
 pixel review). Slot after wave 4; tier 1 could ride RP-10's slides design-pack
 work if convenient.
+
+## 6. OpenHands mining notes (source-verified 2026-06-10, requested by Dylan)
+
+Process rule going forward: before any stuck-detector / condenser / driver-
+discipline order, check the All-Hands **agent-sdk** repo first (the loop
+engine moved there; the main OpenHands repo is now just the app server).
+Research clones: /tmp/openhands-{ref,sdk,v0}.
+
+**Mine (they're ahead — fold into future orders):**
+- Stuck-detector scenarios (sdk `conversation/stuck_detector.py`): repeated
+  action-obs pairs with ID-insensitive equality, action-error loops (×3),
+  alternating A-B-A-B period-2. Port scenarios 1/2/4 as additional detectors
+  feeding OUR graduated valve (keep our nudge→cap→pause; theirs hard-halts).
+  Candidate: wave-2+ order or DC follow-up.
+- Critic finish-gate frame (`critic_mixin.py` + `AgentFinishedCritic`):
+  finish scored; sub-threshold finish → followup prompt instead of finishing,
+  bounded max_iterations. Generalization of our serve gate + verify-on-finish;
+  swap their "git patch non-empty" for "deliverables exist in workspace".
+- Weak-model survival kit (battle-tested, directly relevant to the 27B
+  driver): prompt-mocked tool calling (`fn_call_converter.py`,
+  `<function=name>` protocol + ICL + repair), FunctionCallValidationError
+  injected back as a USER message for self-correction, corrective nudge on
+  empty/reasoning-only turns (`response_dispatch.py`).
+- ThinkTool (no-op reasoning-dump tool) — cheap prose-degeneration mitigation;
+  tiny order candidate.
+- Condenser framework reference: HARD/SOFT requirements, hard_context_reset
+  retry ladder, minimum_progress ≥10% guard.
+
+**No counterpart there (we keep our own):** graduated valve; degeneracy-
+targeted condensation; wiped-sandbox resume reality-check (their sandbox
+survives restarts — pure event replay suffices for them); per-state action-
+space gating; meta-tool rate limiting. One string worth stealing: V0's
+ERROR_ACTION_NOT_EXECUTED_ERROR phrasing for crashed-runtime messaging.
