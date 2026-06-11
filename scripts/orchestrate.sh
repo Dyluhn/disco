@@ -257,8 +257,21 @@ cmd_verify() {
   # the artifact must exist, be non-empty, and be FRESH (claims are not evidence)
   if [ -s "$ARTIFACT" ] && [ "$(stat -c %Y "$ARTIFACT")" -ge "$START_EPOCH" ]; then
     mv "$env" "$DONE/$order.env"
+    # Evidence gate: every units-*.log in the order's manifest must exist,
+    # be non-empty, and contain no failures — catches the "worker ran only
+    # its own tests" / "claimed green, was red" classes before human review.
+    local ev rc=0
+    while read -r ev; do
+      [ -n "$ev" ] || continue
+      if [ ! -s "$REPO_ROOT/$ev" ]; then
+        echo "EVIDENCE MISSING $ev"; rc=2; continue
+      fi
+      if tail -n 30 "$REPO_ROOT/$ev" | grep -qE "[1-9][0-9]* (failed|error)|ERROR |Traceback"; then
+        echo "EVIDENCE RED $ev (failures in tail — review before commit)"; rc=2
+      fi
+    done < <(awk -v o="$order" '$0 ~ "^"o":" {f=1; next} /^[a-z0-9-]+:/ {f=0} f && /test-record\/.*units.*\.log/ {gsub(/^ *- /,""); print}' "$ORDERS")
     echo "VERIFIED $order: artifact ${ARTIFACT#"$REPO_ROOT"/} present, non-empty, fresh."
-    return 0
+    return $rc
   fi
 
   # the pi failure mode (CONTEXT.md §4): claimed success, wrote nothing → salvage
