@@ -34,8 +34,11 @@ describe("History — conversation library", () => {
     withProviders(<HistoryView />);
     await waitFor(() => expect(screen.getByText(/reciprocal rank fusion/i)).toBeInTheDocument());
     await user.type(screen.getByRole("searchbox", { name: /search conversations/i }), "license");
-    expect(screen.getByText(/MIT and Apache 2.0/i)).toBeInTheDocument();
-    expect(screen.queryByText(/reciprocal rank fusion/i)).not.toBeInTheDocument();
+    
+    await waitFor(() => {
+      expect(screen.getByText(/MIT and Apache 2.0/i)).toBeInTheDocument();
+      expect(screen.queryByText(/reciprocal rank fusion/i)).not.toBeInTheDocument();
+    });
   });
 
   it("shows a calm empty state when there are no conversations", () => {

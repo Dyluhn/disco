@@ -1,5 +1,5 @@
 import { AlertTriangle, MessageSquareText, Search, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { formatDate } from "@/lib/date";
@@ -89,9 +89,18 @@ export function HistoryView() {
   const del = useDeleteConversation();
   const navigate = useNavigate();
   const [q, setQ] = useState("");
+  const [deferredQ, setDeferredQ] = useState("");
+
+  // Debounce the search query to keep the UI responsive during fast typing.
+  useEffect(() => {
+    const timer = setTimeout(() => setDeferredQ(q), 150);
+    return () => clearTimeout(timer);
+  }, [q]);
 
   const all = data ?? [];
-  const filtered = all.filter((c) => c.title.toLowerCase().includes(q.trim().toLowerCase()));
+  const filtered = all.filter((c) =>
+    c.title.toLowerCase().includes(deferredQ.trim().toLowerCase()),
+  );
 
   return (
     <div className="mx-auto w-full max-w-doc px-body py-section">

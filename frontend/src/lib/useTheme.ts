@@ -1,7 +1,9 @@
 import { useCallback, useSyncExternalStore } from "react";
 
-/** Theme = a `.dark`/`.light` class on <html>. No storage (kept in the DOM). */
+/** Theme = a `.dark`/`.light` class on <html>. Persisted in localStorage as 'pmx-theme'. */
 export type Theme = "dark" | "light";
+
+const STORAGE_KEY = "pmx-theme";
 
 function current(): Theme {
   return document.documentElement.classList.contains("light") ? "light" : "dark";
@@ -20,6 +22,7 @@ export function useTheme(): { theme: Theme; toggle: () => void } {
     const next: Theme = current() === "dark" ? "light" : "dark";
     root.classList.remove("dark", "light");
     root.classList.add(next);
+    localStorage.setItem(STORAGE_KEY, next);
     for (const cb of listeners) cb();
   }, []);
   return { theme, toggle };

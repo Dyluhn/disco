@@ -178,6 +178,8 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
             onKill={b.kill}
             onStop={b.cancel}
             onResume={b.canResume ? b.resume : undefined}
+            events={b.events}
+            modelId={b.modelId}
           />
           <div className="flex items-center justify-between gap-inline">
             <h1 className="font-display text-[1.3rem] font-medium leading-tight tracking-tight text-text">

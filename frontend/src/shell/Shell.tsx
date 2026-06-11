@@ -2,6 +2,7 @@ import { Menu } from "lucide-react";
 import { useState } from "react";
 import { Outlet } from "react-router-dom";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { CommandPalette } from "@/components/CommandPalette";
 import { cn } from "@/lib/cn";
 import { ModeSlider } from "./ModeSlider";
 import { NavRail } from "./NavRail";
@@ -22,6 +23,7 @@ export function Shell() {
 
   return (
     <div className="flex h-dvh overflow-hidden bg-bg text-text">
+      <CommandPalette />
       {/* desktop rail — in-flow, width-collapsing */}
       <aside
         className={cn(

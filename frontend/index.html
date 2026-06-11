@@ -5,6 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark light" />
     <title>perpleximanus — research</title>
+    <script>
+      (function() {
+        try {
+          const saved = localStorage.getItem('pmx-theme');
+          const pref = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+          const theme = saved || pref;
+          document.documentElement.classList.remove('dark', 'light');
+          document.documentElement.classList.add(theme);
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

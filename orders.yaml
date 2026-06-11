@@ -495,8 +495,16 @@ rp-12: in-flight
   - test-record/rp-12/units-tools.log
   - test-record/rp-12/units-core.log
   - agent-projects/gemini/rp-12-report.md
-rp-14: staged
+  - agent-projects/gemini/rp-12-fix1-report.md
+  - agent-projects/gemini/rp-12-fix2-report.md
+  - agent-projects/gemini/rp-12-fix3-report.md
+rp-14: committed
   - frontend/src/lib/useTheme.ts
+  - frontend/src/components/BuildSurface.tsx
+  - frontend/src/types/models.ts
+  - test-record/screenshots/rp-14/palette-filtered.png
+  - test-record/screenshots/rp-14/theme-persisted-after-reload.png
+  - test-record/screenshots/rp-14/history-search.png
   - frontend/src/lib/useTheme.test.ts
   - frontend/src/main.tsx
   - frontend/index.html

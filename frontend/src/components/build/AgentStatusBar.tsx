@@ -11,10 +11,13 @@
  *    Gated behind an inline confirm so a mis-click can't nuke a long build.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Loader2, OctagonX, Play, ShieldCheck, ShieldHalf, Square } from "lucide-react";
 import { cn } from "@/lib/cn";
-import type { ConversationStatus, IsolationInfo } from "@/types/agent";
+import type { AgentEvent, ConversationStatus, IsolationInfo } from "@/types/agent";
+import { useModels } from "@/hooks/useModels";
+import { calculateUsageCost, formatCost } from "@/lib/cost";
+import { isFree } from "@/types/models";
 
 const STATUS_LABEL: Record<ConversationStatus, string> = {
   IDLE: "Stopped",
@@ -52,6 +55,8 @@ export function AgentStatusBar({
   onKill,
   onStop,
   onResume,
+  events = [],
+  modelId,
 }: {
   status: ConversationStatus;
   /** BP-15: null until the first state frame — renders muted '…'. */
@@ -63,8 +68,13 @@ export function AgentStatusBar({
   onStop?: () => void;
   /** Resume a PAUSED build (stopped, or interrupted by a server restart). */
   onResume?: () => void;
+  /** RP-14: cumulative cost from usage in events. */
+  events?: AgentEvent[];
+  /** RP-14: the currently selected model id for rate lookup. */
+  modelId?: string | null;
 }) {
   const active = ACTIVE.includes(status);
+
   const waiting =
     status === "WAITING_FOR_CONFIRMATION" || status === "AWAITING_PLAN_APPROVAL";
   // Graceful Stop is meaningful while the agent is actually running or waiting
@@ -132,6 +142,10 @@ export function AgentStatusBar({
             suspended
           </span>
         )}
+        {/* RP-14: cost meter mounts only when a model is wired in — callers that
+            don't pass modelId (and the pre-RP-14 test suites) never touch the
+            models query, so no QueryClientProvider is required of them. */}
+        {modelId != null && <CostMeter events={events} modelId={modelId} />}
       </div>
 
       <div className="flex items-center gap-hair">
@@ -211,5 +225,69 @@ export function AgentStatusBar({
         )}
       </div>
     </div>
+  );
+}
+
+/** RP-14: cumulative session cost. Isolated in its own component so the
+ * models query only runs when a caller actually wires in a model — and so
+ * the meter can be hidden on paid models until the event stream carries real
+ * usage data (backend field pending, wave 2): a meter pinned at "≥$0.00"
+ * regardless of real spend would be a false affordance, not a lower bound. */
+function CostMeter({ events, modelId }: { events: AgentEvent[]; modelId: string }) {
+  const { data: models } = useModels();
+
+  const { cost, hasMissingUsage, allFree, sawUsage } = useMemo(() => {
+    let total = 0;
+    let missing = false;
+    let anyPaid = false;
+    let usageSeen = false;
+
+    // The current session model's rate decides whether we're in "paid" mode.
+    const currentModel = models?.find((m) => m.id === modelId);
+    if (currentModel && !isFree(currentModel)) anyPaid = true;
+
+    for (const e of events) {
+      if (e.kind !== "action") continue;
+      // Usage may be in a top-level field or tucked in meta.
+      const usage = (e as any).usage || e.meta?.usage;
+      if (usage) usageSeen = true;
+      // Attribute the cost using the model that was active for THAT action.
+      const mId = (e.meta?.model_id as string) || modelId;
+      const m = models?.find((m) => m.id === mId);
+
+      if (m && !isFree(m)) {
+        anyPaid = true;
+        if (usage) {
+          total += calculateUsageCost(m, usage);
+        } else {
+          missing = true;
+        }
+      }
+    }
+    return { cost: total, hasMissingUsage: missing, allFree: !anyPaid, sawUsage: usageSeen };
+  }, [events, models, modelId]);
+
+  if (!allFree && !sawUsage) return null;
+
+  return (
+    <span
+      title={
+        allFree
+          ? "This model is free"
+          : hasMissingUsage
+            ? "Usage data is missing for some turns; this is a lower bound."
+            : "Cumulative session cost"
+      }
+      className="flex items-center gap-hair rounded-full border border-hairline px-inline py-px font-ui text-[0.7rem] text-text-muted"
+    >
+      {allFree ? (
+        "Free"
+      ) : (
+        <>
+          {hasMissingUsage && <span aria-hidden>&ge;</span>}
+          {formatCost(cost)}
+        </>
+      )}
+    </span>
   );
 }

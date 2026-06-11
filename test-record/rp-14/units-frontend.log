@@ -1,0 +1,700 @@
+
+ RUN  v3.2.4 /var/home/dylan/projects/perpleximanus build/frontend
+
+ ✓ src/components/SourcePanel.test.tsx (3 tests) 228ms
+ ✓ src/components/build/ExecutionCanvas.terminal.test.tsx (7 tests) 258ms
+ ✓ src/shell/Shell.test.tsx (6 tests) 311ms
+ ✓ src/components/build/AskPanel.test.tsx (3 tests) 280ms
+ ✓ src/components/controls.test.tsx (5 tests) 324ms
+ ✓ src/views/history.test.tsx (4 tests) 554ms
+stderr | src/components/CommandPalette.test.tsx > CommandPalette > should open on Ctrl+K
+`DialogContent` requires a `DialogTitle` for the component to be accessible for screen reader users.
+
+If you want to hide the `DialogTitle`, you can wrap it with our VisuallyHidden component.
+
+For more information, see https://radix-ui.com/primitives/docs/components/dialog
+Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.
+
+ ✓ src/components/mainSurface.test.tsx (2 tests) 710ms
+   ✓ Main surface — empty state + reactive provider errors > offers example-query pills that start a run  313ms
+   ✓ Main surface — empty state + reactive provider errors > surfaces a provider error with its REAL content, not a generic failure  394ms
+stderr | src/components/CommandPalette.test.tsx > CommandPalette > should filter commands
+`DialogContent` requires a `DialogTitle` for the component to be accessible for screen reader users.
+
+If you want to hide the `DialogTitle`, you can wrap it with our VisuallyHidden component.
+
+For more information, see https://radix-ui.com/primitives/docs/components/dialog
+Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.
+
+stderr | src/components/CommandPalette.test.tsx > CommandPalette > should close on Escape
+`DialogContent` requires a `DialogTitle` for the component to be accessible for screen reader users.
+
+If you want to hide the `DialogTitle`, you can wrap it with our VisuallyHidden component.
+
+For more information, see https://radix-ui.com/primitives/docs/components/dialog
+Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.
+
+ ✓ src/components/CommandPalette.test.tsx (3 tests) 188ms
+ ✓ src/components/build/cluster6.test.tsx (12 tests) 254ms
+ ✓ src/components/Citation.test.tsx (2 tests) 145ms
+ ✓ src/components/build/ExecutionCanvas.preview.test.tsx (6 tests) 195ms
+ ✓ src/components/build/AgentStatusBar.resume.test.tsx (6 tests) 178ms
+ ✓ src/components/research/DeepReportView.table.test.tsx (3 tests) 165ms
+ ✓ src/components/Markdown.test.tsx (5 tests) 81ms
+ ✓ src/components/build/DeliverablePanel.test.tsx (8 tests) 159ms
+stderr | src/components/build/BuildSurface.upload.test.tsx > UploadComposer > calls uploadFiles with dropped files
+An update to UploadComposer inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+ ✓ src/components/build/BuildSurface.upload.test.tsx (8 tests) 141ms
+ ✓ src/components/build/ActivityFeed.screenshot.test.tsx (8 tests) 114ms
+ ✓ src/components/build/StreamingFile.test.tsx (2 tests) 106ms
+ ✓ src/components/states.test.tsx (2 tests) 109ms
+ ✓ src/views/HistoryView.status.test.tsx (2 tests) 87ms
+ ✓ src/views/settings.test.tsx (10 tests) 2695ms
+   ✓ Settings — model-assignment matrix > changes a role assignment (the picker is enabled and the row reflects it)  358ms
+   ✓ Settings — model catalogue (CRUD) > adds a new model via the form and it appears in the catalogue  393ms
+   ✓ Settings — OpenRouter > saves the key and adds an OpenRouter model to the catalogue  503ms
+ ✓ src/hooks/useSessions.test.ts (9 tests) 82ms
+ ✓ src/components/Toast.test.tsx (2 tests) 79ms
+ ✓ src/components/build/AgentStatusBar.suspend.test.tsx (4 tests) 53ms
+ ✓ src/hooks/useBuildNotifications.test.ts (5 tests) 29ms
+ ✓ src/components/build/AgentStatusBar.cost.test.tsx (3 tests) 73ms
+ ✓ src/hooks/useBuildStream.suspend.test.ts (3 tests) 23ms
+ ✓ src/lib/useTheme.test.ts (2 tests) 16ms
+ ✓ src/hooks/useBuildStream.askgate.test.ts (2 tests) 22ms
+ ✓ src/api/agent.reconnect.test.ts (2 tests) 9ms
+ ✓ src/api/agent.upload.test.ts (5 tests) 9ms
+ ✓ src/lib/isolation.test.ts (7 tests) 3ms
+ ✓ src/lib/buildTrace.test.ts (5 tests) 4ms
+ ✓ src/lib/srcdoc.test.ts (10 tests) 6ms
+ ✓ src/lib/cost.test.ts (4 tests) 3ms
+ ✓ src/components/research/DeepResearchSurface.test.tsx (10 tests) 3748ms
+   ✓ Deep Research surface — full lifecycle > after submit, shows the plan gate with editable sub-questions  973ms
+   ✓ Deep Research surface — full lifecycle > after approve, streams the progress + assembles the report + shows bounded notice  2673ms
+ ❯ src/components/ResearchSurface.test.tsx (2 tests | 1 failed) 5532ms
+   × Research surface (integration + streaming reconcile) > goes empty → query → a finished, grounded, structured answer 3398ms
+     → Unable to find role="button" and name `/How is k chosen/i`
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"flex h-dvh overflow-hidden bg-bg text-text"[39m
+    [36m>[39m
+      [36m<aside[39m
+        [33mclass[39m=[32m"hidden shrink-0 overflow-hidden transition-[width] duration-200 ease-out lg:block w-56"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Primary"[39m
+          [33mclass[39m=[32m"flex h-full flex-col gap-section border-r border-hairline bg-surface-1 py-section"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center px-inline px-body"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33maria-label[39m=[32m"perpleximanus"[39m
+              [33mclass[39m=[32m"font-display tracking-tight text-text"[39m
+            [36m>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[1.15rem]"[39m
+              [36m>[39m
+                [0mperpleximanus[0m
+              [36m</span>[39m
+            [36m</span>[39m
+          [36m</div>[39m
+          [36m<ul[39m
+            [33mclass[39m=[32m"flex flex-1 flex-col gap-hair px-inline"[39m
+          [36m>[39m
+            [36m<li>[39m
+              [36m<a[39m
+                [33maria-current[39m=[32m"page"[39m
+                [33maria-label[39m=[32m"New"[39m
+                [33mclass[39m=[32m"flex items-center gap-inline rounded-control px-inline py-inline font-ui text-[0.86rem] transition-colors bg-surface-2 text-accent"[39m
+                [33mdata-discover[39m=[32m"true"[39m
+                [33mhref[39m=[32m"/"[39m
+              [36m>[39m
+                [36m<svg[39m
+                  [33maria-hidden[39m=[32m"true"[39m
+                  [33mclass[39m=[32m"lucide lucide-plus size-4 shrink-0"[39m
+                  [33mfill[39m=[32m"none"[39m
+                  [33mheight[39m=[32m"24"[39m
+                  [33mstroke[39m=[32m"currentColor"[39m
+                  [33mstroke-linecap[39m=[32m"round"[39m
+                  [33mstroke-linejoin[39m=[32m"round"[39m
+                  [33mstroke-width[39m=[32m"2"[39m
+                  [33mviewBox[39m=[32m"0 0 24 24"[39m
+                  [33mwidth[39m=[32m"24"[39m
+                  [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                [36m>[39m
+                  [36m<path[39m
+                    [33md[39m=[32m"M5 12h14"[39m
+                  [36m/>[39m
+                  [36m<path[39m
+                    [33md[39m=[32m"M12 5v14"[39m
+                  [36m/>[39m
+                [36m</svg>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"flex-1"[39m
+                [36m>[39m
+                  [0mNew[0m
+                [36m</span>[39m
+              [36m</a>[39m
+            [36m</li>[39m
+            [36m<li>[39m
+              [36m<a[39m
+                [33maria-label[39m=[32m"History"[39m
+                [33mclass[39m=[32m"flex items-center gap-inline rounded-control px-inline py-inline font-ui text-[0.86rem] transition-colors text-text-muted hover:bg-surface-2 hover:text-text"[39m
+                [33mdata-discover[39m=[32m"true"[39m
+                [33mhref[39m=[32m"/history"[39m
+              [36m>[39m
+                [36m<svg[39m
+                  [33maria-hidden[39m=[32m"true"[39m
+                  [33mclass[39m=[32m"lucide lucide-clock size-4 shrink-0"[39m
+                  [33mfill[39m=[32m"none"[39m
+                  [33mheight[39m=[32m"24"[39m
+                  [33mstroke[39m=[32m"currentColor"[39m
+                  [33mstroke-linecap[39m=[32m"round"[39m
+                  [33mstroke-linejoin[39m=[32m"round"[39m
+                  [33mstroke-width[39m=[32m"2"[39m
+                  [33mviewBox[39m=[32m"0 0 24 24"[39m
+                  [33mwidth[39m=[32m"24"[39m
+                  [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                [36m>[39m
+                  [36m<circle[39m
+                    [33mcx[39m=[32m"12"[39m
+                    [33mcy[39m=[32m"12"[39m
+                    [33mr[39m=[32m"10"[39m
+                  [36m/>[39m
+                  [36m<polyline[39m
+                    [33mpoints[39m=[32m"12 6 12 12 16 14"[39m
+                  [36m/>[39m
+                [36m</svg>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"flex-1"[39m
+                [36m>[39m
+                  [0mHistory[0m
+                [36m</span>[39m
+              [36m</a>[39m
+            [36m</li>[39m
+            [36m<li>[39m
+              [36m<a[39m
+                [33maria-label[39m=[32m"Projects"[39m
+                [33mclass[39m=[32m"flex items-center gap-inline rounded-control px-inline py-inline font-ui text-[0.86rem] transition-colors text-text-muted hover:bg-surface-2 hover:text-text"[39m
+                [33mdata-discover[39m=[32m"true"[39m
+                [33mhref[39m=[32m"/projects"[39m
+              [36m>[39m
+                [36m<svg[39m
+                  [33maria-hidden[39m=[32m"true"[39m
+                  [33mclass[39m=[32m"lucide lucide-folder-git2 size-4 shrink-0"[39m
+                  [33mfill[39m=[32m"none"[39m
+                  [33mheight[39m=[32m"24"[39m
+                  [33mstroke[39m=[32m"currentColor"[39m
+                  [33mstroke-linecap[39m=[32m"round"[39m
+                  [33mstroke-linejoin[39m=[32m"round"[39m
+                  [33mstroke-width[39m=[32m"2"[39m
+                  [33mviewBox[39m=[32m"0 0 24 24"[39m
+                  [33mwidth[39m=[32m"24"[39m
+                  [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                [36m>[39m
+                  [36m<path[39m
+                    [33md[39m=[32m"M9 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v5"[39m
+                  [36m/>[39m
+                  [36m<circle[39m
+                    [33mcx[39m=[32m"13"[39m
+                    [33mcy[39m=[32m"12"[39m
+                    [33mr[39m=[32m"2"[39m
+                  [36m/>[39m
+                  [36m<path[39m
+                    [33md[39m=[32m"M18 19c-2.8 0-5-2.2-5-5v8"[39m
+                  [36m/>[39m
+                  [36m<circle[39m
+                    [33mcx[39m=[32m"20"[39m
+                    [33mcy[39m=[32m"19"[39m
+                    [33mr[39m=[32m"2"[39m
+                  [36m/>[39m
+                [36m</svg>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"flex-1"[39m
+                [36m>[39m
+                  [0mProjects[0m
+                [36m</span>[39m
+              [36m</a>[39m
+            [36m</li>[39m
+            [36m<li>[39m
+              [36m<span[39m
+                [33maria-disabled[39m=[32m"true"[39m
+      ...
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex h-dvh overflow-hidden bg-bg text-text"[39m
+      [36m>[39m
+        [36m<aside[39m
+          [33mclass[39m=[32m"hidden shrink-0 overflow-hidden transition-[width] duration-200 ease-out lg:block w-56"[39m
+        [36m>[39m
+          [36m<nav[39m
+            [33maria-label[39m=[32m"Primary"[39m
+            [33mclass[39m=[32m"flex h-full flex-col gap-section border-r border-hairline bg-surface-1 py-section"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"flex items-center px-inline px-body"[39m
+            [36m>[39m
+              [36m<span[39m
+                [33maria-label[39m=[32m"perpleximanus"[39m
+                [33mclass[39m=[32m"font-display tracking-tight text-text"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"text-[1.15rem]"[39m
+                [36m>[39m
+                  [0mperpleximanus[0m
+                [36m</span>[39m
+              [36m</span>[39m
+            [36m</div>[39m
+            [36m<ul[39m
+              [33mclass[39m=[32m"flex flex-1 flex-col gap-hair px-inline"[39m
+            [36m>[39m
+              [36m<li>[39m
+                [36m<a[39m
+                  [33maria-current[39m=[32m"page"[39m
+                  [33maria-label[39m=[32m"New"[39m
+                  [33mclass[39m=[32m"flex items-center gap-inline rounded-control px-inline py-inline font-ui text-[0.86rem] transition-colors bg-surface-2 text-accent"[39m
+                  [33mdata-discover[39m=[32m"true"[39m
+                  [33mhref[39m=[32m"/"[39m
+                [36m>[39m
+                  [36m<svg[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"lucide lucide-plus size-4 shrink-0"[39m
+                    [33mfill[39m=[32m"none"[39m
+                    [33mheight[39m=[32m"24"[39m
+                    [33mstroke[39m=[32m"currentColor"[39m
+                    [33mstroke-linecap[39m=[32m"round"[39m
+                    [33mstroke-linejoin[39m=[32m"round"[39m
+                    [33mstroke-width[39m=[32m"2"[39m
+                    [33mviewBox[39m=[32m"0 0 24 24"[39m
+                    [33mwidth[39m=[32m"24"[39m
+                    [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                  [36m>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"M5 12h14"[39m
+                    [36m/>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"M12 5v14"[39m
+                    [36m/>[39m
+                  [36m</svg>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"flex-1"[39m
+                  [36m>[39m
+                    [0mNew[0m
+                  [36m</span>[39m
+                [36m</a>[39m
+              [36m</li>[39m
+              [36m<li>[39m
+                [36m<a[39m
+                  [33maria-label[39m=[32m"History"[39m
+                  [33mclass[39m=[32m"flex items-center gap-inline rounded-control px-inline py-inline font-ui text-[0.86rem] transition-colors text-text-muted hover:bg-surface-2 hover:text-text"[39m
+                  [33mdata-discover[39m=[32m"true"[39m
+                  [33mhref[39m=[32m"/history"[39m
+                [36m>[39m
+                  [36m<svg[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"lucide lucide-clock size-4 shrink-0"[39m
+                    [33mfill[39m=[32m"none"[39m
+                    [33mheight[39m=[32m"24"[39m
+                    [33mstroke[39m=[32m"currentColor"[39m
+                    [33mstroke-linecap[39m=[32m"round"[39m
+                    [33mstroke-linejoin[39m=[32m"round"[39m
+                    [33mstroke-width[39m=[32m"2"[39m
+                    [33mviewBox[39m=[32m"0 0 24 24"[39m
+                    [33mwidth[39m=[32m"24"[39m
+                    [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                  [36m>[39m
+                    [36m<circle[39m
+                      [33mcx[39m=[32m"12"[39m
+                      [33mcy[39m=[32m"12"[39m
+                      [33mr[39m=[32m"10"[39m
+                    [36m/>[39m
+                    [36m<polyline[39m
+                      [33mpoints[39m=[32m"12 6 12 12 16 14"[39m
+                    [36m/>[39m
+                  [36m</svg>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"flex-1"[39m
+                  [36m>[39m
+                    [0mHistory[0m
+                  [36m</span>[39m
+                [36m</a>[39m
+              [36m</li>[39m
+              [36m<li>[39m
+                [36m<a[39m
+                  [33maria-label[39m=[32m"Projects"[39m
+                  [33mclass[39m=[32m"flex items-center gap-inline rounded-control px-inline py-inline font-ui text-[0.86rem] transition-colors text-text-muted hover:bg-surface-2 hover:text-text"[39m
+                  [33mdata-discover[39m=[32m"true"[39m
+                  [33mhref[39m=[32m"/projects"[39m
+                [36m>[39m
+                  [36m<svg[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"lucide lucide-folder-git2 size-4 shrink-0"[39m
+                    [33mfill[39m=[32m"none"[39m
+                    [33mheight[39m=[32m"24"[39m
+                    [33mstroke[39m=[32m"currentColor"[39m
+                    [33mstroke-linecap[39m=[32m"round"[39m
+                    [33mstroke-linejoin[39m=[32m"round"[39m
+                    [33mstroke-width[39m=[32m"2"[39m
+                    [33mviewBox[39m=[32m"0 0 24 24"[39m
+                    [33mwidth[39m=[32m"24"[39m
+                    [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                  [36m>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"M9 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v5"[39m
+                    [36m/>[39m
+                    [36m<circle[39m
+                      [33mcx[39m=[32m"13"[39m
+                      [33mcy[39m=[32m"12"[39m
+                      [33mr[39m=[32m"2"[39m
+                    [36m/>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"M18 19c-2.8 0-5-2.2-5-5v8"[39m
+                    [36m/>[39m
+                    [36m<circle[39m
+                      [33mcx[39m=[32m"20"[39m
+                      [33mcy[39m=[32m"19"[39m
+                      [33mr[39m=[32m"2"[39m
+                    [36m/>[39m
+                  [36m</svg>[39m
+                  [36m<span[39m
+             ...
+   ✓ Research surface (integration + streaming reconcile) > renders verification verdicts as citations (the unsupported claim is marked)  2133ms
+ ✓ src/components/BuildSurface.test.tsx (12 tests) 7380ms
+   ✓ Build surface (plan gate → build → action gate) > pauses on a plan-approval gate FIRST, showing the proposed steps + rationale  548ms
+   ✓ Build surface (plan gate → build → action gate) > after plan approval, shows the activity feed and pauses at the per-action gate  1545ms
+   ✓ Build surface (plan gate → build → action gate) > Approve resumes the loop to a finished answer rendered as markdown  1717ms
+   ✓ Build surface (plan gate → build → action gate) > Reject records a denial without executing the action  1552ms
+   ✓ Build surface (plan gate → build → action gate) > after FINISHED, the bottom input becomes the 'Plan a change' box (re-enter plan mode)  1712ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/components/ResearchSurface.test.tsx > Research surface (integration + streaming reconcile) > goes empty → query → a finished, grounded, structured answer
+TestingLibraryElementError: Unable to find role="button" and name `/How is k chosen/i`
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"flex h-dvh overflow-hidden bg-bg text-text"[39m
+    [36m>[39m
+      [36m<aside[39m
+        [33mclass[39m=[32m"hidden shrink-0 overflow-hidden transition-[width] duration-200 ease-out lg:block w-56"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Primary"[39m
+          [33mclass[39m=[32m"flex h-full flex-col gap-section border-r border-hairline bg-surface-1 py-section"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center px-inline px-body"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33maria-label[39m=[32m"perpleximanus"[39m
+              [33mclass[39m=[32m"font-display tracking-tight text-text"[39m
+            [36m>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[1.15rem]"[39m
+              [36m>[39m
+                [0mperpleximanus[0m
+              [36m</span>[39m
+            [36m</span>[39m
+          [36m</div>[39m
+          [36m<ul[39m
+            [33mclass[39m=[32m"flex flex-1 flex-col gap-hair px-inline"[39m
+          [36m>[39m
+            [36m<li>[39m
+              [36m<a[39m
+                [33maria-current[39m=[32m"page"[39m
+                [33maria-label[39m=[32m"New"[39m
+                [33mclass[39m=[32m"flex items-center gap-inline rounded-control px-inline py-inline font-ui text-[0.86rem] transition-colors bg-surface-2 text-accent"[39m
+                [33mdata-discover[39m=[32m"true"[39m
+                [33mhref[39m=[32m"/"[39m
+              [36m>[39m
+                [36m<svg[39m
+                  [33maria-hidden[39m=[32m"true"[39m
+                  [33mclass[39m=[32m"lucide lucide-plus size-4 shrink-0"[39m
+                  [33mfill[39m=[32m"none"[39m
+                  [33mheight[39m=[32m"24"[39m
+                  [33mstroke[39m=[32m"currentColor"[39m
+                  [33mstroke-linecap[39m=[32m"round"[39m
+                  [33mstroke-linejoin[39m=[32m"round"[39m
+                  [33mstroke-width[39m=[32m"2"[39m
+                  [33mviewBox[39m=[32m"0 0 24 24"[39m
+                  [33mwidth[39m=[32m"24"[39m
+                  [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                [36m>[39m
+                  [36m<path[39m
+                    [33md[39m=[32m"M5 12h14"[39m
+                  [36m/>[39m
+                  [36m<path[39m
+                    [33md[39m=[32m"M12 5v14"[39m
+                  [36m/>[39m
+                [36m</svg>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"flex-1"[39m
+                [36m>[39m
+                  [0mNew[0m
+                [36m</span>[39m
+              [36m</a>[39m
+            [36m</li>[39m
+            [36m<li>[39m
+              [36m<a[39m
+                [33maria-label[39m=[32m"History"[39m
+                [33mclass[39m=[32m"flex items-center gap-inline rounded-control px-inline py-inline font-ui text-[0.86rem] transition-colors text-text-muted hover:bg-surface-2 hover:text-text"[39m
+                [33mdata-discover[39m=[32m"true"[39m
+                [33mhref[39m=[32m"/history"[39m
+              [36m>[39m
+                [36m<svg[39m
+                  [33maria-hidden[39m=[32m"true"[39m
+                  [33mclass[39m=[32m"lucide lucide-clock size-4 shrink-0"[39m
+                  [33mfill[39m=[32m"none"[39m
+                  [33mheight[39m=[32m"24"[39m
+                  [33mstroke[39m=[32m"currentColor"[39m
+                  [33mstroke-linecap[39m=[32m"round"[39m
+                  [33mstroke-linejoin[39m=[32m"round"[39m
+                  [33mstroke-width[39m=[32m"2"[39m
+                  [33mviewBox[39m=[32m"0 0 24 24"[39m
+                  [33mwidth[39m=[32m"24"[39m
+                  [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                [36m>[39m
+                  [36m<circle[39m
+                    [33mcx[39m=[32m"12"[39m
+                    [33mcy[39m=[32m"12"[39m
+                    [33mr[39m=[32m"10"[39m
+                  [36m/>[39m
+                  [36m<polyline[39m
+                    [33mpoints[39m=[32m"12 6 12 12 16 14"[39m
+                  [36m/>[39m
+                [36m</svg>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"flex-1"[39m
+                [36m>[39m
+                  [0mHistory[0m
+                [36m</span>[39m
+              [36m</a>[39m
+            [36m</li>[39m
+            [36m<li>[39m
+              [36m<a[39m
+                [33maria-label[39m=[32m"Projects"[39m
+                [33mclass[39m=[32m"flex items-center gap-inline rounded-control px-inline py-inline font-ui text-[0.86rem] transition-colors text-text-muted hover:bg-surface-2 hover:text-text"[39m
+                [33mdata-discover[39m=[32m"true"[39m
+                [33mhref[39m=[32m"/projects"[39m
+              [36m>[39m
+                [36m<svg[39m
+                  [33maria-hidden[39m=[32m"true"[39m
+                  [33mclass[39m=[32m"lucide lucide-folder-git2 size-4 shrink-0"[39m
+                  [33mfill[39m=[32m"none"[39m
+                  [33mheight[39m=[32m"24"[39m
+                  [33mstroke[39m=[32m"currentColor"[39m
+                  [33mstroke-linecap[39m=[32m"round"[39m
+                  [33mstroke-linejoin[39m=[32m"round"[39m
+                  [33mstroke-width[39m=[32m"2"[39m
+                  [33mviewBox[39m=[32m"0 0 24 24"[39m
+                  [33mwidth[39m=[32m"24"[39m
+                  [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                [36m>[39m
+                  [36m<path[39m
+                    [33md[39m=[32m"M9 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v5"[39m
+                  [36m/>[39m
+                  [36m<circle[39m
+                    [33mcx[39m=[32m"13"[39m
+                    [33mcy[39m=[32m"12"[39m
+                    [33mr[39m=[32m"2"[39m
+                  [36m/>[39m
+                  [36m<path[39m
+                    [33md[39m=[32m"M18 19c-2.8 0-5-2.2-5-5v8"[39m
+                  [36m/>[39m
+                  [36m<circle[39m
+                    [33mcx[39m=[32m"20"[39m
+                    [33mcy[39m=[32m"19"[39m
+                    [33mr[39m=[32m"2"[39m
+                  [36m/>[39m
+                [36m</svg>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"flex-1"[39m
+                [36m>[39m
+                  [0mProjects[0m
+                [36m</span>[39m
+              [36m</a>[39m
+            [36m</li>[39m
+            [36m<li>[39m
+              [36m<span[39m
+                [33maria-disabled[39m=[32m"true"[39m
+      ...
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex h-dvh overflow-hidden bg-bg text-text"[39m
+      [36m>[39m
+        [36m<aside[39m
+          [33mclass[39m=[32m"hidden shrink-0 overflow-hidden transition-[width] duration-200 ease-out lg:block w-56"[39m
+        [36m>[39m
+          [36m<nav[39m
+            [33maria-label[39m=[32m"Primary"[39m
+            [33mclass[39m=[32m"flex h-full flex-col gap-section border-r border-hairline bg-surface-1 py-section"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"flex items-center px-inline px-body"[39m
+            [36m>[39m
+              [36m<span[39m
+                [33maria-label[39m=[32m"perpleximanus"[39m
+                [33mclass[39m=[32m"font-display tracking-tight text-text"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"text-[1.15rem]"[39m
+                [36m>[39m
+                  [0mperpleximanus[0m
+                [36m</span>[39m
+              [36m</span>[39m
+            [36m</div>[39m
+            [36m<ul[39m
+              [33mclass[39m=[32m"flex flex-1 flex-col gap-hair px-inline"[39m
+            [36m>[39m
+              [36m<li>[39m
+                [36m<a[39m
+                  [33maria-current[39m=[32m"page"[39m
+                  [33maria-label[39m=[32m"New"[39m
+                  [33mclass[39m=[32m"flex items-center gap-inline rounded-control px-inline py-inline font-ui text-[0.86rem] transition-colors bg-surface-2 text-accent"[39m
+                  [33mdata-discover[39m=[32m"true"[39m
+                  [33mhref[39m=[32m"/"[39m
+                [36m>[39m
+                  [36m<svg[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"lucide lucide-plus size-4 shrink-0"[39m
+                    [33mfill[39m=[32m"none"[39m
+                    [33mheight[39m=[32m"24"[39m
+                    [33mstroke[39m=[32m"currentColor"[39m
+                    [33mstroke-linecap[39m=[32m"round"[39m
+                    [33mstroke-linejoin[39m=[32m"round"[39m
+                    [33mstroke-width[39m=[32m"2"[39m
+                    [33mviewBox[39m=[32m"0 0 24 24"[39m
+                    [33mwidth[39m=[32m"24"[39m
+                    [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                  [36m>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"M5 12h14"[39m
+                    [36m/>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"M12 5v14"[39m
+                    [36m/>[39m
+                  [36m</svg>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"flex-1"[39m
+                  [36m>[39m
+                    [0mNew[0m
+                  [36m</span>[39m
+                [36m</a>[39m
+              [36m</li>[39m
+              [36m<li>[39m
+                [36m<a[39m
+                  [33maria-label[39m=[32m"History"[39m
+                  [33mclass[39m=[32m"flex items-center gap-inline rounded-control px-inline py-inline font-ui text-[0.86rem] transition-colors text-text-muted hover:bg-surface-2 hover:text-text"[39m
+                  [33mdata-discover[39m=[32m"true"[39m
+                  [33mhref[39m=[32m"/history"[39m
+                [36m>[39m
+                  [36m<svg[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"lucide lucide-clock size-4 shrink-0"[39m
+                    [33mfill[39m=[32m"none"[39m
+                    [33mheight[39m=[32m"24"[39m
+                    [33mstroke[39m=[32m"currentColor"[39m
+                    [33mstroke-linecap[39m=[32m"round"[39m
+                    [33mstroke-linejoin[39m=[32m"round"[39m
+                    [33mstroke-width[39m=[32m"2"[39m
+                    [33mviewBox[39m=[32m"0 0 24 24"[39m
+                    [33mwidth[39m=[32m"24"[39m
+                    [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                  [36m>[39m
+                    [36m<circle[39m
+                      [33mcx[39m=[32m"12"[39m
+                      [33mcy[39m=[32m"12"[39m
+                      [33mr[39m=[32m"10"[39m
+                    [36m/>[39m
+                    [36m<polyline[39m
+                      [33mpoints[39m=[32m"12 6 12 12 16 14"[39m
+                    [36m/>[39m
+                  [36m</svg>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"flex-1"[39m
+                  [36m>[39m
+                    [0mHistory[0m
+                  [36m</span>[39m
+                [36m</a>[39m
+              [36m</li>[39m
+              [36m<li>[39m
+                [36m<a[39m
+                  [33maria-label[39m=[32m"Projects"[39m
+                  [33mclass[39m=[32m"flex items-center gap-inline rounded-control px-inline py-inline font-ui text-[0.86rem] transition-colors text-text-muted hover:bg-surface-2 hover:text-text"[39m
+                  [33mdata-discover[39m=[32m"true"[39m
+                  [33mhref[39m=[32m"/projects"[39m
+                [36m>[39m
+                  [36m<svg[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"lucide lucide-folder-git2 size-4 shrink-0"[39m
+                    [33mfill[39m=[32m"none"[39m
+                    [33mheight[39m=[32m"24"[39m
+                    [33mstroke[39m=[32m"currentColor"[39m
+                    [33mstroke-linecap[39m=[32m"round"[39m
+                    [33mstroke-linejoin[39m=[32m"round"[39m
+                    [33mstroke-width[39m=[32m"2"[39m
+                    [33mviewBox[39m=[32m"0 0 24 24"[39m
+                    [33mwidth[39m=[32m"24"[39m
+                    [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                  [36m>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"M9 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v5"[39m
+                    [36m/>[39m
+                    [36m<circle[39m
+                      [33mcx[39m=[32m"13"[39m
+                      [33mcy[39m=[32m"12"[39m
+                      [33mr[39m=[32m"2"[39m
+                    [36m/>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"M18 19c-2.8 0-5-2.2-5-5v8"[39m
+                    [36m/>[39m
+                    [36m<circle[39m
+                      [33mcx[39m=[32m"20"[39m
+                      [33mcy[39m=[32m"19"[39m
+                      [33mr[39m=[32m"2"[39m
+                    [36m/>[39m
+                  [36m</svg>[39m
+                  [36m<span[39m
+             ...
+ ❯ waitForWrapper node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ src/components/ResearchSurface.test.tsx:27:11
+     25|     // Wait for the FINISHED signal: follow-up pills render only once …
+     26|     // completes (phase !== "running" and the authoritative answer is …
+     27|     await waitFor(
+       |           ^
+     28|       () => expect(screen.getByRole("button", { name: /How is k chosen…
+     29|       { timeout: 3000 },
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 37 passed (38)
+      Tests  1 failed | 193 passed (194)
+   Start at  03:45:29
+   Duration  8.99s (transform 1.55s, setup 1.78s, collect 9.76s, tests 24.35s, environment 12.76s, prepare 3.12s)
+

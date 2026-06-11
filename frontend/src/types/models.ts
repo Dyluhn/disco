@@ -35,6 +35,14 @@ export interface ModelInfo {
   quantization?: string | null;
 }
 
+/** [CONTRACT] provider-neutral usage metrics (llm-router contract §7). */
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens?: number;
+  cost_usd?: number;
+}
+
 /** One model from the live OpenRouter catalogue (mirrors the backend DTO). */
 export interface OpenRouterModel {
   id: string; // slug, becomes the model's model_id
