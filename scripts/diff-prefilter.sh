@@ -49,10 +49,21 @@ $diff_text"
 errf="$(mktemp)"; trap 'rm -f "$errf"' EXIT
 export PMX_PREFILTER_PROMPT="$prompt"   # consumed by the local-Qwen fallback
 
-# ---- primary: gpt-oss-120b:free via pi (paid pi models REVOKED 2026-06-10) -----
-leads="$(pi --provider openrouter --model openai/gpt-oss-120b:free -p --no-session -nt -ne -ns -nc \
+# ---- primary: DeepSeek V4 Flash via DIRECT API (ROUTING.md item 3) --------------
+# Output contract: UNVERIFIED LEADS only — claim-vs-diff discrepancies that NARROW
+# what the Fable verifier must read. NEVER a verdict (bake-off: cheap reviewers
+# were 0/3 and confidently wrong). Tighter leads = less 2x Fable load.
+leads="$(DEEPSEEK_API_KEY=$(cat ~/.config/deepseek/api_key 2>/dev/null) \
+        pi --provider deepseek --model deepseek-v4-flash -p --no-session -nt -ne -ns -nc \
         "$prompt" 2>"$errf" | grep -v '^Warning: No models match' || true)"
-model="gpt-oss-120b:free"
+model="deepseek-v4-flash (direct)"
+
+# ---- fallback: gpt-oss-120b:free via pi ------------------------------------------
+if [ -z "$(printf '%s' "$leads" | tr -d '[:space:]')" ]; then
+  leads="$(pi --provider openrouter --model openai/gpt-oss-120b:free -p --no-session -nt -ne -ns -nc \
+          "$prompt" 2>"$errf" | grep -v '^Warning: No models match' || true)"
+  model="gpt-oss-120b:free (fallback)"
+fi
 
 # ---- fallback: local Qwen 27B (keyless, llama-server :18080) --------------------
 if [ -z "$(printf '%s' "$leads" | tr -d '[:space:]')" ]; then
