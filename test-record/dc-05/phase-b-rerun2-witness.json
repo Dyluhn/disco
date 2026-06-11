@@ -1,0 +1,26 @@
+{
+  "run": "phase-b-rerun-2",
+  "date": "2026-06-10",
+  "cid": "conv_af1741448d6b47779afc75fee6a9d794",
+  "code_under_test": "8d8bd92 (dc-05a f129a27 + dc-05b 18b8c5e + intercept-bypass fix)",
+  "verdict": "DESIGNED-FAIL — breakers correct, model behavior still degenerate post-resume",
+  "comparison_vs_rerun_1": {
+    "rerun_1": "conv_09b63d85: ~50 DeliverableEvents + ~20 prose, 0 real actions, STUCK at seq-121 (stuck detector, ~4.5 min of spam)",
+    "rerun_2": "conv_af174144: degeneration stopped at seq-33 by PAUSED actionless — 3 wasted turns (1 prose + 2 duplicate remembers), zero serve spam (dedup held)"
+  },
+  "what_worked": [
+    "dc-05b reconstruction: orphan reconcile at seq-21, RUNNING resumed at seq-23, reality block present",
+    "knowledge dedup: both duplicate remember calls got 'Already recorded — not stored again.' (seq 29, 31)",
+    "intercept-fix valve: duplicate-remember ActionEvents counted toward the actionless streak; cap-3 tripped at seq-32/33 with detail=actionless",
+    "no serve spam, no DeliverableEvent flood, no STUCK"
+  ],
+  "why_not_pass": "Harness does exactly one UI Resume then asserts FINISHED and 'not valve_fired'. The model self-conditions on its degenerate trailing transcript after resume (arXiv 2505.06120 / 2206.02369) and repeats remembered facts instead of acting. The valve is the guard rail; the behavioral fix is DC-05c resume-time condensation. This run is the locked 'before' datapoint the DC-05c brief requires.",
+  "post_resume_events": "seq 25 fresh knowledge, 26 prose, 27 near-dup knowledge (different hash), 28-31 two duplicate remembers, 32-33 valve PAUSED actionless",
+  "harness_disposition": "killed after capture — wait_ports_live had a 2400s deadline against a conversation that can never serve; outcome (valve_fired assert) already determined",
+  "evidence": [
+    "test-record/dc-05/phase-b-rerun2-events.json",
+    "test-record/screenshots/dc-05/phase-b-rerun2-valve-paused.png",
+    "test-record/screenshots/dc-05/phase-b-rerun2-valve-paused-tail.png"
+  ],
+  "next": "DC-05c dispatch (resume-time condensation) -> Phase B re-run #3 as the 'after' datapoint"
+}
