@@ -681,7 +681,8 @@ rp-05b-acceptance: committed
   - test-record/rp-05b/hostile_server.py
   - test-record/rp-05b/mcp-section-wired.png
   - test-record/rp-05b/mcp-add-form.png
-  - .orchestrate/review/rp-05b-acceptance-fable-brief.md
+  # (the pinned-Fable review brief lived at .orchestrate/review/ — gitignored scratch,
+  #  intentionally NOT tracked; its full two-round verdict is preserved in ACCEPTANCE.md)
 rp-05c: staged
   # §6 active-schema cap (tool_search). Carved out of rp-05a round-4: needs an
   # advertised-set / callable-set split in ToolScope+executor (today callability
