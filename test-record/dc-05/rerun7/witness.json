@@ -1,0 +1,26 @@
+{
+  "rerun": 7,
+  "date": "2026-06-11",
+  "cid": "conv_7b54d6ecb03d4f08b1a00f5b73d79d3f",
+  "designed_fail": true,
+  "shape": "finish-spam under an EMPTY toolset — exposed the TRUE ROOT CAUSE of the whole post-resume ladder",
+  "what_happened": [
+    "seq 25: resume marker after agent-server restart",
+    "seq 27/30/34/37/42: every post-resume action is a verify PROBE (thought 'Verifying completion: ...') from repeated finish calls — each fails agent_error 'no tools are available on this surface'",
+    "seq 40: 'You've failed 4 times in a row' analyzer feedback",
+    "seq 41: recovery_requested; seq 45: stuck_escape; seq 46: AlternativesEvent; seq 47: AWAITING_USER_DECISION; seq 48-49: harness 'Continue' -> continue_anyway loop (cannot ever succeed)",
+    "NO real (non-probe) action was ever offered or attempted post-resume"
+  ],
+  "root_cause": "ConversationRuntime._surface is in-memory only. After the restart, _surface_of's recovery ladder needs a project manifest on disk to derive 'build', but the manifest is ONLY written by _maybe_snapshot, which no-ops when projects_root is unconfigured (the Phase-B harness shape: PMX_DB=test-record/pmx-run.db, no projects root). The conversation fell through to the 'research' default -> _loop_for composed _NoToolExecutor -> available_tools() == [] -> under DC-05 withholding the model's ONLY offered tool was finish. The model wasn't degenerating; it picked the only tool it had.",
+  "reframe": "Re-runs #2-#6 are partially reframed: post-resume real work was structurally IMPOSSIBLE in this harness config all along. The meta escapes (prose spam, remember spam, ask_user-as-narration, premature finish) were partly rational responses to a toolless surface. The gates built along the way (withholding, backstops, probe provenance, valve) remain correct and are still required — they bound behavior when tools genuinely fail.",
+  "fix": [
+    "runtime.py __init__: _surface now loads from a persisted JSON sidecar f'{PMX_DB}.surfaces.json' (B0 model-override pattern)",
+    "runtime.py set_surface: persists via _save_surfaces() — a restart can no longer demote a Build/DR conversation to the toolless research default",
+    "runtime.py _surface_of: recovery-ladder hits (manifest->build, report->deep_research, plan-no-action->deep_research) are written through to the sidecar so the ladder runs at most once per cid; ladder retained as fallback for pre-fix sidecar-less DBs",
+    "runtime.py _load_surfaces: unknown surface values dropped on load (hand-edited/future sidecar cannot compose an invalid loop)",
+    "tests: test_surface_persists_across_restart_without_project_manifest (the exact Phase-B shape: root=None, fresh runtime = restart), test_surface_sidecar_drops_unknown_values"
+  ],
+  "executor_note": "No separate executor fix needed: _loop_for consults _surface_of once and surface=='build' -> _compose_build_loop provisions the real executor + sandbox. Persisting the surface restores the whole composition.",
+  "tests": "packages/core 433 passed, packages/agent-server 199 passed (197+2 new), ruff clean on touched files",
+  "next": "Phase B re-run #8 on the fixed server. Expectation: post-resume the model gets its REAL toolset back; the first genuinely-possible post-resume run of the whole ladder."
+}

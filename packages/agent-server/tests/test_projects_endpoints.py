@@ -227,3 +227,38 @@ def test_surface_recovery_defaults_to_research_when_no_manifest(store, tmp_path)
     # no project on disk → defaults to research, doesn't pollute _surface
     assert runtime._surface_of("conv_unknown") == "research"
     assert "conv_unknown" not in runtime._surface
+
+
+def test_surface_persists_across_restart_without_project_manifest(
+    store, tmp_path, monkeypatch
+):
+    """DC-05 re-run #7 (2026-06-11): with NO projects_root configured, the
+    manifest-based recovery ladder can never derive "build" — so a server
+    restart silently demoted a Build conversation to the research surface,
+    composing _NoToolExecutor. The model's only offered tool became `finish`
+    and every post-resume turn was a doomed finish→verify-probe loop. The
+    surface is now PERSISTED to a sidecar (B0 model-override pattern) so the
+    restart keeps it even with zero durable project state on disk."""
+    monkeypatch.setenv("PMX_DB", str(tmp_path / "events.db"))
+    cid = "conv_restart_survivor"
+    first = _runtime(store, root=None)  # ← no projects root: the Phase-B shape
+    first.set_surface(cid, "build")
+    assert (tmp_path / "events.db.surfaces.json").exists()
+
+    # A fresh runtime = a restarted server: in-memory dict starts from the sidecar.
+    second = _runtime(store, root=None)
+    assert second._surface_of(cid) == "build"
+
+
+def test_surface_sidecar_drops_unknown_values(store, tmp_path, monkeypatch):
+    """A hand-edited / future-versioned sidecar must not compose an invalid
+    loop: unknown surface strings are treated as never-set (ladder applies)."""
+    db = tmp_path / "events.db"
+    monkeypatch.setenv("PMX_DB", str(db))
+    (tmp_path / "events.db.surfaces.json").write_text(
+        '{"conv_ok": "deep_research", "conv_bad": "warp_core"}'
+    )
+    runtime = _runtime(store, root=None)
+    assert runtime._surface_of("conv_ok") == "deep_research"
+    # the invalid entry fell back to the ladder → research default
+    assert runtime._surface_of("conv_bad") == "research"

@@ -206,14 +206,6 @@ class ConversationRuntime:
         # drives the next conversation's sandbox without a restart.
         self._injected_sandbox = sandbox_service
         self._sandbox_spec = sandbox_spec or SandboxSpec()
-        # Per-conversation surface ("research" | "build"); set at create time. Kept in
-        # memory (no schema migration) — a server restart resets a conversation to the
-        # research default until re-selected. The Build executor + its broker are held
-        # so the kill switch can revoke them.
-        self._surface: dict[str, str] = {}
-        self._executors: dict[str, DefaultToolExecutor] = {}
-        self._pending_sessions: dict[str, SandboxSession] = {}
-        self._cap_handlers: dict[str, Any] | None = None
         # per-conversation driver model override (the Build chat model picker → the
         # AGENT_DRIVER for that conversation; RouterAgent applies it).
         # B0: PERSISTED (not just in-memory) — a server restart used to silently revert
@@ -222,6 +214,21 @@ class ConversationRuntime:
         db_path = os.environ.get("PMX_DB", "")
         self._override_path = f"{db_path}.overrides.json" if db_path else ""
         self._model_override: dict[str, str] = self._load_overrides()
+        # Per-conversation surface ("research" | "build" | "deep_research"); set at
+        # create time. PERSISTED to a JSON sidecar (B0 pattern, same as the model
+        # override above) — DC-05 re-run #7 (2026-06-11): after a server restart the
+        # in-memory dict was empty, _surface_of's recovery ladder needs a project
+        # manifest to derive "build" but the manifest is only written by
+        # _maybe_snapshot (which no-ops without a configured projects_root), so a
+        # resumed Build conversation silently composed on the research surface →
+        # _NoToolExecutor → the model's ONLY offered tool was `finish`. The whole
+        # post-resume "degeneration" was a toolless loop, not model failure. The
+        # _surface_of ladder stays as the fallback for pre-fix sidecar-less DBs.
+        self._surface_path = f"{db_path}.surfaces.json" if db_path else ""
+        self._surface: dict[str, str] = self._load_surfaces()
+        self._executors: dict[str, DefaultToolExecutor] = {}
+        self._pending_sessions: dict[str, SandboxSession] = {}
+        self._cap_handlers: dict[str, Any] | None = None
         # per-conversation Deep Research depth tier (set at submit time).
         self._depth: dict[str, str] = {}
         # The encrypted-at-rest secret store (OpenRouter key). Its decrypted key is
@@ -328,19 +335,23 @@ class ConversationRuntime:
         """Select a conversation's surface before it runs. Build composes tools +
         sandbox + the BlastRadiusConfirm gate; Deep Research composes the plan-gate +
         the long-horizon engine; Research stays read-only + ungated. Idempotent
-        until the loop is built."""
+        until the loop is built. PERSISTED so a server restart cannot demote a
+        Build/DR conversation to the toolless research default (DC-05 re-run #7)."""
         self._surface[conversation_id] = (
             surface if surface in self._VALID_SURFACES else "research"
         )
+        self._save_surfaces()
 
     def _surface_of(self, conversation_id: str) -> str:
         """The conversation's surface, recovered durably across server restarts.
-        In-memory `_surface` is authoritative when set (the create-time POST path
-        sets it). When it's missing — typical after a server restart — we DERIVE
-        from durable signals on disk / on the event log:
+        In-memory `_surface` is authoritative when set — at create time via
+        set_surface (which persists to the sidecar) or reloaded from the sidecar
+        at startup. When it's missing — a pre-sidecar DB, or a sidecar lost with
+        its DB — we DERIVE from durable signals on disk / on the event log:
         - a project manifest on disk → Build (Research never snapshots).
         - a ReportEvent on the conversation log → Deep Research.
-        Defaults to "research" when no durable signal exists."""
+        Defaults to "research" when no durable signal exists. Recoveries are
+        written through to the sidecar so the ladder runs at most once per cid."""
         cached = self._surface.get(conversation_id)
         if cached is not None:
             return cached
@@ -348,8 +359,10 @@ class ConversationRuntime:
         if store is not None and store.status() == StorageStatus.OK:
             try:
                 if store.get(conversation_id) is not None:
-                    # cache the recovery so subsequent lookups don't re-stat the FS
+                    # cache + persist the recovery so subsequent lookups (and the
+                    # next restart) don't re-derive
                     self._surface[conversation_id] = "build"
+                    self._save_surfaces()
                     return "build"
             except Exception:  # noqa: BLE001 — best-effort recovery
                 pass
@@ -368,12 +381,14 @@ class ConversationRuntime:
                 }
                 if "report" in kinds:
                     self._surface[conversation_id] = "deep_research"
+                    self._save_surfaces()
                     return "deep_research"
                 # plan-event without any action-event marks a deep-research paused
                 # at its plan gate (Build that survived a restart would also have
                 # an on-disk project manifest, caught above).
                 if "plan" in kinds and "action" not in kinds:
                     self._surface[conversation_id] = "deep_research"
+                    self._save_surfaces()
                     return "deep_research"
         except Exception:  # noqa: BLE001 — best-effort recovery
             pass
@@ -413,6 +428,30 @@ class ConversationRuntime:
         try:
             with open(self._override_path, "w") as f:
                 json.dump(self._model_override, f)
+        except Exception:  # noqa: BLE001 — persistence is best-effort, never fatal
+            pass
+
+    def _load_surfaces(self) -> dict[str, str]:
+        """The persisted surface map (sidecar next to PMX_DB). Unknown values are
+        dropped (treated as never-set → the recovery ladder still applies), so a
+        hand-edited or future-versioned sidecar can't compose an invalid loop."""
+        if self._surface_path and os.path.exists(self._surface_path):
+            try:
+                with open(self._surface_path) as f:
+                    data = json.load(f)
+                return {
+                    str(k): str(v) for k, v in data.items() if v in self._VALID_SURFACES
+                }
+            except Exception:  # noqa: BLE001 — corrupt/missing → start empty, never crash
+                return {}
+        return {}
+
+    def _save_surfaces(self) -> None:
+        if not self._surface_path:
+            return
+        try:
+            with open(self._surface_path, "w") as f:
+                json.dump(self._surface, f)
         except Exception:  # noqa: BLE001 — persistence is best-effort, never fatal
             pass
 
