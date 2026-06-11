@@ -2213,7 +2213,32 @@ class AgentLoop:
                     action = action.model_copy(update={"meta": audited_meta})
                 else:
                     risk = self.analyzer.assess(action)
-                if self.policy.should_confirm(risk):
+
+                # DC-03: obtain WHERE the tool executes (duck-typed; absent → "unknown").
+                _scope_fn = getattr(self.executor, "tool_scope", None)
+                _tool_scope = "unknown"
+                if callable(_scope_fn):
+                    try:
+                        _tool_scope = _scope_fn(action.tool_call.tool_name)
+                    except Exception:
+                        _tool_scope = "unknown"
+
+                # Use should_confirm_action if the policy supports it; fall back to
+                # should_confirm(risk) for policies that predate DC-03.
+                _sca = getattr(self.policy, "should_confirm_action", None)
+                if callable(_sca):
+                    _gates = _sca(risk, scope=_tool_scope, tool_name=action.tool_call.tool_name)
+                else:
+                    _gates = self.policy.should_confirm(risk)
+
+                # Journal: stamp auto_approved when scope-based exemption overrides
+                # what the base risk gate would have decided.
+                if not _gates and self.policy.should_confirm(risk):
+                    action = action.model_copy(
+                        update={"meta": {**action.meta, "auto_approved": "sandboxed"}}
+                    )
+
+                if _gates:
                     await self._emit(action)  # record the PROPOSED action
                     await self._emit(
                         StatusEvent(

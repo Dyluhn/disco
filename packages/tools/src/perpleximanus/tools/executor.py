@@ -53,6 +53,14 @@ class DefaultToolExecutor:
 
     # ---- the ToolExecutor protocol ------------------------------------------
 
+    def tool_scope(self, tool_name: str) -> str:
+        """'sandbox' | 'in_process' | 'unknown' — where this tool executes.
+        Policy input for the blast-radius gate (DC-03)."""
+        for tool in self._registry.in_scope(self._scope):
+            if tool.definition.name == tool_name:
+                return tool.definition.runs_in
+        return "unknown"
+
     def available_tools(self) -> list[ToolSpec]:
         return [t.definition.to_spec() for t in self._registry.in_scope(self._scope)]
 

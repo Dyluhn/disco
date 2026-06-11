@@ -415,7 +415,7 @@ dc-02: committed
   - packages/agent-server/tests/test_override_persistence.py
   - test-record/dc-02/units.log
   - agent-projects/gemini/dc-02-report.md
-dc-03: in-flight
+dc-03: committed
   - packages/core/src/perpleximanus/core/loop/policies.py
   - packages/core/src/perpleximanus/core/loop/engine.py
   - packages/tools/src/perpleximanus/tools/executor.py

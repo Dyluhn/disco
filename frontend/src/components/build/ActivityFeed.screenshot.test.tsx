@@ -21,6 +21,13 @@ const BASE_ITEM: ActivityItem = {
   },
 };
 
+const AUTO_APPROVED_ITEM: ActivityItem = {
+  ...BASE_ITEM,
+  id: "act-auto",
+  label: "Ran a command",
+  autoApproved: true,
+};
+
 const ITEM_WITH_SCREENSHOT: ActivityItem = {
   ...BASE_ITEM,
   expandable: {
@@ -64,5 +71,23 @@ describe("ActivityFeed — screenshot thumbnails (BP-15)", () => {
   it("renders no thumbnail when conversationId not provided", () => {
     render(<ActivityFeed items={[ITEM_WITH_SCREENSHOT]} />);
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  });
+});
+
+describe("ActivityFeed — auto · sandboxed badge (DC-03)", () => {
+  it("renders 'auto · sandboxed' badge when autoApproved is true", () => {
+    render(<ActivityFeed items={[AUTO_APPROVED_ITEM]} />);
+    expect(screen.getByText(/auto · sandboxed/i)).toBeInTheDocument();
+  });
+
+  it("does NOT render badge when autoApproved is absent", () => {
+    render(<ActivityFeed items={[BASE_ITEM]} />);
+    expect(screen.queryByText(/auto · sandboxed/i)).not.toBeInTheDocument();
+  });
+
+  it("does NOT render badge when autoApproved is false", () => {
+    const item: ActivityItem = { ...BASE_ITEM, autoApproved: false };
+    render(<ActivityFeed items={[item]} />);
+    expect(screen.queryByText(/auto · sandboxed/i)).not.toBeInTheDocument();
   });
 });

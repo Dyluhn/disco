@@ -20,7 +20,16 @@ from ..security import at_or_above  # the safe threshold comparator (security §
 # ---- confirmation policies (security-analyzer-contract.md §5) ---------------
 
 
-class NeverConfirm:
+class _ConfirmActionMixin:
+    """Default should_confirm_action for policies that don't override it.
+    Delegates to should_confirm(risk) — NeverConfirm/AlwaysConfirm/ConfirmRisky
+    keep byte-identical behavior through the new entry point (DC-03)."""
+
+    def should_confirm_action(self, risk: SecurityRisk, *, scope: str, tool_name: str) -> bool:
+        return self.should_confirm(risk)  # type: ignore[attr-defined]
+
+
+class NeverConfirm(_ConfirmActionMixin):
     """Never gate — the Research surface default (read-only scope, §8)."""
 
     name = "never_confirm"
@@ -29,7 +38,7 @@ class NeverConfirm:
         return False
 
 
-class AlwaysConfirm:
+class AlwaysConfirm(_ConfirmActionMixin):
     """Gate every action (maximally cautious)."""
 
     name = "always_confirm"
@@ -38,7 +47,7 @@ class AlwaysConfirm:
         return True
 
 
-class ConfirmRisky:
+class ConfirmRisky(_ConfirmActionMixin):
     """Gate when risk is at/above a threshold, and (by default) on UNKNOWN — the
     Agent surface default. Confirm-on-UNKNOWN is the safe default (§5 / principle
     4); UNKNOWN is never ranked, it is handled explicitly."""
@@ -55,6 +64,34 @@ class ConfirmRisky:
         if risk == SecurityRisk.UNKNOWN:
             return self._confirm_unknown
         return at_or_above(risk, self._threshold)
+
+
+# Keywords whose presence in a tool name triggers the belt+braces publish guard
+# (mirrors analyzers.py:192's heuristic — publishing leaves the blast radius).
+_PUBLISH_KEYWORDS = frozenset({"deploy", "publish", "release"})
+
+
+class BlastRadiusConfirm(ConfirmRisky):
+    """Build-surface gate policy: auto-approve sandboxed ops; gate host-scope and
+    unknown-scope ops using ConfirmRisky semantics.
+
+    The sandbox IS the blast radius — egress is proxy-enforced, catastrophes are
+    hard-denied pre-gate, and loops are breaker-guarded.  Sandboxed confinement
+    is the argument, not the risk score: even UNKNOWN in-sandbox → auto-approve.
+
+    Belt+braces publish guard: any tool whose name contains 'deploy', 'publish',
+    or 'release' gates regardless of scope (publishing leaves the blast radius).
+    """
+
+    name = "blast_radius_confirm"
+
+    def should_confirm_action(self, risk: SecurityRisk, *, scope: str, tool_name: str) -> bool:
+        if any(kw in tool_name for kw in _PUBLISH_KEYWORDS):
+            return True  # publish guard — always gate, scope doesn't matter
+        if scope == "sandbox":
+            return False  # sandboxed: confinement is the guarantee, not the score
+        # in_process or unknown → fall back to ConfirmRisky semantics (conservative)
+        return self.should_confirm(risk)
 
 
 # ---- provisional analyzers (the Security contract will supersede these) ------

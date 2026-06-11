@@ -46,6 +46,9 @@ export interface ActivityItem {
   status: "done" | "running" | "pending" | "failed" | "pending_send";
   attention: boolean; // confidence gradient: risky/novel steps float up, routine recede
   risk?: SecurityRisk;
+  /** True when the engine auto-approved a sandboxed op that would have gated
+   * under the base risk policy. Informational-only; never raises attention. */
+  autoApproved?: boolean;
 }
 
 const VERB: Record<string, (a: Record<string, unknown>) => string> = {
@@ -152,6 +155,7 @@ export function deriveActivity(
         status: st,
         attention: isPending || risk === "HIGH" || risk === "UNKNOWN" || st === "failed",
         risk,
+        autoApproved: e.meta?.auto_approved === "sandboxed",
       });
     } else if (e.kind === "message" && e.source === "user") {
       // User input (steer/send_message/revise) — render verbatim. The optimistic

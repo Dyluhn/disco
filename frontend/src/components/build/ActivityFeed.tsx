@@ -222,6 +222,11 @@ export function ActivityFeed({
                     needs approval
                   </span>
                 )}
+                {item.autoApproved && (
+                  <span className="ml-inline font-ui text-[0.7rem] uppercase tracking-wide text-text-faint">
+                    auto · sandboxed
+                  </span>
+                )}
               </span>
               {/* The agent's natural-language thought — NEVER truncated, always
                   shown wrapped. Swallowing this was the most painful UX bug. */}
