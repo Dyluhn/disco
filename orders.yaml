@@ -571,7 +571,19 @@ rp-06: committed
   - test-record/rp-06/units-frontend.log
   - agent-projects/gemini/rp-06-report.md
   - agent-projects/gemini/rp-06-fix1-report.md
-rp-05a: staged
+df-08: done  # committed 272f59e — Fable single-round APPROVE (8/8 PASS); llm-layer, disjoint from rp-05b
+  # actual touch set (worker reconciled): openai_provider.py NOT touched (OR-path
+  # image_url serialization already correct); escalation test in a dedicated new
+  # file, not the manifest's stubs; perpleximanus-config.json is gitignored
+  # (local default mirrors the committed config.py default_config() default).
+  - packages/core/src/perpleximanus/core/llm/config.py
+  - packages/core/src/perpleximanus/core/llm/routing.py
+  - packages/core/tests/test_vision_wiring.py
+  - packages/core/tests/test_df08_vision_escalation.py
+  - test-record/df-08/units-core.log
+  - test-record/df-08/units-server.log
+  - agent-projects/gemini/df-08-report.md
+rp-05a: committed  # done 247b81b — Fable round-4 APPROVE (8/8 PASS)
   - packages/tools/pyproject.toml
   - uv.lock
   - packages/tools/src/perpleximanus/tools/mcp/__init__.py
@@ -584,8 +596,11 @@ rp-05a: staged
   - packages/tools/src/perpleximanus/tools/mcp/migrations.py
   - packages/core/src/perpleximanus/core/llm/config.py
   - packages/core/src/perpleximanus/core/llm/secrets.py
+  - packages/core/src/perpleximanus/core/llm/__init__.py
+  - packages/core/src/perpleximanus/core/store/sqlite.py
   - packages/agent-server/src/perpleximanus/agent_server/runtime.py
   - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/core/src/perpleximanus/core/wire.py
   - packages/agent-server/tests/test_mcp_pool.py
   - packages/tools/tests/mcp_fakes.py
   - packages/tools/tests/test_mcp_transport.py
@@ -596,7 +611,15 @@ rp-05a: staged
   - test-record/rp-05a/units-server.log
   - test-record/rp-05a/units-core.log
   - agent-projects/gemini/rp-05a-report.md
-rp-05b: staged
+# rp-05b (rung B) split into two worker-sized, FILE-DISJOINT dispatches so each
+# fits a single-shot worker and shrinks the gaming surface. The workorder's
+# rung-B 5-drill end-to-end acceptance gate is UNCHANGED — it is the
+# orchestrator's live step after both halves land + pass Fable review.
+#   rp-05b-py = backend security core (transport/egress/fence/retrieval + wiring)
+#   rp-05b-ui = surface (app-server CRUD endpoints + frontend McpSection)
+# Disjoint: py owns mcp/__init__.py + agent-server/{runtime,app}.py; ui owns
+# app-server/* + frontend/*. No shared file → both run in parallel.
+rp-05b-py: in-flight
   - packages/tools/src/perpleximanus/tools/mcp/__init__.py
   - packages/tools/src/perpleximanus/tools/mcp/http.py
   - packages/tools/src/perpleximanus/tools/mcp/retrieval_tier.py
@@ -609,6 +632,11 @@ rp-05b: staged
   - packages/agent-server/tests/test_mcp_retrieval_tier.py
   - packages/agent-server/tests/test_mcp_fence.py
   - packages/agent-server/tests/test_mcp_poisoning.py
+  - test-record/rp-05b/units-tools.log
+  - test-record/rp-05b/units-server.log
+  - agent-projects/gemini/rp-05b-py-report.md
+  - docs/workorders/RP-05b-orchestrator-proxy-decision.md
+rp-05b-ui: in-flight
   - packages/app-server/src/perpleximanus/app_server/app.py
   - packages/app-server/src/perpleximanus/app_server/config_state.py
   - packages/app-server/tests/test_mcp_endpoints.py
@@ -618,11 +646,27 @@ rp-05b: staged
   - frontend/src/components/settings/McpSection.tsx
   - frontend/src/components/settings/McpSection.live.test.tsx
   - frontend/src/components/settings/McpSection.approval.test.tsx
-  - test-record/rp-05b/units-tools.log
-  - test-record/rp-05b/units-server.log
   - test-record/rp-05b/units-app-server.log
   - test-record/rp-05b/units-frontend.log
-  - agent-projects/gemini/rp-05b-report.md
-  - test-record/rp-05b/units-tools.log
-  - test-record/rp-05b/units-server.log
-  - agent-projects/gemini/rp-05b-report.md
+  - agent-projects/gemini/rp-05b-ui-report.md
+  # orchestrator-owned rung-A scaffold transitions (worker must not touch existing
+  # tests; §5 mandates the behavior change these pinned, so the orchestrator updates
+  # them to assert rung-B behavior — reviewed by pinned-Fable as part of the UI diff):
+  - packages/app-server/tests/test_app.py
+  - frontend/src/views/settings.test.tsx
+rp-05c: staged
+  # §6 active-schema cap (tool_search). Carved out of rp-05a round-4: needs an
+  # advertised-set / callable-set split in ToolScope+executor (today callability
+  # == visibility == allowed_tools∩registry) so the LLM sees tool_search only
+  # over-cap yet can still call any tool by qualified name. Cross-cutting core
+  # change — its own order + its own Fable review.
+  - packages/tools/src/perpleximanus/tools/executor.py
+  - packages/tools/src/perpleximanus/tools/registry.py
+  - packages/tools/src/perpleximanus/tools/anatomy.py
+  - packages/tools/src/perpleximanus/tools/mcp/tool_search.py
+  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/tools/tests/test_scope_advertise_split.py
+  - packages/agent-server/tests/test_mcp_tool_search_cap.py
+  - test-record/rp-05c/units-tools.log
+  - test-record/rp-05c/units-server.log
+  - agent-projects/gemini/rp-05c-report.md
