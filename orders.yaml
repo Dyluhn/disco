@@ -615,6 +615,12 @@ rp-05a: committed  # done 247b81b — Fable round-4 APPROVE (8/8 PASS)
 # fits a single-shot worker and shrinks the gaming surface. The workorder's
 # rung-B 5-drill end-to-end acceptance gate is UNCHANGED — it is the
 # orchestrator's live step after both halves land + pass Fable review.
+# ACCEPTANCE 2026-06-11: all 5 §6 drills GREEN against the real stack (FREE
+# or-gpt-oss-120b-free driver, real subprocess/SDK MCP servers, real gvisor box +
+# egress sidecar) and PASSED pinned-Fable adversarial review (round 1 REJECT on
+# drill 5 → control reworked to a gated raw-ingestion check → round 2 APPROVE).
+# Record + evidence: test-record/rp-05b/ACCEPTANCE.md. The "NotWired" banner removal
+# already in committed rp-05b-ui is thereby empirically justified. See rp-05b-acceptance.
 #   rp-05b-py = backend security core (transport/egress/fence/retrieval + wiring)
 #   rp-05b-ui = surface (app-server CRUD endpoints + frontend McpSection)
 # Disjoint: py owns mcp/__init__.py + agent-server/{runtime,app}.py; ui owns
@@ -655,6 +661,27 @@ rp-05b-ui: committed
   # them to assert rung-B behavior — reviewed by pinned-Fable as part of the UI diff):
   - packages/app-server/tests/test_app.py
   - frontend/src/views/settings.test.tsx
+# Orchestrator-owned acceptance record (NOT a worker order). Status `accepted` so the
+# orchestrate shared-file gate never reads it as a live `committed` order. Files are
+# the §6 5-drill harness + verbatim logs + UI screenshots + the consolidated record;
+# all disjoint from every pending order, so no collision.
+rp-05b-acceptance: committed
+  - test-record/rp-05b/ACCEPTANCE.md
+  - test-record/rp-05b/_accept_common.py
+  - test-record/rp-05b/drill1-units.log
+  - test-record/rp-05b/drill2_stdio_process.py
+  - test-record/rp-05b/drill2-stdio-process.log
+  - test-record/rp-05b/drill3_http_gvisor_egress.py
+  - test-record/rp-05b/drill3-http-gvisor-egress.log
+  - test-record/rp-05b/drill4_poisoning.py
+  - test-record/rp-05b/drill4-poisoning.log
+  - test-record/rp-05b/poison_server.py
+  - test-record/rp-05b/drill5_fenced_output.py
+  - test-record/rp-05b/drill5-fenced-output.log
+  - test-record/rp-05b/hostile_server.py
+  - test-record/rp-05b/mcp-section-wired.png
+  - test-record/rp-05b/mcp-add-form.png
+  - .orchestrate/review/rp-05b-acceptance-fable-brief.md
 rp-05c: staged
   # §6 active-schema cap (tool_search). Carved out of rp-05a round-4: needs an
   # advertised-set / callable-set split in ToolScope+executor (today callability

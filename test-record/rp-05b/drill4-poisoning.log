@@ -1,0 +1,20 @@
+McpPool: server 'fake_srv' refused — description_hash changed (000000000000 → 4734a9958a84) — re-approval required
+McpPool: server 'fake_srv' refused — description_hash changed (000000000000 → a2d8bb1d9130) — re-approval required
+McpPool: server 'fake_srv' refused — description_hash changed (4734a9958a84 → a2d8bb1d9130) — re-approval required
+session1 clean: status={'fake_srv': 'connected'}  approved H_clean=4734a9958a84…
+session2 poison: status={'fake_srv': 'approval_required'}  pending old=4734a9958a84… new=a2d8bb1d9130…  poisoned_tools_exposed=[]
+runtime banner (mcp_approval_required source): {'fake_srv': {'old_hash': '4734a9958a84808d75072eaf86353607f4dfa9093d3aa1b8e056843125a045b4', 'new_hash': 'a2d8bb1d91308961be61fb8a905635c34615f67ee8a0648beff60e01752fb443'}}
+session3 re-approved: status={'fake_srv': 'connected'}
+
+--- checks ---
+  [PASS] s1_clean_connected
+  [PASS] hash_actually_changed
+  [PASS] s2_refused
+  [PASS] pending_has_server
+  [PASS] pending_old_is_clean
+  [PASS] pending_new_is_poison
+  [PASS] no_poisoned_tools_in_snapshot
+  [PASS] runtime_banner_pending
+  [PASS] s3_reapproved_connected
+
+  [PASS] poisoning drill: description-hash pin refused the mutated server, raised the re-approval banner, withheld its tools, and re-connected only after explicit re-approval
