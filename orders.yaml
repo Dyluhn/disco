@@ -519,3 +519,44 @@ rp-14: committed
   - frontend/src/lib/cost.test.ts
   - test-record/rp-14/units-frontend.log
   - agent-projects/gemini/rp-14-report.md
+
+rp-03: staged
+  - frontend/src/types/grounded.ts
+  - frontend/src/components/blocks.tsx
+  - frontend/src/components/ChartBlock.test.tsx
+  - frontend/package.json
+  - packages/retrieval/src/perpleximanus/retrieval/streaming.py
+  - packages/retrieval/src/perpleximanus/retrieval/deep_research/synthesis.py
+  - packages/retrieval/tests/test_chart_blocks.py
+  - test-record/rp-03/units-retrieval.log
+  - test-record/rp-03/units-frontend.log
+  - agent-projects/gemini/rp-03-report.md
+rp-04: staged
+  - packages/core/src/perpleximanus/core/llm/openai_provider.py
+  - packages/core/tests/test_toolcall_defense.py
+  - packages/retrieval/src/perpleximanus/retrieval/deep_research/engine.py
+  - packages/retrieval/tests/test_pipeline_invariants.py
+  - test-record/rp-04/units-core.log
+  - test-record/rp-04/units-retrieval.log
+  - agent-projects/gemini/rp-04-report.md
+dc-07: staged
+  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/core/src/perpleximanus/core/llm/prompts.py
+  - packages/agent-server/tests/test_upload.py
+  - test-record/dc-07/units-server.log
+  - test-record/dc-07/units-core.log
+  - agent-projects/gemini/dc-07-report.md
+rp-06: staged
+  - frontend/src/lib/buildTrace.ts
+  - frontend/src/lib/useReplay.test.ts
+  - frontend/src/api/agent.ts
+  - frontend/src/views/ShareView.tsx
+  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/src/perpleximanus/agent_server/redaction.py
+  - packages/agent-server/tests/test_share.py
+  - packages/agent-server/tests/test_redaction.py
+  - test-record/rp-06/units-server.log
+  - test-record/rp-06/units-frontend.log
+  - agent-projects/gemini/rp-06-report.md
