@@ -42,12 +42,14 @@ from ..events import (
     PlanStep,
     StatusEvent,
     ToolCall,
+    ToolResult,
 )
 from ..llm import (
     Difficulty,
     LLMContextWindowExceeded,
     LLMError,
     LLMRouter,
+    LLMTransientError,
     OperatingMode,
     OverflowSignal,
 )
@@ -59,6 +61,9 @@ from .stream_extract import extract_partial_string_field
 from .stuck import StuckDetector, StuckThresholds
 
 _LOG = logging.getLogger("perpleximanus.loop")
+
+_sleep = asyncio.sleep
+_DRIVER_RETRY_BACKOFFS_S: tuple = (10.0, 30.0, 90.0)
 
 # D2: the reserved AlternativesEvent option id for "Continue anyway" — the bypass the
 # user can always pick at the circuit-breaker gate to reset the failure streak and let
@@ -720,6 +725,8 @@ class AgentLoop:
         self._plan_nudges = 0  # consecutive nudges while planning (safety cap)
         self._execution_nudges = 0  # consecutive "you must act" nudges in execution
         self._browser_verify_refusals = 0  # consecutive browser-verification refusals
+        # Actionless-step breaker cap (DEFECT-4)
+        self._ACTIONLESS_BREAK_CAP: int = 3
         # GAP B backstop: max tool-less prose turns in a row before the loop ends
         # the run (a talking-without-acting model can't advance max_iterations).
         self._max_consecutive_noops = 6
@@ -1178,6 +1185,24 @@ class AgentLoop:
         total = len(plan.steps)
         missing = [i + 1 for i in range(total) if (i + 1) not in done]
         return (bool(missing), missing)
+
+    @staticmethod
+    def _actions_since_last_resume(events: list[Event]) -> int:
+        """Count ActionEvents (excluding meta/bookkeeping tools) since the last
+        StatusEvent(RUNNING, detail="resumed") or since start."""
+        count = 0
+        bookkeeping = {"submit_plan", "propose_plan_update", "plan_step", "finish"}
+        for e in reversed(events):
+            if (
+                isinstance(e, StatusEvent)
+                and e.status == ConversationStatus.RUNNING
+                and e.detail == "resumed"
+            ):
+                break
+            if isinstance(e, ActionEvent) and e.tool_call is not None:
+                if e.tool_call.tool_name not in bookkeeping:
+                    count += 1
+        return count
 
     @staticmethod
     def _plan_step_lag_signal(events: list[Event]) -> bool:
@@ -1690,14 +1715,44 @@ class AgentLoop:
                 in_escape = escape_seq is not None and not acted_since_escape
                 escape_temp = _STUCK_ESCAPE_TEMP if in_escape else None
                 try:
-                    step = await self.agent.step(
-                        view,
-                        self._tools_for_step(),
-                        mode=self.mode,
-                        overflow_signal=self._overflow_signal(events),
-                        on_stream=self._build_stream_hook(),
-                        temperature=escape_temp,
-                    )
+                    attempts = 0
+                    while True:
+                        try:
+                            step = await self.agent.step(
+                                view,
+                                self._tools_for_step(),
+                                mode=self.mode,
+                                overflow_signal=self._overflow_signal(events),
+                                on_stream=self._build_stream_hook(),
+                                temperature=escape_temp,
+                            )
+                            break
+                        except LLMContextWindowExceeded:
+                            raise  # handled by view-materialization hard-reset (§8)
+                        except LLMTransientError:
+                            if attempts < len(_DRIVER_RETRY_BACKOFFS_S):
+                                await _sleep(_DRIVER_RETRY_BACKOFFS_S[attempts])
+                                attempts += 1
+                            else:
+                                await self._emit(
+                                    MessageEvent(
+                                        source=EventSource.ENVIRONMENT,
+                                        message=LLMMessage(
+                                            role="user",
+                                            content=(
+                                                "model driver unavailable — conversation"
+                                                " paused, resume when the model is back"
+                                            ),
+                                        ),
+                                    )
+                                )
+                                await self._emit(
+                                    StatusEvent(
+                                        status=ConversationStatus.PAUSED,
+                                        detail="driver-unavailable",
+                                    )
+                                )
+                                return await self.get_state()
                 except LLMContextWindowExceeded:
                     if await self._hard_reset(await self._events()):
                         continue  # retry the step on the condensed view
@@ -1744,16 +1799,42 @@ class AgentLoop:
                     # working right after. A blank fact is ignored (no-op).
                     fact = str(step.tool_call.arguments.get("fact") or "").strip()
                     if fact:
+                        import hashlib
                         scope = str(step.tool_call.arguments.get("scope") or "").strip()
-                        await self._emit(
-                            KnowledgeEvent(source=EventSource.AGENT, scope=scope, snippet=fact)
-                        )
+                        normalized = fact
+                        fact_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+                        seen = {
+                            (e.scope, hashlib.sha256(e.snippet.strip().encode("utf-8")).hexdigest())
+                            for e in events if isinstance(e, KnowledgeEvent)
+                        }
+                        if (scope, fact_hash) in seen:
+                            action = ActionEvent(
+                                thought=step.thought,
+                                tool_call=step.tool_call,
+                                self_assessed_risk=step.self_assessed_risk,
+                                llm_response_id=step.llm_response_id,
+                            )
+                            res = ToolResult(
+                                call_id=step.tool_call.call_id,
+                                tool_name="remember",
+                                success=True,
+                                content="Already recorded — not stored again.",
+                            )
+                            await self._emit(action)
+                            await self._emit(ObservationEvent(tool_result=res, action_id=action.id))
+                        else:
+                            await self._emit(
+                                KnowledgeEvent(source=EventSource.AGENT, scope=scope, snippet=fact)
+                            )
                     continue  # non-blocking — keep working
                 if step.tool_call is not None and step.tool_call.tool_name == "serve":
                     # Finished-artifact HANDOFF: emit a DeliverableEvent the UI renders
                     # as Open-the-app / Download-the-files. Non-blocking — the agent
                     # serves, verifies, then finishes. A missing path/title is ignored
                     # (no-op) rather than emitting a useless handoff.
+                    if not step.tool_call.arguments:
+                        _LOG.debug("Skipping deliverable emission: empty payload from agent")
+                        continue
                     title = str(step.tool_call.arguments.get("title") or "").strip()
                     path = str(step.tool_call.arguments.get("path") or "").strip()
                     kind = str(step.tool_call.arguments.get("kind") or "app").strip()
@@ -1995,29 +2076,52 @@ class AgentLoop:
                             # and can steer if more work is needed. STUCK is
                             # reserved for genuine confusion (stuck detector),
                             # not for "model couldn't quite finish the bookkeeping".
-                            await self._emit(
-                                MessageEvent(
-                                    source=EventSource.ENVIRONMENT,
-                                    message=LLMMessage(
-                                        role="user",
-                                        content=(
-                                            "<system-reminder>\n"
-                                            f"After {self._auto_continue_cap} auto-continues, "
-                                            f"plan steps {missing} are still not marked done. "
-                                            "Landing the run as FINISHED with partial-plan "
-                                            "detail — the user can review and steer if more "
-                                            "work is needed.\n"
-                                            "</system-reminder>"
+                            actions_since = self._actions_since_last_resume(events)
+                            if actions_since == 0:
+                                await self._emit(
+                                    MessageEvent(
+                                        source=EventSource.ENVIRONMENT,
+                                        message=LLMMessage(
+                                            role="user",
+                                            content=(
+                                                "<system-reminder>\n⚠ finishing was"
+                                                " blocked: plan steps remain undone and"
+                                                " no work happened in this run segment."
+                                                "\n</system-reminder>"
+                                            ),
+                                        )
+                                    )
+                                )
+                                await self._emit(
+                                    StatusEvent(
+                                        status=ConversationStatus.PAUSED,
+                                        detail="partial_plan",
+                                    )
+                                )
+                            else:
+                                await self._emit(
+                                    MessageEvent(
+                                        source=EventSource.ENVIRONMENT,
+                                        message=LLMMessage(
+                                            role="user",
+                                            content=(
+                                                "<system-reminder>\n"
+                                                f"After {self._auto_continue_cap} auto-continues, "
+                                                f"plan steps {missing} are still not marked done. "
+                                                "Landing the run as FINISHED with partial-plan "
+                                                "detail — the user can review and steer if more "
+                                                "work is needed.\n"
+                                                "</system-reminder>"
+                                            ),
                                         ),
-                                    ),
+                                    )
                                 )
-                            )
-                            await self._emit(
-                                StatusEvent(
-                                    status=ConversationStatus.FINISHED,
-                                    detail="partial_plan",
+                                await self._emit(
+                                    StatusEvent(
+                                        status=ConversationStatus.FINISHED,
+                                        detail="partial_plan",
+                                    )
                                 )
-                            )
                             return await self.get_state()
                         await self._emit(StatusEvent(status=ConversationStatus.FINISHED))
                         return await self.get_state()
@@ -2043,32 +2147,81 @@ class AgentLoop:
                                 message=LLMMessage(role="assistant", content=step.thought),
                             )
                         )
-                    noops = self._consecutive_noops(await self._events())
-                    if noops >= self._max_consecutive_noops:
-                        # The model is talking without acting and won't stop —
-                        # end cleanly rather than spin. (A real run resumes on a
-                        # user steer; the prompt steers toward finish/act.)
+                    events = await self._events()
+                    noops = self._consecutive_noops(events)
+                    if not step.thought.strip():
+                        noops += 1
+
+                    incomplete, _ = self._plan_is_incomplete(events)
+                    if incomplete and noops >= self._ACTIONLESS_BREAK_CAP:
                         await self._emit(
                             MessageEvent(
                                 source=EventSource.ENVIRONMENT,
                                 message=LLMMessage(
                                     role="user",
                                     content=(
-                                        "<system-reminder>\n"
-                                        f"You have sent {noops} messages in a row without "
-                                        "calling a tool. Ending the run. To continue, the "
-                                        "user can send a new instruction; otherwise call a "
-                                        "tool to act or `finish` to complete.\n"
-                                        "</system-reminder>"
+                                        "The agent produced 3 consecutive responses"
+                                        " without any tool call while plan steps remain"
+                                        " undone — pausing instead of burning tokens."
+                                        " Resume to continue."
                                     ),
-                                ),
+                                )
                             )
                         )
                         await self._emit(
                             StatusEvent(
-                                status=ConversationStatus.FINISHED, detail="noop_limit"
+                                status=ConversationStatus.PAUSED, detail="actionless"
                             )
                         )
+                        return await self.get_state()
+
+                    if noops >= self._max_consecutive_noops:
+                        # The model is talking without acting and won't stop —
+                        # end cleanly rather than spin. (A real run resumes on a
+                        # user steer; the prompt steers toward finish/act.)
+                        actions_since = self._actions_since_last_resume(events)
+                        if incomplete and actions_since == 0:
+                            await self._emit(
+                                MessageEvent(
+                                    source=EventSource.ENVIRONMENT,
+                                    message=LLMMessage(
+                                        role="user",
+                                        content=(
+                                            "<system-reminder>\n⚠ finishing was"
+                                            " blocked: plan steps remain undone and"
+                                            " no work happened in this run segment."
+                                            "\n</system-reminder>"
+                                        ),
+                                    )
+                                )
+                            )
+                            await self._emit(
+                                StatusEvent(
+                                    status=ConversationStatus.PAUSED, detail="noop_limit"
+                                )
+                            )
+                        else:
+                            await self._emit(
+                                MessageEvent(
+                                    source=EventSource.ENVIRONMENT,
+                                    message=LLMMessage(
+                                        role="user",
+                                        content=(
+                                            "<system-reminder>\n"
+                                            f"You have sent {noops} messages in a row without "
+                                            "calling a tool. Ending the run. To continue, the "
+                                            "user can send a new instruction; otherwise call a "
+                                            "tool to act or `finish` to complete.\n"
+                                            "</system-reminder>"
+                                        ),
+                                    ),
+                                )
+                            )
+                            await self._emit(
+                                StatusEvent(
+                                    status=ConversationStatus.FINISHED, detail="noop_limit"
+                                )
+                            )
                         return await self.get_state()
                     if noops == self._max_consecutive_noops - 1:
                         await self._emit(
