@@ -491,6 +491,13 @@ dispatch; #3 is the E-order blueprint; #5/#8 feed the reality-block /
 re-grounding line of work; #9 feeds the valve; #10 feeds status
 write-through (rp-14).
 
+**Backlog ledger (2026-06-11):** the still-floating steals (#3 shell
+spill-to-file, #5/#8 checkpoint+re-grounding, #9 stuck-detector upgrade, #2
+epochal masking — design-blocked, plus OpenHands critic finish-gate / ThinkTool
+and OpenCode's hidden-`invalid`-tool repair) now carry `HS-` ids in
+`docs/harvest-backlog.md` so they survive to brief-authoring. rp-12/rp-14
+already shipped #1/#6/#7/#10 — do not re-schedule those.
+
 ## 8. OpenCode (sst/opencode) survey addendum (source-verified 2026-06-11)
 
 Surveyed because Suna/Kortix deleted their own loop and bet the product on
