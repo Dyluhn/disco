@@ -1,0 +1,17 @@
+{
+  "cid": "conv_e4e9230a78b94da89aec60e5ed9e6663",
+  "iframeSrc": "http://e4e9230a-8000.localhost:8000/?r=0",
+  "port3000Src": "http://e4e9230a-3000.localhost:8000/?r=1",
+  "readings": [
+    {
+      "id": "1",
+      "value": "42"
+    },
+    {
+      "id": "2",
+      "value": "84"
+    }
+  ],
+  "finalStatus": "STUCK",
+  "postFinishProxyStatus": null
+}

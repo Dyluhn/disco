@@ -1,0 +1,10 @@
+
+ RUN  v3.2.4 /var/home/dylan/projects/perpleximanus build/frontend
+
+ ✓ src/components/build/ExecutionCanvas.preview.test.tsx (6 tests) 85ms
+
+ Test Files  1 passed (1)
+      Tests  6 passed (6)
+   Start at  19:04:14
+   Duration  645ms (transform 84ms, setup 26ms, collect 144ms, tests 85ms, environment 165ms, prepare 46ms)
+

@@ -379,11 +379,12 @@ bp-16: committed
   - test-record/screenshots/marathon/phase-b-resume-control.png
 
 # --- de-complexity wave 0 (docs/decomplexity-wave-plan.md) ---------------------
-dc-01: in-flight
+dc-01: committed
   - packages/agent-server/src/perpleximanus/agent_server/host_proxy.py
   - packages/agent-server/src/perpleximanus/agent_server/app.py
   - packages/agent-server/src/perpleximanus/agent_server/runtime.py
   - packages/agent-server/pyproject.toml
+  - uv.lock
   - packages/agent-server/tests/test_host_proxy.py
   - frontend/src/api/client.ts
   - frontend/src/components/build/ExecutionCanvas.tsx
@@ -403,3 +404,28 @@ dc-04a: committed
   - packages/tools/tests/test_session_diagnostics.py
   - test-record/dc-04a/units.log
   - agent-projects/sonnet/dc-04a-report.md
+dc-02: staged
+  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/agent-server/src/perpleximanus/agent_server/host_proxy.py
+  - packages/core/src/perpleximanus/core/llm/config.py
+  - packages/agent-server/tests/test_idle_suspend.py
+  - packages/agent-server/tests/test_host_proxy.py
+  - packages/agent-server/tests/test_lifecycle.py
+  - packages/agent-server/tests/test_override_persistence.py
+  - test-record/dc-02/units.log
+  - agent-projects/gemini/dc-02-report.md
+dc-03: in-flight
+  - packages/core/src/perpleximanus/core/loop/policies.py
+  - packages/core/src/perpleximanus/core/loop/engine.py
+  - packages/tools/src/perpleximanus/tools/executor.py
+  - packages/core/tests/test_gate_scoping.py
+  - packages/tools/tests/test_executor_scope.py
+  - frontend/src/lib/buildTrace.ts
+  - frontend/src/lib/buildTrace.test.ts
+  - frontend/src/components/build/ActivityFeed.tsx
+  - frontend/src/components/build/ActivityFeed.screenshot.test.tsx
+  - test-record/dc-03/units-core.log
+  - test-record/dc-03/units-tools.log
+  - test-record/dc-03/units-frontend.log
+  - agent-projects/sonnet/dc-03-report.md

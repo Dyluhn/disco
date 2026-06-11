@@ -12,7 +12,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, FileCode2, MonitorPlay, PenLine, RotateCw, SquareTerminal } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { deriveFiles, deriveSrcDoc, deriveTerminal } from "@/lib/buildTrace";
-import { agentHttpBase } from "@/api/client";
+import { agentHttpBase, previewHostUrl } from "@/api/client";
 import { restartPreview } from "@/api/agent";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
 import { useSessions } from "@/hooks/useSessions";
@@ -284,11 +284,7 @@ function PreviewPane({
       {restarting ? "Restarting…" : "Refresh"}
     </button>
   );
-  const proxySrc = cid
-    ? previewPort === 8000
-      ? `${agentHttpBase()}/conversations/${cid}/preview-app/?r=${reloadKey}`
-      : `${agentHttpBase()}/conversations/${cid}/port/${previewPort}/?r=${reloadKey}`
-    : null;
+  const proxySrc = cid ? `${previewHostUrl(cid, previewPort)}/?r=${reloadKey}` : null;
 
   // PRIORITY (the fix): default to the RENDERED view, because the backend's bare
   // `python -m http.server` shows a useless directory LISTING (file paths) when

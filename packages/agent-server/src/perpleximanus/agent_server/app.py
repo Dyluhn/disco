@@ -50,6 +50,7 @@ from perpleximanus.tools.projects import (
 from perpleximanus.tools.sandbox._container import USER_PORTS
 from pydantic import BaseModel, ValidationError
 
+from .host_proxy import HostPreviewProxyMiddleware
 from .runtime import ConversationRuntime
 
 _MAX_FILE_BYTES = 25 * 1024 * 1024      # 25 MB per file
@@ -120,6 +121,14 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    def _preview_upstream_resolver(cid8: str, port: int) -> str | None:
+        """DC-01: {cid8}-{port}.localhost → the conversation's sandbox upstream."""
+        if runtime is None:
+            return None
+        cid = runtime.resolve_cid_prefix(cid8)
+        return runtime.port_upstream(cid, port) if cid else None
+
+    app.add_middleware(HostPreviewProxyMiddleware, upstream_resolver=_preview_upstream_resolver)
 
     # ---- health (liveness/readiness — the canary + ops probe hit this) ------
 
@@ -403,6 +412,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
 
     @app.get("/conversations/{conversation_id}/preview-app/{path:path}")
     @app.get("/conversations/{conversation_id}/preview-app/")
+    # DEPRECATED (DC-01): hostname proxy is canonical; kept one release for single-file pages
     async def preview_app(conversation_id: str, path: str = "") -> Response:
         """Proxy the agent's dev server through THIS (tailnet-reachable) origin — the
         backend-derived upstream (localhost for local, the remote tailnet IP for gVisor) is
@@ -424,6 +434,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
 
     @app.get("/conversations/{conversation_id}/port/{port}/{path:path}")
     @app.get("/conversations/{conversation_id}/port/{port}/")
+    # DEPRECATED (DC-01): hostname proxy is canonical; kept one release for single-file pages
     async def port_app(conversation_id: str, port: int, path: str = "") -> Response:
         """Per-port proxy (BP-10): same single-origin forwarding as preview-app for
         the curated USER port set. Arbitrary ints and INTERNAL plumbing ports are

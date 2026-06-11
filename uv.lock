@@ -1544,6 +1544,7 @@ dependencies = [
     { name = "perpleximanus-tools" },
     { name = "python-multipart" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
 ]
 
 [package.metadata]
@@ -1554,6 +1555,7 @@ requires-dist = [
     { name = "perpleximanus-tools", editable = "packages/tools" },
     { name = "python-multipart", specifier = ">=0.0.12" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
+    { name = "websockets", specifier = ">=12.0" },
 ]
 
 [[package]]

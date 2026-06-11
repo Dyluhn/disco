@@ -42,6 +42,22 @@ export function agentWsUrl(path: string): string | null {
   return `${AGENT_BASE.replace(/^http/, "ws")}${path}`;
 }
 
+/** Origin-true preview URL (DC-01): http://{cid8}-{port}.localhost:8000/.
+ * cid8 = first 8 chars of the uuid part. 127.0.0.1/localhost bases map to the
+ * .localhost zone; any other base (future MagicDNS) gets the same {cid8}-{port}.
+ * prefix on its hostname. Null when AGENT_BASE is unconfigured. */
+export function previewHostUrl(cid: string, port: number, base: string = AGENT_BASE): string | null {
+  if (!base) return null;
+  const cid8 = cid.replace(/^conv_/, "").slice(0, 8);
+  const url = new URL(base);
+  if (url.hostname === "127.0.0.1" || url.hostname === "localhost") {
+    url.hostname = `${cid8}-${port}.localhost`;
+  } else {
+    url.hostname = `${cid8}-${port}.${url.hostname}`;
+  }
+  return url.toString().replace(/\/+$/, "");
+}
+
 /** The agent-server HTTP base (for forming proxied URLs the browser loads directly, e.g.
  * the preview iframe). Empty when unconfigured. */
 export function agentHttpBase(): string {

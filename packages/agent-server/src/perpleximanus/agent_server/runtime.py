@@ -1469,6 +1469,14 @@ class ConversationRuntime:
             ),
         )
 
+    def resolve_cid_prefix(self, cid8: str) -> str | None:
+        """Full conversation id whose uuid part starts with cid8 — live executors only
+        (a preview without a live sandbox is a 503 anyway). Ambiguous (>1) → None."""
+        matches = [cid for cid in self._executors.keys() if cid.removeprefix("conv_").startswith(cid8)]
+        if len(matches) == 1:
+            return matches[0]
+        return None
+
     def preview_upstream(self, conversation_id: str) -> str | None:
         """The URL the AGENT-SERVER can reach the conversation's dev server at (the backend
         owns how — localhost for local, the remote host's tailnet IP for gVisor). The

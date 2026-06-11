@@ -9,7 +9,27 @@ import { render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 import { ExecutionCanvas } from "@/components/build/ExecutionCanvas";
+import { previewHostUrl } from "@/api/client";
 import type { AgentEvent } from "@/types/agent";
+
+describe("previewHostUrl (DC-01)", () => {
+  it("returns null when base is unconfigured", () => {
+    expect(previewHostUrl("conv_12345678", 8000, "")).toBeNull();
+  });
+
+  it("extracts cid8 and maps 127.0.0.1 to .localhost", () => {
+    expect(previewHostUrl("conv_abcdef123456", 8000, "http://127.0.0.1:8000")).toBe("http://abcdef12-8000.localhost:8000");
+  });
+
+  it("extracts cid8 and maps localhost to .localhost", () => {
+    expect(previewHostUrl("conv_abcdef123456", 5173, "http://localhost:8000")).toBe("http://abcdef12-5173.localhost:8000");
+  });
+
+  it("prepends cid8-port to other hostnames", () => {
+    expect(previewHostUrl("conv_11112222", 8000, "http://my-magic-dns.net")).toBe("http://11112222-8000.my-magic-dns.net");
+    expect(previewHostUrl("conv_11112222", 8000, "https://my-magic-dns.net:443")).toBe("https://11112222-8000.my-magic-dns.net");
+  });
+});
 
 // The Preview pane uses useBuildPreview (react-query), so renders need a client.
 function withClient(ui: ReactElement) {
