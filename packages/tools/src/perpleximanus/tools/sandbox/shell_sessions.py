@@ -138,8 +138,32 @@ class ShellSessionManager:
         return "\n".join(lines), None
 
     async def exec(self, name: str, command: str, exec_dir: str | None) -> ExecOutcome:
-        await self.ensure(name, exec_dir)
+        try:
+            await self.ensure(name, exec_dir)
+        except Exception as e:
+            raise RuntimeError(
+                f"session '{name}' could not be reached (sandbox shell unavailable or "
+                f"recreated) — retry once; if it persists, use a new session name or "
+                f"server_start. {e}"
+            ) from e
         if await self.is_busy(name):
+            full = self._full_name(name)
+            rc, pane_out = await self._run_tmux_safe(
+                f"list-panes -t {shlex.quote(full)} -F '#{{pane_current_command}}'"
+            )
+            cmd_name = (
+                pane_out.strip().splitlines()[0].strip()
+                if rc == 0 and pane_out.strip()
+                else ""
+            )
+            if cmd_name:
+                raise SessionBusy(
+                    f"session '{name}' is busy running '{cmd_name}' — "
+                    "wait for it (shell_wait), "
+                    "interact with it (shell_write_to_process), "
+                    "kill it (shell_kill_process), "
+                    "or use a different session name."
+                )
             raise SessionBusy(
                 f"Previous command not finished in session '{name}'. Wait for it (shell_wait), "
                 "interact with it (shell_write_to_process), kill it (shell_kill_process), "

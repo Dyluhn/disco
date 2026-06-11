@@ -10,6 +10,13 @@ from pydantic import BaseModel, Field
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 from ..sandbox.shell_sessions import SessionBusy
 
+
+def _fail(msg: str) -> ToolOutcome:
+    # DEFECT-2: failure diagnostics must travel in error AND content so the
+    # relay (executor → AgentErrorEvent) never collapses them to "tool failed".
+    return ToolOutcome(success=False, content=msg, error=msg)
+
+
 class ShellExecArgs(BaseModel):
     session: str = Field(default="main", description="Name of the shell session.")
     exec_dir: str = Field(default="", description="Directory to run the command in.")
@@ -28,23 +35,23 @@ class ShellExecTool:
 
     async def run(self, args: ShellExecArgs, ctx: ToolContext) -> ToolOutcome:
         if not ctx.sessions:
-            return ToolOutcome(success=False, content="Session manager not available.")
+            return _fail("Session manager not available.")
         try:
             outcome = await ctx.sessions.exec(args.session, args.command, args.exec_dir if args.exec_dir else None)
             if outcome.running:
                 header = f"session '{args.session}' — still running"
             else:
                 header = f"session '{args.session}' — exit {outcome.exit_code}"
-            
+
             content = f"{header}\n{outcome.output}"
             if outcome.note:
                 content += f"\nNote: {outcome.note}"
-                
+
             return ToolOutcome(success=True, content=content.strip())
         except SessionBusy as e:
-            return ToolOutcome(success=False, content=str(e))
+            return _fail(str(e))
         except Exception as e:
-            return ToolOutcome(success=False, content=f"Error: {e}")
+            return _fail(f"Error: {e}")
 
 
 class ShellViewArgs(BaseModel):
@@ -63,14 +70,14 @@ class ShellViewTool:
 
     async def run(self, args: ShellViewArgs, ctx: ToolContext) -> ToolOutcome:
         if not ctx.sessions:
-            return ToolOutcome(success=False, content="Session manager not available.")
+            return _fail("Session manager not available.")
         try:
             view = await ctx.sessions.view(args.session)
             state = "running" if view.running else "idle"
             content = f"session '{args.session}' — {state}\n{view.output}"
             return ToolOutcome(success=True, content=content.strip())
         except Exception as e:
-            return ToolOutcome(success=False, content=f"Error: {e}")
+            return _fail(f"Error: {e}")
 
 
 class ShellWaitArgs(BaseModel):
@@ -90,14 +97,14 @@ class ShellWaitTool:
 
     async def run(self, args: ShellWaitArgs, ctx: ToolContext) -> ToolOutcome:
         if not ctx.sessions:
-            return ToolOutcome(success=False, content="Session manager not available.")
+            return _fail("Session manager not available.")
         try:
             view = await ctx.sessions.wait(args.session, args.seconds)
             state = "running" if view.running else "idle"
             content = f"session '{args.session}' — {state}\n{view.output}"
             return ToolOutcome(success=True, content=content.strip())
         except Exception as e:
-            return ToolOutcome(success=False, content=f"Error: {e}")
+            return _fail(f"Error: {e}")
 
 
 class ShellWriteArgs(BaseModel):
@@ -118,12 +125,12 @@ class ShellWriteTool:
 
     async def run(self, args: ShellWriteArgs, ctx: ToolContext) -> ToolOutcome:
         if not ctx.sessions:
-            return ToolOutcome(success=False, content="Session manager not available.")
+            return _fail("Session manager not available.")
         try:
             await ctx.sessions.write(args.session, args.input, args.press_enter)
             return ToolOutcome(success=True, content=f"Wrote to session '{args.session}'.")
         except Exception as e:
-            return ToolOutcome(success=False, content=f"Error: {e}")
+            return _fail(f"Error: {e}")
 
 
 class ShellKillArgs(BaseModel):
@@ -142,9 +149,9 @@ class ShellKillTool:
 
     async def run(self, args: ShellKillArgs, ctx: ToolContext) -> ToolOutcome:
         if not ctx.sessions:
-            return ToolOutcome(success=False, content="Session manager not available.")
+            return _fail("Session manager not available.")
         try:
             res = await ctx.sessions.kill_foreground(args.session)
             return ToolOutcome(success=True, content=res)
         except Exception as e:
-            return ToolOutcome(success=False, content=f"Error: {e}")
+            return _fail(f"Error: {e}")

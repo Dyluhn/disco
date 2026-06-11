@@ -377,3 +377,29 @@ bp-16: committed
   - test-record/screenshots/marathon/phase-a-gate-manual.png
   - test-record/screenshots/marathon/phase-b-plan-approval.png
   - test-record/screenshots/marathon/phase-b-resume-control.png
+
+# --- de-complexity wave 0 (docs/decomplexity-wave-plan.md) ---------------------
+dc-01: in-flight
+  - packages/agent-server/src/perpleximanus/agent_server/host_proxy.py
+  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/pyproject.toml
+  - packages/agent-server/tests/test_host_proxy.py
+  - frontend/src/api/client.ts
+  - frontend/src/components/build/ExecutionCanvas.tsx
+  - frontend/src/components/build/ExecutionCanvas.preview.test.tsx
+  - frontend/e2e-live/dc-01-host-preview.spec.ts
+  - test-record/dc-01/integration-host-proxy.log
+  - test-record/dc-01/frontend-units.log
+  - test-record/dc-01/ui-spec.log
+  - test-record/dc-01/host-preview-witness.json
+  - test-record/screenshots/dc-01/host-preview-table.png
+  - test-record/screenshots/dc-01/host-preview-port-3000.png
+  - agent-projects/gemini/dc-01-report.md
+dc-04a: committed
+  - packages/tools/src/perpleximanus/tools/executor.py
+  - packages/tools/src/perpleximanus/tools/builtin/shell_sessions.py
+  - packages/tools/src/perpleximanus/tools/sandbox/shell_sessions.py
+  - packages/tools/tests/test_session_diagnostics.py
+  - test-record/dc-04a/units.log
+  - agent-projects/sonnet/dc-04a-report.md

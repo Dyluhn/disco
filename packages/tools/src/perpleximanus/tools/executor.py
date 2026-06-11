@@ -114,7 +114,9 @@ class DefaultToolExecutor:
             success=outcome.success,
             content=outcome.content,
             structured=outcome.structured,
-            error=outcome.error,
+            # DEFECT-2: tools report failure via content, not error; fall back so
+            # AgentErrorEvent receives the diagnosis instead of bare "tool failed".
+            error=outcome.error or (None if outcome.success else outcome.content),
         )
 
     # ---- kill switch (§6.4) -------------------------------------------------
