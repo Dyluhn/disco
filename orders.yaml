@@ -539,7 +539,7 @@ rp-04: committed
   - test-record/rp-04/units-core.log
   - test-record/rp-04/units-retrieval.log
   - agent-projects/gemini/rp-04-report.md
-dc-07: in-flight
+dc-07: committed
   - packages/agent-server/src/perpleximanus/agent_server/runtime.py
   - packages/agent-server/src/perpleximanus/agent_server/app.py
   - packages/core/src/perpleximanus/core/llm/prompts.py

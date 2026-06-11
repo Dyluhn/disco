@@ -227,17 +227,24 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         session = runtime.upload_session(conversation_id)
 
         # Existing uploads/ contents for quota and collision detection.
+        # DC-07: account for server-side sidecar uploads as well.
+        server_names = runtime.get_upload_names(conversation_id)
         try:
-            existing_names: set[str] = set(await session.list_dir("uploads"))
+            sandbox_names: set[str] = set(await session.list_dir("uploads"))
         except Exception:  # noqa: BLE001 — uploads/ may not exist yet
-            existing_names = set()
+            sandbox_names = set()
 
-        existing_bytes = 0
-        for fname in existing_names:
-            try:
-                existing_bytes += len(await session.read_file(f"uploads/{fname}"))
-            except Exception:  # noqa: BLE001 — best effort
-                pass
+        existing_names = server_names | sandbox_names
+
+        # Truth for quota is the server-side sidecar, but we check the sandbox for
+        # anything that might have been added manually (best effort).
+        existing_bytes = runtime.get_upload_size(conversation_id)
+        for fname in sandbox_names:
+            if fname not in server_names:
+                try:
+                    existing_bytes += len(await session.read_file(f"uploads/{fname}"))
+                except Exception:  # noqa: BLE001
+                    pass
 
         saved: list[dict] = []
         rejected: list[dict] = []
@@ -275,7 +282,10 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
                 counter += 1
             final_name = candidate
 
+            # DC-07: write to sandbox AND server-side storage.
             await session.write_file(f"uploads/{final_name}", data)
+            runtime.store_upload(conversation_id, final_name, data)
+
             existing_names.add(final_name)
             running_total += len(data)
             saved.append({"name": final_name, "bytes": len(data)})

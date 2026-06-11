@@ -260,8 +260,11 @@ _EXECUTION_DRIVER_PROMPT = (
     "with shell_view; do not assume it finished.\n"
     # [BP-11] user uploads land in uploads/ and are announced.
     "  • Files the user uploads appear under uploads/ in your workspace and are "
-    "announced in the conversation. Read them with file_read before guessing at their "
-    "contents.\n\n"
+    "announced in the conversation. Read them with file_read before guessing at "
+    "their contents. Uploads are also stored server-side (DC-07) and survive "
+    "sandbox recreation — if a resume reality block lists uploads as 'held "
+    "server-side' or missing, they are re-materialized into the fresh sandbox "
+    "on your next action.\n\n"
     "Do not call `submit_plan` during execution."
 )
 

@@ -20,8 +20,10 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from perpleximanus.core import (
@@ -226,6 +228,9 @@ class ConversationRuntime:
         # _surface_of ladder stays as the fallback for pre-fix sidecar-less DBs.
         self._surface_path = f"{db_path}.surfaces.json" if db_path else ""
         self._surface: dict[str, str] = self._load_surfaces()
+        # Per-conversation server-side uploads sidecar directory (B0 pattern).
+        # DC-07 (2026-06-11): uploads survive sandbox recreation.
+        self._uploads_base = f"{db_path}.uploads" if db_path else ""
         self._executors: dict[str, DefaultToolExecutor] = {}
         self._pending_sessions: dict[str, SandboxSession] = {}
         self._cap_handlers: dict[str, Any] | None = None
@@ -590,6 +595,32 @@ class ConversationRuntime:
                 on_recreate=lambda: self._rehydrate_after_recreate(conversation_id),
             )
         return self._pending_sessions[conversation_id]
+
+    def store_upload(self, conversation_id: str, filename: str, data: bytes) -> None:
+        """[DC-07] Store an uploaded file in the server-side sidecar directory."""
+        if not self._uploads_base:
+            return
+        path = Path(self._uploads_base) / conversation_id / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+
+    def get_upload_names(self, conversation_id: str) -> set[str]:
+        """[DC-07] List filenames currently held server-side for this conversation."""
+        if not self._uploads_base:
+            return set()
+        path = Path(self._uploads_base) / conversation_id
+        if not path.is_dir():
+            return set()
+        return {p.name for p in path.iterdir() if p.is_file()}
+
+    def get_upload_size(self, conversation_id: str) -> int:
+        """[DC-07] Total bytes of server-side uploads for this conversation."""
+        if not self._uploads_base:
+            return 0
+        path = Path(self._uploads_base) / conversation_id
+        if not path.is_dir():
+            return 0
+        return sum(p.stat().st_size for p in path.iterdir() if p.is_file())
 
     def _compose_build_loop(
         self, conversation_id: str, router: DefaultLLMRouter, agent: RouterAgent
@@ -1440,6 +1471,36 @@ class ConversationRuntime:
         if rehydrated is not None:
             rehydrated.discard(conversation_id)
         await self._maybe_rehydrate(conversation_id)
+        # DC-07: also re-materialize uploaded files.
+        await self._rematerialize_uploads(conversation_id)
+
+    async def _rematerialize_uploads(self, conversation_id: str) -> None:
+        """[DC-07] Copy server-held uploads back into the fresh sandbox."""
+        if not self._uploads_base:
+            return
+
+        # We need the session to write files. The executor's session if a loop
+        # exists; otherwise the pending session if it's a pre-kick recreation.
+        executor = self._executors.get(conversation_id)
+        session = getattr(executor, "_sandbox", None) if executor is not None else None
+        if session is None:
+            session = self._pending_sessions.get(conversation_id)
+
+        if session is None:
+            return
+
+        uploads_dir = Path(self._uploads_base) / conversation_id
+        if not uploads_dir.is_dir():
+            return
+
+        # Write them back into the sandbox.
+        for p in uploads_dir.iterdir():
+            if p.is_file():
+                try:
+                    data = p.read_bytes()
+                    await session.write_file(f"uploads/{p.name}", data)
+                except Exception:  # noqa: BLE001 — best effort
+                    pass
 
     async def _maybe_snapshot(self, conversation_id: str) -> None:
         """Mirror the live workspace out to disk + update the manifest."""
@@ -1989,6 +2050,15 @@ class ConversationRuntime:
             parts.append(f"- Files that will be restored:\n  {listing}")
         else:
             parts.append("- No saved files — the workspace starts empty.")
+
+        # DC-07: List uploads held server-side.
+        upload_names = sorted(list(self.get_upload_names(conversation_id)))
+        if upload_names:
+            # If the sandbox is dead, they are "lost-and-recoverable" until the 
+            # next action triggers recreation + re-materialization.
+            listing = "\n  ".join(f"uploads/{n}" for n in upload_names[:30])
+            status = "intact" if conversation_id in self._executors else "held server-side and will be restored"
+            parts.append(f"- Uploaded files ({status}):\n  {listing}")
 
         # Session list (degrades gracefully — sessions_snapshot never raises).
         sessions, _ = await self.sessions_snapshot(conversation_id)

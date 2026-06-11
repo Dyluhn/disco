@@ -30,6 +30,7 @@ class _FakeSession:
 
     def __init__(self) -> None:
         self._files: dict[str, bytes] = {}
+        self.recreated = False
 
     async def list_dir(self, path: str) -> list[str]:
         prefix = path.rstrip("/") + "/"
@@ -54,6 +55,7 @@ class _FakeRuntime:
     def __init__(self) -> None:
         self._executors: dict[str, _FakeExecutor] = {}
         self._pending_sessions: dict[str, _FakeSession] = {}
+        self._sidecar: dict[str, dict[str, bytes]] = {}
 
     def kick(self, cid: str) -> None:  # noqa: D401
         pass
@@ -65,6 +67,23 @@ class _FakeRuntime:
         if conversation_id not in self._pending_sessions:
             self._pending_sessions[conversation_id] = _FakeSession()
         return self._pending_sessions[conversation_id]
+
+    def store_upload(self, conversation_id: str, filename: str, data: bytes) -> None:
+        if conversation_id not in self._sidecar:
+            self._sidecar[conversation_id] = {}
+        self._sidecar[conversation_id][filename] = data
+
+    def get_upload_names(self, conversation_id: str) -> set[str]:
+        return set(self._sidecar.get(conversation_id, {}).keys())
+
+    def get_upload_size(self, conversation_id: str) -> int:
+        return sum(len(v) for v in self._sidecar.get(conversation_id, {}).values())
+
+    async def _rematerialize_uploads(self, conversation_id: str, session: _FakeSession) -> None:
+        # Simplified version for testing the interaction.
+        uploads = self._sidecar.get(conversation_id, {})
+        for name, data in uploads.items():
+            await session.write_file(f"uploads/{name}", data)
 
 
 def _make_client(session: _FakeSession | None = None) -> tuple[TestClient, str, _FakeSession]:
@@ -415,3 +434,68 @@ def test_partial_reject_returns_200_with_saved_and_rejected() -> None:
     assert body["saved"][0]["name"] == "small.txt"
     assert len(body["rejected"]) == 1
     assert "big.bin" == body["rejected"][0]["name"]
+
+
+def test_sidecar_quota_counts_toward_limit() -> None:
+    """[DC-07] Server-side upload storage counts toward the 100 MB quota."""
+    store = SqliteEventStore(":memory:")
+    rt = _FakeRuntime()
+    cid = f"conv_{uuid.uuid4().hex}"
+    store.create_conversation(cid, owner_id="local")
+    sess = _FakeSession()
+    rt._executors[cid] = _FakeExecutor(sess)
+    # Pre-fill sidecar with 99 MB — near the 100 MB cap.
+    rt.store_upload(cid, "big.bin", b"x" * (99 * 1024 * 1024))
+    client = TestClient(create_app(store, runtime=rt))
+    # 2 MB extra pushes over 100 MB → rejected.
+    r = _upload(client, cid, [("files", b"x" * (2 * 1024 * 1024), "extra.bin")])
+    assert r.status_code == 413
+    assert "quota" in r.json()["rejected"][0]["reason"]
+
+
+def test_sidecar_quota_allows_when_under() -> None:
+    """[DC-07] Uploads still accepted when sidecar is below the 100 MB cap."""
+    store = SqliteEventStore(":memory:")
+    rt = _FakeRuntime()
+    cid = f"conv_{uuid.uuid4().hex}"
+    store.create_conversation(cid, owner_id="local")
+    sess = _FakeSession()
+    rt._executors[cid] = _FakeExecutor(sess)
+    # Pre-fill sidecar with 90 MB — 5 MB more is safe.
+    rt.store_upload(cid, "big.bin", b"x" * (90 * 1024 * 1024))
+    client = TestClient(create_app(store, runtime=rt))
+    r = _upload(client, cid, [("files", b"x" * (5 * 1024 * 1024), "ok.bin")])
+    assert r.status_code == 200
+    assert r.json()["saved"][0]["name"] == "ok.bin"
+
+
+@pytest.mark.asyncio
+async def test_upload_survives_recreation() -> None:
+    """[DC-07] upload -> simulate sandbox recreation -> re-materialize."""
+    store = SqliteEventStore(":memory:")
+    rt = _FakeRuntime()
+    client = TestClient(create_app(store, runtime=rt))
+    cid = f"conv_{uuid.uuid4().hex}"
+    store.create_conversation(cid, owner_id="local")
+    sess = _FakeSession()
+    rt._executors[cid] = _FakeExecutor(sess)
+
+    # 1. Upload a file.
+    data = b"important data"
+    r = _upload(client, cid, [("files", data, "data.txt")])
+    assert r.status_code == 200
+    assert r.json()["saved"][0]["name"] == "data.txt"
+
+    # Verify it is in the sandbox AND sidecar.
+    assert await sess.read_file("uploads/data.txt") == data
+    assert rt.get_upload_names(cid) == {"data.txt"}
+
+    # 2. Simulate sandbox recreation (wipe it).
+    sess._files = {}
+    assert await sess.read_file("uploads/data.txt") == b""
+
+    # 3. Trigger re-materialization.
+    await rt._rematerialize_uploads(cid, sess)
+
+    # 4. Verify it is back.
+    assert await sess.read_file("uploads/data.txt") == data

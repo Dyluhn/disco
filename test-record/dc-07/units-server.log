@@ -1,0 +1,50 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.13, pytest-9.0.3, pluggy-1.6.0
+rootdir: /var/home/dylan/projects/perpleximanus build
+configfile: pyproject.toml
+plugins: asyncio-1.4.0, anyio-4.13.0, hypothesis-6.155.2
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 192 items
+
+packages/agent-server/tests/test_health.py ..                            [  1%]
+packages/agent-server/tests/test_host_proxy.py ..........                [  6%]
+packages/agent-server/tests/test_idle_suspend.py .....                   [  8%]
+packages/agent-server/tests/test_lifecycle.py ..................         [ 18%]
+packages/agent-server/tests/test_model_pick_pipeline.py ...              [ 19%]
+packages/agent-server/tests/test_override_persistence.py .........       [ 24%]
+packages/agent-server/tests/test_projects_endpoints.py .............     [ 31%]
+packages/agent-server/tests/test_research.py .....                       [ 33%]
+packages/agent-server/tests/test_resume.py ............                  [ 40%]
+packages/agent-server/tests/test_resume_condensation.py ......           [ 43%]
+packages/agent-server/tests/test_resume_reconstruction.py .............  [ 50%]
+packages/agent-server/tests/test_runtime.py ...                          [ 51%]
+packages/agent-server/tests/test_sandbox_config.py ..........            [ 56%]
+packages/agent-server/tests/test_sessions_degrade.py ........            [ 60%]
+packages/agent-server/tests/test_sessions_routes.py ..........           [ 66%]
+packages/agent-server/tests/test_upload.py ............................. [ 81%]
+...                                                                      [ 82%]
+packages/agent-server/tests/test_wire.py ...........                     [ 88%]
+packages/agent-server/tests/test_workspace_route.py .................... [ 98%]
+..                                                                       [100%]
+
+=============================== warnings summary ===============================
+.venv/lib/python3.13/site-packages/fastapi/testclient.py:1
+  /var/home/dylan/projects/perpleximanus build/.venv/lib/python3.13/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+packages/agent-server/tests/test_host_proxy.py::test_websocket_proxy
+  /var/home/dylan/projects/perpleximanus build/.venv/lib/python3.13/site-packages/websockets/legacy/__init__.py:6: DeprecationWarning: websockets.legacy is deprecated; see https://websockets.readthedocs.io/en/stable/howto/upgrade.html for upgrade instructions
+    warnings.warn(  # deprecated in 14.0 - 2024-11-09
+
+packages/agent-server/tests/test_host_proxy.py::test_websocket_proxy
+  /var/home/dylan/projects/perpleximanus build/.venv/lib/python3.13/site-packages/uvicorn/protocols/websockets/websockets_impl.py:17: DeprecationWarning: websockets.server.WebSocketServerProtocol is deprecated
+    from websockets.server import WebSocketServerProtocol
+
+packages/agent-server/tests/test_host_proxy.py::test_websocket_proxy
+packages/agent-server/tests/test_host_proxy.py::test_websocket_proxy
+packages/agent-server/tests/test_host_proxy.py::test_websocket_proxy
+  /var/home/dylan/projects/perpleximanus build/.venv/lib/python3.13/site-packages/websockets/legacy/server.py:1178: DeprecationWarning: remove second argument of ws_handler
+    warnings.warn("remove second argument of ws_handler", DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================= 192 passed, 6 warnings in 9.20s ========================
