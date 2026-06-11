@@ -571,3 +571,58 @@ rp-06: committed
   - test-record/rp-06/units-frontend.log
   - agent-projects/gemini/rp-06-report.md
   - agent-projects/gemini/rp-06-fix1-report.md
+rp-05a: staged
+  - packages/tools/pyproject.toml
+  - uv.lock
+  - packages/tools/src/perpleximanus/tools/mcp/__init__.py
+  - packages/tools/src/perpleximanus/tools/mcp/config.py
+  - packages/tools/src/perpleximanus/tools/mcp/pool.py
+  - packages/tools/src/perpleximanus/tools/mcp/stdio.py
+  - packages/tools/src/perpleximanus/tools/mcp/approval.py
+  - packages/tools/src/perpleximanus/tools/mcp/naming.py
+  - packages/tools/src/perpleximanus/tools/mcp/tool_search.py
+  - packages/tools/src/perpleximanus/tools/mcp/migrations.py
+  - packages/core/src/perpleximanus/core/llm/config.py
+  - packages/core/src/perpleximanus/core/llm/secrets.py
+  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/agent-server/tests/test_mcp_pool.py
+  - packages/tools/tests/mcp_fakes.py
+  - packages/tools/tests/test_mcp_transport.py
+  - packages/tools/tests/test_mcp_naming.py
+  - packages/tools/tests/test_mcp_approval.py
+  - packages/tools/tests/test_mcp_tool_search.py
+  - test-record/rp-05a/units-tools.log
+  - test-record/rp-05a/units-server.log
+  - test-record/rp-05a/units-core.log
+  - agent-projects/gemini/rp-05a-report.md
+rp-05b: staged
+  - packages/tools/src/perpleximanus/tools/mcp/__init__.py
+  - packages/tools/src/perpleximanus/tools/mcp/http.py
+  - packages/tools/src/perpleximanus/tools/mcp/retrieval_tier.py
+  - packages/tools/src/perpleximanus/tools/mcp/fence.py
+  - packages/tools/src/perpleximanus/tools/mcp/http_egress.py
+  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/agent-server/tests/test_mcp_http.py
+  - packages/agent-server/tests/test_mcp_egress.py
+  - packages/agent-server/tests/test_mcp_retrieval_tier.py
+  - packages/agent-server/tests/test_mcp_fence.py
+  - packages/agent-server/tests/test_mcp_poisoning.py
+  - packages/app-server/src/perpleximanus/app_server/app.py
+  - packages/app-server/src/perpleximanus/app_server/config_state.py
+  - packages/app-server/tests/test_mcp_endpoints.py
+  - frontend/src/types/config.ts
+  - frontend/src/api/config.ts
+  - frontend/src/hooks/useConfig.ts
+  - frontend/src/components/settings/McpSection.tsx
+  - frontend/src/components/settings/McpSection.live.test.tsx
+  - frontend/src/components/settings/McpSection.approval.test.tsx
+  - test-record/rp-05b/units-tools.log
+  - test-record/rp-05b/units-server.log
+  - test-record/rp-05b/units-app-server.log
+  - test-record/rp-05b/units-frontend.log
+  - agent-projects/gemini/rp-05b-report.md
+  - test-record/rp-05b/units-tools.log
+  - test-record/rp-05b/units-server.log
+  - agent-projects/gemini/rp-05b-report.md
