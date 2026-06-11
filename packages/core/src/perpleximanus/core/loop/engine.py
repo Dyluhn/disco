@@ -879,10 +879,20 @@ class AgentLoop:
         except Exception:  # noqa: BLE001 — never let tool-listing crash the loop
             return None
 
-    def _tools_for_step(self) -> list:
+    def _tools_for_step(self, *, suppress_meta_tools: bool = False) -> list:
         """Mode-scoped tool visibility. With no planning_tools configured this is a
         pass-through (Research / default). While PLANNING the agent sees ONLY the
         planning tool(s); while executing it sees everything else.
+
+        suppress_meta_tools (Phase-B re-run #4, 2026-06-10): until the first
+        real action of a session (post-resume or conversation start), the
+        meta/handoff virtuals — notify_user, remember, serve — are WITHHELD
+        from the offered set. Three distinct post-resume degenerations in a
+        row (prose spam, serve-before-work, remember spam) all burned the
+        model's first turns on meta tools; shaping the action space beats
+        refusing after the fact (the model can't pick what isn't offered).
+        ask_user / propose_plan_update / finish stay offered — they're
+        legitimate escapes, each guarded by its own gate.
 
         In execution mode the loop also appends a VIRTUAL `ask_user` tool — a
         clean escape hatch the model can call when it (in its own reasoning)
@@ -925,15 +935,18 @@ class AgentLoop:
         # neither is injected by reminder. propose_plan_update is the model's
         # auto-recovery affordance: when its current plan is wrong, it proposes
         # a revision and the user accepts/refines via the plan-approval gate.
-        tools = list(tools) + [
+        virtuals = [
             _ask_user_tool_singleton(),
             _propose_plan_update_tool_singleton(),
-            _notify_user_tool_singleton(),
             _finish_tool_singleton(),
-            _remember_tool_singleton(),
-            _serve_tool_singleton(),
         ]
-        return tools
+        if not suppress_meta_tools:
+            virtuals += [
+                _notify_user_tool_singleton(),
+                _remember_tool_singleton(),
+                _serve_tool_singleton(),
+            ]
+        return list(tools) + virtuals
 
     def _plan_from_args(self, arguments: dict, events: list[Event]) -> PlanEvent:
         """Build a PlanEvent from a `submit_plan` tool call. Defensive against the
@@ -1843,13 +1856,19 @@ class AgentLoop:
                 # the single step right after a stuck reframe (StuckDetector's escape).
                 in_escape = escape_seq is not None and not acted_since_escape
                 escape_temp = _STUCK_ESCAPE_TEMP if in_escape else None
+                # Withhold the meta/handoff virtuals until this session's first
+                # real action (see _tools_for_step docstring — Phase-B re-run #4).
+                fresh_session = (
+                    self.mode != OperatingMode.PLANNING
+                    and self._actions_since_last_resume(events) == 0
+                )
                 try:
                     attempts = 0
                     while True:
                         try:
                             step = await self.agent.step(
                                 view,
-                                self._tools_for_step(),
+                                self._tools_for_step(suppress_meta_tools=fresh_session),
                                 mode=self.mode,
                                 overflow_signal=self._overflow_signal(events),
                                 on_stream=self._build_stream_hook(),

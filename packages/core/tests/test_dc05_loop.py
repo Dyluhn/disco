@@ -514,3 +514,46 @@ def test_actions_since_last_resume_resets_at_marker():
     assert AgentLoop._actions_since_last_resume([shell, resumed]) == 0
     assert AgentLoop._actions_since_last_resume([shell, resumed, plan]) == 0
     assert AgentLoop._actions_since_last_resume([shell, resumed, shell]) == 1
+
+
+# ---- meta-tool suppression until first real action (Phase-B re-run #4) ----------
+#
+# Re-run #4 showed the model burning its post-resume turns on remember spam —
+# the THIRD distinct meta-tool escape (prose, serve, remember). Refusal gates
+# converge one tool at a time; shaping the offered tool set doesn't: until the
+# session's first real action, notify_user / remember / serve are WITHHELD.
+
+
+def test_tools_for_step_suppresses_meta_tools():
+    """suppress_meta_tools drops the three meta virtuals but keeps the
+    legitimate escapes (ask_user / propose_plan_update / finish)."""
+    agent = ScriptedAgent([finish_step()])
+    loop, _ = build_loop(agent)
+
+    full = {getattr(t, "name", None) for t in loop._tools_for_step()}
+    assert {"serve", "remember", "notify_user"} <= full
+
+    lean = {getattr(t, "name", None) for t in
+            loop._tools_for_step(suppress_meta_tools=True)}
+    assert not ({"serve", "remember", "notify_user"} & lean)
+    assert {"ask_user", "propose_plan_update", "finish", "shell"} <= lean
+
+
+@pytest.mark.asyncio
+async def test_meta_tools_withheld_until_first_real_action():
+    """The run loop offers a lean tool set on the session's first turn and the
+    full set once a real action has landed."""
+    agent = ScriptedAgent([
+        action_step("shell", {}),   # first turn: lean set offered
+        action_step("shell", {}),   # second turn: full set offered
+        finish_step(),
+    ])
+    loop, _ = build_loop(agent)
+    await loop.send_message("go")
+    await loop.run()
+
+    first, second = agent.seen_tools[0], agent.seen_tools[1]
+    assert "serve" not in first and "remember" not in first
+    assert "notify_user" not in first
+    assert "ask_user" in first and "finish" in first
+    assert {"serve", "remember", "notify_user"} <= set(second)

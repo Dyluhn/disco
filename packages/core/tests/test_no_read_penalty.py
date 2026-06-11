@@ -1,5 +1,5 @@
 import pytest
-from loop_fakes import FakeExecutor, action_step, build_loop, finish_step, ScriptedAgent
+from loop_fakes import FakeExecutor, ScriptedAgent, action_step, build_loop, finish_step
 from perpleximanus.core import MessageEvent, StatusEvent
 from perpleximanus.core.events import EventSource
 
@@ -42,14 +42,17 @@ async def test_twelve_consecutive_reads_no_reminder_no_withholding():
         if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
         and "STOP reading" in (e.message.content if e.message else "")
     ]
-    assert len(reminders) == 0, f"Found unexpected read-streak reminders: {[r.message.content for r in reminders]}"
+    got = [r.message.content for r in reminders]
+    assert len(reminders) == 0, f"Found unexpected read-streak reminders: {got}"
     
     # (b) the tool list the agent receives on the step AFTER the streak (step 13)
-    # still contains every read tool it had on step 1.
+    # still contains every read tool it had on step 2. (Step 1 is the session's
+    # first turn — the meta virtuals are withheld there BY DESIGN, not as a
+    # read penalty; see _tools_for_step(suppress_meta_tools=...).)
     assert len(agent.captured_tools) == 13
     assert "file_read" in agent.captured_tools[0]
     assert "file_read" in agent.captured_tools[12]
-    assert agent.captured_tools[0] == agent.captured_tools[12]
+    assert agent.captured_tools[1] == agent.captured_tools[12]
 
 @pytest.mark.asyncio
 async def test_stuck_escape_still_fires():

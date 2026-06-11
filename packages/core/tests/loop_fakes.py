@@ -36,6 +36,7 @@ class ScriptedAgent:
         self._steps = list(steps)
         self._before = before or {}
         self.seen_views = []
+        self.seen_tools = []
         self.calls = 0
 
     async def step(
@@ -45,6 +46,7 @@ class ScriptedAgent:
         if i in self._before:
             await self._before[i]()
         self.seen_views.append(view)
+        self.seen_tools.append([getattr(t, "name", None) for t in tools])
         self.calls += 1
         item = self._steps[min(i, len(self._steps) - 1)]
         if isinstance(item, BaseException):
