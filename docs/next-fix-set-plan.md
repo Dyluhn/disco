@@ -341,13 +341,28 @@ removed from the worker set per Dylan's 2026-06-10 rule).
 
 (RP-04b was rejected at ratification — no optional wave.)
 
-Worker-routing note (binding, updated for the 2026-06-10 no-Sonnet rule):
-implementation drafts → Gemini Flash (Pro after quota reset), Pi free models
-(gpt-oss-120b:free) as fallback; spec drafts → Claude (the MiniMax spec-draft
-gate is revoked with the paid-model ban); screenshot triage → Flash or
-nemotron-nano-12b-v2-vl:free; diff pre-filter → gpt-oss-120b:free leads only.
-Verdicts, diff review, live-spec iteration, commits: Claude. No paid OpenRouter
-models via pi, ever; no Sonnet subagents.
+Worker-routing note — **SUPERSEDED 2026-06-11. The canonical routing table is
+`bakeoff/ROUTING.md` (committed `27ac9de`); where this note conflicts, ROUTING.md
+wins.** The 2026-06-10 text is kept below for provenance only. What actually
+changed at ratification ("no testing, no relitigating" — Dylan):
+- implementation/drafts → **DeepSeek V4 Pro (direct, `pro-direct` preset)**,
+  Gemini Flash fallback — paid DeepSeek is campaign-scoped authorized, which
+  REVERSES this note's blanket "no paid OpenRouter, ever";
+- spec/brief first-drafts → **DeepSeek V4 Pro**, not Claude;
+- screenshot **and driver-vision (DEFECT-8)** → **Gemini 3 Flash → Sonnet**
+  (never Fable, never DeepSeek — text-only);
+- diff pre-filter → **DeepSeek V4 Flash**, UNVERIFIED LEADS only;
+- verification verdicts → **pinned-Fable subagents ONLY** (`Agent model:fable`)
+  whenever the session runs on Opus — Opus NEVER renders a verdict (the
+  discipline guard). This is the one sanctioned subagent exception.
+
+  --- provenance (2026-06-10, no longer in force) ---
+  implementation drafts → Gemini Flash (Pro after quota reset), Pi free models
+  (gpt-oss-120b:free) as fallback; spec drafts → Claude (the MiniMax spec-draft
+  gate is revoked with the paid-model ban); screenshot triage → Flash or
+  nemotron-nano-12b-v2-vl:free; diff pre-filter → gpt-oss-120b:free leads only.
+  Verdicts, diff review, live-spec iteration, commits: Claude. No paid OpenRouter
+  models via pi, ever; no Sonnet subagents.
 
 ---
 

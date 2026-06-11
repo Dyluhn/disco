@@ -284,6 +284,15 @@ cmd_verify() {
       if [ ! -s "$REPO_ROOT/$ev" ]; then
         echo "EVIDENCE MISSING $ev"; rc=2; continue
       fi
+      # RED-INFRA first: pytest COLLECTION-phase failures (wrong interpreter /
+      # unsynced venv) co-occur with the generic error regex below, so a worker
+      # that ran the suite outside `uv run` looks identical to broken code. That
+      # would bounce GOOD code and burn a paid round. Keyed on pytest's distinct
+      # collection markers — NOT bare ModuleNotFoundError, which a passing test
+      # may print. Remediation differs: re-run under uv, do NOT touch the code.
+      if grep -qE "[0-9]+ errors? during collection|ImportError while importing test module|Interrupted: [0-9]+ errors? during collection" "$REPO_ROOT/$ev"; then
+        echo "EVIDENCE RED-INFRA $ev (collection/import failure — re-run under 'uv run'; do NOT bounce the code)"; [ "$rc" = 0 ] && rc=3; continue
+      fi
       if tail -n 30 "$REPO_ROOT/$ev" | grep -qE "[1-9][0-9]* (failed|error)|ERROR |Traceback"; then
         echo "EVIDENCE RED $ev (failures in tail — review before commit)"; rc=2
       fi
