@@ -173,3 +173,30 @@ export const rrfAnswer: GroundedAnswer = {
     "Does RRF work for more than two result lists?",
   ],
 };
+
+/**
+ * Fixture that exercises the `sheet` block (RP-11). Routed by the "sheet-demo"
+ * query keyword in research.ts (mirrors the provider-error route) so the honest
+ * preview card — no false-affordance download button — renders in the real
+ * fixture-mode app for visual verification. The .xlsx itself is a workspace
+ * artifact; the block is a preview, not a download surface.
+ */
+export const sheetDemoAnswer: GroundedAnswer = {
+  ...rrfAnswer,
+  query: "sheet-demo",
+  blocks: [
+    {
+      kind: "prose",
+      id: "sb0",
+      text: "Here is the workbook generated for your request. It is saved to the conversation workspace; the preview below lists its sheets.",
+    },
+    {
+      kind: "sheet",
+      id: "sb1",
+      title: "Q4 Sales Report",
+      filename: "q4_sales.xlsx",
+      sheet_names: ["Revenue", "Costs", "Summary"],
+      formulas_evaluated: false,
+    },
+  ],
+};

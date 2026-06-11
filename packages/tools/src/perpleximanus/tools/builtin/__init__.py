@@ -22,6 +22,7 @@ from .files import (
 from .plan import PlanStepTool, SubmitPlanTool
 from .retrieval import ExtractTool, SearchTool
 from .server import ServerStatusTool
+from .sheets import SheetsTool
 from .shell_sessions import ShellExecTool, ShellKillTool, ShellViewTool, ShellWaitTool, ShellWriteTool
 from .system import CodeExecTool, ShellTool
 
@@ -38,6 +39,7 @@ __all__ = [
     "PlanStepTool",
     "SearchTool",
     "ServerStatusTool",
+    "SheetsTool",
     "ShellTool",
     "ShellExecTool",
     "ShellKillTool",
@@ -73,6 +75,7 @@ def build_default_registry() -> ToolRegistry:
         ServerStatusTool(),
         SubmitPlanTool(),  # plan-mode: proposed plan (intercepted by the loop)
         PlanStepTool(),  # plan-mode: capstone progress reports
+        SheetsTool(),  # sheet_generate: write .xlsx with live formulas
     ):
         registry.register(tool)
     return registry

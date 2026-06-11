@@ -4,6 +4,7 @@ import { cn } from "@/lib/cn";
 import { citationNumbers, passageById, verdictForPassage } from "@/lib/sources";
 import type { AnswerBlock, GroundedAnswer } from "@/types/grounded";
 import { Citation } from "./Citation";
+import { FileSpreadsheet, AlertTriangle } from "lucide-react";
 
 Chart.register(...registerables);
 
@@ -311,6 +312,80 @@ function ChartBlockComponent({
   );
 }
 
+/**
+ * SheetBlockComponent — renders a workbook PREVIEW card: sheet metadata + a
+ * disclaimer that formulas are NOT evaluated (values are unvalidated — open in
+ * a spreadsheet app to compute). The .xlsx itself is delivered as a workspace
+ * artifact (ToolOutcome.artifacts → DeliverableEvent) and is downloaded through
+ * the app's deliverable/workspace machinery, which holds the conversation id.
+ *
+ * NO per-block download button: the GroundedAnswer/BlockView render path has no
+ * conversation id (see grounded.ts — GroundedAnswer carries no cid), and the
+ * workspace-file endpoint (app.py:504) is allowlisted to .pmx/screenshots|plots
+ * and serves image/png only. A self-fetching button here could never resolve an
+ * .xlsx — that would be a false affordance (looks usable, always 404s). Wiring a
+ * real download means threading cid through BlockView; deferred to a follow-up.
+ *
+ * Univer read-only embed: also deferred. @univerjs/* 0.25.x ships only a heavy
+ * collaborative editor (plugin DI + WebGL renderer + locale bundles, ~200 lines
+ * of init) with no standalone `<UniverSheet readOnly data={...} />` component.
+ * When that lands, this card adopts it.
+ *
+ * BLOCKERS DOCUMENTED 2026-06-11: (1) no cid on the block render path → no honest
+ * in-block download yet; (2) no read-only embed API in @univerjs/* 0.25.x.
+ */
+function SheetBlockComponent({
+  title,
+  filename,
+  sheet_names,
+}: {
+  title: string;
+  filename: string;
+  sheet_names: string[];
+}) {
+  return (
+    <div className="my-inline rounded-card border border-hairline bg-surface-1">
+      {/* Header — no download button: there is no cid on this render path, so a
+          self-fetching button could never resolve the .xlsx (see doc above). */}
+      <div className="flex items-center gap-inline border-b border-hairline px-body py-inline">
+        <FileSpreadsheet className="size-5 shrink-0 text-accent" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-ui text-[0.9rem] font-semibold text-text">{title}</div>
+          <div className="truncate font-mono text-[0.72rem] text-text-faint">{filename}</div>
+        </div>
+      </div>
+
+      {/* Sheets list */}
+      <div className="px-body py-inline">
+        <div className="mb-hair font-ui text-[0.7rem] font-semibold uppercase tracking-wide text-text-faint">
+          {sheet_names.length} sheet{sheet_names.length !== 1 ? "s" : ""}
+        </div>
+        <ul className="flex flex-wrap gap-hair">
+          {sheet_names.map((name) => (
+            <li
+              key={name}
+              className="rounded-control border border-hairline bg-surface-0 px-inline py-hair font-mono text-[0.78rem] text-text-muted"
+            >
+              {name}
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {/* Provenance + formula disclaimer */}
+      <div className="flex items-start gap-hair border-t border-hairline px-body py-inline">
+        <AlertTriangle className="mt-px size-3.5 shrink-0 text-warn" aria-hidden />
+        <p className="font-ui text-[0.74rem] leading-snug text-text-faint">
+          Saved to the workspace as{" "}
+          <span className="font-mono text-text-muted">{filename}</span>. Formulas are{" "}
+          <strong className="font-semibold text-text-muted">not evaluated</strong> — open in a
+          spreadsheet app (LibreOffice, Excel, Google Sheets) to compute values.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function BlockView({ block, answer }: { block: AnswerBlock; answer: GroundedAnswer | null }) {
   switch (block.kind) {
     case "heading":
@@ -373,5 +448,13 @@ export function BlockView({ block, answer }: { block: AnswerBlock; answer: Groun
       );
     case "table":
       return <TableView columns={block.columns} rows={block.rows} caption={block.caption} />;
+    case "sheet":
+      return (
+        <SheetBlockComponent
+          title={block.title}
+          filename={block.filename}
+          sheet_names={block.sheet_names}
+        />
+      );
   }
 }

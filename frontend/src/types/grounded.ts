@@ -66,6 +66,14 @@ export type AnswerBlock =
       tone: "note" | "definition" | "warning";
       title: string;
       text: string;
+    }
+  | {
+      kind: "sheet";
+      id: string;
+      title: string;
+      filename: string;
+      sheet_names: string[];
+      formulas_evaluated: false;
     };
 
 export interface GroundedAnswer {

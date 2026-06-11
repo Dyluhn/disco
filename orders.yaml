@@ -725,3 +725,42 @@ fix-confirm-livelock: committed
   - test-record/fix-confirm-livelock/units.log
   - .orchestrate/review/fix-confirm-livelock-fable-brief.md
   - .orchestrate/review/fix-confirm-livelock.diff
+
+# --- wave 3 (parallel feature lanes, dispatched after rp-05c freed the seams) -
+rp-08: in-flight
+  # Scheduled tasks — cronsim recurring agent runs append to the SAME conversation;
+  # run-once-coalesced missed-run policy; next-3-runs confirm card. Backend touches
+  # the runtime.py/app.py seam (serial vs rp-07); disjoint from rp-11 (registry.py).
+  - packages/agent-server/src/perpleximanus/agent_server/schedule.py
+  - packages/agent-server/src/perpleximanus/agent_server/schedule_models.py
+  - packages/agent-server/tests/test_schedule_coalesce.py
+  - packages/agent-server/tests/test_schedule_e2e.py
+  - packages/core/src/perpleximanus/core/events.py
+  - packages/core/src/perpleximanus/core/store/sqlite.py
+  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/agent-server/pyproject.toml
+  - frontend/src/components/settings/ScheduleSection.tsx
+  - frontend/src/lib/scheduleNL.ts
+  - test-record/rp-08/units-server.log
+rp-11: committed
+  # Spreadsheet generation — openpyxl writes live FORMULAS (whitelisted) as a
+  # DeliverableEvent artifact, written THROUGH the sandbox jail. Agent-side tool
+  # only (no engine change). Touches registry.py AGENT_TOOLS seam; disjoint from
+  # rp-08. Frontend renders an HONEST preview card (no in-block download: no cid
+  # on the block render path; Univer read-only embed deferred — 0.25.x has none).
+  - packages/tools/src/perpleximanus/tools/builtin/sheets.py
+  - packages/tools/tests/test_sheets.py
+  - packages/tools/src/perpleximanus/tools/builtin/__init__.py
+  - packages/tools/src/perpleximanus/tools/registry.py
+  - packages/tools/pyproject.toml
+  - uv.lock
+  - frontend/src/types/grounded.ts
+  - frontend/src/components/blocks.tsx
+  - frontend/src/components/SheetBlock.test.tsx
+  - frontend/src/api/research.ts
+  - frontend/src/fixtures/answers.ts
+  - frontend/e2e/sheet-block.spec.ts
+  - frontend/package.json
+  - frontend/package-lock.json
+  - test-record/rp-11/units-tools.log

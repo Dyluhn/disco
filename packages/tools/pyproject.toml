@@ -16,6 +16,7 @@ dependencies = [
     "podman>=5",  # Podman SDK — the Podman backend drives the rootless socket native-remote
     "jupyter_client",
     "websockets",
+    "openpyxl>=3.1",
 ]
 
 [project.optional-dependencies]

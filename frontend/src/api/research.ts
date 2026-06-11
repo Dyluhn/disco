@@ -10,7 +10,7 @@
  * tests run with no backend.
  */
 import { researchWsUrl } from "@/api/client";
-import { rrfAnswer } from "@/fixtures/answers";
+import { rrfAnswer, sheetDemoAnswer } from "@/fixtures/answers";
 import type { AnswerBlock, GroundedAnswer, ReScope, StreamFrame } from "@/types/grounded";
 
 export interface StreamHandle {
@@ -146,7 +146,10 @@ export function subscribeResearch(scope: ReScope, onFrame: (f: StreamFrame) => v
 
   // Offline / tests: replay the fixture as the same frame contract.
   const providerError = providerErrorFor(scope);
-  const answer = applyScope(rrfAnswer, scope);
+  // "sheet-demo" query routes to the sheet-block fixture (RP-11 visual check);
+  // keep its own query string so the block, not the swapped query, is the point.
+  const base = /sheet-demo/i.test(scope.query) ? sheetDemoAnswer : rrfAnswer;
+  const answer = applyScope(base, scope);
   const seq: { delay: number; frame: StreamFrame }[] = providerError
     ? [
         { delay: streamTiming.ttft, frame: { type: "state", status: "running" } },
