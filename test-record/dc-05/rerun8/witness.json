@@ -1,0 +1,31 @@
+{
+  "rerun": 8,
+  "date": "2026-06-11",
+  "cid": "conv_89b45a1ecd01431aacb7d224da144b4e",
+  "verdict": "PASS — first clean Phase B pass of the campaign (1 passed in 507.42s)",
+  "server_commit": "52f85df (surface persistence sidecar)",
+  "what_happened": [
+    "seq 20: agent-server SIGTERM'd mid-install (designed kill, pre_file_count=0)",
+    "seq 22: PAUSED 'reconciled: orphaned RUNNING after server restart'",
+    "seq 25: RUNNING resumed (via UI control)",
+    "seq 27+: REAL post-resume work for the first time in 8 runs — ls/pwd orientation, discovers wiped sandbox, mkdir + file_write rebuild, pnpm create vite, pip install flask (recovers from externally-managed-environment with --break-system-packages), backend + frontend up in named shell sessions, self-resolves a port-8000 collision (lsof absent -> fuser -> shell_kill_process -> relaunch)",
+    "zero meta-tool escapes post-resume: no finish-spam, no remember-spam, no ask_user-as-narration, no prose loops",
+    "run reaches FINISHED through the verify-on-finish gate; plan monotonicity held (step 1 done-before-restart stayed done)"
+  ],
+  "harness_assertions": "ALL PASS (survival mechanics: kill, reconcile, resume, rebuild, finish)",
+  "soft_battery": {
+    "live_view": "PASS",
+    "port_pills": "PASS (8000, 3000)",
+    "terminal": "PASS",
+    "feed_thumbnail": "PASS (1 thumbnail, after retries)",
+    "json_screenshot": "PASS",
+    "api_json": "FAIL — rebuilt API served 192 rows vs CSV 200 (agent's from-scratch rebuild dropped 8 rows; its own feed message honestly reports 192). Deliverable-quality issue, not survival mechanics. Logged as carry-forward.",
+    "preview_cells": "FAIL — preview showed 'Directory listing for /' mid-run (port-8000 contention window) and was blank at FINISHED (post-finish sandbox suspend kills the dev server; the check samples at exec_status FINISHED). Logged as carry-forward — likely a check-timing artifact + the known post-finish suspend behavior."
+  },
+  "ladder_closure": "Re-runs #2-#7 each surfaced one degeneration shape; #7 exposed the root cause (in-memory surface reset -> toolless research composition post-restart). With the surface persisted (52f85df), the model's first post-resume turn had its real toolset and it simply... worked. The gates built along the ladder (meta withholding e299ef6, probe provenance 2887063, serve/ask/propose/remember backstops, graduated valve, verify-on-finish, resume reconstruction DC-05b, resume condensation DC-05c) remain in force as bounds for genuine tool failure.",
+  "carry_forwards": [
+    "api_json row-loss: agent rebuild fidelity (192/200) — candidate for the RP-05 deliverable-verification order or the handoff-doc order (plan §9): a handoff snapshot of 'CSV has 200 rows' would have caught the discrepancy at rebuild time",
+    "preview_cells check timing vs post-finish suspend: harness should sample the preview BEFORE finish or tolerate suspended-after-finish"
+  ],
+  "wave0_status": "DC-01..05c ALL COMMITTED; Phase B PASS -> De-complexity Wave 0 CLOSED"
+}
