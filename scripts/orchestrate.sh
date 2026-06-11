@@ -204,7 +204,7 @@ cmd_watch() {
   [ -f "$env" ] || { echo "no active dispatch for $order" >&2; exit 64; }
   # shellcheck disable=SC1090
   source "$env"
-  local last_size=-1 last_growth now size
+  local last_size=-1 last_growth now size newest_mtime
   last_growth=$(date +%s)
   while :; do
     if ! tmux has-session -t "$SESSION" 2>/dev/null; then
@@ -213,6 +213,15 @@ cmd_watch() {
     now=$(date +%s)
     size=$(stat -c %s "$LOG" 2>/dev/null || echo 0)
     if [ "$size" != "$last_size" ]; then last_size="$size"; last_growth="$now"; fi
+    # gemini -p buffers ALL stdout until the final answer (bp-08 saga), so a
+    # silently-productive worker can show zero log growth for its whole run.
+    # Writes to the order's manifest files count as progress too — stall now
+    # means "no output AND no file writes", the failure it was meant to encode.
+    newest_mtime=$(order_files "$order" | while IFS= read -r f; do
+      stat -c %Y "$REPO_ROOT/$f" 2>/dev/null || true
+    done | sort -n | tail -1)
+    if [ -n "${newest_mtime:-}" ] && [ "$newest_mtime" -gt "$last_growth" ] \
+       && [ "$newest_mtime" -le "$now" ]; then last_growth="$newest_mtime"; fi
     if [ $((now - START_EPOCH)) -ge $((TIMEOUT_MIN * 60)) ]; then
       tmux kill-session -t "$SESSION" 2>/dev/null || true
       rm -f "$env"
