@@ -20,6 +20,7 @@ from .boundaries import (
 from .engine import AgentLoop
 from .policies import (
     AlwaysConfirm,
+    BlastRadiusConfirm,
     ConfirmRisky,
     NeverConfirm,
     NullSecurityAnalyzer,
@@ -32,6 +33,7 @@ __all__ = [
     "AgentLoop",
     "AgentStep",
     "AlwaysConfirm",
+    "BlastRadiusConfirm",
     "ConfirmRisky",
     "ConfirmationPolicy",
     "NeverConfirm",

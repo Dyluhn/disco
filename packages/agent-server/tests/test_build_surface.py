@@ -1,11 +1,13 @@
 """The Build (Agent) surface composed in the runtime — hermetic, scripted model.
 
-Proves the security gate BITES on a state-changing surface (the headline): a risky
-action pauses at WAITING_FOR_CONFIRMATION and does NOT execute until confirmed; confirm
-runs exactly it; reject denies without executing. Plus: the kill switch revokes caps +
-tears down the sandbox, and the Research surface stays ungated (the ConfirmRisky vs
-NeverConfirm difference). Real composition (RouterAgent + DefaultToolExecutor + agent
-tools + ProcessSandbox + ConfirmRisky + RuleBasedAnalyzer), fake MODEL only.
+Proves the gate policy on a state-changing surface (the headline, DC-03 contract):
+a risky action that runs INSIDE the sandbox auto-approves (confinement is the blast
+radius) and is stamped `auto_approved: sandboxed`; a publish-class action (deploy/
+publish/release) ALWAYS pauses at WAITING_FOR_CONFIRMATION regardless of scope —
+confirm runs exactly it, reject denies without executing. Plus: the kill switch
+revokes caps + tears down the sandbox, and the Research surface stays ungated.
+Real composition (RouterAgent + DefaultToolExecutor + agent tools + ProcessSandbox
++ BlastRadiusConfirm + RuleBasedAnalyzer), fake MODEL only.
 """
 
 from __future__ import annotations
@@ -127,11 +129,22 @@ async def _build_convo(store, steps) -> ConversationRuntime:
 
 
 # Plan-first lifecycle: PLANNING propose → APPROVE flips to execution → risky shell
-# (gated by ConfirmRisky) → finish. Build now starts in PLANNING mode, so the first
-# scripted step must be a `submit_plan` call.
+# (sandboxed → auto-approved under BlastRadiusConfirm) → finish. Build now starts in
+# PLANNING mode, so the first scripted step must be a `submit_plan` call.
 _RISKY = [
     ("here's the plan", [_plan(["remove the dir"])]),
     ("removing the dir", [_shell("rm -rf doomed")]),
+    ("step 1 complete", [_plan_step_done(1)]),
+    ("done", [_finish()]),
+]
+
+# Publish-class lifecycle: the `deploy_site` tool name trips BlastRadiusConfirm's
+# publish guard (substring match, fires BEFORE scope is consulted), so the gate
+# pauses even though the tool isn't registered. This keeps the confirm/reject flow
+# under real-composition test now that sandboxed shell no longer gates.
+_PUBLISH = [
+    ("here's the plan", [_plan(["deploy the site"])]),
+    ("deploying", [ProposedToolCall(tool_name="deploy_site", arguments={})]),
     ("step 1 complete", [_plan_step_done(1)]),
     ("done", [_finish()]),
 ]
@@ -173,73 +186,110 @@ async def test_build_starts_in_planning_and_pauses_for_plan_approval():
     assert not any(isinstance(e, ObservationEvent) for e in events)
 
 
-async def test_risky_action_pauses_and_does_not_execute():
-    """After plan approval, the per-action ConfirmRisky gate still bites."""
+async def test_sandboxed_risky_action_auto_approves():
+    """DC-03: a HIGH-risk action that runs inside the sandbox does NOT pause — the
+    run goes straight to FINISHED, the action executes, and its meta carries both
+    the risk assessment and the `auto_approved: sandboxed` stamp (so the UI can
+    show the muted badge instead of an approval prompt)."""
     store = SqliteEventStore(":memory:")
     runtime = await _build_convo(store, _RISKY)
     await _run_to_rest(runtime)  # → AWAITING_PLAN_APPROVAL
-    await _approve_plan_and_run(runtime)  # approve → build → action gate
+    await _approve_plan_and_run(runtime)  # approve → build runs to the end
 
     state = await store.get_state(CID)
     events = await store.get_events(CID)
-    assert state.execution_status == ConversationStatus.WAITING_FOR_CONFIRMATION
-    assert state.pending_action_id is not None
-    assert any(isinstance(e, ActionEvent) for e in events)
-    assert not any(isinstance(e, ObservationEvent) for e in events)
-    action = next(e for e in events if isinstance(e, ActionEvent))
-    assert "risk_assessment" in action.meta
-
-
-async def test_confirm_executes_exactly_the_pending_action():
-    store = SqliteEventStore(":memory:")
-    runtime = await _build_convo(store, _RISKY)
-    await _run_to_rest(runtime)
-    await _approve_plan_and_run(runtime)
-    gated = await store.get_state(CID)
-    assert gated.execution_status == ConversationStatus.WAITING_FOR_CONFIRMATION
-
-    await runtime.confirm(CID)  # execute exactly it, then resume
-    await _await_task(runtime)
-
-    events = await store.get_events(CID)
-    # Filter for the gated SHELL action's observation. The script now also marks
-    # plan step 1 done (required by the plan-completeness FINISHED gate), which
-    # produces its own observation — not the subject of this assertion.
+    # never paused for per-action confirmation, anywhere in the run
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert not any(
+        isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.WAITING_FOR_CONFIRMATION
+        for e in events
+    )
+    # the risky shell action executed (observation exists)...
     shell_observations = [
         e
         for e in events
         if isinstance(e, ObservationEvent) and e.tool_result.tool_name == "shell"
     ]
-    assert len(shell_observations) == 1  # exactly the gated action ran, once
+    assert len(shell_observations) == 1
+    # ...and was assessed + stamped, not silently waved through
+    action = next(
+        e
+        for e in events
+        if isinstance(e, ActionEvent)
+        and e.tool_call is not None
+        and e.tool_call.tool_name == "shell"
+    )
+    assert "risk_assessment" in action.meta
+    assert action.meta.get("auto_approved") == "sandboxed"
+
+
+async def test_publish_action_pauses_and_confirm_executes_exactly_it():
+    """The publish guard still BITES on the composed surface, and confirm executes
+    exactly the pending action. `deploy_site` isn't a registered tool, so its
+    execution is observable as the executor's unknown-tool failure — proof the
+    confirm actually dispatched it (reject, below, leaves no such trace)."""
+    store = SqliteEventStore(":memory:")
+    runtime = await _build_convo(store, _PUBLISH)
+    await _run_to_rest(runtime)
+    await _approve_plan_and_run(runtime)
+    gated = await store.get_state(CID)
+    assert gated.execution_status == ConversationStatus.WAITING_FOR_CONFIRMATION
+    assert gated.pending_action_id is not None
+    # gated, not auto-approved: the publish guard pre-empts the sandbox waiver
+    pre_events = await store.get_events(CID)
+    pending = next(
+        e
+        for e in pre_events
+        if isinstance(e, ActionEvent)
+        and e.tool_call is not None
+        and e.tool_call.tool_name == "deploy_site"
+    )
+    assert pending.meta.get("auto_approved") is None
+
+    await runtime.confirm(CID)  # execute exactly it, then resume
+    await _await_task(runtime)
+
+    events = await store.get_events(CID)
+    # the confirmed action was dispatched to the executor: unknown-tool failure
+    executions = [
+        e
+        for e in events
+        if isinstance(e, AgentErrorEvent) and "unknown or out-of-scope tool" in e.error
+    ]
+    assert len(executions) == 1  # exactly the gated action ran, once
+    assert "deploy_site" in executions[0].error
     assert (await store.get_state(CID)).execution_status == ConversationStatus.FINISHED
 
 
 async def test_reject_denies_without_executing():
     store = SqliteEventStore(":memory:")
-    runtime = await _build_convo(store, _RISKY)
+    runtime = await _build_convo(store, _PUBLISH)
     await _run_to_rest(runtime)
     await _approve_plan_and_run(runtime)
 
     # Grab the proposed action so we can verify the rejection is paired by call_id.
     pre_events = await store.get_events(CID)
     proposed = next(
-        e for e in pre_events if isinstance(e, ActionEvent) and e.tool_call is not None
+        e
+        for e in pre_events
+        if isinstance(e, ActionEvent)
+        and e.tool_call is not None
+        and e.tool_call.tool_name == "deploy_site"
     )
 
     await runtime.reject(CID)  # deny, resume without executing
     await _await_task(runtime)
 
     events = await store.get_events(CID)
-    # The SHELL action specifically must NOT have produced an observation. The
-    # script's follow-on plan_step(1, done) may still run as the loop resumes;
-    # that's expected — the test guards the gate semantic, not total observation
-    # count.
-    shell_observations = [
-        e
+    # The deploy action must NEVER have reached the executor: no unknown-tool
+    # failure anywhere (that error is what its execution looks like — see the
+    # confirm test). The script's follow-on plan_step(1, done) may still run as
+    # the loop resumes; that's expected — the test guards the gate semantic.
+    assert not any(
+        isinstance(e, AgentErrorEvent) and "unknown or out-of-scope tool" in e.error
         for e in events
-        if isinstance(e, ObservationEvent) and e.tool_result.tool_name == "shell"
-    ]
-    assert shell_observations == []
+    )
     rejection = next(e for e in events if isinstance(e, AgentErrorEvent))
     # Rejection is framed as an implicit system-reminder, not a user-tone error.
     assert "<system-reminder>" in rejection.error
@@ -435,7 +485,7 @@ async def test_request_plan_on_a_fresh_conversation_composes_the_loop():
     assert len(plans) == 1 and plans[0].revision == 1
 
 
-# ---- ConfirmRisky vs NeverConfirm: the surfaces differ ----------------------
+# ---- BlastRadiusConfirm vs NeverConfirm: the surfaces differ ----------------
 
 
 async def test_research_surface_is_ungated():

@@ -9,7 +9,7 @@ The Research surface defaults: `NeverConfirm` (no human gate) + no tools (the
 model answers directly). The grounded research pipeline (Stage 4) is exposed
 separately via `research_stream()` — it is NOT the agent loop; it is the
 rewrite→search→extract→rerank→generate→verify pipeline streamed as the UI's
-grounded-answer frames. The Build surface's `ConfirmRisky` stays dormant.
+grounded-answer frames. The Build surface's `BlastRadiusConfirm` stays dormant.
 """
 
 from __future__ import annotations
@@ -58,8 +58,8 @@ from perpleximanus.core.llm.secrets import OPENROUTER_API_KEY_ENV
 from perpleximanus.core.llm.wiring import build_providers
 from perpleximanus.core.loop import (
     AgentLoop,
+    BlastRadiusConfirm,
     BuildAgent,
-    ConfirmRisky,
     NeverConfirm,
     ResearchAgent,
     RouterAgent,
@@ -319,7 +319,7 @@ class ConversationRuntime:
 
     def set_surface(self, conversation_id: str, surface: str) -> None:
         """Select a conversation's surface before it runs. Build composes tools +
-        sandbox + the ConfirmRisky gate; Deep Research composes the plan-gate +
+        sandbox + the BlastRadiusConfirm gate; Deep Research composes the plan-gate +
         the long-horizon engine; Research stays read-only + ungated. Idempotent
         until the loop is built."""
         self._surface[conversation_id] = (
@@ -550,7 +550,7 @@ class ConversationRuntime:
     ) -> AgentLoop:
         """[Agent surface] Compose — not reinvent — the loop for Build mode: the agent
         toolset (Prompt 1) over a resilient SandboxSession, the SecurityAnalyzer, the
-        ConfirmRisky gate (NOT Research's NeverConfirm), and the real condenser. The
+        BlastRadiusConfirm gate (NOT Research's NeverConfirm), and the real condenser. The
         executor is held so the kill switch can revoke caps + tear down the sandbox."""
         broker = self._build_broker()
         # Adopt a pending session (created by upload_session for a pre-kick upload) so
@@ -581,7 +581,9 @@ class ConversationRuntime:
             executor,
             router,
             RuleBasedAnalyzer(),
-            ConfirmRisky(),  # Agent surface: gate risky/UNKNOWN actions before they run
+            # DC-03: sandboxed ops auto-approve (confinement is the blast radius);
+            # host-scope/unknown ops keep ConfirmRisky semantics; publish always gates.
+            BlastRadiusConfirm(),
             # A-S1: derive condensation thresholds from the AGENT_DRIVER model's
             # context window (soft 65% / hard 80%) instead of the old bare 24k/32k.
             LLMSummarizingCondenser(context_window=self._driver_context_window()),
@@ -1679,7 +1681,7 @@ class ConversationRuntime:
 
     async def approve_plan(self, conversation_id: str) -> None:
         """Approve the pending plan: flip the loop into execution mode (full tools)
-        and run it. The per-action ConfirmRisky gate still governs the build."""
+        and run it. The per-action BlastRadiusConfirm gate still governs the build."""
         loop = self._loops.get(conversation_id)
         if loop is not None:
             await loop.approve_plan()
