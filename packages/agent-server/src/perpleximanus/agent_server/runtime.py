@@ -260,6 +260,8 @@ class ConversationRuntime:
         self._session_view_cache: dict[tuple[str, str], tuple[float, SessionView]] = {}
         self._session_view_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._wake_locks: dict[str, asyncio.Lock] = {}
+        # DC-04b: last-known session list per cid for stale-on-failure degradation.
+        self._last_sessions: dict[str, list[SessionInfo]] = {}
 
     # The generative (text-producing) roles a model PICK drives. NLI_VERIFIER is a
     # cross-encoder (entailment scorer), NOT a chat model — pointing it at a picked
@@ -810,6 +812,7 @@ class ConversationRuntime:
         for key in [k for k in self._session_view_locks if k[0] == conversation_id]:
             del self._session_view_locks[key]
         self._wake_locks.pop(conversation_id, None)
+        self._last_sessions.pop(conversation_id, None)  # don't ghost a stale list (DC-04b)
         # The sandbox (and its files) are gone, so the NEXT run must rehydrate the
         # snapshot into a fresh sandbox. Clear the rehydrate-once flag — otherwise
         # `_maybe_rehydrate` skips it and the continuation runs in an EMPTY workspace,
@@ -1534,14 +1537,39 @@ class ConversationRuntime:
         except Exception:  # noqa: BLE001
             return None
 
-    async def sessions_list(self, conversation_id: str) -> list[SessionInfo]:
-        """Return the non-internal sessions for a conversation's sandbox.
-        Empty list when no sandbox exists (finished/suspended/not started)."""
+    _SESSIONS_LIST_RETRIES: int = 2
+    _SESSIONS_LIST_BACKOFF_S: float = 0.25
+
+    async def sessions_snapshot(self, conversation_id: str) -> tuple[list[SessionInfo], bool]:
+        """Session list + staleness. Fresh on success (cache updated); on
+        transport failure retry twice (0.25 s apart), then degrade to the
+        last-known list marked stale=True — a read-only listing must never
+        500 the UI poll loop (DEFECT-1). No sandbox -> ([], False)."""
         session = self.live_session(conversation_id)
         if session is None:
-            return []
-        all_sessions = await session.sessions.list()
-        return [s for s in all_sessions if not s.name.startswith("__")]
+            return ([], False)
+        last_exc: BaseException | None = None
+        for attempt in range(self._SESSIONS_LIST_RETRIES + 1):
+            if attempt > 0:
+                await asyncio.sleep(self._SESSIONS_LIST_BACKOFF_S)
+            try:
+                all_sessions = await session.sessions.list()
+                filtered = [s for s in all_sessions if not s.name.startswith("__")]
+                self._last_sessions[conversation_id] = filtered
+                return (filtered, False)
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+        _LOG.warning(
+            "sessions_snapshot: %s failed after %d attempts: %s",
+            conversation_id,
+            self._SESSIONS_LIST_RETRIES + 1,
+            last_exc,
+        )
+        return (self._last_sessions.get(conversation_id, []), True)
+
+    async def sessions_list(self, conversation_id: str) -> list[SessionInfo]:
+        """Compat wrapper — returns only the list, degraded on failure (DEFECT-1)."""
+        return (await self.sessions_snapshot(conversation_id))[0]
 
     _SESSION_VIEW_CACHE_TTL: float = 0.5
     _SESSION_VIEW_MAX_CHARS: int = 100_000

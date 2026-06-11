@@ -39,6 +39,10 @@ def _make_fake_runtime(sessions: list[SessionInfo] | None = None) -> MagicMock:
     async def _sessions_list(cid: str) -> list[SessionInfo]:
         return [s for s in sessions if not s.name.startswith("__")]
 
+    async def _sessions_snapshot(cid: str) -> tuple[list[SessionInfo], bool]:
+        filtered = [s for s in sessions if not s.name.startswith("__")]
+        return (filtered, False)
+
     async def _session_view(cid: str, name: str, tail_chars: int) -> SessionView | None:
         for s in sessions:
             if s.name == name:
@@ -46,6 +50,7 @@ def _make_fake_runtime(sessions: list[SessionInfo] | None = None) -> MagicMock:
         return None
 
     rt.sessions_list = AsyncMock(side_effect=_sessions_list)
+    rt.sessions_snapshot = AsyncMock(side_effect=_sessions_snapshot)
     rt.session_view = AsyncMock(side_effect=_session_view)
     return rt
 
@@ -105,7 +110,8 @@ def test_list_sessions_empty_when_no_sandbox() -> None:
 
     r = client.get(f"/conversations/{cid}/sessions")
     assert r.status_code == 200
-    assert r.json() == {"sessions": []}
+    assert r.json()["sessions"] == []
+    assert r.json()["stale"] is False
 
 
 # ---- __-prefix exclusion -----------------------------------------------------

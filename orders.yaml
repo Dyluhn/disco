@@ -429,3 +429,10 @@ dc-03: committed
   - test-record/dc-03/units-tools.log
   - test-record/dc-03/units-frontend.log
   - agent-projects/sonnet/dc-03-report.md
+dc-04b: committed
+  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/agent-server/tests/test_sessions_degrade.py
+  - packages/agent-server/tests/test_sessions_routes.py
+  - test-record/dc-04b/units.log
+  - agent-projects/sonnet/dc-04b-report.md

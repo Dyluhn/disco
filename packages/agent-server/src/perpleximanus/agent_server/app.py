@@ -345,7 +345,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         No sandbox / finished conversation → empty list (200, not 404)."""
         if runtime is None:
             return {"sessions": []}
-        sessions = await runtime.sessions_list(conversation_id)
+        sessions, stale = await runtime.sessions_snapshot(conversation_id)
         return {
             "sessions": [
                 {
@@ -357,7 +357,8 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
                     ),
                 }
                 for s in sessions
-            ]
+            ],
+            "stale": stale,
         }
 
     @app.get("/conversations/{conversation_id}/sessions/{name}/view")
