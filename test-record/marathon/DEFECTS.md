@@ -197,3 +197,34 @@ orders, never to bp-16 itself.
   values" FAILS as a system finding (recorded per-check in the witness, not
   patched). Port pills, per-port JSON proxy (`/port/3000/api/readings`),
   Terminal, and feed thumbnails are unaffected surfaces.
+
+## DEFECT-6: a provider 400 mid-conversation is terminal — malformed-request rejection has no requery/salvage path
+
+- **Found**: 2026-06-11, Phase B rerun on the OpenRouter free driver
+  (`or-gpt-oss-120b-free`, sole upstream OpenInference), conversation
+  `conv_cd1f9385cbfc484d8368bb9a4f5d1d8b`, evidence
+  `test-record/marathon/phase-b-rerun-postcrash.log` + `/tmp/pmx-marathon.log`.
+- **Chain**: (1) driver hallucinated tool name `shell.exec` (dot; the offered
+  set has `shell_exec`) → engine correctly emitted `agent_error` feedback
+  (seq 15); (2) the NEXT driver request was rejected HTTP 400 by the upstream
+  ("Provider returned error"); (3) the 400 maps to a non-transient `LLMError`
+  → terminal `ErrorEvent` (seq 16) per llm-router v1.3 reactive surfacing.
+  One rejected request killed the whole build; Phase B never reached its
+  SIGTERM/resume subject.
+- **Probes**: dotted name in echoed history alone is NOT the trigger (clean
+  A/B probe with proper tool descriptions → 200/200); a tools array entry
+  missing `description` deterministically 400s on OpenInference (strict
+  pydantic `ToolDescription`), but all engine ToolSpecs carry string
+  descriptions. Exact offending field in request #6 unknown — needs a
+  verbatim capture (recording router) on next repro. Suspect surface: the
+  post-`agent_error` history shape and/or the meta-tool unlock between
+  request 5 and 6 (DC-05 withholding boundary).
+- **Sibling**: DEFECT-5 covered *transient* outages (now retried); this is
+  the *rejected-request* class — retrying the SAME payload cannot help, the
+  payload must be repaired/requeried OUTSIDE the event log (harvest #6,
+  SWE-agent `forward_with_handling`; OpenCode hidden-`invalid`-tool reroute).
+  Both are RP-12 FC-kit scope.
+- **Severity**: HIGH on weak/strictly-validated drivers (the dev default per
+  the OpenRouter-only decision); masked on the local 27B (lenient server).
+- **Gate impact**: Phase B FAIL-before-subject; rerun blocked until RP-12
+  lands or driver changes.

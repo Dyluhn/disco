@@ -354,8 +354,29 @@ cmd_commit() {
 }
 
 # ----------------------------------------------------------------------------- status
+# Total CPU centiseconds consumed by a tmux pane's process tree. The hang
+# signature (2026-06-11, rp-12 fix-2) is cumulative CPU FLAT across checks
+# while tmux=alive — a healthy worker waiting on the API shows ~0 %CPU
+# instantaneously but still accrues CPU between status calls; a hung one
+# does not. Compare cpu= across two status invocations, not one snapshot.
+_pane_cpu_cs() {
+  local root pids p stat total=0
+  root=$(tmux list-panes -t "$1" -F '#{pane_pid}' 2>/dev/null | head -1) || { echo 0; return; }
+  [ -n "$root" ] || { echo 0; return; }
+  pids="$root"; local frontier="$root" next
+  while [ -n "$frontier" ]; do
+    next=$(echo "$frontier" | xargs -r -n1 pgrep -P 2>/dev/null | tr '\n' ' ')
+    pids="$pids $next"; frontier=$(echo "$next" | tr -s ' ')
+  done
+  for p in $pids; do
+    [ -r "/proc/$p/stat" ] || continue
+    stat=$(awk '{print $14+$15}' "/proc/$p/stat" 2>/dev/null) && total=$((total + stat))
+  done
+  echo "$total"
+}
+
 cmd_status() {
-  local env now size last
+  local env now size last cpu
   now=$(date +%s)
   shopt -s nullglob
   for env in "$ACTIVE"/*.env; do
@@ -363,11 +384,13 @@ cmd_status() {
     source "$env"
     size=$(stat -c %s "$LOG" 2>/dev/null || echo 0)
     last=$(stat -c %Y "$LOG" 2>/dev/null || echo "$START_EPOCH")
-    printf '%-8s worker=%-10s age=%3dm log=%7dB log-idle=%3dm tmux=%s\n' \
-      "$ORDER" "$WORKER" $(((now - START_EPOCH) / 60)) "$size" $(((now - last) / 60)) \
+    cpu=$(_pane_cpu_cs "$SESSION")
+    printf '%-8s worker=%-10s age=%3dm log=%7dB log-idle=%3dm cpu=%scs tmux=%s\n' \
+      "$ORDER" "$WORKER" $(((now - START_EPOCH) / 60)) "$size" $(((now - last) / 60)) "$cpu" \
       "$(tmux has-session -t "$SESSION" 2>/dev/null && echo alive || echo gone)"
   done
   [ -z "$(ls -A "$ACTIVE" 2>/dev/null)" ] && echo "no active dispatches"
+  return 0
 }
 
 # ----------------------------------------------------------------------------- main
