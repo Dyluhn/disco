@@ -208,8 +208,9 @@ class DefaultLLMRouter:
 
     def _resolve(
         self, req: CompletionRequest, ctx: CallContext
-    ) -> tuple[ModelEntry, Path, str]:
-        """Deterministic role→model resolution. Returns (entry, path, reason).
+    ) -> tuple[ModelEntry, Path, str, list[str]]:
+        """Deterministic role→model resolution. Returns (entry, path, reason,
+        overflow_triggers).
 
         Precedence is owned by `RouterConfig.model_for`: per-conversation override
         (driver only) > settings assignment > default_model.
@@ -250,9 +251,13 @@ class DefaultLLMRouter:
             )
 
         # [BP-00] Vision capability guard: if the request carries images, the
-        # model MUST support VISION.
+        # model MUST support VISION. DF-08: when the primary lacks vision,
+        # escalate to the configured vision_escalation_model instead of raising.
         if any(getattr(m, "images", None) for m in req.messages):
             if Requirement.VISION not in (entry.capabilities or []):
+                escalated = self._try_vision_escalation(profile, key, entry, path)
+                if escalated is not None:
+                    return escalated
                 self._sink.record(
                     RoutingDecision(
                         profile=profile,
@@ -268,7 +273,27 @@ class DefaultLLMRouter:
                     f"Check PMX_DRIVER_VISION env and driver-local config."
                 )
 
-        return entry, path, "config"
+        return entry, path, "config", []
+
+    # -- vision escalation (DF-08) ---------------------------------------------
+
+    def _try_vision_escalation(
+        self, profile, key: str, entry: ModelEntry, original_path: Path
+    ) -> tuple[ModelEntry, Path, str, list[str]] | None:
+        """DF-08: escalate an image-bearing request to the configured vision
+        model when the primary lacks VISION. Returns (entry, path, reason,
+        overflow_triggers) or None if escalation is not possible (guard stays
+        hard). Does NOT emit to the sink — the caller (complete) owns the one
+        and only RoutingDecision per call (RT4)."""
+        target_key = self._config.vision_escalation_model
+        if target_key is None:
+            return None
+        target = self._config.models.get(target_key)
+        if target is None:
+            return None
+        if Requirement.VISION not in (target.capabilities or []):
+            return None
+        return target, "overflow", f"vision escalation: {key} lacks VISION → {target_key}", ["vision_escalation"]
 
     # -- prompt injection (RT3, §8) -------------------------------------------
 
@@ -308,7 +333,7 @@ class DefaultLLMRouter:
         self, req: CompletionRequest, *, context: CallContext | None = None
     ) -> CompletionResponse:
         ctx = context or CallContext()
-        entry, path, reason = self._resolve(req, ctx)
+        entry, path, reason, overflow_triggers = self._resolve(req, ctx)
         self._enforce_hard_budget(req, entry, path, ctx)
         exec_req = self._inject_prompt(req, entry)
         provider = self._providers[entry.provider]
@@ -335,7 +360,7 @@ class DefaultLLMRouter:
                     provider=entry.provider,
                     path=path,
                     reason=reason,
-                    overflow_triggers=[],
+                    overflow_triggers=list(overflow_triggers),
                     attempt=attempt,
                 )
                 self._sink.record(decision)
@@ -348,7 +373,7 @@ class DefaultLLMRouter:
         self, req: CompletionRequest, *, context: CallContext | None = None
     ) -> AsyncIterator[StreamChunk]:
         ctx = context or CallContext()
-        entry, path, reason = self._resolve(req, ctx)
+        entry, path, reason, overflow_triggers = self._resolve(req, ctx)
         self._enforce_hard_budget(req, entry, path, ctx)
         provider = self._providers[entry.provider]
         exec_req = self._inject_prompt(req, entry)
@@ -367,7 +392,7 @@ class DefaultLLMRouter:
                 provider=entry.provider,
                 path=path,
                 reason=reason,
-                overflow_triggers=[],
+                overflow_triggers=list(overflow_triggers),
                 attempt=attempt,
             )
             yielded_any = False

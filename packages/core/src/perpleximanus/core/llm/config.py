@@ -165,6 +165,11 @@ class RouterConfig(BaseModel):
     # MCP (Model Context Protocol) — external tool servers (RP-05).
     # Off by default; the pool is built at agent-server start when enabled.
     mcp: McpSettings = Field(default_factory=McpSettings)
+    # DF-08: catalogue key of a vision-capable model to escalate image-bearing
+    # requests to when the primary model lacks VISION. None → vision guard stays
+    # hard (raise NoEligibleModel). Swappable to any vision model in the catalogue
+    # (e.g. "or-gemma-4-31b-free" for free tier, "driver-overflow" for Sonnet).
+    vision_escalation_model: str | None = None
     # v1.2 deterministic assignment — the source of truth (R10):
     default_model: str  # AGENT_DRIVER's model + fallback for any unassigned role
     assignments: dict[ModelRole, str] = Field(default_factory=dict)  # explicit per-role
@@ -291,6 +296,28 @@ def default_config() -> RouterConfig:
             price_in_per_m=3.0,
             price_out_per_m=15.0,
         ),
+        # DF-08: Vision escalation target — Gemini 3 Flash via OpenRouter.
+        # Proven 4/4 in the vision bake-off. Slug google/gemini-3-flash-preview
+        # is the real GA-track id; bare google/gemini-3-flash does NOT exist.
+        # Documented fallback (one-line perpleximanus-config.json swap, no code
+        # change): google/gemini-3.5-flash (newer, non-preview).
+        "or-gemini-3-flash": ModelEntry(
+            model_id="google/gemini-3-flash-preview",
+            provider="openrouter",
+            base_url="https://openrouter.ai/api/v1",
+            api_key_env="PMX_OPENROUTER_API_KEY",
+            context_window=1_048_576,
+            capabilities=frozenset(
+                {
+                    Requirement.TOOL_CALLING,
+                    Requirement.LONG_CONTEXT,
+                    Requirement.VISION,
+                    Requirement.JSON_MODE,
+                }
+            ),
+            price_in_per_m=0.075,
+            price_out_per_m=0.30,
+        ),
     }
     assignments = {
         # AGENT_DRIVER intentionally omitted: it resolves to `default_model`.
@@ -303,6 +330,7 @@ def default_config() -> RouterConfig:
         models=models,
         default_model="driver-local",
         assignments=assignments,
+        vision_escalation_model="or-gemini-3-flash",
     )
 
 
