@@ -436,3 +436,13 @@ dc-04b: committed
   - packages/agent-server/tests/test_sessions_routes.py
   - test-record/dc-04b/units.log
   - agent-projects/sonnet/dc-04b-report.md
+dc-05a: in-flight
+  - packages/core/src/perpleximanus/core/loop/engine.py
+  - packages/core/tests/test_dc05_loop.py
+  - test-record/dc-05/units-core.log
+  - agent-projects/gemini/dc-05a-report.md
+dc-05b: committed
+  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/tests/test_resume_reconstruction.py
+  - test-record/dc-05/units-server.log
+  - agent-projects/sonnet/dc-05b-report.md

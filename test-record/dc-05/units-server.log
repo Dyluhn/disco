@@ -1,0 +1,13 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.13, pytest-9.0.3, pluggy-1.6.0
+rootdir: /var/home/dylan/projects/perpleximanus build
+configfile: pyproject.toml
+plugins: asyncio-1.4.0, anyio-4.13.0, hypothesis-6.155.2
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 42 items
+
+packages/agent-server/tests/test_resume_reconstruction.py ............   [ 28%]
+packages/agent-server/tests/test_resume.py ............                  [ 57%]
+packages/agent-server/tests/test_lifecycle.py ..................         [100%]
+
+============================== 42 passed in 0.31s ==============================

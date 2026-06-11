@@ -26,6 +26,7 @@ from typing import Any
 from perpleximanus.core import (
     DEFAULT_OWNER_ID,
     ActionEvent,
+    AgentErrorEvent,
     ConversationStatus,
     EventFilter,
     EventSource,
@@ -1752,6 +1753,145 @@ class ConversationRuntime:
         self._cancel_flags.pop(conversation_id, None)
         self.kick(conversation_id)
 
+    async def _reconstruct_resume_context(
+        self, conversation_id: str, events: list
+    ) -> list:
+        """Build the events to append before a resume status flip (DC-05b / DEFECT-4).
+
+        Returns a list that may contain:
+          - 0 or more synthetic ObservationEvents for dangling (unresolved) actions
+          - exactly 1 ENVIRONMENT MessageEvent: sandbox reality + file list + sessions
+            + the first undone plan step as the next actionable instruction
+
+        Receives the event list explicitly so it is unit-testable against an archived
+        log without a live runtime — do NOT load events from the store here.
+        """
+        result: list = []
+
+        # 1. Synthesize terminal observations for dangling actions.
+        # An action is "dangling" if no ObservationEvent or AgentErrorEvent references
+        # its id — the server was killed while the tool was in-flight.
+        resolved: set[str] = set()
+        for e in events:
+            if isinstance(e, ObservationEvent) and e.action_id:
+                resolved.add(e.action_id)
+            elif isinstance(e, AgentErrorEvent) and e.action_id:
+                resolved.add(e.action_id)
+
+        for e in events:
+            if isinstance(e, ActionEvent) and e.id not in resolved:
+                result.append(
+                    ObservationEvent(
+                        source=EventSource.ENVIRONMENT,
+                        action_id=e.id,
+                        tool_result=ToolResult(
+                            call_id=e.tool_call.call_id,
+                            tool_name=e.tool_call.tool_name,
+                            success=False,
+                            content=(
+                                "<system-reminder>This action was interrupted by a server"
+                                " restart — its outcome is UNKNOWN. Re-verify its effect"
+                                " before assuming it completed.</system-reminder>"
+                            ),
+                        ),
+                    )
+                )
+
+        # 2. Environment reality block.
+        # Starts with "Resumed by user." so existing checks that test for that
+        # literal substring continue to pass.
+        parts: list[str] = [
+            "Resumed by user. Current environment reality after interruption:"
+        ]
+
+        # The sandbox sentence must match reality: a PAUSED landed by an in-loop
+        # valve (dc-05a actionless/noop breakers) leaves the executor — and its
+        # sandbox — alive; only restart/suspend paths reclaim it. Lying about a
+        # reclaim would push the model into pointless re-verification.
+        if conversation_id in self._executors:
+            parts.append(
+                "- Your sandbox is still running — existing workspace files and"
+                " shell sessions are intact."
+            )
+        else:
+            parts.append(
+                "- The previous sandbox was reclaimed. A fresh sandbox is created on"
+                " your next action and your saved workspace files are restored into"
+                " it automatically."
+            )
+
+        # Workspace file listing from the project-store snapshot (up to 30 paths).
+        store = self._project_store_now()
+        file_paths: list[str] = []
+        if store is not None and store.status() == StorageStatus.OK:
+            try:
+                workspace = store.path_for(conversation_id)
+                raw_paths = list(store.iter_workspace(conversation_id))[:30]
+                file_paths = [str(p.relative_to(workspace)) for p in raw_paths]
+            except Exception:  # noqa: BLE001 — missing/corrupt store: fall through to empty
+                pass
+
+        if file_paths:
+            listing = "\n  ".join(file_paths)
+            parts.append(f"- Files that will be restored:\n  {listing}")
+        else:
+            parts.append("- No saved files — the workspace starts empty.")
+
+        # Session list (degrades gracefully — sessions_snapshot never raises).
+        sessions, _ = await self.sessions_snapshot(conversation_id)
+        if sessions:
+            names = ", ".join(s.name for s in sessions)
+            parts.append(f"- Shell sessions: {names}")
+        else:
+            parts.append("- No shell sessions are running.")
+
+        # 3. Plan restatement: find the latest plan and the first step not yet done.
+        latest_plan: PlanEvent | None = None
+        for e in events:
+            if isinstance(e, PlanEvent):
+                if latest_plan is None or e.revision >= latest_plan.revision:
+                    latest_plan = e
+
+        if latest_plan is not None and latest_plan.steps:
+            plan_seq = latest_plan.seq or 0
+            done_steps: set[int] = set()
+            for e in events:
+                if not isinstance(e, ActionEvent) or e.tool_call is None:
+                    continue
+                if e.tool_call.tool_name != "plan_step":
+                    continue
+                if (e.seq or 0) < plan_seq:
+                    continue
+                try:
+                    idx = int(e.tool_call.arguments.get("index"))  # type: ignore[arg-type]
+                    state = str(e.tool_call.arguments.get("state"))
+                except (TypeError, ValueError):
+                    continue
+                if state == "done":
+                    done_steps.add(idx)
+
+            first_undone: int | None = None
+            for i in range(1, len(latest_plan.steps) + 1):
+                if i not in done_steps:
+                    first_undone = i
+                    break
+
+            if first_undone is not None:
+                step_title = latest_plan.steps[first_undone - 1].title
+                parts.append(
+                    f"Next actionable step ({first_undone}): '{step_title}'."
+                    " Do not re-plan and do not summarize — execute this step now using"
+                    " tools."
+                )
+
+        result.append(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(role="user", content="\n".join(parts)),
+            )
+        )
+        return result
+
     async def resume_conversation(self, conversation_id: str) -> dict:
         """Mode-agnostic, event-log-driven resume. Legal from PAUSED and IDLE-with-
         unfinished-plan (an approved PlanEvent exists but FINISHED was never reached).
@@ -1774,24 +1914,21 @@ class ConversationRuntime:
         if status == ConversationStatus.ERROR:
             return {"ok": False, "reason": "conversation_error"}
 
+        events = await self._store.get_events(conversation_id)
+
         legal = status == ConversationStatus.PAUSED
         if not legal and status == ConversationStatus.IDLE:
-            events = await self._store.get_events(conversation_id)
             legal = _has_unfinished_plan(events)
 
         if not legal:
             return {"ok": False, "reason": f"illegal_state_{status.value}"}
 
-        # Append environment message exactly once so the model knows time passed and
-        # can re-orient from the plan recitation (GAP D's pinned objective+checklist
-        # is the re-orientation mechanism — no new machinery needed here).
-        await self._store.append(
-            conversation_id,
-            MessageEvent(
-                source=EventSource.ENVIRONMENT,
-                message=LLMMessage(role="user", content="Resumed by user."),
-            ),
-        )
+        # Reconstruct resume context: synthesized observations + reality block.
+        # All new events are appended BEFORE the RUNNING status flip so View.of
+        # sees resolved action→observation pairs and the model re-orients correctly.
+        new_events = await self._reconstruct_resume_context(conversation_id, events)
+        for event in new_events:
+            await self._store.append(conversation_id, event)
 
         # Clear any lingering cancel flag from a prior Stop.
         self._cancel_flags.pop(conversation_id, None)
