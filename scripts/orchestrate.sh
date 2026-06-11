@@ -117,6 +117,11 @@ pointer_prompt() { # <brief-file> -> pointer text on stdout
 worker_cmd() { # <preset> <brief-file> -> command string on stdout
   local brief="$2" ptr; ptr="$(pointer_prompt "$brief")"
   case "$1" in
+    pro)
+      # Gemini Pro = primary implementer when quota allows (gemini-cli-delegation);
+      # same yolo posture as flash. Quota-probe before dispatch: a quota-dead Pro
+      # burns the dispatch (stall-killed with an empty log).
+      printf 'gemini -m gemini-3-pro-preview --yolo -p %q' "$ptr" ;;
     flash)
       printf 'gemini -m gemini-3-flash-preview --yolo -p %q' "$ptr" ;;
     sonnet)
@@ -162,7 +167,7 @@ cmd_dispatch() {
   done < <(order_files "$order")
 
   local cmd; cmd=$(worker_cmd "$worker" "$brief") || fail_reason "$order" "unknown-worker" \
-    "Dispatch refused: unknown worker preset '$worker'. Valid presets: flash, sonnet, pi-free."
+    "Dispatch refused: unknown worker preset '$worker'. Valid presets: pro, flash, sonnet, pi-free."
 
   # a staged (declared-but-untouched) order becomes live the moment a worker is
   # let loose on its files — flip BEFORE launch so the gates see it immediately
