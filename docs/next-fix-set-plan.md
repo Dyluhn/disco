@@ -523,3 +523,28 @@ choice.
 - Caution reinforced: their prune mutates rendered history in place —
   hostile to llama.cpp prefix caching; if adopted, fire only at compaction
   boundaries. Aligns with the never-mask-per-step rule.
+
+## 9. Handoff-document design (Dylan's proposal, 2026-06-11)
+
+Dylan independently proposed the anchored-checkpoint pattern: an agent
+crafts a heavily structured handoff document before a project ends, the
+next iteration recycles it (merge + prune stale), it's injected at session
+start, and the model is refused access to change the structure. Ratified
+direction for the reality-block upgrade, with two amendments from the
+Phase-B evidence:
+
+1. WRITE-THROUGH, not write-at-finish: crashes don't announce themselves
+   (every Phase-B resume came from an unscheduled restart). The checkpoint
+   updates at every plan-step transition. Sections that CAN be derived from
+   the event log (plan state, deliverables, pinned facts) are
+   harness-rendered, never model-authored — the model can't hallucinate
+   progress into the handoff. Model fills only the narrative slots.
+2. NO "first action: ask the user" — that is re-run #5's degeneration
+   (ask_user-as-narration). The injected block ends with the next
+   actionable step + execute-now instruction; ask_user unlocks after one
+   real action. The handoff doc rendered to the HUMAN on resume is the UX
+   answer to "where were we".
+
+Template + merge prompt references: Pi compaction.ts checkpoint format
+(§7 #5), OpenCode anchored-summary update (§8). Candidate order: fold into
+the reality-block/re-grounding line (with §7 #8 scheduled facts-survey).
