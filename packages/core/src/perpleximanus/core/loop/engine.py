@@ -124,10 +124,11 @@ _PLAN_NUDGE = (
     "<system-reminder>\n"
     "Still in PLANNING mode — no plan has been proposed yet. To advance, either "
     "(a) call the `submit_plan` tool with a summary, ordered steps, and a markdown "
-    "`context` block, or (b) if a required detail is genuinely missing and you "
-    "cannot plan well without it (the user named something only they know — a "
+    "`context` block, or (b) if required details are genuinely missing and you "
+    "cannot plan well without them (the user named something only they know — a "
     "color, a credential, a target, a file that isn't here), call `ask_user` with "
-    "a clear `question` to get it BEFORE planning. Prefer asking over guessing on "
+    "a clear `question` (for ONE missing detail) or `clarify` (for SEVERAL) to get "
+    "them BEFORE planning. Prefer asking over guessing on "
     "details the user explicitly required. You may also keep reading (file_list, "
     "file_read, search, extract) for more context, but a prose reply alone doesn't "
     "advance the conversation.\n"
@@ -206,6 +207,77 @@ _NON_PRODUCTIVE_TOOLS = frozenset(
 # AWAITING_USER_QUESTION (the user types an answer). Either way the reply resumes
 # the run.
 _ASK_USER_TOOL_NAME = "ask_user"
+
+# The virtual clarify tool — the planner's typed multi-question escape hatch.
+# When the request is ambiguous (multiple interpretations, missing specifics),
+# the planner calls `clarify` with a set of TYPED questions instead of guessing.
+# The loop intercepts the call, emits a ClarifyEvent carrying the typed
+# questions, and halts at AWAITING_USER_QUESTION. The user answers each
+# question; the answers are re-injected as a user message and planning proceeds
+# with the clarified context.
+#
+# This GENERALIZES ask_user's single free-form question: clarify carries
+# MULTIPLE structured questions with types (short_text / long_text / choice)
+# so the planner can get precise answers to the exact unknowns, not one
+# sprawling free-form block. The planner CHOOSES which tool to call — single
+# question (ask_user) or structured batch (clarify) — based on how many
+# unknowns it faces.
+_CLARIFY_TOOL_NAME = "clarify"
+_CLARIFY_DESCRIPTION = (
+    "Pause BEFORE planning and ask the user MULTIPLE structured clarification "
+    "questions. Use this when the request is ambiguous and you need SEVERAL "
+    "specific answers before you can commit to a good plan — a brand color, "
+    "a tech preference, a target host, a file name, a layout choice. "
+    "Provide an overarching `question` summarizing what you're clarifying, "
+    "and a `questions` array of typed items. Each item has: an `id` (short "
+    "stable identifier like 'color' or 'stack'), the `question` text, a "
+    "`type` field ('short_text' for a one-word answer, 'long_text' for a "
+    "sentence, 'choice' for a pick from `options`), and optional `options` "
+    "array for choice-type questions. Prefer 2-5 questions — enough to "
+    "disambiguate, not an interrogation. Call this BEFORE submit_plan when "
+    "the unknowns are genuine blockers to a good plan."
+)
+_CLARIFY_PARAMETERS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "question": {
+            "type": "string",
+            "description": "Overarching summary of what you're clarifying (one sentence).",
+        },
+        "questions": {
+            "type": "array",
+            "description": "The typed questions to ask (2-5 items).",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Short stable id, e.g. 'color' or 'stack'.",
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": "The question text the user sees.",
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": ["short_text", "long_text", "choice"],
+                        "description": "Input kind: short_text (one word), long_text (sentence), choice (pick from options).",
+                    },
+                    "options": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Allowed choices (required when type=choice).",
+                    },
+                },
+                "required": ["id", "question"],
+            },
+            "minItems": 1,
+            "maxItems": 5,
+        },
+    },
+    "required": ["question", "questions"],
+}
+# Original ask_user description follows.
 _ASK_USER_DESCRIPTION = (
     "Pause the run and ask the human user for input. Call this tool when YOU "
     "(in your own reasoning) decide that the next step depends on human "
@@ -326,9 +398,20 @@ def _propose_plan_update_tool_spec():
     )
 
 
+def _clarify_tool_spec():
+    from ..llm.types import ToolSpec
+
+    return ToolSpec(
+        name=_CLARIFY_TOOL_NAME,
+        description=_CLARIFY_DESCRIPTION,
+        parameters_schema=_CLARIFY_PARAMETERS_SCHEMA,
+    )
+
+
 # Lazy singletons — built on first access so module-level import order stays clean.
 _ASK_USER_TOOL_SPEC = None
 _PROPOSE_PLAN_UPDATE_TOOL_SPEC = None
+_CLARIFY_TOOL_SPEC = None
 
 
 def _ask_user_tool_singleton():
@@ -343,6 +426,13 @@ def _propose_plan_update_tool_singleton():
     if _PROPOSE_PLAN_UPDATE_TOOL_SPEC is None:
         _PROPOSE_PLAN_UPDATE_TOOL_SPEC = _propose_plan_update_tool_spec()
     return _PROPOSE_PLAN_UPDATE_TOOL_SPEC
+
+
+def _clarify_tool_singleton():
+    global _CLARIFY_TOOL_SPEC
+    if _CLARIFY_TOOL_SPEC is None:
+        _CLARIFY_TOOL_SPEC = _clarify_tool_spec()
+    return _CLARIFY_TOOL_SPEC
 
 
 # GAP B turn-taking tools — notify (non-blocking progress / mid-run reply) and
@@ -926,17 +1016,18 @@ class AgentLoop:
                 return True
 
             planner_tools = [t for t in tools if _planner_ok(getattr(t, "name", None))]
-            # Append the VIRTUAL ask_user even while planning: an under-specified
+            # Append the VIRTUAL ask_user + clarify even while planning: an under-specified
             # task most needs clarification BEFORE a plan is committed (the user
             # named a detail only they know). ask_user is read-only-safe — the loop
             # intercepts it (never executes it against the sandbox) and halts at the
-            # Ask-gate, same as in execution. Without this the planner is forced to
-            # guess and bury the unknown in the plan instead of just asking.
-            return planner_tools + [_ask_user_tool_singleton()]
+            # Ask-gate, same as in execution. clarify is the MULTI-QUESTION variant
+            # for when several specifics are missing. Without this the planner is forced
+            # to guess and bury the unknown in the plan instead of just asking.
+            return planner_tools + [_ask_user_tool_singleton(), _clarify_tool_singleton()]
         if self._planning_tools:
             tools = [t for t in tools if getattr(t, "name", None) not in self._planning_tools]
-        # Append the virtual ask_user + propose_plan_update tools in execution
-        # mode. Both are documented so the model decides WHEN to use them;
+        # Append the virtual ask_user + clarify + propose_plan_update tools in execution
+        # mode. All are documented so the model decides WHEN to use them;
         # neither is injected by reminder. propose_plan_update is the model's
         # auto-recovery affordance: when its current plan is wrong, it proposes
         # a revision and the user accepts/refines via the plan-approval gate.
@@ -944,6 +1035,7 @@ class AgentLoop:
         if not suppress_meta_tools:
             virtuals += [
                 _ask_user_tool_singleton(),
+                _clarify_tool_singleton(),
                 _propose_plan_update_tool_singleton(),
                 _notify_user_tool_singleton(),
                 _remember_tool_singleton(),
@@ -1926,6 +2018,7 @@ class AgentLoop:
                                 known_tool_names = {t.name for t in self.executor.available_tools()}
                             virtual_names = {
                                 "ask_user",
+                                "clarify",
                                 "propose_plan_update",
                                 "plan_step",
                                 "notify_user",
@@ -2618,7 +2711,7 @@ class AgentLoop:
                 # committing a plan is the legitimate use).
                 if (
                     step.tool_call is not None
-                    and step.tool_call.tool_name in ("ask_user", "propose_plan_update")
+                    and step.tool_call.tool_name in ("ask_user", "clarify", "propose_plan_update")
                     and self.mode != OperatingMode.PLANNING
                     and self._actions_since_last_resume(events) == 0
                 ):
@@ -2655,6 +2748,71 @@ class AgentLoop:
                         StatusEvent(
                             status=ConversationStatus.AWAITING_PLAN_APPROVAL,
                             detail=new_plan.id,
+                        )
+                    )
+                    return await self.get_state()
+
+                if step.tool_call is not None and step.tool_call.tool_name == "clarify":
+                    # clarify → ClarifyEvent with typed questions. The planner
+                    # calls this when SEVERAL specifics are missing and
+                    # guessing would produce a bad plan. The loop emits a
+                    # ClarifyEvent (carrying the structured question items)
+                    # and halts at AWAITING_USER_QUESTION. The user answers
+                    # each question; the answers are re-injected as a user
+                    # message that resumes planning.
+                    from ..events import ClarifyEvent as _ClarifyEvent, ClarifyQuestionItem
+
+                    question = str(
+                        step.tool_call.arguments.get("question") or ""
+                    ).strip() or step.thought.strip()
+                    raw_items = step.tool_call.arguments.get("questions") or []
+                    items: list[ClarifyQuestionItem] = []
+                    for it in raw_items:
+                        if not isinstance(it, dict):
+                            continue
+                        qid = str(it.get("id") or f"q{len(items) + 1}").strip()
+                        qtext = str(it.get("question") or "").strip()
+                        if not qtext:
+                            continue
+                        qtype = str(it.get("type") or "short_text").strip()
+                        if qtype not in ("short_text", "long_text", "choice"):
+                            qtype = "short_text"
+                        qopts = it.get("options") or []
+                        if isinstance(qopts, list):
+                            qopts = [str(o) for o in qopts]
+                        else:
+                            qopts = []
+                        items.append(
+                            ClarifyQuestionItem(
+                                id=qid, question=qtext, type=qtype, options=qopts
+                            )
+                        )
+                    if not items:
+                        # No valid questions → fall back to free-form ask_user
+                        q_event = MessageEvent(
+                            source=EventSource.AGENT,
+                            message=LLMMessage(
+                                role="assistant",
+                                content=question or "The agent needs clarification before planning.",
+                            ),
+                        )
+                        await self._emit(q_event)
+                        await self._emit(
+                            StatusEvent(
+                                status=ConversationStatus.AWAITING_USER_QUESTION,
+                                detail=q_event.id,
+                            )
+                        )
+                        return await self.get_state()
+                    clarify_event = _ClarifyEvent(
+                        question=question or "The agent needs clarification before planning.",
+                        items=items,
+                    )
+                    await self._emit(clarify_event)
+                    await self._emit(
+                        StatusEvent(
+                            status=ConversationStatus.AWAITING_USER_QUESTION,
+                            detail=clarify_event.id,
                         )
                     )
                     return await self.get_state()

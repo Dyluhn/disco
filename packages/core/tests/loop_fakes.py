@@ -216,6 +216,9 @@ def build_loop(
     stop_hooks=None,
     stuck_thresholds=None,
     conversation_id: str = "conv",
+    planning_tools: frozenset[str] = frozenset(),
+    plan_tool: str = "submit_plan",
+    execution_mode: OperatingMode = OperatingMode.LONG_HORIZON,
 ):
     """Construct an AgentLoop over fakes. `router` is unused by the loop itself
     (the Agent wraps it) so a None sentinel is passed."""
@@ -234,6 +237,9 @@ def build_loop(
         max_iterations=max_iterations,
         stop_hooks=stop_hooks,
         stuck_thresholds=stuck_thresholds,
+        planning_tools=planning_tools,
+        plan_tool=plan_tool,
+        execution_mode=execution_mode,
     )
     return loop, store
 

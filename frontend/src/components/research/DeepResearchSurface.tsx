@@ -37,6 +37,7 @@ import { DeepProgressStrip } from "./DeepProgressStrip";
 import { DeepReportView } from "./DeepReportView";
 import { DepthTierSelector, type Tier } from "./DepthTierSelector";
 import { TieredSourcePanel } from "./TieredSourcePanel";
+import { ReportFollowUp } from "./ReportFollowUp";
 
 interface Props {
   /** When passed via /deep/:cid, the surface resumes the existing conversation. */
@@ -271,6 +272,16 @@ export function DeepResearchSurface({ resumeCid, onScopeChange }: Props) {
         {r.report && (
           <div className="mx-auto w-full max-w-doc">
             <TieredSourcePanel tiers={r.sources} />
+          </div>
+        )}
+
+        {/* Report follow-up — ask a question that reuses the report's corpus */}
+        {r.status === "FINISHED" && r.report && (
+          <div className="mx-auto w-full max-w-doc">
+            <ReportFollowUp
+              onAsk={(question) => r.followUp(question)}
+              busy={false}
+            />
           </div>
         )}
 

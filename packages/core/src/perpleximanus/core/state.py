@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from .events import (
     ActionEvent,
     AlternativesEvent,
+    ClarifyEvent,
     ConversationStatus,
     ErrorEvent,
     Event,
@@ -52,6 +53,11 @@ class ConversationState(BaseModel):
     # answer, if status is AWAITING_USER_QUESTION. The two-way Ask-gate's pending
     # id — lets a reconnecting surface resolve the question from a state snapshot.
     pending_question_id: str | None = None
+    # The id of a ClarifyEvent awaiting answers, if status is
+    # AWAITING_USER_QUESTION and the gate is a clarify card (not a free-form
+    # ask_user question). The frontend resolves this to render ClarifyPanel
+    # instead of AskPanel.
+    pending_clarify_id: str | None = None
     # Feature-scoped scratch state; keys are namespaced by subsystem,
     # e.g. "memory.last_condense_seq". [CONTRACT]
     extras: dict[str, Any] = Field(default_factory=dict)
@@ -76,6 +82,9 @@ class ConversationState(BaseModel):
         # The most recent agent message id — the candidate question when the loop
         # transitions to AWAITING_USER_QUESTION (the free-form Ask-gate).
         last_agent_message_id: str | None = None
+        # The most recent ClarifyEvent id — the candidate when the loop
+        # transitions to AWAITING_USER_QUESTION via the clarify gate.
+        last_clarify_id: str | None = None
 
         for e in events:
             if e.seq is not None:
@@ -100,8 +109,17 @@ class ConversationState(BaseModel):
                     # Prefer the explicit id the engine stamped on the status
                     # event; fall back to the last agent message.
                     st.pending_question_id = e.detail or last_agent_message_id
+                    # This gate is a clarify card ONLY when the engine stamped THIS
+                    # status with the clarify event's id. A free-form ask_user gate
+                    # stamps the agent message id instead — so gating on the detail
+                    # (not just "the last clarify seen") stops a stale clarify card
+                    # from shadowing a later ask_user question on reload/reconnect.
+                    st.pending_clarify_id = (
+                        last_clarify_id if e.detail == last_clarify_id else None
+                    )
                 else:
                     st.pending_question_id = None
+                    st.pending_clarify_id = None
             elif isinstance(e, ActionEvent):
                 run_iteration += 1
                 last_action_id = e.id
@@ -116,6 +134,8 @@ class ConversationState(BaseModel):
                 # Track the latest agent message — the free-form Ask-gate's
                 # question is the agent message just before the status flip.
                 last_agent_message_id = e.id
+            elif isinstance(e, ClarifyEvent):
+                last_clarify_id = e.id
             elif isinstance(e, ErrorEvent):
                 st.execution_status = ConversationStatus.ERROR
 

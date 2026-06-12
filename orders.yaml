@@ -810,7 +810,7 @@ rp-10: committed
   - packages/tools/src/perpleximanus/tools/builtin/__init__.py
   - packages/tools/src/perpleximanus/tools/registry.py
   - test-record/rp-10/units-tools.log
-rp-13: in-flight
+rp-13: committed
   # Clarifying questions (pre-plan clarify gate, ADDITIVE on engine.py mirroring
   # ask_user) + deep-report follow-ups (continuation run reusing report corpus, the
   # RP-08 re-injection mechanism). Core-engine + agent-server + research frontend.
@@ -818,12 +818,22 @@ rp-13: in-flight
   - packages/core/src/perpleximanus/core/loop/engine.py
   - packages/core/src/perpleximanus/core/events.py
   - packages/core/src/perpleximanus/core/llm/prompts.py
+  - packages/core/src/perpleximanus/core/__init__.py
+  - packages/core/src/perpleximanus/core/state.py
   - packages/core/tests/test_clarify_gate.py
+  - packages/core/tests/loop_fakes.py
+  - packages/core/tests/test_planner_gate.py
   - packages/agent-server/src/perpleximanus/agent_server/runtime.py
   - packages/agent-server/src/perpleximanus/agent_server/app.py
   - packages/agent-server/tests/test_report_followup.py
+  - frontend/src/types/agent.ts
+  - frontend/src/hooks/useBuildStream.ts
+  - frontend/src/hooks/useDeepResearchStream.ts
   - frontend/src/components/build/ClarifyPanel.tsx
-  - frontend/src/components/build/BuildSurface.tsx
+  - frontend/src/components/BuildSurface.tsx
   - frontend/src/components/research/ReportFollowUp.tsx
   - frontend/src/components/research/DeepResearchSurface.tsx
+  - frontend/src/fixtures/agentTrace.ts
+  - frontend/src/api/agent.ts
+  - frontend/e2e/clarify-gate.spec.ts
   - test-record/rp-13/units-core.log

@@ -39,6 +39,7 @@ import { SteerInput } from "@/components/build/SteerInput";
 import { UploadComposer } from "@/components/build/BuildSurface";
 import { AlternativesGate } from "@/components/build/AlternativesGate";
 import { AskPanel } from "@/components/build/AskPanel";
+import { ClarifyPanel } from "@/components/build/ClarifyPanel";
 import { ReplayScrubber } from "@/components/build/ReplayScrubber";
 import { ScheduleSection } from "@/components/settings/ScheduleSection";
 
@@ -335,7 +336,19 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
               onPick={b.pickAlternative}
             />
           )}
-          {b.awaitingQuestion && (
+          {b.awaitingQuestion && b.pendingClarify && (
+            <ClarifyPanel
+              question={b.pendingClarify.question}
+              items={b.pendingClarify.items.map((it) => ({
+                id: it.id,
+                question: it.question,
+                type: it.type,
+                options: it.options,
+              }))}
+              onAnswer={b.answer}
+            />
+          )}
+          {b.awaitingQuestion && !b.pendingClarify && (
             <AskPanel
               question={b.pendingQuestion?.message?.content ?? finalMessage ?? "The agent has a question."}
               onAnswer={b.answer}

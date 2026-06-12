@@ -238,6 +238,38 @@ export const askGateState: ConversationState = {
   pending_question_id: ASK_QUESTION_ID,
 };
 
+// ---- the pre-plan Clarify gate (RP-13, typed multi-question) ----------------
+// Reached offline when the build task contains "clarify" — the planner asks
+// SEVERAL typed questions (short_text / choice / long_text) and parks at
+// AWAITING_USER_QUESTION with a clarify card (pending_clarify_id set, so the
+// surface renders ClarifyPanel rather than the free-form AskPanel).
+export const CLARIFY_ID = "evt_clarify";
+
+export const clarifyEvent: AgentEvent = {
+  kind: "clarify",
+  id: CLARIFY_ID,
+  source: "agent",
+  seq: 9,
+  question: "A few specifics before I commit to a plan for your landing page.",
+  items: [
+    { id: "color", question: "What primary brand color? (hex or name)", type: "short_text", options: [], answer: "" },
+    { id: "stack", question: "Which framework should I build it in?", type: "choice", options: ["React", "Vue", "Svelte"], answer: "" },
+    { id: "audience", question: "Who is the target audience, in a sentence?", type: "long_text", options: [], answer: "" },
+  ],
+};
+
+export const clarifyGateState: ConversationState = {
+  conversation_id: FIXTURE_CID,
+  execution_status: "AWAITING_USER_QUESTION",
+  iteration: 1,
+  max_iterations: 500,
+  last_seq: 9,
+  pending_action_id: null,
+  pending_plan_id: null,
+  pending_question_id: CLARIFY_ID,
+  pending_clarify_id: CLARIFY_ID,
+};
+
 /** Re-entering plan mode after the build: a focused, diff-style revision (revision 2). */
 export const replanEvent: AgentEvent = {
   kind: "plan",

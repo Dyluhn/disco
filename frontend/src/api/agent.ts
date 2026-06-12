@@ -9,6 +9,8 @@
 import {
   askGateState,
   askQuestionEvent,
+  clarifyEvent,
+  clarifyGateState,
   finishedState,
   gateState,
   planEvent,
@@ -277,12 +279,31 @@ function subscribeFixture(onFrame: (f: WSServerFrame) => void): AgentHandle {
     onFrame({ type: "state", state: askGateState });
   }
 
+  // The pre-plan Clarify gate demo (RP-13): the planner asks several TYPED
+  // questions and parks at AWAITING_USER_QUESTION with a clarify card.
+  async function clarifyDemo() {
+    onFrame({ type: "state", state: runningState() });
+    if (cancelled) return;
+    await fixtureDelay(120);
+    onFrame({ type: "event", event: clarifyEvent });
+    if (cancelled) return;
+    atAsk = true;
+    onFrame({ type: "state", state: clarifyGateState });
+  }
+
   return {
     send: (f) => {
       if (f.type === "send_message")
-        // A task mentioning "ask" routes to the Ask-gate demo; everything else
-        // follows the normal plan-first flow.
-        void (/\bask\b/i.test(f.content ?? "") ? askDemo() : propose(planEvent, planGateState));
+        // A task mentioning "clarify" routes to the pre-plan Clarify gate demo;
+        // "ask" routes to the free-form Ask-gate; everything else follows the
+        // normal plan-first flow.
+        void (
+          /\bclarif/i.test(f.content ?? "")
+            ? clarifyDemo()
+            : /\bask\b/i.test(f.content ?? "")
+              ? askDemo()
+              : propose(planEvent, planGateState)
+        );
       else if (f.type === "steer" && atAsk) {
         // the answer to the agent's question → resume + finish
         atAsk = false;

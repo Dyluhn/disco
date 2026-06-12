@@ -1715,7 +1715,12 @@ class ConversationRuntime:
             )
             if last_status is not None and last_status.detail == "plan_approved":
                 await self._execute_deep_research(conversation_id, plans[-1])
-        # else: waiting at AWAITING_PLAN_APPROVAL, FINISHED, etc. — no-op.
+
+        # Phase 3: FOLLOW-UP — a FINISHED report exists AND there's a new user
+        # message since the last report. Run a follow-up synthesis that reuses
+        # the existing report's passages as grounding (RP-13).
+        elif reports and self._has_fresh_user_message(events, reports):
+            await self._follow_up_deep_research(conversation_id, events, reports[-1])
 
     async def _propose_deep_research_plan(
         self, conversation_id: str, events: list
@@ -2046,6 +2051,167 @@ class ConversationRuntime:
             "events": scrubbed_events,
         }
         return {"ok": True, "bundle": bundle}
+
+    @staticmethod
+    def _has_fresh_user_message(
+        events: list[Event], reports: list[ReportEvent]
+    ) -> bool:
+        """True when a USER message arrived AFTER the latest ReportEvent —
+        a follow-up question the user asked on a finished report."""
+        if not reports:
+            return False
+        last_report_seq = reports[-1].seq or 0
+        for e in reversed(events):
+            if (
+                isinstance(e, MessageEvent)
+                and e.source == EventSource.USER
+                and (e.seq or 0) > last_report_seq
+            ):
+                return True
+        return False
+
+    async def _follow_up_deep_research(
+        self,
+        conversation_id: str,
+        events: list[Event],
+        prior_report: ReportEvent,
+    ) -> None:
+        """Run a follow-up synthesis on an existing deep-research report.
+
+        Reuses the prior report's corpus (passages) as grounding context so
+        the follow-up answer is source-backed. The user's follow-up question
+        is the most recent USER message after the report. The answer is
+        emitted as message events (agent response) on the conversation log,
+        and a new lightweight ReportEvent captures the follow-up.
+
+        This is the RP-13 report-follow-up path — same event-stream-append
+        pattern as RP-08's scheduled-task re-injection."""
+        # Find the follow-up question (most recent USER message since the report).
+        last_report_seq = prior_report.seq or 0
+        follow_up_query = next(
+            (
+                e.message.content
+                for e in reversed(events)
+                if isinstance(e, MessageEvent)
+                and e.source == EventSource.USER
+                and (e.seq or 0) > last_report_seq
+            ),
+            None,
+        )
+        if not follow_up_query or not follow_up_query.strip():
+            return
+
+        await self._store.append(
+            conversation_id,
+            StatusEvent(status=ConversationStatus.RUNNING, detail="follow_up"),
+        )
+
+        # Reuse the prior report's passages as the grounding corpus.
+        passages = prior_report.passages or []
+        if not passages:
+            # No corpus to ground on — just answer directly.
+            router = self._router_now()
+            try:
+                answer = await router.complete(
+                    prompt=follow_up_query,
+                    mode=OperatingMode.INTERACTIVE,
+                    role=ModelRole.RAG_ANSWERER,
+                )
+                await self._store.append(
+                    conversation_id,
+                    MessageEvent(
+                        source=EventSource.AGENT,
+                        message=LLMMessage(role="assistant", content=answer.text),
+                    ),
+                )
+            except Exception as exc:
+                await self._store.append(
+                    conversation_id,
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                "<system-reminder>\n"
+                                f"Follow-up failed: {type(exc).__name__}: {exc}\n"
+                                "</system-reminder>"
+                            ),
+                        ),
+                    ),
+                )
+                await self._store.append(
+                    conversation_id,
+                    StatusEvent(status=ConversationStatus.ERROR),
+                )
+                return
+        else:
+            # Build a grounding block from the report's cited passages so the
+            # answerer can cite them. Limit to a reasonable context window.
+            MAX_PASSAGE_CHARS = 12_000
+            passage_blocks: list[str] = []
+            total = 0
+            for p in passages:
+                pid = str(p.get("id", ""))
+                ptext = str(p.get("text", ""))
+                src = str(p.get("source_title", p.get("source_url", "")))
+                block = f"[{pid}] ({src})\n{ptext}\n"
+                if total + len(block) > MAX_PASSAGE_CHARS:
+                    break
+                passage_blocks.append(block)
+                total += len(block)
+
+            grounding = "\n---\n".join(passage_blocks)
+            prompt = (
+                f"You are answering a follow-up question about a research report. "
+                f"The original query was: {prior_report.query}\n\n"
+                f"The report summary: {prior_report.summary}\n\n"
+                f"Below are the source passages the report was grounded on. "
+                f"Use them to answer the follow-up question. Cite sources "
+                f"with [[passage_id]] markers.\n\n"
+                f"--- SOURCE PASSAGES ---\n{grounding}\n"
+                f"--- END SOURCES ---\n\n"
+                f"Follow-up question: {follow_up_query}"
+            )
+
+            router = self._router_now()
+            try:
+                answer = await router.complete(
+                    prompt=prompt,
+                    mode=OperatingMode.INTERACTIVE,
+                    role=ModelRole.RAG_ANSWERER,
+                )
+                await self._store.append(
+                    conversation_id,
+                    MessageEvent(
+                        source=EventSource.AGENT,
+                        message=LLMMessage(role="assistant", content=answer.text),
+                    ),
+                )
+            except Exception as exc:
+                await self._store.append(
+                    conversation_id,
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                "<system-reminder>\n"
+                                f"Follow-up failed: {type(exc).__name__}: {exc}\n"
+                                "</system-reminder>"
+                            ),
+                        ),
+                    ),
+                )
+                await self._store.append(
+                    conversation_id,
+                    StatusEvent(status=ConversationStatus.ERROR),
+                )
+                return
+
+        await self._store.append(
+            conversation_id,
+            StatusEvent(status=ConversationStatus.FINISHED, detail="follow_up_complete"),
+        )
 
     async def export_report(
         self,

@@ -164,6 +164,24 @@ export interface DeliverableEvent extends EventBase {
   deployment_url?: string;
 }
 
+export interface ClarifyQuestionItem {
+  id: string;
+  question: string;
+  type: "short_text" | "long_text" | "choice";
+  options: string[];
+  answer: string;
+}
+
+/** Pre-plan typed clarification questions (RP-13). The planner calls `clarify`
+ *  with multiple structured questions; the loop emits this event and halts at
+ *  AWAITING_USER_QUESTION. The user answers each question and planning proceeds
+ *  with the clarified context. */
+export interface ClarifyEvent extends EventBase {
+  kind: "clarify";
+  question: string;
+  items: ClarifyQuestionItem[];
+}
+
 export type AgentEvent =
   | MessageEvent
   | ActionEvent
@@ -174,6 +192,7 @@ export type AgentEvent =
   | PlanEvent
   | ReportEvent
   | AlternativesEvent
+  | ClarifyEvent
   | DeliverableEvent
   | ErrorEvent;
 
@@ -188,6 +207,8 @@ export interface ConversationState {
   pending_alternatives_id?: string | null;
   // The agent's free-form question message id, if status is AWAITING_USER_QUESTION.
   pending_question_id?: string | null;
+  // The ClarifyEvent id, if status is AWAITING_USER_QUESTION and the gate is a clarify card.
+  pending_clarify_id?: string | null;
   // Runtime-overlaid sandbox liveness; absent for non-build surfaces.
   extras?: { sandbox?: "active" | "suspended" };
   // BP-15: the active sandbox backend name ('gvisor'|'podman'|'local'|'process').

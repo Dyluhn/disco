@@ -308,6 +308,32 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             runtime.kick(conversation_id)
         return {"event_id": stored.id, "seq": stored.seq}
 
+    @app.post("/conversations/{conversation_id}/followup")
+    async def post_followup(conversation_id: str, body: SendMessageBody) -> dict:
+        """Submit a follow-up question on a finished Deep Research report (RP-13).
+
+        Appends the question as a USER message, then kicks the loop. The runtime
+        detects a ReportEvent on the conversation and runs a follow-up synthesis
+        that reuses the report's passages as grounding."""
+        if runtime is None:
+            raise HTTPException(status_code=503, detail="runtime not available")
+        state = await store.get_state(conversation_id)
+        # Only accept follow-ups on FINISHED conversations.
+        if state.execution_status not in (
+            ConversationStatus.FINISHED,
+            ConversationStatus.IDLE,
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "reason": "not_finished",
+                    "status": state.execution_status.value,
+                },
+            )
+        stored = await store.append(conversation_id, _user_message(body.content))
+        runtime.kick(conversation_id)
+        return {"event_id": stored.id, "seq": stored.seq, "followup": True}
+
     @app.post("/conversations/{conversation_id}/files")
     async def upload_files(
         conversation_id: str,

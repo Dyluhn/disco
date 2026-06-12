@@ -12,6 +12,7 @@ import type {
   ActionEvent,
   AgentEvent,
   AlternativesEvent,
+  ClarifyEvent,
   ConversationStatus,
   MessageEvent,
   WSServerFrame,
@@ -56,6 +57,7 @@ export interface BuildStreamState {
   pendingPlanId: string | null;
   pendingAlternativesId: string | null;
   pendingQuestionId: string | null;
+  pendingClarifyId: string | null;
   /** Runtime sandbox liveness from the state frame's extras overlay (bp-13):
    *  'suspended' = container torn down, workspace saved (badge);
    *  'active' = live; null = unknown / no sandbox context. */
@@ -76,6 +78,7 @@ const initial: BuildStreamState = {
   pendingPlanId: null,
   pendingAlternativesId: null,
   pendingQuestionId: null,
+  pendingClarifyId: null,
   sandboxState: null,
   frameSeq: 0,
   error: null,
@@ -111,6 +114,7 @@ function reducer(state: BuildStreamState, action: Action): BuildStreamState {
       pendingPlanId: f.state.pending_plan_id,
       pendingAlternativesId: f.state.pending_alternatives_id ?? null,
       pendingQuestionId: f.state.pending_question_id ?? null,
+      pendingClarifyId: f.state.pending_clarify_id ?? null,
       sandboxState: f.state.extras?.sandbox ?? null,
       frameSeq: f.state.last_seq ?? 0,
     };
@@ -183,6 +187,10 @@ function reducer(state: BuildStreamState, action: Action): BuildStreamState {
           status === "AWAITING_USER_QUESTION"
             ? (f.event.detail ?? state.pendingQuestionId)
             : null,
+        pendingClarifyId:
+          status === "AWAITING_USER_QUESTION"
+            ? (events.find((e) => e.id === f.event.detail && e.kind === "clarify")?.id ?? null)
+            : null,
       };
     }
     if (f.event.kind === "error") {
@@ -207,6 +215,8 @@ export interface BuildStream extends BuildStreamState {
   pendingAlternatives: AlternativesEvent | null;
   /** The agent's free-form question, when status is AWAITING_USER_QUESTION. */
   pendingQuestion: MessageEvent | null;
+  /** The clarify card's event, when status is AWAITING_USER_QUESTION via clarify. */
+  pendingClarify: ClarifyEvent | null;
   plan: PlanView | null;
   planProgress: Map<number, StepState>;
   awaitingPlan: boolean;
@@ -304,6 +314,12 @@ export function useBuildStream(session: BuildSession | null): BuildStream {
         (e) => e.id === state.pendingQuestionId && e.kind === "message",
       ) as MessageEvent | undefined)) ||
     null;
+  const pendingClarify =
+    (state.pendingClarifyId &&
+      (state.events.find(
+        (e) => e.id === state.pendingClarifyId && e.kind === "clarify",
+      ) as ClarifyEvent | undefined)) ||
+    null;
 
   const plan = useMemo(() => derivePlan(state.events), [state.events]);
   const planProgress = useMemo(
@@ -319,6 +335,7 @@ export function useBuildStream(session: BuildSession | null): BuildStream {
     pendingAction,
     pendingAlternatives,
     pendingQuestion,
+    pendingClarify,
     plan,
     planProgress,
     awaitingPlan,

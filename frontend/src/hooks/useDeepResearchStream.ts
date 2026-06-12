@@ -131,6 +131,9 @@ export interface DeepResearchStream {
   cancel: () => void;
   /** Continue a stopped/incomplete run (explicit — never on open). */
   resume: () => void;
+  /** Ask a follow-up question on this conversation — sends a steer message
+   *  that re-kicks the loop with the report's corpus as grounding. */
+  followUp: (question: string) => void;
 }
 
 export function useDeepResearchStream(
@@ -163,6 +166,11 @@ export function useDeepResearchStream(
   const cancel = () => handle.current?.send({ type: "cancel" });
   // Resume a stopped/incomplete run (explicit; never automatic on open).
   const resume = () => handle.current?.send({ type: "resume" });
+  // Ask a follow-up question on the finished report — sends a user message
+  // that resumes the conversation loop with the existing context.
+  const followUp = (question: string) => {
+    handle.current?.send({ type: "send_message", content: question });
+  };
 
   const plan = useMemo(() => derivePlan(state.events), [state.events]);
   const progress = useMemo(
@@ -198,5 +206,6 @@ export function useDeepResearchStream(
     requestPlan,
     cancel,
     resume,
+    followUp,
   };
 }

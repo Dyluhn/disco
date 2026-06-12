@@ -50,6 +50,7 @@ class EventKind(str, Enum):
     DELIVERABLE = "deliverable"  # the agent's finished-artifact handoff signal
     SCHEDULE = "schedule"  # a schedule was created or deleted (RP-08)
     SCHEDULE_RUN = "schedule_run"  # a scheduled run fired (RP-08)
+    CLARIFY = "clarify"  # pre-plan typed clarification questions (RP-13)
 
 
 def _new_id() -> str:
@@ -596,6 +597,39 @@ class ScheduleRunEvent(BaseEvent):
     coalesced: bool = False
 
 
+class ClarifyQuestionItem(BaseModel):
+    """One typed question in a ClarifyEvent. Each item has a stable id, the
+    question text, a type that drives the UI input, and (after the user answers)
+    the user's answer."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    id: str  # stable id for this question within the clarify card
+    question: str  # the question text (rendered as Markdown)
+    type: Literal["short_text", "long_text", "choice"] = "short_text"
+    # For choice-type questions: the allowed options.
+    options: list[str] = Field(default_factory=list)
+    # Populated by the user's response; empty until answered.
+    answer: str = ""
+
+
+class ClarifyEvent(BaseEvent):
+    """Pre-plan clarification gate (RP-13). When the request is ambiguous and
+    the planner needs structured user input before committing to a plan, it
+    calls the `clarify` virtual tool. The loop intercepts the call, emits this
+    event carrying MULTIPLE typed questions, and halts at
+    AWAITING_USER_QUESTION. The user answers each question; the answers are
+    re-injected as context and planning proceeds.
+
+    NOT LLMConvertible — the clarify card is a UI gate, not a model-facing event.
+    The user's answers are re-injected as a regular USER MessageEvent, which the
+    model reads on its next View."""
+
+    kind: Literal[EventKind.CLARIFY] = EventKind.CLARIFY
+    source: EventSource = EventSource.AGENT
+    question: str  # overarching question / summary of what needs clarification
+    items: list[ClarifyQuestionItem]
+
+
 # ---- the discriminated union the store/serde use ----------------------------
 
 Event = Annotated[
@@ -613,7 +647,8 @@ Event = Annotated[
     | DeliverableEvent
     | ErrorEvent
     | ScheduleEvent
-    | ScheduleRunEvent,
+    | ScheduleRunEvent
+    | ClarifyEvent,
     Field(discriminator="kind"),
 ]
 
