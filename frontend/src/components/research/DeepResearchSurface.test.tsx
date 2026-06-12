@@ -110,8 +110,12 @@ describe("Deep Research surface — full lifecycle", () => {
     expect(screen.getByRole("tab", { name: /Cited/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Reviewed/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Discovered/i })).toBeInTheDocument();
-    // export button
-    expect(screen.getByRole("button", { name: /export/i })).toBeInTheDocument();
+    // export controls (RP-07): MD downloads now; PDF/DOCX are disabled until the
+    // sandbox image rebuild ships pandoc + WeasyPrint (no false affordance).
+    expect(screen.getByRole("button", { name: /^MD$/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^PDF$/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^DOCX$/ })).toBeDisabled();
+    expect(screen.getByText(/arrive with the next sandbox update/i)).toBeInTheDocument();
   });
 });
 

@@ -18,6 +18,8 @@ import { useMutation } from "@tanstack/react-query";
 import {
   createDeepResearchConversation,
   exportReportAsMarkdown,
+  exportReport,
+  type ReportExportFmt,
 } from "@/api/deepResearch";
 import { killConversation } from "@/api/agent";
 import {
@@ -85,9 +87,25 @@ export function useDeepResearch(resumeCid?: string | null) {
 
   const reset = useCallback(() => setSession(null), []);
 
-  const exportReport = useCallback(() => {
+  const exportMd = useCallback(() => {
     if (stream.report) exportReportAsMarkdown(stream.report);
   }, [stream.report]);
+
+  const exportReportByFmt = useCallback(
+    async (fmt: ReportExportFmt) => {
+      if (!session?.cid) return;
+      if (fmt === "md") {
+        exportMd();
+        return;
+      }
+      // Server-side export for pdf/docx. The UI reports errors via toast/surface.
+      await exportReport(session.cid, fmt);
+    },
+    [session?.cid, exportMd],
+  );
+
+  // Legacy export (single-button MD download) — kept for backward compat.
+  const exportReport = exportMd;
 
   return {
     started: session !== null,
@@ -106,6 +124,7 @@ export function useDeepResearch(resumeCid?: string | null) {
     retry,
     reset,
     exportReport,
+    exportReportByFmt,
     ...stream,
     // A failed create was silent (empty state, no message). Expose it to the UI.
     submitError: create.error ?? null,

@@ -25,7 +25,7 @@
  * subscription, the Build status state machine.
  */
 
-import { Ban, Download, Play, RotateCcw, Settings as SettingsIcon, Square } from "lucide-react";
+import { Ban, Download, File, FileText, FileType, Play, RotateCcw, Settings as SettingsIcon, Square } from "lucide-react";
 import { Link } from "react-router-dom";
 import { PlanPanel } from "@/components/build/PlanPanel";
 import { useDeepResearch } from "@/hooks/useDeepResearch";
@@ -52,6 +52,15 @@ const CTRL_BTN =
 // Kill is destructive (ends the run for good) → warn-tinted, distinct from Stop.
 const KILL_BTN =
   "flex items-center gap-hair rounded-control border border-warn/40 px-inline py-hair font-ui text-[0.78rem] text-warn transition-colors hover:bg-warn/10";
+// A control that exists but is not yet wired — visibly inert (no hover, dimmed,
+// not-allowed cursor), never a click that silently errors. NO FALSE AFFORDANCES.
+const PENDING_BTN =
+  "flex items-center gap-hair rounded-control border border-hairline border-dashed px-inline py-hair font-ui text-[0.78rem] text-text-faint opacity-50 cursor-not-allowed";
+// RP-07: PDF/DOCX generation needs pandoc + WeasyPrint, which ship in the sandbox
+// image rebuild (BP-08/BP-04 VM-201). Until that lands they CANNOT work, so the
+// buttons are disabled + labelled — not clickable buttons that 500. Flip to true
+// in the same change that adds the toolchain to deploy/sandbox/Dockerfile.
+const EXPORT_BINARY_FORMATS_READY = false;
 
 export function DeepResearchSurface({ resumeCid, onScopeChange }: Props) {
   const r = useDeepResearch(resumeCid);
@@ -137,10 +146,52 @@ export function DeepResearchSurface({ resumeCid, onScopeChange }: Props) {
               </button>
             )}
             {r.report && (
-              <button type="button" onClick={r.exportReport} className={CTRL_BTN}>
-                <Download className="size-3.5" aria-hidden />
-                Export
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => r.exportReportByFmt("md")}
+                  className={CTRL_BTN}
+                  title="Download as Markdown"
+                >
+                  <FileText className="size-3.5" aria-hidden />
+                  MD
+                </button>
+                <button
+                  type="button"
+                  onClick={() => r.exportReportByFmt("pdf")}
+                  disabled={!EXPORT_BINARY_FORMATS_READY}
+                  aria-disabled={!EXPORT_BINARY_FORMATS_READY}
+                  className={EXPORT_BINARY_FORMATS_READY ? CTRL_BTN : PENDING_BTN}
+                  title={
+                    EXPORT_BINARY_FORMATS_READY
+                      ? "Download as PDF"
+                      : "PDF export arrives with the next sandbox update"
+                  }
+                >
+                  <FileType className="size-3.5" aria-hidden />
+                  PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={() => r.exportReportByFmt("docx")}
+                  disabled={!EXPORT_BINARY_FORMATS_READY}
+                  aria-disabled={!EXPORT_BINARY_FORMATS_READY}
+                  className={EXPORT_BINARY_FORMATS_READY ? CTRL_BTN : PENDING_BTN}
+                  title={
+                    EXPORT_BINARY_FORMATS_READY
+                      ? "Download as DOCX"
+                      : "DOCX export arrives with the next sandbox update"
+                  }
+                >
+                  <File className="size-3.5" aria-hidden />
+                  DOCX
+                </button>
+                {!EXPORT_BINARY_FORMATS_READY && (
+                  <span className="font-ui text-[0.68rem] text-text-faint">
+                    PDF / DOCX arrive with the next sandbox update
+                  </span>
+                )}
+              </>
             )}
             {(r.status === "FINISHED" || r.status === "ERROR") && (
               <Link to="/" className={CTRL_BTN}>

@@ -60,21 +60,59 @@ export async function createDeepResearchConversation(
   return res.conversation_id;
 }
 
+/** Export format for the report export endpoint. */
+export type ReportExportFmt = "md" | "pdf" | "docx";
+
 /** Export a finished ReportEvent as a markdown document downloaded to the
  * user's machine. Reuses Projects' Blob → URL.createObjectURL → invisible
  * <a download> pattern; client-side serialization (no new endpoint). */
 export function exportReportAsMarkdown(report: ReportEvent): void {
   const md = serializeReportToMarkdown(report);
-  const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+  downloadBlob(new Blob([md], { type: "text/markdown;charset=utf-8" }), report.query, ".md");
+}
+
+/** Server-side report export (PDF / DOCX). Hits the new backend endpoint.
+ * For `md`, we still use the client-side serializer to avoid the round-trip.
+ * The UI should gate pdf/docx: if the call returns a non-OK response (e.g.
+ * the sandbox image hasn't been rebuilt yet), surface the error to the user.
+ * Never silent — missing report → error detail; unknown fmt → error detail. */
+export async function exportReport(cid: string, fmt: ReportExportFmt): Promise<boolean> {
+  // MD stays client-side for now (the endpoint also supports it, but the
+  // client-side path is zero-latency and byte-identical).
+  if (fmt === "md") {
+    throw new Error("Use exportReportAsMarkdown for md exports (client-side).");
+  }
+  const res = await fetch(`/api/conversations/${cid}/report/export?fmt=${fmt}`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    let detail = `${res.status}`;
+    try {
+      const body = await res.json();
+      detail = body.detail?.reason || body.detail || JSON.stringify(body);
+    } catch {
+      // not JSON
+    }
+    throw new Error(`Export failed (${res.status}): ${detail}`);
+  }
+  const blob = await res.blob();
+  const ext = fmt === "pdf" ? ".pdf" : ".docx";
+  downloadBlob(blob, `report-${cid}`, ext);
+  return true;
+}
+
+/** Download a Blob as a file. Shared helper for client-side and server-side
+ * export paths. */
+function downloadBlob(blob: Blob, fallbackName: string, ext: string): void {
   const url = URL.createObjectURL(blob);
-  const safeTitle = (report.query || "research-report")
+  const safeTitle = (fallbackName || "research-report")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 60);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${safeTitle || "research-report"}.md`;
+  a.download = `${safeTitle || "research-report"}${ext}`;
   document.body.appendChild(a);
   a.click();
   a.remove();

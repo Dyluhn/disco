@@ -987,6 +987,61 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             with contextlib.suppress(Exception):
                 await websocket.close()
 
+    # ---- report export (RP-07) --------------------------------------------
+
+    @app.post("/api/conversations/{conversation_id}/report/export")
+    async def export_report(conversation_id: str, fmt: str = Query(...)) -> Response:
+        """Export the latest Deep Research report as MD, PDF, or DOCX.
+
+        Query param `fmt` must be md, pdf, or docx.
+        Returns 200 with the file streamed (Content-Type + Content-Disposition).
+        Returns 404 when no ReportEvent exists for this conversation.
+        Returns 400 for an unknown format."""
+        if runtime is None:
+            raise HTTPException(
+                status_code=503, detail={"ok": False, "reason": "no_runtime"}
+            )
+        from .report_export import MEDIA_TYPES, EXTENSIONS
+
+        valid_fmts = frozenset({"md", "pdf", "docx"})
+        if fmt not in valid_fmts:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown export format: {fmt!r}. Valid: md, pdf, docx",
+            )
+
+        try:
+            result = await runtime.export_report(
+                conversation_id, fmt, owner_id=DEFAULT_OWNER_ID
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if result is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"ok": False, "reason": "no_report"},
+            )
+
+        payload, media_type, ext = result
+
+        # Build a safe filename from the conversation id
+        safe_cid = conversation_id.replace("/", "-").replace("..", "-")
+        filename = f"report-{safe_cid}{ext}"
+
+        headers: dict[str, str] = {
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        }
+        if media_type:
+            headers["Content-Type"] = media_type
+
+        return Response(
+            content=payload,
+            status_code=200,
+            media_type=media_type,
+            headers=headers,
+        )
+
     # ---- share links + static viewer (RP-06) -------------------------------
 
     @app.post("/api/conversations/{conversation_id}/share")

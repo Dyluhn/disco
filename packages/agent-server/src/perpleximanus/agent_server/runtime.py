@@ -2047,6 +2047,34 @@ class ConversationRuntime:
         }
         return {"ok": True, "bundle": bundle}
 
+    async def export_report(
+        self,
+        conversation_id: str,
+        fmt: str,
+        *,
+        owner_id: str = DEFAULT_OWNER_ID,
+    ) -> tuple[bytes, str, str] | None:
+        """Export the latest ReportEvent from a conversation as MD, PDF, or DOCX.
+
+        Returns (payload_bytes, media_type, filename_extension) on success,
+        or None when no ReportEvent exists for this conversation (the caller
+        maps None → 404). Raises ValueError for unknown `fmt` (the caller
+        maps ValueError → 400).
+
+        The endpoint is generic over ReportEvent — today only deep_research
+        conversations emit one; standard research and build do not."""
+        from .report_export import export_report as _export
+
+        events = await self._store.get_events(conversation_id)
+        reports = [e for e in events if isinstance(e, ReportEvent)]
+        if not reports:
+            return None
+        # The latest report (deep research emits only one; safe for future
+        # multi-report conversations).
+        report = reports[-1]
+        payload, media_type, ext = _export(report, fmt)
+        return payload, media_type, ext
+
     def create_share_link(
         self,
         conversation_id: str,

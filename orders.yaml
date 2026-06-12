@@ -767,3 +767,35 @@ rp-11: committed
   - frontend/package.json
   - frontend/package-lock.json
   - test-record/rp-11/units-tools.log
+
+# --- wave 3-4 lane (RP-07 ∥ RP-09 — disjoint seams, dispatched 2026-06-11) -----
+rp-07: committed
+  # Report export PDF/DOCX — pandoc (DOCX) + WeasyPrint (PDF), md serializer ported
+  # byte-identical from deepResearch.ts. Backend seam = runtime.py + app.py (owns
+  # uv.lock + app.py this wave). Live pdf/docx generation rides the VM-201 image
+  # rebuild; code + md path + unit tests land now. Disjoint from rp-09 (registry).
+  - packages/agent-server/src/perpleximanus/agent_server/report_export.py
+  - packages/agent-server/tests/test_report_export.py
+  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/agent-server/pyproject.toml
+  - uv.lock
+  - frontend/src/api/deepResearch.ts
+  - frontend/src/hooks/useDeepResearch.ts
+  - frontend/src/components/research/DeepResearchSurface.tsx
+  - frontend/src/components/research/DeepResearchSurface.test.tsx
+  - frontend/e2e/report-export.spec.ts
+  - test-record/rp-07/units-server.log
+rp-09: in-flight
+  # Audio overviews — two-voice (af_heart + af_bella) Kokoro-via-Speaches TTS from a
+  # finished report → MP3 + transcript DeliverableEvent. Agent-side tool only; seam =
+  # registry.py AGENT_TOOLS. NO new Python dep, NO app.py (rp-07 owns uv.lock+app.py).
+  # Writes through ctx.sandbox. Disjoint from rp-07.
+  - packages/tools/src/perpleximanus/tools/builtin/audio_overview.py
+  - packages/tools/src/perpleximanus/tools/builtin/_audio_mixer.py
+  - packages/agent-server/src/perpleximanus/agent_server/audio_config.py
+  - packages/tools/tests/test_audio_overview_tool.py
+  - packages/tools/tests/test_audio_overview_integration.py
+  - packages/tools/src/perpleximanus/tools/builtin/__init__.py
+  - packages/tools/src/perpleximanus/tools/registry.py
+  - test-record/rp-09/units-tools.log
