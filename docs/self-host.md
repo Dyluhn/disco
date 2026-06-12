@@ -62,6 +62,28 @@ Search (DuckDuckGo via `ddgs`), extraction (bundled), and the embedding/rerank/N
 encoders (bundled ONNX/CPU) are all **keyless by default** — a grounded answer needs
 no API key, only outbound internet for the search + the first encoder download.
 
+## Verify your setup
+
+The whole point of perpleximanus is reliability on *your* model — so check it before
+you trust it. `pmx verify` runs a small battery against your configured driver and
+prints a pass/fail table: config resolves a driver, the endpoint completes, the model
+emits a structured **tool call** (the capability the whole agent loop rests on), and the
+full research pipeline returns a cited answer.
+
+```bash
+# in a compose deployment
+docker compose exec agent-server python -m perpleximanus.agent_server.verify
+# from a checkout
+make verify              # or: uv run python -m perpleximanus.agent_server.verify
+make verify ARGS=--quick # skip the live grounding step (config + LLM only)
+```
+
+It exits non-zero if any check fails, with the provider's **verbatim** error (so a wrong
+`base_url`, an unserved model, or a model that can't tool-call is obvious). A check it
+can't run here — e.g. grounding with no internet — is reported `SKIP`, not a failure.
+This is a capability check; the faithfulness *score* is the eval harness's job
+(`make eval`).
+
 ## Security
 
 ### The sandbox-socket tradeoff (read this)

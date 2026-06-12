@@ -32,6 +32,12 @@ tts = [
     "numpy>=1.26",
 ]
 
+[project.scripts]
+# `pmx verify` — verify a self-hoster's configured model actually drives the loop.
+# Installed into the venv, so it runs in the compose image as `pmx-verify` (or
+# `python -m perpleximanus.agent_server.verify`).
+pmx-verify = "perpleximanus.agent_server.verify:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
