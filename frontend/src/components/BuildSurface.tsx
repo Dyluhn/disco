@@ -40,6 +40,7 @@ import { UploadComposer } from "@/components/build/BuildSurface";
 import { AlternativesGate } from "@/components/build/AlternativesGate";
 import { AskPanel } from "@/components/build/AskPanel";
 import { ReplayScrubber } from "@/components/build/ReplayScrubber";
+import { ScheduleSection } from "@/components/settings/ScheduleSection";
 
 export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) {
   const b = useBuild(resumeCid);
@@ -365,6 +366,13 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
               <BuildModelPicker value={b.modelId} onChange={b.setModelId} />
               {/* re-enter plan mode: a focused, diff-style change is planned + re-approved */}
               <QueryInput onSubmit={b.requestPlan} placeholder="Plan a change to this build…" />
+            </div>
+          )}
+          {/* RP-08: schedule this conversation to re-run on a cron cadence. Only
+              meaningful once it's settled and has a persisted conversation id. */}
+          {settled && b.cid && (
+            <div className="border-t border-hairline pt-inline">
+              <ScheduleSection conversationId={b.cid} />
             </div>
           )}
         </div>
