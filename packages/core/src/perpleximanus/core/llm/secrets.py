@@ -24,7 +24,29 @@ from cryptography.fernet import Fernet, InvalidToken
 
 _ENV_SECRET = "PMX_SECRET_KEY"
 _ENV_PATH = "PMX_SECRETS"
-_DEFAULT_PATH = "perpleximanus-secrets.json"
+# Legacy default: the encrypted secrets lived in the CWD, i.e. the repo root when a
+# server is launched from the checkout. That put credential ciphertext inside the
+# project tree — undesirable defense-in-depth-wise (anything granted read of the
+# working dir could copy it). New default is the user config dir, OUTSIDE the tree.
+_LEGACY_FILENAME = "perpleximanus-secrets.json"
+
+
+def _default_secrets_path() -> Path:
+    """Resolve the secrets file when neither an explicit path nor PMX_SECRETS is given.
+
+    Prefers `$XDG_CONFIG_HOME/perpleximanus/secrets.json` (default `~/.config/...`) so
+    credentials never land in the project tree. Back-compat: if that file doesn't
+    exist yet but a legacy in-tree `perpleximanus-secrets.json` does, honor the legacy
+    one so an existing deployment keeps working — but fresh installs write out-of-tree.
+    Pure read (no side effects); migrate the legacy file with a one-time `mv`."""
+    cfg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    new = Path(cfg) / "perpleximanus" / "secrets.json"
+    if new.exists():
+        return new
+    legacy = Path(_LEGACY_FILENAME)
+    if legacy.exists():
+        return legacy
+    return new
 
 # OpenRouter models use this as their `api_key_env`. The agent-server overlays the
 # DECRYPTED OpenRouter key into the provider env under this name at build time, so
@@ -80,7 +102,11 @@ class SecretStore:
         *,
         box: SecretBox | None = None,
     ) -> None:
-        self._path = Path(path or os.environ.get(_ENV_PATH, _DEFAULT_PATH))
+        env_path = os.environ.get(_ENV_PATH)
+        if path:
+            self._path = Path(path)
+        else:
+            self._path = Path(env_path) if env_path else _default_secrets_path()
         self._box = box or SecretBox.from_env()
 
     @property
