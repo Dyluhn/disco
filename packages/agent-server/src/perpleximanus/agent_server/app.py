@@ -52,6 +52,7 @@ from pydantic import BaseModel, ValidationError
 
 from .host_proxy import HostPreviewProxyMiddleware
 from .runtime import ConversationRuntime
+from .schedule_models import CreateScheduleBody, PreviewScheduleBody
 
 _MAX_FILE_BYTES = 25 * 1024 * 1024      # 25 MB per file
 _MAX_FILES_PER_REQUEST = 20
@@ -102,6 +103,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         # this they show 'RUNNING' forever in History / the Deep Research read-only
         # view (and may have leaked a sandbox).
         idle_sweep_task: asyncio.Task | None = None
+        schedule_task: asyncio.Task | None = None
         if runtime is not None:
             try:
                 await runtime._start_mcp_pool()
@@ -114,7 +116,13 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             with contextlib.suppress(Exception):  # never block boot on reconciliation
                 await runtime.reconcile_orphaned_runs()
             idle_sweep_task = asyncio.create_task(runtime._idle_sweep_loop())
+            # RP-08: start the schedule manager loop alongside the idle sweep.
+            schedule_task = asyncio.create_task(runtime._schedule_manager_loop())
         yield
+        if schedule_task is not None:
+            schedule_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await schedule_task
         if idle_sweep_task is not None:
             idle_sweep_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -772,6 +780,65 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             "entries": entries,
             "selectable": select_status,
         }
+
+    # ---- RP-08: scheduled tasks ----------------------------------------------
+
+    @app.post("/api/conversations/{conversation_id}/schedules")
+    async def create_schedule(
+        conversation_id: str,
+        body: CreateScheduleBody,
+    ) -> dict:
+        """Create a cron-style recurring schedule for a conversation.
+
+        The cron expression in `rrule` is validated by cronsim; an invalid
+        expression returns 422 (never silent — the user must fix it)."""
+        if runtime is None:
+            raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
+        try:
+            result = runtime.create_schedule(
+                conversation_id=conversation_id,
+                owner_id=DEFAULT_OWNER_ID,
+                rrule=body.rrule,
+                description=body.description,
+                depth=body.depth,
+                model_override=body.model_override,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail={"reason": str(exc)}) from exc
+        return result
+
+    @app.get("/api/conversations/{conversation_id}/schedules")
+    async def list_schedules_for_conversation(conversation_id: str) -> dict:
+        """List all schedules for a conversation."""
+        if runtime is None:
+            return {"schedules": []}
+        return {
+            "schedules": runtime.list_schedules(
+                owner_id=DEFAULT_OWNER_ID, conversation_id=conversation_id
+            )
+        }
+
+    @app.delete("/api/schedules/{schedule_id}")
+    async def delete_schedule(schedule_id: str) -> dict:
+        """Delete a schedule by id. OWNER-SCOPED. Returns `{deleted: true/false}`."""
+        if runtime is None:
+            raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
+        deleted = runtime.delete_schedule(schedule_id, owner_id=DEFAULT_OWNER_ID)
+        return {"ok": deleted, "schedule_id": schedule_id, "deleted": deleted}
+
+    @app.post("/api/schedules/preview")
+    async def preview_schedule(body: PreviewScheduleBody) -> dict:
+        """Preview the next N run times for a cron expression.  Use this before
+        saving a schedule — the confirm card shows next-3-runs to the user."""
+        if runtime is None:
+            raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
+        times = runtime.preview_schedule_runs(body.rrule, body.n)
+        if not times:
+            raise HTTPException(
+                status_code=422,
+                detail={"reason": f"Invalid or non-firing cron expression: {body.rrule!r}"},
+            )
+        return {"next_runs": times, "rrule": body.rrule}
 
     # ---- WebSocket (§7.1–7.4) -----------------------------------------------
 

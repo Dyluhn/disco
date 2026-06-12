@@ -2952,3 +2952,65 @@ class ConversationRuntime:
         for session in self._pending_sessions.values():
             with contextlib.suppress(Exception):
                 await session.destroy()
+
+    # ---- RP-08: scheduled tasks ---------------------------------------------
+
+    def _schedule_manager(self) -> "Any":
+        """Lazy accessor for the ScheduleManager (avoids circular import at
+        module load).  The manager is created on first access (or already held
+        after _start_schedule_manager is called at lifespan start)."""
+        if not hasattr(self, "_sched_manager"):
+            from .schedule import ScheduleManager
+            self._sched_manager = ScheduleManager(self._store, self)
+        return self._sched_manager
+
+    async def _schedule_manager_loop(self) -> None:
+        """Thin trampoline: lifespan task → ScheduleManager.run().  Mirrors the
+        _idle_sweep_loop pattern so the app lifespan owns the Task."""
+        await self._schedule_manager().run()
+
+    def create_schedule(
+        self,
+        *,
+        conversation_id: str,
+        owner_id: str,
+        rrule: str,
+        description: str,
+        depth: str | None = None,
+        model_override: str | None = None,
+    ) -> dict:
+        """Create a new schedule and return it as a JSON-safe dict.
+        Raises ValueError for invalid cron expressions (caller surfaces to user)."""
+        from .schedule import ScheduleManager
+        sched = self._schedule_manager().create_schedule(
+            conversation_id=conversation_id,
+            owner_id=owner_id,
+            rrule=rrule,
+            description=description,
+            depth=depth,
+            model_override=model_override,
+        )
+        return sched.model_dump(mode="json")
+
+    def list_schedules(
+        self, *, owner_id: str, conversation_id: str | None = None
+    ) -> list[dict]:
+        """List schedules, optionally filtered to one conversation."""
+        return [
+            s.model_dump(mode="json")
+            for s in self._schedule_manager().list_schedules(
+                owner_id=owner_id, conversation_id=conversation_id
+            )
+        ]
+
+    def delete_schedule(self, schedule_id: str, *, owner_id: str) -> bool:
+        """Delete a schedule. OWNER-SCOPED. Returns True if a row was removed."""
+        return self._schedule_manager().delete_schedule(schedule_id, owner_id=owner_id)
+
+    def preview_schedule_runs(self, rrule: str, n: int = 3) -> list[str]:
+        """Preview next N run times for a cron expression (ISO-8601 strings).
+        Returns [] for invalid expressions."""
+        return [
+            dt.isoformat()
+            for dt in self._schedule_manager().preview_next_runs(rrule, n)
+        ]

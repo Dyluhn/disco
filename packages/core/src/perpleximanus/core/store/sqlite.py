@@ -78,6 +78,38 @@ CREATE TABLE IF NOT EXISTS share_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_share_tokens_conv
     ON share_tokens (conversation_id);
+CREATE TABLE IF NOT EXISTS schedules (
+    -- RP-08: cron-style recurring agent runs. One row per user-created schedule.
+    -- `rrule` stores a cron expression (cronsim-parseable, 5-field standard cron).
+    -- `depth` + `model_override` reproduce the user's settings on each scheduled
+    -- run. `next_run` is updated after each fire (always a future time after the
+    -- coalesced catch-up policy runs). `enabled = 0` pauses without deleting.
+    schedule_id     TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    owner_id        TEXT NOT NULL,
+    rrule           TEXT NOT NULL,
+    description     TEXT NOT NULL,
+    depth           TEXT,
+    model_override  TEXT,
+    created_at      TEXT NOT NULL,
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    next_run        TEXT,
+    FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_schedules_owner
+    ON schedules (owner_id, conversation_id);
+CREATE TABLE IF NOT EXISTS schedule_runs (
+    -- RP-08: audit log of every scheduled run that fired. `coalesced = 1` when
+    -- N missed fires were coalesced into this single catch-up run (downtime policy).
+    run_id          TEXT PRIMARY KEY,
+    schedule_id     TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    fired_at        TEXT NOT NULL,
+    coalesced       INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (schedule_id) REFERENCES schedules(schedule_id)
+);
+CREATE INDEX IF NOT EXISTS idx_schedule_runs_sched
+    ON schedule_runs (schedule_id, fired_at DESC);
 CREATE TABLE IF NOT EXISTS mcp_approvals (
     -- RP-05: per-server MCP tool-description approvals. One row per server;
     -- the description_hash is the SHA-256 fingerprint of the canonicalized
@@ -496,6 +528,94 @@ class SqliteEventStore:
         )
         self._conn.commit()
         return cur.rowcount > 0
+
+    # ---- schedules (RP-08) --------------------------------------------------
+
+    def create_schedule(self, row: dict) -> None:
+        """Persist a new schedule row. `row` must contain all required fields.
+        Uses INSERT OR IGNORE so a double-create is a no-op."""
+        self._conn.execute(
+            "INSERT OR IGNORE INTO schedules "
+            "(schedule_id, conversation_id, owner_id, rrule, description, "
+            "depth, model_override, created_at, enabled, next_run) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                row["schedule_id"],
+                row["conversation_id"],
+                row["owner_id"],
+                row["rrule"],
+                row["description"],
+                row.get("depth"),
+                row.get("model_override"),
+                row["created_at"],
+                1 if row.get("enabled", True) else 0,
+                row.get("next_run"),
+            ),
+        )
+        self._conn.commit()
+
+    def list_schedules(self, *, owner_id: str, conversation_id: str | None = None) -> list[dict]:
+        """List schedules for an owner, optionally filtered by conversation."""
+        if conversation_id is not None:
+            rows = self._conn.execute(
+                "SELECT * FROM schedules WHERE owner_id = ? AND conversation_id = ? "
+                "ORDER BY created_at DESC",
+                (owner_id, conversation_id),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM schedules WHERE owner_id = ? ORDER BY created_at DESC",
+                (owner_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def list_enabled_schedules(self) -> list[dict]:
+        """All enabled schedules across all owners — used by the background loop."""
+        rows = self._conn.execute(
+            "SELECT * FROM schedules WHERE enabled = 1"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_schedule(self, schedule_id: str, *, owner_id: str) -> bool:
+        """Delete a schedule. OWNER-SCOPED. Returns True if a row was removed."""
+        cur = self._conn.execute(
+            "DELETE FROM schedules WHERE schedule_id = ? AND owner_id = ?",
+            (schedule_id, owner_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def update_schedule_next_run(self, schedule_id: str, next_run: str | None) -> None:
+        """Update the next_run timestamp after a schedule fires."""
+        self._conn.execute(
+            "UPDATE schedules SET next_run = ? WHERE schedule_id = ?",
+            (next_run, schedule_id),
+        )
+        self._conn.commit()
+
+    def create_schedule_run(self, row: dict) -> None:
+        """Record a completed schedule run in the audit log."""
+        self._conn.execute(
+            "INSERT OR IGNORE INTO schedule_runs "
+            "(run_id, schedule_id, conversation_id, fired_at, coalesced) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                row["run_id"],
+                row["schedule_id"],
+                row["conversation_id"],
+                row["fired_at"],
+                1 if row.get("coalesced", False) else 0,
+            ),
+        )
+        self._conn.commit()
+
+    def list_schedule_runs(self, schedule_id: str) -> list[dict]:
+        """List run history for a schedule."""
+        rows = self._conn.execute(
+            "SELECT * FROM schedule_runs WHERE schedule_id = ? ORDER BY fired_at DESC",
+            (schedule_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     async def _subscribe(self, conversation_id: str, after_seq: int | None) -> AsyncIterator[Event]:
         # Register the live queue FIRST so no append is missed between the

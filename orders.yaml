@@ -740,9 +740,13 @@ rp-08: in-flight
   - packages/agent-server/src/perpleximanus/agent_server/runtime.py
   - packages/agent-server/src/perpleximanus/agent_server/app.py
   - packages/agent-server/pyproject.toml
+  - uv.lock
   - frontend/src/components/settings/ScheduleSection.tsx
   - frontend/src/lib/scheduleNL.ts
   - test-record/rp-08/units-server.log
+  # FOLLOW-UP (UI wiring, separate commit): ScheduleSection is per-conversation but
+  # was never mounted. Wire a per-conversation entry point + live screenshot, then
+  # flip this order to committed. Backend re-run fix landed in the partial commit.
 rp-11: committed
   # Spreadsheet generation — openpyxl writes live FORMULAS (whitelisted) as a
   # DeliverableEvent artifact, written THROUGH the sandbox jail. Agent-side tool

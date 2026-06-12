@@ -48,6 +48,8 @@ class EventKind(str, Enum):
     KNOWLEDGE = "knowledge"  # a scoped best-practice snippet (Cluster 7)
     DATASOURCE = "datasource"  # durable API/schema docs, condensation-immune (Cluster 7)
     DELIVERABLE = "deliverable"  # the agent's finished-artifact handoff signal
+    SCHEDULE = "schedule"  # a schedule was created or deleted (RP-08)
+    SCHEDULE_RUN = "schedule_run"  # a scheduled run fired (RP-08)
 
 
 def _new_id() -> str:
@@ -569,6 +571,31 @@ class ErrorEvent(BaseEvent):
     detail: str
 
 
+class ScheduleEvent(BaseEvent):
+    """A schedule was created or deleted for this conversation (RP-08).
+    NOT LLMConvertible — it is a system lifecycle event."""
+
+    kind: Literal[EventKind.SCHEDULE] = EventKind.SCHEDULE
+    source: EventSource = EventSource.SYSTEM
+    action: Literal["created", "deleted"]
+    schedule_id: str
+    rrule: str  # cron expression
+    description: str
+
+
+class ScheduleRunEvent(BaseEvent):
+    """A scheduled run fired and was appended to this conversation (RP-08).
+    NOT LLMConvertible — it is a system lifecycle event.
+
+    `coalesced` is True when the server was down across N missed fires and this
+    single run stands in for all of them (run-once-coalesced policy)."""
+
+    kind: Literal[EventKind.SCHEDULE_RUN] = EventKind.SCHEDULE_RUN
+    source: EventSource = EventSource.SYSTEM
+    schedule_id: str
+    coalesced: bool = False
+
+
 # ---- the discriminated union the store/serde use ----------------------------
 
 Event = Annotated[
@@ -584,7 +611,9 @@ Event = Annotated[
     | KnowledgeEvent
     | DatasourceEvent
     | DeliverableEvent
-    | ErrorEvent,
+    | ErrorEvent
+    | ScheduleEvent
+    | ScheduleRunEvent,
     Field(discriminator="kind"),
 ]
 

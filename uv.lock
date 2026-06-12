@@ -436,6 +436,14 @@ wheels = [
 ]
 
 [[package]]
+name = "cronsim"
+version = "2.7"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fb/1a/02f105147f7f2e06ed4f734ff5a6439590bb275a53dd91fc73df6312298a/cronsim-2.7-py3-none-any.whl", hash = "sha256:1e1431fa08c51dc7f72e67e571c7c7a09af26420169b607badd4ca9677ffad1e", size = 14213, upload-time = "2025-10-21T16:38:20.431Z" },
+]
+
+[[package]]
 name = "cryptography"
 version = "48.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1629,6 +1637,7 @@ name = "perpleximanus-agent-server"
 version = "0.1.0"
 source = { editable = "packages/agent-server" }
 dependencies = [
+    { name = "cronsim" },
     { name = "fastapi" },
     { name = "perpleximanus-core" },
     { name = "perpleximanus-retrieval" },
@@ -1640,6 +1649,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cronsim", specifier = ">=2.6" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "perpleximanus-core", editable = "packages/core" },
     { name = "perpleximanus-retrieval", editable = "packages/retrieval" },
