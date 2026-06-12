@@ -1,0 +1,137 @@
+# perpleximanus — one-command self-host.
+#
+#   cp .env.example .env        # then read it; set PMX_BIND/model as you like
+#   docker compose up -d --build
+#   open http://localhost:8088
+#
+# Defaults bind to 127.0.0.1 — there is NO AUTH in v1. Do not set PMX_BIND=0.0.0.0
+# without your own TLS + auth in front. The sandbox-socket mount makes the
+# agent-server root-equivalent on your host; see docs/self-host.md#security.
+name: perpleximanus
+
+services:
+  # Build-only: deposits the sandbox image into the host daemon so the agent-server
+  # (talking to the mounted socket) finds it. The agent never pulls — the image must
+  # pre-exist. `entrypoint: true` makes the container exit 0 immediately after build.
+  sandbox-image:
+    build:
+      context: .
+      dockerfile: deploy/sandbox/Dockerfile
+    image: pmx-sandbox:base
+    entrypoint: ["true"]
+    restart: "no"
+
+  app-server:
+    build:
+      context: .
+      dockerfile: deploy/compose/Dockerfile.server
+    image: pmx-server
+    command: ["python", "-m", "perpleximanus.app_server"]
+    entrypoint: ["/entrypoint.sh"]
+    env_file: .env
+    environment:
+      PMX_HOST: "0.0.0.0"
+      PMX_PORT: "8800"
+      PMX_DB: /data/perpleximanus.db
+      PMX_CONFIG: /data/perpleximanus-config.json
+      PMX_SECRETS: /data/secrets.json
+      PMX_SKILLS_DIR: /data/skills
+    volumes:
+      - pmx-data:/data
+    ports:
+      - "${PMX_BIND:-127.0.0.1}:${PMX_APP_PORT:-8800}:8800"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8800/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+
+  agent-server:
+    image: pmx-server # same image as app-server, different command
+    command: ["python", "-m", "perpleximanus.agent_server"]
+    entrypoint: ["/entrypoint.sh"]
+    env_file: .env
+    environment:
+      PMX_HOST: "0.0.0.0"
+      PMX_PORT: "8000"
+      PMX_DB: /data/perpleximanus.db # ONE SQLite file, shared with app-server
+      PMX_CONFIG: /data/perpleximanus-config.json
+      PMX_SECRETS: /data/secrets.json
+      PMX_SKILLS_DIR: /data/skills
+      PMX_TTS_DIR: /data/cache/tts
+      PMX_PROJECTS_ROOT: /data/projects
+      FASTEMBED_CACHE_PATH: /data/cache/fastembed
+      # Where the agent-server reaches sandbox-published preview ports (host-gateway).
+      PMX_PREVIEW_HOST: "${PMX_PREVIEW_HOST:-host.docker.internal}"
+      # NOTE: PMX_SANDBOX is intentionally UNSET — the backend stays Settings-driven
+      # (defaults to `local`, which uses the mounted socket below).
+    volumes:
+      - pmx-data:/data
+      # The host container socket → the agent-server spawns sibling sandbox
+      # containers through it. SECURITY: this is root-equivalent on the host;
+      # prefer a rootless Podman socket (see .env.example + docs/self-host.md).
+      - "${PMX_SANDBOX_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${PMX_BIND:-127.0.0.1}:${PMX_AGENT_PORT:-8000}:8000"
+    depends_on:
+      sandbox-image:
+        condition: service_completed_successfully
+      app-server:
+        condition: service_healthy # the seed runs once; let app-server win the race
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: pmx-frontend
+    environment:
+      # Blank explicit URLs → env.js falls back to the browser's own hostname +
+      # these ports, so localhost AND LAN access work with zero config.
+      PMX_PUBLIC_API_BASE: "${PMX_PUBLIC_API_BASE:-}"
+      PMX_PUBLIC_AGENT_BASE: "${PMX_PUBLIC_AGENT_BASE:-}"
+      PMX_APP_PORT: "${PMX_APP_PORT:-8800}"
+      PMX_AGENT_PORT: "${PMX_AGENT_PORT:-8000}"
+    ports:
+      - "${PMX_BIND:-127.0.0.1}:${PMX_UI_PORT:-8088}:80"
+    depends_on:
+      app-server:
+        condition: service_healthy
+      agent-server:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # The bundled local model — the keyless out-of-box default. Disable by deleting
+  # `bundled-llm` from COMPOSE_PROFILES in .env and pointing PMX_DRIVER_BASE_URL at
+  # your own endpoint. CPU by default; a 4B Q4 is a working demo, not the 24-32B the
+  # reliability wedge was proven on (see docs/self-host.md#models).
+  llm:
+    profiles: ["bundled-llm"]
+    image: ghcr.io/ggml-org/llama.cpp:server
+    command: >
+      -hf ${PMX_LLM_HF:-unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_K_M}
+      --jinja -c ${PMX_LLM_CTX:-32768} --host 0.0.0.0 --port 8080
+    volumes:
+      - pmx-models:/root/.cache/llama.cpp
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8080/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 600s # first run downloads the GGUF
+    restart: unless-stopped
+    # No host port — the agent-server reaches it in-network as http://llm:8080/v1.
+
+volumes:
+  pmx-data: # db + config + secrets + skills + projects + tts/encoder caches
+  pmx-models: # GGUF downloads survive recreation

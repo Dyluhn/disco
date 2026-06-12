@@ -8,15 +8,23 @@
  * no base URL, so they exercise the fixtures (no network).
  */
 
-const BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/+$/, "");
+/** Runtime config injected by the self-host nginx (a `/env.js` that sets
+ * `window.__PMX_ENV` from the deployer's environment), so ONE built image works at
+ * any host/port without rebaking. Build-time `VITE_*` still wins in dev; in
+ * vitest/jsdom there's no `__PMX_ENV`, so this is `{}` and fixture mode is preserved. */
+const RT: { API_BASE?: string; AGENT_BASE?: string; OWNER_ID?: string } =
+  (globalThis as { __PMX_ENV?: { API_BASE?: string; AGENT_BASE?: string; OWNER_ID?: string } })
+    .__PMX_ENV ?? {};
+
+const BASE = ((RT.API_BASE ?? import.meta.env.VITE_API_BASE) ?? "").replace(/\/+$/, "");
 
 /** The agent-server base (the live WebSocket surface — loops + research). Distinct
  * from VITE_API_BASE (the app-server: settings + library) because they are
  * different services/ports. Unset → research stays fixture-backed (offline/tests). */
-const AGENT_BASE = (import.meta.env.VITE_AGENT_BASE ?? "").replace(/\/+$/, "");
+const AGENT_BASE = ((RT.AGENT_BASE ?? import.meta.env.VITE_AGENT_BASE) ?? "").replace(/\/+$/, "");
 
 /** The owner whose conversations we read/write (no auth in v1; an explicit id). */
-export const OWNER_ID = import.meta.env.VITE_OWNER_ID ?? "local";
+export const OWNER_ID = RT.OWNER_ID ?? import.meta.env.VITE_OWNER_ID ?? "local";
 
 /** True when a backend base URL is configured — the api modules call it live. */
 export function isLive(): boolean {

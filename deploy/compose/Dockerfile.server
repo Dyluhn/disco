@@ -1,0 +1,88 @@
+# Production image for the perpleximanus Python servers (BoD §5: app-server +
+# agent-server). ONE venv runs both:
+#   python -m perpleximanus.app_server     (user-facing orchestrator, :8800)
+#   python -m perpleximanus.agent_server    (per-conversation runtime,  :8000)
+# compose overrides `command` per service; the default CMD is the app-server.
+#
+# uv-workspace monorepo: packages/{core,tools,retrieval,agent-server,app-server}.
+# The agent-server's OPTIONAL `tts` extra (kokoro-onnx) lives on the MEMBER
+# package, so it is installed via `--all-packages --extra tts` (a bare
+# `uv sync --extra tts` errors — the workspace root has no `tts` extra). The
+# tools `browser` extra (Playwright/Chromium) is deliberately NOT installed: the
+# browser belongs to the separate sandbox image (deploy/sandbox/Dockerfile).
+
+# ---------------------------------------------------------------------------
+# Stage 1 — builder: resolve + install BOTH servers + the agent-server tts extra
+# into a single self-contained venv at /app/.venv (workspace members go in as
+# editable installs whose .pth files point at /app/packages/*/src).
+# ---------------------------------------------------------------------------
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
+
+# copy (not hardlink) into the venv, and pre-compile .pyc for faster cold start.
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
+
+WORKDIR /app
+
+# Workspace metadata + every member's source (uv builds the members editable
+# from src, so the full packages/ tree must be present at sync time).
+COPY pyproject.toml uv.lock ./
+COPY packages/ ./packages/
+
+# Single incantation that lands all 5 members + the agent-server `tts` extra
+# (kokoro-onnx, lameenc, numpy) + weasyprint, and NOT the browser extra:
+#   --all-packages : install every workspace member (core,tools,retrieval,
+#                    agent-server,app-server) into one venv
+#   --extra tts    : resolves against the member that defines it (agent-server)
+#   --frozen       : honour uv.lock exactly, never re-resolve
+#   --no-dev       : drop the shared dev toolchain (pytest/ruff/playwright/etc.)
+RUN uv sync --frozen --no-dev --all-packages --extra tts
+
+# ---------------------------------------------------------------------------
+# Stage 2 — runtime: slim python with only the native libs the servers need.
+# ---------------------------------------------------------------------------
+FROM python:3.12-slim-bookworm
+
+# WeasyPrint (RP-07 PDF export) needs pango/cairo/gdk-pixbuf + fontconfig + a
+# base font; tmux backs the agent shell-session tool. libgomp1 is required by
+# the onnxruntime that fastembed (retrieval encoders) and kokoro-onnx (TTS)
+# load lazily at runtime — without it the encoders/TTS fail at first use.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpango-1.0-0 \
+        libpangoft2-1.0-0 \
+        libgdk-pixbuf-2.0-0 \
+        libcairo2 \
+        libgomp1 \
+        fontconfig \
+        fonts-dejavu-core \
+        tmux \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# The self-contained venv + the workspace source the editable installs resolve
+# against. The .pth files baked by the builder reference /app/packages/*/src,
+# so the source must land at exactly that path.
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/packages /app/packages
+
+# The compose entrypoint (prepares /data, seeds a first-run config, ensures a
+# PMX_SECRET_KEY) and the seed script it calls. compose sets
+# `entrypoint: ["/entrypoint.sh"]` and the entrypoint runs /app/scripts/seed_config.py.
+COPY deploy/compose/entrypoint.sh /entrypoint.sh
+COPY scripts/ /app/scripts/
+RUN chmod +x /entrypoint.sh
+
+# Put the venv first on PATH so `python` is the venv interpreter (the base
+# python:3.12-slim interpreter the venv was built against lives at the same
+# /usr/local path, so the venv symlinks resolve here).
+ENV PATH=/app/.venv/bin:$PATH \
+    PYTHONUNBUFFERED=1
+
+# Both servers default to PMX_HOST/PMX_DB/… from the environment; compose
+# supplies those plus the /data mount. The healthcheck hits the servers with
+# python stdlib urllib (no curl needed), which the venv interpreter provides.
+EXPOSE 8000 8800
+
+# Default to the app-server; compose overrides `command` for the agent-server.
+CMD ["python", "-m", "perpleximanus.app_server"]
