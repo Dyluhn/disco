@@ -1,5 +1,12 @@
 # perpleximanus — project status
 
+> **⚠️ ARCHIVED HISTORICAL SNAPSHOT (≈ 2026-05).** This describes an early "walking
+> skeleton" state — when the model path, agent loop, research answers, and the
+> Build/Agent surfaces were *not yet wired*. ALL of that has since shipped. It is
+> kept only as a project-history artifact. For current status see the root
+> `README.md` and `docs/release-execution-plan.md`. Do not treat anything below as
+> current.
+
 _A snapshot of what's built, what's wired live, and what's still ahead._
 
 ## TL;DR
