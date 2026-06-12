@@ -19,6 +19,16 @@ dependencies = [
     "markdown>=3.5",  # RP-07: faithful md → HTML for the PDF path (tables/lists/etc.)
 ]
 
+[project.optional-dependencies]
+# RP-09 in-process Kokoro TTS — OPTIONAL so the lean core install stays lean. Rides
+# the onnxruntime already pulled by fastembed (deliberately NOT torch). Install with
+# `uv sync --extra tts` (or the compose's tts profile). Weights download on first use.
+tts = [
+    "kokoro-onnx>=0.4",
+    "lameenc>=1.7",
+    "numpy>=1.26",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
