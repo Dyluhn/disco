@@ -166,6 +166,18 @@ uv run ruff check .        # lint
 uv run ruff format .       # format
 ```
 
+Optional extras live on the member packages (not the workspace root), so install
+them with `--package`:
+
+```bash
+# Audio overviews (RP-09): bundled in-process Kokoro TTS — kokoro-onnx + lameenc.
+# Weights (~0.3 GB) download to ~/.cache/perpleximanus-tts on first use.
+uv sync --package perpleximanus-agent-server --extra tts
+```
+
+A bare `uv sync --extra tts` errors — the root defines no `tts` extra. Without this
+extra installed, the audio-overview tool stays importable but fails soft when run.
+
 ## The load-bearing idea
 
 The append-only event log is the single source of truth. `State` (what the loop

@@ -21,8 +21,11 @@ dependencies = [
 
 [project.optional-dependencies]
 # RP-09 in-process Kokoro TTS — OPTIONAL so the lean core install stays lean. Rides
-# the onnxruntime already pulled by fastembed (deliberately NOT torch). Install with
-# `uv sync --extra tts` (or the compose's tts profile). Weights download on first use.
+# the onnxruntime already pulled by fastembed (deliberately NOT torch). This extra is
+# on the MEMBER package, so install it with
+# `uv sync --package perpleximanus-agent-server --extra tts` (NOT a bare `uv sync
+# --extra tts`, which errors — the workspace root has no `tts` extra). Weights
+# download on first use.
 tts = [
     "kokoro-onnx>=0.4",
     "lameenc>=1.7",
