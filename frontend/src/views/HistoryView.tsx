@@ -3,7 +3,6 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { formatDate } from "@/lib/date";
-import { cn } from "@/lib/cn";
 import { useConversations, useDeleteConversation } from "@/hooks/useConversations";
 
 /**
@@ -170,9 +169,11 @@ export function HistoryView() {
                         navigate(
                           c.surface === "deep_research"
                             ? `/deep/${c.id}`
-                            : c.surface === "build"
-                              ? `/build/${c.id}`
-                              : "/",
+                            : c.surface === "agent"
+                              ? `/agent/${c.id}`
+                              : c.surface === "build"
+                                ? `/build/${c.id}`
+                                : "/",
                         )
                       }
                       className="group min-w-0 flex-1 text-left"
@@ -190,6 +191,11 @@ export function HistoryView() {
                         {c.surface === "build" && (
                           <span className="shrink-0 rounded-full border border-hairline px-hair font-ui text-[0.62rem] uppercase tracking-wide text-text-faint">
                             build
+                          </span>
+                        )}
+                        {c.surface === "agent" && (
+                          <span className="shrink-0 rounded-full border border-hairline px-hair font-ui text-[0.62rem] uppercase tracking-wide text-text-faint">
+                            agent
                           </span>
                         )}
                       </div>

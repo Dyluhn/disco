@@ -473,9 +473,17 @@ class ConversationRuntime:
             prompt_provider=DriverPrompts(skills_block=skills_block),
         )
 
-    # Three surfaces: research (single-pass /ws/research stream), build (agent +
-    # tools + plan gate), deep_research (long-horizon plan → iterate → report).
-    _VALID_SURFACES: frozenset[str] = frozenset({"research", "build", "deep_research"})
+    # Four surfaces: research (single-pass /ws/research stream), build (agent +
+    # tools + plan gate, framed for software), agent (the SAME agent machinery
+    # framed as a general task agent), deep_research (long-horizon plan → iterate
+    # → report). "agent" is a framing copy of "build" — identical loop/tools/
+    # sandbox/persistence — so it travels with build through every surface branch.
+    _VALID_SURFACES: frozenset[str] = frozenset({"research", "build", "agent", "deep_research"})
+    # The surfaces that compose the build agent loop (tools + sandbox + gate +
+    # workspace snapshot/rehydrate). "build" and "agent" are behaviorally identical;
+    # they differ only in frontend framing + entry. Branch on this set, never on the
+    # bare string, so a new build-like surface can't silently miss a call site.
+    _BUILD_LIKE_SURFACES: frozenset[str] = frozenset({"build", "agent"})
 
     def set_surface(self, conversation_id: str, surface: str) -> None:
         """Select a conversation's surface before it runs. Build composes tools +
@@ -493,14 +501,35 @@ class ConversationRuntime:
         In-memory `_surface` is authoritative when set — at create time via
         set_surface (which persists to the sidecar) or reloaded from the sidecar
         at startup. When it's missing — a pre-sidecar DB, or a sidecar lost with
-        its DB — we DERIVE from durable signals on disk / on the event log:
-        - a project manifest on disk → Build (Research never snapshots).
+        its DB — we recover from durable signals, MOST AUTHORITATIVE FIRST:
+        - the `conversations.surface` column (written at create, app.py) — the
+          real answer, durable in the same DB. This is the only rung that can tell
+          "agent" from "build" (the project manifest can't — they snapshot
+          identically) and it also fixes a pre-existing hole where a plan-gated
+          Build with no manifest yet mis-derived deep_research below.
+        - a project manifest on disk → a build-like surface (Research never snapshots).
         - a ReportEvent on the conversation log → Deep Research.
         Defaults to "research" when no durable signal exists. Recoveries are
         written through to the sidecar so the ladder runs at most once per cid."""
         cached = self._surface.get(conversation_id)
         if cached is not None:
             return cached
+        # Rung 0 — the authoritative DB column (set at create). Cheap sync SQL on
+        # the same connection the rungs below already use. This makes the
+        # heuristic rungs a fallback only for legacy rows with a NULL surface.
+        try:
+            conn0 = getattr(self._store, "_conn", None)
+            if conn0 is not None:
+                row = conn0.execute(
+                    "SELECT surface FROM conversations WHERE conversation_id = ?",
+                    (conversation_id,),
+                ).fetchone()
+                if row is not None and row["surface"] in self._VALID_SURFACES:
+                    self._surface[conversation_id] = row["surface"]
+                    self._save_surfaces()
+                    return row["surface"]
+        except Exception:  # noqa: BLE001 — best-effort recovery, fall through to heuristics
+            pass
         store = self._project_store_now()
         if store is not None and store.status() == StorageStatus.OK:
             try:
@@ -695,7 +724,8 @@ class ConversationRuntime:
             # Research↔Build isolation: the SURFACE picks the agent class, so
             # completion semantics (prose=answer for Research vs affirmative
             # `finish` for Build) are owned by type, not a shared mode flag.
-            if surface == "build":
+            # "agent" is a build-like surface — same BuildAgent + build loop.
+            if surface in self._BUILD_LIKE_SURFACES:
                 agent: RouterAgent = BuildAgent(
                     router, conversation_id=conversation_id, model_override=override
                 )
@@ -703,7 +733,7 @@ class ConversationRuntime:
                 agent = ResearchAgent(
                     router, conversation_id=conversation_id, model_override=override
                 )
-            if surface == "build":
+            if surface in self._BUILD_LIKE_SURFACES:
                 loop = self._compose_build_loop(conversation_id, router, agent)
             elif surface == "deep_research":
                 loop = self._compose_deep_research_loop(conversation_id, router, agent)
@@ -1105,7 +1135,7 @@ class ConversationRuntime:
         # storage path is configured AND a prior snapshot exists for this cid,
         # write its files into the (lazy) sandbox so the agent sees them. Reads
         # are cheap; the rehydrate only writes if there are files on disk.
-        if surface == "build":
+        if surface in self._BUILD_LIKE_SURFACES:
             await self._maybe_rehydrate(conversation_id)
             # DC-07: re-materialize server-side uploads into the fresh sandbox.
             # This is the SINGLE chokepoint that covers ALL paths:
@@ -1127,7 +1157,7 @@ class ConversationRuntime:
             ConversationStatus.ERROR,
             ConversationStatus.PAUSED,
         }
-        if surface == "build" and state.execution_status in _ENDED:
+        if surface in self._BUILD_LIKE_SURFACES and state.execution_status in _ENDED:
             await self._maybe_snapshot(conversation_id)
             # FINISHED now rides the idle sweep like STUCK/ERROR/PAUSED;
             # suspend = sweep_idle_once -> _suspend

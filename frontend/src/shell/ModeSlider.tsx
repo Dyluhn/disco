@@ -1,14 +1,23 @@
-import { Search } from "lucide-react";
+import { Bot, Search } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { CodeBlocksIcon } from "@/components/icons/CodeBlocksIcon";
 import { cn } from "@/lib/cn";
-import { useMode } from "./mode";
+import { useMode, type Mode } from "./mode";
+
+/** One icon per mode. A total Record (not a ternary) so a new mode is a compile
+ * error here rather than silently inheriting another mode's glyph. */
+const MODE_ICON: Record<Mode, LucideIcon | typeof CodeBlocksIcon> = {
+  search: Search,
+  build: CodeBlocksIcon,
+  agent: Bot,
+};
 
 /**
  * The top-level mode slider (the ONLY mode control). A segmented rounded-pill
- * toggle holding exactly two modes — Search (live) and Build (dormant/SOON). It is
- * both the indicator (the filled segment shows the active mode) and the selector.
- * Build is present but not switchable yet; it carries a SOON tag and a coming-soon
- * tooltip, and selecting it does nothing (the thumb stays on Search).
+ * toggle holding the live modes — Search (grounded research), Build (the agent
+ * surface framed for software), and Agent (the same machinery, general-task
+ * framing). It is both the indicator (the filled segment shows the active mode)
+ * and the selector. Dormant modes (if any) carry a SOON tag and don't switch.
  */
 export function ModeSlider() {
   const { mode, setMode, modes } = useMode();
@@ -21,7 +30,7 @@ export function ModeSlider() {
     >
       {modes.map((m) => {
         const active = m.id === mode;
-        const Icon = m.id === "search" ? Search : CodeBlocksIcon;
+        const Icon = MODE_ICON[m.id];
         return (
           <button
             key={m.id}

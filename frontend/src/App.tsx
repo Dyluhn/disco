@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Navigate, Route, BrowserRouter as Router, Routes, useParams } from "react-router-dom";
 import { BuildSurface } from "@/components/BuildSurface";
+import { AgentSurface } from "@/components/AgentSurface";
 import { ResearchSurface } from "@/components/ResearchSurface";
 import { DeepResearchSurface } from "@/components/research/DeepResearchSurface";
 import { ModeProvider } from "@/shell/ModeProvider";
@@ -17,10 +18,13 @@ const queryClient = new QueryClient({
 });
 
 /** The main surface follows the active top-level mode (the slider): Search → the
- * grounded research surface; Build → the live agent surface. */
+ * grounded research surface; Build → the agent surface (software framing); Agent →
+ * the same surface, general-task framing. */
 function MainSurface() {
   const { mode } = useMode();
-  return mode === "build" ? <BuildSurface /> : <ResearchSurface />;
+  if (mode === "build") return <BuildSurface />;
+  if (mode === "agent") return <AgentSurface />;
+  return <ResearchSurface />;
 }
 
 /** Resume an existing Build project from /build/:cid — opens the Build surface
@@ -28,6 +32,14 @@ function MainSurface() {
 function ResumeProject() {
   const { cid } = useParams<{ cid: string }>();
   return <BuildSurface resumeCid={cid ?? null} />;
+}
+
+/** Resume an existing Agent task from /agent/:cid — the same machinery as
+ * ResumeProject, agent framing. The stored surface stays "agent"; resume never
+ * re-sets it (the WS just replays history-then-live). */
+function ResumeAgent() {
+  const { cid } = useParams<{ cid: string }>();
+  return <AgentSurface resumeCid={cid ?? null} />;
 }
 
 /** Resume an existing Deep Research run from /deep/:cid — opens the Deep
@@ -57,6 +69,7 @@ export default function App() {
               <Route path="history" element={<HistoryView />} />
               <Route path="projects" element={<ProjectsView />} />
               <Route path="build/:cid" element={<ResumeProject />} />
+              <Route path="agent/:cid" element={<ResumeAgent />} />
               <Route path="deep/:cid" element={<ResumeDeepResearch />} />
               <Route path="share/:token" element={<ShareView />} />
               <Route path="settings" element={<SettingsView />} />

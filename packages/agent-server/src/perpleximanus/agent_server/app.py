@@ -16,7 +16,7 @@ import re
 import unicodedata
 import uuid
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import httpx
 from fastapi import (
@@ -72,7 +72,11 @@ class CreateConversationBody(BaseModel):
     owner_id: str = DEFAULT_OWNER_ID
     space_id: str | None = None
     title: str | None = None
-    surface: str = "research"  # "research" (read-only, ungated) | "build" (agent + gate)
+    # "research" (read-only, ungated) | "build" / "agent" (agent + tools + gate;
+    # identical machinery, different framing) | "deep_research" (plan→iterate→report).
+    # A Literal so a junk surface 422s at the edge rather than persisting a DB label
+    # the runtime then coerces to a toolless research loop (the DC-05 half-state).
+    surface: Literal["research", "build", "agent", "deep_research"] = "research"
     model_override: str | None = None  # pin the driver model (catalogue key) for this convo
     # Deep Research depth tier ("quick" | "standard_deep" | "exhaustive"). The UI's
     # depth picker sends it here; the runtime reads it via _depth_for. Without
@@ -664,6 +668,10 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
                     "id": r.conversation_id,
                     "owner_id": r.owner_id or (s.owner_id if s else owner_id),
                     "title": (s.title if s else None) or r.title or "(untitled)",
+                    # Surface so the Projects list resumes each row on the right
+                    # surface ("agent" → /agent/:cid, else /build/:cid). Build-like
+                    # surfaces are the only ones that snapshot, so default to "build".
+                    "surface": (s.surface if s else None) or "build",
                     "created_at": (s.created_at if s else None) or r.created_at,
                     "last_snapshot_at": r.last_snapshot_at,
                     "file_count": r.file_count,
@@ -1041,7 +1049,6 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             raise HTTPException(
                 status_code=503, detail={"ok": False, "reason": "no_runtime"}
             )
-        from .report_export import MEDIA_TYPES, EXTENSIONS
 
         valid_fmts = frozenset({"md", "pdf", "docx"})
         if fmt not in valid_fmts:

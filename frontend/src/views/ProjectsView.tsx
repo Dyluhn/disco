@@ -92,7 +92,9 @@ function ProjectRow({ project, onDelete }: { project: Project; onDelete: () => v
     <li className="flex items-center justify-between gap-section border-b border-hairline py-inline last:border-b-0">
       <button
         type="button"
-        onClick={() => navigate(`/build/${project.id}`)}
+        onClick={() =>
+          navigate(project.surface === "agent" ? `/agent/${project.id}` : `/build/${project.id}`)
+        }
         className="group min-w-0 flex-1 text-left"
       >
         <div className="flex items-center gap-inline">

@@ -89,6 +89,28 @@ def test_list_projects_joins_manifests_with_conversation_metadata(store, tmp_pat
     assert row["files_missing"] is False
 
 
+def test_list_projects_carries_surface_for_resume_routing(store, tmp_path):
+    """The row must carry `surface` so the Projects list resumes each project on the
+    right surface (an "agent" project → /agent/:cid, not the build-framed /build/:cid).
+    A build project (or a legacy row with no surface) defaults to "build"."""
+    runtime = _runtime(store, root=str(tmp_path))
+    ps = ProjectStore(str(tmp_path))
+    for cid, surface in (("conv_agent", "agent"), ("conv_build", "build")):
+        ws = ps.path_for(cid)
+        ws.mkdir(parents=True)
+        (ws / "f.txt").write_bytes(b"x")
+        ps.write_manifest(
+            cid, title=None, owner_id="local",
+            created_at="2026-06-06T00:00:00Z", file_count=1, total_bytes=1,
+        )
+        store.create_conversation(cid, owner_id="local", surface=surface)
+
+    client = TestClient(create_app(store, runtime=runtime))
+    rows = {r["id"]: r for r in client.get("/api/projects").json()["projects"]}
+    assert rows["conv_agent"]["surface"] == "agent"
+    assert rows["conv_build"]["surface"] == "build"
+
+
 def test_files_missing_flag_surfaces_when_workspace_deleted(store, tmp_path):
     runtime = _runtime(store, root=str(tmp_path))
     ps = ProjectStore(str(tmp_path))

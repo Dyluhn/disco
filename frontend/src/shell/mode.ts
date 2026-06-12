@@ -3,17 +3,19 @@ import { createContext, useContext } from "react";
 /**
  * Two-level mode model.
  *
- * TOP LEVEL (the slider, the single source of mode state): exactly two modes —
- * Search (live) and Build (dormant/SOON). The slider is both the indicator and
- * the selector; there is no separate mode indicator and no mode options on the
- * model pill.
+ * TOP LEVEL (the slider, the single source of mode state): three live modes —
+ * Search (grounded research), Build (the agent surface framed for software), and
+ * Agent (the SAME agent machinery framed as a general task agent). The slider is
+ * both the indicator and the selector; there is no separate mode indicator and no
+ * mode options on the model pill.
  *
  * CHILD LEVEL (the in-chat scope control): a per-mode option set surfaced by ONE
  * reusable control whose options swap with the active mode. Search → Standard
- * (default) + Deep Research (dormant). Build (future) → Site / Desktop / Mobile /
- * Other. Deep Research is a CHILD of Search, never a top-level mode.
+ * (default) + Deep Research. Build → Site / Desktop / Mobile / Other (dormant).
+ * Agent → a single Standard scope (the surface doesn't render a scope control).
+ * Deep Research is a CHILD of Search, never a top-level mode.
  */
-export type Mode = "search" | "build";
+export type Mode = "search" | "build" | "agent";
 
 export interface ModeMeta {
   id: Mode;
@@ -23,7 +25,8 @@ export interface ModeMeta {
 
 export const MODES: ModeMeta[] = [
   { id: "search", label: "search", dormant: false },
-  { id: "build", label: "build", dormant: false }, // woken: the live agent surface
+  { id: "build", label: "build", dormant: false }, // the agent surface, software framing
+  { id: "agent", label: "agent", dormant: false }, // the same machinery, general-task framing
 ];
 
 export function modeMeta(id: Mode): ModeMeta {
@@ -60,6 +63,10 @@ export const SCOPE_OPTIONS: Record<Mode, ScopeOption[]> = {
     { id: "mobile", label: "Mobile Application", dormant: true },
     { id: "other", label: "Other", dormant: true, promptOnFirstTurn: true },
   ],
+  // Agent has no meaningful sub-scopes (it's "do a task"), and the surface never
+  // renders the scope control — but `defaultScope` indexes [0], so keep exactly one
+  // non-dormant entry (reuses an existing ScopeId so SCOPE_ICON stays total).
+  agent: [{ id: "standard", label: "Standard", dormant: false }],
 };
 
 /** The default (first non-dormant, else first) scope for a mode. */

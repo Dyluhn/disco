@@ -25,6 +25,9 @@ export interface Project {
   /** True when the manifest exists but the workspace tree is gone (deleted
    * under the app — the graceful-failure flag the list view surfaces). */
   files_missing: boolean;
+  /** The surface that produced it — the list resumes "agent" projects on /agent/:cid
+   * and everything else on /build/:cid. Defaults to "build" server-side. */
+  surface?: "build" | "agent";
 }
 
 export interface ProjectsList {

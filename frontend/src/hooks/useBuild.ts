@@ -9,10 +9,12 @@ import { useMutation } from "@tanstack/react-query";
 import { createBuildConversation, killConversation } from "@/api/agent";
 import { useBuildStream, type BuildSession } from "./useBuildStream";
 
-/** Opens a Build conversation. If `resumeCid` is given (the /build/:cid route),
- * skip the create call and connect to the existing conversation — the WebSocket
- * subscription replays history-then-live, so the prior events restore. */
-export function useBuild(resumeCid?: string | null) {
+/** Opens a build-like conversation. `surface` is "build" (software framing) or
+ * "agent" (general-task framing) — identical machinery. If `resumeCid` is given
+ * (the /build/:cid or /agent/:cid route), skip the create call and connect to the
+ * existing conversation — the WebSocket replays history-then-live, so prior events
+ * restore (the stored surface is authoritative; resume never re-sets it). */
+export function useBuild(resumeCid?: string | null, surface: "build" | "agent" = "build") {
   const [session, setSession] = useState<BuildSession | null>(null);
   const [modelId, setModelId] = useState<string | null>(null); // null → server default
   const stream = useBuildStream(session);
@@ -25,7 +27,9 @@ export function useBuild(resumeCid?: string | null) {
     }
   }, [resumeCid, session]);
 
-  const create = useMutation({ mutationFn: createBuildConversation });
+  const create = useMutation({
+    mutationFn: (modelOverride: string | null) => createBuildConversation(modelOverride, surface),
+  });
 
   const submit = useCallback(
     (task: string) => {

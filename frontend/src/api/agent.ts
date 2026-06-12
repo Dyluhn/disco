@@ -46,13 +46,18 @@ export interface AgentHandle {
   cancel: () => void;
 }
 
-/** Create a Build-surface conversation (the agent loop + the ConfirmRisky gate),
- * optionally pinning the driver model for it (the chat model picker). */
-export async function createBuildConversation(modelOverride?: string | null): Promise<string> {
+/** Create a build-like conversation (the agent loop + the ConfirmRisky gate),
+ * optionally pinning the driver model for it (the chat model picker). The surface
+ * is "build" (software framing) or "agent" (general-task framing) — identical
+ * machinery, so the same create path serves both. */
+export async function createBuildConversation(
+  modelOverride?: string | null,
+  surface: "build" | "agent" = "build",
+): Promise<string> {
   if (!agentLive()) return FIXTURE_CID;
   const res = await agentSend<{ conversation_id: string }>("POST", "/conversations", {
     owner_id: import.meta.env.VITE_OWNER_ID ?? "local",
-    surface: "build",
+    surface,
     model_override: modelOverride ?? null,
   });
   return res.conversation_id;

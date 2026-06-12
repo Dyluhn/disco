@@ -43,8 +43,39 @@ import { ClarifyPanel } from "@/components/build/ClarifyPanel";
 import { ReplayScrubber } from "@/components/build/ReplayScrubber";
 import { ScheduleSection } from "@/components/settings/ScheduleSection";
 
-export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) {
-  const b = useBuild(resumeCid);
+/** This surface backs two framings of the SAME agent machinery: "build" (software)
+ * and "agent" (general tasks). Only presentational strings differ; everything else
+ * — loop, gate, sandbox, persistence — is identical, so the agent surface reuses
+ * this component via a thin wrapper rather than a forked copy. The default is
+ * "build", so every existing call site renders byte-identically. */
+export type BuildFraming = "build" | "agent";
+
+const FRAMING: Record<
+  BuildFraming,
+  { placeholder: string; replanPlaceholder: string; startError: string; heroSubtitle?: string }
+> = {
+  build: {
+    placeholder: "Describe what you want the agent to build or do…",
+    replanPlaceholder: "Plan a change to this build…",
+    startError: "Couldn't start the build — the server didn't respond. Try again.",
+    // heroSubtitle omitted → EmptyState keeps its default copy (build left as-is).
+  },
+  agent: {
+    placeholder: "Describe a task for the agent to carry out…",
+    replanPlaceholder: "Plan a change to this task…",
+    startError: "Couldn't start the agent — the server didn't respond. Try again.",
+    heroSubtitle:
+      "Give the agent a task. It plans first, works in a sandbox with real tools, " +
+      "and pauses on anything risky for your approval.",
+  },
+};
+
+export function BuildSurface({
+  resumeCid,
+  framing = "build",
+}: { resumeCid?: string | null; framing?: BuildFraming } = {}) {
+  const b = useBuild(resumeCid, framing);
+  const copy = FRAMING[framing];
 
   // BP-15: fetch the real sandbox backend name from the server state endpoint.
   // useBuildStream doesn't expose sandbox_backend yet, so we read it once via HTTP
@@ -150,7 +181,7 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
     return (
       <div className="flex min-h-full flex-col pt-section">
         <main className="flex flex-1 flex-col items-center justify-center gap-major px-body pb-[12vh]">
-          <EmptyState />
+          <EmptyState subtitle={copy.heroSubtitle} />
           <div className="w-full max-w-measure">
             <div className="mb-inline flex items-center justify-between gap-inline">
               <BuildModelPicker value={b.modelId} onChange={b.setModelId} />
@@ -160,16 +191,14 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
               onSubmit={b.submit}
               busy={b.submitting}
               autoFocus
-              placeholder="Describe what you want the agent to build or do…"
+              placeholder={copy.placeholder}
             />
             <p className="mt-inline text-center font-ui text-[0.78rem] text-text-faint">
               The agent works in a sandbox and shows its plan. Risky steps pause for your approval.
             </p>
             {b.submitError && (
               <p role="alert" className="mt-inline text-center font-ui text-[0.8rem] text-unsupported">
-                {b.submitError instanceof Error
-                  ? b.submitError.message
-                  : "Couldn't start the build — the server didn't respond. Try again."}
+                {b.submitError instanceof Error ? b.submitError.message : copy.startError}
               </p>
             )}
           </div>
@@ -378,7 +407,7 @@ export function BuildSurface({ resumeCid }: { resumeCid?: string | null } = {}) 
             <div className="flex flex-col gap-hair">
               <BuildModelPicker value={b.modelId} onChange={b.setModelId} />
               {/* re-enter plan mode: a focused, diff-style change is planned + re-approved */}
-              <QueryInput onSubmit={b.requestPlan} placeholder="Plan a change to this build…" />
+              <QueryInput onSubmit={b.requestPlan} placeholder={copy.replanPlaceholder} />
             </div>
           )}
           {/* RP-08: schedule this conversation to re-run on a cron cadence. Only
