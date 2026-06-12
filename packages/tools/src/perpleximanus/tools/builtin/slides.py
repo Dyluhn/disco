@@ -11,11 +11,9 @@ Format support:
 
 from __future__ import annotations
 
-import asyncio
 import html
 import re
-import shutil
-from tempfile import NamedTemporaryFile
+import shlex
 from textwrap import dedent
 
 from pydantic import BaseModel, Field
@@ -147,7 +145,7 @@ def _basic_md_to_html(md: str) -> str:
                 bq_lines.append(lines[i][2:])
                 i += 1
             bq_text = "<br>".join(
-                _inline_markdown_to_html(html.escape(l)) for l in bq_lines
+                _inline_markdown_to_html(html.escape(ln)) for ln in bq_lines
             )
             out.append(f"<blockquote>{bq_text}</blockquote>")
             continue
@@ -199,7 +197,7 @@ def _basic_md_to_html(md: str) -> str:
             i += 1
         if para_lines:
             text = "<br>".join(
-                _inline_markdown_to_html(html.escape(l)) for l in para_lines
+                _inline_markdown_to_html(html.escape(ln)) for ln in para_lines
             )
             out.append(f"<p>{text}</p>")
 
@@ -260,42 +258,41 @@ def _fallback_html(markdown: str, theme: str | None = None) -> str:
     )
 
 
-# ---- marp CLI subprocess ----------------------------------------------------
+# ---- marp CLI — run INSIDE the sandbox (not the agent-server host) -----------
+# The deck markdown is agent-generated (injection-tainted). Marp drives a full
+# Chromium to render PDF/PPTX; running that on the host would let a crafted deck
+# (file:// refs, local URLs) exfiltrate host files during render. So marp runs in
+# the jailed sandbox via exec_shell — the binary + Chromium ship in the image
+# (deploy/sandbox/Dockerfile, RP-10 layer). The output lands directly in the
+# workspace, so there is no host temp file and no read-back.
 
 
-def _marp_available() -> bool:
-    """Check if the marp CLI binary is on PATH."""
-    return shutil.which("marp") is not None
+async def _marp_available(ctx: ToolContext) -> bool:
+    """True if the marp CLI is present INSIDE the sandbox."""
+    try:
+        res = await ctx.sandbox.exec_shell("command -v marp", timeout_s=10)
+    except Exception:
+        return False
+    return res.exit_code == 0
 
 
-async def _marp_render(
-    input_path: str,
-    output_path: str,
+async def _marp_render_in_sandbox(
+    ctx: ToolContext,
+    src_name: str,
+    out_name: str,
     fmt: str,
     *,
-    timeout_s: int = 120,
+    timeout_s: int = 180,
 ) -> tuple[bool, str]:
-    """Run `marp <input> -o <output>` and return (ok, error_message)."""
-    cmd = ["marp", input_path, "-o", output_path]
-    if fmt == "pptx":
-        cmd.insert(1, "--pptx")
-
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
-    except TimeoutError:
-        proc.kill()
-        await proc.wait()
+    """Run `marp <src> -o <out>` INSIDE the sandbox (workdir = workspace). Both
+    paths are workspace-relative names. Returns (ok, error_message)."""
+    pptx = "--pptx " if fmt == "pptx" else ""
+    cmd = f"marp {pptx}{shlex.quote(src_name)} -o {shlex.quote(out_name)}"
+    res = await ctx.sandbox.exec_shell(cmd, timeout_s=timeout_s)
+    if res.timed_out:
         return False, f"marp render timed out after {timeout_s}s"
-
-    if proc.returncode != 0:
-        err_msg = stderr.decode("utf-8", errors="replace").strip()
-        return False, err_msg or f"marp exited with code {proc.returncode}"
-
+    if res.exit_code != 0:
+        return False, (res.stderr or "").strip() or f"marp exited with code {res.exit_code}"
     return True, ""
 
 
@@ -343,7 +340,7 @@ class SlidesTool:
             theme_block = f"<!-- theme: custom -->\n<style>\n{args.theme}\n</style>\n\n"
             markdown = theme_block + markdown
 
-        have_marp = _marp_available()
+        have_marp = await _marp_available(ctx)
 
         # ---- HTML path ----
         if fmt == "html":
@@ -356,17 +353,16 @@ class SlidesTool:
                     markdown, out_filename, ctx, args
                 )
 
-        # ---- PDF / PPTX paths (require marp + Chromium) ----
+        # ---- PDF / PPTX paths (require marp + Chromium in the sandbox image) ----
         if not have_marp:
             return ToolOutcome(
                 success=False,
                 content=(
-                    f"{fmt.upper()} export requires the Marp CLI + Chromium toolchain "
-                    f"in the sandbox image. This will be available after the VM-201 "
-                    f"image rebuild (BP-08/RP-07). HTML export is available now as a "
-                    f"fallback — re-run with format='html' for a rendered deck."
+                    f"{fmt.upper()} export needs the Marp CLI + Chromium in the sandbox "
+                    f"image, which isn't present in this sandbox. HTML export works now "
+                    f"as a fallback — re-run with format='html' for a rendered deck."
                 ),
-                error=f"marp CLI not found on PATH — {fmt.upper()} export unavailable.",
+                error=f"marp CLI not found in the sandbox — {fmt.upper()} export unavailable.",
             )
 
         return await self._render_with_marp(markdown, out_filename, fmt, ctx, args)
@@ -379,50 +375,29 @@ class SlidesTool:
         ctx: ToolContext,
         args: SlidesGenerateArgs,
     ) -> ToolOutcome:
-        """Render via marp CLI: write markdown to temp file, run marp, read
-        output, write through sandbox."""
-        # Write markdown source to a temp file
-        with NamedTemporaryFile(
-            mode="w",
-            suffix=".md",
-            encoding="utf-8",
-            delete=False,
-        ) as tmp_src:
-            tmp_src.write(markdown)
-            src_path = tmp_src.name
-
-        with NamedTemporaryFile(
-            mode="wb",
-            suffix=f".{fmt}",
-            delete=False,
-        ) as tmp_out:
-            out_path = tmp_out.name
-
+        """Render via marp INSIDE the sandbox: write the markdown source into the
+        jailed workspace, run marp in-box (output lands directly in the
+        workspace), then clean up the source. No host temp files, no read-back."""
+        # A hidden workspace-relative source file marp reads (workdir = workspace).
+        src_name = f".{args.filename}.marp-src.md"
+        await ctx.sandbox.write_file(src_name, markdown.encode("utf-8"))
         try:
-            ok, err = await _marp_render(src_path, out_path, fmt)
-            if not ok:
-                return ToolOutcome(
-                    success=False,
-                    content=f"Marp render failed: {err}",
-                    error=f"Marp render failed: {err}",
-                )
-
-            # Read the rendered output
-            with open(out_path, "rb") as f:
-                rendered_bytes = f.read()
-
+            ok, err = await _marp_render_in_sandbox(ctx, src_name, out_filename, fmt)
         finally:
-            # Clean up temp files
-            import os
+            # Best-effort cleanup of the transient source inside the sandbox.
+            try:
+                await ctx.sandbox.exec_shell(f"rm -f {shlex.quote(src_name)}", timeout_s=10)
+            except Exception:
+                pass
 
-            for p in (src_path, out_path):
-                try:
-                    os.unlink(p)
-                except OSError:
-                    pass
-
-        # Write THROUGH the sandbox — jailed, lands in the conversation workspace.
-        await ctx.sandbox.write_file(out_filename, rendered_bytes)
+        if not ok:
+            return ToolOutcome(
+                success=False,
+                content=f"Marp render failed: {err}",
+                error=f"Marp render failed: {err}",
+            )
+        # The output already lives in the workspace at out_filename (marp wrote it
+        # there) — jailed by construction; nothing to read back.
 
         note = ""
         if fmt == "pptx":

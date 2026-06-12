@@ -248,7 +248,9 @@ async def test_pdf_fails_when_marp_absent(tmp_workspace):
 
     assert not outcome.success
     assert "PDF" in outcome.content
-    assert "image rebuild" in outcome.content.lower() or "vm-201" in outcome.content.lower()
+    # marp runs INSIDE the sandbox now; absence is surfaced as "not present in this
+    # sandbox" + an HTML fallback hint — NOT the old false "after VM-201 rebuild".
+    assert "sandbox" in outcome.content.lower() and "html" in outcome.content.lower()
     assert "marp CLI not found" in outcome.error
     # No file was written
     assert not (tmp_workspace / "deck.pdf").exists()

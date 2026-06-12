@@ -22,6 +22,19 @@ RUN pip3 install --break-system-packages playwright \
     && playwright install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/*
 
+# RP-10: Marp slide-deck rendering (HTML / PDF / PPTX), run INSIDE the sandbox by
+# the slides_generate tool via exec_shell — NOT on the agent-server host (the deck
+# markdown is agent-generated; a full Chromium over it belongs behind the jail).
+# Reuses the Playwright Chromium installed above; a stable symlink decouples
+# CHROME_PATH from the version-pinned playwright cache path. Verified: marp renders
+# PDF+PPTX+HTML with CHROME_NO_SANDBOX=true (Chromium's own sandbox can't nest;
+# gVisor/runc is the boundary).
+RUN npm install -g @marp-team/marp-cli \
+    && ln -sf "$(find /root/.cache/ms-playwright -name chrome -type f -path '*chrome-linux*' | head -1)" /usr/local/bin/marp-chromium \
+    && rm -rf /root/.npm
+ENV CHROME_PATH=/usr/local/bin/marp-chromium \
+    CHROME_NO_SANDBOX=true
+
 # Non-root user available (gVisor is the isolation boundary; app may pick --user)
 RUN useradd -m -u 1000 -s /bin/bash agent && mkdir -p /workspace && chown agent:agent /workspace
 WORKDIR /workspace
