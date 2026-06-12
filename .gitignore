@@ -33,3 +33,23 @@ perpleximanus-secrets.json
 # orchestration runtime state (scripts/orchestrate.sh) + Claude review queue
 .orchestrate/
 review-queue/
+
+# Agent runtime workspaces (dev PMX_PROJECTS_ROOT output) + model bake-off scratch +
+# captured verification artifacts (event logs, screenshots, run records). All generated.
+/agent-projects/
+/bakeoff/
+/test-record/
+
+# Root-level manual-test scratch (these patterns are ROOT-scoped on purpose — real
+# test_*.py live under packages/ and must stay tracked).
+/run_manual*.py
+/test_*.py
+/validate.py
+/validation_output.txt
+/test_tmux_out.txt
+/tmp_weather.csv
+/pytest_shell_sessions.txt
+/pytest_tools.txt
+/selected.csv
+/sensor_readings.csv
+/wind_dataset.csv
