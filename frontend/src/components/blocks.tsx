@@ -319,20 +319,20 @@ function ChartBlockComponent({
  * artifact (ToolOutcome.artifacts → DeliverableEvent) and is downloaded through
  * the app's deliverable/workspace machinery, which holds the conversation id.
  *
- * NO per-block download button: the GroundedAnswer/BlockView render path has no
- * conversation id (see grounded.ts — GroundedAnswer carries no cid), and the
- * workspace-file endpoint (app.py:504) is allowlisted to .pmx/screenshots|plots
- * and serves image/png only. A self-fetching button here could never resolve an
- * .xlsx — that would be a false affordance (looks usable, always 404s). Wiring a
- * real download means threading cid through BlockView; deferred to a follow-up.
+ * NO per-block download button HERE — by design, not by deferral. This block
+ * renders on the ANSWER path (GroundedAnswer/BlockView), which carries no cid AND
+ * which the live research pipeline can never feed a sheet to (the block composer
+ * has no "sheet" branch; sheet_generate is research-scope-rejected). The honest
+ * download lives where sheets are actually made: the Build/Agent ActivityFeed,
+ * which HAS a cid, via the declared-artifact route (app.py
+ * `/conversations/{cid}/artifacts/{path}`, allowlisted to emitted .xlsx artifacts) —
+ * see SheetDownload in build/ActivityFeed.tsx (rp-11 residue). Keeping a cid-less
+ * download button here would be a false affordance (always 404s).
  *
- * Univer read-only embed: also deferred. @univerjs/* 0.25.x ships only a heavy
- * collaborative editor (plugin DI + WebGL renderer + locale bundles, ~200 lines
- * of init) with no standalone `<UniverSheet readOnly data={...} />` component.
- * When that lands, this card adopts it.
- *
- * BLOCKERS DOCUMENTED 2026-06-11: (1) no cid on the block render path → no honest
- * in-block download yet; (2) no read-only embed API in @univerjs/* 0.25.x.
+ * Univer read-only embed (an in-card grid): still deferred. @univerjs/* 0.25.x
+ * ships only a heavy collaborative editor with no standalone read-only component,
+ * and a server-side openpyxl→grid preview runs on agent-overwritable bytes — out of
+ * scope for now. The card stays an honest preview + the ActivityFeed download.
  */
 function SheetBlockComponent({
   title,

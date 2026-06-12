@@ -42,6 +42,9 @@ export interface ActivityItem {
     output?: string; // observation content (truncated to ~2KB)
     error?: string; // error message if the action failed
     screenshot_path?: string; // BP-15: relative .pmx/screenshots/… path from structured
+    // rp-11: a generated spreadsheet artifact, downloadable via the declared-artifact
+    // route (only present for a successful sheet_generate).
+    sheet?: { filename: string; title?: string; sheet_names?: string[] };
   };
   status: "done" | "running" | "pending" | "failed" | "pending_send";
   attention: boolean; // confidence gradient: risky/novel steps float up, routine recede
@@ -112,14 +115,34 @@ export function deriveActivity(
   // to drill into commands + results — hiding them is poor design).
   const observationByActionId = new Map<
     string,
-    { output?: string; error?: string; screenshotPath?: string }
+    {
+      output?: string;
+      error?: string;
+      screenshotPath?: string;
+      sheet?: { filename: string; title?: string; sheet_names?: string[] };
+    }
   >();
   for (const e of events) {
     if (e.kind === "observation") {
-      const sp = e.tool_result.structured?.screenshot_path;
+      const struct = e.tool_result.structured;
+      const sp = struct?.screenshot_path;
+      const fn = struct?.filename;
+      const sheet =
+        e.tool_result.tool_name === "sheet_generate" &&
+        e.tool_result.success &&
+        typeof fn === "string"
+          ? {
+              filename: fn,
+              title: typeof struct?.title === "string" ? struct.title : undefined,
+              sheet_names: Array.isArray(struct?.sheet_names)
+                ? (struct.sheet_names as string[])
+                : undefined,
+            }
+          : undefined;
       observationByActionId.set(e.action_id, {
         output: (e.tool_result.content || "").slice(0, 2000),
         screenshotPath: typeof sp === "string" ? sp : undefined,
+        sheet,
       });
     } else if (e.kind === "agent_error" && e.action_id) {
       observationByActionId.set(e.action_id, { error: e.error });
@@ -151,6 +174,7 @@ export function deriveActivity(
           output: obs?.output,
           error: obs?.error,
           screenshot_path: obs?.screenshotPath,
+          sheet: obs?.sheet,
         },
         status: st,
         attention: isPending || risk === "HIGH" || risk === "UNKNOWN" || st === "failed",

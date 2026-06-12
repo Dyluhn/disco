@@ -17,6 +17,8 @@ import {
   ChevronDown,
   ChevronRight,
   Circle,
+  Download,
+  FileSpreadsheet,
   Loader2,
   MessageSquare,
   Paperclip,
@@ -51,6 +53,40 @@ function ScreenshotThumbnail({
         onError={() => setFailed(true)}
         className="max-h-[200px] w-auto rounded border border-hairline object-contain"
       />
+    </a>
+  );
+}
+
+/** A generated spreadsheet — a real download via the declared-artifact route
+ * (encodeURI preserves any subdir slashes). Honest: only renders when there's a
+ * conversation id to fetch against; the file's live formulas compute on open. */
+function SheetDownload({
+  sheet,
+  conversationId,
+}: {
+  sheet: NonNullable<ActivityItem["expandable"]>["sheet"];
+  conversationId: string;
+}) {
+  if (!sheet) return null;
+  const href = `${agentHttpBase()}/conversations/${conversationId}/artifacts/${encodeURI(sheet.filename)}`;
+  const n = sheet.sheet_names?.length ?? 0;
+  return (
+    <a
+      href={href}
+      download
+      className="mt-hair flex items-center gap-inline rounded-card border border-hairline bg-surface-0 px-inline py-hair transition-colors hover:border-hairline-strong"
+    >
+      <FileSpreadsheet className="size-4 shrink-0 text-accent" aria-hidden />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-ui text-[0.82rem] text-text">
+          {sheet.title || sheet.filename}
+        </span>
+        <span className="block truncate font-mono text-[0.7rem] text-text-faint">
+          {sheet.filename}
+          {n > 0 ? ` · ${n} sheet${n !== 1 ? "s" : ""}` : ""}
+        </span>
+      </span>
+      <Download className="size-3.5 shrink-0 text-text-faint" aria-hidden />
     </a>
   );
 }
@@ -249,6 +285,11 @@ export function ActivityFeed({
                   path={item.expandable.screenshot_path}
                   conversationId={conversationId}
                 />
+              )}
+              {/* rp-11: a generated spreadsheet → an honest download card (only when
+                  there's a cid to fetch the declared artifact against). */}
+              {item.expandable?.sheet && conversationId && (
+                <SheetDownload sheet={item.expandable.sheet} conversationId={conversationId} />
               )}
               {/* Expandable raw command + output drill-down. */}
               {item.expandable && <ExpandableDetail item={item} />}

@@ -38,6 +38,7 @@ from perpleximanus.core import (
     EventSource,
     LLMMessage,
     MessageEvent,
+    ObservationEvent,
     WSClientFrame,
     WSServerFrame,
 )
@@ -554,6 +555,86 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             content=data,
             media_type="image/png",
             headers={"Cache-Control": "private, max-age=31536000, immutable"},
+        )
+
+    # ---- Declared-artifact download (rp-11 residue) ---------------------------
+
+    # v1: spreadsheets only. The content-type is pinned to the extension (never
+    # sniffed) and served as an ATTACHMENT — we never parse or inline-render the
+    # bytes server-side, so an agent overwriting the declared file post-hoc can't
+    # turn this into a render/parse exploit.
+    _ARTIFACT_TYPES = {
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }
+
+    async def _declared_artifacts(conversation_id: str) -> set[str]:
+        """The set of workspace-relative paths this conversation EMITTED as results —
+        a successful `sheet_generate` observation's filename, or a files-kind
+        DeliverableEvent path. The download jail: only emitted artifacts are
+        reachable, never arbitrary workspace paths (user code, secrets, uploads)."""
+        out: set[str] = set()
+        with contextlib.suppress(Exception):
+            for e in await store.get_events(conversation_id):
+                if (
+                    isinstance(e, ObservationEvent)
+                    and e.tool_result.success
+                    and e.tool_result.tool_name == "sheet_generate"
+                    and e.tool_result.structured
+                ):
+                    fn = e.tool_result.structured.get("filename")
+                    if isinstance(fn, str) and fn:
+                        out.add(posixpath.normpath(fn))
+                elif isinstance(e, DeliverableEvent) and e.artifact_kind == "files":
+                    out.add(posixpath.normpath(e.path))
+        return out
+
+    @app.get("/conversations/{conversation_id}/artifacts/{path:path}")
+    async def artifact_file(conversation_id: str, path: str) -> Response:
+        """Download a generated artifact (v1: .xlsx) by its workspace-relative path.
+        Jails: (1) the path must have been DECLARED as an artifact in the event log;
+        (2) extension allowlist; (3) traversal-normalized + host-path resolve-jail.
+        Reads the live sandbox first, falling back to the host ProjectStore snapshot
+        so a FINISHED run (no live session) still serves. 404 uniformly (no probe)."""
+        norm = posixpath.normpath(path)
+        if posixpath.isabs(norm) or norm.startswith(".."):
+            raise HTTPException(status_code=404)
+        _, ext = posixpath.splitext(norm)
+        media_type = _ARTIFACT_TYPES.get(ext.lower())
+        if media_type is None:
+            raise HTTPException(status_code=404)
+        if runtime is None:
+            raise HTTPException(status_code=404)
+        if norm not in await _declared_artifacts(conversation_id):
+            raise HTTPException(status_code=404)
+
+        data: bytes | None = None
+        # 1) live sandbox (a running/suspended-but-live conversation)
+        session = runtime.live_session(conversation_id)
+        if session is not None:
+            with contextlib.suppress(Exception):
+                data = await session.read_file(norm)
+        # 2) host ProjectStore snapshot (finished run, sandbox reaped)
+        if data is None:
+            ps = runtime.project_store()
+            if ps is not None and ps.status() == StorageStatus.OK:
+                with contextlib.suppress(Exception):
+                    workspace = ps.path_for(conversation_id).resolve()
+                    resolved = (workspace / norm).resolve()
+                    if resolved.is_relative_to(workspace) and resolved.is_file():
+                        data = resolved.read_bytes()
+        if data is None:
+            raise HTTPException(status_code=404)
+        if len(data) > 50 * 1024 * 1024:  # 50 MB cap
+            raise HTTPException(status_code=404)
+
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{posixpath.basename(norm)}"',
+                "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "private, no-store",
+            },
         )
 
     @app.get("/conversations/{conversation_id}/preview-app/{path:path}")
