@@ -73,9 +73,14 @@ the agent-server gets one by mounting your host's container socket
 > Mounting the socket makes the **agent-server process root-equivalent on your host**:
 > anything that fully compromises the agent-server could start a privileged container
 > and own the machine. The **agent's own code never touches the socket** — it runs in
-> sibling sandboxes with a clean environment, real CPU/memory limits, and (by default)
-> no network. The socket is a blast-radius concern for an *agent-server RCE*, not a
-> lane the agent drives in.
+> sibling sandboxes with a clean environment and real CPU/memory limits. The socket is
+> a blast-radius concern for an *agent-server RCE*, not a lane the agent drives in.
+
+> **Network, honestly:** the sandbox *primitive* is network-sealed, but the Build/Agent
+> surface **grants the sandbox full outbound internet by default** (an agent usually
+> needs to `pip install`, `npm i`, call APIs). Set `PMX_BUILD_EGRESS=filtered` for a
+> deny-by-default allowlist (package registries + your configured MCP hosts only),
+> enforced by an egress-proxy sidecar. See **Network egress** below.
 
 Mitigations, in order of value:
 
@@ -99,6 +104,18 @@ socket-proxy filters accidents, not attackers — we don't pretend otherwise.
 On a host with no container runtime at all, set `PMX_SANDBOX=process`. This runs the
 agent's tools **in the agent-server's own container with no isolation** — fine for
 trying it out, unsafe for untrusted/agentic workloads. It is labeled that way in the UI.
+
+### Network egress
+
+By default the Build/Agent sandbox has **full outbound internet** — agents routinely
+need to install packages and reach APIs, so an open default is the usable one. The cost
+is that prompt-injected or buggy agent code can also exfiltrate or call out freely.
+
+For untrusted/agentic workloads, set `PMX_BUILD_EGRESS=filtered` (uncomment it in
+`.env`). The sandbox then goes **deny-by-default**: an egress-proxy sidecar permits only
+package registries plus the hosts of any MCP servers you've configured, and denies
+everything else with a 403 the agent cannot bypass. The full threat model — isolation
+tiers, prompt-injection handling, action guards — is in [`SECURITY.md`](../SECURITY.md).
 
 ## Podman
 

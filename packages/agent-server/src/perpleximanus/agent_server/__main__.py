@@ -4,9 +4,10 @@ Builds the shared event store + the live ConversationRuntime (real Qwen-backed
 loop) and serves the wire/REST surface. Env:
   PMX_HOST (default 127.0.0.1), PMX_PORT (default 8000),
   PMX_DB   (default ./perpleximanus.db — shared with the app-server).
-  PMX_SANDBOX (default "process") — the Build surface's sandbox backend:
-    "process" (dev, runs on the HOST), "local" (a real container via the rootless
-    Podman/Docker socket — runc/crun), "gvisor"/"podman" (the remote-host backends).
+  PMX_SANDBOX (unset → config-driven; the persisted Settings default is "local") —
+    an OPTIONAL startup override of the Build surface's sandbox backend:
+    "process" (dev, runs on the HOST, NO isolation), "local" (a real container via the
+    rootless Podman/Docker socket — runc/crun), "gvisor"/"podman" (remote-host backends).
   PMX_LOCAL_SOCKET (default unix:///run/user/1000/podman/podman.sock),
   PMX_LOCAL_RUNTIME (default runc), PMX_SANDBOX_IMAGE (default pmx-sandbox:base).
 """
