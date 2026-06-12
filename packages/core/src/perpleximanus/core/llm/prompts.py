@@ -299,8 +299,21 @@ class DriverPrompts:
         planning_prompt: str = _PLANNING_DRIVER_PROMPT,
         execution_prompt: str = _EXECUTION_DRIVER_PROMPT,
         skills_block: str = "",
+        flavor: str = "build",
     ) -> None:
         self._base = base or StaticPromptProvider()
+        # `flavor` reframes the driver's IDENTITY for the agent surface — a general
+        # task agent rather than a software builder — while keeping every mechanic
+        # (plan→approve→execute, the meta-tools, the finish/verify gates) byte-
+        # identical. v1 is an identity-only swap; a deeper task-framed rewrite is
+        # deferred (it needs eval passes). "build" leaves the prompts untouched.
+        if flavor == "agent":
+            planning_prompt = planning_prompt.replace(
+                "autonomous build agent", "autonomous task agent"
+            )
+            execution_prompt = execution_prompt.replace(
+                "autonomous build agent", "autonomous task agent"
+            )
         self._planning = planning_prompt
         self._execution = execution_prompt
         self._skills_block = skills_block.strip()

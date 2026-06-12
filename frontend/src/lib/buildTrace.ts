@@ -65,12 +65,24 @@ const VERB: Record<string, (a: Record<string, unknown>) => string> = {
   extract: () => `Read a web page`,
 };
 
+/** Split an MCP qualified tool name `mcp__<server>__<tool>` into {server, tool};
+ * null for a non-MCP name. MCP calls otherwise read as gibberish in the feed. */
+function splitMcpName(toolName: string): { server: string; tool: string } | null {
+  if (!toolName.startsWith("mcp__")) return null;
+  const rest = toolName.slice("mcp__".length);
+  const sep = rest.indexOf("__");
+  if (sep < 0) return { server: rest, tool: rest };
+  return { server: rest.slice(0, sep), tool: rest.slice(sep + 2) };
+}
+
 function plainLabel(toolName: string, args: Record<string, unknown>): string {
   if (toolName === "browser") {
     const act = String(args.action ?? "navigate");
     if (act === "submit" || act === "fill") return `Submitted a web form`;
     return `Opened ${args.url ?? "a page"}`;
   }
+  const mcp = splitMcpName(toolName);
+  if (mcp) return `${mcp.tool} · via ${mcp.server}`;
   return (VERB[toolName] ?? (() => `Used ${toolName}`))(args);
 }
 

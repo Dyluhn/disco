@@ -473,10 +473,13 @@ class ConversationRuntime:
         # read fresh each request so a Settings toggle takes effect next run.
         # `surface` filters to skills scoped to it (build vs agent) — None = all.
         skills_block = render_skills_for_prompt(self._skill_store.enabled(), surface=surface)
+        # The "agent" surface gets the task-agent prompt flavor (an identity reframe);
+        # build + every other surface keep the build driver prompts unchanged.
+        flavor = "agent" if surface == "agent" else "build"
         return DefaultLLMRouter(
             cfg,
             providers,
-            prompt_provider=DriverPrompts(skills_block=skills_block),
+            prompt_provider=DriverPrompts(skills_block=skills_block, flavor=flavor),
         )
 
     # Four surfaces: research (single-pass /ws/research stream), build (agent +

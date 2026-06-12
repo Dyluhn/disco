@@ -33,6 +33,8 @@ import { AgentStatusBar } from "@/components/build/AgentStatusBar";
 import { BuildModelPicker } from "@/components/build/BuildModelPicker";
 import { ConfirmationPanel } from "@/components/build/ConfirmationPanel";
 import { ExecutionCanvas } from "@/components/build/ExecutionCanvas";
+import { AgentCanvas } from "@/components/build/AgentCanvas";
+import { ConnectionsStrip } from "@/components/build/ConnectionsStrip";
 import { PlanPanel } from "@/components/build/PlanPanel";
 import { DeliverablePanel } from "@/components/build/DeliverablePanel";
 import { SteerInput } from "@/components/build/SteerInput";
@@ -196,6 +198,8 @@ export function BuildSurface({
             <p className="mt-inline text-center font-ui text-[0.78rem] text-text-faint">
               The agent works in a sandbox and shows its plan. Risky steps pause for your approval.
             </p>
+            {/* Agent surface: foreground the MCP tools it can reach (its reason for being). */}
+            {framing === "agent" && <ConnectionsStrip />}
             {b.submitError && (
               <p role="alert" className="mt-inline text-center font-ui text-[0.8rem] text-unsupported">
                 {b.submitError instanceof Error ? b.submitError.message : copy.startError}
@@ -425,12 +429,18 @@ export function BuildSurface({
     <ResizableSplit
       chat={chatPane}
       inspector={
-        <ExecutionCanvas
-          events={visibleEvents}
-          status={b.status}
-          cid={b.cid}
-          streamingFile={b.streamingFile}
-        />
+        // Build → the software IDE inspector (Files/Terminal/Preview). Agent → the
+        // lighter operator canvas (Browser/Artifacts/Console). Build is unchanged.
+        framing === "agent" ? (
+          <AgentCanvas events={visibleEvents} status={b.status} cid={b.cid} />
+        ) : (
+          <ExecutionCanvas
+            events={visibleEvents}
+            status={b.status}
+            cid={b.cid}
+            streamingFile={b.streamingFile}
+          />
+        )
       }
     />
   );
