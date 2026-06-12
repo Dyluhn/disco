@@ -5,9 +5,12 @@ Exports a finished deep-research ReportEvent to three formats:
   - PDF via WeasyPrint (md → HTML → PDF)
   - DOCX via pandoc subprocess (md → docx)
 
-pandoc and WeasyPrint are imported/invoked lazily so the module imports
-even when the system binaries/libs are absent. The markdown path works
-end-to-end now; PDF/DOCX live generation needs the rebuilt sandbox image.
+pandoc and WeasyPrint are imported/invoked lazily so the module imports even
+when the binaries/libs are absent. These run in the AGENT-SERVER process (this is
+an export endpoint over a stored, server-generated ReportEvent — there is no
+sandbox in this path), so PDF needs `weasyprint` importable and DOCX needs
+`pandoc` on PATH wherever the agent-server runs. `export_capabilities()` reports
+which formats are actually usable so the UI never offers a button that 500s.
 """
 
 from __future__ import annotations
@@ -16,7 +19,6 @@ import logging
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any
 
 from perpleximanus.core import ReportEvent
 
@@ -79,32 +81,21 @@ def _markdown_to_html(md: str, title: str = "Deep Research Report") -> str:
     HTML document from the markdown — no external assets, CSS embedded,
     a clean print layout.
     """
-    # LIMITATION (must fix before the PDF button goes live — tracked with the
-    # sandbox image rebuild): this is a NAIVE line-by-line converter. It styles
-    # ATX headings and `---` rules, but section BODIES (`s.markdown`) are merely
-    # HTML-escaped and wrapped in <p> — so **bold**, _italic_, [links](url),
-    # lists, and especially the RP-02/RP-03 tables/charts render as LITERAL
-    # markdown text in the PDF, not formatted. (DOCX via pandoc renders them
-    # correctly; only this PDF path is degraded.) Before enabling the PDF button
-    # (DeepResearchSurface EXPORT_BINARY_FORMATS_READY), replace this with a real
-    # markdown→HTML pass — the pure-Python `markdown` library, no system libs.
-    # The button is DISABLED in the UI today, so no user reaches this path yet.
+    # Faithful markdown → HTML via the pure-Python `markdown` library (no system
+    # libs): headings, **bold**, _italic_, [links], lists, and crucially the
+    # RP-02/RP-03 TABLES render as real HTML, not literal markdown text. (An
+    # earlier version was a naive line parser that dumped section bodies as
+    # escaped <p> — degraded PDFs; this replaces it.) `markdown` escapes/structures
+    # the input; the report markdown is server-generated, not arbitrary HTML.
     import html
 
-    body_lines: list[str] = []
-    for line in md.split("\n"):
-        escaped_line = html.escape(line)
-        if escaped_line.startswith("# ") and not escaped_line.startswith("## "):
-            body_lines.append(f'<h1>{escaped_line[2:]}</h1>')
-        elif escaped_line.startswith("## "):
-            body_lines.append(f'<h2>{escaped_line[3:]}</h2>')
-        elif escaped_line.startswith("---"):
-            body_lines.append('<hr class="section-divider">')
-        elif escaped_line == "":
-            body_lines.append("")
-        else:
-            # Preserve inline markdown hints: **bold**, _italic_, [links]
-            body_lines.append(f"<p>{escaped_line}</p>")
+    import markdown as _md
+
+    body_html = _md.markdown(
+        md,
+        extensions=["tables", "fenced_code", "sane_lists", "nl2br"],
+        output_format="html5",
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -120,14 +111,21 @@ def _markdown_to_html(md: str, title: str = "Deep Research Report") -> str:
     color: #1a1a1a;
   }}
   h1 {{ font-size: 1.6em; margin-top: 0; border-bottom: 2px solid #333; padding-bottom: 0.2em; }}
-  h2 {{ font-size: 1.25em; margin-top: 1.4em; border-bottom: 1px solid #ccc; padding-bottom: 0.15em; }}
+  h2 {{ font-size: 1.25em; margin-top: 1.4em; border-bottom: 1px solid #ccc; }}
   p {{ margin: 0.5em 0; }}
-  hr.section-divider {{ border: none; border-top: 1px solid #ddd; margin: 1.5em 0; }}
-  pre {{ white-space: pre-wrap; font-family: inherit; }}
+  hr {{ border: none; border-top: 1px solid #ddd; margin: 1.5em 0; }}
+  pre {{ white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; font-size: 0.85em;
+         background: #f6f6f6; padding: 0.8em; border-radius: 4px; }}
+  code {{ font-family: ui-monospace, Menlo, monospace; font-size: 0.9em; }}
+  ul, ol {{ margin: 0.5em 0; padding-left: 1.4em; }}
+  a {{ color: #0b5cad; }}
+  table {{ border-collapse: collapse; margin: 0.8em 0; width: 100%; font-size: 0.95em; }}
+  th, td {{ border: 1px solid #ccc; padding: 0.35em 0.6em; text-align: left; vertical-align: top; }}
+  th {{ background: #f0f0f0; }}
 </style>
 </head>
 <body>
-{"".join(body_lines)}
+{body_html}
 </body>
 </html>"""
 
@@ -145,9 +143,9 @@ def _lazy_import_weasyprint():
 def serialize_pdf(report: ReportEvent) -> bytes:
     """Serialize a ReportEvent to PDF via WeasyPrint.
 
-    WeasyPrint renders HTML+CSS to PDF. We convert the markdown to a
-    styled HTML page and render it. The sandbox image must have
-    WeasyPrint + libpango installed.
+    WeasyPrint renders HTML+CSS to PDF. We convert the markdown to a styled HTML
+    page and render it. Runs in the AGENT-SERVER process, so weasyprint (+ its
+    pango/cairo libs) must be importable there.
 
     Raises ImportError if weasyprint is not installed (test skips
     cleanly). Raises RuntimeError on rendering failure.
@@ -175,8 +173,8 @@ def _find_pandoc() -> str | None:
 def serialize_docx(report: ReportEvent) -> bytes:
     """Serialize a ReportEvent to DOCX via pandoc subprocess.
 
-    Converts markdown → docx using the pandoc system binary (NOT pypandoc).
-    The sandbox image must have pandoc installed.
+    Converts markdown → docx using the pandoc system binary (NOT pypandoc). Runs
+    in the AGENT-SERVER process, so `pandoc` must be on PATH there.
 
     Raises FileNotFoundError if pandoc is not on PATH (test skips cleanly).
     Raises RuntimeError on conversion failure.
@@ -184,8 +182,7 @@ def serialize_docx(report: ReportEvent) -> bytes:
     pandoc = _find_pandoc()
     if pandoc is None:
         raise FileNotFoundError(
-            "pandoc not found on PATH. "
-            "PDF/DOCX export rides the sandbox image rebuild (BP-08/BP-04 VM-201)."
+            "pandoc not found on PATH — DOCX export needs pandoc on the agent-server host."
         )
 
     md = serialize_markdown(report)
@@ -209,8 +206,8 @@ def serialize_docx(report: ReportEvent) -> bytes:
                 f"pandoc failed (exit code {result.returncode}): {stderr}"
             )
         return result.stdout
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("pandoc timed out after 60s")
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("pandoc timed out after 60s") from exc
     finally:
         Path(md_path).unlink(missing_ok=True)
 
@@ -254,3 +251,18 @@ def export_report(report: ReportEvent, fmt: str) -> tuple[bytes, str, str]:
     media_type = MEDIA_TYPES[fmt]
     ext = EXTENSIONS[fmt]
     return payload, media_type, ext
+
+
+def export_capabilities() -> dict[str, bool]:
+    """Which export formats are usable in THIS agent-server environment.
+
+    md is always available; pdf needs `weasyprint` importable (+ its pango/cairo
+    libs); docx needs `pandoc` on PATH. The UI reads this to enable each download
+    button only when it will actually work — no false affordance, and it adapts to
+    whatever environment the agent-server runs in (dev host today, app image later)."""
+    try:
+        _lazy_import_weasyprint()
+        pdf_ok = True
+    except Exception:
+        pdf_ok = False
+    return {"md": True, "pdf": pdf_ok, "docx": _find_pandoc() is not None}

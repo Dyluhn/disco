@@ -110,12 +110,13 @@ describe("Deep Research surface — full lifecycle", () => {
     expect(screen.getByRole("tab", { name: /Cited/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Reviewed/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Discovered/i })).toBeInTheDocument();
-    // export controls (RP-07): MD downloads now; PDF/DOCX are disabled until the
-    // sandbox image rebuild ships pandoc + WeasyPrint (no false affordance).
+    // export controls (RP-07): MD downloads now; PDF/DOCX are gated on the real
+    // server capability (/api/export/capabilities). Offline/fixture defaults to
+    // md-only, so PDF/DOCX are disabled here — no false affordance.
     expect(screen.getByRole("button", { name: /^MD$/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^PDF$/ })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^DOCX$/ })).toBeDisabled();
-    expect(screen.getByText(/arrive with the next sandbox update/i)).toBeInTheDocument();
+    expect(screen.getByText(/need(s)? .*server/i)).toBeInTheDocument();
   });
 });
 

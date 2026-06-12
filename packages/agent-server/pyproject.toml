@@ -16,6 +16,7 @@ dependencies = [
     "websockets>=12.0",
     "cronsim>=2.6",
     "weasyprint>=63.0",  # RP-07: PDF export (md → HTML → WeasyPrint)
+    "markdown>=3.5",  # RP-07: faithful md → HTML for the PDF path (tables/lists/etc.)
 ]
 
 [build-system]

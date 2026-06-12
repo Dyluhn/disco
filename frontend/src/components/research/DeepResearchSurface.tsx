@@ -29,6 +29,7 @@ import { Ban, Download, File, FileText, FileType, Play, RotateCcw, Settings as S
 import { Link } from "react-router-dom";
 import { PlanPanel } from "@/components/build/PlanPanel";
 import { useDeepResearch } from "@/hooks/useDeepResearch";
+import { useExportCapabilities } from "@/hooks/useExportCapabilities";
 import { QueryInput } from "@/components/QueryInput";
 import { EmptyState, ErrorState } from "@/components/states";
 import type { ScopeId } from "@/shell/mode";
@@ -57,15 +58,13 @@ const KILL_BTN =
 // not-allowed cursor), never a click that silently errors. NO FALSE AFFORDANCES.
 const PENDING_BTN =
   "flex items-center gap-hair rounded-control border border-hairline border-dashed px-inline py-hair font-ui text-[0.78rem] text-text-faint opacity-50 cursor-not-allowed";
-// RP-07: PDF/DOCX generation needs pandoc + WeasyPrint, which ship in the sandbox
-// image rebuild (BP-08/BP-04 VM-201). Until that lands they CANNOT work, so the
-// buttons are disabled + labelled — not clickable buttons that 500. Flip to true
-// in the same change that adds the toolchain to deploy/sandbox/Dockerfile.
-const EXPORT_BINARY_FORMATS_READY = false;
-
 export function DeepResearchSurface({ resumeCid, onScopeChange }: Props) {
   const r = useDeepResearch(resumeCid);
   const started = r.started;
+  // RP-07: PDF/DOCX run in the agent-server (weasyprint / pandoc). The buttons are
+  // gated on the REAL server capability — never a clickable button that 500s. MD
+  // always works; PDF/DOCX enable wherever the server has the toolchain.
+  const exportCaps = useExportCapabilities();
 
   if (!started) {
     return (
@@ -160,13 +159,13 @@ export function DeepResearchSurface({ resumeCid, onScopeChange }: Props) {
                 <button
                   type="button"
                   onClick={() => r.exportReportByFmt("pdf")}
-                  disabled={!EXPORT_BINARY_FORMATS_READY}
-                  aria-disabled={!EXPORT_BINARY_FORMATS_READY}
-                  className={EXPORT_BINARY_FORMATS_READY ? CTRL_BTN : PENDING_BTN}
+                  disabled={!exportCaps.pdf}
+                  aria-disabled={!exportCaps.pdf}
+                  className={exportCaps.pdf ? CTRL_BTN : PENDING_BTN}
                   title={
-                    EXPORT_BINARY_FORMATS_READY
+                    exportCaps.pdf
                       ? "Download as PDF"
-                      : "PDF export arrives with the next sandbox update"
+                      : "PDF export unavailable — the server has no WeasyPrint"
                   }
                 >
                   <FileType className="size-3.5" aria-hidden />
@@ -175,21 +174,25 @@ export function DeepResearchSurface({ resumeCid, onScopeChange }: Props) {
                 <button
                   type="button"
                   onClick={() => r.exportReportByFmt("docx")}
-                  disabled={!EXPORT_BINARY_FORMATS_READY}
-                  aria-disabled={!EXPORT_BINARY_FORMATS_READY}
-                  className={EXPORT_BINARY_FORMATS_READY ? CTRL_BTN : PENDING_BTN}
+                  disabled={!exportCaps.docx}
+                  aria-disabled={!exportCaps.docx}
+                  className={exportCaps.docx ? CTRL_BTN : PENDING_BTN}
                   title={
-                    EXPORT_BINARY_FORMATS_READY
+                    exportCaps.docx
                       ? "Download as DOCX"
-                      : "DOCX export arrives with the next sandbox update"
+                      : "DOCX export unavailable — the server has no pandoc"
                   }
                 >
                   <File className="size-3.5" aria-hidden />
                   DOCX
                 </button>
-                {!EXPORT_BINARY_FORMATS_READY && (
+                {!(exportCaps.pdf && exportCaps.docx) && (
                   <span className="font-ui text-[0.68rem] text-text-faint">
-                    PDF / DOCX arrive with the next sandbox update
+                    {!exportCaps.pdf && !exportCaps.docx
+                      ? "PDF / DOCX need the export toolchain on the server"
+                      : !exportCaps.pdf
+                        ? "PDF needs WeasyPrint on the server"
+                        : "DOCX needs pandoc on the server"}
                   </span>
                 )}
               </>

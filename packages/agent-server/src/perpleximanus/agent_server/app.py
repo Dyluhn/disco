@@ -1015,6 +1015,15 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
 
     # ---- report export (RP-07) --------------------------------------------
 
+    @app.get("/api/export/capabilities")
+    async def export_capabilities_route() -> dict:
+        """Which export formats THIS agent-server can actually produce (md always;
+        pdf if weasyprint importable; docx if pandoc on PATH). The UI enables each
+        download button from this — never offering one that would 500."""
+        from .report_export import export_capabilities
+
+        return export_capabilities()
+
     @app.post("/api/conversations/{conversation_id}/report/export")
     async def export_report(conversation_id: str, fmt: str = Query(...)) -> Response:
         """Export the latest Deep Research report as MD, PDF, or DOCX.

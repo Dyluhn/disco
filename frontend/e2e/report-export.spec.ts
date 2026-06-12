@@ -2,12 +2,13 @@ import { expect, test } from "@playwright/test";
 
 /**
  * RP-07 — the report export controls render HONESTLY. MD download works now;
- * PDF/DOCX need the sandbox image rebuild (pandoc + WeasyPrint), so they are
- * visibly DISABLED with a "arrive with the next sandbox update" note — never
- * clickable buttons that 500. (no false affordances)
+ * PDF/DOCX are gated on the real server capability (/api/export/capabilities) —
+ * weasyprint for PDF, pandoc for DOCX. Offline/fixture mode has no backend, so the
+ * capability fetch fails and defaults to md-only: PDF/DOCX are visibly DISABLED
+ * with a "needs ... on the server" note — never clickable buttons that 500.
  */
 test.describe("Deep Research → export controls", () => {
-  test("MD active, PDF/DOCX disabled-with-note until the image rebuild", async ({
+  test("MD active, PDF/DOCX disabled-with-note (offline capability default)", async ({
     page,
   }) => {
     await page.goto("/");
@@ -28,7 +29,7 @@ test.describe("Deep Research → export controls", () => {
     // The load-bearing assertion: PDF/DOCX are NOT clickable affordances yet.
     await expect(pdf).toBeDisabled();
     await expect(docx).toBeDisabled();
-    await expect(page.getByText(/arrive with the next sandbox update/i)).toBeVisible();
+    await expect(page.getByText(/need(s)? .*server/i)).toBeVisible();
 
     // Screenshot the control row for the evidence record.
     const row = md.locator("xpath=ancestor::div[1]");

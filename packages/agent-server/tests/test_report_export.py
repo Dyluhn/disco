@@ -336,7 +336,10 @@ def test_markdown_to_html_produces_valid_html() -> None:
     assert "<h1>Test</h1>" in html
     assert "<h2>Section</h2>" in html
     assert "Footer." in html
-    assert '<hr class="section-divider">' in html
+    assert "<hr" in html  # the `markdown` lib renders `---` as <hr />
+    # Tables render as real HTML now (the naive line-parser bug is fixed).
+    table_html = _markdown_to_html("| A | B |\n|---|---|\n| 1 | 2 |\n")
+    assert "<table>" in table_html and "| A |" not in table_html
 
 
 # ---- DOCX tests (acceptance #4) --------------------------------------------
