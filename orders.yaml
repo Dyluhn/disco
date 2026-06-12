@@ -786,7 +786,7 @@ rp-07: committed
   - frontend/src/components/research/DeepResearchSurface.test.tsx
   - frontend/e2e/report-export.spec.ts
   - test-record/rp-07/units-server.log
-rp-09: in-flight
+rp-09: committed
   # Audio overviews — two-voice (af_heart + af_bella) Kokoro-via-Speaches TTS from a
   # finished report → MP3 + transcript DeliverableEvent. Agent-side tool only; seam =
   # registry.py AGENT_TOOLS. NO new Python dep, NO app.py (rp-07 owns uv.lock+app.py).

@@ -9,6 +9,7 @@ dev server + controlled preview boundary).
 from __future__ import annotations
 
 from ..registry import ToolRegistry
+from .audio_overview import AudioOverviewTool
 from .browser import BrowserTool
 from .files import (
     FileAppendTool,
@@ -27,6 +28,7 @@ from .shell_sessions import ShellExecTool, ShellKillTool, ShellViewTool, ShellWa
 from .system import CodeExecTool, ShellTool
 
 __all__ = [
+    "AudioOverviewTool",
     "BrowserTool",
     "CodeExecTool",
     "ExtractTool",
@@ -76,6 +78,7 @@ def build_default_registry() -> ToolRegistry:
         SubmitPlanTool(),  # plan-mode: proposed plan (intercepted by the loop)
         PlanStepTool(),  # plan-mode: capstone progress reports
         SheetsTool(),  # sheet_generate: write .xlsx with live formulas
+        AudioOverviewTool(),  # audio_overview: two-voice TTS from finished report
     ):
         registry.register(tool)
     return registry
