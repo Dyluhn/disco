@@ -4,7 +4,7 @@ couple of NLI edges — shipped paths not hit by the scenario tests."""
 from __future__ import annotations
 
 from conftest import FakeExtractionProvider, FakeRouter, FakeSearchProvider
-from perpleximanus.retrieval import (
+from disco.retrieval import (
     CrossEncoderNLIVerifier,
     DefaultCorpusService,
     DefaultRetrievalEngine,

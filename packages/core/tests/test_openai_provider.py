@@ -11,15 +11,15 @@ import json
 
 import httpx
 import pytest
-from perpleximanus.core.events import LLMMessage
-from perpleximanus.core.llm.errors import (
+from disco.core.events import LLMMessage
+from disco.core.llm.errors import (
     LLMAuthError,
     LLMContextWindowExceeded,
     LLMError,
     is_context_window_exceeded,
 )
-from perpleximanus.core.llm.openai_provider import OpenAIProvider
-from perpleximanus.core.llm.types import CapabilityProfile, CompletionRequest, ModelRole
+from disco.core.llm.openai_provider import OpenAIProvider
+from disco.core.llm.types import CapabilityProfile, CompletionRequest, ModelRole
 
 
 def _req(text: str = "hi") -> CompletionRequest:

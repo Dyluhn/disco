@@ -21,14 +21,14 @@ from pathlib import Path
 import openpyxl
 import pytest
 from conftest import FakeSandboxInstance, call
-from perpleximanus.tools.anatomy import ToolContext
-from perpleximanus.tools.builtin import build_default_registry
-from perpleximanus.tools.builtin.sheets import SheetGenerateArgs, SheetsTool
-from perpleximanus.tools.executor import DefaultToolExecutor
-from perpleximanus.tools.registry import agent_scope
-from perpleximanus.tools.sandbox.base import SandboxSpec
-from perpleximanus.tools.sandbox.process import ProcessSandboxInstance
-from perpleximanus.tools.secrets import CapabilityBroker
+from disco.tools.anatomy import ToolContext
+from disco.tools.builtin import build_default_registry
+from disco.tools.builtin.sheets import SheetGenerateArgs, SheetsTool
+from disco.tools.executor import DefaultToolExecutor
+from disco.tools.registry import agent_scope
+from disco.tools.sandbox.base import SandboxSpec
+from disco.tools.sandbox.process import ProcessSandboxInstance
+from disco.tools.secrets import CapabilityBroker
 
 
 @pytest.fixture
@@ -370,7 +370,7 @@ async def test_tool_registered_and_scoped():
 
 async def test_executor_rejects_sheet_generate_in_research_scope():
     """sheet_generate is agent-scope only, not research."""
-    from perpleximanus.tools.registry import research_scope
+    from disco.tools.registry import research_scope
 
     reg = build_default_registry()
     ex = DefaultToolExecutor(reg, research_scope(), sandbox=FakeSandboxInstance())

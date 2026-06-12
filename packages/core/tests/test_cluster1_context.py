@@ -3,15 +3,15 @@ A-S4 structured summarizer, D pin-plan + recency recitation."""
 
 from __future__ import annotations
 
-from perpleximanus.core import (
+from disco.core import (
     ActionEvent,
     ObservationEvent,
     PlanEvent,
     ToolCall,
     ToolResult,
 )
-from perpleximanus.core.events import snip_content
-from perpleximanus.core.view import LLMSummarizingCondenser, View
+from disco.core.events import snip_content
+from disco.core.view import LLMSummarizingCondenser, View
 
 
 def _seq(events):
@@ -83,7 +83,7 @@ def test_observation_event_snips_large_content_in_llm_message():
 
 
 def test_latest_plan_is_pinned_and_never_forgotten():
-    from perpleximanus.core.events import CondensationEvent
+    from disco.core.events import CondensationEvent
 
     events = _seq(
         [

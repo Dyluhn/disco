@@ -17,7 +17,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 from conftest import FakeSandboxInstance, call
-from perpleximanus.core import (
+from disco.core import (
     ActionEvent,
     EventSource,
     LLMMessage,
@@ -27,12 +27,12 @@ from perpleximanus.core import (
     ToolCall,
     View,
 )
-from perpleximanus.core.loop import ConfirmRisky
-from perpleximanus.core.security import RuleBasedAnalyzer
-from perpleximanus.tools.builtin.browser import _FENCE_CLOSE, _FENCE_OPEN, _quarantine
-from perpleximanus.tools.executor import DefaultToolExecutor
-from perpleximanus.tools.registry import agent_scope
-from perpleximanus.tools.sandbox.base import ExecResult
+from disco.core.loop import ConfirmRisky
+from disco.core.security import RuleBasedAnalyzer
+from disco.tools.builtin.browser import _FENCE_CLOSE, _FENCE_OPEN, _quarantine
+from disco.tools.executor import DefaultToolExecutor
+from disco.tools.registry import agent_scope
+from disco.tools.sandbox.base import ExecResult
 
 # A hostile page: active markup, an embedded injection, a link + a form to a bad host.
 EVIL_HTML = """<html><head><title>Breaking News</title></head><body>
@@ -69,7 +69,7 @@ class _PageSandbox(FakeSandboxInstance):
 
 
 def _exec(sandbox):
-    from perpleximanus.tools.builtin import build_default_registry
+    from disco.tools.builtin import build_default_registry
 
     return DefaultToolExecutor(build_default_registry(), agent_scope(), sandbox=sandbox)
 
@@ -113,8 +113,8 @@ async def test_browser_returns_fenced_untrusted_data_via_the_sandbox():
 
 
 def test_browser_runs_in_sandbox_and_network_is_a_granted_need():
-    from perpleximanus.tools.anatomy import Capability
-    from perpleximanus.tools.builtin.browser import BrowserTool
+    from disco.tools.anatomy import Capability
+    from disco.tools.builtin.browser import BrowserTool
 
     d = BrowserTool().definition
     assert d.runs_in == "sandbox"

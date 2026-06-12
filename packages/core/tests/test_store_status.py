@@ -1,17 +1,17 @@
 
-import pytest
-import asyncio
 import sqlite3
-from perpleximanus.core import (
-    SqliteEventStore, 
-    StatusEvent, 
-    ConversationStatus, 
-    EventSource, 
-    MessageEvent, 
-    LLMMessage,
-    ConversationSummary
-)
 from unittest.mock import patch
+
+import pytest
+from disco.core import (
+    ConversationStatus,
+    EventSource,
+    LLMMessage,
+    MessageEvent,
+    SqliteEventStore,
+    StatusEvent,
+)
+
 
 @pytest.fixture
 def store():

@@ -34,7 +34,7 @@
 ## What was done
 
 ### 1. Fixed blocking `str.format` bug (synthesis.py)
-- File: `packages/retrieval/src/perpleximanus/retrieval/deep_research/synthesis.py`
+- File: `packages/retrieval/src/disco/retrieval/deep_research/synthesis.py`
 - Changed: escaped `{`→`{{` and `}`→`}}` in the chart JSON example within
   `_SECTION_PROMPT` (the 6-line chart-format block under rule 6).
 - Result: `_SECTION_PROMPT.format(topic=..., passages=...)` no longer raises

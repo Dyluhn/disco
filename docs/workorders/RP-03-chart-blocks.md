@@ -16,11 +16,11 @@ Implementation of a new `chart` answer block type for both standard and deep res
    - Handle the narrow per-type JSON schema; unknown/invalid chart payloads render the table fallback, never a crash.
    - Include a degrade-to-table path if rendering fails.
 
-3. **Backend: `packages/retrieval/src/perpleximanus/retrieval/streaming.py` (~line 109)**
+3. **Backend: `packages/retrieval/src/disco/retrieval/streaming.py` (~line 109)**
    - Update `_to_blocks()` to detect markdown-encoded data suitable for charts.
    - Emit `chart` blocks when appropriate.
 
-4. **Deep Research: `packages/retrieval/src/perpleximanus/retrieval/deep_research/synthesis.py` (~line 95)**
+4. **Deep Research: `packages/retrieval/src/disco/retrieval/deep_research/synthesis.py` (~line 95)**
    - Update the synthesis prompt to encourage the model to propose charts as typed blocks.
    - Implement backend validation of proposed chart JSON using `jsonschema`.
    - Implement **one retry-with-error-trace** on validation failure.
@@ -43,8 +43,8 @@ Implementation of a new `chart` answer block type for both standard and deep res
 - frontend/src/types/grounded.ts
 - frontend/src/components/blocks.tsx
 - frontend/package.json
-- packages/retrieval/src/perpleximanus/retrieval/streaming.py
-- packages/retrieval/src/perpleximanus/retrieval/deep_research/synthesis.py
+- packages/retrieval/src/disco/retrieval/streaming.py
+- packages/retrieval/src/disco/retrieval/deep_research/synthesis.py
 - packages/retrieval/tests/test_chart_blocks.py
 - frontend/src/components/ChartBlock.test.tsx
 - test-record/rp-03/units-retrieval.log

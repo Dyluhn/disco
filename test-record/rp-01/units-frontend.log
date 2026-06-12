@@ -1,5 +1,5 @@
 
- RUN  v3.2.4 /var/home/dylan/projects/perpleximanus build/frontend
+ RUN  v3.2.4 /var/home/dylan/projects/disco build/frontend
 
  ✓ src/views/HistoryView.status.test.tsx (2 tests) 49ms
 

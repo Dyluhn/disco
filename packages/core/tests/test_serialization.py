@@ -17,7 +17,7 @@ from conftest import (
     tombstone,
     user_msg,
 )
-from perpleximanus.core import (
+from disco.core import (
     ConversationStatus,
     EventAdapter,
     LLMMessage,

@@ -13,11 +13,11 @@ Three layers under test:
 from __future__ import annotations
 
 from conftest import call
-from perpleximanus.tools import DefaultToolExecutor, ToolContext, ToolDef, ToolOutcome
-from perpleximanus.tools.builtin.shell_sessions import ShellExecArgs, ShellExecTool
-from perpleximanus.tools.registry import ToolRegistry, ToolScope
-from perpleximanus.tools.sandbox.base import ExecResult
-from perpleximanus.tools.sandbox.shell_sessions import SessionBusy, ShellSessionManager
+from disco.tools import DefaultToolExecutor, ToolContext, ToolDef, ToolOutcome
+from disco.tools.builtin.shell_sessions import ShellExecArgs, ShellExecTool
+from disco.tools.registry import ToolRegistry, ToolScope
+from disco.tools.sandbox.base import ExecResult
+from disco.tools.sandbox.shell_sessions import SessionBusy, ShellSessionManager
 from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------

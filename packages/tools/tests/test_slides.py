@@ -23,19 +23,18 @@ from unittest.mock import patch
 
 import pytest
 from conftest import FakeSandboxInstance, call
-from perpleximanus.tools.anatomy import ToolContext
-from perpleximanus.tools.builtin import build_default_registry
-from perpleximanus.tools.anatomy import Capability
-from perpleximanus.tools.builtin.slides import (
+from disco.tools.anatomy import Capability, ToolContext
+from disco.tools.builtin import build_default_registry
+from disco.tools.builtin.slides import (
     SlidesGenerateArgs,
     SlidesTool,
     _split_slides,
 )
-from perpleximanus.tools.executor import DefaultToolExecutor
-from perpleximanus.tools.registry import agent_scope, research_scope
-from perpleximanus.tools.sandbox.base import SandboxSpec
-from perpleximanus.tools.sandbox.process import ProcessSandboxInstance
-from perpleximanus.tools.secrets import CapabilityBroker
+from disco.tools.executor import DefaultToolExecutor
+from disco.tools.registry import agent_scope, research_scope
+from disco.tools.sandbox.base import SandboxSpec
+from disco.tools.sandbox.process import ProcessSandboxInstance
+from disco.tools.secrets import CapabilityBroker
 
 
 @pytest.fixture
@@ -129,7 +128,7 @@ async def test_html_fallback_writes_artifact(tmp_workspace):
     tool = SlidesTool()
     ctx = _ctx(_jailed_sandbox(tmp_workspace))
 
-    with patch("perpleximanus.tools.builtin.slides._marp_available", return_value=False):
+    with patch("disco.tools.builtin.slides._marp_available", return_value=False):
         outcome = await tool.run(
             SlidesGenerateArgs(
                 markdown=_THREE_SLIDE_MD,
@@ -168,7 +167,7 @@ async def test_html_fallback_with_theme(tmp_workspace):
 
     custom_theme = "body { background: #f0f; }"
 
-    with patch("perpleximanus.tools.builtin.slides._marp_available", return_value=False):
+    with patch("disco.tools.builtin.slides._marp_available", return_value=False):
         outcome = await tool.run(
             SlidesGenerateArgs(
                 markdown="# One\n\n---\n\n# Two",
@@ -189,7 +188,7 @@ async def test_html_fallback_slide_count_in_result(tmp_workspace):
     tool = SlidesTool()
     ctx = _ctx(_jailed_sandbox(tmp_workspace))
 
-    with patch("perpleximanus.tools.builtin.slides._marp_available", return_value=False):
+    with patch("disco.tools.builtin.slides._marp_available", return_value=False):
         outcome = await tool.run(
             SlidesGenerateArgs(
                 markdown=_THREE_SLIDE_MD,
@@ -236,7 +235,7 @@ async def test_pdf_fails_when_marp_absent(tmp_workspace):
     tool = SlidesTool()
     ctx = _ctx(_jailed_sandbox(tmp_workspace))
 
-    with patch("perpleximanus.tools.builtin.slides._marp_available", return_value=False):
+    with patch("disco.tools.builtin.slides._marp_available", return_value=False):
         outcome = await tool.run(
             SlidesGenerateArgs(
                 markdown=_THREE_SLIDE_MD,
@@ -261,7 +260,7 @@ async def test_pptx_fails_when_marp_absent(tmp_workspace):
     tool = SlidesTool()
     ctx = _ctx(_jailed_sandbox(tmp_workspace))
 
-    with patch("perpleximanus.tools.builtin.slides._marp_available", return_value=False):
+    with patch("disco.tools.builtin.slides._marp_available", return_value=False):
         outcome = await tool.run(
             SlidesGenerateArgs(
                 markdown=_THREE_SLIDE_MD,
@@ -312,7 +311,7 @@ async def test_file_lands_in_workspace_not_host_cwd(tmp_workspace):
     sbx = _jailed_sandbox(tmp_workspace)
     ctx = _ctx(sbx)
 
-    with patch("perpleximanus.tools.builtin.slides._marp_available", return_value=False):
+    with patch("disco.tools.builtin.slides._marp_available", return_value=False):
         outcome = await tool.run(
             SlidesGenerateArgs(
                 markdown="# Hello",

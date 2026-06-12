@@ -7,10 +7,9 @@ streams back as an agent message + FINISHED.
 
 from __future__ import annotations
 
-from fastapi.testclient import TestClient
-from perpleximanus.agent_server import ConversationRuntime, create_app
-from perpleximanus.core import SqliteEventStore
-from perpleximanus.core.llm import (
+from disco.agent_server import ConversationRuntime, create_app
+from disco.core import SqliteEventStore
+from disco.core.llm import (
     CompletionResponse,
     DefaultLLMRouter,
     ModelEntry,
@@ -18,6 +17,7 @@ from perpleximanus.core.llm import (
     StreamChunk,
     TokenUsage,
 )
+from fastapi.testclient import TestClient
 
 
 class _FakeProvider:
@@ -99,7 +99,7 @@ def test_create_conversation_applies_depth_tier():
     """The POST /conversations `depth_tier` must reach the runtime — it was dropped
     (handler set surface+model but never depth), so every Deep Research run silently
     used the standard_deep default regardless of the UI picker."""
-    from perpleximanus.retrieval.deep_research import DepthTier
+    from disco.retrieval.deep_research import DepthTier
 
     store = SqliteEventStore(":memory:")
     runtime = _runtime(store, "x")

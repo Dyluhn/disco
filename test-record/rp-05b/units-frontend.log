@@ -4,7 +4,7 @@
 #   pre-existing. Sequential gives the true all-green. cmd: npx vitest run --no-file-parallelism
 
 
- RUN  v3.2.4 /var/home/dylan/projects/perpleximanus build/frontend
+ RUN  v3.2.4 /var/home/dylan/projects/disco build/frontend
 
  ✓ src/components/BuildSurface.test.tsx (12 tests) 6892ms
    ✓ Build surface (plan gate → build → action gate) > after plan approval, shows the activity feed and pauses at the per-action gate  1331ms
@@ -74,29 +74,29 @@ This ensures that you're testing the behavior the user would see in the browser.
  ✓ src/components/build/BuildSurface.upload.test.tsx (8 tests) 67ms
 stderr | src/components/ChartBlock.test.tsx > ChartBlock component > renders table fallback when Chart.js throws (error degrade)
 Chart.js init failed Error: Rendering failed
-    at t.<anonymous> [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39msrc/components/ChartBlock.test.tsx:133:13[90m)[39m
-    at new mockCall [90m(file:///var/home/dylan/projects/perpleximanus%20build/frontend/[39mnode_modules/[4m@vitest/spy[24m/dist/index.js:96:15[90m)[39m
-    at new spy [90m(file:///var/home/dylan/projects/perpleximanus%20build/frontend/[39mnode_modules/[4mtinyspy[24m/dist/index.js:47:34[90m)[39m
-    at [90m/var/home/dylan/projects/perpleximanus build/frontend/[39msrc/components/blocks.tsx:227:15
-    at Object.react_stack_bottom_frame [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:25989:20[90m)[39m
-    at runWithFiberInDEV [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:874:13[90m)[39m
-    at commitHookEffectListMount [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:13249:29[90m)[39m
-    at commitHookPassiveMountEffects [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:13336:11[90m)[39m
-    at commitPassiveMountOnFiber [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:15484:13[90m)[39m
-    at recursivelyTraversePassiveMountEffects [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:15439:11[90m)[39m
+    at t.<anonymous> [90m(/var/home/dylan/projects/disco build/frontend/[39msrc/components/ChartBlock.test.tsx:133:13[90m)[39m
+    at new mockCall [90m(file:///var/home/dylan/projects/disco%20build/frontend/[39mnode_modules/[4m@vitest/spy[24m/dist/index.js:96:15[90m)[39m
+    at new spy [90m(file:///var/home/dylan/projects/disco%20build/frontend/[39mnode_modules/[4mtinyspy[24m/dist/index.js:47:34[90m)[39m
+    at [90m/var/home/dylan/projects/disco build/frontend/[39msrc/components/blocks.tsx:227:15
+    at Object.react_stack_bottom_frame [90m(/var/home/dylan/projects/disco build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:25989:20[90m)[39m
+    at runWithFiberInDEV [90m(/var/home/dylan/projects/disco build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:874:13[90m)[39m
+    at commitHookEffectListMount [90m(/var/home/dylan/projects/disco build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:13249:29[90m)[39m
+    at commitHookPassiveMountEffects [90m(/var/home/dylan/projects/disco build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:13336:11[90m)[39m
+    at commitPassiveMountOnFiber [90m(/var/home/dylan/projects/disco build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:15484:13[90m)[39m
+    at recursivelyTraversePassiveMountEffects [90m(/var/home/dylan/projects/disco build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:15439:11[90m)[39m
 
 stderr | src/components/ChartBlock.test.tsx > ChartBlock component > renders table fallback when Chart.js throws even with partial data
 Chart.js init failed Error: Rendering failed
-    at t.<anonymous> [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39msrc/components/ChartBlock.test.tsx:155:13[90m)[39m
-    at new mockCall [90m(file:///var/home/dylan/projects/perpleximanus%20build/frontend/[39mnode_modules/[4m@vitest/spy[24m/dist/index.js:96:15[90m)[39m
-    at new spy [90m(file:///var/home/dylan/projects/perpleximanus%20build/frontend/[39mnode_modules/[4mtinyspy[24m/dist/index.js:47:34[90m)[39m
-    at [90m/var/home/dylan/projects/perpleximanus build/frontend/[39msrc/components/blocks.tsx:227:15
-    at Object.react_stack_bottom_frame [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:25989:20[90m)[39m
-    at runWithFiberInDEV [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:874:13[90m)[39m
-    at commitHookEffectListMount [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:13249:29[90m)[39m
-    at commitHookPassiveMountEffects [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:13336:11[90m)[39m
-    at commitPassiveMountOnFiber [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:15484:13[90m)[39m
-    at recursivelyTraversePassiveMountEffects [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:15439:11[90m)[39m
+    at t.<anonymous> [90m(/var/home/dylan/projects/disco build/frontend/[39msrc/components/ChartBlock.test.tsx:155:13[90m)[39m
+    at new mockCall [90m(file:///var/home/dylan/projects/disco%20build/frontend/[39mnode_modules/[4m@vitest/spy[24m/dist/index.js:96:15[90m)[39m
+    at new spy [90m(file:///var/home/dylan/projects/disco%20build/frontend/[39mnode_modules/[4mtinyspy[24m/dist/index.js:47:34[90m)[39m
+    at [90m/var/home/dylan/projects/disco build/frontend/[39msrc/components/blocks.tsx:227:15
+    at Object.react_stack_bottom_frame [90m(/var/home/dylan/projects/disco build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:25989:20[90m)[39m
+    at runWithFiberInDEV [90m(/var/home/dylan/projects/disco build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:874:13[90m)[39m
+    at commitHookEffectListMount [90m(/var/home/dylan/projects/disco build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:13249:29[90m)[39m
+    at commitHookPassiveMountEffects [90m(/var/home/dylan/projects/disco build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:13336:11[90m)[39m
+    at commitPassiveMountOnFiber [90m(/var/home/dylan/projects/disco build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:15484:13[90m)[39m
+    at recursivelyTraversePassiveMountEffects [90m(/var/home/dylan/projects/disco build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:15439:11[90m)[39m
 
  ✓ src/components/ChartBlock.test.tsx (9 tests) 58ms
  ✓ src/components/states.test.tsx (2 tests) 57ms

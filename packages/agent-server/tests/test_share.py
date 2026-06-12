@@ -23,9 +23,8 @@ from __future__ import annotations
 import json
 
 import pytest
-from fastapi.testclient import TestClient
-from perpleximanus.agent_server import ConversationRuntime, create_app
-from perpleximanus.core import (
+from disco.agent_server import ConversationRuntime, create_app
+from disco.core import (
     ConversationStatus,
     EventSource,
     LLMMessage,
@@ -33,8 +32,8 @@ from perpleximanus.core import (
     SqliteEventStore,
     StatusEvent,
 )
-from perpleximanus.core.events import ActionEvent, ObservationEvent, ToolCall, ToolResult
-
+from disco.core.events import ActionEvent, ToolCall
+from fastapi.testclient import TestClient
 
 # ---- shared helpers --------------------------------------------------------
 
@@ -175,7 +174,7 @@ def test_bundle_scrubs_secrets_in_events(client_with_runtime: TestClient) -> Non
         for v in vars(r_obj).values():
             pass
     # Easier path: build a parallel store + runtime, seed events, export.
-    from perpleximanus.agent_server import ConversationRuntime as CR
+    from disco.agent_server import ConversationRuntime as CR
 
     store2 = SqliteEventStore(":memory:")
     rt2 = CR(store2)
@@ -293,7 +292,7 @@ def test_share_export_is_deterministic_for_same_event_log() -> None:
     Two exports of the same log produce structurally identical bundles —
     the structural reason the bundle doubles as a deterministic harness
     cassette (RP-00 synergy)."""
-    from perpleximanus.agent_server import ConversationRuntime as CR
+    from disco.agent_server import ConversationRuntime as CR
 
     store = SqliteEventStore(":memory:")
     rt = CR(store)
@@ -332,7 +331,7 @@ def test_share_export_is_deterministic_for_same_event_log() -> None:
 
 
 def test_share_export_unknown_conversation_returns_not_found() -> None:
-    from perpleximanus.agent_server import ConversationRuntime as CR
+    from disco.agent_server import ConversationRuntime as CR
 
     store = SqliteEventStore(":memory:")
     rt = CR(store)
@@ -354,7 +353,7 @@ def test_share_export_includes_surface_in_bundle() -> None:
     (research | build | deep_research). The viewer uses it to render
     the right banner / affordance; tests confirm it is set correctly
     for at least one case."""
-    from perpleximanus.agent_server import ConversationRuntime as CR
+    from disco.agent_server import ConversationRuntime as CR
 
     store = SqliteEventStore(":memory:")
     rt = CR(store)
@@ -381,7 +380,8 @@ def test_share_tokens_table_persists_tokens_across_runtimes(tmp_path) -> None:
     `SqliteEventStore` against the same DB file reads the same tokens.
     This is the "reopen the server, the link still works" rung."""
     import asyncio
-    from perpleximanus.agent_server import ConversationRuntime as CR
+
+    from disco.agent_server import ConversationRuntime as CR
 
     db_path = tmp_path / "events.db"
     store1 = SqliteEventStore(str(db_path))
@@ -410,7 +410,8 @@ def test_share_tokens_revoke_owner_scoped(tmp_path) -> None:
     WHERE clause on revoke is owner-scoped). Cross-owner revocation
     attempts return False (no row matched)."""
     import asyncio
-    from perpleximanus.agent_server import ConversationRuntime as CR
+
+    from disco.agent_server import ConversationRuntime as CR
 
     store = SqliteEventStore(":memory:")
     rt = CR(store)

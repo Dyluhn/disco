@@ -37,8 +37,8 @@ Implemented a deterministic (no-model) trailing degeneracy detector in `Conversa
 
 ## Manifest
 
-- `packages/agent-server/src/perpleximanus/agent_server/runtime.py`
-- `packages/core/src/perpleximanus/core/view.py`
+- `packages/agent-server/src/disco/agent_server/runtime.py`
+- `packages/core/src/disco/core/view.py`
 - `packages/agent-server/tests/test_resume_condensation.py`
 - `test-record/dc-05/units-c.log`
 - `agent-projects/gemini/dc-05c-report.md`

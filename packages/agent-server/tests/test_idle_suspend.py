@@ -3,8 +3,8 @@ import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from perpleximanus.agent_server import ConversationRuntime
-from perpleximanus.core import (
+from disco.agent_server import ConversationRuntime
+from disco.core import (
     ConversationStatus,
     EventSource,
     LLMMessage,
@@ -12,7 +12,7 @@ from perpleximanus.core import (
     SqliteEventStore,
     StatusEvent,
 )
-from perpleximanus.tools import ProcessSandboxService
+from disco.tools import ProcessSandboxService
 
 # ---- helpers -----------------------------------------------------------------
 

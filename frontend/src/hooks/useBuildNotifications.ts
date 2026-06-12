@@ -67,7 +67,7 @@ export function useBuildNotifications(
 
     try {
       if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-        new Notification(badge, { body: taskLabel || "perpleximanus build" });
+        new Notification(badge, { body: taskLabel || "Disco build" });
       }
     } catch {
       /* notifications are a bonus — never let them throw into the render path */

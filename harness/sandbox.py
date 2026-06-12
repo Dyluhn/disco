@@ -24,7 +24,7 @@ from __future__ import annotations
 import base64
 from collections import defaultdict
 
-from perpleximanus.tools.sandbox.base import ExecResult
+from disco.tools.sandbox.base import ExecResult
 
 from .cassette import Cassette
 

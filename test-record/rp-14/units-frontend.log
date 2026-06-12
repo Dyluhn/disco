@@ -1,5 +1,5 @@
 
- RUN  v3.2.4 /var/home/dylan/projects/perpleximanus build/frontend
+ RUN  v3.2.4 /var/home/dylan/projects/disco build/frontend
 
  ✓ src/components/SourcePanel.test.tsx (3 tests) 228ms
  ✓ src/components/build/ExecutionCanvas.terminal.test.tsx (7 tests) 258ms
@@ -101,13 +101,13 @@ Ignored nodes: comments, script, style
             [33mclass[39m=[32m"flex items-center px-inline px-body"[39m
           [36m>[39m
             [36m<span[39m
-              [33maria-label[39m=[32m"perpleximanus"[39m
+              [33maria-label[39m=[32m"disco"[39m
               [33mclass[39m=[32m"font-display tracking-tight text-text"[39m
             [36m>[39m
               [36m<span[39m
                 [33mclass[39m=[32m"text-[1.15rem]"[39m
               [36m>[39m
-                [0mperpleximanus[0m
+                [0mdisco[0m
               [36m</span>[39m
             [36m</span>[39m
           [36m</div>[39m
@@ -253,13 +253,13 @@ Ignored nodes: comments, script, style
               [33mclass[39m=[32m"flex items-center px-inline px-body"[39m
             [36m>[39m
               [36m<span[39m
-                [33maria-label[39m=[32m"perpleximanus"[39m
+                [33maria-label[39m=[32m"disco"[39m
                 [33mclass[39m=[32m"font-display tracking-tight text-text"[39m
               [36m>[39m
                 [36m<span[39m
                   [33mclass[39m=[32m"text-[1.15rem]"[39m
                 [36m>[39m
-                  [0mperpleximanus[0m
+                  [0mdisco[0m
                 [36m</span>[39m
               [36m</span>[39m
             [36m</div>[39m
@@ -406,13 +406,13 @@ Ignored nodes: comments, script, style
             [33mclass[39m=[32m"flex items-center px-inline px-body"[39m
           [36m>[39m
             [36m<span[39m
-              [33maria-label[39m=[32m"perpleximanus"[39m
+              [33maria-label[39m=[32m"disco"[39m
               [33mclass[39m=[32m"font-display tracking-tight text-text"[39m
             [36m>[39m
               [36m<span[39m
                 [33mclass[39m=[32m"text-[1.15rem]"[39m
               [36m>[39m
-                [0mperpleximanus[0m
+                [0mdisco[0m
               [36m</span>[39m
             [36m</span>[39m
           [36m</div>[39m
@@ -558,13 +558,13 @@ Ignored nodes: comments, script, style
               [33mclass[39m=[32m"flex items-center px-inline px-body"[39m
             [36m>[39m
               [36m<span[39m
-                [33maria-label[39m=[32m"perpleximanus"[39m
+                [33maria-label[39m=[32m"disco"[39m
                 [33mclass[39m=[32m"font-display tracking-tight text-text"[39m
               [36m>[39m
                 [36m<span[39m
                   [33mclass[39m=[32m"text-[1.15rem]"[39m
                 [36m>[39m
-                  [0mperpleximanus[0m
+                  [0mdisco[0m
                 [36m</span>[39m
               [36m</span>[39m
             [36m</div>[39m

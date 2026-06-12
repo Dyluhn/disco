@@ -12,8 +12,8 @@ from __future__ import annotations
 import json
 
 import pytest
-from perpleximanus.retrieval.providers import ExtractionProvider, SearchProvider
-from perpleximanus.tools.mcp.retrieval_tier import (
+from disco.retrieval.providers import ExtractionProvider, SearchProvider
+from disco.tools.mcp.retrieval_tier import (
     _MCPRetrievalExtractionProvider,
     _MCPRetrievalSearchProvider,
     _tool_matches_fetch_shape,
@@ -284,14 +284,14 @@ async def test_mcp_discovered_url_flows_through_real_engine_to_citation():
     earlier version registered providers under dead `mcp_search_*` broker names —
     a path the runtime no longer uses; that was the gamed structural-only test.
     """
-    from perpleximanus.retrieval.engine import DefaultRetrievalEngine
-    from perpleximanus.retrieval.models import (
+    from disco.retrieval.engine import DefaultRetrievalEngine
+    from disco.retrieval.models import (
         ExtractedDoc,
         Passage,
         RetrievalRequest,
     )
-    from perpleximanus.retrieval.ranking import LexicalReranker
-    from perpleximanus.tools.mcp.retrieval_tier import compose_with_mcp
+    from disco.retrieval.ranking import LexicalReranker
+    from disco.tools.mcp.retrieval_tier import compose_with_mcp
 
     MCP_URL = "https://mcp-only.example/doc"
 

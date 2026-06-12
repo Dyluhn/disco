@@ -21,10 +21,10 @@ import sys
 
 from pydantic import TypeAdapter
 
-import perpleximanus.core.view as view_mod
-from perpleximanus.core.events import Event
-from perpleximanus.core.loop.engine import AgentLoop
-from perpleximanus.core.view import View
+import disco.core.view as view_mod
+from disco.core.events import Event
+from disco.core.loop.engine import AgentLoop
+from disco.core.view import View
 
 DB = "test-record/pmx-run.db"
 CID = "conv_7820b3effc204906a88b2c92b21d00f1"

@@ -21,15 +21,15 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
-from perpleximanus.agent_server.schedule import ScheduleManager
-from perpleximanus.core.events import (
+from disco.agent_server.schedule import ScheduleManager
+from disco.core.events import (
     EventSource,
     LLMMessage,
     MessageEvent,
     ScheduleRunEvent,
 )
-from perpleximanus.core.loop.engine import AgentLoop
-from perpleximanus.core.store.sqlite import SqliteEventStore
+from disco.core.loop.engine import AgentLoop
+from disco.core.store.sqlite import SqliteEventStore
 
 # ---- helpers -----------------------------------------------------------------
 

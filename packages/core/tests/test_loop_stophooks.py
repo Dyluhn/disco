@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from disco.core import ConversationStatus, EventSource, MessageEvent
 from loop_fakes import ScriptedAgent, ScriptedStopHook, build_loop, finish_step
-from perpleximanus.core import ConversationStatus, EventSource, MessageEvent
 
 CID = "conv"
 

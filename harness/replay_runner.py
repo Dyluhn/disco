@@ -1,6 +1,6 @@
 """Event-log replay runner (plan Phase 3) — the event log IS a recording.
 
-perpleximanus is event-sourced: a conversation is a totally-ordered log of typed
+disco is event-sourced: a conversation is a totally-ordered log of typed
 events. The USER `MessageEvent`s (+ a plan approval) are the INPUTS; everything
 the engine emits (`action`/`observation`/`plan`/`report`/`status`/`agent_error`)
 are the OUTPUTS. Pin the non-determinism (LLM + search + extraction) with a replay
@@ -30,7 +30,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from perpleximanus.core.events import (
+from disco.core.events import (
     BaseEvent,
     ConversationStatus,
     EventAdapter,
@@ -171,7 +171,7 @@ async def _main() -> None:
     and diff. Exits non-zero (the regression signal) if the event sequence drifted."""
     import sys
 
-    from perpleximanus.core import SqliteEventStore
+    from disco.core import SqliteEventStore
 
     from harness.cassette import Cassette
 

@@ -1,8 +1,8 @@
 # RP-12 Fix 1 Report
 
 ## F1 — ROOT CAUSE FIX (DEFECT-6)
-- **Engine Fix**: Modified `packages/core/src/perpleximanus/core/loop/engine.py:1500` and `:1507` (approx) within `_execute_and_observe` to explicitly pass `tool_call_id=action.tool_call.call_id` when emitting `AgentErrorEvent`.
-- **Provider Defense**: Updated `OpenAIProvider._message` in `packages/core/src/perpleximanus/core/llm/openai_provider.py` to downgrade `role: "tool"` messages to `role: "user"` if `tool_call_id` is missing/falsy, prefixing the content with `"Tool error: "`. This prevents the upstream 400 "missing field 'tool_call_id'" error.
+- **Engine Fix**: Modified `packages/core/src/disco/core/loop/engine.py:1500` and `:1507` (approx) within `_execute_and_observe` to explicitly pass `tool_call_id=action.tool_call.call_id` when emitting `AgentErrorEvent`.
+- **Provider Defense**: Updated `OpenAIProvider._message` in `packages/core/src/disco/core/llm/openai_provider.py` to downgrade `role: "tool"` messages to `role: "user"` if `tool_call_id` is missing/falsy, prefixing the content with `"Tool error: "`. This prevents the upstream 400 "missing field 'tool_call_id'" error.
 - **Verification**: Added `test_agent_error_serialization_defense` to `packages/core/tests/test_toolcall_defense.py`.
 
 ## F2 — BLOCKER: Echoed history names unsanitized

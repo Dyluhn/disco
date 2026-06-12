@@ -10,9 +10,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from perpleximanus.core.events import LLMMessage
-from perpleximanus.core.llm import CapabilityProfile, CompletionRequest, ModelRole
-from perpleximanus.core.llm.types import (
+from disco.core.events import LLMMessage
+from disco.core.llm import CapabilityProfile, CompletionRequest, ModelRole
+from disco.core.llm.types import (
     CompletionResponse,
     ProposedToolCall,
     StreamChunk,

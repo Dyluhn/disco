@@ -2,13 +2,13 @@
 and Anthropic cache-block stability with the images field present."""
 
 import pytest
-from perpleximanus.core import LLMMessage
-from perpleximanus.core.llm.config import default_config
-from perpleximanus.core.llm.config_store import ConfigStore
-from perpleximanus.core.llm.errors import NoEligibleModel
-from perpleximanus.core.llm.openai_provider import OpenAIProvider
-from perpleximanus.core.llm.routing import CallContext, DefaultLLMRouter
-from perpleximanus.core.llm.types import (
+from disco.core import LLMMessage
+from disco.core.llm.config import default_config
+from disco.core.llm.config_store import ConfigStore
+from disco.core.llm.errors import NoEligibleModel
+from disco.core.llm.openai_provider import OpenAIProvider
+from disco.core.llm.routing import CallContext, DefaultLLMRouter
+from disco.core.llm.types import (
     CapabilityProfile,
     CompletionRequest,
     ModelRole,

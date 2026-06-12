@@ -9,7 +9,7 @@
 
 ### §1 — Backend endpoint (`app.py`)
 
-`POST /conversations/{cid}/files` is implemented in `packages/agent-server/src/perpleximanus/agent_server/app.py`.
+`POST /conversations/{cid}/files` is implemented in `packages/agent-server/src/disco/agent_server/app.py`.
 
 - **Sanitization** (`_sanitize_name`): `Path(raw).name` → NFC → `lstrip(".")` → `re.sub(r"\s+", "-", name.strip())` → reject empty.
 - **Limits**: 25 MB/file, 20 files/request, 100 MB/conversation (via `list_dir` + `read_file` of existing `uploads/` files).

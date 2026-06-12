@@ -16,10 +16,10 @@ read-only and cacheable — the honest degraded answer is the last list we saw,
 marked stale, never a 500.
 
 Code as of HEAD:
-- `packages/agent-server/src/perpleximanus/agent_server/runtime.py:1537` —
+- `packages/agent-server/src/disco/agent_server/runtime.py:1537` —
   `sessions_list()`: `live_session()` → None ⇒ `[]`; otherwise
   `await session.sessions.list()` unguarded.
-- `packages/agent-server/src/perpleximanus/agent_server/app.py:342` — the
+- `packages/agent-server/src/disco/agent_server/app.py:342` — the
   `/sessions` route; `app.py:363` — `/sessions/{name}/view` (calls
   `sessions_list` for its existence check).
 
@@ -105,8 +105,8 @@ Code as of HEAD:
 
 ## Manifest (orders.yaml `dc-04b` — touch nothing outside it)
 
-- packages/agent-server/src/perpleximanus/agent_server/runtime.py
-- packages/agent-server/src/perpleximanus/agent_server/app.py
+- packages/agent-server/src/disco/agent_server/runtime.py
+- packages/agent-server/src/disco/agent_server/app.py
 - packages/agent-server/tests/test_sessions_degrade.py
 - test-record/dc-04b/units.log
 - agent-projects/sonnet/dc-04b-report.md

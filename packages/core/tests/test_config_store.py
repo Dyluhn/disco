@@ -11,8 +11,8 @@ from __future__ import annotations
 import json
 
 import pytest
-from perpleximanus.core.llm import ConfigStore, ModelRole, default_config
-from perpleximanus.core.llm.config import ModelEntry
+from disco.core.llm import ConfigStore, ModelRole, default_config
+from disco.core.llm.config import ModelEntry
 
 
 def _entry(**kw) -> ModelEntry:

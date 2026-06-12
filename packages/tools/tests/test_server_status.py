@@ -1,10 +1,9 @@
 import json
-import os
+
 import pytest
-from perpleximanus.tools.anatomy import Capability, ToolContext
-from perpleximanus.tools.builtin.server import ServerStatusTool, ServerStatusArgs
-from perpleximanus.tools.sandbox.base import ExecResult
-from perpleximanus.tools.sandbox.port_owner import port_owner
+from disco.tools.anatomy import Capability, ToolContext
+from disco.tools.builtin.server import ServerStatusArgs, ServerStatusTool
+from disco.tools.sandbox.base import ExecResult
 
 pytestmark = pytest.mark.asyncio
 

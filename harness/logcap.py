@@ -28,7 +28,7 @@ class _CaptureHandler(logging.Handler):
 
 
 @contextlib.contextmanager
-def capture_spans(logger: str = "perpleximanus.span") -> Iterator[list[dict[str, Any]]]:
+def capture_spans(logger: str = "disco.span") -> Iterator[list[dict[str, Any]]]:
     h = _CaptureHandler()
     lg = logging.getLogger(logger)
     lg.addHandler(h)

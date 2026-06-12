@@ -7,10 +7,10 @@ the §11.7 cross-contract gate. No Firecracker, no real network, no real provide
 
 from __future__ import annotations
 
-from perpleximanus.core import ToolCall
-from perpleximanus.core.loop import AgentStep
-from perpleximanus.tools.sandbox.base import ExecResult, SandboxError, SandboxSpec
-from perpleximanus.tools.sandbox.kernel import KernelResult
+from disco.core import ToolCall
+from disco.core.loop import AgentStep
+from disco.tools.sandbox.base import ExecResult, SandboxError, SandboxSpec
+from disco.tools.sandbox.kernel import KernelResult
 
 
 class FakeKernel:

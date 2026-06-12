@@ -13,8 +13,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from perpleximanus.core import LLMMessage
-from perpleximanus.core.events import (
+from disco.core import LLMMessage
+from disco.core.events import (
     ActionEvent,
     EventSource,
     MessageEvent,
@@ -140,7 +140,7 @@ _FIXTURE = Path(__file__).resolve().parents[1] / "cassettes" / "loop_demo.events
     not _FIXTURE.exists(), reason="needs the captured loop fixture (make capture-loop)"
 )
 async def test_deterministic_replay_reproduces_recorded_events():
-    from perpleximanus.core import SqliteEventStore
+    from disco.core import SqliteEventStore
 
     from harness.cassette import Cassette
     from harness.replay_runner import load_events, replay_conversation

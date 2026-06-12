@@ -1,4 +1,4 @@
-# Self-hosting perpleximanus
+# Self-hosting Disco
 
 A one-command `docker compose` self-host. A stranger on a clean Linux box (or WSL2)
 copies one file and runs one command, and gets a working instance: the UI loads, a
@@ -11,7 +11,7 @@ grounded answer works keyless, and the Build/Agent surface can run a task.
 ## Quickstart
 
 ```bash
-git clone <repo> && cd "perpleximanus build"
+git clone <repo> && cd "disco build"
 cp .env.example .env          # then open it — at minimum skim the model + security notes
 docker compose up -d --build  # podman compose works too (see below)
 # wait for the model to download on first run, then:
@@ -39,7 +39,7 @@ encoder/TTS caches. Downloaded models live in `pmx-models`.
 
 ## Models
 
-The strategic point of perpleximanus is **reliability on local / open-weight models**.
+The strategic point of Disco is **reliability on local / open-weight models**.
 Three configurations, switched in `.env`:
 
 1. **Bundled (default).** `COMPOSE_PROFILES=bundled-llm` runs a llama.cpp server with
@@ -64,7 +64,7 @@ no API key, only outbound internet for the search + the first encoder download.
 
 ## Verify your setup
 
-The whole point of perpleximanus is reliability on *your* model — so check it before
+The whole point of Disco is reliability on *your* model — so check it before
 you trust it. `pmx verify` runs a small battery against your configured driver and
 prints a pass/fail table: config resolves a driver, the endpoint completes, the model
 emits a structured **tool call** (the capability the whole agent loop rests on), and the
@@ -72,9 +72,9 @@ full research pipeline returns a cited answer.
 
 ```bash
 # in a compose deployment
-docker compose exec agent-server python -m perpleximanus.agent_server.verify
+docker compose exec agent-server python -m disco.agent_server.verify
 # from a checkout
-make verify              # or: uv run python -m perpleximanus.agent_server.verify
+make verify              # or: uv run python -m disco.agent_server.verify
 make verify ARGS=--quick # skip the live grounding step (config + LLM only)
 ```
 
@@ -169,6 +169,6 @@ model; 12–16 GB is comfortable with `bundled-llm`. Disk ~7–8 GB after first 
 ## Persisting / backing up
 
 Everything durable is in the `pmx-data` volume. Back it up with
-`docker run --rm -v perpleximanus_pmx-data:/data -v "$PWD":/out alpine tar czf
+`docker run --rm -v disco_pmx-data:/data -v "$PWD":/out alpine tar czf
 /out/pmx-backup.tgz /data`. Pin `PMX_SECRET_KEY` in `.env` so your encrypted API keys
 survive a volume rebuild.

@@ -17,7 +17,7 @@ Recon: the tree currently has only a scaffold (`packages/app-server/.../config_s
 hitting `GET /api/mcp`). There is no `mcp` Python package in `uv.lock` yet
 and no MCP code anywhere in `packages/`. The `egress_proxy.py` sidecar
 (RP-00 rung 0) **is already in-tree** at
-`packages/tools/src/perpleximanus/tools/sandbox/egress_proxy.py` — see
+`packages/tools/src/disco/tools/sandbox/egress_proxy.py` — see
 "Rung 0" below; no separate design-doc gate is needed.
 
 ---
@@ -34,55 +34,55 @@ and no MCP code anywhere in `packages/`. The `egress_proxy.py` sidecar
   live, fixture in offline mode.
 - `frontend/src/hooks/useConfig.ts:55-57` — `useMcpConnections()` query
   (`queryKey: ["mcp-connections"]`).
-- `packages/app-server/src/perpleximanus/app_server/app.py:213-216` —
+- `packages/app-server/src/disco/app_server/app.py:213-216` —
   `GET /api/mcp` returns `state.mcp_connections()` (scaffold).
-- `packages/app-server/src/perpleximanus/app_server/config_state.py:411-418`
+- `packages/app-server/src/disco/app_server/config_state.py:411-418`
   — `_mcp` is a hard-coded list of two `McpConnectionDTO` (Filesystem +
   GitHub fixtures) with `status="connected"` / `status="disconnected"`.
   This is the scaffold; rung A replaces the **source of truth** (persisted
   config + live pool) but preserves the DTO shape so the frontend keeps
   rendering.
-- `packages/core/src/perpleximanus/core/llm/config.py:138` — `RouterConfig`
+- `packages/core/src/disco/core/llm/config.py:138` — `RouterConfig`
   is a Pydantic model. RP-05 adds `mcp: McpSettings` to it; the plan's
   line citation (139-160) covers the field block it will live next to.
-- `packages/agent-server/src/perpleximanus/agent_server/runtime.py:625` —
+- `packages/agent-server/src/disco/agent_server/runtime.py:625` —
   `_compose_build_loop` (plan said 517-520; the build-loop **definition**
   is at 625, the call site that consumes the pool is at 548 — the plan's
   reference is the call site). Rung A's pool is built once at agent-server
   start and snapshotted into the per-conversation registry here.
-- `packages/tools/src/perpleximanus/tools/sandbox/egress_proxy.py:1-50` —
+- `packages/tools/src/disco/tools/sandbox/egress_proxy.py:1-50` —
   the stdlib-only allowlisting sidecar. **The design IS in-tree; rung 0
   is not a sequencing gate** for the operator's docs. Rung B routes MCP
   HTTP through this proxy.
-- `packages/tools/src/perpleximanus/tools/sandbox/_container.py` —
+- `packages/tools/src/disco/tools/sandbox/_container.py` —
   `EGRESS_PROXY_PORT=8888`, `proxy_env(host, port)`, `proxy_run_argv(allow, port)`
   (the helpers rung B calls to set the env block the MCP HTTP client
   inherits).
-- `packages/tools/src/perpleximanus/tools/secrets.py:21-36` — `SecretsStore`
+- `packages/tools/src/disco/tools/secrets.py:21-36` — `SecretsStore`
   Protocol + `InMemorySecretsStore` (the seam for per-server `env` secret
   references). Plan said line 68-90 — that range is the `CapabilityBroker`
   block. The right anchor for secrets is the `SecretsStore.get` Protocol
   method at line 27; rung A's MCP server config uses this.
-- `packages/core/src/perpleximanus/core/security/analyzers.py:180` —
+- `packages/core/src/disco/core/security/analyzers.py:180` —
   `_score_other` (the keyword-based fallback the plan warns against;
   `analyzers.py:178-208` in the plan covers this entire function). Rung A
   makes the explicit `base_risk` per-tool the **only** path for MCP tools.
-- `packages/tools/src/perpleximanus/tools/builtin/browser.py:131` —
+- `packages/tools/src/disco/tools/builtin/browser.py:131` —
   `_fence(view)` (plan said 131 was the docstring line; the function
   definition is at 131, body at 132). Rung B extends the same fence idiom
   to MCP tool results.
-- `packages/retrieval/src/perpleximanus/retrieval/providers.py:21-42` —
+- `packages/retrieval/src/disco/retrieval/providers.py:21-42` —
   `SearchProvider` + `ExtractionProvider` `@runtime_checkable` Protocols
   (the contract the retrieval-tier MCP registry tier implements).
-- `packages/retrieval/src/perpleximanus/retrieval/wiring.py:29-52` —
+- `packages/retrieval/src/disco/retrieval/wiring.py:29-52` —
   `retrieval_capability_handlers(search, extraction)` returns
   `{"search": handler, "extract": handler}` (the shape the MCP retrieval
   tier must satisfy to plug into the Build broker at
   `runtime.py:_build_broker`).
-- `packages/tools/src/perpleximanus/tools/anatomy.py:80-90` — `ToolDef`
+- `packages/tools/src/disco/tools/anatomy.py:80-90` — `ToolDef`
   fields (`base_risk`, `runs_in`, `capabilities`, etc.) — the shape rung A
   builds for every registered MCP tool.
-- `packages/tools/src/perpleximanus/tools/executor.py:60-150` — DefaultToolExecutor
+- `packages/tools/src/disco/tools/executor.py:60-150` — DefaultToolExecutor
   dispatch on `runs_in` ("sandbox" vs "in_process"). MCP stdio MUST be
   `runs_in="sandbox"` (inside gVisor); MCP HTTP MUST be `runs_in="in_process"`
   with `capabilities=Capability.NETWORK` so the executor routes it through
@@ -94,10 +94,10 @@ and no MCP code anywhere in `packages/`. The `egress_proxy.py` sidecar
 
 The plan marks the egress allowlist proxy as RP-05's rung 0 dependency. The
 sidecar **design exists** in this repo at
-`packages/tools/src/perpleximanus/tools/sandbox/egress_proxy.py` and has
+`packages/tools/src/disco/tools/sandbox/egress_proxy.py` and has
 been validated end-to-end by BP-09 (sandbox-image rebuild + prewarm), with
 the `egress_mode`, `proxy_env`, `proxy_run_argv`, and `format_allow`
-helpers exposed in `packages/tools/src/perpleximanus/tools/sandbox/_container.py`.
+helpers exposed in `packages/tools/src/disco/tools/sandbox/_container.py`.
 The 3 gotchas the plan cites (DNS, sidecar internal-net IP, NO_PROXY
 loopback) are already handled.
 
@@ -132,7 +132,7 @@ a tool-tier concern that agent-server composes):
 
 `uv lock && uv sync` once; commit `uv.lock` deltas with the rung A diff.
 
-### 2. Module layout (new files under `packages/tools/src/perpleximanus/tools/mcp/`)
+### 2. Module layout (new files under `packages/tools/src/disco/tools/mcp/`)
 
 - `__init__.py` — public surface: `McpPool`, `McpServerSpec`, `McpServerConfig`,
   `McpToolDescriptor`, `ApprovalRecord`.
@@ -213,7 +213,7 @@ For every `tools/list` response, build a `ToolDef` (matching
 ### 4. McpSettings on RouterConfig
 
 Add `mcp: McpSettings` to `RouterConfig` in
-`packages/core/src/perpleximanus/core/llm/config.py:138`. Shape:
+`packages/core/src/disco/core/llm/config.py:138`. Shape:
 
 ```python
 class McpSettings(BaseModel):
@@ -229,7 +229,7 @@ config UI in rung B.
 
 ### 5. Agent-server wiring (the half that does NOT change surface)
 
-`packages/agent-server/src/perpleximanus/agent_server/runtime.py`:
+`packages/agent-server/src/disco/agent_server/runtime.py`:
 
 - New attribute: `self._mcp_pool: McpPool | None = None`.
 - In `__aenter__` (or wherever the lifespan starts the singleton
@@ -256,7 +256,7 @@ config UI in rung B.
   `None`. Used by the executor to route the call back to the right
   per-server client.
 
-`packages/agent-server/src/perpleximanus/agent_server/app.py`:
+`packages/agent-server/src/disco/agent_server/app.py`:
 
 - New WebSocket frame (or extend an existing typed event): `mcp_approval_required`
   carrying `{server, tool, description_hash, old_description_hash}`. The
@@ -303,7 +303,7 @@ A new `tests/mcp_fakes.py` module under `packages/tools/tests/`:
 
 ### 1. Streamable-HTTP transport
 
-`packages/tools/src/perpleximanus/tools/mcp/http.py` — new module:
+`packages/tools/src/disco/tools/mcp/http.py` — new module:
 
 - Uses the official `mcp` SDK's streamable-HTTP client (`streamablehttp_client`
   or whatever the 1.27.x API exposes — check the pinned version's docs in
@@ -324,7 +324,7 @@ For each HTTP server in the pool:
 - `allowed = format_allow(set(server.allowed_hosts) ∪ {url_host(url)})`
 - Build the `HTTP_PROXY` / `https_proxy` / `NO_PROXY` env block via
   `proxy_env(proxy_host, EGRESS_PROXY_PORT)` from
-  `packages/tools/src/perpleximanus/tools/sandbox/_container.py`.
+  `packages/tools/src/disco/tools/sandbox/_container.py`.
 - Pass both the env block AND the per-call `client=httpx.AsyncClient(
   proxies=..., timeout=...)` to the SDK call. **The httpx client MUST
   honor the env block** — if the SDK wraps the call in a way that
@@ -345,14 +345,14 @@ For each HTTP server in the pool:
 ### 3. Retrieval-tier MCP registry
 
 A separate registry tier in
-`packages/tools/src/perpleximanus/tools/mcp/retrieval_tier.py`:
+`packages/tools/src/disco/tools/mcp/retrieval_tier.py`:
 
 - Picks a subset of MCP tools whose names match the OpenAI
   `search(query)→{results:[{id,title,url}]}` and
   `fetch(id)→doc` shape.
 - Wraps each picked tool as a `SearchProvider` and `ExtractionProvider`
   that satisfy the `@runtime_checkable` Protocols in
-  `packages/retrieval/src/perpleximanus/retrieval/providers.py:21-42`.
+  `packages/retrieval/src/disco/retrieval/providers.py:21-42`.
 - Registers them with the build broker at `_compose_build_loop` time
   (extend `runtime.py:_build_broker` — currently lines 510-526 — to
   accept the retrieval-tier MCP providers as additional handlers).
@@ -366,7 +366,7 @@ the same way SearXNG/Firecrawl are).
 
 ### 4. Fenced MCP output (extends browser `_fence()`)
 
-`packages/tools/src/perpleximanus/tools/mcp/fence.py` — new module:
+`packages/tools/src/disco/tools/mcp/fence.py` — new module:
 
 - `fence_mcp_result(server: str, tool: str, result: Any) -> str` —
   produces a fenced string the LLM sees as untrusted. The wrapper
@@ -395,7 +395,7 @@ the same way SearXNG/Firecrawl are).
 - Replace the disabled `<button>` "Add connection" with a live form
   (or modal — match the existing skills-create UX) that POSTs to
   `POST /api/mcp/servers` with the config payload. The new endpoint
-  lives in `packages/app-server/src/perpleximanus/app_server/app.py`
+  lives in `packages/app-server/src/disco/app_server/app.py`
   next to the existing `GET /api/mcp` (line 213-216) and persists via
   the new `mcp_approvals` table (config + approval are persisted
   together — re-approval flow mutates the row, never creates a new one).
@@ -469,27 +469,27 @@ five** are green.
 
 - `packages/tools/pyproject.toml`
 - `uv.lock`
-- `packages/tools/src/perpleximanus/tools/mcp/__init__.py`
-- `packages/tools/src/perpleximanus/tools/mcp/config.py`
-- `packages/tools/src/perpleximanus/tools/mcp/pool.py`
-- `packages/tools/src/perpleximanus/tools/mcp/stdio.py`
-- `packages/tools/src/perpleximanus/tools/mcp/approval.py`
-- `packages/tools/src/perpleximanus/tools/mcp/naming.py`
-- `packages/tools/src/perpleximanus/tools/mcp/tool_search.py`
-- `packages/tools/src/perpleximanus/tools/mcp/migrations.py` (the
+- `packages/tools/src/disco/tools/mcp/__init__.py`
+- `packages/tools/src/disco/tools/mcp/config.py`
+- `packages/tools/src/disco/tools/mcp/pool.py`
+- `packages/tools/src/disco/tools/mcp/stdio.py`
+- `packages/tools/src/disco/tools/mcp/approval.py`
+- `packages/tools/src/disco/tools/mcp/naming.py`
+- `packages/tools/src/disco/tools/mcp/tool_search.py`
+- `packages/tools/src/disco/tools/mcp/migrations.py` (the
   `mcp_approvals` table — see how `share_tokens` is created in
   RP-06, follow the same pattern)
-- `packages/core/src/perpleximanus/core/llm/config.py` (add
+- `packages/core/src/disco/core/llm/config.py` (add
   `McpSettings` + `mcp: McpSettings` field on `RouterConfig`)
-- `packages/core/src/perpleximanus/core/llm/secrets.py` (generalize
+- `packages/core/src/disco/core/llm/secrets.py` (generalize
   **only if** the tools-layer `SecretsStore` cannot be reached from
   the agent-server; the plan says "generalize only if needed" — verify
   in this rung before touching this file)
-- `packages/agent-server/src/perpleximanus/agent_server/runtime.py`
+- `packages/agent-server/src/disco/agent_server/runtime.py`
   (pool lifecycle: `_mcp_pool` attribute, `start` in lifespan, snapshot
   injection in `_compose_build_loop`, `_qualified_tool_call_name`
   helper, new `mcp_approval_required` WS frame dispatch)
-- `packages/agent-server/src/perpleximanus/agent_server/app.py` (the
+- `packages/agent-server/src/disco/agent_server/app.py` (the
   `mcp_approval_required` WS event)
 - `packages/agent-server/tests/test_mcp_pool.py` (new — unit + integration
   with the fake stdio server; covers: pool start, snapshot, name
@@ -519,19 +519,19 @@ agent-server-side).
 
 ## Rung B — manifest (the ONLY files rung B may touch)
 
-- `packages/tools/src/perpleximanus/tools/mcp/__init__.py` (re-export
+- `packages/tools/src/disco/tools/mcp/__init__.py` (re-export
   the new modules)
-- `packages/tools/src/perpleximanus/tools/mcp/http.py` (new)
-- `packages/tools/src/perpleximanus/tools/mcp/retrieval_tier.py` (new)
-- `packages/tools/src/perpleximanus/tools/mcp/fence.py` (new)
-- `packages/tools/src/perpleximanus/tools/mcp/http_egress.py` (new —
+- `packages/tools/src/disco/tools/mcp/http.py` (new)
+- `packages/tools/src/disco/tools/mcp/retrieval_tier.py` (new)
+- `packages/tools/src/disco/tools/mcp/fence.py` (new)
+- `packages/tools/src/disco/tools/mcp/http_egress.py` (new —
   the per-server allowlist union + `proxy_env`/`format_allow` glue)
-- `packages/agent-server/src/perpleximanus/agent_server/runtime.py`
+- `packages/agent-server/src/disco/agent_server/runtime.py`
   (extend `_build_broker` with the retrieval-tier MCP providers;
   extend `_build_sandbox_spec` to union the per-conversation MCP
   allowlist into the sandbox `egress_allow` set; wire HTTP pool
   lifecycle)
-- `packages/agent-server/src/perpleximanus/agent_server/app.py` (the
+- `packages/agent-server/src/disco/agent_server/app.py` (the
   HTTP-side `mcp_approval_required` path; per-server health-check
   route for the UI status projection)
 - `packages/agent-server/tests/test_mcp_http.py` (new — proxy env
@@ -549,12 +549,12 @@ agent-server-side).
 - `packages/agent-server/tests/test_mcp_poisoning.py` (new — mutate
   description between sessions → `ApprovalRequired` raised → agent
   refuses)
-- `packages/app-server/src/perpleximanus/app_server/app.py` (new
+- `packages/app-server/src/disco/app_server/app.py` (new
   `POST /api/mcp/servers`, `PATCH /api/mcp/servers/{name}`,
   `DELETE /api/mcp/servers/{name}`, `POST /api/mcp/servers/{name}/approve`;
   the `GET /api/mcp` route is REPLACED, not duplicated, to return the
   live pool status projection)
-- `packages/app-server/src/perpleximanus/app_server/config_state.py`
+- `packages/app-server/src/disco/app_server/config_state.py`
   (drop the `_mcp` fixture list; replace with the live pool
   projection; the `mcp_connections()` accessor stays for back-compat
   with the rung A surface; `McpConnectionDTO` gains the new optional
@@ -636,7 +636,7 @@ it — rung B calls its helpers, does not edit it).
   changes to `runtime.py:210-259`** runtime tracking dicts
   (RP-01's anti-scope carries over).
 - **No new module outside the `mcp/` subpackage** under
-  `packages/tools/src/perpleximanus/tools/`. The MCP code is a
+  `packages/tools/src/disco/tools/`. The MCP code is a
   single tree; do not scatter it.
 - **No `mcp` client call that bypasses the proxy env block for
   HTTP servers.** Symmetric threat model: an HTTP server call
@@ -718,7 +718,7 @@ Rung B:
   on the same wave-3 lane but in a second round.
 - Rung 0 (egress allowlist proxy) is **not** a sequencing gate
   for either rung: the sidecar design is in-tree
-  (`packages/tools/src/perpleximanus/tools/sandbox/egress_proxy.py`)
+  (`packages/tools/src/disco/tools/sandbox/egress_proxy.py`)
   and BP-09 has already validated it end-to-end on VM-201. Rung
   B's HTTP transport reuses it.
 - The wave-3 lane is shared with RP-07 (sandbox image rebuild

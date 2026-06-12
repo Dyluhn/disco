@@ -7,7 +7,7 @@ appear in the follow-up's grounding context.
 
 from __future__ import annotations
 
-from perpleximanus.core import (
+from disco.core import (
     ConversationStatus,
     EventSource,
     LLMMessage,
@@ -16,7 +16,7 @@ from perpleximanus.core import (
     ReportSection,
     StatusEvent,
 )
-from perpleximanus.core.store.sqlite import SqliteEventStore
+from disco.core.store.sqlite import SqliteEventStore
 
 
 async def test_followup_triggered_by_new_user_message():
@@ -40,7 +40,7 @@ async def test_followup_triggered_by_new_user_message():
     reports = [e for e in events if isinstance(e, ReportEvent)]
 
     # Before follow-up: no fresh user message
-    from perpleximanus.agent_server.runtime import ConversationRuntime
+    from disco.agent_server.runtime import ConversationRuntime
     assert not ConversationRuntime._has_fresh_user_message(events, reports)
 
     # After follow-up: user sends a question
@@ -120,5 +120,5 @@ async def test_followup_requires_existing_report():
     events = await store.get_events(cid)
     reports = [e for e in events if isinstance(e, ReportEvent)]
 
-    from perpleximanus.agent_server.runtime import ConversationRuntime
+    from disco.agent_server.runtime import ConversationRuntime
     assert not ConversationRuntime._has_fresh_user_message(events, reports)

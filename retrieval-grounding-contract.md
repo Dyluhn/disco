@@ -23,7 +23,7 @@
 
 **Conventions** (identical to prior contracts): illustrative Python 3.12 + Pydantic v2; field names/types/signatures **normative**, bodies illustrative. **[CONTRACT]** = relied-upon guarantee; **[INTERIOR]** = builder's free choice; **[VERIFY]** = confirm at build (model/checkpoint names, provider availability, versions).
 
-**Packaging note (v1.1).** Retrieval is its **own package** (`packages/retrieval`, importable as `perpleximanus.retrieval`), depending only on `core` — **not** under `core`. The `search`/`extract` *tools* live in `tools` (`perpleximanus.tools.builtin`); the capability *handlers* that back those tools onto this engine live in `perpleximanus.retrieval.wiring` (registered with the tool contract's `CapabilityBroker`), so retrieval stays a `core`-only-dependent sibling and never imports `tools`.
+**Packaging note (v1.1).** Retrieval is its **own package** (`packages/retrieval`, importable as `disco.retrieval`), depending only on `core` — **not** under `core`. The `search`/`extract` *tools* live in `tools` (`disco.tools.builtin`); the capability *handlers* that back those tools onto this engine live in `disco.retrieval.wiring` (registered with the tool contract's `CapabilityBroker`), so retrieval stays a `core`-only-dependent sibling and never imports `tools`.
 
 ---
 

@@ -10,10 +10,10 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from disco.agent_server import create_app
+from disco.core import SqliteEventStore
+from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
 from fastapi.testclient import TestClient
-from perpleximanus.agent_server import create_app
-from perpleximanus.core import SqliteEventStore
-from perpleximanus.tools.sandbox.shell_sessions import SessionInfo, SessionView
 
 # ---- helpers -----------------------------------------------------------------
 
@@ -193,9 +193,9 @@ def test_view_coalescing_single_exec() -> None:
     """Two concurrent session_view calls for the same (cid, name) coalesce into one
     capture-pane exec. We test the runtime layer directly (not via HTTP) to count
     the underlying view() invocations on a counting fake ShellSessionManager."""
-    from perpleximanus.agent_server.runtime import ConversationRuntime
-    from perpleximanus.core import SqliteEventStore
-    from perpleximanus.tools.sandbox.shell_sessions import SessionView
+    from disco.agent_server.runtime import ConversationRuntime
+    from disco.core import SqliteEventStore
+    from disco.tools.sandbox.shell_sessions import SessionView
 
     call_count = 0
 

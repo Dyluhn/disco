@@ -22,7 +22,7 @@ htmlcov
 *.db
 *.db-shm
 *.db-wal
-perpleximanus-config.json
+disco-config.json
 secrets.json
 *secret*
 .env

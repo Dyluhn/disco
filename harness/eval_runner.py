@@ -20,11 +20,11 @@ import os
 from pathlib import Path
 from typing import Any
 
-from perpleximanus.retrieval.engine import DefaultRetrievalEngine
-from perpleximanus.retrieval.evaluation import grounding_metrics
-from perpleximanus.retrieval.grounding import GroundingPipeline
-from perpleximanus.retrieval.ranking import RouterQueryRewriter
-from perpleximanus.retrieval.wiring import research_answer
+from disco.retrieval.engine import DefaultRetrievalEngine
+from disco.retrieval.evaluation import grounding_metrics
+from disco.retrieval.grounding import GroundingPipeline
+from disco.retrieval.ranking import RouterQueryRewriter
+from disco.retrieval.wiring import research_answer
 
 from .cassette import Cassette
 from .providers import (
@@ -85,7 +85,7 @@ def score_research(answer, task: dict) -> dict:
 
 
 def _encoders() -> dict:
-    from perpleximanus.retrieval.live import build_live_retrieval
+    from disco.retrieval.live import build_live_retrieval
 
     d = build_live_retrieval()
     return {"reranker": d["reranker"], "embedder": d["embedder"], "nli": d["nli"]}
@@ -95,7 +95,7 @@ def _encoders() -> dict:
 
 
 async def capture_research(query: str, cassette: Cassette, router_real, depth="standard") -> None:
-    from perpleximanus.retrieval.bundled_providers import (
+    from disco.retrieval.bundled_providers import (
         DdgsSearchProvider,
         LocalExtractionProvider,
     )
@@ -119,10 +119,10 @@ def _load_corpus(kind: str) -> list[dict]:
 def _real_search_extract_router(model_pick: str):
     """Live providers + a live router (built from the persisted config/secrets in the
     env) — the `--real` path. Encoders come from `_encoders()` separately."""
-    from perpleximanus.agent_server import ConversationRuntime
-    from perpleximanus.core import SqliteEventStore
-    from perpleximanus.core.llm import ConfigStore, SecretStore
-    from perpleximanus.retrieval.bundled_providers import (
+    from disco.agent_server import ConversationRuntime
+    from disco.core import SqliteEventStore
+    from disco.core.llm import ConfigStore, SecretStore
+    from disco.retrieval.bundled_providers import (
         DdgsSearchProvider,
         LocalExtractionProvider,
     )

@@ -1,5 +1,5 @@
-import pytest
-from perpleximanus.retrieval.streaming import _to_blocks
+from disco.retrieval.streaming import _to_blocks
+
 
 def test_single_table():
     text = "| Header 1 | Header 2 |\n| --- | --- |\n| Row 1 Col 1 | Row 1 Col 2 |\n| Row 2 Col 1 | Row 2 Col 2 |"

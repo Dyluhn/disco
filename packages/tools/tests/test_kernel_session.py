@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from perpleximanus.tools.sandbox.kernel import KernelResult, ProcessKernel
+from disco.tools.sandbox.kernel import KernelResult, ProcessKernel
 
 
 # 1. Unit tests

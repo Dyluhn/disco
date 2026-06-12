@@ -1,5 +1,5 @@
 #!/bin/sh
-# Container entrypoint for both perpleximanus servers (app-server + agent-server).
+# Container entrypoint for both disco servers (app-server + agent-server).
 # Prepares the shared /data volume, ensures an app secret exists (so encrypted
 # secrets survive restarts), seeds a first-run config, then execs the server CMD.
 set -e

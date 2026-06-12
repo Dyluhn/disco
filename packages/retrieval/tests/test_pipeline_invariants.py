@@ -1,13 +1,15 @@
 
 import asyncio
-import time
-import pytest
 import hashlib
-from perpleximanus.retrieval.deep_research import DeepResearchRun
-from perpleximanus.retrieval.deep_research.gather import SubQuestionResult
-from perpleximanus.retrieval.models import Passage
-from perpleximanus.core import ReportSection
+import time
 from unittest.mock import AsyncMock, patch
+
+import pytest
+from disco.core import ReportSection
+from disco.retrieval.deep_research import DeepResearchRun
+from disco.retrieval.deep_research.gather import SubQuestionResult
+from disco.retrieval.models import Passage
+
 
 @pytest.mark.asyncio
 async def test_pipeline_invariants():
@@ -69,9 +71,9 @@ async def test_pipeline_invariants():
     async def emit(kind, payload):
         captured_events.append((kind, payload))
 
-    with patch("perpleximanus.retrieval.deep_research.engine.gather_for_subquestion", side_effect=mock_gather), \
-         patch("perpleximanus.retrieval.deep_research.engine.synthesize_section", side_effect=mock_synth), \
-         patch("perpleximanus.retrieval.deep_research.engine.coherence_pass", return_value="summary"):
+    with patch("disco.retrieval.deep_research.engine.gather_for_subquestion", side_effect=mock_gather), \
+         patch("disco.retrieval.deep_research.engine.synthesize_section", side_effect=mock_synth), \
+         patch("disco.retrieval.deep_research.engine.coherence_pass", return_value="summary"):
         
         report = await run.run(plan_steps, emit=emit)
 
@@ -143,9 +145,9 @@ async def test_budget_partitioning():
     
     async def emit(kind, payload): pass
 
-    with patch("perpleximanus.retrieval.deep_research.engine.gather_for_subquestion", side_effect=mock_gather), \
-         patch("perpleximanus.retrieval.deep_research.engine.synthesize_section"), \
-         patch("perpleximanus.retrieval.deep_research.engine.coherence_pass"):
+    with patch("disco.retrieval.deep_research.engine.gather_for_subquestion", side_effect=mock_gather), \
+         patch("disco.retrieval.deep_research.engine.synthesize_section"), \
+         patch("disco.retrieval.deep_research.engine.coherence_pass"):
         
         await run.run(plan_steps, emit=emit)
 
@@ -173,9 +175,9 @@ async def test_resume_semantics_with_pipeline():
     
     async def emit(kind, payload): pass
 
-    with patch("perpleximanus.retrieval.deep_research.engine.gather_for_subquestion", side_effect=mock_gather), \
-         patch("perpleximanus.retrieval.deep_research.engine.synthesize_section"), \
-         patch("perpleximanus.retrieval.deep_research.engine.coherence_pass"):
+    with patch("disco.retrieval.deep_research.engine.gather_for_subquestion", side_effect=mock_gather), \
+         patch("disco.retrieval.deep_research.engine.synthesize_section"), \
+         patch("disco.retrieval.deep_research.engine.coherence_pass"):
         
         await run.run(plan_steps, emit=emit, resume_sections=resume_sections)
 

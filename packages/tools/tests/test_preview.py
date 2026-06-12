@@ -7,10 +7,15 @@ the local backend publishes the port only when network is granted; Podman is a c
 
 from __future__ import annotations
 
-from perpleximanus.tools.anatomy import Capability
-from perpleximanus.tools.sandbox._container import PREVIEW_PORT, PUBLISHED_PORTS, USER_PORTS, ContainerInstance
-from perpleximanus.tools.sandbox.base import SandboxSpec
-from perpleximanus.tools.sandbox.gvisor import _preview_host
+from disco.tools.anatomy import Capability
+from disco.tools.sandbox._container import (
+    PREVIEW_PORT,
+    PUBLISHED_PORTS,
+    USER_PORTS,
+    ContainerInstance,
+)
+from disco.tools.sandbox.base import SandboxSpec
+from disco.tools.sandbox.gvisor import _preview_host
 
 
 class _Container:
@@ -56,7 +61,7 @@ def test_expose_extra_user_ports():
 def test_internal_ports_are_never_exposed_to_user():
     # security-critical: INTERNAL_PORTS (8899) must NEVER become user URLs,
     # even if the backend publishes them.
-    from perpleximanus.tools.sandbox._container import INTERNAL_PORTS
+    from disco.tools.sandbox._container import INTERNAL_PORTS
 
     assert 8899 in INTERNAL_PORTS
 
@@ -91,7 +96,7 @@ def test_gvisor_preview_host_parsing():
 
 def test_local_publishes_curated_port_set_when_network_granted():
     from conftest import FakeSandboxInstance  # noqa: F401 — ensures conftest path
-    from perpleximanus.tools.sandbox import LocalSandboxService, SandboxConfig
+    from disco.tools.sandbox import LocalSandboxService, SandboxConfig
     from test_local import FakeLocalClient  # reuse the local backend's fake docker client
 
     async def _run(spec) -> dict:
@@ -110,6 +115,6 @@ def test_local_publishes_curated_port_set_when_network_granted():
 
 def test_podman_expose_port_is_a_stub():
     # the Podman instance overrides expose_port to a labeled None (stub in this env)
-    from perpleximanus.tools.sandbox.podman import PodmanSandboxInstance
+    from disco.tools.sandbox.podman import PodmanSandboxInstance
 
     assert PodmanSandboxInstance.expose_port is not ContainerInstance.expose_port

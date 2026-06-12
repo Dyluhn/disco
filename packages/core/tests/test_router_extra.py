@@ -9,9 +9,8 @@ test_router_overflow.py (skipped).
 from __future__ import annotations
 
 import pytest
-from llm_fakes import build_router, simple_config
-from perpleximanus.core import LLMMessage
-from perpleximanus.core.llm import (
+from disco.core import LLMMessage
+from disco.core.llm import (
     BudgetExceeded,
     CallContext,
     CapabilityProfile,
@@ -23,6 +22,7 @@ from perpleximanus.core.llm import (
     StubNLIVerifier,
     default_config,
 )
+from llm_fakes import build_router, simple_config
 
 
 def _driver_req() -> CompletionRequest:

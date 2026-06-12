@@ -12,11 +12,11 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from disco.agent_server import create_app
+from disco.core import ObservationEvent, SqliteEventStore
+from disco.core.events import ToolResult
+from disco.tools.projects import ProjectStore, StorageStatus
 from fastapi.testclient import TestClient
-from perpleximanus.agent_server import create_app
-from perpleximanus.core import ObservationEvent, SqliteEventStore
-from perpleximanus.core.events import ToolResult
-from perpleximanus.tools.projects import ProjectStore, StorageStatus
 
 XLSX = b"PK\x03\x04" + b"stub-workbook"  # zip magic — stands in for a real .xlsx
 

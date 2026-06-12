@@ -13,15 +13,15 @@ from collections import namedtuple
 from typing import Any
 
 import pytest
-from docker.errors import ImageNotFound
-from perpleximanus.tools.anatomy import Capability
-from perpleximanus.tools.sandbox import (
+from disco.tools.anatomy import Capability
+from disco.tools.sandbox import (
     GvisorSandboxService,
     SandboxConfig,
     SandboxError,
     SandboxSpec,
     SandboxUnavailableError,
 )
+from docker.errors import ImageNotFound
 
 _Exec = namedtuple("_Exec", ["exit_code", "output"])
 

@@ -1,5 +1,5 @@
 
- RUN  v3.2.4 /var/home/dylan/projects/perpleximanus build/frontend
+ RUN  v3.2.4 /var/home/dylan/projects/disco build/frontend
 
  ✓ src/components/Markdown.test.tsx (5 tests) 59ms
  ✓ src/components/research/DeepReportView.table.test.tsx (3 tests) 77ms

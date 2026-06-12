@@ -7,7 +7,7 @@ Parent plan: docs/next-fix-set-plan.md §2 RP-02 (locked). Recon verified
 
 - `frontend/src/components/blocks.tsx:168-210` — a complete `table` renderer
   already exists for AnswerBlocks; the backend simply never emits the kind.
-- `packages/retrieval/src/perpleximanus/retrieval/streaming.py:109-171` —
+- `packages/retrieval/src/disco/retrieval/streaming.py:109-171` —
   `_to_blocks()` only emits prose, code, heading.
 - `frontend/src/components/research/DeepReportView.tsx:150-155` — deep reports
   split markdown on `/\n\s*\n/` and render plain paragraphs, so GFM tables
@@ -61,7 +61,7 @@ a harness may be live on :8000.
 
 ## Manifest (the ONLY files you may touch)
 
-- packages/retrieval/src/perpleximanus/retrieval/streaming.py
+- packages/retrieval/src/disco/retrieval/streaming.py
 - packages/retrieval/tests/test_table_blocks.py
 - frontend/src/components/research/DeepReportView.tsx
 - frontend/src/components/research/DeepReportView.table.test.tsx

@@ -1,6 +1,6 @@
-import pytest
-from perpleximanus.core.events import ActionEvent, ObservationEvent, ToolCall, ToolResult
-from perpleximanus.core.view import View
+from disco.core.events import ActionEvent, ObservationEvent, ToolCall, ToolResult
+from disco.core.view import View
+
 
 def test_tail_variation_deterministic():
     """B3: Variation is deterministic per seq."""

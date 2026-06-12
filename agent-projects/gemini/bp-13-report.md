@@ -243,7 +243,7 @@ mid-run snapshots are backlog.
 ## Ops note (honesty record)
 
 While cleaning up a throwaway :8010 server, the orchestrator ran
-`pkill -f 'perpleximanus.agent_server' -u dylan` — the pattern also matched the
+`pkill -f 'disco.agent_server' -u dylan` — the pattern also matched the
 LIVE :8000 server and killed it. Nothing was RUNNING and a restart onto bp-13 code
 was needed anyway, but it is the same too-broad-pattern error class as the earlier
 `qm reboot` self-match. The tmux session was gone and was re-created via

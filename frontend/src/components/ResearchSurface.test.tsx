@@ -29,7 +29,7 @@ describe("Research surface (integration + streaming reconcile)", () => {
     render(<App />);
 
     // empty state (wordmark appears in header + hero)
-    expect(screen.getAllByText("perpleximanus").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Disco").length).toBeGreaterThan(0);
 
     await user.type(screen.getByPlaceholderText(/ask anything/i), "How does RRF work?");
     await user.keyboard("{Enter}");

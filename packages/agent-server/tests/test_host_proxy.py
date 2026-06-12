@@ -7,11 +7,11 @@ import httpx
 import pytest
 import uvicorn
 import websockets
+from disco.agent_server.host_proxy import HostPreviewProxyMiddleware
 from starlette.applications import Starlette
 from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 
-from perpleximanus.agent_server.host_proxy import HostPreviewProxyMiddleware
 
 class EchoHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -136,9 +136,9 @@ async def test_host_header_not_matching(mock_app):
 
 # --- WebSocket Test ---
 
-from starlette.routing import Route, WebSocketRoute
 from starlette.endpoints import WebSocketEndpoint
 from starlette.routing import WebSocketRoute
+
 
 class EchoWSEndpoint(WebSocketEndpoint):
     async def on_connect(self, websocket):

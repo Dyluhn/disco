@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from loop_fakes import FakeExecutor, ScriptedAgent, action_step, build_loop, finish_step
-from perpleximanus.core import (
+from disco.core import (
     ActionEvent,
     AgentErrorEvent,
     ObservationEvent,
     ToolResult,
 )
+from loop_fakes import FakeExecutor, ScriptedAgent, action_step, build_loop, finish_step
 
 CID = "conv"
 
@@ -81,7 +81,7 @@ async def test_dangling_action_is_detectable_after_crash():
     """Simulate a crash between the ActionEvent and its observation: the proposed
     action is recorded first (§4.1), so on replay it is a detectable dangling
     action with no paired observation."""
-    from perpleximanus.core import SqliteEventStore, ToolCall
+    from disco.core import SqliteEventStore, ToolCall
 
     store = SqliteEventStore(":memory:")
     await store.append(
@@ -98,7 +98,7 @@ async def test_dangling_action_is_detectable_after_crash():
 async def _reminders(events):
     """Pull just the system-reminder MessageEvents out of the log (the loop emits
     them with source=ENVIRONMENT and a wrapped <system-reminder> body)."""
-    from perpleximanus.core import EventSource, MessageEvent
+    from disco.core import EventSource, MessageEvent
 
     return [
         e
@@ -140,8 +140,8 @@ def test_plan_is_incomplete_helper_recognizes_partial_completion():
     not every step has been marked plan_step(idx, "done"), the helper returns
     (True, [missing_indices]) — which the FINISHED transition uses to fall back
     to STUCK with a reminder naming the gap."""
-    from perpleximanus.core import ActionEvent, PlanEvent, ToolCall
-    from perpleximanus.core.loop.engine import AgentLoop
+    from disco.core import ActionEvent, PlanEvent, ToolCall
+    from disco.core.loop.engine import AgentLoop
 
     # Plan with 3 steps; only step 1 marked done.
     events = [
@@ -158,8 +158,8 @@ def test_plan_is_incomplete_helper_recognizes_partial_completion():
 
 def test_plan_is_incomplete_helper_passes_when_all_steps_done():
     """When every step is marked done, the gate clears — FINISHED is allowed."""
-    from perpleximanus.core import ActionEvent, PlanEvent, ToolCall
-    from perpleximanus.core.loop.engine import AgentLoop
+    from disco.core import ActionEvent, PlanEvent, ToolCall
+    from disco.core.loop.engine import AgentLoop
 
     events = [
         PlanEvent(summary="p", steps=[{"title": "a"}, {"title": "b"}], revision=1),
@@ -180,7 +180,7 @@ def test_plan_is_incomplete_helper_passes_when_all_steps_done():
 def test_plan_is_incomplete_helper_inert_without_plan():
     """No plan at all → no progress signal to gate on → not incomplete. The gate
     is a no-op for non-plan-first flows (Build runs without an explicit plan)."""
-    from perpleximanus.core.loop.engine import AgentLoop
+    from disco.core.loop.engine import AgentLoop
 
     incomplete, missing = AgentLoop._plan_is_incomplete([])
     assert incomplete is False
@@ -190,8 +190,8 @@ def test_plan_is_incomplete_helper_inert_without_plan():
 def test_plan_is_incomplete_helper_uses_latest_revision():
     """A re-plan (revision bump) replaces prior — the gate must check completeness
     against the LATEST plan, not the original."""
-    from perpleximanus.core import ActionEvent, PlanEvent, ToolCall
-    from perpleximanus.core.loop.engine import AgentLoop
+    from disco.core import ActionEvent, PlanEvent, ToolCall
+    from disco.core.loop.engine import AgentLoop
 
     events = [
         PlanEvent(summary="p1", steps=[{"title": "a"}], revision=1),
@@ -220,7 +220,7 @@ async def test_ask_user_intercepts_and_halts_at_decision_gate():
     intercepts it (the tool is never executed), builds an AlternativesEvent
     from the structured options, and halts at AWAITING_USER_DECISION until
     the user picks one. This is the model-driven escape hatch."""
-    from perpleximanus.core import AlternativesEvent, ConversationStatus
+    from disco.core import AlternativesEvent, ConversationStatus
 
     alt_call = action_step(
         tool="ask_user",
@@ -265,7 +265,7 @@ async def test_ask_user_intercepts_and_halts_at_decision_gate():
 async def test_pick_alternative_runs_the_selected_option():
     """User picks option 'a' → the loop synthesizes an ActionEvent from option
     'a's tool_call (shell with sudo) → executes it → returns to RUNNING."""
-    from perpleximanus.core import (
+    from disco.core import (
         ActionEvent,
         ConversationStatus,
         ObservationEvent,
@@ -330,7 +330,7 @@ async def test_pick_alternative_runs_the_selected_option():
 async def test_pick_alternative_with_unknown_id_does_not_resume():
     """Defensive: a bad pick (stale id, wrong user) doesn't crash — it leaves
     the gate intact + emits a reminder so the user can try again."""
-    from perpleximanus.core import ConversationStatus, MessageEvent
+    from disco.core import ConversationStatus, MessageEvent
 
     alt_call = action_step(
         tool="ask_user",
@@ -375,7 +375,7 @@ async def test_propose_plan_update_intercepts_and_halts_at_plan_approval():
     approval. Slots chronologically into the chat; the existing plan-approval
     UI handles accept/refine/reject. This is the auto-recovery affordance the
     model uses without the user having to poke it."""
-    from perpleximanus.core import ConversationStatus, PlanEvent
+    from disco.core import ConversationStatus, PlanEvent
 
     update_call = action_step(
         tool="propose_plan_update",
@@ -426,7 +426,7 @@ async def test_ask_user_without_options_pauses_as_free_form_question():
     pick-a-card AWAITING_USER_DECISION gate. The user replies via send_message
     or steer. `pending_question_id` resolves to the question message so the UI
     can render it in the AskPanel."""
-    from perpleximanus.core import ConversationStatus, MessageEvent
+    from disco.core import ConversationStatus, MessageEvent
 
     free_form = action_step(
         tool="ask_user",
@@ -469,7 +469,7 @@ async def test_finished_with_incomplete_plan_auto_continues_then_lands_finished(
     # Pre-seed: plan with 2 steps, only step 1 done, then RUNNING. The agent
     # script repeatedly emits finish_step (model claims done despite step 2
     # being unmarked).
-    from perpleximanus.core import (
+    from disco.core import (
         ActionEvent,
         ConversationStatus,
         EventSource,
@@ -478,9 +478,9 @@ async def test_finished_with_incomplete_plan_auto_continues_then_lands_finished(
         StatusEvent,
         ToolCall,
     )
-    from perpleximanus.core import MessageEvent as ME
-    from perpleximanus.core import SqliteEventStore as Store
-    from perpleximanus.core.llm import OperatingMode
+    from disco.core import MessageEvent as ME
+    from disco.core import SqliteEventStore as Store
+    from disco.core.llm import OperatingMode
 
     store = Store(":memory:")
     await store.append(
@@ -552,14 +552,14 @@ async def test_auto_continue_budget_resets_on_new_user_message():
     """A fresh user prompt resets the auto-continue counter so each new
     instruction gets its own budget. Prevents one prior stoppage from
     poisoning subsequent runs."""
-    from perpleximanus.core import (
+    from disco.core import (
         ConversationStatus,
         EventSource,
         LLMMessage,
         MessageEvent,
         StatusEvent,
     )
-    from perpleximanus.core.loop.engine import AgentLoop
+    from disco.core.loop.engine import AgentLoop
 
     # Build a synthetic event log: auto_continue fires twice, then a user
     # message arrives, then auto_continue fires once more.
@@ -592,9 +592,9 @@ async def test_planning_mode_preserves_acknowledgment_prose():
     acknowledging the request before it explores) must be RECORDED as an agent
     message, not silently discarded. Previously only the plan-nudge survived,
     so the user heard nothing back before work began."""
+    from disco.core import MessageEvent, ToolCall
+    from disco.core.llm import OperatingMode
     from loop_fakes import AgentStep
-    from perpleximanus.core import MessageEvent, ToolCall
-    from perpleximanus.core.llm import OperatingMode
 
     ack = AgentStep(
         thought="Got it — you want a stock ticker. Let me check the APIs first.",
@@ -637,9 +637,9 @@ async def test_planning_mode_can_ask_user_before_proposing_a_plan():
     detail only the user knows; the loop halts at AWAITING_USER_QUESTION instead of
     forcing a guessed plan. (Regression for the live finding: the planner WANTED to
     ask for the brand color but was forced to submit_plan.)"""
+    from disco.core import ConversationStatus, MessageEvent, ToolCall
+    from disco.core.llm import OperatingMode
     from loop_fakes import AgentStep
-    from perpleximanus.core import ConversationStatus, MessageEvent, ToolCall
-    from perpleximanus.core.llm import OperatingMode
 
     ask = AgentStep(
         thought="The task names an exact brand color I don't have — I should ask.",
@@ -674,7 +674,7 @@ async def test_planning_mode_can_ask_user_before_proposing_a_plan():
     assert len(questions) == 1
     assert state.pending_question_id == questions[0].id
     # and no plan was committed on a guess
-    from perpleximanus.core import PlanEvent
+    from disco.core import PlanEvent
 
     assert not any(isinstance(e, PlanEvent) for e in events)
 
@@ -694,8 +694,8 @@ def _ev_seq(events):
 def test_plan_step_lag_signal_fires_when_work_outpaces_tracker():
     """Auditor: lots of productive actions since approval, < half the steps
     marked done, and no prior lag nudge → soft nudge warranted."""
-    from perpleximanus.core import ActionEvent, ConversationStatus, PlanEvent, StatusEvent, ToolCall
-    from perpleximanus.core.loop.engine import AgentLoop
+    from disco.core import ActionEvent, ConversationStatus, PlanEvent, StatusEvent, ToolCall
+    from disco.core.loop.engine import AgentLoop
 
     def act(tool, args=None):
         return ActionEvent(thought="x", tool_call=ToolCall(tool_name=tool, arguments=args or {}))
@@ -720,8 +720,8 @@ def test_plan_step_lag_signal_fires_when_work_outpaces_tracker():
 def test_plan_step_lag_signal_silent_when_tracker_keeps_up():
     """When at least half the steps are marked done, the tracker is keeping up
     — no nudge."""
-    from perpleximanus.core import ActionEvent, ConversationStatus, PlanEvent, StatusEvent, ToolCall
-    from perpleximanus.core.loop.engine import AgentLoop
+    from disco.core import ActionEvent, ConversationStatus, PlanEvent, StatusEvent, ToolCall
+    from disco.core.loop.engine import AgentLoop
 
     def act(tool, args=None):
         return ActionEvent(thought="x", tool_call=ToolCall(tool_name=tool, arguments=args or {}))
@@ -742,7 +742,7 @@ def test_plan_step_lag_signal_silent_when_tracker_keeps_up():
 def test_plan_step_lag_signal_fires_once_per_episode():
     """After a lag nudge fires, it must not re-fire until the agent checks off
     another step (otherwise it would nag every iteration)."""
-    from perpleximanus.core import (
+    from disco.core import (
         ActionEvent,
         ConversationStatus,
         EventSource,
@@ -752,7 +752,7 @@ def test_plan_step_lag_signal_fires_once_per_episode():
         StatusEvent,
         ToolCall,
     )
-    from perpleximanus.core.loop.engine import AgentLoop
+    from disco.core.loop.engine import AgentLoop
 
     def act(tool, args=None):
         return ActionEvent(thought="x", tool_call=ToolCall(tool_name=tool, arguments=args or {}))
@@ -790,9 +790,9 @@ def test_productive_gate_rejects_read_only_then_finish():
     """The build-finish gate must require a STATE-CHANGING action since plan
     approval — reading the files and declaring done delivers nothing (caught live:
     a build iteration 'finished' after only file_reads with zero edits)."""
-    from perpleximanus.core import ActionEvent, StatusEvent, ToolCall
-    from perpleximanus.core.events import ConversationStatus
-    from perpleximanus.core.loop.engine import AgentLoop
+    from disco.core import ActionEvent, StatusEvent, ToolCall
+    from disco.core.events import ConversationStatus
+    from disco.core.loop.engine import AgentLoop
 
     def _seqd(evs):
         return [e.model_copy(update={"seq": i}) for i, e in enumerate(evs, 1)]
@@ -828,8 +828,8 @@ async def test_execution_nudge_without_action_lands_instead_of_livelocking():
     model_error ERROR state instead of noop_limit — and never lands FINISHED.
     (It also can't hang the suite.) The FIXED path lands in ~7 turns, well before
     the cap."""
-    from perpleximanus.core import ActionEvent as AE
-    from perpleximanus.core import (
+    from disco.core import ActionEvent as AE
+    from disco.core import (
         ConversationStatus,
         EventSource,
         LLMMessage,
@@ -837,10 +837,10 @@ async def test_execution_nudge_without_action_lands_instead_of_livelocking():
         StatusEvent,
         ToolCall,
     )
-    from perpleximanus.core import MessageEvent as ME
-    from perpleximanus.core import SqliteEventStore as Store
-    from perpleximanus.core.llm import OperatingMode
-    from perpleximanus.core.llm.errors import LLMError
+    from disco.core import MessageEvent as ME
+    from disco.core import SqliteEventStore as Store
+    from disco.core.llm import OperatingMode
+    from disco.core.llm.errors import LLMError
 
     store = Store(":memory:")
     await store.append(

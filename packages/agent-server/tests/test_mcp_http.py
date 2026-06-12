@@ -16,9 +16,9 @@ from urllib.parse import urlparse
 
 import httpx
 import pytest
-from perpleximanus.core import SecurityRisk
-from perpleximanus.tools.mcp.config import McpServerConfig
-from perpleximanus.tools.mcp.http import McpHttpClient
+from disco.core import SecurityRisk
+from disco.tools.mcp.config import McpServerConfig
+from disco.tools.mcp.http import McpHttpClient
 
 # ---------------------------------------------------------------------------
 # Fake HTTP MCP server (speaks the streamable-HTTP JSON-RPC protocol)
@@ -312,9 +312,9 @@ async def test_mcp_proxy_env_follows_build_egress_posture(monkeypatch):
     """`ConversationRuntime._mcp_proxy_env()` is governed by PMX_BUILD_EGRESS — the
     SAME single source of truth as the sandbox spec. filtered → a real proxy env
     block pointing at the egress proxy; open (default) → None (direct)."""
-    from perpleximanus.agent_server.runtime import ConversationRuntime
-    from perpleximanus.core import SqliteEventStore
-    from perpleximanus.tools.sandbox._container import EGRESS_PROXY_PORT
+    from disco.agent_server.runtime import ConversationRuntime
+    from disco.core import SqliteEventStore
+    from disco.tools.sandbox._container import EGRESS_PROXY_PORT
 
     runtime = ConversationRuntime(SqliteEventStore(":memory:"))
 
@@ -341,8 +341,8 @@ def test_secret_absent_from_build_sandbox_spec(monkeypatch):
     spec would pass vacuously; pairing it with "host present" proves the boundary
     is selective, and that we built a spec that actually carries MCP state.
     """
-    from perpleximanus.agent_server.runtime import ConversationRuntime
-    from perpleximanus.core import SqliteEventStore
+    from disco.agent_server.runtime import ConversationRuntime
+    from disco.core import SqliteEventStore
 
     SECRET = "sk-must-never-serialize-9f3c"
     secrets = _FakeSecretsStore({"api_key": SECRET})
@@ -431,7 +431,7 @@ async def test_http_client_init_failure_surfaces_error():
     mock_ctx.__aexit__ = AsyncMock(return_value=None)
 
     with patch(
-        "perpleximanus.tools.mcp.http.streamable_http_client",
+        "disco.tools.mcp.http.streamable_http_client",
         return_value=mock_ctx,
     ):
         client = McpHttpClient(server=config, call_timeout_s=2.0, init_timeout_s=1.0)

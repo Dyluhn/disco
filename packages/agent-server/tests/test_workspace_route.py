@@ -11,9 +11,9 @@ test-record/bp-15/integration-workspace-route.log.
 from __future__ import annotations
 
 import pytest
+from disco.agent_server import create_app
+from disco.core import SqliteEventStore
 from fastapi.testclient import TestClient
-from perpleximanus.agent_server import create_app
-from perpleximanus.core import SqliteEventStore
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 MISSING = ".pmx/screenshots/9999-missing.png"

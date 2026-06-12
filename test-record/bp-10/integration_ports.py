@@ -20,15 +20,15 @@ import asyncio
 import sys
 import urllib.request
 
-from perpleximanus.tools.sandbox._container import (
+from disco.tools.sandbox._container import (
     INTERNAL_PORTS,
     PUBLISHED_PORTS,
     USER_PORTS,
 )
-from perpleximanus.tools.sandbox.base import Capability, SandboxSpec
-from perpleximanus.tools.sandbox.config import SandboxConfig
-from perpleximanus.tools.sandbox.gvisor import GvisorSandboxService
-from perpleximanus.tools.sandbox.port_owner import port_owners
+from disco.tools.sandbox.base import Capability, SandboxSpec
+from disco.tools.sandbox.config import SandboxConfig
+from disco.tools.sandbox.gvisor import GvisorSandboxService
+from disco.tools.sandbox.port_owner import port_owners
 
 SOCKET = "ssh://sandbox@100.81.82.115"
 

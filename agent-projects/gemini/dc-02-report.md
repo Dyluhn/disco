@@ -7,7 +7,7 @@
 - FINISHED conversations now stay active until they are suspended by the idle sweep.
 
 ### 2. `sandbox.idle_ttl_s` Configuration
-- Added `idle_ttl_s: int = 1800` to `SandboxSettings` in `packages/core/src/perpleximanus/core/llm/config.py`.
+- Added `idle_ttl_s: int = 1800` to `SandboxSettings` in `packages/core/src/disco/core/llm/config.py`.
 - Updated `sweep_idle_once()` to respect `PMX_IDLE_SUSPEND_S` as an override, falling back to `sandbox.idle_ttl_s`.
 
 ### 3. Wake-on-preview-hit
@@ -28,21 +28,21 @@
 ..........................                                               [100%]
 =============================== warnings summary ===============================
 .venv/lib/python3.13/site-packages/fastapi/testclient.py:1
-  /var/home/dylan/projects/perpleximanus build/.venv/lib/python3.13/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+  /var/home/dylan/projects/disco build/.venv/lib/python3.13/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
     from starlette.testclient import TestClient as TestClient  # noqa
 
 packages/agent-server/tests/test_host_proxy.py::test_websocket_proxy
-  /var/home/dylan/projects/perpleximanus build/.venv/lib/python3.13/site-packages/websockets/legacy/__init__.py:6: DeprecationWarning: websockets.legacy is deprecated; see https://websockets.readthedocs.io/en/stable/howto/upgrade.html for upgrade instructions
+  /var/home/dylan/projects/disco build/.venv/lib/python3.13/site-packages/websockets/legacy/__init__.py:6: DeprecationWarning: websockets.legacy is deprecated; see https://websockets.readthedocs.io/en/stable/howto/upgrade.html for upgrade instructions
     warnings.warn(  # deprecated in 14.0 - 2024-11-09
 
 packages/agent-server/tests/test_host_proxy.py::test_websocket_proxy
-  /var/home/dylan/projects/perpleximanus build/.venv/lib/python3.13/site-packages/uvicorn/protocols/websockets/websockets_impl.py:17: DeprecationWarning: websockets.server.WebSocketServerProtocol is deprecated
+  /var/home/dylan/projects/disco build/.venv/lib/python3.13/site-packages/uvicorn/protocols/websockets/websockets_impl.py:17: DeprecationWarning: websockets.server.WebSocketServerProtocol is deprecated
     from websockets.server import WebSocketServerProtocol
 
 packages/agent-server/tests/test_host_proxy.py::test_websocket_proxy
 packages/agent-server/tests/test_host_proxy.py::test_websocket_proxy
 packages/agent-server/tests/test_host_proxy.py::test_websocket_proxy
-  /var/home/dylan/projects/perpleximanus build/.venv/lib/python3.13/site-packages/websockets/legacy/server.py:1178: DeprecationWarning: remove second argument of ws_handler
+  /var/home/dylan/projects/disco build/.venv/lib/python3.13/site-packages/websockets/legacy/server.py:1178: DeprecationWarning: remove second argument of ws_handler
     warnings.warn("remove second argument of ws_handler", DeprecationWarning)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html

@@ -1,14 +1,6 @@
 import pytest
 from conftest import action, with_seqs
-from loop_fakes import (
-    FakeAnalyzer,
-    FakeExecutor,
-    FakeSummarizer,
-    ScriptedAgent,
-    action_step,
-    finish_step,
-)
-from perpleximanus.core import (
+from disco.core import (
     MessageEvent,
     NoOpCondenser,
     ObservationEvent,
@@ -16,14 +8,22 @@ from perpleximanus.core import (
     StatusEvent,
     ToolResult,
 )
-from perpleximanus.core.events import EventSource
-from perpleximanus.core.llm import OperatingMode, ToolSpec
-from perpleximanus.core.loop import AgentLoop, NeverConfirm
-from perpleximanus.core.loop.engine import (
+from disco.core.events import EventSource
+from disco.core.llm import OperatingMode, ToolSpec
+from disco.core.loop import AgentLoop, NeverConfirm
+from disco.core.loop.engine import (
     _browser_verified,
     _is_web_deliverable,
     _last_productive_seq,
     _latest_browser_error,
+)
+from loop_fakes import (
+    FakeAnalyzer,
+    FakeExecutor,
+    FakeSummarizer,
+    ScriptedAgent,
+    action_step,
+    finish_step,
 )
 
 

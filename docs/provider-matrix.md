@@ -1,6 +1,6 @@
 # Provider & model matrix
 
-"What model should I run?" perpleximanus is provider-neutral: it drives the agent loop
+"What model should I run?" Disco is provider-neutral: it drives the agent loop
 through an OpenAI-compatible LLM router, not a hardcoded vendor. This page is the honest
 guidance on *which* model to point it at. For the *how* (the three self-host configs),
 see [`self-host.md#models`](./self-host.md#models) — this page does not duplicate it.
@@ -86,7 +86,7 @@ live in [`self-host.md#models`](./self-host.md#models); in brief:
 
 Every comparable OSS project either warns that non-frontier models "significantly
 degrade" or carries issue threads of 14–32B models stalling the loop (release-roadmap
-§"field-wide gaps"). perpleximanus's whole bet is to push that floor down with a harness
+§"field-wide gaps"). Disco's whole bet is to push that floor down with a harness
 engineered around local-model weaknesses — but it does not erase it:
 
 - A **4B** runs the loop end-to-end and is genuinely useful as a keyless demo, but will
@@ -107,7 +107,7 @@ deliberately invents none. A given model's reliability on *your* hardware and qu
 empirical question — so confirm it directly:
 
 ```bash
-docker compose exec agent-server python -m perpleximanus.agent_server.verify
+docker compose exec agent-server python -m disco.agent_server.verify
 # from a checkout: make verify   (add ARGS=--quick to skip live grounding)
 ```
 

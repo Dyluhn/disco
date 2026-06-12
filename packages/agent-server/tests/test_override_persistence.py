@@ -5,9 +5,9 @@ default without telling the user)."""
 
 from __future__ import annotations
 
-from perpleximanus.agent_server import ConversationRuntime
-from perpleximanus.core import SqliteEventStore
-from perpleximanus.core.llm import ConfigStore, SecretBox, SecretStore
+from disco.agent_server import ConversationRuntime
+from disco.core import SqliteEventStore
+from disco.core.llm import ConfigStore, SecretBox, SecretStore
 
 
 def _runtime(tmp_path, monkeypatch) -> ConversationRuntime:
@@ -100,7 +100,7 @@ async def test_reconcile_marks_orphaned_running_paused_and_notes(tmp_path, monke
     """Startup orphan reconciliation: a conversation left RUNNING (its loop died with
     the previous server process) is marked PAUSED with an interrupted note; a FINISHED
     one is untouched — fixes the stale-'RUNNING'-forever-after-a-crash."""
-    from perpleximanus.core import (
+    from disco.core import (
         ConversationStatus,
         EventSource,
         LLMMessage,
@@ -147,7 +147,7 @@ async def test_reconcile_marks_orphaned_running_paused_and_notes(tmp_path, monke
 async def _runtime_with_projects(tmp_path, monkeypatch, root: str = ""):
     """A runtime whose config has projects_root set (or not) — auto-suspend only
     fires when storage is configured (otherwise the snapshot wouldn't be durable)."""
-    from perpleximanus.core.llm import ProjectStorageSettings
+    from disco.core.llm import ProjectStorageSettings
 
     monkeypatch.setenv("PMX_DB", str(tmp_path / "c.db"))
     store = SqliteEventStore(":memory:")
@@ -163,7 +163,7 @@ async def _runtime_with_projects(tmp_path, monkeypatch, root: str = ""):
 
 
 async def _set_status(store, cid, status):
-    from perpleximanus.core import StatusEvent
+    from disco.core import StatusEvent
 
     store.create_conversation(cid, surface="build")
     await store.append(cid, StatusEvent(status=status))
@@ -173,7 +173,7 @@ async def test_suspend_frees_idle_sandbox_but_not_a_running_one(tmp_path, monkey
     """The core auto-suspend policy: when the last viewer leaves, a build that is NOT
     actively RUNNING has its sandbox torn down (freeing container/port/memory) after
     snapshotting; an in-flight RUNNING run is left alone to finish in the background."""
-    from perpleximanus.core import ConversationStatus
+    from disco.core import ConversationStatus
 
     rt, store = await _runtime_with_projects(tmp_path, monkeypatch, root=str(tmp_path / "ws"))
 
@@ -198,7 +198,7 @@ async def test_suspend_is_a_noop_without_durable_storage(tmp_path, monkeypatch):
     """No projects_root → no durable snapshot, so tearing the sandbox down would LOSE
     work. Auto-suspend must keep the sandbox in that config (resume has nothing to
     restore from otherwise)."""
-    from perpleximanus.core import ConversationStatus
+    from disco.core import ConversationStatus
 
     rt, store = await _runtime_with_projects(tmp_path, monkeypatch, root="")  # not configured
     ex = _FakeExecutor()
@@ -215,7 +215,7 @@ async def test_on_disconnect_grace_fires_suspend_but_reconnect_cancels_it(tmp_pa
     A real disconnect with no reconnect lets the suspend fire."""
     import asyncio
 
-    from perpleximanus.core import ConversationStatus
+    from disco.core import ConversationStatus
 
     rt, store = await _runtime_with_projects(tmp_path, monkeypatch, root=str(tmp_path / "ws"))
     await _set_status(store, "conv_a", ConversationStatus.FINISHED)
@@ -242,7 +242,7 @@ async def test_deep_research_resume_carries_the_partial_report_forward(tmp_path,
     (bounded_by='stopped') ReportEvent on the log resumes by passing that report as
     `resume_from` to the engine — so completed sections are carried, not redone — and
     flips the status back to RUNNING/plan_approved first."""
-    from perpleximanus.core import (
+    from disco.core import (
         ConversationStatus,
         EventSource,
         LLMMessage,

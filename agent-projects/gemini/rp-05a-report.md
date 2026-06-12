@@ -76,10 +76,10 @@ truthful metadata, not an enforced boundary.
 
 | File | Scope |
 |------|-------|
-| `packages/agent-server/src/perpleximanus/agent_server/runtime.py` | P2 (delete hook), P6 (tool_search cap + _MetaToolSearchWrapper) |
-| `packages/tools/src/perpleximanus/tools/mcp/pool.py` | P1 (teardown unapproved server in except ApprovalRequired) |
-| `packages/tools/src/perpleximanus/tools/mcp/stdio.py` | P4 (delete _parse_non_json_stdout) |
-| `packages/core/src/perpleximanus/core/wire.py` | P3 (already had mcp_approval_required frame type — no change; declared per manifest) |
+| `packages/agent-server/src/disco/agent_server/runtime.py` | P2 (delete hook), P6 (tool_search cap + _MetaToolSearchWrapper) |
+| `packages/tools/src/disco/tools/mcp/pool.py` | P1 (teardown unapproved server in except ApprovalRequired) |
+| `packages/tools/src/disco/tools/mcp/stdio.py` | P4 (delete _parse_non_json_stdout) |
+| `packages/core/src/disco/core/wire.py` | P3 (already had mcp_approval_required frame type — no change; declared per manifest) |
 | `packages/agent-server/tests/test_mcp_pool.py` | P1 test, P3 tests, P5 test, P6 tests; P4 docstring fix |
 | `packages/tools/tests/test_mcp_transport.py` | P5 escape-hatch removal; P4 docstring fix |
 

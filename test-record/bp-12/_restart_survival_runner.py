@@ -29,15 +29,15 @@ import contextlib
 import sys
 import time
 
-from perpleximanus.agent_server import ConversationRuntime
-from perpleximanus.core import (
+from disco.agent_server import ConversationRuntime
+from disco.core import (
     ConversationStatus,
     EventSource,
     LLMMessage,
     MessageEvent,
     SqliteEventStore,
 )
-from perpleximanus.core.llm import (
+from disco.core.llm import (
     CompletionResponse,
     DefaultLLMRouter,
     ModelEntry,
@@ -46,7 +46,7 @@ from perpleximanus.core.llm import (
     StreamChunk,
     TokenUsage,
 )
-from perpleximanus.tools import ProcessSandboxService
+from disco.tools import ProcessSandboxService
 
 CID = "bp12-restart-survival"
 
@@ -253,7 +253,7 @@ async def main() -> int:
         state_reconciled = await store.get_state(CID)
         print(f"    Status after approval: {state_reconciled.execution_status.value}")
         if state_reconciled.execution_status != ConversationStatus.PAUSED:
-            from perpleximanus.core import StatusEvent
+            from disco.core import StatusEvent
             await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
 
     assert state_reconciled.execution_status == ConversationStatus.PAUSED, (

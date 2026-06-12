@@ -7,11 +7,11 @@ shape, no-schema-mutation guarantee.
 from __future__ import annotations
 
 import pytest
-from perpleximanus.core import SecurityRisk
-from perpleximanus.tools.mcp.tool_search import (
-    _ToolSearchArgs,
+from disco.core import SecurityRisk
+from disco.tools.mcp.tool_search import (
     _match_score,
     _tool_search_handler,
+    _ToolSearchArgs,
     meta_tool_search,
 )
 

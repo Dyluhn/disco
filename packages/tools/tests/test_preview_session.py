@@ -14,10 +14,9 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
-from perpleximanus.tools.sandbox.port_owner import port_owner
-from perpleximanus.tools.sandbox.process import ProcessSandboxService
-from perpleximanus.tools.sandbox.session import SandboxSession
+from disco.tools.sandbox.port_owner import port_owner
+from disco.tools.sandbox.process import ProcessSandboxService
+from disco.tools.sandbox.session import SandboxSession
 
 _PORT = 8188  # free on dev hosts; NOT 8000 (the agent-server owns that here)
 

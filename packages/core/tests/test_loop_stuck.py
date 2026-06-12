@@ -7,9 +7,9 @@ event_content_eq) + loop integration (STUCK then resume on a new message).
 from __future__ import annotations
 
 from conftest import action, agent_error, agent_msg, observation, user_msg
+from disco.core import ConversationStatus, StatusEvent
+from disco.core.loop import StuckDetector, StuckThresholds
 from loop_fakes import ScriptedAgent, action_step, build_loop, finish_step
-from perpleximanus.core import ConversationStatus, StatusEvent
-from perpleximanus.core.loop import StuckDetector, StuckThresholds
 
 CID = "conv"
 
@@ -91,7 +91,7 @@ async def test_loop_tries_a_temp_escape_before_going_stuck():
     temperature. It does NOT halt yet. Only if it's STILL stuck after that retry does
     STUCK fire — and the escape buys the model at least one extra step it wouldn't
     have had under immediate-halt."""
-    from perpleximanus.core import MessageEvent
+    from disco.core import MessageEvent
 
     agent = ScriptedAgent([action_step()] * 6 + [finish_step()])
     loop, store = build_loop(agent, stuck_thresholds=StuckThresholds(repeat_action_observation=3))

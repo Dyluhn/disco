@@ -4,9 +4,9 @@ import pathlib
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from perpleximanus.tools.anatomy import ToolContext
-from perpleximanus.tools.builtin.browser import BrowserTool
-from perpleximanus.tools.sandbox.base import ExecResult
+from disco.tools.anatomy import ToolContext
+from disco.tools.builtin.browser import BrowserTool
+from disco.tools.sandbox.base import ExecResult
 
 
 @pytest.mark.asyncio
@@ -70,8 +70,8 @@ async def test_browser_daemon_integration_real_chromium(tmp_path):
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
 
+    import disco.tools.builtin._browser_daemon as daemon_mod
     import httpx
-    import perpleximanus.tools.builtin._browser_daemon as daemon_mod
 
     # 1. Setup a fixture page: a counter button, a cookie-setter, and a console error.
     fixture_dir = tmp_path / "fixtures"

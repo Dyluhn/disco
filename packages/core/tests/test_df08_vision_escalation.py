@@ -12,10 +12,8 @@ Three test categories:
 from __future__ import annotations
 
 import pytest
-from llm_fakes import FakeModelProvider, build_router, simple_config
-from perpleximanus.core import LLMMessage
-from perpleximanus.core.llm import (
-    CallContext,
+from disco.core import LLMMessage
+from disco.core.llm import (
     CapabilityProfile,
     CompletionRequest,
     ModelEntry,
@@ -24,7 +22,8 @@ from perpleximanus.core.llm import (
     Requirement,
     RouterConfig,
 )
-from perpleximanus.core.llm.openai_provider import OpenAIProvider
+from disco.core.llm.openai_provider import OpenAIProvider
+from llm_fakes import FakeModelProvider
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -97,7 +96,7 @@ async def test_vision_escalation_routes_to_escalation_model():
         "ollama": FakeModelProvider("ollama", text="local"),
         "openrouter": FakeModelProvider("openrouter", text="escalated-vision-response", cost_usd=0.01),
     }
-    from perpleximanus.core.llm.routing import DefaultLLMRouter, InMemoryRoutingSink
+    from disco.core.llm.routing import DefaultLLMRouter, InMemoryRoutingSink
     sink = InMemoryRoutingSink()
     router = DefaultLLMRouter(cfg, providers, sink=sink)
 
@@ -122,7 +121,7 @@ async def test_vision_escalation_does_not_affect_text_only_requests():
         "ollama": FakeModelProvider("ollama", text="local-text-response"),
         "openrouter": FakeModelProvider("openrouter", text="should-not-be-called", cost_usd=0.01),
     }
-    from perpleximanus.core.llm.routing import DefaultLLMRouter, InMemoryRoutingSink
+    from disco.core.llm.routing import DefaultLLMRouter, InMemoryRoutingSink
     sink = InMemoryRoutingSink()
     router = DefaultLLMRouter(cfg, providers, sink=sink)
 
@@ -141,7 +140,7 @@ async def test_escalation_model_receives_provider_and_model_id_correctly():
     openrouter_provider = FakeModelProvider("openrouter", text="escalated", cost_usd=0.01)
     cfg = _cfg_with_escalation("vision-model")
     providers = {"ollama": FakeModelProvider("ollama", text="local"), "openrouter": openrouter_provider}
-    from perpleximanus.core.llm.routing import DefaultLLMRouter, InMemoryRoutingSink
+    from disco.core.llm.routing import DefaultLLMRouter, InMemoryRoutingSink
     router = DefaultLLMRouter(cfg, providers, sink=InMemoryRoutingSink())
 
     await router.complete(_img_req())
@@ -161,7 +160,7 @@ async def test_guard_preserved_when_escalation_unset():
     """When vision_escalation_model is None, the guard still raises
     NoEligibleModel — we did NOT weaken the safety guard."""
     cfg = _cfg_with_escalation(None)
-    from perpleximanus.core.llm.routing import CallContext, DefaultLLMRouter, InMemoryRoutingSink
+    from disco.core.llm.routing import CallContext, DefaultLLMRouter, InMemoryRoutingSink
     router = DefaultLLMRouter(cfg, {}, sink=InMemoryRoutingSink())
 
     with pytest.raises(NoEligibleModel) as excinfo:
@@ -173,7 +172,7 @@ async def test_guard_preserved_when_escalation_not_in_catalogue():
     """When vision_escalation_model points to a key NOT in the catalogue,
     the guard raises NoEligibleModel."""
     cfg = _cfg_with_escalation("nonexistent-model")
-    from perpleximanus.core.llm.routing import CallContext, DefaultLLMRouter, InMemoryRoutingSink
+    from disco.core.llm.routing import CallContext, DefaultLLMRouter, InMemoryRoutingSink
     router = DefaultLLMRouter(cfg, {}, sink=InMemoryRoutingSink())
 
     with pytest.raises(NoEligibleModel) as excinfo:
@@ -186,7 +185,7 @@ async def test_guard_preserved_when_escalation_model_lacks_vision():
     have VISION, the guard raises NoEligibleModel — won't silently send images
     to a non-vision model."""
     cfg = _cfg_with_escalation("vision-model", escalation_vision=False)
-    from perpleximanus.core.llm.routing import CallContext, DefaultLLMRouter, InMemoryRoutingSink
+    from disco.core.llm.routing import CallContext, DefaultLLMRouter, InMemoryRoutingSink
     router = DefaultLLMRouter(cfg, {}, sink=InMemoryRoutingSink())
 
     with pytest.raises(NoEligibleModel) as excinfo:
@@ -302,7 +301,7 @@ async def test_no_escalation_when_primary_has_vision():
         "ollama": FakeModelProvider("ollama", text="local-with-vision"),
         "openrouter": FakeModelProvider("openrouter", text="should-not-be-called"),
     }
-    from perpleximanus.core.llm.routing import DefaultLLMRouter, InMemoryRoutingSink
+    from disco.core.llm.routing import DefaultLLMRouter, InMemoryRoutingSink
     router = DefaultLLMRouter(cfg, providers, sink=InMemoryRoutingSink())
 
     resp = await router.complete(_img_req())

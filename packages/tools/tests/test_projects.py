@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 
 import pytest
-from perpleximanus.tools.projects import (
+from disco.tools.projects import (
     ProjectStore,
     StorageStatus,
     rehydrate_workspace,
@@ -176,7 +176,7 @@ def test_unsafe_conversation_id_rejected(tmp_path: Path) -> None:
     """Defense in depth against a poisoned cid — the conversations table
     enforces a UUID shape, but the store path code must not allow `..` or `/`
     as a project identifier."""
-    from perpleximanus.tools.projects import StorageError
+    from disco.tools.projects import StorageError
 
     store = ProjectStore(str(tmp_path))
     for bad in ("..", "../etc", "/abs", "a/b", "x\x00y"):
@@ -266,7 +266,7 @@ async def test_snapshot_dead_transport_aborts(tmp_path: Path) -> None:
     """A dropped pipe fails EVERY call — after the consecutive-failure cap the
     snapshot aborts loudly instead of grinding through thousands of doomed
     round-trips. (Distinct from the one-bad-file case above.)"""
-    from perpleximanus.tools.projects.archive import (
+    from disco.tools.projects.archive import (
         _SNAPSHOT_MAX_CONSECUTIVE_FAILURES,
         WorkspaceArchiveError,
     )

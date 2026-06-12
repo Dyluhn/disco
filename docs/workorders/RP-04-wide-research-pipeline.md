@@ -5,11 +5,11 @@ Restructure the deep-research engine into a producer/consumer pipeline to allow 
 
 ## Work items
 
-0. **E3 Root-cause: `packages/core/src/perpleximanus/core/llm/openai_provider.py`**
+0. **E3 Root-cause: `packages/core/src/disco/core/llm/openai_provider.py`**
    - Investigate and fix the stray `</parameter>` malformed tool-call root cause.
    - The mitigation in `_tool_calls` (`{"_raw":...}` fallback, ~line 335) confirms the problem exists; fix it in the stream parsing/extraction machinery if appropriate.
 
-1. **Pipeline: `packages/retrieval/src/perpleximanus/retrieval/deep_research/engine.py` (~line 174)**
+1. **Pipeline: `packages/retrieval/src/disco/retrieval/deep_research/engine.py` (~line 174)**
    - Restructure the `for subq in pending:` loop into a producer/consumer pipeline.
    - ALL retrieval work (search, fetch, extract, embed, rerank) for all N sub-questions should run concurrently.
    - LLM work (QUERY_REWRITER/RAG_ANSWERER synthesis) MUST stay a single-depth queue (one at a time).
@@ -33,8 +33,8 @@ Restructure the deep-research engine into a producer/consumer pipeline to allow 
 
 ## Manifest
 
-- packages/core/src/perpleximanus/core/llm/openai_provider.py
-- packages/retrieval/src/perpleximanus/retrieval/deep_research/engine.py
+- packages/core/src/disco/core/llm/openai_provider.py
+- packages/retrieval/src/disco/retrieval/deep_research/engine.py
 - packages/retrieval/tests/test_pipeline_invariants.py
 - packages/core/tests/test_toolcall_defense.py
 - test-record/rp-04/units-core.log

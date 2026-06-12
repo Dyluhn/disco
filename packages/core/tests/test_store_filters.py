@@ -11,7 +11,7 @@ from datetime import timedelta
 
 import pytest
 from conftest import action, agent_error, agent_msg, status, user_msg, with_seqs
-from perpleximanus.core import (
+from disco.core import (
     ConversationStatus,
     EventFilter,
     EventKind,

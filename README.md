@@ -1,4 +1,4 @@
-# perpleximanus
+# Disco
 
 A self-hosted **Research + Agent** platform — a Perplexity-class grounded answer
 engine and a Manus-class autonomous agent — built as **one agent core over an
@@ -89,8 +89,8 @@ gVisor/podman). The sequenced plan is in
 ```
 
 Dependency direction: `core → tools → agent-server → app-server`; the frontend talks
-to the servers over HTTP/WS. `perpleximanus` is a PEP 420 namespace package, so every
-workspace member shares the `perpleximanus.*` namespace.
+to the servers over HTTP/WS. `disco` is a PEP 420 namespace package, so every
+workspace member shares the `disco.*` namespace.
 
 ## Quickstart (self-host)
 
@@ -101,7 +101,7 @@ cp .env.example .env            # then skim it — at least the model + security
 docker compose up -d --build    # podman compose works too
 open http://localhost:8088
 # confirm your model can actually drive the loop:
-docker compose exec agent-server python -m perpleximanus.agent_server.verify
+docker compose exec agent-server python -m disco.agent_server.verify
 ```
 
 Keyless out of the box (DuckDuckGo search + local extraction + bundled ONNX encoders +
@@ -130,8 +130,8 @@ them with `--package`:
 
 ```bash
 # Audio overviews (RP-09): bundled in-process Kokoro TTS — kokoro-onnx + lameenc.
-# Weights (~0.3 GB) download to ~/.cache/perpleximanus-tts on first use.
-uv sync --package perpleximanus-agent-server --extra tts
+# Weights (~0.3 GB) download to ~/.cache/disco-tts on first use.
+uv sync --package disco-agent-server --extra tts
 ```
 
 A bare `uv sync --extra tts` errors — the root defines no `tts` extra. Without this
@@ -139,11 +139,11 @@ extra installed, the audio-overview tool stays importable but fails soft when ru
 
 ## License
 
-perpleximanus is licensed under the **Apache License 2.0** — see [`LICENSE`](./LICENSE).
+disco is licensed under the **Apache License 2.0** — see [`LICENSE`](./LICENSE).
 Permissive: use it, modify it, run it commercially, fold it into your own product; just
 keep the notices.
 
-**Our promise: this license will never change.** perpleximanus will not be relicensed
+**Our promise: this license will never change.** disco will not be relicensed
 to a source-available, "fair-source", BSL/SSPL, or commercial license — not as it grows,
 not after adoption, not on acquisition. Every past and future release stays Apache-2.0.
 The whole point of this project is to be the *trustworthy* one you can self-host; a

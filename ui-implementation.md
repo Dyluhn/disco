@@ -1,6 +1,6 @@
 # The Full Run — UI Build Prompts
 
-The complete, sequenced set of build prompts for the perpleximanus UI. Five prompts, in dependency order. Each "PROMPT" block is paste-able to the build agent as one task; everything else is for you. This run **supersedes** the earlier single answer-UI hand-off — Prompts 1 and 3 cover and extend it.
+The complete, sequenced set of build prompts for the disco UI. Five prompts, in dependency order. Each "PROMPT" block is paste-able to the build agent as one task; everything else is for you. This run **supersedes** the earlier single answer-UI hand-off — Prompts 1 and 3 cover and extend it.
 
 ---
 
@@ -41,7 +41,7 @@ The complete, sequenced set of build prompts for the perpleximanus UI. Five prom
 
 **PASTE:**
 
-You are building the **design system** for perpleximanus — the token foundation every other surface will consume — and proving it by applying it to the existing answer surface. **Build only the system + its application to what already exists; do not build new screens, nav, or settings.** Read `basis-of-design.md` §13.7 (design language) first. Honor the Shared DNA you were given (dark-first, quiet-but-functional, chroma-on-meaning).
+You are building the **design system** for disco — the token foundation every other surface will consume — and proving it by applying it to the existing answer surface. **Build only the system + its application to what already exists; do not build new screens, nav, or settings.** Read `basis-of-design.md` §13.7 (design language) first. Honor the Shared DNA you were given (dark-first, quiet-but-functional, chroma-on-meaning).
 
 **Deliver a token system** as CSS variables / Tailwind theme tokens, structured so every later surface references tokens, never hard-coded values:
 
@@ -73,7 +73,7 @@ You are building the **design system** for perpleximanus — the token foundatio
 
 **PASTE:**
 
-You are building the **application shell** for perpleximanus — the persistent frame that hosts every view — and **nothing inside the views themselves** beyond placeholders. Consume the design system (Prompt 1). Honor the Shared DNA (quiet-but-functional, dark-first, data-flow discipline).
+You are building the **application shell** for disco — the persistent frame that hosts every view — and **nothing inside the views themselves** beyond placeholders. Consume the design system (Prompt 1). Honor the Shared DNA (quiet-but-functional, dark-first, data-flow discipline).
 
 **Build:**
 

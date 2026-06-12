@@ -19,8 +19,8 @@ from __future__ import annotations
 import asyncio
 import os
 
-from perpleximanus.agent_server import ConversationRuntime
-from perpleximanus.core import (
+from disco.agent_server import ConversationRuntime
+from disco.core import (
     ActionEvent,
     AgentErrorEvent,
     CondensationEvent,
@@ -33,8 +33,8 @@ from perpleximanus.core import (
     SqliteEventStore,
     StatusEvent,
 )
-from perpleximanus.core.llm.config import default_config
-from perpleximanus.tools.sandbox import LocalSandboxService, SandboxConfig, SandboxSpec
+from disco.core.llm.config import default_config
+from disco.tools.sandbox import LocalSandboxService, SandboxConfig, SandboxSpec
 
 CID = "proof-of-life"
 TASK = (

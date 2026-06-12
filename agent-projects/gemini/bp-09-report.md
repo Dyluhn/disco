@@ -23,9 +23,9 @@ The following matrix was run inside a fresh Build-spec sandbox on VM-201. All ch
 
 ## 3. Filtered profile (opt-in)
 
-- Added `REGISTRY_EGRESS_ALLOW` to `packages/tools/src/perpleximanus/tools/sandbox/base.py`.
-- Exported `REGISTRY_EGRESS_ALLOW` via `perpleximanus.tools` and `perpleximanus.tools.sandbox`.
-- Updated `packages/agent-server/src/perpleximanus/agent_server/runtime.py`'s `_compose_build_loop` to check `PMX_BUILD_EGRESS`.
+- Added `REGISTRY_EGRESS_ALLOW` to `packages/tools/src/disco/tools/sandbox/base.py`.
+- Exported `REGISTRY_EGRESS_ALLOW` via `disco.tools` and `disco.tools.sandbox`.
+- Updated `packages/agent-server/src/disco/agent_server/runtime.py`'s `_compose_build_loop` to check `PMX_BUILD_EGRESS`.
   - `PMX_BUILD_EGRESS=filtered` -> uses `REGISTRY_EGRESS_ALLOW` and denies full network capability.
   - Default stays `open` (full network capability granted).
 

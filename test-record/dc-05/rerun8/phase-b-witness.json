@@ -8,9 +8,9 @@
   },
   "reconciliation": {
     "lines": [
-      "{\"level\": \"INFO\", \"logger\": \"perpleximanus.agent_server.runtime\", \"msg\": \"reconciled 1 orphaned RUNNING conversation(s) on startup\"}",
-      "{\"level\": \"INFO\", \"logger\": \"perpleximanus.agent_server.runtime\", \"msg\": \"reconciled 1 orphaned RUNNING conversation(s) on startup\"}",
-      "{\"level\": \"INFO\", \"logger\": \"perpleximanus.agent_server.runtime\", \"msg\": \"swept orphan container cid=conv_89b45a1ecd01431aacb7d224da144b4e status=PAUSED\"}"
+      "{\"level\": \"INFO\", \"logger\": \"disco.agent_server.runtime\", \"msg\": \"reconciled 1 orphaned RUNNING conversation(s) on startup\"}",
+      "{\"level\": \"INFO\", \"logger\": \"disco.agent_server.runtime\", \"msg\": \"reconciled 1 orphaned RUNNING conversation(s) on startup\"}",
+      "{\"level\": \"INFO\", \"logger\": \"disco.agent_server.runtime\", \"msg\": \"swept orphan container cid=conv_89b45a1ecd01431aacb7d224da144b4e status=PAUSED\"}"
     ],
     "tracebacks": 252
   },

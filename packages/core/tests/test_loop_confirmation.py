@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+from disco.core import (
+    ActionEvent,
+    AgentErrorEvent,
+    ConversationStatus,
+    ObservationEvent,
+    SecurityRisk,
+)
+from disco.core.loop import ConfirmRisky, NeverConfirm
 from loop_fakes import (
     FakeAnalyzer,
     ScriptedAgent,
@@ -9,14 +17,6 @@ from loop_fakes import (
     build_loop,
     finish_step,
 )
-from perpleximanus.core import (
-    ActionEvent,
-    AgentErrorEvent,
-    ConversationStatus,
-    ObservationEvent,
-    SecurityRisk,
-)
-from perpleximanus.core.loop import ConfirmRisky, NeverConfirm
 
 CID = "conv"
 

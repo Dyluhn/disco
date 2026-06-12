@@ -13,10 +13,10 @@ from __future__ import annotations
 import asyncio
 import json
 
+from disco.core import SqliteEventStore
+from disco.core.llm.types import StreamChunk
+from disco.core.loop.stream_extract import extract_partial_string_field
 from loop_fakes import ScriptedAgent, build_loop, finish_step
-from perpleximanus.core import SqliteEventStore
-from perpleximanus.core.llm.types import StreamChunk
-from perpleximanus.core.loop.stream_extract import extract_partial_string_field
 
 # ---- the partial-JSON field extractor ---------------------------------------
 

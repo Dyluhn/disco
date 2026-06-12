@@ -1,4 +1,4 @@
-# Workspace root for the Platform (codename: perpleximanus).
+# Workspace root for the Platform (codename: disco).
 #
 # This is a *virtual* uv project: it is never built or installed itself
 # (`tool.uv.package = false`). It exists to (a) declare the workspace members
@@ -7,7 +7,7 @@
 # separately-versioned distribution, mirroring the four-layer topology in
 # basis-of-design.md §5 (core -> tools -> agent-server -> app-server).
 [project]
-name = "perpleximanus-workspace"
+name = "disco-workspace"
 version = "0"
 description = "Self-hosted Research & Agent platform — workspace root (not a distributable)."
 requires-python = ">=3.12"

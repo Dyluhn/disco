@@ -106,8 +106,8 @@ Brief: agent-projects/gemini/rp-06-followup-1.md
 - `frontend/src/App.tsx` — added `/share/:token` route + `ShareView` import
 
 ## Not touched (backend, per brief)
-- `packages/agent-server/src/perpleximanus/agent_server/app.py` — share endpoints already in tree
-- `packages/agent-server/src/perpleximanus/agent_server/runtime.py` — share_export + share_tokens already in tree
-- `packages/agent-server/src/perpleximanus/agent_server/redaction.py` — already in tree
+- `packages/agent-server/src/disco/agent_server/app.py` — share endpoints already in tree
+- `packages/agent-server/src/disco/agent_server/runtime.py` — share_export + share_tokens already in tree
+- `packages/agent-server/src/disco/agent_server/redaction.py` — already in tree
 - `packages/agent-server/tests/test_share.py` — already in tree
 - `packages/agent-server/tests/test_redaction.py` — already in tree

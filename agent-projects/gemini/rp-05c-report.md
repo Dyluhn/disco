@@ -121,9 +121,9 @@ wrapper constructed directly.
 ## Files changed
 
 ```
-packages/tools/src/perpleximanus/tools/registry.py        +11 lines
-packages/tools/src/perpleximanus/tools/executor.py         +4 lines
-packages/agent-server/src/perpleximanus/agent_server/runtime.py  +66/-29 lines
+packages/tools/src/disco/tools/registry.py        +11 lines
+packages/tools/src/disco/tools/executor.py         +4 lines
+packages/agent-server/src/disco/agent_server/runtime.py  +66/-29 lines
 packages/tools/tests/test_scope_advertise_split.py        NEW (92 lines)
 packages/agent-server/tests/test_mcp_tool_search_cap.py   NEW (101 lines)
 ```

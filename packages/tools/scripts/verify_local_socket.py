@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import os
 
-from perpleximanus.tools.sandbox import (
+from disco.tools.sandbox import (
     LocalSandboxService,
     SandboxConfig,
     SandboxSpec,
@@ -141,7 +141,7 @@ async def main() -> None:
     prof = svc.isolation
     tighter = prof.recommended_confirmation()
     stronger = isolation_for("gvisor").recommended_confirmation()
-    from perpleximanus.core import SecurityRisk
+    from disco.core import SecurityRisk
 
     coupling_bites = tighter.should_confirm(SecurityRisk.MEDIUM) and not stronger.should_confirm(SecurityRisk.MEDIUM)
     print("\n#5 isolation legibility:")

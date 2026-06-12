@@ -57,11 +57,11 @@ export function NavRail({ collapsed, onToggleCollapse, onNavigate }: Props) {
     >
       {/* wordmark — collapses to a serif monogram */}
       <div className={cn("flex items-center px-inline", collapsed ? "justify-center" : "px-body")}>
-        <span className="font-display tracking-tight text-text" aria-label="perpleximanus">
+        <span className="font-display tracking-tight text-text" aria-label="Disco">
           {collapsed ? (
-            <span className="text-[1.3rem]">p</span>
+            <span className="text-[1.3rem]">D</span>
           ) : (
-            <span className="text-[1.15rem]">perpleximanus</span>
+            <span className="text-[1.15rem]">Disco</span>
           )}
         </span>
       </div>

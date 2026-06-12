@@ -14,7 +14,7 @@ http.server` would now block the agent from legitimately managing its own sessio
 
 ### 1. Replace the DEPLOY/PREVIEW prompt section
 
-File: `packages/core/src/perpleximanus/core/llm/prompts.py`, inside
+File: `packages/core/src/disco/core/llm/prompts.py`, inside
 `_EXECUTION_DRIVER_PROMPT`. Locate the block starting with the exact string
 `"DEPLOY / PREVIEW — read carefully` and ending before the next section. Replace it with
 **exactly** this text (same string-concatenation style as the surrounding code):
@@ -50,7 +50,7 @@ toolset, substitute `server_status`).
 
 ### 2. Retire the two preview hard-denies
 
-File: `packages/core/src/perpleximanus/core/security/analyzers.py`, list `_SHELL_DENY`.
+File: `packages/core/src/disco/core/security/analyzers.py`, list `_SHELL_DENY`.
 Delete exactly these two entries (and the `# E6: protect the live preview…` comment):
 
 - `(re.compile(r"\b(pkill|killall)\b[^\n;|&]*http\.server"), …)`

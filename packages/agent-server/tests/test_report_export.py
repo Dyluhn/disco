@@ -12,9 +12,8 @@ Covers:
 from __future__ import annotations
 
 import pytest
-from fastapi.testclient import TestClient
-from perpleximanus.agent_server import ConversationRuntime, create_app
-from perpleximanus.agent_server.report_export import (
+from disco.agent_server import ConversationRuntime, create_app
+from disco.agent_server.report_export import (
     _markdown_to_html,
     export_report,
     pdf_available,
@@ -22,12 +21,13 @@ from perpleximanus.agent_server.report_export import (
     serialize_markdown,
     serialize_pdf,
 )
-from perpleximanus.core import (
+from disco.core import (
     EventSource,
     ReportEvent,
     ReportSection,
     SqliteEventStore,
 )
+from fastapi.testclient import TestClient
 
 
 class _FakeRenderSandbox:

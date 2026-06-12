@@ -7,9 +7,9 @@ external services). Each test gets a fresh in-memory store via create_app.
 from __future__ import annotations
 
 import pytest
+from disco.agent_server import create_app
+from disco.core import SqliteEventStore
 from fastapi.testclient import TestClient
-from perpleximanus.agent_server import create_app
-from perpleximanus.core import SqliteEventStore
 
 
 @pytest.fixture

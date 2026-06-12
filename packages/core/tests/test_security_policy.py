@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from perpleximanus.core import ActionEvent, SecurityRisk, ToolCall
-from perpleximanus.core.loop import AlwaysConfirm, ConfirmRisky, NeverConfirm
-from perpleximanus.core.security import RuleBasedAnalyzer
+from disco.core import ActionEvent, SecurityRisk, ToolCall
+from disco.core.loop import AlwaysConfirm, ConfirmRisky, NeverConfirm
+from disco.core.security import RuleBasedAnalyzer
 
 U, L, M, H = (
     SecurityRisk.UNKNOWN,

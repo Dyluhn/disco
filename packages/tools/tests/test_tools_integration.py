@@ -10,17 +10,17 @@ loop's ToolExecutor boundary and the secrets discipline holds end to end.
 from __future__ import annotations
 
 from conftest import ScriptedAgent
-from perpleximanus.core import (
+from disco.core import (
     ActionEvent,
     ConversationStatus,
     ObservationEvent,
     SqliteEventStore,
     ToolCall,
 )
-from perpleximanus.core.llm import OperatingMode
-from perpleximanus.core.loop import AgentLoop, AgentStep, NeverConfirm, NullSecurityAnalyzer
-from perpleximanus.core.view import NoOpCondenser
-from perpleximanus.tools import (
+from disco.core.llm import OperatingMode
+from disco.core.loop import AgentLoop, AgentStep, NeverConfirm, NullSecurityAnalyzer
+from disco.core.view import NoOpCondenser
+from disco.tools import (
     CapabilityBroker,
     DefaultToolExecutor,
     InMemorySecretsStore,

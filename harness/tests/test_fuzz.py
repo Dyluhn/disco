@@ -11,8 +11,8 @@ import json
 
 from hypothesis import given
 from hypothesis import strategies as st
-from perpleximanus.core.loop.stream_extract import extract_partial_string_field
-from perpleximanus.retrieval.bundled_providers import _MarkdownExtractor, chunk_passages
+from disco.core.loop.stream_extract import extract_partial_string_field
+from disco.retrieval.bundled_providers import _MarkdownExtractor, chunk_passages
 
 # ---- extract_partial_string_field — the streaming partial-JSON parser --------
 

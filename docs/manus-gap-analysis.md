@@ -1,4 +1,4 @@
-# Perpleximanus Gap Analysis: Long-Horizon Site Building vs. Manus Architecture
+# Disco Gap Analysis: Long-Horizon Site Building vs. Manus Architecture
 
 > Produced 2026-06-07 by a 19-agent adversarial workflow (8 code-mapping agents +
 > 10 pillar-comparison agents + synthesis), every finding grounded in actual
@@ -10,7 +10,7 @@
 > verified its citations (`24k/32k defaults, keep_head=1/keep_recent=6 at
 > view.py:166-169`), so coverage held — that domain became GAP A.
 
-File:line citations are to `packages/core/src/perpleximanus/core/` unless noted.
+File:line citations are to `packages/core/src/disco/core/` unless noted.
 
 ---
 

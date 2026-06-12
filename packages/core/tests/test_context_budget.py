@@ -5,8 +5,8 @@ model still condenses at ~24k instead of ~681k; (2) large tool-call argument val
 
 from __future__ import annotations
 
-from perpleximanus.core.events import ActionEvent, ToolCall
-from perpleximanus.core.view import LLMSummarizingCondenser
+from disco.core.events import ActionEvent, ToolCall
+from disco.core.view import LLMSummarizingCondenser
 
 
 def test_huge_window_is_capped_at_the_working_budget():
@@ -31,7 +31,7 @@ def test_no_window_falls_back_to_the_budget():
 def test_should_condense_fires_at_the_budget_for_a_giant_window():
     c = LLMSummarizingCondenser(context_window=1_048_576)
     # A 60k context on a 1M model now triggers (it didn't before — 60k << 681k).
-    from perpleximanus.core.view import View
+    from disco.core.view import View
 
     empty = View(messages=[], visible_seqs=[], total_events=0, forgotten_count=0)
     assert c.should_condense(empty, token_count=60_000) is not None

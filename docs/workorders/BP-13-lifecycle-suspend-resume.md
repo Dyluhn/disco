@@ -6,7 +6,7 @@
 
 Partial machinery exists: tab-close auto-suspend of idle sandboxes [a98d224], orphan
 RUNNING reconciliation at startup [8bcdef9], WS auto-reconnect [b3694a0],
-snapshot-on-terminal [56526be]. The missing legs (memory: "perpleximanus open gaps"):
+snapshot-on-terminal [56526be]. The missing legs (memory: "disco open gaps"):
 a server-side **idle-TTL sweep** (tab-close never fires for crashed browsers / sleeping
 laptops → GPU/RAM leak on the sandbox host), and a verified **reconnect-resume** path
 (suspended sandbox must transparently come back when the user returns).

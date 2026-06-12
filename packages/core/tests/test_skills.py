@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from perpleximanus.core import Skill, SkillStore, render_skills_for_prompt, slugify
+from disco.core import Skill, SkillStore, render_skills_for_prompt, slugify
 
 
 def test_slugify_is_filesystem_safe():
@@ -158,7 +158,7 @@ def test_body_size_is_capped(tmp_path):
 
 
 def test_unscoped_skills_always_render_full():
-    from perpleximanus.core import Skill, render_skills_for_prompt
+    from disco.core import Skill, render_skills_for_prompt
 
     skills = [Skill(id="a", name="House Style", body="Use TypeScript strict mode.", enabled=True)]
     out = render_skills_for_prompt(skills)  # no active_paths
@@ -167,7 +167,7 @@ def test_unscoped_skills_always_render_full():
 
 
 def test_scoped_skill_shows_manifest_only_without_matching_path():
-    from perpleximanus.core import Skill, render_skills_for_prompt
+    from disco.core import Skill, render_skills_for_prompt
 
     skills = [
         Skill(
@@ -186,7 +186,7 @@ def test_scoped_skill_shows_manifest_only_without_matching_path():
 
 
 def test_scoped_skill_shows_full_body_on_matching_path():
-    from perpleximanus.core import Skill, render_skills_for_prompt
+    from disco.core import Skill, render_skills_for_prompt
 
     skills = [
         Skill(
@@ -202,7 +202,7 @@ def test_scoped_skill_shows_full_body_on_matching_path():
 
 
 def test_scope_round_trips_through_markdown(tmp_path):
-    from perpleximanus.core import SkillStore
+    from disco.core import SkillStore
 
     store = SkillStore(tmp_path)
     store.create(name="Scoped", body="x")

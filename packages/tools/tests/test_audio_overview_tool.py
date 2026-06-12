@@ -10,19 +10,19 @@ import json
 
 import numpy as np
 import pytest
-from perpleximanus.tools.anatomy import ToolContext
-from perpleximanus.tools.builtin import build_default_registry
-from perpleximanus.tools.builtin._audio_mixer import (
+from disco.tools.anatomy import ToolContext
+from disco.tools.builtin import build_default_registry
+from disco.tools.builtin._audio_mixer import (
     encode_mp3,
     mix_pcm,
     mix_turns_count,
 )
-from perpleximanus.tools.builtin.audio_overview import (
+from disco.tools.builtin.audio_overview import (
     _extract_json,
     _validate_turn_script,
 )
-from perpleximanus.tools.registry import agent_scope, research_scope
-from perpleximanus.tools.secrets import CapabilityBroker
+from disco.tools.registry import agent_scope, research_scope
+from disco.tools.secrets import CapabilityBroker
 
 
 def _ctx(sandbox) -> ToolContext:

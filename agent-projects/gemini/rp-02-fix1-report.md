@@ -17,7 +17,7 @@
 ## F2 — Table blocks cited_passage_ids
 - **Problem:** `_to_blocks` in `streaming.py` extracted citations for prose blocks but ignored them for table blocks, breaking NLI verification for table-borne claims.
 - **Fix:**
-    - Modified `_to_blocks` in `packages/retrieval/src/perpleximanus/retrieval/streaming.py` to extract `[[id]]` matches from all header and row cells in a table block.
+    - Modified `_to_blocks` in `packages/retrieval/src/disco/retrieval/streaming.py` to extract `[[id]]` matches from all header and row cells in a table block.
     - Added `cited_passage_ids` (sorted set) to the table block payload, matching the prose block convention.
 - **Verification:**
     - Added `test_table_with_citations` to `packages/retrieval/tests/test_table_blocks.py`.

@@ -1,4 +1,4 @@
-# perpleximanus — one-command self-host.
+# disco — one-command self-host.
 #
 #   cp .env.example .env        # then read it; set PMX_BIND/model as you like
 #   docker compose up -d --build
@@ -7,7 +7,7 @@
 # Defaults bind to 127.0.0.1 — there is NO AUTH in v1. Do not set PMX_BIND=0.0.0.0
 # without your own TLS + auth in front. The sandbox-socket mount makes the
 # agent-server root-equivalent on your host; see docs/self-host.md#security.
-name: perpleximanus
+name: disco
 
 services:
   # Build-only: deposits the sandbox image into the host daemon so the agent-server
@@ -26,14 +26,14 @@ services:
       context: .
       dockerfile: deploy/compose/Dockerfile.server
     image: pmx-server
-    command: ["python", "-m", "perpleximanus.app_server"]
+    command: ["python", "-m", "disco.app_server"]
     entrypoint: ["/entrypoint.sh"]
     env_file: .env
     environment:
       PMX_HOST: "0.0.0.0"
       PMX_PORT: "8800"
-      PMX_DB: /data/perpleximanus.db
-      PMX_CONFIG: /data/perpleximanus-config.json
+      PMX_DB: /data/disco.db
+      PMX_CONFIG: /data/disco-config.json
       PMX_SECRETS: /data/secrets.json
       PMX_SKILLS_DIR: /data/skills
     volumes:
@@ -50,14 +50,14 @@ services:
 
   agent-server:
     image: pmx-server # same image as app-server, different command
-    command: ["python", "-m", "perpleximanus.agent_server"]
+    command: ["python", "-m", "disco.agent_server"]
     entrypoint: ["/entrypoint.sh"]
     env_file: .env
     environment:
       PMX_HOST: "0.0.0.0"
       PMX_PORT: "8000"
-      PMX_DB: /data/perpleximanus.db # ONE SQLite file, shared with app-server
-      PMX_CONFIG: /data/perpleximanus-config.json
+      PMX_DB: /data/disco.db # ONE SQLite file, shared with app-server
+      PMX_CONFIG: /data/disco-config.json
       PMX_SECRETS: /data/secrets.json
       PMX_SKILLS_DIR: /data/skills
       PMX_TTS_DIR: /data/cache/tts

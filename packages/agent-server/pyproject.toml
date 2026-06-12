@@ -2,14 +2,14 @@
 # exposes the §7 wire layer (WebSocket event/state streaming + reconnect/replay)
 # and the §7.5 REST surface over the core EventStore. No agent loop yet.
 [project]
-name = "perpleximanus-agent-server"
+name = "disco-agent-server"
 version = "0.1.0"
 description = "Per-conversation runtime: WebSocket + REST over the core event log."
 requires-python = ">=3.12"
 dependencies = [
-    "perpleximanus-core",
-    "perpleximanus-retrieval",
-    "perpleximanus-tools",  # the Build surface composes the agent toolset + sandbox here
+    "disco-core",
+    "disco-retrieval",
+    "disco-tools",  # the Build surface composes the agent toolset + sandbox here
     "fastapi>=0.110",
     "python-multipart>=0.0.12",
     "uvicorn[standard]>=0.30",  # [standard] pulls the websockets impl the WS routes need
@@ -23,7 +23,7 @@ dependencies = [
 # RP-09 in-process Kokoro TTS — OPTIONAL so the lean core install stays lean. Rides
 # the onnxruntime already pulled by fastembed (deliberately NOT torch). This extra is
 # on the MEMBER package, so install it with
-# `uv sync --package perpleximanus-agent-server --extra tts` (NOT a bare `uv sync
+# `uv sync --package disco-agent-server --extra tts` (NOT a bare `uv sync
 # --extra tts`, which errors — the workspace root has no `tts` extra). Weights
 # download on first use.
 tts = [
@@ -35,17 +35,17 @@ tts = [
 [project.scripts]
 # `pmx verify` — verify a self-hoster's configured model actually drives the loop.
 # Installed into the venv, so it runs in the compose image as `pmx-verify` (or
-# `python -m perpleximanus.agent_server.verify`).
-pmx-verify = "perpleximanus.agent_server.verify:main"
+# `python -m disco.agent_server.verify`).
+pmx-verify = "disco.agent_server.verify:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/perpleximanus"]
+packages = ["src/disco"]
 
 [tool.uv.sources]
-perpleximanus-core = { workspace = true }
-perpleximanus-retrieval = { workspace = true }
-perpleximanus-tools = { workspace = true }
+disco-core = { workspace = true }
+disco-retrieval = { workspace = true }
+disco-tools = { workspace = true }

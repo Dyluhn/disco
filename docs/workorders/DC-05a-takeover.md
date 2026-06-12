@@ -8,7 +8,7 @@ only describes the takeover situation.**
 
 A prior worker (Gemini Pro) was killed by a provider quota failure mid-order.
 It left a PARTIAL implementation in the working tree — do `git diff
-packages/core/src/perpleximanus/core/loop/engine.py` to see exactly what it
+packages/core/src/disco/core/loop/engine.py` to see exactly what it
 did (~211 lines changed; the file COMPILES — `ast.parse` passes).
 
 State observed at takeover:

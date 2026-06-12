@@ -10,10 +10,9 @@ import asyncio
 import copy
 
 import pytest
-from fastapi.testclient import TestClient
-from perpleximanus.agent_server import ConversationRuntime, create_app
-from perpleximanus.core import MessageEvent, SqliteEventStore, StatusEvent
-from perpleximanus.core.events import (
+from disco.agent_server import ConversationRuntime, create_app
+from disco.core import MessageEvent, SqliteEventStore, StatusEvent
+from disco.core.events import (
     ActionEvent,
     ConversationStatus,
     EventSource,
@@ -22,6 +21,7 @@ from perpleximanus.core.events import (
     ToolCall,
     ToolResult,
 )
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture

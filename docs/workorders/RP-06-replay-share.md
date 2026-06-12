@@ -10,16 +10,16 @@ Implementation of conversation replay in the UI and static-bundle sharing.
    - buildTrace selectors are already pure functions of `AgentEvent[]`; leverage this.
    - Add a scrubber UI component to the Build view.
 
-2. **Share Export: `packages/agent-server/src/perpleximanus/agent_server/runtime.py`**
+2. **Share Export: `packages/agent-server/src/disco/agent_server/runtime.py`**
    - Implement `share_export(cid)` to produce a scrubbed JSON bundle.
    - Bundle should include events and necessary metadata for static replay. The bundle IS the future harness cassette format (RP-00 locked synergy) — keep it a pure, versioned projection.
 
-3. **Share API: `packages/agent-server/src/perpleximanus/agent_server/app.py`**
+3. **Share API: `packages/agent-server/src/disco/agent_server/app.py`**
    - Implement `POST /api/conversations/{cid}/share` to trigger export.
    - Implement `GET /share/<id>` to serve the static viewer + bundle.
    - Implement `share_tokens` table (base62 random, revocable) for link management.
 
-4. **Redaction: `packages/agent-server/src/perpleximanus/agent_server/redaction.py` (New File)**
+4. **Redaction: `packages/agent-server/src/disco/agent_server/redaction.py` (New File)**
    - Implement export-time redaction using ordered regex.
    - Target secrets like `sk_live_...`, generic `KEY=value`, shell/env outputs.
    - Ensure streamed deltas are also scrubbed if applicable.
@@ -41,9 +41,9 @@ Implementation of conversation replay in the UI and static-bundle sharing.
 - frontend/src/lib/buildTrace.ts
 - frontend/src/api/agent.ts
 - frontend/src/views/ShareView.tsx
-- packages/agent-server/src/perpleximanus/agent_server/app.py
-- packages/agent-server/src/perpleximanus/agent_server/runtime.py
-- packages/agent-server/src/perpleximanus/agent_server/redaction.py
+- packages/agent-server/src/disco/agent_server/app.py
+- packages/agent-server/src/disco/agent_server/runtime.py
+- packages/agent-server/src/disco/agent_server/redaction.py
 - packages/agent-server/tests/test_share.py
 - packages/agent-server/tests/test_redaction.py
 - frontend/src/lib/useReplay.test.ts

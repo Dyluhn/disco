@@ -10,7 +10,7 @@ import asyncio
 import sys
 
 import pytest
-from perpleximanus.tools.mcp.stdio import McpStdioClient
+from disco.tools.mcp.stdio import McpStdioClient
 
 
 @pytest.fixture

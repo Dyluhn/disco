@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from conftest import FakeSandboxInstance, call
-from perpleximanus.tools import (
+from disco.tools import (
     DefaultToolExecutor,
     ProcessSandboxService,
     SandboxError,
@@ -84,7 +84,7 @@ async def test_process_backend_expose_port_defense():
     import tempfile
     from pathlib import Path
 
-    from perpleximanus.tools.sandbox.process import ProcessSandboxInstance
+    from disco.tools.sandbox.process import ProcessSandboxInstance
 
     with tempfile.TemporaryDirectory() as tmp:
         inst = ProcessSandboxInstance("i", "o", "c", SandboxSpec(), Path(tmp))
@@ -107,7 +107,7 @@ async def test_session_recreate_fires_rehydrate_hook():
     the runtime hangs workspace rehydration on it (the conv_f3bdc842 'all files
     were lost' incident). The hook writes back THROUGH the session, so this also
     proves the hook can't deadlock against the session's own lock."""
-    from perpleximanus.tools.sandbox.base import SandboxUnavailableError
+    from disco.tools.sandbox.base import SandboxUnavailableError
 
     svc = ProcessSandboxService()
     hook_runs: list[int] = []
@@ -142,7 +142,7 @@ async def test_session_recreate_fires_rehydrate_hook():
 async def test_session_no_hook_recreate_still_works():
     """Without a hook (research surface / tests), recreate behaves exactly as
     before — no new failure mode introduced."""
-    from perpleximanus.tools.sandbox.base import SandboxUnavailableError
+    from disco.tools.sandbox.base import SandboxUnavailableError
 
     svc = ProcessSandboxService()
     session = SandboxSession(svc, owner_id="local", conversation_id="c-nohook")

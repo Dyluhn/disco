@@ -1,9 +1,10 @@
+
 import pytest
-import re
-from perpleximanus.core.llm.openai_provider import _sanitize_tool_name, OpenAIProvider
-from perpleximanus.core.llm.types import ToolSpec, ProposedToolCall
-from perpleximanus.core.events import AgentErrorEvent, LLMMessage
+from disco.core.events import AgentErrorEvent, LLMMessage
+from disco.core.llm.openai_provider import OpenAIProvider, _sanitize_tool_name
+from disco.core.llm.types import ToolSpec
 from loop_fakes import ScriptedAgent, action_step, build_loop
+
 
 def test_tool_name_sanitization():
     """DEFECT-6: tool names must be sanitized (no dots)."""
@@ -129,5 +130,5 @@ async def test_exhausted_scripted_agent_during_requery():
     import asyncio
     try:
         await asyncio.wait_for(loop.run(), timeout=5.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pytest.fail("AgentLoop.run() hung on exhausted ScriptedAgent during requery")

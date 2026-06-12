@@ -33,7 +33,7 @@ After the archive.py fix (`ebda91c`):
    conversation**: fresh container `pmx-sbx-sbx_d853b070…` rehydrated from the
    snapshot, page served 200 — `rung2-preview-2-after-wake.png` shows the
    rehydrated app ("cleanup demo complete").
-5. `idle_ttl_s` restored to 1800 in perpleximanus-config.json.
+5. `idle_ttl_s` restored to 1800 in disco-config.json.
 
 ### Finding (filed, not blocking): first-hit wake race
 

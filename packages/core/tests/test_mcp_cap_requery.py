@@ -8,10 +8,11 @@ poison the model's context before the tool ever executes.
 """
 
 import asyncio
+
 import pytest
-from perpleximanus.core import ToolResult
-from perpleximanus.core.llm import ToolSpec
-from loop_fakes import build_loop, action_step, finish_step, ScriptedAgent
+from disco.core import ToolResult
+from disco.core.llm import ToolSpec
+from loop_fakes import ScriptedAgent, action_step, build_loop, finish_step
 
 
 class _SplitExecutor:

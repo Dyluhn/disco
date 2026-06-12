@@ -8,10 +8,9 @@ frames (state → token… → final → state) — the same contract the fixtur
 
 from __future__ import annotations
 
-from fastapi.testclient import TestClient
-from perpleximanus.agent_server import ConversationRuntime, create_app
-from perpleximanus.core import SqliteEventStore
-from perpleximanus.core.llm import (
+from disco.agent_server import ConversationRuntime, create_app
+from disco.core import SqliteEventStore
+from disco.core.llm import (
     CompletionResponse,
     ConfigStore,
     DefaultLLMRouter,
@@ -22,7 +21,8 @@ from perpleximanus.core.llm import (
     StreamChunk,
     TokenUsage,
 )
-from perpleximanus.retrieval.models import ExtractedDoc, Passage, SearchHit
+from disco.retrieval.models import ExtractedDoc, Passage, SearchHit
+from fastapi.testclient import TestClient
 
 _ANSWER = "Paris is the capital of France. [[wiki_p0]]"
 

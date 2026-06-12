@@ -17,10 +17,10 @@ import io
 import uuid
 
 import pytest
+from disco.agent_server import create_app
+from disco.agent_server.app import _sanitize_name
+from disco.core import EventSource, MessageEvent, SqliteEventStore
 from fastapi.testclient import TestClient
-from perpleximanus.agent_server import create_app
-from perpleximanus.agent_server.app import _sanitize_name
-from perpleximanus.core import EventSource, MessageEvent, SqliteEventStore
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -306,8 +306,8 @@ async def test_no_event_when_all_rejected() -> None:
 
 
 async def test_upload_blocked_in_error_state() -> None:
-    from perpleximanus.core import ConversationStatus as CS
-    from perpleximanus.core import StatusEvent
+    from disco.core import ConversationStatus as CS
+    from disco.core import StatusEvent
 
     store = SqliteEventStore(":memory:")
     rt = _FakeRuntime()
@@ -324,8 +324,8 @@ async def test_upload_blocked_in_error_state() -> None:
 
 
 async def test_upload_allowed_in_finished_state() -> None:
-    from perpleximanus.core import ConversationStatus as CS
-    from perpleximanus.core import StatusEvent
+    from disco.core import ConversationStatus as CS
+    from disco.core import StatusEvent
 
     store = SqliteEventStore(":memory:")
     rt = _FakeRuntime()
@@ -378,9 +378,9 @@ async def test_pending_session_adopted_by_build_loop() -> None:
     _compose_build_loop call for that conversation adopts it (object identity)."""
     from unittest import mock
 
-    from perpleximanus.agent_server.runtime import ConversationRuntime
-    from perpleximanus.core.llm import DefaultLLMRouter
-    from perpleximanus.core.loop import RouterAgent
+    from disco.agent_server.runtime import ConversationRuntime
+    from disco.core.llm import DefaultLLMRouter
+    from disco.core.loop import RouterAgent
 
     rt = ConversationRuntime(SqliteEventStore(":memory:"))
     router = mock.MagicMock(spec=DefaultLLMRouter)
@@ -402,7 +402,7 @@ async def test_pending_session_destroyed_on_kill() -> None:
     """Killing a conversation tears down any pending (pre-loop) sandbox session."""
     from unittest import mock
 
-    from perpleximanus.agent_server.runtime import ConversationRuntime
+    from disco.agent_server.runtime import ConversationRuntime
 
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)
@@ -515,9 +515,9 @@ async def test_upload_rematerialized_on_lazy_compose_path() -> None:
     import tempfile
     from unittest import mock
 
-    from perpleximanus.agent_server.runtime import ConversationRuntime
-    from perpleximanus.core.llm import DefaultLLMRouter
-    from perpleximanus.core.loop import RouterAgent
+    from disco.agent_server.runtime import ConversationRuntime
+    from disco.core.llm import DefaultLLMRouter
+    from disco.core.loop import RouterAgent
 
     store = SqliteEventStore(":memory:")
     cid = f"conv_{uuid.uuid4().hex}"

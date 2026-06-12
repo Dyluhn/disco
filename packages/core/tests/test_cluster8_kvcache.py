@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 
-from perpleximanus.core.llm.openai_provider import OpenAIProvider
+from disco.core.llm.openai_provider import OpenAIProvider
 
 
 def _adapter():
@@ -16,7 +16,7 @@ def _adapter():
 
 
 def test_tool_call_arguments_serialize_with_sorted_keys():
-    from perpleximanus.core.events import LLMMessage
+    from disco.core.events import LLMMessage
 
     adapter = _adapter()
     # An assistant message carrying a tool_call with unsorted dict args.
@@ -61,7 +61,7 @@ def test_response_surfaces_cached_tokens():
         },
         "model": "m",
     }
-    from perpleximanus.core.llm.types import CapabilityProfile, CompletionRequest, ModelRole
+    from disco.core.llm.types import CapabilityProfile, CompletionRequest, ModelRole
 
     req = CompletionRequest(
         profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER), messages=[]
@@ -75,8 +75,8 @@ def test_response_surfaces_cached_tokens():
 
 
 def _req(system: str = "You are an agent.", tools=None):
-    from perpleximanus.core.events import LLMMessage
-    from perpleximanus.core.llm.types import (
+    from disco.core.events import LLMMessage
+    from disco.core.llm.types import (
         CapabilityProfile,
         CompletionRequest,
         ModelRole,

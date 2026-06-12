@@ -5,19 +5,19 @@ Ensure uploaded files survive sandbox recreation by storing them server-side and
 
 ## Work items
 
-1. **Server-side Storage: `packages/agent-server/src/perpleximanus/agent_server/runtime.py`**
+1. **Server-side Storage: `packages/agent-server/src/disco/agent_server/runtime.py`**
    - Implement a mechanism to store uploaded file bytes on the server's local disk in a `{PMX_DB}.uploads/<cid>/` sidecar directory (the established `{PMX_DB}.surfaces.json` B0 sidecar pattern — NEVER under test-record/, that is evidence space).
    - Update `Runtime` to manage these server-held uploads.
 
-2. **Re-materialization: `packages/agent-server/src/perpleximanus/agent_server/runtime.py` (~line 1430)**
+2. **Re-materialization: `packages/agent-server/src/disco/agent_server/runtime.py` (~line 1430)**
    - Update `_rehydrate_after_recreate(conversation_id)` to copy server-held uploads back into the fresh sandbox's `uploads/` directory.
    - This ensures the agent is not "data-orphaned" after a sandbox recreation.
 
-3. **Upload Logic: `packages/agent-server/src/perpleximanus/agent_server/app.py` (~line 206)**
+3. **Upload Logic: `packages/agent-server/src/disco/agent_server/app.py` (~line 206)**
    - Update `upload_files` to write bytes to the server-side storage in addition to (or instead of, with write-through to) the sandbox.
    - Ensure quota checks (~line 58, 100MB) accounting for server-side storage.
 
-4. **Resume Reality Block: `packages/core/src/perpleximanus/core/llm/prompts.py`**
+4. **Resume Reality Block: `packages/core/src/disco/core/llm/prompts.py`**
    - Update the resume reality block (injected at session start) to list uploads as "lost-and-recoverable" when they are missing from the sandbox but present on the server.
    - (Or ideally, the re-materialization makes this transparent, but the reality block should still reflect the truth of the workspace).
 
@@ -31,9 +31,9 @@ Ensure uploaded files survive sandbox recreation by storing them server-side and
 
 ## Manifest
 
-- packages/agent-server/src/perpleximanus/agent_server/runtime.py
-- packages/agent-server/src/perpleximanus/agent_server/app.py
-- packages/core/src/perpleximanus/core/llm/prompts.py
+- packages/agent-server/src/disco/agent_server/runtime.py
+- packages/agent-server/src/disco/agent_server/app.py
+- packages/core/src/disco/core/llm/prompts.py
 - packages/agent-server/tests/test_upload.py
 - test-record/dc-07/units-server.log
 - test-record/dc-07/units-core.log

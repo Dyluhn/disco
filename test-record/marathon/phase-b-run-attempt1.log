@@ -52,7 +52,7 @@ harness/marathon/test_phase_b.py:107:
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 input = None, capture_output = False, timeout = None, check = True
-popenargs = ('tmux respawn-pane -k -t pmx-agent-server "cd \'/var/home/dylan/projects/perpleximanus build\' && PMX_LOG_JSON=1 PMX_...runsc PMX_DB=test-record/pmx-run.db uv run python -m perpleximanus.agent_server 2>&1 | tee -a /tmp/pmx-marathon.log"',)
+popenargs = ('tmux respawn-pane -k -t pmx-agent-server "cd \'/var/home/dylan/projects/disco build\' && PMX_LOG_JSON=1 PMX_...runsc PMX_DB=test-record/pmx-run.db uv run python -m disco.agent_server 2>&1 | tee -a /tmp/pmx-marathon.log"',)
 kwargs = {'shell': True}
 process = <Popen: returncode: 1 args: 'tmux respawn-pane -k -t pmx-agent-server "cd \'...>
 stdout = None, stderr = None, retcode = 1
@@ -124,7 +124,7 @@ stdout = None, stderr = None, retcode = 1
             if check and retcode:
 >               raise CalledProcessError(retcode, process.args,
                                          output=stdout, stderr=stderr)
-E               subprocess.CalledProcessError: Command 'tmux respawn-pane -k -t pmx-agent-server "cd '/var/home/dylan/projects/perpleximanus build' && PMX_LOG_JSON=1 PMX_DRIVER_VISION=1 PMX_SANDBOX=gvisor PMX_LOCAL_SOCKET=ssh://sandbox@100.81.82.115 PMX_LOCAL_RUNTIME=runsc PMX_DB=test-record/pmx-run.db uv run python -m perpleximanus.agent_server 2>&1 | tee -a /tmp/pmx-marathon.log"' returned non-zero exit status 1.
+E               subprocess.CalledProcessError: Command 'tmux respawn-pane -k -t pmx-agent-server "cd '/var/home/dylan/projects/disco build' && PMX_LOG_JSON=1 PMX_DRIVER_VISION=1 PMX_SANDBOX=gvisor PMX_LOCAL_SOCKET=ssh://sandbox@100.81.82.115 PMX_LOCAL_RUNTIME=runsc PMX_DB=test-record/pmx-run.db uv run python -m disco.agent_server 2>&1 | tee -a /tmp/pmx-marathon.log"' returned non-zero exit status 1.
 
 ../../.local/share/uv/python/cpython-3.13.13-linux-x86_64-gnu/lib/python3.13/subprocess.py:577: CalledProcessError
 =========================== short test summary info ============================

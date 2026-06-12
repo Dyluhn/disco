@@ -1,7 +1,8 @@
-import pytest
 import json
-from perpleximanus.retrieval.streaming import _to_blocks
-from perpleximanus.retrieval.deep_research.synthesis import _validate_charts
+
+from disco.retrieval.deep_research.synthesis import _validate_charts
+from disco.retrieval.streaming import _to_blocks
+
 
 def test_bar_chart_block():
     payload = {

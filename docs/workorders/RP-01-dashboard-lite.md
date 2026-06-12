@@ -5,17 +5,17 @@ Parent plan: docs/next-fix-set-plan.md §2 RP-01 (locked). Recon verified
 
 ## Context — verified anchors
 
-- `packages/core/src/perpleximanus/core/store/sqlite.py:57` — the
+- `packages/core/src/disco/core/store/sqlite.py:57` — the
   `conversations` table has a `status` column that NO code path ever writes.
   History therefore cannot show live state without opening each conversation.
-- `packages/app-server/src/perpleximanus/app_server/app.py:45-54` —
+- `packages/app-server/src/disco/app_server/app.py:45-54` —
   `ConversationSummaryDTO` lacks a `status` field; the History surface fetches
   `GET /api/conversations` from THIS server (frontend/src/api/conversations.ts:20).
-- `packages/agent-server/src/perpleximanus/agent_server/app.py:486` — the
+- `packages/agent-server/src/disco/agent_server/app.py:486` — the
   agent-server has its own `list_conversations`; extend consistently if it
   returns summaries (check what it returns first — if it returns bare ids,
   leave it alone).
-- `packages/core/src/perpleximanus/core/state.py:64` —
+- `packages/core/src/disco/core/state.py:64` —
   `ConversationState.reconstruct()` is pure; it is the repair path, NOT the
   hot path.
 - Runtime tracking stays the in-process dicts (`runtime.py:210-259`). Do NOT
@@ -70,11 +70,11 @@ on :8000.
 
 ## Manifest (the ONLY files you may touch)
 
-- packages/core/src/perpleximanus/core/store/sqlite.py
+- packages/core/src/disco/core/store/sqlite.py
 - packages/core/tests/test_store_status.py
-- packages/app-server/src/perpleximanus/app_server/app.py
+- packages/app-server/src/disco/app_server/app.py
 - packages/app-server/tests/ (existing route test file only)
-- packages/agent-server/src/perpleximanus/agent_server/app.py (only if its
+- packages/agent-server/src/disco/agent_server/app.py (only if its
   list route returns summaries — else leave)
 - frontend/src/types/conversation.ts
 - frontend/src/api/conversations.ts

@@ -9,12 +9,12 @@ resolution-markers = [
 
 [manifest]
 members = [
-    "perpleximanus-agent-server",
-    "perpleximanus-app-server",
-    "perpleximanus-core",
-    "perpleximanus-retrieval",
-    "perpleximanus-tools",
-    "perpleximanus-workspace",
+    "disco-agent-server",
+    "disco-app-server",
+    "disco-core",
+    "disco-retrieval",
+    "disco-tools",
+    "disco-workspace",
 ]
 
 [[package]]
@@ -1784,16 +1784,16 @@ wheels = [
 ]
 
 [[package]]
-name = "perpleximanus-agent-server"
+name = "disco-agent-server"
 version = "0.1.0"
 source = { editable = "packages/agent-server" }
 dependencies = [
     { name = "cronsim" },
     { name = "fastapi" },
     { name = "markdown" },
-    { name = "perpleximanus-core" },
-    { name = "perpleximanus-retrieval" },
-    { name = "perpleximanus-tools" },
+    { name = "disco-core" },
+    { name = "disco-retrieval" },
+    { name = "disco-tools" },
     { name = "python-multipart" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "weasyprint" },
@@ -1815,9 +1815,9 @@ requires-dist = [
     { name = "lameenc", marker = "extra == 'tts'", specifier = ">=1.7" },
     { name = "markdown", specifier = ">=3.5" },
     { name = "numpy", marker = "extra == 'tts'", specifier = ">=1.26" },
-    { name = "perpleximanus-core", editable = "packages/core" },
-    { name = "perpleximanus-retrieval", editable = "packages/retrieval" },
-    { name = "perpleximanus-tools", editable = "packages/tools" },
+    { name = "disco-core", editable = "packages/core" },
+    { name = "disco-retrieval", editable = "packages/retrieval" },
+    { name = "disco-tools", editable = "packages/tools" },
     { name = "python-multipart", specifier = ">=0.0.12" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
     { name = "weasyprint", specifier = ">=63.0" },
@@ -1826,13 +1826,13 @@ requires-dist = [
 provides-extras = ["tts"]
 
 [[package]]
-name = "perpleximanus-app-server"
+name = "disco-app-server"
 version = "0.1.0"
 source = { editable = "packages/app-server" }
 dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
-    { name = "perpleximanus-core" },
+    { name = "disco-core" },
     { name = "uvicorn" },
 ]
 
@@ -1840,12 +1840,12 @@ dependencies = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.110" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "perpleximanus-core", editable = "packages/core" },
+    { name = "disco-core", editable = "packages/core" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
 
 [[package]]
-name = "perpleximanus-core"
+name = "disco-core"
 version = "0.1.0"
 source = { editable = "packages/core" }
 dependencies = [
@@ -1862,7 +1862,7 @@ requires-dist = [
 ]
 
 [[package]]
-name = "perpleximanus-retrieval"
+name = "disco-retrieval"
 version = "0.1.0"
 source = { editable = "packages/retrieval" }
 dependencies = [
@@ -1870,7 +1870,7 @@ dependencies = [
     { name = "fastembed" },
     { name = "httpx" },
     { name = "jsonschema" },
-    { name = "perpleximanus-core" },
+    { name = "disco-core" },
 ]
 
 [package.metadata]
@@ -1879,11 +1879,11 @@ requires-dist = [
     { name = "fastembed", specifier = ">=0.8" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "jsonschema", specifier = ">=4.20.0" },
-    { name = "perpleximanus-core", editable = "packages/core" },
+    { name = "disco-core", editable = "packages/core" },
 ]
 
 [[package]]
-name = "perpleximanus-tools"
+name = "disco-tools"
 version = "0.1.0"
 source = { editable = "packages/tools" }
 dependencies = [
@@ -1891,7 +1891,7 @@ dependencies = [
     { name = "jupyter-client" },
     { name = "mcp" },
     { name = "openpyxl" },
-    { name = "perpleximanus-core" },
+    { name = "disco-core" },
     { name = "podman" },
     { name = "websockets" },
 ]
@@ -1907,7 +1907,7 @@ requires-dist = [
     { name = "jupyter-client" },
     { name = "mcp", specifier = ">=1.27.2,<2" },
     { name = "openpyxl", specifier = ">=3.1" },
-    { name = "perpleximanus-core", editable = "packages/core" },
+    { name = "disco-core", editable = "packages/core" },
     { name = "playwright", marker = "extra == 'browser'" },
     { name = "podman", specifier = ">=5" },
     { name = "websockets" },
@@ -1915,7 +1915,7 @@ requires-dist = [
 provides-extras = ["browser"]
 
 [[package]]
-name = "perpleximanus-workspace"
+name = "disco-workspace"
 version = "0"
 source = { virtual = "." }
 

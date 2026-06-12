@@ -6,7 +6,7 @@ construction boilerplate. They mirror the shapes in event-state-contract.md §2.
 
 from __future__ import annotations
 
-from perpleximanus.core import (
+from disco.core import (
     ActionEvent,
     AgentErrorEvent,
     CondensationEvent,

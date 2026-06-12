@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import pytest
-from perpleximanus.core.events import ActionEvent, ToolCall, SecurityRisk
-from perpleximanus.core.security.analyzers import RuleBasedAnalyzer, hard_deny_reason
-from perpleximanus.core.llm.prompts import _EXECUTION_DRIVER_PROMPT, _PLANNING_DRIVER_PROMPT
-from perpleximanus.core.loop.engine import AgentLoop
+from disco.core.events import ActionEvent, SecurityRisk, ToolCall
+from disco.core.llm.prompts import _EXECUTION_DRIVER_PROMPT, _PLANNING_DRIVER_PROMPT
+from disco.core.loop.engine import AgentLoop
+from disco.core.security.analyzers import RuleBasedAnalyzer, hard_deny_reason
+
 
 def test_analyzer_allows_pkill_but_denies_mkfs():
     # pkill is no longer in _SHELL_DENY

@@ -5,7 +5,7 @@
 ## Why (context — already diagnosed, do not re-litigate)
 
 Every shell call today is fire-and-forget (`ShellTool` → `SandboxInstance.exec_shell`,
-`packages/tools/src/perpleximanus/tools/builtin/system.py`). Long-running processes only
+`packages/tools/src/disco/tools/builtin/system.py`). Long-running processes only
 exist via `run_server`'s `setsid nohup` hack (`builtin/preview.py`), which the agent can
 never inspect. This is the root of the "model kills its own port" spiral. The proven fix
 is Manus's process-as-durable-resource model: named sessions the agent can exec into,
@@ -31,7 +31,7 @@ completion-detection scheme.
 - Process backend runs on the host: acceptance step 0 verifies `tmux -V` ≥ 3.x on the
   host and FAILS the order with a STOP-report if absent (do not silently degrade).
 
-### 2. New module: `packages/tools/src/perpleximanus/tools/sandbox/shell_sessions.py`
+### 2. New module: `packages/tools/src/disco/tools/sandbox/shell_sessions.py`
 
 A `ShellSessionManager` that drives tmux **through** `SandboxInstance.exec_shell` (so it
 works on all backends unchanged). One manager per `SandboxSession`; attach it there
@@ -120,7 +120,7 @@ pre-send snapshot prefix; strip the echoed command line (first line of the delta
 trailing marker line. If tmux echoes differently than expected, fix the stripping — never
 return marker garbage to the model.
 
-### 3. Five new tools: `packages/tools/src/perpleximanus/tools/builtin/shell_sessions.py`
+### 3. Five new tools: `packages/tools/src/disco/tools/builtin/shell_sessions.py`
 
 Follow the exact `ToolDef`/`Tool` pattern in `builtin/system.py` (`ShellTool` is the
 template). The manager is reached via the sandbox: add `sessions` to `ToolContext`

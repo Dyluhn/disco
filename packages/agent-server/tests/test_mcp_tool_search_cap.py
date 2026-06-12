@@ -9,13 +9,11 @@ was the round-3 tautology that let a false affordance slip through).
 from __future__ import annotations
 
 import pytest
+from disco.agent_server.runtime import _apply_mcp_scope
+from disco.core import SecurityRisk, ToolCall
+from disco.tools import DefaultToolExecutor, agent_scope, build_default_registry
+from disco.tools.anatomy import ToolDef
 from pydantic import BaseModel
-from perpleximanus.core import SecurityRisk, ToolCall
-from perpleximanus.tools import DefaultToolExecutor, agent_scope, build_default_registry
-from perpleximanus.tools.anatomy import ToolDef
-
-from perpleximanus.agent_server.runtime import _apply_mcp_scope
-
 
 # ---- fakes ------------------------------------------------------------------
 

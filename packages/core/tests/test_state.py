@@ -9,7 +9,7 @@ from __future__ import annotations
 import random
 
 from conftest import action, fatal, status, user_msg, with_seqs
-from perpleximanus.core import ConversationState, ConversationStatus
+from disco.core import ConversationState, ConversationStatus
 
 CID = "conv"
 

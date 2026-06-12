@@ -4,11 +4,11 @@
 
 | Component | File | Lines |
 |---|---|---|
-| `live_session()` | `packages/agent-server/src/perpleximanus/agent_server/runtime.py:1482` | read-only sandbox accessor |
-| `sessions_list()` | `packages/agent-server/src/perpleximanus/agent_server/runtime.py:1488` | non-`__` filter |
-| `session_view()` + cache | `packages/agent-server/src/perpleximanus/agent_server/runtime.py:1497–1524` | asyncio.Lock coalescing, 0.5s TTL |
-| `GET /sessions` | `packages/agent-server/src/perpleximanus/agent_server/app.py:327` | wire: `{sessions:[{name,busy,last_line}]}` |
-| `GET /sessions/{name}/view` | `packages/agent-server/src/perpleximanus/agent_server/app.py:348` | wire: `{name,busy,content}` |
+| `live_session()` | `packages/agent-server/src/disco/agent_server/runtime.py:1482` | read-only sandbox accessor |
+| `sessions_list()` | `packages/agent-server/src/disco/agent_server/runtime.py:1488` | non-`__` filter |
+| `session_view()` + cache | `packages/agent-server/src/disco/agent_server/runtime.py:1497–1524` | asyncio.Lock coalescing, 0.5s TTL |
+| `GET /sessions` | `packages/agent-server/src/disco/agent_server/app.py:327` | wire: `{sessions:[{name,busy,last_line}]}` |
+| `GET /sessions/{name}/view` | `packages/agent-server/src/disco/agent_server/app.py:348` | wire: `{name,busy,content}` |
 | `SessionInfo`, `SessionView` interfaces | `frontend/src/api/agent.ts:119–130` | TS interfaces |
 | `getSessions()`, `getSessionView()` | `frontend/src/api/agent.ts:132–146` | API functions |
 | `useSessions` hook | `frontend/src/hooks/useSessions.ts:17` | polling gates: `active`, `visible` |

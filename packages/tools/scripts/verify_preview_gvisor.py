@@ -20,13 +20,13 @@ from __future__ import annotations
 import asyncio
 import os
 
-from perpleximanus.tools.sandbox import (
+from disco.tools.sandbox import (
     GvisorSandboxService,
     SandboxSpec,
     default_sandbox_config,
 )
-from perpleximanus.tools.sandbox.port_owner import port_owner
-from perpleximanus.tools.sandbox.session import SandboxSession
+from disco.tools.sandbox.port_owner import port_owner
+from disco.tools.sandbox.session import SandboxSession
 
 
 def ok(label: str, passed: bool, detail: str = "") -> None:

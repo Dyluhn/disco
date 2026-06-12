@@ -121,7 +121,7 @@ async def run(base: str, *, query: str, with_research: bool) -> list[CanaryResul
 
 
 def _main() -> int:
-    ap = argparse.ArgumentParser(description="perpleximanus synthetic canary")
+    ap = argparse.ArgumentParser(description="disco synthetic canary")
     ap.add_argument("--base", default="http://localhost:8001", help="agent-server base URL")
     ap.add_argument("--query", default="What is the capital of France and its population?")
     ap.add_argument("--no-research", dest="research", action="store_false")

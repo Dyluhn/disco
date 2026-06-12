@@ -8,20 +8,20 @@ from __future__ import annotations
 
 import asyncio
 
-from perpleximanus.core import (
+from disco.core import (
     NoOpCondenser,
     SecurityRisk,
     SqliteEventStore,
     ToolResult,
 )
-from perpleximanus.core.llm import (
+from disco.core.llm import (
     CompletionResponse,
     OperatingMode,
     StreamChunk,
     TokenUsage,
     ToolSpec,
 )
-from perpleximanus.core.loop import AgentLoop, AgentStep, NeverConfirm
+from disco.core.loop import AgentLoop, AgentStep, NeverConfirm
 
 # ---- fake Agent (scripted) --------------------------------------------------
 
@@ -245,7 +245,7 @@ def build_loop(
 
 
 def action_step(tool: str = "shell", args: dict | None = None, thought: str = "do it"):
-    from perpleximanus.core import ToolCall
+    from disco.core import ToolCall
 
     return AgentStep(
         thought=thought, tool_call=ToolCall(tool_name=tool, arguments=args or {}), finished=False

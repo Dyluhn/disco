@@ -21,9 +21,9 @@ import asyncio
 import json
 from pathlib import Path
 
-from perpleximanus.core import LLMMessage, SqliteEventStore
-from perpleximanus.core.events import ConversationStatus, EventSource, MessageEvent
-from perpleximanus.core.llm import ConfigStore, SecretStore
+from disco.core import LLMMessage, SqliteEventStore
+from disco.core.events import ConversationStatus, EventSource, MessageEvent
+from disco.core.llm import ConfigStore, SecretStore
 
 from .cassette import Cassette
 from .runtime import build_recording_runtime

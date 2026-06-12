@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import asyncio
 
-from perpleximanus.agent_server import ConversationRuntime
-from perpleximanus.core import SqliteEventStore
-from perpleximanus.core.llm import ConfigStore, SecretStore
+from disco.agent_server import ConversationRuntime
+from disco.core import SqliteEventStore
+from disco.core.llm import ConfigStore, SecretStore
 
 from .cassette import Cassette
 from .eval_runner import (

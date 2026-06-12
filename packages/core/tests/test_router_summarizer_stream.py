@@ -8,15 +8,15 @@ non-streamed result for the same input.
 
 from __future__ import annotations
 
-from llm_fakes import FakeModelProvider, build_router, simple_config
-from perpleximanus.core import LLMMessage, NoOpCondenser, View
-from perpleximanus.core.llm import (
+from disco.core import LLMMessage, NoOpCondenser, View
+from disco.core.llm import (
     CapabilityProfile,
     CompletionRequest,
     DefaultLLMRouter,
     ModelRole,
     RouterSummarizer,
 )
+from llm_fakes import FakeModelProvider, build_router, simple_config
 
 
 async def test_summarizer_routes_summarizer_role_and_returns_text():

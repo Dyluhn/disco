@@ -7,7 +7,7 @@ regex enforcement, ambiguous name rejection.
 from __future__ import annotations
 
 import pytest
-from perpleximanus.tools.mcp.naming import is_mcp_qualified, qualified_name, split_qualified_name
+from disco.tools.mcp.naming import is_mcp_qualified, qualified_name, split_qualified_name
 
 
 class TestQualifiedName:

@@ -20,12 +20,12 @@ from conftest import (
     user_msg,
     with_seqs,
 )
-from perpleximanus.core import (
+from disco.core import (
     ConversationStatus,
     NoOpCondenser,
     View,
 )
-from perpleximanus.core.view import microcompact
+from disco.core.view import microcompact
 
 # ---- S3 Microcompact (GAP A) — drop no-op turns -----------------------------
 
@@ -178,8 +178,8 @@ def test_recitation_scopes_plan_steps_to_the_current_plan():
     """After a re-plan, the recitation must NOT count the PRIOR plan's done marks —
     else every step shows done on the new plan and the model gets confused (observed
     live → STUCK). Only plan_steps after the latest PlanEvent count."""
-    from perpleximanus.core import PlanEvent
-    from perpleximanus.core.view import _recitation_message
+    from disco.core import PlanEvent
+    from disco.core.view import _recitation_message
 
     def act(tool, args):
         return action(tool=tool, args=args)

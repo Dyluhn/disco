@@ -1,7 +1,7 @@
 import pytest
+from disco.core import MessageEvent, StatusEvent
+from disco.core.events import EventSource
 from loop_fakes import FakeExecutor, ScriptedAgent, action_step, build_loop, finish_step
-from perpleximanus.core import MessageEvent, StatusEvent
-from perpleximanus.core.events import EventSource
 
 CID = "conv"
 
@@ -22,7 +22,7 @@ async def test_twelve_consecutive_reads_no_reminder_no_withholding():
     
     agent = RecordingAgent(steps)
     
-    from perpleximanus.core.llm import ToolSpec
+    from disco.core.llm import ToolSpec
     tools = [
         ToolSpec(name="file_read", description="read", parameters_schema={}),
         ToolSpec(name="file_write", description="write", parameters_schema={}),

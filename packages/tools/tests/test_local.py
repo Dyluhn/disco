@@ -15,10 +15,9 @@ import tarfile
 from collections import namedtuple
 
 import pytest
-from docker.errors import ImageNotFound
-from perpleximanus.core import SecurityRisk
-from perpleximanus.tools.anatomy import Capability
-from perpleximanus.tools.sandbox import (
+from disco.core import SecurityRisk
+from disco.tools.anatomy import Capability
+from disco.tools.sandbox import (
     LocalSandboxService,
     SandboxConfig,
     SandboxError,
@@ -27,6 +26,7 @@ from perpleximanus.tools.sandbox import (
     default_local_config,
     isolation_for,
 )
+from docker.errors import ImageNotFound
 
 _Exec = namedtuple("_Exec", ["exit_code", "output"])
 

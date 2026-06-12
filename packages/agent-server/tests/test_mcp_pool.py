@@ -9,22 +9,19 @@ Uses the FakeStdioServer via McpPool + McpStdioClient.
 from __future__ import annotations
 
 import sqlite3
+import sys
 
 import pytest
-from perpleximanus.core import SecurityRisk
-from perpleximanus.tools.mcp.approval import (
-    ApprovalRequired,
+from disco.core import SecurityRisk
+from disco.tools.mcp.approval import (
     compute_description_hash,
 )
-from perpleximanus.tools.mcp.config import McpServerConfig, McpSettings
-from perpleximanus.tools.mcp.pool import McpPool
-from perpleximanus.tools.mcp.migrations import (
+from disco.tools.mcp.config import McpServerConfig, McpSettings
+from disco.tools.mcp.migrations import (
     create_mcp_approval,
-    get_mcp_approval,
     list_mcp_approvals,
 )
-
-import sys
+from disco.tools.mcp.pool import McpPool
 
 
 def _fake_stdio_server_config(
@@ -440,9 +437,9 @@ def test_mcp_approval_required_frame_reaches_ws_client():
     from its approval-pending loop on conversation start (runtime.py)."""
     import time
 
+    from disco.agent_server import create_app
+    from disco.core import SqliteEventStore
     from fastapi.testclient import TestClient
-    from perpleximanus.agent_server import create_app
-    from perpleximanus.core import SqliteEventStore
 
     store = SqliteEventStore(":memory:")
     client = TestClient(create_app(store))
@@ -489,8 +486,8 @@ async def test_mcp_tool_wrapper_run_returns_real_tool_outcome():
     """P5: _MCPToolWrapper.run() is invoked through the production wrapper
     (not pool.call_tool directly) and returns a real ToolOutcome with the
     fake server's result. This proves the wrapper path end-to-end."""
-    from perpleximanus.agent_server.runtime import _MCPToolWrapper
-    from perpleximanus.tools.anatomy import ToolOutcome
+    from disco.agent_server.runtime import _MCPToolWrapper
+    from disco.tools.anatomy import ToolOutcome
 
     srv = _fake_stdio_server_config()
     pool = _make_pool({"fake_srv": srv})

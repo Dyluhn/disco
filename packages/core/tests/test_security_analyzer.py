@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from perpleximanus.core import ActionEvent, SecurityRisk, ToolCall
-from perpleximanus.core.security import (
+from disco.core import ActionEvent, SecurityRisk, ToolCall
+from disco.core.security import (
     EnsembleAnalyzer,
     LLMBasedAnalyzer,
     RiskAssessment,

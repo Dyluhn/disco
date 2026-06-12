@@ -4,7 +4,7 @@ brace/quote noise polluting its context."""
 
 from __future__ import annotations
 
-from perpleximanus.tools.builtin.retrieval import (
+from disco.tools.builtin.retrieval import (
     _EXTRACT_CHAR_BUDGET,
     _extract_markdown,
     _search_markdown,

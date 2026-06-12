@@ -10,18 +10,18 @@ provider key never reaches the tool observations or the answer (tool §6).
 from __future__ import annotations
 
 from conftest import FakeExtractionProvider, FakeRouter, FakeSearchProvider, hit
-from perpleximanus.core import ConversationStatus, SqliteEventStore, ToolCall
-from perpleximanus.core.llm import OperatingMode
-from perpleximanus.core.loop import AgentLoop, AgentStep, NeverConfirm, NullSecurityAnalyzer
-from perpleximanus.core.view import NoOpCondenser
-from perpleximanus.retrieval import (
+from disco.core import ConversationStatus, SqliteEventStore, ToolCall
+from disco.core.llm import OperatingMode
+from disco.core.loop import AgentLoop, AgentStep, NeverConfirm, NullSecurityAnalyzer
+from disco.core.view import NoOpCondenser
+from disco.retrieval import (
     CrossEncoderNLIVerifier,
     DefaultRetrievalEngine,
     GroundingPipeline,
     LexicalReranker,
     RetrievalRequest,
 )
-from perpleximanus.tools import (
+from disco.tools import (
     CapabilityBroker,
     DefaultToolExecutor,
     InMemorySecretsStore,

@@ -1,4 +1,4 @@
-# Contributing to perpleximanus
+# Contributing to Disco
 
 A self-hosted Research + Agent platform built as one agent core over an append-only
 event log. Before you start, skim the two design authorities — when code and prose
@@ -38,24 +38,24 @@ extra):
 
 ```bash
 # Audio overviews — bundled in-process Kokoro TTS (weights download on first use):
-uv sync --package perpleximanus-agent-server --extra tts
+uv sync --package disco-agent-server --extra tts
 ```
 
 ### Running the servers
 
 Two FastAPI/uvicorn servers share one SQLite event store (`PMX_DB`, default
-`./perpleximanus.db`). Run each as a module:
+`./disco.db`). Run each as a module:
 
 ```bash
 # Agent-server — per-conversation runtime (WebSocket + REST).
 # Env: PMX_HOST (default 127.0.0.1), PMX_PORT (default 8000), PMX_DB.
 #      PMX_SANDBOX (process|local|gvisor|podman) optionally forces a sandbox backend;
 #      unset → the persisted Settings selector decides per request.
-uv run python -m perpleximanus.agent_server
+uv run python -m disco.agent_server
 
 # App-server — settings + library gateway the frontend calls.
 # Env: PMX_HOST (default 127.0.0.1), PMX_PORT (default 8800), PMX_DB.
-uv run python -m perpleximanus.app_server
+uv run python -m disco.app_server
 ```
 
 > Note: `.env.example` / the compose deploy use different default ports
@@ -149,8 +149,8 @@ core  →  tools  →  agent-server  →  app-server
 - **app-server** — user-facing settings/library gateway. Depends on `core` (+ httpx to
   proxy the OpenRouter catalogue).
 
-`perpleximanus` is a PEP 420 namespace package — every member shares the
-`perpleximanus.*` namespace. **Do not create up-edges.** `core` must never import from
+`disco` is a PEP 420 namespace package — every member shares the
+`disco.*` namespace. **Do not create up-edges.** `core` must never import from
 `tools`/`agent_server`/`app_server`; a lower layer reaching up into a higher one is a
 review-blocking defect, not a style nit.
 
@@ -191,6 +191,6 @@ them.
 
 By contributing, you agree your contributions are licensed under the project's
 **Apache License 2.0** ([`LICENSE`](./LICENSE)) — no CLA, no copyright assignment. And a
-standing promise back to you: **the license will never change.** perpleximanus will not
+standing promise back to you: **the license will never change.** disco will not
 be relicensed to a source-available or commercial license, so your contribution stays
 Apache-2.0 forever (see the README's License section).

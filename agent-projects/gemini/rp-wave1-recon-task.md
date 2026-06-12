@@ -14,15 +14,15 @@ report: **CONFIRMED at line N** (give the current line number) or **DRIFTED**
 (describe what you actually found and where, or state it is absent).
 
 ### RP-01 (dashboard lite)
-1. `packages/core/src/perpleximanus/core/store/sqlite.py` around lines 34-56 —
+1. `packages/core/src/disco/core/store/sqlite.py` around lines 34-56 —
    a `conversations` table schema with a `status` column that is never written
    by any code path (search the whole repo for writes to it).
 2. `ConversationSummaryDTO` lacks a `status` field — find the DTO definition
    (agent-server package) and confirm.
 3. `ConversationState.reconstruct()` — pure function at
-   `packages/core/src/perpleximanus/core/state.py` around line 59.
+   `packages/core/src/disco/core/state.py` around line 59.
 4. In-process runtime-tracking dicts at
-   `packages/agent-server/src/perpleximanus/agent_server/runtime.py` around
+   `packages/agent-server/src/disco/agent_server/runtime.py` around
    lines 228-241.
 
 ### RP-02 (deep-report rich blocks)

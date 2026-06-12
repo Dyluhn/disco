@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from conftest import FakeSandboxInstance, call
-from perpleximanus.tools import (
+from disco.tools import (
     DefaultToolExecutor,
     ToolContext,
     ToolDef,
@@ -14,8 +14,8 @@ from perpleximanus.tools import (
     build_default_registry,
     research_scope,
 )
-from perpleximanus.tools.builtin import FileReadTool
-from perpleximanus.tools.registry import ToolRegistry, ToolScope
+from disco.tools.builtin import FileReadTool
+from disco.tools.registry import ToolRegistry, ToolScope
 from pydantic import BaseModel
 
 

@@ -9,7 +9,7 @@ No deviations from the spec.
 
 ## Changes Made
 
-### 1. `packages/tools/src/perpleximanus/tools/executor.py`
+### 1. `packages/tools/src/disco/tools/executor.py`
 
 **The relay fix (DEFECT-2 root cause).**
 
@@ -34,7 +34,7 @@ opacity for **every** tool that reports failure via `content` rather than
 
 ---
 
-### 2. `packages/tools/src/perpleximanus/tools/builtin/shell_sessions.py`
+### 2. `packages/tools/src/disco/tools/builtin/shell_sessions.py`
 
 **Belt+braces: every `ToolOutcome(success=False, ...)` now also sets `error=`.**
 
@@ -58,7 +58,7 @@ return ToolOutcome(success=False, content="Session manager not available.", erro
 
 ---
 
-### 3. `packages/tools/src/perpleximanus/tools/sandbox/shell_sessions.py`
+### 3. `packages/tools/src/disco/tools/sandbox/shell_sessions.py`
 
 **Two changes to `ShellSessionManager.exec()`.**
 

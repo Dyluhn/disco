@@ -17,7 +17,7 @@ import asyncio
 import os
 import subprocess
 
-from perpleximanus.tools.sandbox import (
+from disco.tools.sandbox import (
     GvisorSandboxService,
     SandboxSpec,
     default_sandbox_config,

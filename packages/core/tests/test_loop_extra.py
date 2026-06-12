@@ -5,15 +5,7 @@ resume(), and the policy/analyzer classes.
 
 from __future__ import annotations
 
-from loop_fakes import (
-    FakeAnalyzer,
-    FakeCondenser,
-    ScriptedAgent,
-    action_step,
-    build_loop,
-    finish_step,
-)
-from perpleximanus.core import (
+from disco.core import (
     ActionEvent,
     CondensationEvent,
     CondensationRequest,
@@ -23,12 +15,20 @@ from perpleximanus.core import (
     SecurityRisk,
     ToolCall,
 )
-from perpleximanus.core.loop import (
+from disco.core.loop import (
     AgentStep,
     AlwaysConfirm,
     ConfirmRisky,
     NullSecurityAnalyzer,
     SelfAssessedAnalyzer,
+)
+from loop_fakes import (
+    FakeAnalyzer,
+    FakeCondenser,
+    ScriptedAgent,
+    action_step,
+    build_loop,
+    finish_step,
 )
 
 CID = "conv"

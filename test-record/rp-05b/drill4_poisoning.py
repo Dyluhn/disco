@@ -27,11 +27,11 @@ import sys
 
 from _accept_common import REPO_ROOT  # noqa: F401  (import triggers cwd→repo root)
 
-from perpleximanus.agent_server import ConversationRuntime
-from perpleximanus.core import SecurityRisk, SqliteEventStore
-from perpleximanus.tools.mcp import McpPool, McpServerConfig, McpSettings
-from perpleximanus.tools.mcp.migrations import create_mcp_approval, list_mcp_approvals
-from perpleximanus.tools.sandbox import ProcessSandboxService
+from disco.agent_server import ConversationRuntime
+from disco.core import SecurityRisk, SqliteEventStore
+from disco.tools.mcp import McpPool, McpServerConfig, McpSettings
+from disco.tools.mcp.migrations import create_mcp_approval, list_mcp_approvals
+from disco.tools.sandbox import ProcessSandboxService
 
 SERVER = "fake_srv"
 

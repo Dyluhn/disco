@@ -11,7 +11,7 @@ import asyncio
 
 import pytest
 from conftest import action, user_msg
-from perpleximanus.core import SqliteEventStore
+from disco.core import SqliteEventStore
 from pydantic import ValidationError
 
 CID = "conv_test"

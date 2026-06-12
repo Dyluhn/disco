@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import pytest
 from conftest import FakeSandboxInstance, call
-from perpleximanus.tools.builtin import build_default_registry
-from perpleximanus.tools.executor import DefaultToolExecutor
-from perpleximanus.tools.registry import agent_scope, research_scope
-from perpleximanus.tools.sandbox import SandboxSession
-from perpleximanus.tools.sandbox._container import ContainerInstance
-from perpleximanus.tools.sandbox.base import (
+from disco.tools.builtin import build_default_registry
+from disco.tools.executor import DefaultToolExecutor
+from disco.tools.registry import agent_scope, research_scope
+from disco.tools.sandbox import SandboxSession
+from disco.tools.sandbox._container import ContainerInstance
+from disco.tools.sandbox.base import (
     ExecResult,
     SandboxError,
     SandboxInstance,
@@ -120,7 +120,7 @@ async def test_code_exec_timeout_is_surfaced():
 async def test_code_exec_python_state_persists_across_cells(tmp_path):
     """Stateful CodeAct (the 'persistent kernel' contract): a name defined in one
     Python cell is in scope in the next — proven against the REAL process sandbox."""
-    from perpleximanus.tools.sandbox.process import ProcessSandboxInstance, ProcessSandboxService
+    from disco.tools.sandbox.process import ProcessSandboxInstance, ProcessSandboxService
 
     ws = tmp_path / "ws"
     ws.mkdir()
@@ -145,7 +145,7 @@ async def test_code_exec_python_state_persists_across_cells(tmp_path):
 async def test_code_exec_erroring_cell_keeps_prior_state(tmp_path):
     """A cell that raises surfaces the traceback + a failure, but does NOT wipe the
     session — names bound before it remain available (kernel-like)."""
-    from perpleximanus.tools.sandbox.process import ProcessSandboxInstance, ProcessSandboxService
+    from disco.tools.sandbox.process import ProcessSandboxInstance, ProcessSandboxService
     ws = tmp_path / "ws"
     ws.mkdir()
     

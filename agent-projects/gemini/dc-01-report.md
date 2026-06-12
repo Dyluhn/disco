@@ -2,8 +2,8 @@
 
 ## Changes Made
 - Added `websockets` dependency to `packages/agent-server/pyproject.toml`.
-- Implemented `HostPreviewProxyMiddleware` in `packages/agent-server/src/perpleximanus/agent_server/host_proxy.py`. The middleware intercepts HTTP and WebSocket requests where the `Host` header matches `^(?P<cid8>[0-9a-f]{8})-(?P<port>\d{2,5})\.localhost(?::\d+)?$`. It validates the port against `USER_PORTS`, resolves the `cid8`, and proxies the requests to the real upstream using `httpx.AsyncClient` for HTTP and `websockets` for WebSockets.
-- Added `resolve_cid_prefix(cid8)` to `ConversationRuntime` in `packages/agent-server/src/perpleximanus/agent_server/runtime.py` to match the prefix against `_executors.keys()`.
+- Implemented `HostPreviewProxyMiddleware` in `packages/agent-server/src/disco/agent_server/host_proxy.py`. The middleware intercepts HTTP and WebSocket requests where the `Host` header matches `^(?P<cid8>[0-9a-f]{8})-(?P<port>\d{2,5})\.localhost(?::\d+)?$`. It validates the port against `USER_PORTS`, resolves the `cid8`, and proxies the requests to the real upstream using `httpx.AsyncClient` for HTTP and `websockets` for WebSockets.
+- Added `resolve_cid_prefix(cid8)` to `ConversationRuntime` in `packages/agent-server/src/disco/agent_server/runtime.py` to match the prefix against `_executors.keys()`.
 - Wired the middleware into `app.py` after `CORSMiddleware`.
 - Marked existing path-based preview proxy endpoints (`/conversations/{id}/preview-app/` and `/conversations/{id}/port/{port}/`) as deprecated.
 - Implemented `previewHostUrl` in `frontend/src/api/client.ts` to construct the origin-true preview URLs.
@@ -16,7 +16,7 @@
 
 ### Frontend Unit Tests
 ```
- RUN  v3.2.4 /var/home/dylan/projects/perpleximanus build/frontend
+ RUN  v3.2.4 /var/home/dylan/projects/disco build/frontend
 
  ✓ src/components/build/ExecutionCanvas.preview.test.tsx (6 tests) 85ms
 
@@ -32,15 +32,15 @@ uv run pytest packages/agent-server/tests/test_host_proxy.py -x -q
 .........                                                                [100%]
 =============================== warnings summary ===============================
 packages/agent-server/tests/test_host_proxy.py::test_websocket_proxy
-  /var/home/dylan/projects/perpleximanus build/.venv/lib/python3.13/site-packages/websockets/legacy/__init__.py:6: DeprecationWarning: websockets.legacy is deprecated; see https://websockets.readthedocs.io/en/stable/howto/upgrade.html for upgrade instructions
+  /var/home/dylan/projects/disco build/.venv/lib/python3.13/site-packages/websockets/legacy/__init__.py:6: DeprecationWarning: websockets.legacy is deprecated; see https://websockets.readthedocs.io/en/stable/howto/upgrade.html for upgrade instructions
     warnings.warn(  # deprecated in 14.0 - 2024-11-09
 
 packages/agent-server/tests/test_host_proxy.py::test_websocket_proxy
-  /var/home/dylan/projects/perpleximanus build/.venv/lib/python3.13/site-packages/uvicorn/protocols/websockets/websockets_impl.py:17: DeprecationWarning: websockets.server.WebSocketServerProtocol is deprecated
+  /var/home/dylan/projects/disco build/.venv/lib/python3.13/site-packages/uvicorn/protocols/websockets/websockets_impl.py:17: DeprecationWarning: websockets.server.WebSocketServerProtocol is deprecated
     from websockets.server import WebSocketServerProtocol
 
 packages/agent-server/tests/test_host_proxy.py::test_websocket_proxy
-  /var/home/dylan/projects/perpleximanus build/.venv/lib/python3.13/site-packages/websockets/legacy/server.py:1178: DeprecationWarning: remove second argument of ws_handler
+  /var/home/dylan/projects/disco build/.venv/lib/python3.13/site-packages/websockets/legacy/server.py:1178: DeprecationWarning: remove second argument of ws_handler
     warnings.warn("remove second argument of ws_handler", DeprecationWarning)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html

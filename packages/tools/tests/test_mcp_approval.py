@@ -6,8 +6,7 @@ re-approval required path.
 
 from __future__ import annotations
 
-import pytest
-from perpleximanus.tools.mcp.approval import (
+from disco.tools.mcp.approval import (
     ApprovalRecord,
     ApprovalRequired,
     compute_description_hash,

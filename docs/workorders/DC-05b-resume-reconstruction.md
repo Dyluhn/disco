@@ -22,16 +22,16 @@ because the reconstructed context is pathological:
 The same model tool-calls correctly from step 1 of every fresh run — this is
 the resume prompt's shape, not the model.
 
-Code as of HEAD (`packages/agent-server/src/perpleximanus/agent_server/runtime.py`):
+Code as of HEAD (`packages/agent-server/src/disco/agent_server/runtime.py`):
 - `resume_conversation()` ~1755: checks status, appends
   `MessageEvent(source=ENVIRONMENT, message=LLMMessage(role="user",
   content="Resumed by user."))` (~1790-1793), flips
   `StatusEvent(RUNNING, detail="resumed")` (~1807-1810), re-kicks the loop.
 - Context is rebuilt by `View.of(events)`
-  (packages/core/src/perpleximanus/core/view.py:228) — renders events as-is;
+  (packages/core/src/disco/core/view.py:228) — renders events as-is;
   an ActionEvent with no correlated ObservationEvent/AgentErrorEvent just
   dangles. (You are NOT changing view.py — you append real events instead.)
-- Event shapes: packages/core/src/perpleximanus/core/events.py (ActionEvent,
+- Event shapes: packages/core/src/disco/core/events.py (ActionEvent,
   ObservationEvent + their correlation fields — read it; match the
   tool_call_id pairing exactly so View renders the pair correctly).
 - Workspace snapshot listing: `self._project_store_now()` → `store.get(cid)`
@@ -125,7 +125,7 @@ One ENVIRONMENT MessageEvent (role="user") composed of:
 
 ## Manifest (orders.yaml `dc-05b` — touch nothing outside it)
 
-- packages/agent-server/src/perpleximanus/agent_server/runtime.py
+- packages/agent-server/src/disco/agent_server/runtime.py
 - packages/agent-server/tests/test_resume_reconstruction.py
 - test-record/dc-05/units-server.log
 - agent-projects/sonnet/dc-05b-report.md

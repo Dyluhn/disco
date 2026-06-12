@@ -6,6 +6,17 @@ items are tested directly against the policy and via the engine (meta stamping).
 
 from __future__ import annotations
 
+from disco.core import (
+    ActionEvent,
+    ConversationStatus,
+    SecurityRisk,
+)
+from disco.core.loop import (
+    AlwaysConfirm,
+    BlastRadiusConfirm,
+    ConfirmRisky,
+    NeverConfirm,
+)
 from loop_fakes import (
     FakeAnalyzer,
     FakeExecutor,
@@ -13,17 +24,6 @@ from loop_fakes import (
     action_step,
     build_loop,
     finish_step,
-)
-from perpleximanus.core import (
-    ActionEvent,
-    ConversationStatus,
-    SecurityRisk,
-)
-from perpleximanus.core.loop import (
-    AlwaysConfirm,
-    BlastRadiusConfirm,
-    ConfirmRisky,
-    NeverConfirm,
 )
 
 U, L, M, H = (
@@ -137,7 +137,7 @@ async def test_hard_deny_refuses_sandboxed_rm_rf_before_policy():
     events = await store.get_events("conv")
     statuses = [e.status for e in events if hasattr(e, "status")]
     assert ConversationStatus.WAITING_FOR_CONFIRMATION not in statuses
-    from perpleximanus.core import AgentErrorEvent
+    from disco.core import AgentErrorEvent
     errors = [e for e in events if isinstance(e, AgentErrorEvent)]
     assert errors, "hard-deny must emit an AgentErrorEvent"
     assert any("hard-denied" in e.error or "REFUSED" in e.error for e in errors)
@@ -224,7 +224,7 @@ async def test_auto_approved_not_stamped_when_base_would_not_gate():
     # rp-12 registry-aware requery: a tool absent from available_tools() is
     # treated as unknown and requeried — the test executor must register what
     # the script calls, like a real registry would.
-    from perpleximanus.core.llm.types import ToolSpec
+    from disco.core.llm.types import ToolSpec
     loop, store = build_loop(
         agent,
         executor=_SandboxScopedExecutor(

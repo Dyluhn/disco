@@ -2,7 +2,7 @@
 
 ## What changed
 
-### `packages/agent-server/src/perpleximanus/agent_server/runtime.py`
+### `packages/agent-server/src/disco/agent_server/runtime.py`
 
 **`__init__`** — added `self._last_sessions: dict[str, list[SessionInfo]] = {}` after the existing `_session_view_locks` dict. This is the per-cid snapshot cache for degraded responses.
 
@@ -25,7 +25,7 @@ return (await self.sessions_snapshot(conversation_id))[0]
 ```
 All existing callers (`/sessions/{name}/view` existence check, etc.) continue to work unchanged, now automatically degraded instead of propagating exceptions.
 
-### `packages/agent-server/src/perpleximanus/agent_server/app.py`
+### `packages/agent-server/src/disco/agent_server/app.py`
 
 **`list_sessions` route** — changed from `runtime.sessions_list(...)` to `runtime.sessions_snapshot(...)`. Response now includes `"stale": stale`. No-runtime guard (`runtime is None`) returns the existing `{"sessions": []}` shape unchanged to avoid breaking backward compat.
 
@@ -65,7 +65,7 @@ packages/agent-server/tests/test_sessions_routes.py ..........           [100%]
 
 =============================== warnings summary ===============================
 .venv/lib/python3.13/site-packages/fastapi/testclient.py:1
-  /var/home/dylan/projects/perpleximanus build/.venv/lib/python3.13/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+  /var/home/dylan/projects/disco build/.venv/lib/python3.13/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
     from starlette.testclient import TestClient as TestClient  # noqa
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html

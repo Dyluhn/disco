@@ -29,7 +29,7 @@ BP-16 MARATHON GATE                  ← last; the cluster is DONE only when thi
 
 ## Environment facts (do not rediscover, do not contradict)
 
-- Repo root: `/var/home/dylan/projects/perpleximanus build` (the directory name contains
+- Repo root: `/var/home/dylan/projects/disco build` (the directory name contains
   a space — quote every path).
 - uv workspace, Python ≥3.12. Packages: `packages/{core,tools,retrieval,agent-server,app-server}`.
 - Frontend: `frontend/` — React 19, Vite 6, TS 5.6, Tailwind 4. Dev server `:5173`.

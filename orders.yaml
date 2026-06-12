@@ -20,23 +20,23 @@
 
 # --- committed (kept for the record) -----------------------------------------
 bp-01: committed
-  - packages/tools/src/perpleximanus/tools/sandbox/session.py
-  - packages/tools/src/perpleximanus/tools/sandbox/_container.py
+  - packages/tools/src/disco/tools/sandbox/session.py
+  - packages/tools/src/disco/tools/sandbox/_container.py
 bp-02: committed
-  - packages/tools/src/perpleximanus/tools/sandbox/port_owner.py
-  - packages/tools/src/perpleximanus/tools/builtin/server.py
-  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/tools/src/disco/tools/sandbox/port_owner.py
+  - packages/tools/src/disco/tools/builtin/server.py
+  - packages/agent-server/src/disco/agent_server/runtime.py
 bp-03: committed
-  - packages/core/src/perpleximanus/core/llm/prompts.py
-  - packages/core/src/perpleximanus/core/security/analyzers.py
-  - packages/core/src/perpleximanus/core/loop/engine.py
+  - packages/core/src/disco/core/llm/prompts.py
+  - packages/core/src/disco/core/security/analyzers.py
+  - packages/core/src/disco/core/loop/engine.py
   - packages/core/tests/test_bp03_acceptance.py
   - packages/core/tests/test_cluster3_security.py
   - frontend/e2e-live/bp-03-contract.spec.ts
 
 # --- in flight ----------------------------------------------------------------
 bp-06: committed
-  - packages/core/src/perpleximanus/core/view.py
+  - packages/core/src/disco/core/view.py
   - packages/core/tests/test_observation_masking.py
   - packages/core/tests/test_view_kv_stability.py
   - frontend/e2e-live/bp-06-feed-unmasked.spec.ts
@@ -49,13 +49,13 @@ bp-06: committed
   - test-record/bp-06/send_frame.py
   - test-record/screenshots/bp-06/feed-unmasked.png
 bp-07: committed
-  - packages/core/src/perpleximanus/core/loop/engine.py
+  - packages/core/src/disco/core/loop/engine.py
   - packages/core/tests/test_no_read_penalty.py
   - packages/core/tests/test_loop_step.py
   - packages/core/tests/test_planner_gate.py
 bp-04: committed
-  - packages/tools/src/perpleximanus/tools/builtin/_browser_daemon.py
-  - packages/tools/src/perpleximanus/tools/builtin/browser.py
+  - packages/tools/src/disco/tools/builtin/_browser_daemon.py
+  - packages/tools/src/disco/tools/builtin/browser.py
   - packages/tools/pyproject.toml
   - deploy/sandbox/Dockerfile
   - packages/tools/tests/test_browser.py
@@ -72,10 +72,10 @@ bp-04: committed
   - test-record/screenshots/bp-04/feed-browser-observation.png
   - test-record/screenshots/bp-04/feed-browser-observation-expanded.png
 bp-05: committed
-  - packages/core/src/perpleximanus/core/loop/engine.py
-  - packages/core/src/perpleximanus/core/llm/prompts.py
+  - packages/core/src/disco/core/loop/engine.py
+  - packages/core/src/disco/core/llm/prompts.py
   - packages/core/tests/test_finish_browser_gate.py
-  - packages/core/src/perpleximanus/core/events.py
+  - packages/core/src/disco/core/events.py
   - packages/core/tests/test_serialization.py
   - frontend/src/lib/buildTrace.ts
   - frontend/src/components/build/ActivityFeed.tsx
@@ -88,18 +88,18 @@ bp-05: committed
   - test-record/screenshots/bp-05/verify-clean-finish.png
   - test-record/screenshots/bp-05/verify-warned-finish.png
 bp-00: committed
-  - packages/core/src/perpleximanus/core/events.py
-  - packages/core/src/perpleximanus/core/llm/openai_provider.py
-  - packages/core/src/perpleximanus/core/llm/config.py
-  - packages/core/src/perpleximanus/core/llm/config_store.py
-  - packages/core/src/perpleximanus/core/llm/routing.py
-  - packages/core/src/perpleximanus/core/llm/prompts.py
-  - packages/core/src/perpleximanus/core/view.py
-  - packages/tools/src/perpleximanus/tools/builtin/_browser_daemon.py
-  - packages/tools/src/perpleximanus/tools/builtin/browser.py
-  - packages/tools/src/perpleximanus/tools/sandbox/_container.py
-  - packages/tools/src/perpleximanus/tools/sandbox/podman.py
-  - packages/tools/src/perpleximanus/tools/sandbox/gvisor.py
+  - packages/core/src/disco/core/events.py
+  - packages/core/src/disco/core/llm/openai_provider.py
+  - packages/core/src/disco/core/llm/config.py
+  - packages/core/src/disco/core/llm/config_store.py
+  - packages/core/src/disco/core/llm/routing.py
+  - packages/core/src/disco/core/llm/prompts.py
+  - packages/core/src/disco/core/view.py
+  - packages/tools/src/disco/tools/builtin/_browser_daemon.py
+  - packages/tools/src/disco/tools/builtin/browser.py
+  - packages/tools/src/disco/tools/sandbox/_container.py
+  - packages/tools/src/disco/tools/sandbox/podman.py
+  - packages/tools/src/disco/tools/sandbox/gvisor.py
   - packages/core/tests/test_serialization.py
   - packages/core/tests/test_vision_wiring.py
   - packages/core/tests/test_view_kv_stability.py
@@ -134,16 +134,16 @@ bp-00: committed
   - test-record/screenshots/bp-00/defect-before.png
   - test-record/screenshots/bp-00/fixed-after.png
 bp-09: committed
-  - packages/tools/src/perpleximanus/tools/sandbox/base.py
-  - packages/tools/src/perpleximanus/tools/sandbox/gvisor.py
-  - packages/tools/src/perpleximanus/tools/sandbox/__init__.py
-  - packages/tools/src/perpleximanus/tools/__init__.py
-  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/tools/src/disco/tools/sandbox/base.py
+  - packages/tools/src/disco/tools/sandbox/gvisor.py
+  - packages/tools/src/disco/tools/sandbox/__init__.py
+  - packages/tools/src/disco/tools/__init__.py
+  - packages/agent-server/src/disco/agent_server/runtime.py
   - packages/agent-server/pyproject.toml
   - packages/agent-server/tests/test_sandbox_config.py
   - packages/agent-server/tests/test_build_surface.py
   - packages/tools/tests/test_sandbox.py
-  - packages/core/src/perpleximanus/core/llm/prompts.py
+  - packages/core/src/disco/core/llm/prompts.py
   - deploy/sandbox/Dockerfile
   - uv.lock
   - frontend/e2e-live/bp-09-install.spec.ts
@@ -159,10 +159,10 @@ bp-09: committed
   - test-record/screenshots/bp-09/install-and-serve.png
   - agent-projects/gemini/bp-09-report.md
 bp-12: committed
-  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
-  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/agent-server/src/disco/agent_server/runtime.py
+  - packages/agent-server/src/disco/agent_server/app.py
   - packages/agent-server/tests/test_resume.py
-  - packages/core/src/perpleximanus/core/loop/engine.py
+  - packages/core/src/disco/core/loop/engine.py
   - frontend/src/api/agent.ts
   - frontend/src/hooks/useBuildStream.ts
   - frontend/src/components/BuildSurface.tsx
@@ -180,15 +180,15 @@ bp-12: committed
   - test-record/screenshots/bp-12/resume-running.png
   - agent-projects/gemini/bp-12-report.md
 bp-13: committed
-  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
-  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/agent-server/src/disco/agent_server/runtime.py
+  - packages/agent-server/src/disco/agent_server/app.py
   - packages/agent-server/tests/test_lifecycle.py
-  - packages/tools/src/perpleximanus/tools/sandbox/base.py
-  - packages/tools/src/perpleximanus/tools/sandbox/gvisor.py
-  - packages/tools/src/perpleximanus/tools/sandbox/podman.py
-  - packages/tools/src/perpleximanus/tools/sandbox/local.py
-  - packages/tools/src/perpleximanus/tools/sandbox/process.py
-  - packages/tools/src/perpleximanus/tools/sandbox/session.py
+  - packages/tools/src/disco/tools/sandbox/base.py
+  - packages/tools/src/disco/tools/sandbox/gvisor.py
+  - packages/tools/src/disco/tools/sandbox/podman.py
+  - packages/tools/src/disco/tools/sandbox/local.py
+  - packages/tools/src/disco/tools/sandbox/process.py
+  - packages/tools/src/disco/tools/sandbox/session.py
   - packages/tools/tests/test_sandbox.py
   - frontend/src/types/agent.ts
   - frontend/src/hooks/useBuildStream.ts
@@ -207,8 +207,8 @@ bp-13: committed
 bp-11: committed
   - frontend/src/lib/buildTrace.ts
   - frontend/src/components/build/ActivityFeed.tsx
-  - packages/agent-server/src/perpleximanus/agent_server/app.py
-  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/src/disco/agent_server/app.py
+  - packages/agent-server/src/disco/agent_server/runtime.py
   - packages/agent-server/tests/test_upload.py
   - frontend/src/api/agent.ts
   - frontend/src/components/BuildSurface.tsx
@@ -227,15 +227,15 @@ bp-11: committed
   - test-record/screenshots/bp-11/preview-table.png
   - agent-projects/gemini/bp-11-report.md
 bp-08: committed
-  - packages/tools/src/perpleximanus/tools/sandbox/kernel.py
-  - packages/tools/src/perpleximanus/tools/sandbox/session.py
-  - packages/tools/src/perpleximanus/tools/sandbox/_container.py
-  - packages/tools/src/perpleximanus/tools/builtin/system.py
-  - packages/tools/src/perpleximanus/tools/anatomy.py
-  - packages/tools/src/perpleximanus/tools/executor.py
+  - packages/tools/src/disco/tools/sandbox/kernel.py
+  - packages/tools/src/disco/tools/sandbox/session.py
+  - packages/tools/src/disco/tools/sandbox/_container.py
+  - packages/tools/src/disco/tools/builtin/system.py
+  - packages/tools/src/disco/tools/anatomy.py
+  - packages/tools/src/disco/tools/executor.py
   - packages/tools/pyproject.toml
   - deploy/sandbox/Dockerfile
-  - packages/core/src/perpleximanus/core/llm/prompts.py
+  - packages/core/src/disco/core/llm/prompts.py
   - packages/tools/tests/test_agent_tools.py
   - packages/tools/tests/test_kernel_session.py
   - packages/tools/tests/test_sandbox.py
@@ -253,20 +253,20 @@ bp-08: committed
   - test-record/bp-08/kernel-cells-witness.json
   - test-record/screenshots/bp-08/kernel-cells.png
 bp-10: committed
-  - packages/tools/src/perpleximanus/tools/sandbox/_container.py
-  - packages/tools/src/perpleximanus/tools/sandbox/gvisor.py
-  - packages/tools/src/perpleximanus/tools/sandbox/local.py
-  - packages/tools/src/perpleximanus/tools/sandbox/process.py
-  - packages/tools/src/perpleximanus/tools/sandbox/session.py
-  - packages/tools/src/perpleximanus/tools/sandbox/port_owner.py
-  - packages/tools/src/perpleximanus/tools/builtin/server.py
+  - packages/tools/src/disco/tools/sandbox/_container.py
+  - packages/tools/src/disco/tools/sandbox/gvisor.py
+  - packages/tools/src/disco/tools/sandbox/local.py
+  - packages/tools/src/disco/tools/sandbox/process.py
+  - packages/tools/src/disco/tools/sandbox/session.py
+  - packages/tools/src/disco/tools/sandbox/port_owner.py
+  - packages/tools/src/disco/tools/builtin/server.py
   - packages/tools/tests/test_preview.py
   - packages/tools/tests/test_sandbox.py
   - packages/tools/tests/test_server_status.py
-  - packages/agent-server/src/perpleximanus/agent_server/app.py
-  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/src/disco/agent_server/app.py
+  - packages/agent-server/src/disco/agent_server/runtime.py
   - packages/agent-server/tests/test_sandbox_config.py
-  - packages/core/src/perpleximanus/core/llm/prompts.py
+  - packages/core/src/disco/core/llm/prompts.py
   - frontend/src/components/build/ExecutionCanvas.tsx
   - frontend/src/types/agent.ts
   - frontend/e2e-live/bp-10-port-pills.spec.ts
@@ -285,8 +285,8 @@ bp-10: committed
 
 # --- staged (declared; dispatch flips to in-flight) ----------------------------
 bp-14: committed
-  - packages/agent-server/src/perpleximanus/agent_server/app.py
-  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/src/disco/agent_server/app.py
+  - packages/agent-server/src/disco/agent_server/runtime.py
   - packages/agent-server/tests/test_sessions_routes.py
   - frontend/src/hooks/useSessions.ts
   - frontend/src/hooks/useSessions.test.ts
@@ -302,8 +302,8 @@ bp-14: committed
   - test-record/screenshots/bp-14/terminal-history.png
   - agent-projects/gemini/bp-14-report.md
 bp-15: committed
-  - packages/agent-server/src/perpleximanus/agent_server/app.py
-  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/src/disco/agent_server/app.py
+  - packages/agent-server/src/disco/agent_server/runtime.py
   - packages/agent-server/tests/test_workspace_route.py
   - frontend/src/lib/buildTrace.ts
   - frontend/src/lib/isolation.ts
@@ -380,9 +380,9 @@ bp-16: committed
 
 # --- de-complexity wave 0 (docs/decomplexity-wave-plan.md) ---------------------
 dc-01: committed
-  - packages/agent-server/src/perpleximanus/agent_server/host_proxy.py
-  - packages/agent-server/src/perpleximanus/agent_server/app.py
-  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/src/disco/agent_server/host_proxy.py
+  - packages/agent-server/src/disco/agent_server/app.py
+  - packages/agent-server/src/disco/agent_server/runtime.py
   - packages/agent-server/pyproject.toml
   - uv.lock
   - packages/agent-server/tests/test_host_proxy.py
@@ -398,17 +398,17 @@ dc-01: committed
   - test-record/screenshots/dc-01/host-preview-port-3000.png
   - agent-projects/gemini/dc-01-report.md
 dc-04a: committed
-  - packages/tools/src/perpleximanus/tools/executor.py
-  - packages/tools/src/perpleximanus/tools/builtin/shell_sessions.py
-  - packages/tools/src/perpleximanus/tools/sandbox/shell_sessions.py
+  - packages/tools/src/disco/tools/executor.py
+  - packages/tools/src/disco/tools/builtin/shell_sessions.py
+  - packages/tools/src/disco/tools/sandbox/shell_sessions.py
   - packages/tools/tests/test_session_diagnostics.py
   - test-record/dc-04a/units.log
   - agent-projects/sonnet/dc-04a-report.md
 dc-02: committed
-  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
-  - packages/agent-server/src/perpleximanus/agent_server/app.py
-  - packages/agent-server/src/perpleximanus/agent_server/host_proxy.py
-  - packages/core/src/perpleximanus/core/llm/config.py
+  - packages/agent-server/src/disco/agent_server/runtime.py
+  - packages/agent-server/src/disco/agent_server/app.py
+  - packages/agent-server/src/disco/agent_server/host_proxy.py
+  - packages/core/src/disco/core/llm/config.py
   - packages/agent-server/tests/test_idle_suspend.py
   - packages/agent-server/tests/test_host_proxy.py
   - packages/agent-server/tests/test_lifecycle.py
@@ -416,9 +416,9 @@ dc-02: committed
   - test-record/dc-02/units.log
   - agent-projects/gemini/dc-02-report.md
 dc-03: committed
-  - packages/core/src/perpleximanus/core/loop/policies.py
-  - packages/core/src/perpleximanus/core/loop/engine.py
-  - packages/tools/src/perpleximanus/tools/executor.py
+  - packages/core/src/disco/core/loop/policies.py
+  - packages/core/src/disco/core/loop/engine.py
+  - packages/tools/src/disco/tools/executor.py
   - packages/core/tests/test_gate_scoping.py
   - packages/tools/tests/test_executor_scope.py
   - frontend/src/lib/buildTrace.ts
@@ -430,34 +430,34 @@ dc-03: committed
   - test-record/dc-03/units-frontend.log
   - agent-projects/sonnet/dc-03-report.md
 dc-04b: committed
-  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
-  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/agent-server/src/disco/agent_server/runtime.py
+  - packages/agent-server/src/disco/agent_server/app.py
   - packages/agent-server/tests/test_sessions_degrade.py
   - packages/agent-server/tests/test_sessions_routes.py
   - test-record/dc-04b/units.log
   - agent-projects/sonnet/dc-04b-report.md
 dc-05a: committed
-  - packages/core/src/perpleximanus/core/loop/engine.py
+  - packages/core/src/disco/core/loop/engine.py
   - packages/core/tests/test_dc05_loop.py
   - test-record/dc-05/units-core.log
   - agent-projects/gemini/dc-05a-report.md
 dc-05b: committed
-  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/src/disco/agent_server/runtime.py
   - packages/agent-server/tests/test_resume_reconstruction.py
   - test-record/dc-05/units-server.log
   - agent-projects/sonnet/dc-05b-report.md
 dc-05c: committed
-  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
-  - packages/core/src/perpleximanus/core/view.py
+  - packages/agent-server/src/disco/agent_server/runtime.py
+  - packages/core/src/disco/core/view.py
   - packages/agent-server/tests/test_resume_condensation.py
   - test-record/dc-05/units-c.log
   - agent-projects/gemini/dc-05c-report.md
 rp-01: committed
-  - packages/core/src/perpleximanus/core/store/sqlite.py
-  - packages/core/src/perpleximanus/core/store/base.py
-  - packages/core/src/perpleximanus/core/__init__.py
+  - packages/core/src/disco/core/store/sqlite.py
+  - packages/core/src/disco/core/store/base.py
+  - packages/core/src/disco/core/__init__.py
   - packages/core/tests/test_store_status.py
-  - packages/app-server/src/perpleximanus/app_server/app.py
+  - packages/app-server/src/disco/app_server/app.py
   - packages/app-server/tests/test_app.py
   - frontend/src/types/conversation.ts
   - frontend/src/views/HistoryView.tsx
@@ -468,7 +468,7 @@ rp-01: committed
   - agent-projects/gemini/rp-01-report.md
   - agent-projects/gemini/rp-01-fix1-report.md
 rp-02: committed
-  - packages/retrieval/src/perpleximanus/retrieval/streaming.py
+  - packages/retrieval/src/disco/retrieval/streaming.py
   - packages/retrieval/tests/test_table_blocks.py
   - frontend/src/components/Markdown.tsx
   - frontend/src/components/Markdown.test.tsx
@@ -480,15 +480,15 @@ rp-02: committed
   - agent-projects/gemini/rp-02-report.md
   - agent-projects/gemini/rp-02-fix1-report.md
 rp-12: committed
-  - packages/tools/src/perpleximanus/tools/sandbox/kernel.py
+  - packages/tools/src/disco/tools/sandbox/kernel.py
   - packages/tools/tests/test_kernel_session.py
-  - packages/core/src/perpleximanus/core/llm/prompts.py
-  - packages/core/src/perpleximanus/core/llm/types.py
-  - packages/core/src/perpleximanus/core/llm/openai_provider.py
-  - packages/core/src/perpleximanus/core/view.py
-  - packages/core/src/perpleximanus/core/loop/engine.py
-  - packages/core/src/perpleximanus/core/loop/agent.py
-  - packages/core/src/perpleximanus/core/loop/boundaries.py
+  - packages/core/src/disco/core/llm/prompts.py
+  - packages/core/src/disco/core/llm/types.py
+  - packages/core/src/disco/core/llm/openai_provider.py
+  - packages/core/src/disco/core/view.py
+  - packages/core/src/disco/core/loop/engine.py
+  - packages/core/src/disco/core/loop/agent.py
+  - packages/core/src/disco/core/loop/boundaries.py
   - packages/core/tests/test_tail_variation.py
   - packages/core/tests/test_prefill_masking.py
   - packages/core/tests/test_toolcall_defense.py
@@ -525,24 +525,24 @@ rp-03: committed
   - frontend/src/components/blocks.tsx
   - frontend/src/components/ChartBlock.test.tsx
   - frontend/package.json
-  - packages/retrieval/src/perpleximanus/retrieval/streaming.py
-  - packages/retrieval/src/perpleximanus/retrieval/deep_research/synthesis.py
+  - packages/retrieval/src/disco/retrieval/streaming.py
+  - packages/retrieval/src/disco/retrieval/deep_research/synthesis.py
   - packages/retrieval/tests/test_chart_blocks.py
   - test-record/rp-03/units-retrieval.log
   - test-record/rp-03/units-frontend.log
   - agent-projects/gemini/rp-03-report.md
 rp-04: committed
-  - packages/core/src/perpleximanus/core/llm/openai_provider.py
+  - packages/core/src/disco/core/llm/openai_provider.py
   - packages/core/tests/test_toolcall_defense.py
-  - packages/retrieval/src/perpleximanus/retrieval/deep_research/engine.py
+  - packages/retrieval/src/disco/retrieval/deep_research/engine.py
   - packages/retrieval/tests/test_pipeline_invariants.py
   - test-record/rp-04/units-core.log
   - test-record/rp-04/units-retrieval.log
   - agent-projects/gemini/rp-04-report.md
 dc-07: committed
-  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
-  - packages/agent-server/src/perpleximanus/agent_server/app.py
-  - packages/core/src/perpleximanus/core/llm/prompts.py
+  - packages/agent-server/src/disco/agent_server/runtime.py
+  - packages/agent-server/src/disco/agent_server/app.py
+  - packages/core/src/disco/core/llm/prompts.py
   - packages/agent-server/tests/test_upload.py
   - test-record/dc-07/units-server.log
   - test-record/dc-07/units-core.log
@@ -559,12 +559,12 @@ rp-06: committed
   - frontend/src/App.tsx
   - frontend/src/test/setup.ts
   - frontend/package-lock.json
-  - packages/core/src/perpleximanus/core/store/sqlite.py
+  - packages/core/src/disco/core/store/sqlite.py
   - packages/retrieval/pyproject.toml
   - uv.lock
-  - packages/agent-server/src/perpleximanus/agent_server/app.py
-  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
-  - packages/agent-server/src/perpleximanus/agent_server/redaction.py
+  - packages/agent-server/src/disco/agent_server/app.py
+  - packages/agent-server/src/disco/agent_server/runtime.py
+  - packages/agent-server/src/disco/agent_server/redaction.py
   - packages/agent-server/tests/test_share.py
   - packages/agent-server/tests/test_redaction.py
   - test-record/rp-06/units-server.log
@@ -574,10 +574,10 @@ rp-06: committed
 df-08: done  # committed 272f59e — Fable single-round APPROVE (8/8 PASS); llm-layer, disjoint from rp-05b
   # actual touch set (worker reconciled): openai_provider.py NOT touched (OR-path
   # image_url serialization already correct); escalation test in a dedicated new
-  # file, not the manifest's stubs; perpleximanus-config.json is gitignored
+  # file, not the manifest's stubs; disco-config.json is gitignored
   # (local default mirrors the committed config.py default_config() default).
-  - packages/core/src/perpleximanus/core/llm/config.py
-  - packages/core/src/perpleximanus/core/llm/routing.py
+  - packages/core/src/disco/core/llm/config.py
+  - packages/core/src/disco/core/llm/routing.py
   - packages/core/tests/test_vision_wiring.py
   - packages/core/tests/test_df08_vision_escalation.py
   - test-record/df-08/units-core.log
@@ -586,21 +586,21 @@ df-08: done  # committed 272f59e — Fable single-round APPROVE (8/8 PASS); llm-
 rp-05a: committed  # done 247b81b — Fable round-4 APPROVE (8/8 PASS)
   - packages/tools/pyproject.toml
   - uv.lock
-  - packages/tools/src/perpleximanus/tools/mcp/__init__.py
-  - packages/tools/src/perpleximanus/tools/mcp/config.py
-  - packages/tools/src/perpleximanus/tools/mcp/pool.py
-  - packages/tools/src/perpleximanus/tools/mcp/stdio.py
-  - packages/tools/src/perpleximanus/tools/mcp/approval.py
-  - packages/tools/src/perpleximanus/tools/mcp/naming.py
-  - packages/tools/src/perpleximanus/tools/mcp/tool_search.py
-  - packages/tools/src/perpleximanus/tools/mcp/migrations.py
-  - packages/core/src/perpleximanus/core/llm/config.py
-  - packages/core/src/perpleximanus/core/llm/secrets.py
-  - packages/core/src/perpleximanus/core/llm/__init__.py
-  - packages/core/src/perpleximanus/core/store/sqlite.py
-  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
-  - packages/agent-server/src/perpleximanus/agent_server/app.py
-  - packages/core/src/perpleximanus/core/wire.py
+  - packages/tools/src/disco/tools/mcp/__init__.py
+  - packages/tools/src/disco/tools/mcp/config.py
+  - packages/tools/src/disco/tools/mcp/pool.py
+  - packages/tools/src/disco/tools/mcp/stdio.py
+  - packages/tools/src/disco/tools/mcp/approval.py
+  - packages/tools/src/disco/tools/mcp/naming.py
+  - packages/tools/src/disco/tools/mcp/tool_search.py
+  - packages/tools/src/disco/tools/mcp/migrations.py
+  - packages/core/src/disco/core/llm/config.py
+  - packages/core/src/disco/core/llm/secrets.py
+  - packages/core/src/disco/core/llm/__init__.py
+  - packages/core/src/disco/core/store/sqlite.py
+  - packages/agent-server/src/disco/agent_server/runtime.py
+  - packages/agent-server/src/disco/agent_server/app.py
+  - packages/core/src/disco/core/wire.py
   - packages/agent-server/tests/test_mcp_pool.py
   - packages/tools/tests/mcp_fakes.py
   - packages/tools/tests/test_mcp_transport.py
@@ -626,13 +626,13 @@ rp-05a: committed  # done 247b81b — Fable round-4 APPROVE (8/8 PASS)
 # Disjoint: py owns mcp/__init__.py + agent-server/{runtime,app}.py; ui owns
 # app-server/* + frontend/*. No shared file → both run in parallel.
 rp-05b-py: committed
-  - packages/tools/src/perpleximanus/tools/mcp/__init__.py
-  - packages/tools/src/perpleximanus/tools/mcp/http.py
-  - packages/tools/src/perpleximanus/tools/mcp/retrieval_tier.py
-  - packages/tools/src/perpleximanus/tools/mcp/fence.py
-  - packages/tools/src/perpleximanus/tools/mcp/http_egress.py
-  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
-  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/tools/src/disco/tools/mcp/__init__.py
+  - packages/tools/src/disco/tools/mcp/http.py
+  - packages/tools/src/disco/tools/mcp/retrieval_tier.py
+  - packages/tools/src/disco/tools/mcp/fence.py
+  - packages/tools/src/disco/tools/mcp/http_egress.py
+  - packages/agent-server/src/disco/agent_server/runtime.py
+  - packages/agent-server/src/disco/agent_server/app.py
   - packages/agent-server/tests/test_mcp_http.py
   - packages/agent-server/tests/test_mcp_egress.py
   - packages/agent-server/tests/test_mcp_retrieval_tier.py
@@ -643,8 +643,8 @@ rp-05b-py: committed
   - agent-projects/gemini/rp-05b-py-report.md
   - docs/workorders/RP-05b-orchestrator-proxy-decision.md
 rp-05b-ui: committed
-  - packages/app-server/src/perpleximanus/app_server/app.py
-  - packages/app-server/src/perpleximanus/app_server/config_state.py
+  - packages/app-server/src/disco/app_server/app.py
+  - packages/app-server/src/disco/app_server/config_state.py
   - packages/app-server/tests/test_mcp_endpoints.py
   - frontend/src/types/config.ts
   - frontend/src/api/config.ts
@@ -689,12 +689,12 @@ rp-05c: committed
   # == visibility == allowed_tools∩registry) so the LLM sees tool_search only
   # over-cap yet can still call any tool by qualified name. Cross-cutting core
   # change — its own order + its own Fable review.
-  - packages/tools/src/perpleximanus/tools/executor.py
-  - packages/tools/src/perpleximanus/tools/registry.py
-  - packages/tools/src/perpleximanus/tools/anatomy.py
-  - packages/tools/src/perpleximanus/tools/mcp/tool_search.py
-  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
-  - packages/core/src/perpleximanus/core/loop/engine.py
+  - packages/tools/src/disco/tools/executor.py
+  - packages/tools/src/disco/tools/registry.py
+  - packages/tools/src/disco/tools/anatomy.py
+  - packages/tools/src/disco/tools/mcp/tool_search.py
+  - packages/agent-server/src/disco/agent_server/runtime.py
+  - packages/core/src/disco/core/loop/engine.py
   - packages/tools/tests/test_scope_advertise_split.py
   - packages/agent-server/tests/test_mcp_tool_search_cap.py
   - packages/core/tests/test_mcp_cap_requery.py
@@ -719,8 +719,8 @@ fix-confirm-livelock: committed
   # test_build_surface.py tests (no longer need deselection). pinned-Fable APPROVE
   # (5/5 items; Fable independently reproduced the Defect-B inverse proof + re-ran
   # the full sweep 786 passed). Disjoint from df-08 (llm-layer) — no shared files.
-  - packages/core/src/perpleximanus/core/loop/engine.py
-  - packages/core/src/perpleximanus/core/loop/policies.py
+  - packages/core/src/disco/core/loop/engine.py
+  - packages/core/src/disco/core/loop/policies.py
   - packages/core/tests/test_loop_step.py
   - test-record/fix-confirm-livelock/units.log
   - .orchestrate/review/fix-confirm-livelock-fable-brief.md
@@ -731,14 +731,14 @@ rp-08: committed
   # Scheduled tasks — cronsim recurring agent runs append to the SAME conversation;
   # run-once-coalesced missed-run policy; next-3-runs confirm card. Backend touches
   # the runtime.py/app.py seam (serial vs rp-07); disjoint from rp-11 (registry.py).
-  - packages/agent-server/src/perpleximanus/agent_server/schedule.py
-  - packages/agent-server/src/perpleximanus/agent_server/schedule_models.py
+  - packages/agent-server/src/disco/agent_server/schedule.py
+  - packages/agent-server/src/disco/agent_server/schedule_models.py
   - packages/agent-server/tests/test_schedule_coalesce.py
   - packages/agent-server/tests/test_schedule_e2e.py
-  - packages/core/src/perpleximanus/core/events.py
-  - packages/core/src/perpleximanus/core/store/sqlite.py
-  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
-  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/core/src/disco/core/events.py
+  - packages/core/src/disco/core/store/sqlite.py
+  - packages/agent-server/src/disco/agent_server/runtime.py
+  - packages/agent-server/src/disco/agent_server/app.py
   - packages/agent-server/pyproject.toml
   - uv.lock
   - frontend/src/components/settings/ScheduleSection.tsx
@@ -752,10 +752,10 @@ rp-11: committed
   # only (no engine change). Touches registry.py AGENT_TOOLS seam; disjoint from
   # rp-08. Frontend renders an HONEST preview card (no in-block download: no cid
   # on the block render path; Univer read-only embed deferred — 0.25.x has none).
-  - packages/tools/src/perpleximanus/tools/builtin/sheets.py
+  - packages/tools/src/disco/tools/builtin/sheets.py
   - packages/tools/tests/test_sheets.py
-  - packages/tools/src/perpleximanus/tools/builtin/__init__.py
-  - packages/tools/src/perpleximanus/tools/registry.py
+  - packages/tools/src/disco/tools/builtin/__init__.py
+  - packages/tools/src/disco/tools/registry.py
   - packages/tools/pyproject.toml
   - uv.lock
   - frontend/src/types/grounded.ts
@@ -774,10 +774,10 @@ rp-07: committed
   # byte-identical from deepResearch.ts. Backend seam = runtime.py + app.py (owns
   # uv.lock + app.py this wave). Live pdf/docx generation rides the VM-201 image
   # rebuild; code + md path + unit tests land now. Disjoint from rp-09 (registry).
-  - packages/agent-server/src/perpleximanus/agent_server/report_export.py
+  - packages/agent-server/src/disco/agent_server/report_export.py
   - packages/agent-server/tests/test_report_export.py
-  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
-  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/agent-server/src/disco/agent_server/runtime.py
+  - packages/agent-server/src/disco/agent_server/app.py
   - packages/agent-server/pyproject.toml
   - uv.lock
   - frontend/src/api/deepResearch.ts
@@ -791,13 +791,13 @@ rp-09: committed
   # finished report → MP3 + transcript DeliverableEvent. Agent-side tool only; seam =
   # registry.py AGENT_TOOLS. NO new Python dep, NO app.py (rp-07 owns uv.lock+app.py).
   # Writes through ctx.sandbox. Disjoint from rp-07.
-  - packages/tools/src/perpleximanus/tools/builtin/audio_overview.py
-  - packages/tools/src/perpleximanus/tools/builtin/_audio_mixer.py
-  - packages/agent-server/src/perpleximanus/agent_server/audio_config.py
+  - packages/tools/src/disco/tools/builtin/audio_overview.py
+  - packages/tools/src/disco/tools/builtin/_audio_mixer.py
+  - packages/agent-server/src/disco/agent_server/audio_config.py
   - packages/tools/tests/test_audio_overview_tool.py
   - packages/tools/tests/test_audio_overview_integration.py
-  - packages/tools/src/perpleximanus/tools/builtin/__init__.py
-  - packages/tools/src/perpleximanus/tools/registry.py
+  - packages/tools/src/disco/tools/builtin/__init__.py
+  - packages/tools/src/disco/tools/registry.py
   - test-record/rp-09/units-tools.log
 
 # --- wave 4 final lane (RP-10 ∥ RP-13 — disjoint seams, dispatched 2026-06-12) -
@@ -805,26 +805,26 @@ rp-10: committed
   # Slides — Marp deck generation (slides_generate tool). HTML now; PDF/PPTX ride
   # the VM-201 image rebuild (marp-cli + chromium). Backend tool only, NO frontend.
   # Seam = registry.py AGENT_TOOLS. Sandbox-jailed writes. Disjoint from rp-13.
-  - packages/tools/src/perpleximanus/tools/builtin/slides.py
+  - packages/tools/src/disco/tools/builtin/slides.py
   - packages/tools/tests/test_slides.py
-  - packages/tools/src/perpleximanus/tools/builtin/__init__.py
-  - packages/tools/src/perpleximanus/tools/registry.py
+  - packages/tools/src/disco/tools/builtin/__init__.py
+  - packages/tools/src/disco/tools/registry.py
   - test-record/rp-10/units-tools.log
 rp-13: committed
   # Clarifying questions (pre-plan clarify gate, ADDITIVE on engine.py mirroring
   # ask_user) + deep-report follow-ups (continuation run reusing report corpus, the
   # RP-08 re-injection mechanism). Core-engine + agent-server + research frontend.
   # Disjoint from rp-10 (tools/registry). ENGINE-RISK: additive-only, heavy review.
-  - packages/core/src/perpleximanus/core/loop/engine.py
-  - packages/core/src/perpleximanus/core/events.py
-  - packages/core/src/perpleximanus/core/llm/prompts.py
-  - packages/core/src/perpleximanus/core/__init__.py
-  - packages/core/src/perpleximanus/core/state.py
+  - packages/core/src/disco/core/loop/engine.py
+  - packages/core/src/disco/core/events.py
+  - packages/core/src/disco/core/llm/prompts.py
+  - packages/core/src/disco/core/__init__.py
+  - packages/core/src/disco/core/state.py
   - packages/core/tests/test_clarify_gate.py
   - packages/core/tests/loop_fakes.py
   - packages/core/tests/test_planner_gate.py
-  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
-  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/agent-server/src/disco/agent_server/runtime.py
+  - packages/agent-server/src/disco/agent_server/app.py
   - packages/agent-server/tests/test_report_followup.py
   - frontend/src/types/agent.ts
   - frontend/src/hooks/useBuildStream.ts

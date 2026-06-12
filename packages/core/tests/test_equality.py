@@ -7,7 +7,7 @@ test is table-driven (mutate each field, assert eq/neq).
 
 from __future__ import annotations
 
-from perpleximanus.core import (
+from disco.core import (
     ActionEvent,
     AgentErrorEvent,
     ConversationStatus,

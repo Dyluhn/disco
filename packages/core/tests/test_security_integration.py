@@ -7,10 +7,10 @@ RiskAssessment is reconstructable from the log (audit §7).
 
 from __future__ import annotations
 
+from disco.core import ActionEvent, AgentErrorEvent, ConversationStatus
+from disco.core.loop import ConfirmRisky, NeverConfirm
+from disco.core.security import RuleBasedAnalyzer
 from loop_fakes import FakeExecutor, ScriptedAgent, action_step, build_loop, finish_step
-from perpleximanus.core import ActionEvent, AgentErrorEvent, ConversationStatus
-from perpleximanus.core.loop import ConfirmRisky, NeverConfirm
-from perpleximanus.core.security import RuleBasedAnalyzer
 
 CID = "conv"
 

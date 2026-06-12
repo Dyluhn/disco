@@ -8,8 +8,7 @@ request_id carried into ActionEvent.llm_response_id. No real model involved.
 
 from __future__ import annotations
 
-from llm_fakes import FakeModelProvider, build_router
-from perpleximanus.core import (
+from disco.core import (
     ActionEvent,
     EventSource,
     LLMMessage,
@@ -17,12 +16,13 @@ from perpleximanus.core import (
     ToolCall,
     View,
 )
-from perpleximanus.core.llm import (
+from disco.core.llm import (
     CapabilityProfile,
     CompletionRequest,
     ModelRole,
     ProposedToolCall,
 )
+from llm_fakes import FakeModelProvider, build_router
 
 
 async def test_view_to_request_to_action_event_round_trip():

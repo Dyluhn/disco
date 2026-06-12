@@ -20,7 +20,7 @@ server), so do not re-litigate resolution; just assert it in the live spec.
 
 ## The decided design (locked — do not redesign)
 
-### New module: `packages/agent-server/src/perpleximanus/agent_server/host_proxy.py`
+### New module: `packages/agent-server/src/disco/agent_server/host_proxy.py`
 
 A **pure-ASGI middleware** class (NOT BaseHTTPMiddleware — it must see `websocket`
 scopes and must stream):
@@ -37,7 +37,7 @@ PREVIEW_HOST_RE = re.compile(r"^(?P<cid8>[0-9a-f]{8})-(?P<port>\d{2,5})\.localho
   header; no match → passthrough (the ENTIRE existing app is untouched for normal
   hosts). On match:
   - `port not in USER_PORTS` → 404 `unknown port` (import USER_PORTS from
-    `perpleximanus.tools.sandbox._container` like app.py does). 8899/8901 are not in
+    `disco.tools.sandbox._container` like app.py does). 8899/8901 are not in
     USER_PORTS → stay non-routable, by construction.
   - `upstream_resolver(cid8, port)` returns None → 503 `preview not available`
     (mirrors the path-prefix proxies' semantics).
@@ -144,9 +144,9 @@ The app factory wires `upstream_resolver = lambda cid8, port: (cid := runtime.re
 
 ## Manifest (orders.yaml `dc-01` — touch nothing outside it)
 
-- packages/agent-server/src/perpleximanus/agent_server/host_proxy.py
-- packages/agent-server/src/perpleximanus/agent_server/app.py
-- packages/agent-server/src/perpleximanus/agent_server/runtime.py
+- packages/agent-server/src/disco/agent_server/host_proxy.py
+- packages/agent-server/src/disco/agent_server/app.py
+- packages/agent-server/src/disco/agent_server/runtime.py
 - packages/agent-server/pyproject.toml
 - packages/agent-server/tests/test_host_proxy.py
 - frontend/src/api/client.ts

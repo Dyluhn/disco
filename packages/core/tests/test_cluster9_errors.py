@@ -3,7 +3,7 @@ prompt ladders, and the anti-fewshot driver temperature."""
 
 from __future__ import annotations
 
-from perpleximanus.core.llm import DriverPrompts, ModelRole, OperatingMode
+from disco.core.llm import DriverPrompts, ModelRole, OperatingMode
 
 
 def _exec_prompt() -> str:
@@ -45,7 +45,7 @@ def test_planning_prompt_unaffected_by_file_rules_block():
 
 
 def test_router_agent_defaults_to_nonzero_temperature():
-    from perpleximanus.core.loop.agent import RouterAgent
+    from disco.core.loop.agent import RouterAgent
 
     agent = RouterAgent(router=None)  # ctor doesn't touch the router
     assert agent._temperature > 0.0
@@ -53,7 +53,7 @@ def test_router_agent_defaults_to_nonzero_temperature():
 
 
 def test_router_agent_temperature_is_overridable():
-    from perpleximanus.core.loop.agent import RouterAgent
+    from disco.core.loop.agent import RouterAgent
 
     agent = RouterAgent(router=None, temperature=0.0)
     assert agent._temperature == 0.0

@@ -45,7 +45,7 @@ Process backend: add `playwright` to `packages/tools` optional dependency group
 `browser` (`pyproject.toml`), document `uv sync --extra browser && playwright install
 chromium` in the order's report; acceptance step 0 verifies it.
 
-### 2. Daemon source: `packages/tools/src/perpleximanus/tools/builtin/_browser_daemon.py`
+### 2. Daemon source: `packages/tools/src/disco/tools/builtin/_browser_daemon.py`
 
 A single self-contained script (it is shipped into the sandbox via `write_file`, like the
 egress-proxy pattern in `sandbox/gvisor.py` `_setup_filtered_egress`). Contract:

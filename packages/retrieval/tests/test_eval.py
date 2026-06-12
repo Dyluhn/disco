@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from perpleximanus.retrieval import (
+from disco.retrieval import (
     Claim,
     ExtractedDoc,
     GroundedAnswer,

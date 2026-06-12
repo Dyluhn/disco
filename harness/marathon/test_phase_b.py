@@ -54,7 +54,7 @@ _OR_KEY_SH = "PMX_OPENROUTER_API_KEY=$(python3 harness/marathon/_or_key.py)"
 _SERVER_SH = (
     "cd '{root}' && " + _OR_KEY_SH + " PMX_LOG_JSON=1 PMX_DRIVER_VISION=1 PMX_SANDBOX=gvisor "
     "PMX_LOCAL_SOCKET=ssh://sandbox@100.81.82.115 PMX_LOCAL_RUNTIME=runsc "
-    "PMX_DB=test-record/pmx-run.db uv run python -m perpleximanus.agent_server "
+    "PMX_DB=test-record/pmx-run.db uv run python -m disco.agent_server "
     "2>&1 | tee -a /tmp/pmx-marathon.log"
 )
 
@@ -80,7 +80,7 @@ def _server_pid() -> int | None:
     whose cmdline also matches (first Phase-B run killed the wrapper and the
     server only died via SIGPIPE, voiding the graceful-shutdown premise)."""
     out = subprocess.run(
-        ["pgrep", "-f", "perpleximanus.agent_server"], capture_output=True, text=True
+        ["pgrep", "-f", "disco.agent_server"], capture_output=True, text=True
     ).stdout.split()
     for pid in out:
         try:

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from perpleximanus.agent_server import tts_local
+from disco.agent_server import tts_local
 
 pytestmark = pytest.mark.asyncio
 

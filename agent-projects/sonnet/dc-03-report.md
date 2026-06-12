@@ -8,7 +8,7 @@
 
 ## What changed and where
 
-### 1. `packages/tools/src/perpleximanus/tools/executor.py`
+### 1. `packages/tools/src/disco/tools/executor.py`
 
 Added `tool_scope(tool_name: str) -> str` method to `DefaultToolExecutor`. Iterates
 `self._registry.in_scope(self._scope)` to find the tool by name and returns its
@@ -16,7 +16,7 @@ Added `tool_scope(tool_name: str) -> str` method to `DefaultToolExecutor`. Itera
 found in the current scope (unregistered or out-of-scope tools). Uses only the public
 registry API — no private attribute access.
 
-### 2. `packages/core/src/perpleximanus/core/loop/policies.py`
+### 2. `packages/core/src/disco/core/loop/policies.py`
 
 Three additions:
 
@@ -33,11 +33,11 @@ publish guard trigger, mirroring `analyzers.py:192`'s heuristic.
 - `scope != "sandbox"` → `self.should_confirm(risk)` (ConfirmRisky semantics)
 - Any `_PUBLISH_KEYWORDS` substring in `tool_name` → `True` regardless of scope
 
-### 3. `packages/core/src/perpleximanus/core/loop/__init__.py`
+### 3. `packages/core/src/disco/core/loop/__init__.py`
 
 Exported `BlastRadiusConfirm` from the loop package.
 
-### 4. `packages/core/src/perpleximanus/core/loop/engine.py`
+### 4. `packages/core/src/disco/core/loop/engine.py`
 
 At gate callsite (~2216, the main run-step gate):
 
@@ -75,12 +75,12 @@ Added the "auto · sandboxed" badge next to the label for action items with
 ## Build policy construction site
 
 The brief confirmed this site and my finding matches: `ConfirmRisky()` is constructed at
-`packages/agent-server/src/perpleximanus/agent_server/runtime.py:583`.
+`packages/agent-server/src/disco/agent_server/runtime.py:583`.
 
 **Status: deferred to the orchestrator.** Per the brief, `agent-server` is owned by DC-02
 and is explicitly out of scope for this order. `BlastRadiusConfirm` is fully importable
-from `packages/core/src/perpleximanus/core/loop/policies.py` (and re-exported from
-`packages/core/src/perpleximanus/core/loop/__init__.py`). The one-line swap in
+from `packages/core/src/disco/core/loop/policies.py` (and re-exported from
+`packages/core/src/disco/core/loop/__init__.py`). The one-line swap in
 `runtime.py` (`ConfirmRisky()` → `BlastRadiusConfirm()`) is the orchestrator's to make
 after DC-02 lands.
 
@@ -93,7 +93,7 @@ after DC-02 lands.
 ```
 ============================= test session starts ==============================
 platform linux -- Python 3.13.13, pytest-9.0.3, pluggy-1.6.0
-rootdir: /var/home/dylan/projects/perpleximanus build
+rootdir: /var/home/dylan/projects/disco build
 configfile: pyproject.toml
 plugins: asyncio-1.4.0, anyio-4.5.0, hypothesis-6.155.2
 asyncio: mode=Mode.AUTO, debug=False
@@ -109,7 +109,7 @@ packages/core/tests/test_gate_scoping.py .................               [100%]
 ```
 ============================= test session starts ==============================
 platform linux -- Python 3.13.13, pytest-9.0.3, pluggy-1.6.0
-rootdir: /var/home/dylan/projects/perpleximanus build
+rootdir: /var/home/dylan/projects/disco build
 configfile: pyproject.toml
 plugins: asyncio-1.4.0, anyio-4.5.0, hypothesis-6.155.2
 asyncio: mode=Mode.AUTO, debug=False

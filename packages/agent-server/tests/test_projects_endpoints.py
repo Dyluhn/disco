@@ -10,11 +10,11 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from disco.agent_server import ConversationRuntime, create_app
+from disco.core import SqliteEventStore
+from disco.core.llm import ConfigStore, ProjectStorageSettings, RouterConfig
+from disco.tools.projects import ProjectStore
 from fastapi.testclient import TestClient
-from perpleximanus.agent_server import ConversationRuntime, create_app
-from perpleximanus.core import SqliteEventStore
-from perpleximanus.core.llm import ConfigStore, ProjectStorageSettings, RouterConfig
-from perpleximanus.tools.projects import ProjectStore
 
 
 @pytest.fixture

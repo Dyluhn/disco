@@ -11,12 +11,12 @@ allowlist alone never had.
 
 from __future__ import annotations
 
+from disco.core.llm import OperatingMode
+from disco.core.llm.types import ToolSpec
+from disco.core.loop import AgentLoop, NeverConfirm
+from disco.core.store.sqlite import SqliteEventStore
+from disco.core.view import NoOpCondenser
 from loop_fakes import FakeAnalyzer, FakeExecutor, FakeSummarizer
-from perpleximanus.core.llm import OperatingMode
-from perpleximanus.core.llm.types import ToolSpec
-from perpleximanus.core.loop import AgentLoop, NeverConfirm
-from perpleximanus.core.store.sqlite import SqliteEventStore
-from perpleximanus.core.view import NoOpCondenser
 
 # A mixed tool surface: two read-only, two mutating.
 _TOOLS = [

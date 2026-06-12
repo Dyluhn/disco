@@ -197,7 +197,7 @@ cmd_dispatch() {
     "cd $(printf %q "$REPO_ROOT") && $cmd 2>&1 | tee $(printf %q "$log"); echo \"EXIT=\$?\" >> $(printf %q "$log")"
 
   # Values QUOTED — this file is `source`d, and the repo path contains a space
-  # ("perpleximanus build"); unquoted values word-split and break every consumer.
+  # ("disco build"); unquoted values word-split and break every consumer.
   cat >"$ACTIVE/$order.env" <<EOF
 ORDER="$order"
 WORKER="$worker"

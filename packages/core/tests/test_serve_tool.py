@@ -5,16 +5,16 @@ DeliverableEvent the UI renders as Open-the-app / Download-the-files. Non-blocki
 
 from __future__ import annotations
 
-from llm_fakes import simple_config
-from loop_fakes import FakeExecutor, SequenceProvider, build_loop
-from perpleximanus.core import (
+from disco.core import (
     ActionEvent,
     ConversationStatus,
     DeliverableEvent,
 )
-from perpleximanus.core.events import EventSource
-from perpleximanus.core.llm import DefaultLLMRouter, OperatingMode, ProposedToolCall
-from perpleximanus.core.loop import NeverConfirm, RouterAgent
+from disco.core.events import EventSource
+from disco.core.llm import DefaultLLMRouter, OperatingMode, ProposedToolCall
+from disco.core.loop import NeverConfirm, RouterAgent
+from llm_fakes import simple_config
+from loop_fakes import FakeExecutor, SequenceProvider, build_loop
 
 CID = "conv"
 

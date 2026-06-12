@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 
-from perpleximanus.core import (
+from disco.core import (
     ActionEvent,
     AgentErrorEvent,
     ConversationStatus,
@@ -27,12 +27,12 @@ from perpleximanus.core import (
     ObservationEvent,
     SqliteEventStore,
 )
-from perpleximanus.core.llm import DefaultLLMRouter, OperatingMode, RouterSummarizer
-from perpleximanus.core.llm.config import default_config
-from perpleximanus.core.llm.wiring import build_providers
-from perpleximanus.core.loop import AgentLoop, ConfirmRisky, RouterAgent
-from perpleximanus.core.security import RuleBasedAnalyzer
-from perpleximanus.tools import (
+from disco.core.llm import DefaultLLMRouter, OperatingMode, RouterSummarizer
+from disco.core.llm.config import default_config
+from disco.core.llm.wiring import build_providers
+from disco.core.loop import AgentLoop, ConfirmRisky, RouterAgent
+from disco.core.security import RuleBasedAnalyzer
+from disco.tools import (
     Capability,
     CapabilityBroker,
     DefaultToolExecutor,
@@ -41,7 +41,7 @@ from perpleximanus.tools import (
     agent_scope,
     build_default_registry,
 )
-from perpleximanus.tools.sandbox import LocalSandboxService, SandboxConfig
+from disco.tools.sandbox import LocalSandboxService, SandboxConfig
 
 CID = "inj"
 EVIL_HTML = """<html><head><title>City Weather</title></head><body>

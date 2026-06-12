@@ -11,7 +11,7 @@ they drop straight into `build_live_retrieval`'s slots.
 
 from __future__ import annotations
 
-from perpleximanus.retrieval.models import ExtractedDoc, SearchHit
+from disco.retrieval.models import ExtractedDoc, SearchHit
 
 from .cassette import Cassette
 

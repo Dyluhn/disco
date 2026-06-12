@@ -1,4 +1,4 @@
-# Perpleximanus Build UX — Interaction & Visual Gap Analysis
+# Disco Build UX — Interaction & Visual Gap Analysis
 
 > Produced 2026-06-07 by a 19-agent adversarial workflow (8 UI-mapping agents +
 > 10 pillar-comparison agents + synthesis). Scope: the Build (agent) surface at

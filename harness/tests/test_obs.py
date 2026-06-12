@@ -6,7 +6,7 @@ Run: PYTHONPATH=. uv run pytest harness/tests/test_obs.py
 
 from __future__ import annotations
 
-from perpleximanus.core.obs import log_event, log_span
+from disco.core.obs import log_event, log_span
 
 from harness.logcap import capture_spans, ends, sequence
 

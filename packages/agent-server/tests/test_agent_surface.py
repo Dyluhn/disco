@@ -12,10 +12,10 @@
 
 from __future__ import annotations
 
-from perpleximanus.agent_server import ConversationRuntime
-from perpleximanus.core import SqliteEventStore
-from perpleximanus.core.llm import ConfigStore, SecretBox, SecretStore
-from perpleximanus.tools.projects import StorageStatus
+from disco.agent_server import ConversationRuntime
+from disco.core import SqliteEventStore
+from disco.core.llm import ConfigStore, SecretBox, SecretStore
+from disco.tools.projects import StorageStatus
 
 
 def _rt(tmp_path, monkeypatch, db="events.db"):

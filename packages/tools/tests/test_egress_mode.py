@@ -5,15 +5,15 @@ mode, and the env/argv the filtered path hands the proxy sidecar."""
 
 from __future__ import annotations
 
-from perpleximanus.tools.anatomy import Capability
-from perpleximanus.tools.sandbox._container import (
+from disco.tools.anatomy import Capability
+from disco.tools.sandbox._container import (
     EGRESS_PROXY_PORT,
     egress_mode,
     format_allow,
     proxy_env,
     proxy_run_argv,
 )
-from perpleximanus.tools.sandbox.base import SandboxSpec
+from disco.tools.sandbox.base import SandboxSpec
 
 
 def test_egress_mode_three_way():

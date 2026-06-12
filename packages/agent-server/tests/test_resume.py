@@ -13,8 +13,8 @@ import asyncio
 import contextlib
 
 import httpx
-from perpleximanus.agent_server import ConversationRuntime, create_app
-from perpleximanus.core import (
+from disco.agent_server import ConversationRuntime, create_app
+from disco.core import (
     ConversationStatus,
     EventSource,
     LLMMessage,
@@ -22,8 +22,8 @@ from perpleximanus.core import (
     SqliteEventStore,
     StatusEvent,
 )
-from perpleximanus.core.events import PlanEvent
-from perpleximanus.core.llm import (
+from disco.core.events import PlanEvent
+from disco.core.llm import (
     CompletionResponse,
     DefaultLLMRouter,
     ModelEntry,
@@ -32,7 +32,7 @@ from perpleximanus.core.llm import (
     StreamChunk,
     TokenUsage,
 )
-from perpleximanus.tools import ProcessSandboxService
+from disco.tools import ProcessSandboxService
 
 CID = "test-resume-cid"
 

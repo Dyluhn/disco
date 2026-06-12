@@ -8,10 +8,10 @@
 
 ## What changed
 
-### `packages/agent-server/src/perpleximanus/agent_server/runtime.py`
+### `packages/agent-server/src/disco/agent_server/runtime.py`
 
 **Import added:**
-- `AgentErrorEvent` added to the `from perpleximanus.core import (...)` block — needed to detect resolved (error-paired) actions when scanning for dangling ones.
+- `AgentErrorEvent` added to the `from disco.core import (...)` block — needed to detect resolved (error-paired) actions when scanning for dangling ones.
 
 **New private method — `_reconstruct_resume_context(self, conversation_id, events) -> list`** (inserted immediately before `resume_conversation`):
 
@@ -66,7 +66,7 @@ Implements all three pieces from the decided design, in order:
 ```
 ============================= test session starts ==============================
 platform linux -- Python 3.13.13, pytest-8.0.3, pluggy-1.6.0
-rootdir: /var/home/dylan/projects/perpleximanus build
+rootdir: /var/home/dylan/projects/disco build
 configfile: pyproject.toml
 plugins: asyncio-1.4.0, anyio-4.13.0, hypothesis-6.155.2
 asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function

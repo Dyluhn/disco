@@ -6,15 +6,15 @@ sequence and the reconstructed ConversationState.
 
 from __future__ import annotations
 
-from loop_fakes import ScriptedAgent, action_step, build_loop, finish_step
-from perpleximanus.core import (
+from disco.core import (
     ActionEvent,
     ConversationStatus,
     ErrorEvent,
     ObservationEvent,
     StatusEvent,
 )
-from perpleximanus.core.loop import StuckThresholds
+from disco.core.loop import StuckThresholds
+from loop_fakes import ScriptedAgent, action_step, build_loop, finish_step
 
 CID = "conv"
 

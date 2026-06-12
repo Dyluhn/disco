@@ -105,7 +105,7 @@ New private method on ConversationRuntime:
 
 ## Manifest (orders.yaml `dc-05c`)
 
-- packages/agent-server/src/perpleximanus/agent_server/runtime.py
+- packages/agent-server/src/disco/agent_server/runtime.py
 - packages/agent-server/tests/test_resume_condensation.py
 - test-record/dc-05/units-c.log
 - agent-projects/gemini/dc-05c-report.md

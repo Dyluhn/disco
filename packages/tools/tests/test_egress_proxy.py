@@ -11,8 +11,8 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from perpleximanus.tools.sandbox.base import SandboxSpec
-from perpleximanus.tools.sandbox.egress_proxy import (
+from disco.tools.sandbox.base import SandboxSpec
+from disco.tools.sandbox.egress_proxy import (
     AllowlistProxy,
     host_allowed,
     make_predicate,

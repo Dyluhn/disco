@@ -39,7 +39,7 @@ already transitively present. Image (`deploy/sandbox/Dockerfile`):
 
 ## Implementation
 
-### 1. `packages/tools/src/perpleximanus/tools/sandbox/kernel.py`
+### 1. `packages/tools/src/disco/tools/sandbox/kernel.py`
 
 ```python
 class KernelSession:

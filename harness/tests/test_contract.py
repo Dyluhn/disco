@@ -15,8 +15,8 @@ import re
 import typing
 from pathlib import Path
 
-from perpleximanus.core.events import EventKind
-from perpleximanus.core.wire import WSClientFrame, WSServerFrame
+from disco.core.events import EventKind
+from disco.core.wire import WSClientFrame, WSServerFrame
 
 _TS = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "types" / "agent.ts").read_text()
 

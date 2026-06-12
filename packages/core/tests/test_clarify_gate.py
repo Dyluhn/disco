@@ -6,24 +6,19 @@ Load-bearing test asserting the engine work-gate behaves correctly.
 
 from __future__ import annotations
 
-from loop_fakes import (
-    FakeAnalyzer,
-    FakeExecutor,
-    FakeSummarizer,
-    ScriptedAgent,
-    action_step,
-    build_loop,
-    finish_step,
-)
-from perpleximanus.core import (
+from disco.core import (
     ClarifyEvent,
     ClarifyQuestionItem,
     ConversationStatus,
     StatusEvent,
     ToolCall,
 )
-from perpleximanus.core.llm import OperatingMode
-from perpleximanus.core.loop import AgentStep
+from disco.core.llm import OperatingMode
+from disco.core.loop import AgentStep
+from loop_fakes import (
+    ScriptedAgent,
+    build_loop,
+)
 
 CID = "clarify_test"
 
@@ -226,7 +221,7 @@ def test_reconstruct_clarify_then_ask_does_not_shadow():
     LATER free-form ask_user gate must reconstruct with pending_clarify_id=None —
     so the snapshot path renders the AskPanel, not a stale ClarifyPanel. Regression
     guard for the unconditional `pending_clarify_id = last_clarify_id` bug."""
-    from perpleximanus.core import (
+    from disco.core import (
         ConversationState,
         EventSource,
         LLMMessage,

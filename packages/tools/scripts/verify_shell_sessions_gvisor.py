@@ -15,12 +15,12 @@ from __future__ import annotations
 import asyncio
 import os
 
-from perpleximanus.tools.sandbox import (
+from disco.tools.sandbox import (
     GvisorSandboxService,
     SandboxSpec,
     default_sandbox_config,
 )
-from perpleximanus.tools.sandbox.shell_sessions import SessionBusy, ShellSessionManager
+from disco.tools.sandbox.shell_sessions import SessionBusy, ShellSessionManager
 
 
 def ok(label: str, passed: bool, detail: str = "") -> None:

@@ -1,9 +1,11 @@
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
+
 import pytest
-from perpleximanus.core.loop.agent import RouterAgent
-from perpleximanus.core.llm import OperatingMode, OverflowSignal, Difficulty, CompletionRequest
-from perpleximanus.core.view import View
+from disco.core.llm import Difficulty, OperatingMode, OverflowSignal
+from disco.core.loop.agent import RouterAgent
+from disco.core.view import View
+
 
 @pytest.mark.asyncio
 async def test_prefill_masking_behavior():
@@ -15,7 +17,7 @@ async def test_prefill_masking_behavior():
     async def mock_stream(req, **kwargs):
         nonlocal captured_req
         captured_req = req
-        from perpleximanus.core.llm import StreamChunk, CompletionResponse, TokenUsage
+        from disco.core.llm import CompletionResponse, StreamChunk, TokenUsage
         yield StreamChunk(
             done=True,
             final=CompletionResponse(

@@ -1,4 +1,4 @@
-# perpleximanus — Release Execution Plan (v0.1 public release)
+# disco — Release Execution Plan (v0.1 public release)
 
 **Written 2026-06-12.** Reconciles `release-roadmap.md` (compiled 2026-06-09) against the
 ~158 commits that landed since (BP-00..16, DC-01..07, RP-01..14, df-08, cs-01 — all
@@ -38,7 +38,7 @@ path verified against the tree on 2026-06-12.
 |---|---|---|
 | File upload, both surfaces | DONE | bp-11 `ca5d8dc`; dc-07 uploads re-materialization across sandbox recreate `8398573` + `0c5dbd6`, live acceptance `f3d2966` |
 | Vision feedback for the build agent | DONE | bp-00/bp-05/df-08 (above) |
-| MCP client | DONE | rp-05a `247b81b` (stdio, pool, approval gate), rp-05b-py `9dce032` (HTTP transport, egress allowlist, output fence, retrieval tier), rp-05b-ui `e021f2f` (live CRUD + approval store), rp-05c `7dc2bf4` (active-schema cap + tool_search split). Full stack: `packages/tools/src/perpleximanus/tools/mcp/` (approval, fence, http_egress, pool, retrieval_tier, tool_search) |
+| MCP client | DONE | rp-05a `247b81b` (stdio, pool, approval gate), rp-05b-py `9dce032` (HTTP transport, egress allowlist, output fence, retrieval tier), rp-05b-ui `e021f2f` (live CRUD + approval store), rp-05c `7dc2bf4` (active-schema cap + tool_search split). Full stack: `packages/tools/src/disco/tools/mcp/` (approval, fence, http_egress, pool, retrieval_tier, tool_search) |
 | Clarifying questions + report follow-ups | DONE | rp-13 `9b0658c` |
 | Export PDF/DOCX | DONE | rp-07 `0d30b7f` + `accd7ee` (PDF live, capability-gated) + `415aee5` (DOCX in transient jailed sandbox); `agent_server/report_export.py` |
 | Usability debt (theme, Cmd+K, history search, cost meter, isolation tier) | DONE | rp-14 `17b5ce0` |
@@ -76,7 +76,7 @@ path verified against the tree on 2026-06-12.
 | E3 `</parameter>` leak root cause | PARTIAL | Mitigated (`openai_provider.py` `_raw` fallback) + rp-04's stray-XML strip (`545f7b7`); root cause never isolated |
 | Real-sample harness backfill | PARTIAL | Streaming/provider/DR-lifecycle harnesses still use `_ScriptedRouter`/synthetic docs (pending-items "Process debt"); rp-06 bundle format exists to fix this but no backfill order ran |
 | HS- harvest backlog | NOT-STARTED | `harvest-backlog.md`: HS-01 spill-to-file, HS-02/03/05 reality-block cluster, HS-04 stuck-detector upgrade, HS-06 (design-blocked), HS-07, HS-08 |
-| First-hit wake race; ruff/flake debt | OPEN | memory `perpleximanus-open-gaps` (post-BP residue list) |
+| First-hit wake race; ruff/flake debt | OPEN | memory `disco-open-gaps` (post-BP residue list) |
 | Stale strategy docs | OPEN | README, project-status.md, and the now-superseded roadmap phases need a truth pass |
 
 **Bottom line of the reconciliation:** the roadmap's Phase 0/0.5/1 are complete, Phase 2
@@ -115,7 +115,7 @@ this plan; `git mv project-status.md docs/archive/`.
 tracker later: isolate the E3 `</parameter>` leak root cause (the mitigations work but
 the wedge story is "we root-cause weak-model failure modes"), fix the first-hit wake
 race, clear the ruff/flake debt so CI (D4) can land green from day one.
-**Class:** PARTIAL (mitigations in `openai_provider.py`; memory `perpleximanus-open-gaps`).
+**Class:** PARTIAL (mitigations in `openai_provider.py`; memory `disco-open-gaps`).
 **Effort:** S-M. **Risk:** engine-loop (E3 touches the provider parse path — full
 regression suite mandatory). **Deps:** none.
 **First step:** reproduce E3 with the captured leak samples under the rp-12 requery

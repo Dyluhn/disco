@@ -1,7 +1,7 @@
-# Production image for the perpleximanus Python servers (BoD §5: app-server +
+# Production image for the disco Python servers (BoD §5: app-server +
 # agent-server). ONE venv runs both:
-#   python -m perpleximanus.app_server     (user-facing orchestrator, :8800)
-#   python -m perpleximanus.agent_server    (per-conversation runtime,  :8000)
+#   python -m disco.app_server     (user-facing orchestrator, :8800)
+#   python -m disco.agent_server    (per-conversation runtime,  :8000)
 # compose overrides `command` per service; the default CMD is the app-server.
 #
 # uv-workspace monorepo: packages/{core,tools,retrieval,agent-server,app-server}.
@@ -85,4 +85,4 @@ ENV PATH=/app/.venv/bin:$PATH \
 EXPOSE 8000 8800
 
 # Default to the app-server; compose overrides `command` for the agent-server.
-CMD ["python", "-m", "perpleximanus.app_server"]
+CMD ["python", "-m", "disco.app_server"]

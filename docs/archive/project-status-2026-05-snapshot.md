@@ -1,4 +1,4 @@
-# perpleximanus — project status
+# disco — project status
 
 > **⚠️ ARCHIVED HISTORICAL SNAPSHOT (≈ 2026-05).** This describes an early "walking
 > skeleton" state — when the model path, agent loop, research answers, and the
@@ -49,7 +49,7 @@ Two FastAPI servers, both thin adapters over the **same** SQLite event store:
 
 | Server | Run | Serves |
 |--------|-----|--------|
-| **app-server** | `PMX_PORT=8800 python -m perpleximanus.app_server` | `/api/models`, `/api/models/assignments`, `/api/skills`, `/api/mcp`, `/api/conversations` (+ delete), `/api/health` — with CORS |
+| **app-server** | `PMX_PORT=8800 python -m disco.app_server` | `/api/models`, `/api/models/assignments`, `/api/skills`, `/api/mcp`, `/api/conversations` (+ delete), `/api/health` — with CORS |
 | **agent-server** | (TestClient today; needs a uvicorn wrapper) | `/conversations`, `/conversations/{id}/{messages,events,state}`, `WS /ws/conversations/{id}` |
 
 The frontend (`npm run dev`) points at `VITE_API_BASE`; with it set, the config +
@@ -158,8 +158,8 @@ API + tests), the **core store** additions (`ConversationSummary`,
 
 ```bash
 # 1. backend config/library API
-cd "perpleximanus build"
-PMX_PORT=8800 PMX_DB=./perpleximanus.db uv run python -m perpleximanus.app_server
+cd "disco build"
+PMX_PORT=8800 PMX_DB=./disco.db uv run python -m disco.app_server
 
 # 2. frontend, pointed at it (copy frontend/.env.example -> frontend/.env.local first)
 cd frontend && VITE_API_BASE=http://localhost:8800 npm run dev

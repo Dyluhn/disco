@@ -34,7 +34,7 @@ const OWNER_ID = (import.meta.env.VITE_OWNER_ID as string | undefined) ?? "local
 // fresh one. The path-picker fixture lists a small synthetic tree.
 
 let fixtureStorage: ProjectStorageConfig = {
-  projects_root: "/home/dylan/perpleximanus-projects",
+  projects_root: "/home/dylan/disco-projects",
   status: "ok",
 };
 
@@ -186,15 +186,15 @@ const FIXTURE_TREE: Record<string, BrowseResult> = {
     parent: "/home",
     selectable: "ok",
     entries: [
-      { name: "perpleximanus-projects", is_dir: true },
+      { name: "disco-projects", is_dir: true },
       { name: "Documents", is_dir: true },
       { name: "Downloads", is_dir: true },
       { name: "code", is_dir: true },
       { name: "notes.md", is_dir: false },
     ],
   },
-  "/home/dylan/perpleximanus-projects": {
-    path: "/home/dylan/perpleximanus-projects",
+  "/home/dylan/disco-projects": {
+    path: "/home/dylan/disco-projects",
     parent: "/home/dylan",
     selectable: "ok",
     entries: [

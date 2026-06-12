@@ -16,8 +16,8 @@ import contextlib
 import json
 from pathlib import Path
 
-from perpleximanus.agent_server import ConversationRuntime
-from perpleximanus.core import (
+from disco.agent_server import ConversationRuntime
+from disco.core import (
     ActionEvent,
     AgentErrorEvent,
     ConversationStatus,
@@ -32,7 +32,7 @@ from perpleximanus.core import (
     ToolResult,
     event_from_json_dict,
 )
-from perpleximanus.core.llm import (
+from disco.core.llm import (
     CompletionResponse,
     ConfigStore,
     DefaultLLMRouter,
@@ -41,8 +41,8 @@ from perpleximanus.core.llm import (
     StreamChunk,
     TokenUsage,
 )
-from perpleximanus.core.migration import migrate_event
-from perpleximanus.tools import ProcessSandboxService
+from disco.core.migration import migrate_event
+from disco.tools import ProcessSandboxService
 
 CID = "test-rc-cid"
 

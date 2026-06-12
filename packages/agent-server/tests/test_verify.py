@@ -1,4 +1,4 @@
-"""Unit tests for `pmx verify` (perpleximanus.agent_server.verify).
+"""Unit tests for `pmx verify` (disco.agent_server.verify).
 
 We exercise the PASS/FAIL/SKIP decision logic of each capability check with a FAKE
 router + config (no network), using the REAL CompletionResponse/ProposedToolCall
@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from perpleximanus.agent_server import verify
-from perpleximanus.core.llm.types import (
+from disco.agent_server import verify
+from disco.core.llm.types import (
     CompletionResponse,
     ProposedToolCall,
     TokenUsage,

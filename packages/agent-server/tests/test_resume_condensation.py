@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 
 import pytest
-from perpleximanus.agent_server import ConversationRuntime
-from perpleximanus.core import (
+from disco.agent_server import ConversationRuntime
+from disco.core import (
     ActionEvent,
     CondensationEvent,
     ConversationStatus,
@@ -23,14 +23,14 @@ from perpleximanus.core import (
     View,
     event_from_json_dict,
 )
-from perpleximanus.core.llm import (
+from disco.core.llm import (
     CompletionResponse,
     ConfigStore,
     DefaultLLMRouter,
     RouterConfig,
     TokenUsage,
 )
-from perpleximanus.core.migration import migrate_event
+from disco.core.migration import migrate_event
 
 FIXTURE_PATH = (
     Path(__file__).parent.parent.parent.parent

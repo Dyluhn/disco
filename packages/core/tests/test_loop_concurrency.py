@@ -8,8 +8,7 @@ from __future__ import annotations
 
 import asyncio
 
-from loop_fakes import GatedAgent, ScriptedAgent, action_step, build_loop, finish_step
-from perpleximanus.core import (
+from disco.core import (
     ActionEvent,
     AgentErrorEvent,
     ConversationStatus,
@@ -18,6 +17,7 @@ from perpleximanus.core import (
     MessageEvent,
     ObservationEvent,
 )
+from loop_fakes import GatedAgent, ScriptedAgent, action_step, build_loop, finish_step
 
 CID = "conv"
 

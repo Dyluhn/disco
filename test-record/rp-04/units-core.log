@@ -1,6 +1,6 @@
 ============================= test session starts ==============================
 platform linux -- Python 3.13.13, pytest-9.0.3, pluggy-1.6.0
-rootdir: /var/home/dylan/projects/perpleximanus build
+rootdir: /var/home/dylan/projects/disco build
 configfile: pyproject.toml
 plugins: asyncio-1.4.0, anyio-4.13.0, hypothesis-6.155.2
 asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
@@ -127,8 +127,8 @@ E        +  where 3 = <llm_fakes.FakeModelProvider object at 0x7f93c84b23c0>.cal
 
 packages/core/tests/test_loop_integration.py:109: AssertionError
 ------------------------------ Captured log call -------------------------------
-WARNING  perpleximanus.loop:engine.py:2008 Provider rejected request: image input not supported by local-driver-q4, requerying...
-WARNING  perpleximanus.loop:engine.py:2008 Provider rejected request: image input not supported by local-driver-q4, requerying...
+WARNING  disco.loop:engine.py:2008 Provider rejected request: image input not supported by local-driver-q4, requerying...
+WARNING  disco.loop:engine.py:2008 Provider rejected request: image input not supported by local-driver-q4, requerying...
 ______________________ test_small_old_observation_is_full ______________________
 
     def test_small_old_observation_is_full():

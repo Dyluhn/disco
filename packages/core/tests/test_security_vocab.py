@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from perpleximanus.core import SecurityRisk
-from perpleximanus.core.security import at_or_above, max_risk
+from disco.core import SecurityRisk
+from disco.core.security import at_or_above, max_risk
 
 U, L, M, H = (
     SecurityRisk.UNKNOWN,

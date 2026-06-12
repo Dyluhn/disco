@@ -21,34 +21,34 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
-from perpleximanus.core.llm import (
+from disco.core.llm import (
     CompletionRequest,
     CompletionResponse,
     LLMRouter,
     StreamChunk,
     TokenUsage,
 )
-from perpleximanus.retrieval.deep_research import (
+from disco.retrieval.deep_research import (
     DeepResearchRun,
     DepthBound,
     DepthTier,
     bounds_for,
     decompose_query,
 )
-from perpleximanus.retrieval.deep_research.decompose import SubQuestion
-from perpleximanus.retrieval.deep_research.gather import (
+from disco.retrieval.deep_research.decompose import SubQuestion
+from disco.retrieval.deep_research.gather import (
     SubQuestionResult,
     gather_for_subquestion,
 )
-from perpleximanus.retrieval.engine import DefaultRetrievalEngine
-from perpleximanus.retrieval.models import (
+from disco.retrieval.engine import DefaultRetrievalEngine
+from disco.retrieval.models import (
     ExtractedDoc,
     Passage,
     RetrievalRequest,
     RetrievalResult,
     SearchHit,
 )
-from perpleximanus.retrieval.vectorstore import InMemoryVectorStore
+from disco.retrieval.vectorstore import InMemoryVectorStore
 
 # ---- fakes ------------------------------------------------------------------
 

@@ -10,17 +10,17 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from perpleximanus.agent_server import ConversationRuntime
-from perpleximanus.core import SqliteEventStore
-from perpleximanus.core.events import LLMMessage
-from perpleximanus.core.llm import (
+from disco.agent_server import ConversationRuntime
+from disco.core import SqliteEventStore
+from disco.core.events import LLMMessage
+from disco.core.llm import (
     CapabilityProfile,
     CompletionRequest,
     ConfigStore,
     ModelRole,
     SecretStore,
 )
-from perpleximanus.retrieval.bundled_providers import (
+from disco.retrieval.bundled_providers import (
     DdgsSearchProvider,
     LocalExtractionProvider,
 )

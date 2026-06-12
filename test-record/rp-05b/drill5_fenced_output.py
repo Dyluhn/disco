@@ -40,12 +40,12 @@ import sys
 
 from _accept_common import ConversationStatus, drive, user_event
 
-import perpleximanus.tools.mcp as mcp_mod
-from perpleximanus.agent_server import ConversationRuntime
-from perpleximanus.core import ActionEvent, ObservationEvent, SecurityRisk, SqliteEventStore
-from perpleximanus.tools.mcp import McpPool, McpServerConfig, McpSettings
-from perpleximanus.tools.mcp.migrations import create_mcp_approval, list_mcp_approvals
-from perpleximanus.tools.sandbox import ProcessSandboxService, SandboxSpec
+import disco.tools.mcp as mcp_mod
+from disco.agent_server import ConversationRuntime
+from disco.core import ActionEvent, ObservationEvent, SecurityRisk, SqliteEventStore
+from disco.tools.mcp import McpPool, McpServerConfig, McpSettings
+from disco.tools.mcp.migrations import create_mcp_approval, list_mcp_approvals
+from disco.tools.sandbox import ProcessSandboxService, SandboxSpec
 
 SERVER = "hostile"
 QUAL = f"mcp__{SERVER}__read_doc"
@@ -134,7 +134,7 @@ async def _run_once(*, fenced: bool) -> dict:
     original_fence = mcp_mod.fence_mcp_result
     if not fenced:
         # The UNFENCED control: the runtime resolves the fence via a lazy
-        # `from perpleximanus.tools.mcp import fence_mcp_result`, so replacing the
+        # `from disco.tools.mcp import fence_mcp_result`, so replacing the
         # module attribute feeds the hostile output back RAW (no XML fence) — the
         # model reads the injection text directly, exactly as an un-fenced harness would.
         mcp_mod.fence_mcp_result = lambda server, tool, result: _raw_text(result)

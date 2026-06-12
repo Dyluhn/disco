@@ -18,13 +18,13 @@ from __future__ import annotations
 
 import os
 
-from perpleximanus.core.llm import (
+from disco.core.llm import (
     ConfigStore,
     ModelEntry,
     ProjectStorageSettings,
     default_config,
 )
-from perpleximanus.core.llm.types import ModelRole
+from disco.core.llm.types import ModelRole
 
 _DRIVER_KEY = "driver"
 

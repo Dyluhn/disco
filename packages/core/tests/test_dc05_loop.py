@@ -1,6 +1,5 @@
 import pytest
-from loop_fakes import ScriptedAgent, action_step, build_loop, finish_step
-from perpleximanus.core import (
+from disco.core import (
     ActionEvent,
     ConversationStatus,
     DeliverableEvent,
@@ -13,13 +12,14 @@ from perpleximanus.core import (
     SqliteEventStore,
     StatusEvent,
 )
-from perpleximanus.core.llm import LLMTransientError, OperatingMode
+from disco.core.llm import LLMTransientError, OperatingMode
+from loop_fakes import ScriptedAgent, action_step, build_loop, finish_step
 
 CID = "conv"
 
 
 def noop_step(thought="just talking"):
-    from perpleximanus.core.loop import AgentStep
+    from disco.core.loop import AgentStep
     return AgentStep(thought=thought, tool_call=None, finished=False)
 
 
@@ -218,7 +218,7 @@ async def test_dedup_remember():
 @pytest.mark.asyncio
 async def test_transient_error_retry_succeeds(monkeypatch):
     """2 transient errors then success → step completes, delays == (10.0, 30.0)."""
-    import perpleximanus.core.loop.engine as engine_module
+    import disco.core.loop.engine as engine_module
 
     delays = []
 
@@ -244,7 +244,7 @@ async def test_transient_error_retry_succeeds(monkeypatch):
 @pytest.mark.asyncio
 async def test_transient_error_persistent_pauses(monkeypatch):
     """Persistent LLMTransientError → PAUSED driver-unavailable, 4 attempts, no ErrorEvent."""
-    import perpleximanus.core.loop.engine as engine_module
+    import disco.core.loop.engine as engine_module
 
     async def mock_sleep(_d):
         pass
@@ -507,8 +507,8 @@ async def test_serve_before_work_spam_trips_valve():
 def test_actions_since_last_resume_resets_at_marker():
     """The gate's counter ignores pre-resume work: a resume marker zeroes it,
     and bookkeeping tools never count."""
-    from perpleximanus.core import ToolCall
-    from perpleximanus.core.loop.engine import AgentLoop
+    from disco.core import ToolCall
+    from disco.core.loop.engine import AgentLoop
 
     shell = ActionEvent(thought="t", tool_call=ToolCall(tool_name="shell", arguments={}))
     plan = ActionEvent(thought="t", tool_call=ToolCall(tool_name="submit_plan", arguments={}))
@@ -618,8 +618,8 @@ async def test_failed_verify_probe_does_not_unlock_meta_tools():
     gate's probe runs as a shell ActionEvent — which must NOT count as the
     session's first real action, or the refused finish unlocks the withheld
     meta tools and the model can remember-spam (exactly what happened live)."""
+    from disco.core import ToolResult
     from loop_fakes import FakeExecutor
-    from perpleximanus.core import ToolResult
     agent = ScriptedAgent([
         action_step("finish", {"summary": "done", "verify": "pytest -q"}),
         action_step("remember", {"fact": "csv columns"}),  # turn 2: still lean

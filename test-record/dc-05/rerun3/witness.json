@@ -19,7 +19,7 @@
   "dc05c_condensation_behavior": "CORRECT — _condense_trailing_degeneracy returned None because the trailing pre-pause history was healthy (real ActionEvents). Condensation targets degenerate tails; this defect is fresh post-resume degeneration, out of its scope by design.",
   "fix": {
     "name": "post-resume serve gate",
-    "where": "packages/core/src/perpleximanus/core/loop/engine.py serve intercept (~line 1992)",
+    "where": "packages/core/src/disco/core/loop/engine.py serve intercept (~line 1992)",
     "mechanism": "serve with _actions_since_last_resume(events) == 0 is refused with an actionable ENVIRONMENT message (B4), counts as an invisible step, and feeds the shared actionless valve. Covers conversation-start serves too (helper counts from list start when no resume marker exists).",
     "tests": [
       "test_dc05_loop.py::test_serve_before_any_work_refused",

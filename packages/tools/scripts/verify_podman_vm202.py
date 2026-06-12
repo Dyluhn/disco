@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import os
 
-from perpleximanus.tools.sandbox import (
+from disco.tools.sandbox import (
     PodmanSandboxService,
     SandboxSpec,
     SandboxUnavailableError,

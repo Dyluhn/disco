@@ -19,9 +19,8 @@ pytest.skip(
     allow_module_level=True,
 )
 
-from llm_fakes import FakeModelProvider, build_router, simple_config
-from perpleximanus.core import LLMMessage
-from perpleximanus.core.llm import (
+from disco.core import LLMMessage
+from disco.core.llm import (
     BudgetExceeded,
     CallContext,
     CapabilityProfile,
@@ -34,6 +33,7 @@ from perpleximanus.core.llm import (
     Requirement,
     ThresholdOverflowPolicy,
 )
+from llm_fakes import FakeModelProvider, build_router, simple_config
 
 CFG = simple_config()
 POLICY = ThresholdOverflowPolicy()

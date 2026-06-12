@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from conftest import FakeSandboxInstance, call
-from perpleximanus.tools import (
+from disco.tools import (
     CapabilityBroker,
     DefaultToolExecutor,
     ProcessSandboxService,
@@ -13,7 +13,7 @@ from perpleximanus.tools import (
     research_scope,
     validate_args,
 )
-from perpleximanus.tools.builtin import FileReadTool
+from disco.tools.builtin import FileReadTool
 
 
 async def test_file_edit_replaces_and_reports_missing():

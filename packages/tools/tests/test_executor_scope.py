@@ -6,15 +6,15 @@ sandbox tool → 'sandbox', in_process tool → 'in_process', unregistered → '
 from __future__ import annotations
 
 from conftest import FakeSandboxInstance
-from perpleximanus.tools import (
+from disco.tools import (
     DefaultToolExecutor,
     ToolDef,
     ToolOutcome,
     agent_scope,
     build_default_registry,
 )
-from perpleximanus.tools.anatomy import ToolContext
-from perpleximanus.tools.registry import ToolRegistry, ToolScope
+from disco.tools.anatomy import ToolContext
+from disco.tools.registry import ToolRegistry, ToolScope
 from pydantic import BaseModel
 
 

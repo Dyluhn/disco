@@ -5,12 +5,12 @@ fix for the GAP B leak where a Build change silently broke Research."""
 from __future__ import annotations
 
 import pytest
+from disco.core.llm import DefaultLLMRouter, OperatingMode, OverflowSignal
+from disco.core.llm.policy import Difficulty
+from disco.core.loop import BuildAgent, ResearchAgent, RouterAgent
+from disco.core.view import View
 from llm_fakes import simple_config
 from loop_fakes import SequenceProvider
-from perpleximanus.core.llm import DefaultLLMRouter, OperatingMode, OverflowSignal
-from perpleximanus.core.llm.policy import Difficulty
-from perpleximanus.core.loop import BuildAgent, ResearchAgent, RouterAgent
-from perpleximanus.core.view import View
 
 pytestmark = pytest.mark.asyncio
 

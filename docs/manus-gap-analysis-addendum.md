@@ -4,7 +4,7 @@
 > `manus-ui-gap-analysis.md` (UI/interaction). Assumes the reader has both docs
 > open. Triage source: two deep-research reports on Manus + Claude Code + Replit
 > + Devin + Lovable + Base44, run through per-pattern code triage. File:line
-> citations are to `packages/.../perpleximanus/...` as noted, matching the base docs.
+> citations are to `packages/.../disco/...` as noted, matching the base docs.
 >
 > This addendum does NOT restate the gaps. It records (a) patterns the base docs
 > never named, and (b) concrete implementation recipes for gaps the base docs

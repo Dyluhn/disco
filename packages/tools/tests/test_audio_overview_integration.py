@@ -5,7 +5,7 @@ Drives the AudioOverviewTool over function-level mocks:
 
 The TTS backend is selected from ConfigStore (Settings → Audio); these tests patch
 `ConfigStore.load` so the toggle/backend/voices are deterministic rather than reading
-the live perpleximanus-config.json. The synth seam is now PCM (float32 mono @ 24 kHz):
+the live disco-config.json. The synth seam is now PCM (float32 mono @ 24 kHz):
 the bundled path is `_synthesize_local(text, voice)`, the remote path is
 `_synthesize_remote(text, voice, url)`. Both return numpy arrays; the mixer encodes
 the whole overview to MP3 once.
@@ -31,15 +31,15 @@ from unittest import mock
 import httpx
 import numpy as np
 import pytest
-from perpleximanus.core.llm import ConfigStore, TtsSettings, default_config
-from perpleximanus.tools.anatomy import ToolContext
-from perpleximanus.tools.builtin.audio_overview import (
+from disco.core.llm import ConfigStore, TtsSettings, default_config
+from disco.tools.anatomy import ToolContext
+from disco.tools.builtin.audio_overview import (
     AudioOverviewArgs,
     AudioOverviewTool,
 )
-from perpleximanus.tools.sandbox.base import SandboxSpec
-from perpleximanus.tools.sandbox.process import ProcessSandboxInstance
-from perpleximanus.tools.secrets import CapabilityBroker
+from disco.tools.sandbox.base import SandboxSpec
+from disco.tools.sandbox.process import ProcessSandboxInstance
+from disco.tools.secrets import CapabilityBroker
 
 pytestmark = pytest.mark.asyncio
 
@@ -167,11 +167,11 @@ async def test_full_happy_path():
         with (
             _patch_tts(TtsSettings(enabled=True, remote=False)),
             mock.patch(
-                "perpleximanus.tools.builtin.audio_overview._call_llm",
+                "disco.tools.builtin.audio_overview._call_llm",
                 side_effect=_mock_llm_happy,
             ),
             mock.patch(
-                "perpleximanus.tools.builtin.audio_overview._synthesize_local",
+                "disco.tools.builtin.audio_overview._synthesize_local",
                 side_effect=_mock_synth_local,
             ),
         ):
@@ -225,11 +225,11 @@ async def test_malformed_then_retry():
         with (
             _patch_tts(TtsSettings(enabled=True, remote=False)),
             mock.patch(
-                "perpleximanus.tools.builtin.audio_overview._call_llm",
+                "disco.tools.builtin.audio_overview._call_llm",
                 side_effect=tracking_llm,
             ),
             mock.patch(
-                "perpleximanus.tools.builtin.audio_overview._synthesize_local",
+                "disco.tools.builtin.audio_overview._synthesize_local",
                 side_effect=_mock_synth_local,
             ),
         ):
@@ -264,11 +264,11 @@ async def test_disabled_toggle_fails_soft():
         with (
             _patch_tts(TtsSettings(enabled=False)),
             mock.patch(
-                "perpleximanus.tools.builtin.audio_overview._call_llm",
+                "disco.tools.builtin.audio_overview._call_llm",
                 side_effect=_mock_llm_happy,
             ),
             mock.patch(
-                "perpleximanus.tools.builtin.audio_overview._synthesize_local",
+                "disco.tools.builtin.audio_overview._synthesize_local",
                 synth,
             ),
         ):
@@ -296,11 +296,11 @@ async def test_remote_backend_offline():
                 TtsSettings(enabled=True, remote=True, speaches_url="http://localhost:8000")
             ),
             mock.patch(
-                "perpleximanus.tools.builtin.audio_overview._call_llm",
+                "disco.tools.builtin.audio_overview._call_llm",
                 side_effect=_mock_llm_happy,
             ),
             mock.patch(
-                "perpleximanus.tools.builtin.audio_overview._synthesize_remote",
+                "disco.tools.builtin.audio_overview._synthesize_remote",
                 side_effect=_mock_synth_remote_offline,
             ),
         ):
@@ -326,11 +326,11 @@ async def test_sandbox_jailed_write():
         with (
             _patch_tts(TtsSettings(enabled=True, remote=False)),
             mock.patch(
-                "perpleximanus.tools.builtin.audio_overview._call_llm",
+                "disco.tools.builtin.audio_overview._call_llm",
                 side_effect=_mock_llm_happy,
             ),
             mock.patch(
-                "perpleximanus.tools.builtin.audio_overview._synthesize_local",
+                "disco.tools.builtin.audio_overview._synthesize_local",
                 side_effect=_mock_synth_local,
             ),
         ):
@@ -360,11 +360,11 @@ async def test_transcript_matches_script():
         with (
             _patch_tts(TtsSettings(enabled=True, remote=False)),
             mock.patch(
-                "perpleximanus.tools.builtin.audio_overview._call_llm",
+                "disco.tools.builtin.audio_overview._call_llm",
                 side_effect=_mock_llm_happy,
             ),
             mock.patch(
-                "perpleximanus.tools.builtin.audio_overview._synthesize_local",
+                "disco.tools.builtin.audio_overview._synthesize_local",
                 side_effect=_mock_synth_local,
             ),
         ):
@@ -392,7 +392,7 @@ async def test_llm_failure_returned_cleanly():
         with (
             _patch_tts(TtsSettings(enabled=True, remote=False)),
             mock.patch(
-                "perpleximanus.tools.builtin.audio_overview._call_llm",
+                "disco.tools.builtin.audio_overview._call_llm",
                 side_effect=_mock_llm_fail,
             ),
         ):
@@ -416,11 +416,11 @@ async def test_artifact_list_includes_both_files():
         with (
             _patch_tts(TtsSettings(enabled=True, remote=False)),
             mock.patch(
-                "perpleximanus.tools.builtin.audio_overview._call_llm",
+                "disco.tools.builtin.audio_overview._call_llm",
                 side_effect=_mock_llm_happy,
             ),
             mock.patch(
-                "perpleximanus.tools.builtin.audio_overview._synthesize_local",
+                "disco.tools.builtin.audio_overview._synthesize_local",
                 side_effect=_mock_synth_local,
             ),
         ):

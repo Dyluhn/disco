@@ -7,9 +7,8 @@ overridden when one is; family derivation maps each model to its tag.
 from __future__ import annotations
 
 import pytest
-from llm_fakes import FakeModelProvider, simple_config
-from perpleximanus.core import LLMMessage
-from perpleximanus.core.llm import (
+from disco.core import LLMMessage
+from disco.core.llm import (
     CapabilityProfile,
     CompletionRequest,
     DefaultLLMRouter,
@@ -18,6 +17,7 @@ from perpleximanus.core.llm import (
     StaticPromptProvider,
     derive_family,
 )
+from llm_fakes import FakeModelProvider, simple_config
 
 
 @pytest.mark.parametrize(
@@ -85,8 +85,8 @@ def test_driver_prompts_inject_enabled_skills_block():
     """Enabled skills are prepended to BOTH driver prompts (planning + execution)
     so the agent follows the user's standing instructions; absent skills leave
     the prompts unchanged."""
-    from perpleximanus.core import Skill, render_skills_for_prompt
-    from perpleximanus.core.llm import DriverPrompts, ModelRole, OperatingMode
+    from disco.core import Skill, render_skills_for_prompt
+    from disco.core.llm import DriverPrompts, ModelRole, OperatingMode
 
     skills = [
         Skill(id="yf", name="Yahoo Finance", description="stock data", body="Use the v8 endpoint."),

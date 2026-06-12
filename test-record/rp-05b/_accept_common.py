@@ -26,7 +26,7 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 # Run every drill logically from the repo root: the stdio MCP fakes are spawned
 # as `python -c "from packages.tools.tests.mcp_fakes import …"`, which only
 # resolves when the subprocess inherits cwd == repo root (its `-c` puts cwd on
-# sys.path). Also makes perpleximanus-config.json / harness paths resolve.
+# sys.path). Also makes disco-config.json / harness paths resolve.
 os.chdir(REPO_ROOT)
 
 
@@ -46,7 +46,7 @@ def source_openrouter_key() -> None:
 source_openrouter_key()
 
 
-from perpleximanus.core import (  # noqa: E402  (key must be set before import chain)
+from disco.core import (  # noqa: E402  (key must be set before import chain)
     ActionEvent,
     AgentErrorEvent,
     ConversationStatus,

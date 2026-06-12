@@ -25,11 +25,11 @@ from __future__ import annotations
 import asyncio
 import os
 
-from perpleximanus.core import ToolCall
-from perpleximanus.tools.builtin import build_default_registry
-from perpleximanus.tools.executor import DefaultToolExecutor
-from perpleximanus.tools.registry import agent_scope
-from perpleximanus.tools.sandbox import LocalSandboxService, SandboxSession, SandboxSpec
+from disco.core import ToolCall
+from disco.tools.builtin import build_default_registry
+from disco.tools.executor import DefaultToolExecutor
+from disco.tools.registry import agent_scope
+from disco.tools.sandbox import LocalSandboxService, SandboxSession, SandboxSpec
 
 SENTINEL = "sk-LEAK-SENTINEL-agent-tools-do-not-expose"
 
@@ -39,7 +39,7 @@ def ok(label: str, passed: bool, detail: str = "") -> None:
 
 
 def _service() -> LocalSandboxService:
-    from perpleximanus.tools.sandbox import SandboxConfig
+    from disco.tools.sandbox import SandboxConfig
 
     cfg = SandboxConfig(
         backend="local",

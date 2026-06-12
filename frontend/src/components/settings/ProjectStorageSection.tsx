@@ -93,7 +93,7 @@ export function ProjectStorageSection() {
           <input
             id="projects-root"
             value={draft}
-            placeholder="/home/you/perpleximanus-projects"
+            placeholder="/home/you/disco-projects"
             spellCheck={false}
             onChange={(e) => setDraft(e.target.value)}
             className="flex-1 rounded-control border border-hairline bg-surface-1 px-inline py-hair font-mono text-[0.82rem] text-text outline-none transition-colors focus:border-hairline-strong"

@@ -9,16 +9,16 @@ models are cached.
 from __future__ import annotations
 
 import pytest
-from perpleximanus.core.llm.nli import NLIVerifier
-from perpleximanus.retrieval.live import build_live_retrieval
-from perpleximanus.retrieval.local_encoders import (
+from disco.core.llm.nli import NLIVerifier
+from disco.retrieval.live import build_live_retrieval
+from disco.retrieval.local_encoders import (
     FastEmbedEmbedder,
     FastEmbedNLIVerifier,
     FastEmbedReranker,
     _sigmoid,
 )
-from perpleximanus.retrieval.models import Passage
-from perpleximanus.retrieval.ranking import Embedder, Reranker
+from disco.retrieval.models import Passage
+from disco.retrieval.ranking import Embedder, Reranker
 
 # ---- wiring (pure — no model load) ------------------------------------------
 
@@ -56,7 +56,7 @@ async def test_rerank_truncates_and_batches_to_bound_memory(monkeypatch):
     """Regression: a cross-encoder's attention is O(seq^2)*batch; scoring full-page
     passages all at once blew rerank to ~16GB and OOM-froze the box. The reranker
     must truncate each scoring input AND score in bounded batches."""
-    from perpleximanus.retrieval import local_encoders as le
+    from disco.retrieval import local_encoders as le
 
     calls: list[list[str]] = []
 
@@ -88,7 +88,7 @@ async def test_rerank_truncates_and_batches_to_bound_memory(monkeypatch):
 
 def _models_available() -> bool:
     try:
-        from perpleximanus.retrieval.local_encoders import _reranker
+        from disco.retrieval.local_encoders import _reranker
 
         _reranker()  # loads from cache; raises if unavailable/offline
         return True

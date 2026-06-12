@@ -14,7 +14,7 @@ export function EmptyState({ subtitle }: { subtitle?: string } = {}) {
   return (
     <div className="flex flex-col items-center gap-section text-center">
       <div className="font-display text-[2.6rem] font-light tracking-tight text-text">
-        perpleximanus
+        Disco
       </div>
       <p className="max-w-measure font-reading text-[1.05rem] leading-relaxed text-text-muted">
         {subtitle ?? DEFAULT_SUBTITLE}

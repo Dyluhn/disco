@@ -1,5 +1,5 @@
 
- RUN  v3.2.4 /var/home/dylan/projects/perpleximanus build/frontend
+ RUN  v3.2.4 /var/home/dylan/projects/disco build/frontend
 
  ✓ src/components/build/ExecutionCanvas.preview.test.tsx (6 tests) 85ms
 

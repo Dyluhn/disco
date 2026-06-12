@@ -84,7 +84,7 @@ The test put `raising_step` (a closure raising on the first 2 calls) at index 0 
 ```
 ============================= test session starts ==============================
 platform linux -- Python 3.13.13, pytest-9.0.3, pluggy-1.6.0
-rootdir: /var/home/dylan/projects/perpleximanus build
+rootdir: /var/home/dylan/projects/disco build
 configfile: pyproject.toml
 plugins: asyncio-1.4.0, anyio-4.13.0, hypothesis-6.155.2
 asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
@@ -105,7 +105,7 @@ Files touched (all within the `dc-05a` manifest):
 
 | File | Action |
 |---|---|
-| `packages/core/src/perpleximanus/core/loop/engine.py` | 1-line fix: `call_id=step.tool_call.call_id` in ToolResult constructor |
+| `packages/core/src/disco/core/loop/engine.py` | 1-line fix: `call_id=step.tool_call.call_id` in ToolResult constructor |
 | `packages/core/tests/test_dc05_loop.py` | Full rewrite: fixed fixtures, status-detail assertions, valve tests, transient-error tests |
 | `test-record/dc-05/units-core.log` | Created (directory + file) |
 | `agent-projects/gemini/dc-05a-report.md` | Created (this file, overwrote Gemini quota-error stub) |

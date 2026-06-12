@@ -30,14 +30,12 @@ import json
 import re
 
 import pytest
-
-from perpleximanus.agent_server.redaction import (
+from disco.agent_server.redaction import (
     patterns,
     redact_event_payload,
     redact_frame,
     redact_text,
 )
-
 
 # ---- 1. provider-prefixed secret tokens -----------------------------------
 

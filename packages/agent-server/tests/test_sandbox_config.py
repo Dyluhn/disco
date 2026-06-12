@@ -8,11 +8,11 @@ the active backend); a change is picked up per-request; and an explicit injectio
 from __future__ import annotations
 
 import pytest
-from perpleximanus.agent_server.runtime import ConversationRuntime, build_sandbox_service
-from perpleximanus.core import SqliteEventStore
-from perpleximanus.core.llm import ConfigStore, DefaultLLMRouter, SandboxSettings
-from perpleximanus.core.loop import RouterAgent
-from perpleximanus.tools.sandbox import (
+from disco.agent_server.runtime import ConversationRuntime, build_sandbox_service
+from disco.core import SqliteEventStore
+from disco.core.llm import ConfigStore, DefaultLLMRouter, SandboxSettings
+from disco.core.loop import RouterAgent
+from disco.tools.sandbox import (
     GvisorSandboxService,
     LocalSandboxService,
     PodmanSandboxService,
@@ -99,7 +99,7 @@ async def test_preview_is_backend_aware_and_honest():
     # raw upstream is kept server-side (the browser hits the agent-server proxy).
     rt._executors["loc"] = _FakeExecutor(_FakeSession("local", "http://localhost:32768"))
     # Mock port_owners for this test
-    from perpleximanus.tools.sandbox.port_owner import PortOwner
+    from disco.tools.sandbox.port_owner import PortOwner
 
     async def mock_port_owners(inst, ports):
         return {
@@ -111,7 +111,7 @@ async def test_preview_is_backend_aware_and_honest():
     import unittest.mock
 
     with unittest.mock.patch(
-        "perpleximanus.agent_server.runtime.port_owners", side_effect=mock_port_owners
+        "disco.agent_server.runtime.port_owners", side_effect=mock_port_owners
     ):
         loc = await rt.preview("loc")
         assert loc["available"] is True and loc.get("proxy") is True and "url" not in loc
@@ -119,7 +119,7 @@ async def test_preview_is_backend_aware_and_honest():
 
     # local with no dev server up → a reason, not a fake URL
     rt._executors["bare"] = _FakeExecutor(_FakeSession("local", None))
-    with unittest.mock.patch("perpleximanus.agent_server.runtime.port_owners", return_value={}):
+    with unittest.mock.patch("disco.agent_server.runtime.port_owners", return_value={}):
         bare = await rt.preview("bare")
         assert bare["available"] is False
         assert rt.preview_upstream("bare") is None
@@ -149,9 +149,9 @@ async def test_port_proxy_route_auth_and_defense():
     # BP-10: app-route proxy defends USER_PORTS set
     import unittest.mock
 
+    from disco.agent_server import create_app
+    from disco.tools.sandbox._container import USER_PORTS
     from fastapi.testclient import TestClient
-    from perpleximanus.agent_server import create_app
-    from perpleximanus.tools.sandbox._container import USER_PORTS
 
     rt = ConversationRuntime(SqliteEventStore(":memory:"))
     app = create_app(rt._store, runtime=rt)
@@ -186,7 +186,7 @@ async def test_ensure_preview_rematerializes_after_clean_finish_teardown():
     """BP-02 §E7 + the G safe-leak fix: a clean FINISH tears the sandbox down, but
     'Restart preview' must NOT become a dead affordance — with a snapshot on disk it
     re-materializes through the resume path (loop_for → rehydrate → ensure_preview)."""
-    from perpleximanus.tools.projects.store import StorageStatus
+    from disco.tools.projects.store import StorageStatus
 
     rt = ConversationRuntime(SqliteEventStore(":memory:"))
 
@@ -257,7 +257,7 @@ async def test_compose_build_loop_egress_modes():
     import os
     from unittest import mock
 
-    from perpleximanus.tools import REGISTRY_EGRESS_ALLOW, Capability
+    from disco.tools import REGISTRY_EGRESS_ALLOW, Capability
 
     rt = ConversationRuntime(SqliteEventStore(":memory:"))
     router = mock.MagicMock(spec=DefaultLLMRouter)
@@ -282,7 +282,7 @@ async def test_compose_build_loop_egress_modes():
 
 def test_registry_egress_allow_semantics():
     # BP-09: REGISTRY_EGRESS_ALLOW matches exact and .suffix
-    from perpleximanus.tools import REGISTRY_EGRESS_ALLOW, SandboxSpec
+    from disco.tools import REGISTRY_EGRESS_ALLOW, SandboxSpec
 
     spec = SandboxSpec(egress_allow=REGISTRY_EGRESS_ALLOW)
     assert spec.egress_allowed("registry.npmjs.org") is True

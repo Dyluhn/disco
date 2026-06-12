@@ -24,8 +24,8 @@ import asyncio
 import sys
 import time
 
-from perpleximanus.agent_server import ConversationRuntime
-from perpleximanus.core import (
+from disco.agent_server import ConversationRuntime
+from disco.core import (
     ConversationStatus,
     EventSource,
     LLMMessage,
@@ -33,7 +33,7 @@ from perpleximanus.core import (
     SqliteEventStore,
     StatusEvent,
 )
-from perpleximanus.core.llm import (
+from disco.core.llm import (
     CompletionResponse,
     DefaultLLMRouter,
     ModelEntry,
@@ -42,7 +42,7 @@ from perpleximanus.core.llm import (
     StreamChunk,
     TokenUsage,
 )
-from perpleximanus.tools import ProcessSandboxService
+from disco.tools import ProcessSandboxService
 
 CID = "bp12-integration-test"
 

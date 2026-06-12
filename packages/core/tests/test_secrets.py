@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from perpleximanus.core.llm import SecretBox, SecretStore
-from perpleximanus.core.llm.secrets import _default_secrets_path
+from disco.core.llm import SecretBox, SecretStore
+from disco.core.llm.secrets import _default_secrets_path
 
 
 def test_box_round_trips_and_ciphertext_is_not_plaintext():
@@ -83,17 +83,17 @@ def test_default_path_is_under_xdg_config(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.delenv("PMX_SECRETS", raising=False)
     monkeypatch.chdir(tmp_path)  # ensure cwd has no legacy file
-    assert _default_secrets_path() == tmp_path / "perpleximanus" / "secrets.json"
+    assert _default_secrets_path() == tmp_path / "disco" / "secrets.json"
 
 
 def test_default_path_honors_legacy_in_tree_file(monkeypatch, tmp_path):
-    """Back-compat: an existing legacy ./perpleximanus-secrets.json is still used, so a
+    """Back-compat: an existing legacy ./disco-secrets.json is still used, so a
     running deployment that relies on it keeps working after the relocation."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))  # empty → no new file
     monkeypatch.delenv("PMX_SECRETS", raising=False)
     monkeypatch.chdir(tmp_path)
-    Path("perpleximanus-secrets.json").write_text("{}")
-    assert _default_secrets_path() == Path("perpleximanus-secrets.json")
+    Path("disco-secrets.json").write_text("{}")
+    assert _default_secrets_path() == Path("disco-secrets.json")
 
 
 def test_default_path_xdg_wins_over_legacy(monkeypatch, tmp_path):
@@ -102,8 +102,8 @@ def test_default_path_xdg_wins_over_legacy(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.delenv("PMX_SECRETS", raising=False)
     monkeypatch.chdir(tmp_path)
-    Path("perpleximanus-secrets.json").write_text("{}")
-    new = tmp_path / "perpleximanus" / "secrets.json"
+    Path("disco-secrets.json").write_text("{}")
+    new = tmp_path / "disco" / "secrets.json"
     new.parent.mkdir(parents=True)
     new.write_text("{}")
     assert _default_secrets_path() == new

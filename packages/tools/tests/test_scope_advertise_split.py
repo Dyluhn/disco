@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import pytest
 from conftest import call
+from disco.tools.anatomy import ToolContext, ToolDef, ToolOutcome
+from disco.tools.executor import DefaultToolExecutor
+from disco.tools.registry import ToolRegistry, ToolScope
 from pydantic import BaseModel
-from perpleximanus.tools.anatomy import ToolContext, ToolDef, ToolOutcome
-from perpleximanus.tools.executor import DefaultToolExecutor
-from perpleximanus.tools.registry import ToolRegistry, ToolScope
 
 
 class _NoArgs(BaseModel):

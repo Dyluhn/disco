@@ -5,7 +5,7 @@ Tables now render correctly in both streaming answers and deep research reports.
 ## Changes
 
 ### Backend (retrieval)
-- **File:** `packages/retrieval/src/perpleximanus/retrieval/streaming.py`
+- **File:** `packages/retrieval/src/disco/retrieval/streaming.py`
 - **Change:** Implemented GFM table detection in `_to_blocks()`. It now identifies contiguous tables (header + divider + ≥1 data row) and emits them as `table` blocks.
 - **Robustness:** Handles ragged rows by padding/truncating to header length. Malformed tables (missing divider or data rows) are left as prose to avoid breaking the layout.
 

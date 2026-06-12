@@ -6,7 +6,7 @@ import { EmptyState, ErrorState } from "./states";
 describe("states", () => {
   it("empty state reflects the philosophy", () => {
     render(<EmptyState />);
-    expect(screen.getByText("perpleximanus")).toBeInTheDocument();
+    expect(screen.getByText("Disco")).toBeInTheDocument();
     expect(screen.getByText(/document-grade answer/i)).toBeInTheDocument();
   });
 

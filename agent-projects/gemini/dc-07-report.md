@@ -26,9 +26,9 @@ The brief listed three expected core test failures
 passing build's code state resolving those failures. No chase needed.
 
 ### 3. Reality block location differs from work order manifest
-Work item 4 specifies `packages/core/src/perpleximanus/core/llm/prompts.py`,
+Work item 4 specifies `packages/core/src/disco/core/llm/prompts.py`,
 but the resume reality block is generated dynamically in
-`packages/agent-server/src/perpleximanus/agent_server/runtime.py`
+`packages/agent-server/src/disco/agent_server/runtime.py`
 (`_reconstruct_resume_context`, ~line 2014). DC-07 upload awareness was added
 **in both locations**: the dynamic reality block in `runtime.py` (listing
 uploads as "held server-side and will be restored" when the sandbox is dead)

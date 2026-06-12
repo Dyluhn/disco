@@ -10,9 +10,8 @@ from __future__ import annotations
 import inspect
 
 import pytest
-from llm_fakes import FakeModelProvider, build_router
-from perpleximanus.core import LLMMessage
-from perpleximanus.core.llm import (
+from disco.core import LLMMessage
+from disco.core.llm import (
     CallContext,
     CapabilityProfile,
     CompletionRequest,
@@ -25,6 +24,7 @@ from perpleximanus.core.llm import (
     Requirement,
     RouterConfig,
 )
+from llm_fakes import FakeModelProvider, build_router
 
 MSGS = [LLMMessage(role="user", content="do the thing")]
 

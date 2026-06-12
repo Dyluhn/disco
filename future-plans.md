@@ -22,7 +22,7 @@ prompt trust — small open models can't talk their way out of it.
 
 ### 2A. Consecutive tool-error reminder
 
-**Where:** `packages/core/src/perpleximanus/core/loop/engine.py`, around the
+**Where:** `packages/core/src/disco/core/loop/engine.py`, around the
 existing `_overflow_signal` path (currently uses
 `consecutive_tool_errors` to escalate the model overflow signal — i.e. route to a
 stronger model — but never tells the *model* about the pattern).
@@ -128,7 +128,7 @@ and the prompt is positional (a long context might bury it).
 
 ### 3B. Browser injection reinforcement
 
-**Where:** `packages/tools/src/perpleximanus/tools/builtin/browser.py`, the
+**Where:** `packages/tools/src/disco/tools/builtin/browser.py`, the
 quarantine path.
 
 **Trigger:** every successful `browser` fetch.
@@ -176,7 +176,7 @@ A few places where system-reminders would be wrong:
 ### Subagent infrastructure (Claude-Code-style Explore/Plan agents)
 
 Claude Code's plan mode spawns up to 3 parallel `Explore` agents that read
-across the codebase concurrently. perpleximanus's loop is strictly one action
+across the codebase concurrently. disco's loop is strictly one action
 per iteration — adding parallel fan-out is a major architectural feature
 (parallel inference, result join, event-log namespacing). Sequential reads
 during planning (currently shipped) cover most of the same need at much lower

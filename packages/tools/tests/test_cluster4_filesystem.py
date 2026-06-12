@@ -4,14 +4,14 @@ and lazy/scoped skill injection."""
 from __future__ import annotations
 
 import pytest
-from perpleximanus.tools.anatomy import Capability, ToolContext
-from perpleximanus.tools.builtin import (
+from disco.tools.anatomy import Capability, ToolContext
+from disco.tools.builtin import (
     FileAppendTool,
     FileReadTool,
     FileWriteTool,
 )
-from perpleximanus.tools.sandbox.base import SandboxSpec
-from perpleximanus.tools.sandbox.process import ProcessSandboxService
+from disco.tools.sandbox.base import SandboxSpec
+from disco.tools.sandbox.process import ProcessSandboxService
 
 pytestmark = pytest.mark.asyncio
 

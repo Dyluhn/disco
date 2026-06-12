@@ -1,7 +1,9 @@
-import pytest
 import asyncio
-from perpleximanus.tools.sandbox.shell_sessions import ShellSessionManager, SessionBusy
-from perpleximanus.tools.sandbox.base import ExecResult
+
+import pytest
+from disco.tools.sandbox.base import ExecResult
+from disco.tools.sandbox.shell_sessions import SessionBusy, ShellSessionManager
+
 
 class FakeInstance:
     def __init__(self):
@@ -138,9 +140,10 @@ async def test_session_lost_after_recreate():
     assert "Session not found or error" in view2.output
 
 
-import os
 import urllib.request
-from perpleximanus.tools.sandbox.process import ProcessSandboxService
+
+from disco.tools.sandbox.process import ProcessSandboxService
+
 
 @pytest.mark.integration
 @pytest.mark.asyncio

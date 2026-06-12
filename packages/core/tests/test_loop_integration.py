@@ -10,16 +10,16 @@ ActionEvent.llm_response_id.
 
 from __future__ import annotations
 
-from llm_fakes import FakeModelProvider, simple_config  # the router-contract test config
-from loop_fakes import FakeExecutor, SequenceProvider, build_loop
-from perpleximanus.core import (
+from disco.core import (
     ActionEvent,
     ConversationState,
     ConversationStatus,
     ErrorEvent,
 )
-from perpleximanus.core.llm import DefaultLLMRouter, LLMContentFiltered, ProposedToolCall
-from perpleximanus.core.loop import NeverConfirm, RouterAgent
+from disco.core.llm import DefaultLLMRouter, LLMContentFiltered, ProposedToolCall
+from disco.core.loop import NeverConfirm, RouterAgent
+from llm_fakes import FakeModelProvider, simple_config  # the router-contract test config
+from loop_fakes import FakeExecutor, SequenceProvider, build_loop
 
 CID = "conv"
 
@@ -64,7 +64,7 @@ async def test_loop_router_event_contracts_compose():
     assert action.llm_response_id == sent_request_id
 
     # The agent declared AGENT_DRIVER role to the router (capability routing).
-    from perpleximanus.core.llm import ModelRole
+    from disco.core.llm import ModelRole
 
     assert provider.seen[0].profile.role == ModelRole.AGENT_DRIVER
 

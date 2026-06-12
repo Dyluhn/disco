@@ -9,8 +9,7 @@ and keeps going coherently.
 
 from __future__ import annotations
 
-from loop_fakes import FakeExecutor, ScriptedAgent, action_step, build_loop, finish_step
-from perpleximanus.core import (
+from disco.core import (
     ActionEvent,
     CondensationEvent,
     EventSource,
@@ -23,6 +22,7 @@ from perpleximanus.core import (
     ToolResult,
     View,
 )
+from loop_fakes import FakeExecutor, ScriptedAgent, action_step, build_loop, finish_step
 
 CID = "conv"
 

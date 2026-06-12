@@ -14,8 +14,8 @@ Run: PYTHONPATH=. uv run pytest harness/tests/test_faults.py
 from __future__ import annotations
 
 import pytest
-from perpleximanus.core import LLMMessage
-from perpleximanus.core.llm import (
+from disco.core import LLMMessage
+from disco.core.llm import (
     CapabilityProfile,
     CompletionRequest,
     LLMAuthError,
@@ -23,10 +23,10 @@ from perpleximanus.core.llm import (
     LLMTransientError,
     ModelRole,
 )
-from perpleximanus.core.llm.routing import _MAX_ATTEMPTS
-from perpleximanus.retrieval.grounding import GroundingPipeline
-from perpleximanus.retrieval.models import RetrievalResult
-from perpleximanus.tools.sandbox import SandboxError, SandboxSession, SandboxSpec
+from disco.core.llm.routing import _MAX_ATTEMPTS
+from disco.retrieval.grounding import GroundingPipeline
+from disco.retrieval.models import RetrievalResult
+from disco.tools.sandbox import SandboxError, SandboxSession, SandboxSpec
 
 from harness.faults import FaultyProvider, FaultySandboxService, build_faulty_router
 

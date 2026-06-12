@@ -6,14 +6,14 @@ from __future__ import annotations
 
 import asyncio
 
-from perpleximanus.retrieval.bundled_providers import (
+from disco.retrieval.bundled_providers import (
     DdgsSearchProvider,
     FirecrawlExtractionProvider,
     LocalExtractionProvider,
     TavilySearchProvider,
     _MarkdownExtractor,
 )
-from perpleximanus.retrieval.live import _make_extraction, _make_search
+from disco.retrieval.live import _make_extraction, _make_search
 
 # ---- provider selection (config → instance) ---------------------------------
 
@@ -78,7 +78,7 @@ def test_local_extractor_populates_citable_passages():
     """The research pipeline cites PASSAGES, not raw content — an extractor that
     returns content but no passages makes a run report 'couldn't read any'. So the
     local extractor must chunk (regression for the in-app extraction failure)."""
-    from perpleximanus.retrieval.bundled_providers import chunk_passages
+    from disco.retrieval.bundled_providers import chunk_passages
 
     para = "Paragraph with plenty of words so it counts as a real passage of content here."
     body = "\n\n".join(f"{i}. {para}" for i in range(60))  # ~5k chars → several passages

@@ -11,10 +11,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from disco.agent_server import ConversationRuntime, create_app
+from disco.core import SqliteEventStore
+from disco.core.llm import ConfigStore, RouterConfig
 from fastapi.testclient import TestClient
-from perpleximanus.agent_server import ConversationRuntime, create_app
-from perpleximanus.core import SqliteEventStore
-from perpleximanus.core.llm import ConfigStore, RouterConfig
 
 
 @pytest.fixture

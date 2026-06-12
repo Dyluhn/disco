@@ -3,15 +3,15 @@
 ## Step 0 — Current wiring (re-verified 2026-06-10, post-bp-14-commit 2d6aba1)
 
 ### Screenshot production
-- **`packages/tools/src/perpleximanus/tools/builtin/_browser_daemon.py:153`** — `screenshot_rel_path = f".pmx/screenshots/{state.screenshot_seq:04d}-{action}.png"` → stored to disk, included in the daemon JSON response at `:165` (`"screenshot_path": screenshot_path`).
-- **`packages/tools/src/perpleximanus/tools/builtin/browser.py:223`** — `return ToolOutcome(success=True, content=..., structured=data)` carries the whole daemon dict (including `screenshot_path`) as `ToolOutcome.structured`.
+- **`packages/tools/src/disco/tools/builtin/_browser_daemon.py:153`** — `screenshot_rel_path = f".pmx/screenshots/{state.screenshot_seq:04d}-{action}.png"` → stored to disk, included in the daemon JSON response at `:165` (`"screenshot_path": screenshot_path`).
+- **`packages/tools/src/disco/tools/builtin/browser.py:223`** — `return ToolOutcome(success=True, content=..., structured=data)` carries the whole daemon dict (including `screenshot_path`) as `ToolOutcome.structured`.
 - `ToolResult.structured?: Record<string, unknown> | null` already on the wire (`types/agent.ts:40`) — no new wire schema needed.
 
 ### Plot production
 - **`kernel.py:164-169` and `:400-404`** — both `ProcessKernel` and `GatewayKernel` write `.pmx/plots/{seq:04d}.png`. Same workspace prefix allowlist covers both.
 
 ### Binary read
-- **`packages/tools/src/perpleximanus/tools/sandbox/session.py:183`** — `SandboxSession.read_file(path) -> bytes`. Path-agnostic; escape validation in backends. Route does its own normalization + prefix allowlist.
+- **`packages/tools/src/disco/tools/sandbox/session.py:183`** — `SandboxSession.read_file(path) -> bytes`. Path-agnostic; escape validation in backends. Route does its own normalization + prefix allowlist.
 
 ### Sandbox accessor
 - **`runtime.py:1489`** — `live_session(cid) -> SandboxSession | None` (BP-14). Does not create a session. Used by the new workspace route.

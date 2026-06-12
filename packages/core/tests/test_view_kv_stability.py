@@ -4,8 +4,8 @@ import sys
 
 import pytest
 from conftest import action, agent_msg, observation, user_msg, with_seqs
-from perpleximanus.core import PlanEvent, View
-from perpleximanus.core.events import PlanStep
+from disco.core import PlanEvent, View
+from disco.core.events import PlanStep
 
 
 def test_view_append_stability():
@@ -69,13 +69,13 @@ def test_view_subprocess_roundtrip():
     # Serialize events to JSON using model_dump(mode="json")
     events_json = json.dumps([e.model_dump(mode="json") for e in events])
     
-    # The subprocess needs to be able to import perpleximanus.
+    # The subprocess needs to be able to import disco.
     # We'll assume the environment is set up such that it's in sys.path.
     code = f"""
 import json
 import sys
-from perpleximanus.core import View
-from perpleximanus.core.events import TypeAdapter, Event
+from disco.core import View
+from disco.core.events import TypeAdapter, Event
 try:
     events_data = json.loads({events_json!r})
     adapter = TypeAdapter(list[Event])
@@ -95,7 +95,7 @@ except Exception as e:
 
 # ---- BP-00: latest-image-only view rule --------------------------------------
 
-from perpleximanus.core.events import ObservationEvent, ToolResult  # noqa: E402
+from disco.core.events import ObservationEvent, ToolResult  # noqa: E402
 
 
 def _browser_obs(b64: str | None, n: int) -> ObservationEvent:

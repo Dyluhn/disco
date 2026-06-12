@@ -8,8 +8,8 @@ Anti-gaming bar (from master brief):
 
 from __future__ import annotations
 
-from perpleximanus.tools.mcp.http_egress import build_egress_union, url_host
-from perpleximanus.tools.sandbox.base import REGISTRY_EGRESS_ALLOW
+from disco.tools.mcp.http_egress import build_egress_union, url_host
+from disco.tools.sandbox.base import REGISTRY_EGRESS_ALLOW
 
 
 def test_url_host_extracts_netloc():
@@ -128,10 +128,10 @@ def test_build_egress_union_deduplicates():
 def test_runtime_mcp_egress_hosts_method():
     """The ConversationRuntime._mcp_egress_hosts() method computes the correct
     union from active HTTP clients."""
-    from perpleximanus.agent_server.runtime import ConversationRuntime
-    from perpleximanus.core import SecurityRisk, SqliteEventStore
-    from perpleximanus.tools.mcp.config import McpServerConfig
-    from perpleximanus.tools.mcp.http import McpHttpClient
+    from disco.agent_server.runtime import ConversationRuntime
+    from disco.core import SecurityRisk, SqliteEventStore
+    from disco.tools.mcp.config import McpServerConfig
+    from disco.tools.mcp.http import McpHttpClient
 
     store = SqliteEventStore(":memory:")
     runtime = ConversationRuntime(store)
@@ -162,10 +162,10 @@ def test_build_sandbox_spec_unions_mcp_hosts_into_egress_allow(monkeypatch):
     omission (ignore MCP) would fail the MCP-host assertion. The earlier tests stop
     at build_egress_union / _mcp_egress_hosts; this one drives _build_sandbox_spec,
     the real production fold-in point."""
-    from perpleximanus.agent_server.runtime import ConversationRuntime
-    from perpleximanus.core import SecurityRisk, SqliteEventStore
-    from perpleximanus.tools.mcp.config import McpServerConfig
-    from perpleximanus.tools.mcp.http import McpHttpClient
+    from disco.agent_server.runtime import ConversationRuntime
+    from disco.core import SecurityRisk, SqliteEventStore
+    from disco.tools.mcp.config import McpServerConfig
+    from disco.tools.mcp.http import McpHttpClient
 
     runtime = ConversationRuntime(SqliteEventStore(":memory:"))
     config = McpServerConfig(

@@ -20,10 +20,10 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from perpleximanus.tools.sandbox.base import Capability, SandboxSpec
-from perpleximanus.tools.sandbox.config import SandboxConfig
-from perpleximanus.tools.sandbox.gvisor import GvisorSandboxService
-from perpleximanus.tools.sandbox.session import SandboxSession
+from disco.tools.sandbox.base import Capability, SandboxSpec
+from disco.tools.sandbox.config import SandboxConfig
+from disco.tools.sandbox.gvisor import GvisorSandboxService
+from disco.tools.sandbox.session import SandboxSession
 
 SOCKET = "ssh://sandbox@100.81.82.115"
 

@@ -7,7 +7,7 @@ builders so each test stays focused on the behavior under test.
 
 from __future__ import annotations
 
-from perpleximanus.core.llm import (
+from disco.core.llm import (
     CompletionRequest,
     CompletionResponse,
     DefaultLLMRouter,

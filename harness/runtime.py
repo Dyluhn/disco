@@ -10,8 +10,8 @@ they run live in both modes and need no cassette.
 
 from __future__ import annotations
 
-from perpleximanus.agent_server import ConversationRuntime
-from perpleximanus.core.llm import ConfigStore, SecretStore
+from disco.agent_server import ConversationRuntime
+from disco.core.llm import ConfigStore, SecretStore
 
 from .cassette import Cassette
 from .providers import (
@@ -26,7 +26,7 @@ from .sandbox import RecordingSandboxService, ReplaySandboxService
 
 def _live_encoders() -> dict:
     """The real, deterministic fastembed encoders (reranker/embedder/nli)."""
-    from perpleximanus.retrieval.live import build_live_retrieval
+    from disco.retrieval.live import build_live_retrieval
 
     deps = build_live_retrieval()  # defaults: bundled encoders + ddgs/local (we override those)
     return {"reranker": deps["reranker"], "embedder": deps["embedder"], "nli": deps["nli"]}
@@ -68,7 +68,7 @@ def build_recording_runtime(
     `record_sandbox=True` additionally records the build sandbox (exec/read/list)
     by wrapping the host `process` backend — set it when capturing a BUILD demo
     (research captures leave it off; they never touch the sandbox)."""
-    from perpleximanus.retrieval.live import build_live_retrieval
+    from disco.retrieval.live import build_live_retrieval
 
     real = build_live_retrieval()
     providers = {
@@ -80,7 +80,7 @@ def build_recording_runtime(
     }
     sandbox = None
     if record_sandbox:
-        from perpleximanus.tools.sandbox.process import ProcessSandboxService
+        from disco.tools.sandbox.process import ProcessSandboxService
 
         sandbox = RecordingSandboxService(ProcessSandboxService(), cassette)
     rt = ConversationRuntime(

@@ -24,7 +24,7 @@ pre-gate hard-deny (engine.py ~2181-2197), the 4-failure circuit breaker
 
 ### 1. The engine learns WHERE an action runs — via the executor, not the runtime
 
-`packages/tools/src/perpleximanus/tools/executor.py`: add a small read-only
+`packages/tools/src/disco/tools/executor.py`: add a small read-only
 method to `DefaultToolExecutor`:
 
 ```python
@@ -130,9 +130,9 @@ instrumentation) is RUN BY THE ORCHESTRATOR after the policy swap lands.
 
 ## Manifest (orders.yaml `dc-03` — touch nothing outside it)
 
-- packages/core/src/perpleximanus/core/loop/policies.py
-- packages/core/src/perpleximanus/core/loop/engine.py
-- packages/tools/src/perpleximanus/tools/executor.py
+- packages/core/src/disco/core/loop/policies.py
+- packages/core/src/disco/core/loop/engine.py
+- packages/tools/src/disco/tools/executor.py
 - packages/core/tests/test_gate_scoping.py
 - packages/tools/tests/test_executor_scope.py
 - frontend/src/lib/buildTrace.ts

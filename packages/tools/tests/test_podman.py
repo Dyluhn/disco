@@ -11,8 +11,8 @@ import io
 import tarfile
 
 import pytest
-from perpleximanus.tools.anatomy import Capability
-from perpleximanus.tools.sandbox import (
+from disco.tools.anatomy import Capability
+from disco.tools.sandbox import (
     PodmanSandboxService,
     SandboxConfig,
     SandboxError,
@@ -199,7 +199,7 @@ async def test_podman_unreachable_is_typed_error():
 
 
 def test_config_is_podman_and_crun_and_cli_url():
-    from perpleximanus.tools.sandbox import default_podman_config
+    from disco.tools.sandbox import default_podman_config
 
     cfg = default_podman_config()
     assert cfg.backend == "podman" and cfg.runtime == "crun"

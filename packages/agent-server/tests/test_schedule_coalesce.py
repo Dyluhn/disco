@@ -17,14 +17,14 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
-from perpleximanus.agent_server.schedule import ScheduleManager, next_n_runs
-from perpleximanus.core.events import (
+from disco.agent_server.schedule import ScheduleManager, next_n_runs
+from disco.core.events import (
     EventSource,
     LLMMessage,
     MessageEvent,
     ScheduleRunEvent,
 )
-from perpleximanus.core.store.sqlite import SqliteEventStore
+from disco.core.store.sqlite import SqliteEventStore
 
 # ---- helpers -----------------------------------------------------------------
 
@@ -257,7 +257,7 @@ def test_dst_spring_forward_skips_missing_hour():
 
 def test_dst_spring_forward_next_future_run():
     """_next_future_run correctly advances past the spring-forward gap."""
-    from perpleximanus.agent_server.schedule import _next_future_run
+    from disco.agent_server.schedule import _next_future_run
 
     try:
         from zoneinfo import ZoneInfo
@@ -296,7 +296,7 @@ def test_invalid_rrule_returns_empty():
 
 def test_validate_rrule():
     """validate_rrule correctly accepts/rejects expressions."""
-    from perpleximanus.agent_server.schedule import validate_rrule
+    from disco.agent_server.schedule import validate_rrule
 
     assert validate_rrule("*/2 * * * *") is True
     assert validate_rrule("0 9 * * 1") is True

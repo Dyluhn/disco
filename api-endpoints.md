@@ -1,4 +1,4 @@
-# API Endpoints — perpleximanus
+# API Endpoints — disco
 
 The HTTP + WebSocket surface, and the frontend data-layer wiring against it. This
 is the integration contract between `frontend/src/api/*` and the backend.
@@ -7,7 +7,7 @@ There are **two servers**, split by responsibility (BoD §5):
 
 | Server | Owns | Default | Run |
 |--------|------|---------|-----|
-| **app-server** | settings (model-assignment matrix, skills, MCP) + library (conversation list/delete) | `:8800` | `python -m perpleximanus.app_server` |
+| **app-server** | settings (model-assignment matrix, skills, MCP) + library (conversation list/delete) | `:8800` | `python -m disco.app_server` |
 | **agent-server** | per-conversation runtime: create/message + the live WebSocket event stream | `:8000` | (TestClient / uvicorn wrapper) |
 
 Both are thin adapters over the **same** core `EventStore` (a SQLite file, shared
@@ -23,7 +23,7 @@ open (ownership is an explicit query param, never a cookie).
 
 ## app-server (`/api/*`) — settings + library
 
-Base: `http://<host>:8800`. CORS open. Source: `packages/app-server/src/perpleximanus/app_server/app.py`.
+Base: `http://<host>:8800`. CORS open. Source: `packages/app-server/src/disco/app_server/app.py`.
 
 ### Health
 - ✅ **GET `/api/health`** → `{ "status": "ok", "service": "app-server" }`
@@ -76,7 +76,7 @@ Base: `http://<host>:8800`. CORS open. Source: `packages/app-server/src/perplexi
 
 ## agent-server — per-conversation runtime
 
-Base: `http://<host>:8000`. Source: `packages/agent-server/src/perpleximanus/agent_server/app.py`.
+Base: `http://<host>:8000`. Source: `packages/agent-server/src/disco/agent_server/app.py`.
 Phase 0: a thin wire/REST adapter over the event log — **no agent loop or model
 yet**, so control frames and token streaming are accepted but produce nothing.
 

@@ -44,13 +44,13 @@ import time
 
 from _accept_common import ConversationStatus, drive, user_event
 
-from perpleximanus.agent_server import ConversationRuntime
-from perpleximanus.core import ObservationEvent, SecurityRisk, SqliteEventStore
-from perpleximanus.tools.mcp.approval import ApprovalRequired, compute_description_hash
-from perpleximanus.tools.mcp.config import McpServerConfig
-from perpleximanus.tools.mcp.http import McpHttpClient
-from perpleximanus.tools.mcp.naming import qualified_name
-from perpleximanus.tools.sandbox import (
+from disco.agent_server import ConversationRuntime
+from disco.core import ObservationEvent, SecurityRisk, SqliteEventStore
+from disco.tools.mcp.approval import ApprovalRequired, compute_description_hash
+from disco.tools.mcp.config import McpServerConfig
+from disco.tools.mcp.http import McpHttpClient
+from disco.tools.mcp.naming import qualified_name
+from disco.tools.sandbox import (
     REGISTRY_EGRESS_ALLOW,
     GvisorSandboxService,
     SandboxConfig,

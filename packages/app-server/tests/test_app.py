@@ -7,11 +7,11 @@ in-memory store. Mirrors the wire contract the frontend's data layer consumes.
 from __future__ import annotations
 
 import pytest
+from disco.app_server import create_app
+from disco.app_server.config_state import ConfigState, normalize_openrouter
+from disco.core import SkillStore, SqliteEventStore
+from disco.core.llm import ConfigStore, SecretBox, SecretStore
 from fastapi.testclient import TestClient
-from perpleximanus.app_server import create_app
-from perpleximanus.app_server.config_state import ConfigState, normalize_openrouter
-from perpleximanus.core import SkillStore, SqliteEventStore
-from perpleximanus.core.llm import ConfigStore, SecretBox, SecretStore
 
 
 @pytest.fixture
@@ -381,7 +381,7 @@ def test_delete_is_owner_scoped(client, store):
     assert client.get("/api/conversations", params={"owner_id": "me"}).json() == []
 
 
-from perpleximanus.core import ConversationStatus, EventSource, StatusEvent
+from disco.core import ConversationStatus, EventSource, StatusEvent
 
 
 async def test_conversations_include_status(client, store):

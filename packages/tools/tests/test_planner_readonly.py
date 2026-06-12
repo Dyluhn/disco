@@ -5,7 +5,7 @@ planner be handed, and (critically) which may NOT."""
 
 from __future__ import annotations
 
-from perpleximanus.tools import (
+from disco.tools import (
     DefaultToolExecutor,
     agent_scope,
     build_default_registry,
@@ -43,7 +43,7 @@ def test_fail_safe_default_unmarked_tool_is_mutating():
     # A ToolDef that forgets `read_only` defaults to False → treated as mutating
     # → withheld from the planner. The worst case is an over-restricted planner,
     # never a write tool leaking to it.
-    from perpleximanus.tools.anatomy import ToolDef
+    from disco.tools.anatomy import ToolDef
     from pydantic import BaseModel
 
     class _Args(BaseModel):

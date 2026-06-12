@@ -6,7 +6,7 @@ Drops non-supported claims and strips their citation markers from the prose, so 
 
 from __future__ import annotations
 
-from perpleximanus.retrieval.streaming import _drop_weak
+from disco.retrieval.streaming import _drop_weak
 
 
 def _answer() -> dict:

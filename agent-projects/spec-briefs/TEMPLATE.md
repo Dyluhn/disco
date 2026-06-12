@@ -12,7 +12,7 @@ every real passing run on a fact no brief had transmitted; the checklist below
 encodes the two facts we have already paid for so they never recur.
 -->
 
-Write ONE Playwright spec file (TypeScript, ESM) for the perpleximanus frontend that
+Write ONE Playwright spec file (TypeScript, ESM) for the disco frontend that
 proves — against the REAL running stack, end to end, with NO mocking or fixtures —
 that: {{WHAT THE SPEC MUST PROVE, ONE SENTENCE}}.
 

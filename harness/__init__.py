@@ -1,4 +1,4 @@
-"""perpleximanus test harness — record/replay cassettes + runners.
+"""disco test harness — record/replay cassettes + runners.
 
 The substrate for the testing surfaces (universal-readiness testing plan): a
 VCR-style record/replay layer that captures VERBATIM responses from the real

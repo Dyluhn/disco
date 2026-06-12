@@ -11,15 +11,14 @@ hash-diff data returns old-vs-new tool lists for the UI.
 from __future__ import annotations
 
 import hashlib
-import sqlite3
 from pathlib import Path
 
 import pytest
+from disco.app_server import create_app
+from disco.app_server.config_state import ConfigState
+from disco.core import SkillStore, SqliteEventStore
+from disco.core.llm import ConfigStore, SecretBox, SecretStore
 from fastapi.testclient import TestClient
-from perpleximanus.app_server import create_app
-from perpleximanus.app_server.config_state import ConfigState
-from perpleximanus.core import SkillStore, SqliteEventStore
-from perpleximanus.core.llm import ConfigStore, SecretBox, SecretStore
 
 
 @pytest.fixture

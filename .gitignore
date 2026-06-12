@@ -20,8 +20,8 @@ htmlcov/
 *.db-shm
 
 # App-server config + secrets (NEVER commit — contains encrypted key material)
-perpleximanus-config.json
-perpleximanus-secrets.json
+disco-config.json
+disco-secrets.json
 *-secrets.json
 
 # OS / editor

@@ -14,7 +14,7 @@ now actively harm: capped reads → worse edits. They come out surgically. Runaw
 remains via `max_iterations`, StuckDetector, and the circuit breaker — none of which you
 touch.
 
-## Exact removal list — `packages/core/src/perpleximanus/core/loop/engine.py`
+## Exact removal list — `packages/core/src/disco/core/loop/engine.py`
 
 Locate by symbol (line hints are from 2026-06-09):
 

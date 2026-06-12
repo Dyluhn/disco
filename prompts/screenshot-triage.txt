@@ -1,4 +1,4 @@
-You are judging ONE screenshot of the perpleximanus web app (a local agentic
+You are judging ONE screenshot of the disco web app (a local agentic
 build-me-an-app tool: chat feed left, inspector with Files/Terminal/Preview tabs
 right). Judge it ONLY against the EXPECTED STATE below — written by the spec author —
 not against "does this look like a normal app". Vague plausibility is how broken

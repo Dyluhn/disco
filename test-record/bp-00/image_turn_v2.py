@@ -126,7 +126,7 @@ def generate_screenshot_locally(tmp: Path, dest: Path, record: dict) -> None:
         cwd=tmp / "site", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     daemon = subprocess.Popen(
-        [str(REPO / ".venv/bin/python"), "-m", "perpleximanus.tools.builtin._browser_daemon"],
+        [str(REPO / ".venv/bin/python"), "-m", "disco.tools.builtin._browser_daemon"],
         env={**os.environ, "PMX_WORKSPACE": str(tmp)},
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )

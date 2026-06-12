@@ -7,9 +7,7 @@ action.
 
 from __future__ import annotations
 
-from llm_fakes import simple_config
-from loop_fakes import FakeAnalyzer, FakeExecutor, SequenceProvider, build_loop
-from perpleximanus.core import (
+from disco.core import (
     ActionEvent,
     AgentErrorEvent,
     ConversationStatus,
@@ -17,8 +15,10 @@ from perpleximanus.core import (
     SecurityRisk,
     ToolResult,
 )
-from perpleximanus.core.llm import DefaultLLMRouter, ProposedToolCall
-from perpleximanus.core.loop import ConfirmRisky, NeverConfirm, RouterAgent
+from disco.core.llm import DefaultLLMRouter, ProposedToolCall
+from disco.core.loop import ConfirmRisky, NeverConfirm, RouterAgent
+from llm_fakes import simple_config
+from loop_fakes import FakeAnalyzer, FakeExecutor, SequenceProvider, build_loop
 
 CID = "conv"
 
@@ -201,7 +201,7 @@ def test_app_verify_command_distinguishes_serving_from_not(tmp_path):
     import subprocess
     import threading
 
-    from perpleximanus.core.loop.engine import _app_verify_command
+    from disco.core.loop.engine import _app_verify_command
 
     # a real one-request server on an ephemeral port, serving a non-trivial body
     sock = socket.socket()

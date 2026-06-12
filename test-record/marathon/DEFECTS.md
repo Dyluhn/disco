@@ -10,8 +10,8 @@ orders, never to bp-16 itself.
 - **Symptom**: `GET /conversations/{cid}/sessions` intermittently returns
   `500 Internal Server Error` while the build is healthy. `/tmp/pmx-marathon.log`
   shows ~20 tracebacks in the first hour, terminal exceptions:
-  - `perpleximanus.tools.sandbox.base.SandboxError: sandbox op failed in sbx_…: [Errno 32] Broken pipe`
-  - `perpleximanus.tools.sandbox.base.SandboxError: sandbox session is closed`
+  - `disco.tools.sandbox.base.SandboxError: sandbox op failed in sbx_…: [Errno 32] Broken pipe`
+  - `disco.tools.sandbox.base.SandboxError: sandbox session is closed`
   - raw `BrokenPipeError: [Errno 32] Broken pipe`
 - **Evidence**: pmx-marathon.log lines 1049/1305/1562 (500s on /sessions),
   tracebacks at lines 134, 971, 1167, 1685, 1731.
@@ -20,7 +20,7 @@ orders, never to bp-16 itself.
   becomes a user-facing 500. The op succeeds again on the next poll, so this is
   transport flakiness amplified into an API error.
 - **Suspected owner**: BP-14 (sessions routes) + the sandbox transport layer
-  (`packages/tools/src/perpleximanus/tools/sandbox/_container.py:182-185
+  (`packages/tools/src/disco/tools/sandbox/_container.py:182-185
   exec_shell`). Matches the standing "Broken-pipe sandbox-op recurrence watch"
   carry-forward — this is its first reproducible high-frequency sighting.
 - **Severity**: medium — polling clients (Terminal tab useSessions) see gaps;
@@ -172,7 +172,7 @@ orders, never to bp-16 itself.
   ("Sensor Dashboard", Readings 200, Min 32.8 °C…). The user and the agent see
   DIFFERENT apps.
 - **Root cause (code-confirmed)**: `preview_app`/`port_app`
-  (`packages/agent-server/src/perpleximanus/agent_server/app.py:404-446`) are
+  (`packages/agent-server/src/disco/agent_server/app.py:404-446`) are
   plain GET forwarders — no HTML rewriting, no <base> injection, no
   POST/PUT/WS. A page served at `/conversations/{cid}/preview-app/` that
   references absolute paths resolves them against the AGENT-SERVER origin:

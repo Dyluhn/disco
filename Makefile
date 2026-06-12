@@ -1,4 +1,4 @@
-# perpleximanus — local test/verify runners (no CI; this IS the runner).
+# disco — local test/verify runners (no CI; this IS the runner).
 # Two halves (see ~/.claude/plans/fancy-sauteeing-ocean.md):
 #   hermetic  → in-process, replay/fake, fast — `make test`
 #   live      → drives the real running app / real services — `make canary`, `make capture`
@@ -13,7 +13,7 @@ CASSETTE ?= harness/cassettes/research_demo.jsonl
         canary canary-health capture capture-loop lint fmt e2e verify
 
 help:
-	@echo "perpleximanus runners:"
+	@echo "disco runners:"
 	@echo "  make test        unit + harness (contract/fuzz/fault/canary) — fast, hermetic, offline"
 	@echo "  make unit        per-package unit suite only (packages/*/tests)"
 	@echo "  make harness     all harness/ tests"
@@ -69,7 +69,7 @@ eval-real:
 # loop? (config + completion + tool-calling + grounding, pass/fail). --quick skips
 # the live grounding step. Reads the persisted config/secrets like the servers do.
 verify:
-	uv run python -m perpleximanus.agent_server.verify $(ARGS)
+	uv run python -m disco.agent_server.verify $(ARGS)
 
 # Heavy: cold fastembed + a real LLM + the grounding self-correction loop. Detached
 # (setsid) so an interactive-session timeout can't SIGKILL it before fastembed loads.

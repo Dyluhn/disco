@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from conftest import FakeNLI, FakeRouter
-from perpleximanus.retrieval import (
+from disco.retrieval import (
     CrossEncoderNLIVerifier,
     GroundingPipeline,
     Passage,

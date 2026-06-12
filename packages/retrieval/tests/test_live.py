@@ -9,14 +9,14 @@ is run separately.)
 from __future__ import annotations
 
 import httpx
-from perpleximanus.retrieval.live import (
+from disco.retrieval.live import (
     Crawl4aiExtractionProvider,
     OpenAIEmbedder,
     SearxngSearchProvider,
     SidecarNLIVerifier,
     TeiReranker,
 )
-from perpleximanus.retrieval.models import Passage
+from disco.retrieval.models import Passage
 
 
 def _async(handler) -> httpx.MockTransport:

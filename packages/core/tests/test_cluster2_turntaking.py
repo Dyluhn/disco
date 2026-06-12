@@ -3,14 +3,14 @@ tools, the no-op backstop, and the circuit breaker."""
 
 from __future__ import annotations
 
-from loop_fakes import AgentStep, FakeExecutor, ScriptedAgent, action_step, build_loop
-from perpleximanus.core import (
+from disco.core import (
     ConversationStatus,
     EventSource,
     MessageEvent,
     ObservationEvent,
     ToolResult,
 )
+from loop_fakes import AgentStep, FakeExecutor, ScriptedAgent, action_step, build_loop
 
 CID = "conv"
 
@@ -77,7 +77,7 @@ async def test_consecutive_noops_end_the_run_cleanly():
     # the noop backstop is the secondary net (→ FINISHED noop_limit). Here we
     # raise the monologue threshold so the noop BACKSTOP is exercised in
     # isolation — proving the run terminates even if monologue detection misses.
-    from perpleximanus.core.loop.stuck import StuckThresholds
+    from disco.core.loop.stuck import StuckThresholds
 
     agent = ScriptedAgent([_prose(f"thought number {i}") for i in range(10)])
     loop, store = build_loop(
@@ -110,8 +110,8 @@ async def test_talking_without_acting_always_terminates():
 
 
 def test_consecutive_noops_helper_counts_and_resets():
-    from perpleximanus.core import LLMMessage
-    from perpleximanus.core.loop.engine import AgentLoop
+    from disco.core import LLMMessage
+    from disco.core.loop.engine import AgentLoop
 
     def agent_msg(text):
         return MessageEvent(
@@ -153,7 +153,7 @@ async def test_circuit_breaker_hands_off_after_distinct_failures():
     # The harness halts for the user instead of grinding to max_iterations.
     assert state.execution_status == ConversationStatus.AWAITING_USER_DECISION
     events = await store.get_events(CID)
-    from perpleximanus.core import AlternativesEvent
+    from disco.core import AlternativesEvent
 
     # The harness SYNTHESIZES an AlternativesEvent so the UI renders the recovery
     # gate (not dead-end prose): the failure summary + a "Continue anyway" option.

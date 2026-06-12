@@ -24,21 +24,21 @@ EXIST — they're dropped in the relay:
 
 ## The decided design (locked)
 
-### 1. `packages/tools/src/perpleximanus/tools/executor.py` — the relay fix
+### 1. `packages/tools/src/disco/tools/executor.py` — the relay fix
 
 In the final `ToolResult` construction: when `outcome.success` is False and
 `outcome.error` is falsy, fall back to `outcome.content` (and only then to
 None). One expression; comment it with the DEFECT-2 reference. This fixes the
 opacity for EVERY tool that reports failure via content, not just shell.
 
-### 2. `packages/tools/src/perpleximanus/tools/builtin/shell_sessions.py` — belt+braces
+### 2. `packages/tools/src/disco/tools/builtin/shell_sessions.py` — belt+braces
 
 Every `ToolOutcome(success=False, content=…)` in this module also sets
 `error=` to the same text (the contract says error is populated iff not
 success — honor it at the source too). The generic `except Exception as e:
 … f"Error: {e}"` stays as the last resort.
 
-### 3. `packages/tools/src/perpleximanus/tools/sandbox/shell_sessions.py` — name WHICH state
+### 3. `packages/tools/src/disco/tools/sandbox/shell_sessions.py` — name WHICH state
 
 - **Busy**: `SessionBusy` currently says "Previous command not finished…".
   Enrich it to name the occupant: query
@@ -87,9 +87,9 @@ success — honor it at the source too). The generic `except Exception as e:
 
 ## Manifest (orders.yaml `dc-04a` — touch nothing outside it)
 
-- packages/tools/src/perpleximanus/tools/executor.py
-- packages/tools/src/perpleximanus/tools/builtin/shell_sessions.py
-- packages/tools/src/perpleximanus/tools/sandbox/shell_sessions.py
+- packages/tools/src/disco/tools/executor.py
+- packages/tools/src/disco/tools/builtin/shell_sessions.py
+- packages/tools/src/disco/tools/sandbox/shell_sessions.py
 - packages/tools/tests/test_session_diagnostics.py
 - test-record/dc-04a/units.log
 - agent-projects/sonnet/dc-04a-report.md

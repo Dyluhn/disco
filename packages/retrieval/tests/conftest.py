@@ -6,8 +6,8 @@ faked/stubbed — no real network, no provider keys, no real model.
 
 from __future__ import annotations
 
-from perpleximanus.core.llm import CompletionResponse, TokenUsage
-from perpleximanus.retrieval import ExtractedDoc, Passage, SearchHit
+from disco.core.llm import CompletionResponse, TokenUsage
+from disco.retrieval import ExtractedDoc, Passage, SearchHit
 
 
 class FakeSearchProvider:
@@ -78,7 +78,7 @@ class FakeRouter:
 
     async def complete(self, req, *, context=None):
         self.complete_calls += 1
-        from perpleximanus.core.llm import ModelRole
+        from disco.core.llm import ModelRole
 
         text = self._answerer if req.profile.role == ModelRole.RAG_ANSWERER else self._rewriter
         return CompletionResponse(

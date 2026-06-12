@@ -32,7 +32,7 @@ The slug `google/gemini-3-flash-preview` is the live, bake-off-validated GA-trac
 id. Documented fallback (`google/gemini-3.5-flash`) is a one-line JSON swap of
 `vision_escalation_model`, not a code change.
 
-The entry was also added to `perpleximanus-config.json` (the persisted config).
+The entry was also added to `disco-config.json` (the persisted config).
 
 ### 2. Config field — `vision_escalation_model` (`config.py`)
 
@@ -119,9 +119,9 @@ explicit `pytest.skip(allow_module_level=True)`).
 
 | File | Change |
 |------|--------|
-| `packages/core/src/perpleximanus/core/llm/config.py` | +`vision_escalation_model` field on `RouterConfig`, +`or-gemini-3-flash` model entry in `default_config()`, defaults `vision_escalation_model="or-gemini-3-flash"` |
-| `packages/core/src/perpleximanus/core/llm/routing.py` | `_resolve` now returns 4-tuple (adds `overflow_triggers`); vision guard calls `_try_vision_escalation` before raising; new `_try_vision_escalation` helper; `complete`/`stream_complete` use `overflow_triggers` in RoutingDecision |
-| `perpleximanus-config.json` | +`or-gemini-3-flash` entry, +`vision_escalation_model` field |
+| `packages/core/src/disco/core/llm/config.py` | +`vision_escalation_model` field on `RouterConfig`, +`or-gemini-3-flash` model entry in `default_config()`, defaults `vision_escalation_model="or-gemini-3-flash"` |
+| `packages/core/src/disco/core/llm/routing.py` | `_resolve` now returns 4-tuple (adds `overflow_triggers`); vision guard calls `_try_vision_escalation` before raising; new `_try_vision_escalation` helper; `complete`/`stream_complete` use `overflow_triggers` in RoutingDecision |
+| `disco-config.json` | +`or-gemini-3-flash` entry, +`vision_escalation_model` field |
 | `packages/core/tests/test_vision_wiring.py` | Updated `test_vision_capability_guard` to clear escalation (guard still tested) |
 | `packages/core/tests/test_df08_vision_escalation.py` | NEW — 10 unit tests |
 

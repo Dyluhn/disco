@@ -7,7 +7,7 @@ Run: PYTHONPATH=. uv run pytest harness/tests/test_eval_runner.py
 
 from __future__ import annotations
 
-from perpleximanus.retrieval.models import (
+from disco.retrieval.models import (
     Claim,
     GroundedAnswer,
     Passage,

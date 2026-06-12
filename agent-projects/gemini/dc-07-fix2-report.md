@@ -33,7 +33,7 @@ Why this chokepoint and not per-path patches:
 
 ## Changes made
 
-### `packages/agent-server/src/perpleximanus/agent_server/runtime.py`
+### `packages/agent-server/src/disco/agent_server/runtime.py`
 
 1. **Chokepoint** (line ~848): Added `await self._rematerialize_uploads(conversation_id)` in `_run_with_persistence`, inside the `if surface == "build":` block, right after `_maybe_rehydrate`.
 

@@ -23,14 +23,14 @@ import sys
 
 from _accept_common import ConversationStatus, drive, get, user_event
 
-from perpleximanus.agent_server import ConversationRuntime
-from perpleximanus.core import ObservationEvent, SecurityRisk, SqliteEventStore
-from perpleximanus.tools.mcp import McpPool, McpServerConfig, McpSettings
-from perpleximanus.tools.mcp.migrations import (
+from disco.agent_server import ConversationRuntime
+from disco.core import ObservationEvent, SecurityRisk, SqliteEventStore
+from disco.tools.mcp import McpPool, McpServerConfig, McpSettings
+from disco.tools.mcp.migrations import (
     create_mcp_approval,
     list_mcp_approvals,
 )
-from perpleximanus.tools.sandbox import ProcessSandboxService, SandboxSpec
+from disco.tools.sandbox import ProcessSandboxService, SandboxSpec
 
 CID = "rp05b-drill2-stdio-process"
 SERVER = "fake_srv"

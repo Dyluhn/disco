@@ -3,14 +3,14 @@
 
 from __future__ import annotations
 
-from loop_fakes import ScriptedAgent, action_step, build_loop
-from perpleximanus.core import (
+from disco.core import (
     ActionEvent,
     AgentErrorEvent,
     ConversationStatus,
     ObservationEvent,
 )
-from perpleximanus.core.security.analyzers import hard_deny_reason
+from disco.core.security.analyzers import hard_deny_reason
+from loop_fakes import ScriptedAgent, action_step, build_loop
 
 CID = "conv"
 
@@ -87,7 +87,7 @@ async def test_loop_refuses_hard_denied_action_without_executing():
 
 
 def test_egress_deny_by_default():
-    from perpleximanus.tools.sandbox.base import SandboxSpec
+    from disco.tools.sandbox.base import SandboxSpec
 
     spec = SandboxSpec()  # empty allowlist
     assert spec.egress_allowed("example.com") is False
@@ -95,7 +95,7 @@ def test_egress_deny_by_default():
 
 
 def test_egress_exact_and_subdomain_matching():
-    from perpleximanus.tools.sandbox.base import SandboxSpec
+    from disco.tools.sandbox.base import SandboxSpec
 
     spec = SandboxSpec(egress_allow=frozenset({"api.openai.com", ".github.com"}))
     # exact

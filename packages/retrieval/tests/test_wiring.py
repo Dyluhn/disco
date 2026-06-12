@@ -7,8 +7,8 @@ Research-surface composition — the shippable form of the §8.5 in-test wiring.
 from __future__ import annotations
 
 from conftest import FakeExtractionProvider, FakeRouter, FakeSearchProvider, hit
-from perpleximanus.core import ToolCall
-from perpleximanus.retrieval import (
+from disco.core import ToolCall
+from disco.retrieval import (
     CrossEncoderNLIVerifier,
     DefaultRetrievalEngine,
     GroundingPipeline,
@@ -16,7 +16,7 @@ from perpleximanus.retrieval import (
     research_answer,
     retrieval_capability_handlers,
 )
-from perpleximanus.tools import (
+from disco.tools import (
     CapabilityBroker,
     DefaultToolExecutor,
     InMemorySecretsStore,

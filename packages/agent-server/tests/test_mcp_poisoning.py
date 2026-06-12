@@ -8,21 +8,16 @@ Anti-gaming bar (from master brief):
 
 from __future__ import annotations
 
-import sqlite3
 import sys
 
 import pytest
-from perpleximanus.core import SecurityRisk
-from perpleximanus.tools.mcp.approval import (
+from disco.core import SecurityRisk
+from disco.tools.mcp.approval import (
     ApprovalRequired,
     compute_description_hash,
 )
-from perpleximanus.tools.mcp.config import McpServerConfig, McpSettings
-from perpleximanus.tools.mcp.pool import McpPool
-from perpleximanus.tools.mcp.migrations import (
-    create_mcp_approval,
-    get_mcp_approval,
-)
+from disco.tools.mcp.config import McpServerConfig, McpSettings
+from disco.tools.mcp.pool import McpPool
 
 
 def _fake_stdio_server_config(name: str = "test_srv") -> McpServerConfig:

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from perpleximanus.core.llm.types import CompletionResponse, StreamChunk
+from disco.core.llm.types import CompletionResponse, StreamChunk
 
 
 def _req_payload(req) -> dict:

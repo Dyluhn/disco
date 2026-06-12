@@ -1,8 +1,9 @@
 import hashlib
 import re
-import pytest
-from conftest import action, observation, user_msg, with_seqs, agent_error
-from perpleximanus.core import View, KnowledgeEvent, DatasourceEvent, LLMMessage
+
+from conftest import action, agent_error, observation, user_msg, with_seqs
+from disco.core import DatasourceEvent, KnowledgeEvent, View
+
 
 def test_small_old_observation_is_full():
     # _MASK_MIN_CHARS = 600

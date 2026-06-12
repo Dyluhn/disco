@@ -9,7 +9,7 @@ import { act, renderHook } from "@testing-library/react";
 import type { ConversationStatus } from "@/types/agent";
 import { useBuildNotifications } from "./useBuildNotifications";
 
-const BASE = "perpleximanus";
+const BASE = "disco";
 
 function setHidden(hidden: boolean) {
   Object.defineProperty(document, "hidden", { value: hidden, configurable: true });

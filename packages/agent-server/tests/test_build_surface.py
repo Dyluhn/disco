@@ -12,8 +12,8 @@ Real composition (RouterAgent + DefaultToolExecutor + agent tools + ProcessSandb
 
 from __future__ import annotations
 
-from perpleximanus.agent_server import ConversationRuntime
-from perpleximanus.core import (
+from disco.agent_server import ConversationRuntime
+from disco.core import (
     ActionEvent,
     AgentErrorEvent,
     ConversationStatus,
@@ -25,7 +25,7 @@ from perpleximanus.core import (
     SqliteEventStore,
     StatusEvent,
 )
-from perpleximanus.core.llm import (
+from disco.core.llm import (
     CompletionResponse,
     DefaultLLMRouter,
     ModelEntry,
@@ -35,7 +35,7 @@ from perpleximanus.core.llm import (
     StreamChunk,
     TokenUsage,
 )
-from perpleximanus.tools import ProcessSandboxService
+from disco.tools import ProcessSandboxService
 
 CID = "c1"
 
@@ -168,7 +168,7 @@ async def _approve_plan_and_run(runtime: ConversationRuntime) -> None:
 
 async def test_build_starts_in_planning_and_pauses_for_plan_approval():
     """Submission proposes a plan and HALTS for approval — no work yet."""
-    from perpleximanus.core.events import PlanEvent
+    from disco.core.events import PlanEvent
 
     store = SqliteEventStore(":memory:")
     runtime = await _build_convo(store, _RISKY)
@@ -308,9 +308,9 @@ async def test_sandbox_restart_emits_implicit_system_reminder():
     """If the sandbox's generation grows during a tool call (mid-session death,
     transparent recreate), the loop appends a system-reminder so the model knows
     files-on-disk remain but in-memory state was lost. Idempotent when no restart."""
-    from perpleximanus.core import ToolCall, ToolResult
-    from perpleximanus.core.loop.boundaries import ToolExecutor
-    from perpleximanus.core.loop.engine import AgentLoop
+    from disco.core import ToolCall, ToolResult
+    from disco.core.loop.boundaries import ToolExecutor
+    from disco.core.loop.engine import AgentLoop
 
     class _FakeSandbox:
         def __init__(self):
@@ -426,7 +426,7 @@ async def test_execution_gate_refuses_finish_without_productive_action():
 async def test_request_plan_after_finish_reopens_plan_mode_with_a_new_revision():
     """Re-entering plan mode after a build proposes a NEW plan (revision 2) and
     halts again for approval — the foundation of the diff-style change flow."""
-    from perpleximanus.core.events import PlanEvent
+    from disco.core.events import PlanEvent
 
     # A scripted lifecycle: plan #1 → approve → safe write → finish → request_plan(...) → plan #2.
     safe = ProposedToolCall(
@@ -459,7 +459,7 @@ async def test_request_plan_on_a_fresh_conversation_composes_the_loop():
     conversation after a server restart) must lazily compose one — the old
     `_loops.get()` guard silently dropped the frame, leaving the UI's optimistic
     echo at "sending…" forever while the server stayed IDLE at seq 0."""
-    from perpleximanus.core.events import PlanEvent
+    from disco.core.events import PlanEvent
 
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
@@ -521,7 +521,7 @@ async def test_kill_switch_revokes_caps_tears_down_sandbox_and_records_stop():
         isinstance(e, StatusEvent) and e.detail == "killed" for e in events
     )
     # and the executor refuses further work after the kill
-    from perpleximanus.core import ToolCall
+    from disco.core import ToolCall
 
     res = await executor.execute(ToolCall(tool_name="shell", arguments={"command": "echo hi"}))
     assert res.success is False and res.structured["kind"] == "sandbox_error"

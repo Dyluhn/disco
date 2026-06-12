@@ -37,7 +37,7 @@ already covers FINISHED (it skips only RUNNING).
 
 ### 2. TTL becomes config: `sandbox.idle_ttl_s`
 
-- `packages/core/src/perpleximanus/core/llm/config.py`: add
+- `packages/core/src/disco/core/llm/config.py`: add
   `idle_ttl_s: int = 1800` to `SandboxSettings` (~lines 64-84), with a one-line
   comment (seconds a non-RUNNING sandbox may sit idle before suspend).
 - `sweep_idle_once()`: TTL = `PMX_IDLE_SUSPEND_S` env if set (test/ops
@@ -109,10 +109,10 @@ not attempt to drive the UI or start vite.
 
 ## Manifest (orders.yaml `dc-02` — touch nothing outside it)
 
-- packages/agent-server/src/perpleximanus/agent_server/runtime.py
-- packages/agent-server/src/perpleximanus/agent_server/app.py
-- packages/agent-server/src/perpleximanus/agent_server/host_proxy.py
-- packages/core/src/perpleximanus/core/llm/config.py
+- packages/agent-server/src/disco/agent_server/runtime.py
+- packages/agent-server/src/disco/agent_server/app.py
+- packages/agent-server/src/disco/agent_server/host_proxy.py
+- packages/core/src/disco/core/llm/config.py
 - packages/agent-server/tests/test_idle_suspend.py
 - packages/agent-server/tests/test_host_proxy.py
 - packages/agent-server/tests/test_lifecycle.py

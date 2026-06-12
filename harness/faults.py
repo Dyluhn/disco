@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from perpleximanus.core.llm import (
+from disco.core.llm import (
     CompletionRequest,
     CompletionResponse,
     DefaultLLMRouter,
@@ -32,7 +32,7 @@ from perpleximanus.core.llm import (
     StreamChunk,
     TokenUsage,
 )
-from perpleximanus.tools.sandbox import (
+from disco.tools.sandbox import (
     ExecResult,
     SandboxSpec,
     SandboxUnavailableError,

@@ -28,7 +28,7 @@
 - **`approve_mcp_server()`** — Writes to `mcp_approvals` via `create_mcp_approval` (INSERT OR REPLACE = mutates, never inserts a second row)
 - **`mcp_approval_diff()`** — Returns old-vs-new hash for the UI diff view
 - **`_mcp_live_status()`** — Derives "connected"/"disconnected" from approval existence
-- Imported `McpSettings` from `perpleximanus.core.llm.config`
+- Imported `McpSettings` from `disco.core.llm.config`
 
 ### frontend types (`types/config.ts`)
 - `McpConnection` — Added optional fields: `transport`, `risk_tier`, `description_hash`, `approved_at`, `enabled`

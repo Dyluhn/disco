@@ -10,11 +10,11 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
+from disco.agent_server import create_app
+from disco.agent_server.runtime import ConversationRuntime
+from disco.core import SqliteEventStore
+from disco.tools.sandbox.shell_sessions import SessionInfo
 from fastapi.testclient import TestClient
-from perpleximanus.agent_server import create_app
-from perpleximanus.agent_server.runtime import ConversationRuntime
-from perpleximanus.core import SqliteEventStore
-from perpleximanus.tools.sandbox.shell_sessions import SessionInfo
 
 # ---- helpers -----------------------------------------------------------------
 

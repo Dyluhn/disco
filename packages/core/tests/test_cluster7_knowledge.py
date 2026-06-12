@@ -3,7 +3,7 @@ LLMConvertible context."""
 
 from __future__ import annotations
 
-from perpleximanus.core import (
+from disco.core import (
     CondensationEvent,
     DatasourceEvent,
     KnowledgeEvent,
@@ -11,7 +11,7 @@ from perpleximanus.core import (
     ObservationEvent,
     ToolResult,
 )
-from perpleximanus.core.view import View
+from disco.core.view import View
 
 
 def _seq(events):
@@ -65,7 +65,7 @@ def test_knowledge_and_datasource_survive_condensation():
 
 
 def test_events_round_trip_through_the_union():
-    from perpleximanus.core import EventAdapter
+    from disco.core import EventAdapter
 
     for e in (
         KnowledgeEvent(scope="x", snippet="s"),

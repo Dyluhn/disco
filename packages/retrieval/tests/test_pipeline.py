@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from conftest import FakeExtractionProvider, FakeRewriter, FakeSearchProvider, hit
-from perpleximanus.retrieval import (
+from disco.retrieval import (
     DefaultRetrievalEngine,
     LexicalReranker,
     RetrievalRequest,

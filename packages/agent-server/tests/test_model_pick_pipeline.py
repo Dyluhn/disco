@@ -8,10 +8,10 @@ model now means that model does the entire generative job; only the NLI verifier
 
 from __future__ import annotations
 
-from perpleximanus.agent_server import ConversationRuntime
-from perpleximanus.core import SqliteEventStore
-from perpleximanus.core.llm import ConfigStore, SecretBox, SecretStore
-from perpleximanus.core.llm.types import ModelRole
+from disco.agent_server import ConversationRuntime
+from disco.core import SqliteEventStore
+from disco.core.llm import ConfigStore, SecretBox, SecretStore
+from disco.core.llm.types import ModelRole
 
 _GENERATIVE = (
     ModelRole.AGENT_DRIVER,

@@ -1,6 +1,6 @@
-# Security posture & threat model — perpleximanus
+# Security posture & threat model — Disco
 
-This document describes what perpleximanus v1 does and does **not** protect against, the
+This document describes what disco v1 does and does **not** protect against, the
 trust boundaries it enforces, and the honest limits of each control. It is written to be
 trusted literally: where a control is partial, aspirational, or off by default, that is
 stated. Every substantive claim cites the file (and line, where load-bearing) that
@@ -65,7 +65,7 @@ Where the agent runs its tools is operator-selectable (Settings → Sandbox, or 
 Each tier is honest about its strength, and a **weaker tier is wired to a tighter
 confirmation default** so it is never silently as permissive as a strong one
 (`isolation.py:1-13,40-79`). The **default backend is `local`** (`SandboxSettings.backend
-= "local"`, `packages/core/src/perpleximanus/core/llm/config.py:77`; the compose `agent-server`
+= "local"`, `packages/core/src/disco/core/llm/config.py:77`; the compose `agent-server`
 leaves `PMX_SANDBOX` unset so the persisted setting wins, `compose.yaml:68-69`).
 
 | Tier | Isolation actually provided | Adversarial-safe? | Confirmation default |
@@ -208,7 +208,7 @@ Three layers gate what the agent may do, before execution (`engine.py:2869-2932`
   (`secrets.py:51-54`).
 - **Fails closed.** With no/wrong `PMX_SECRET_KEY` the store reports `locked` and callers get
   `None` rather than a broken key (`secrets.py:6-8,117-127`).
-- **Out of the project tree.** New installs write `~/.config/perpleximanus/secrets.json`, not
+- **Out of the project tree.** New installs write `~/.config/disco/secrets.json`, not
   the repo root, so anything granted read of the working dir cannot copy the ciphertext
   (`secrets.py:27-49`). In compose it lives in the `pmx-data` volume (`compose.yaml:39-40,61`).
 - **Pin your key.** If `PMX_SECRET_KEY` is blank it is auto-generated into the data volume;
@@ -226,7 +226,7 @@ put TLS + auth in front (`.env.example:5-8`).
 
 ## 8. Reporting a vulnerability
 
-perpleximanus is an early single-owner project and **has no formal vulnerability-disclosure
+Disco is an early single-owner project and **has no formal vulnerability-disclosure
 process, security contact, or SLA yet.** If you find a security issue, please report it
 privately to the maintainer (e.g. via a private GitHub Security Advisory on the repository, or
 direct contact) rather than opening a public issue with exploit detail. This section is a

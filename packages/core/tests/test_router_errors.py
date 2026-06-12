@@ -7,9 +7,8 @@ is_context_window_exceeded() on whatever the router raises.
 from __future__ import annotations
 
 import pytest
-from llm_fakes import FakeModelProvider, build_router
-from perpleximanus.core import LLMMessage
-from perpleximanus.core.llm import (
+from disco.core import LLMMessage
+from disco.core.llm import (
     CapabilityProfile,
     CompletionRequest,
     LLMAuthError,
@@ -19,6 +18,7 @@ from perpleximanus.core.llm import (
     ModelRole,
     is_context_window_exceeded,
 )
+from llm_fakes import FakeModelProvider, build_router
 
 
 def _req(role=ModelRole.AGENT_DRIVER):

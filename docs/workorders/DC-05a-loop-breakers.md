@@ -15,7 +15,7 @@ steps [1,2,3,4] all undone. Attempt 5 reproduced it in a different register
 `LLMTransientError` during a local-model restart ERRORs the conversation
 after ~12 s — no backoff, no PAUSED.
 
-Code as of HEAD (`packages/core/src/perpleximanus/core/loop/engine.py`):
+Code as of HEAD (`packages/core/src/disco/core/loop/engine.py`):
 - `self._auto_continue_cap = 3` (line ~735); decision branch ~1960-1963
   (`_plan_is_incomplete` + `_auto_continue_attempts`); FINISHED
   detail="partial_plan" landing ~2015-2020; FINISHED detail="noop_limit"
@@ -23,7 +23,7 @@ Code as of HEAD (`packages/core/src/perpleximanus/core/loop/engine.py`):
 - `_plan_is_incomplete(events)` ~1140-1180 returns `(incomplete, missing)`.
 - remember-tool KnowledgeEvent emit ~1740-1750 (`KnowledgeEvent(source=…,
   scope=scope, snippet=fact)`); KnowledgeEvent shape in
-  `packages/core/src/perpleximanus/core/events.py` ~486 (`scope`, `snippet`).
+  `packages/core/src/disco/core/events.py` ~486 (`scope`, `snippet`).
 - `except LLMError as e:` ~1708 emits ErrorEvent → terminal ERROR;
   `LLMTransientError` (subclass, `core/llm/errors.py`) dies there too.
 
@@ -124,7 +124,7 @@ Code as of HEAD (`packages/core/src/perpleximanus/core/loop/engine.py`):
 
 ## Manifest (orders.yaml `dc-05a` — touch nothing outside it)
 
-- packages/core/src/perpleximanus/core/loop/engine.py
+- packages/core/src/disco/core/loop/engine.py
 - packages/core/tests/test_dc05_loop.py
 - test-record/dc-05/units-core.log
 - agent-projects/gemini/dc-05a-report.md

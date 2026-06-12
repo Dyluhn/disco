@@ -53,7 +53,7 @@ the pack after this one.
 ## 2. Locked mechanism decisions, order by order
 
 ### RP-00 — Process debt (S, standing; some items fold into later orders)
-- **Real-sample harness rebuild** per `memory/perpleximanus-test-harness-design.md`:
+- **Real-sample harness rebuild** per `memory/disco-test-harness-design.md`:
   eval runner + event-log replay + shared cassette layer on the existing
   `evaluation.py` + runtime injection seams. **Locked synergy:** the RP-06 share
   bundle IS the cassette format — one projection, two consumers. Build the

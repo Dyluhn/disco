@@ -8,17 +8,17 @@ call is non-blocking: the run continues, exactly like notify_user.
 
 from __future__ import annotations
 
-from llm_fakes import simple_config
-from loop_fakes import FakeExecutor, SequenceProvider, build_loop
-from perpleximanus.core import (
+from disco.core import (
     ActionEvent,
     ConversationStatus,
     KnowledgeEvent,
 )
-from perpleximanus.core.events import EventSource
-from perpleximanus.core.llm import DefaultLLMRouter, OperatingMode, ProposedToolCall
-from perpleximanus.core.loop import NeverConfirm, RouterAgent
-from perpleximanus.core.view import View
+from disco.core.events import EventSource
+from disco.core.llm import DefaultLLMRouter, OperatingMode, ProposedToolCall
+from disco.core.loop import NeverConfirm, RouterAgent
+from disco.core.view import View
+from llm_fakes import simple_config
+from loop_fakes import FakeExecutor, SequenceProvider, build_loop
 
 CID = "conv"
 
@@ -96,7 +96,7 @@ async def test_remembered_fact_survives_condensation_via_pinning():
     view = View.of(events)
     assert any("API base is /v2" in (m.content or "") for m in view.messages)
     # And the pin set names this event's seq (the condensation-exempt guarantee).
-    from perpleximanus.core.view import _pinned_seqs
+    from disco.core.view import _pinned_seqs
 
     assert know.seq in _pinned_seqs(events)
 

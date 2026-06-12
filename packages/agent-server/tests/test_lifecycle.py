@@ -10,8 +10,8 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from perpleximanus.agent_server import ConversationRuntime
-from perpleximanus.core import (
+from disco.agent_server import ConversationRuntime
+from disco.core import (
     ConversationStatus,
     EventSource,
     LLMMessage,
@@ -19,7 +19,7 @@ from perpleximanus.core import (
     SqliteEventStore,
     StatusEvent,
 )
-from perpleximanus.tools import ProcessSandboxService
+from disco.tools import ProcessSandboxService
 
 # ---- helpers -----------------------------------------------------------------
 
@@ -287,7 +287,7 @@ async def test_http_state_route_overlays_sandbox_state():
     HTTP. Caught live: the first bp-13 UI-spec run failed because only the WS
     path was overlaid (extras.sandbox came back undefined over HTTP)."""
     import httpx
-    from perpleximanus.agent_server import create_app
+    from disco.agent_server import create_app
 
     store = SqliteEventStore(":memory:")
     rt = _runtime(store)
