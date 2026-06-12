@@ -12,12 +12,16 @@ models**, not just frontier APIs.
 
 ## Status
 
-**The product works end-to-end; the release engineering doesn't exist yet.** A real
-question gets a real, grounded, cited answer; the agent plans, runs tools in a
-sandbox, and produces artifacts — all driveable from local open-weight models. What's
-*not* done is packaging it for strangers: a one-command deploy, a published security
-doc, LICENSE/CI, and an eval users can run against their own model (see the execution
-plan). This is a working system without a release, not the reverse.
+**The product works end-to-end, and the release engineering has landed.** A real
+question gets a real, grounded, cited answer; the agent plans, runs tools in a sandbox,
+and produces artifacts — all driveable from local open-weight models. It now also
+*packages* for strangers: a one-command `docker compose` self-host
+([`docs/self-host.md`](./docs/self-host.md)), a published threat model
+([`SECURITY.md`](./SECURITY.md)), a contributor guide
+([`CONTRIBUTING.md`](./CONTRIBUTING.md)) + provider/VRAM matrix
+([`docs/provider-matrix.md`](./docs/provider-matrix.md)), and **`pmx verify`** — a
+command that checks *your* model actually drives the loop. What's left before a public
+v0.1 is small: a LICENSE + CI, and a mobile polish pass.
 
 ### Surfaces
 
@@ -62,12 +66,12 @@ Four surfaces, one shared event log + agent core:
 
 ### Honest gaps (the road to v0.1)
 
-Release engineering (one-command compose deploy, published sandbox image, a
-`SECURITY.md` threat model, LICENSE / CI / CONTRIBUTING); an eval users can run
-against their own local model; some artifact polish (an in-app sheet viewer,
-share-bundle *import*). No auth yet — every conversation is owner `"local"`. Windows
-is via WSL2 / Docker, not native (POSIX deps: tmux sessions, gVisor/podman). The
-sequenced plan is in [`docs/release-execution-plan.md`](./docs/release-execution-plan.md).
+What's left: a **LICENSE + CI**, and a **mobile polish pass** (the research + history
+surfaces are mostly responsive; the Build/Agent inspector is desktop-first). **No auth
+yet** — every conversation is owner `"local"`, so don't expose it without your own TLS +
+auth in front. Windows is via WSL2 / Docker, not native (POSIX deps: tmux sessions,
+gVisor/podman). The sequenced plan is in
+[`docs/release-execution-plan.md`](./docs/release-execution-plan.md).
 
 ## Layout
 
@@ -88,9 +92,29 @@ Dependency direction: `core → tools → agent-server → app-server`; the fron
 to the servers over HTTP/WS. `perpleximanus` is a PEP 420 namespace package, so every
 workspace member shares the `perpleximanus.*` namespace.
 
+## Quickstart (self-host)
+
+A clean Linux box (or WSL2) with a container runtime:
+
+```bash
+cp .env.example .env            # then skim it — at least the model + security notes
+docker compose up -d --build    # podman compose works too
+open http://localhost:8088
+# confirm your model can actually drive the loop:
+docker compose exec agent-server python -m perpleximanus.agent_server.verify
+```
+
+Keyless out of the box (DuckDuckGo search + local extraction + bundled ONNX encoders +
+a small bundled llama.cpp model) — a grounded answer needs no API key. For real agent
+work, point it at a 24–32B-class endpoint (see
+[`docs/provider-matrix.md`](./docs/provider-matrix.md)). **No auth in v1** — defaults
+bind `127.0.0.1`; read [`SECURITY.md`](./SECURITY.md) before exposing it. The full story
+is in [`docs/self-host.md`](./docs/self-host.md).
+
 ## Develop
 
 Requires [uv](https://docs.astral.sh/uv/) and Python 3.12+ (and Node for the frontend).
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the full contributor guide.
 
 ```bash
 uv sync --all-packages     # provision the venv + install every workspace member
