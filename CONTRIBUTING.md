@@ -186,3 +186,11 @@ Keep the subject imperative and honest about scope. When a change spans the wire
 contract (TS ↔ Python), run `make contract`. When it touches a surface the user sees,
 attach the screenshot. Reference the design authorities when a change reinterprets
 them.
+
+## License
+
+By contributing, you agree your contributions are licensed under the project's
+**Apache License 2.0** ([`LICENSE`](./LICENSE)) — no CLA, no copyright assignment. And a
+standing promise back to you: **the license will never change.** perpleximanus will not
+be relicensed to a source-available or commercial license, so your contribution stays
+Apache-2.0 forever (see the README's License section).

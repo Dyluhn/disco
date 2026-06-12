@@ -137,6 +137,18 @@ uv sync --package perpleximanus-agent-server --extra tts
 A bare `uv sync --extra tts` errors — the root defines no `tts` extra. Without this
 extra installed, the audio-overview tool stays importable but fails soft when run.
 
+## License
+
+perpleximanus is licensed under the **Apache License 2.0** — see [`LICENSE`](./LICENSE).
+Permissive: use it, modify it, run it commercially, fold it into your own product; just
+keep the notices.
+
+**Our promise: this license will never change.** perpleximanus will not be relicensed
+to a source-available, "fair-source", BSL/SSPL, or commercial license — not as it grows,
+not after adoption, not on acquisition. Every past and future release stays Apache-2.0.
+The whole point of this project is to be the *trustworthy* one you can self-host; a
+license rug-pull would break that promise, so we don't reserve the right to make one.
+
 ## The load-bearing idea
 
 The append-only event log is the single source of truth. `State` (what the loop
