@@ -799,3 +799,31 @@ rp-09: committed
   - packages/tools/src/perpleximanus/tools/builtin/__init__.py
   - packages/tools/src/perpleximanus/tools/registry.py
   - test-record/rp-09/units-tools.log
+
+# --- wave 4 final lane (RP-10 ∥ RP-13 — disjoint seams, dispatched 2026-06-12) -
+rp-10: committed
+  # Slides — Marp deck generation (slides_generate tool). HTML now; PDF/PPTX ride
+  # the VM-201 image rebuild (marp-cli + chromium). Backend tool only, NO frontend.
+  # Seam = registry.py AGENT_TOOLS. Sandbox-jailed writes. Disjoint from rp-13.
+  - packages/tools/src/perpleximanus/tools/builtin/slides.py
+  - packages/tools/tests/test_slides.py
+  - packages/tools/src/perpleximanus/tools/builtin/__init__.py
+  - packages/tools/src/perpleximanus/tools/registry.py
+  - test-record/rp-10/units-tools.log
+rp-13: in-flight
+  # Clarifying questions (pre-plan clarify gate, ADDITIVE on engine.py mirroring
+  # ask_user) + deep-report follow-ups (continuation run reusing report corpus, the
+  # RP-08 re-injection mechanism). Core-engine + agent-server + research frontend.
+  # Disjoint from rp-10 (tools/registry). ENGINE-RISK: additive-only, heavy review.
+  - packages/core/src/perpleximanus/core/loop/engine.py
+  - packages/core/src/perpleximanus/core/events.py
+  - packages/core/src/perpleximanus/core/llm/prompts.py
+  - packages/core/tests/test_clarify_gate.py
+  - packages/agent-server/src/perpleximanus/agent_server/runtime.py
+  - packages/agent-server/src/perpleximanus/agent_server/app.py
+  - packages/agent-server/tests/test_report_followup.py
+  - frontend/src/components/build/ClarifyPanel.tsx
+  - frontend/src/components/build/BuildSurface.tsx
+  - frontend/src/components/research/ReportFollowUp.tsx
+  - frontend/src/components/research/DeepResearchSurface.tsx
+  - test-record/rp-13/units-core.log

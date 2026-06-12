@@ -84,6 +84,7 @@ AGENT_TOOLS = frozenset(
         "submit_plan",
         "plan_step",
         "sheet_generate",
+        "slides_generate",
         "audio_overview",
     }
 )

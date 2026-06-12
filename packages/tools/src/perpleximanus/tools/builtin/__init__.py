@@ -25,6 +25,7 @@ from .retrieval import ExtractTool, SearchTool
 from .server import ServerStatusTool
 from .sheets import SheetsTool
 from .shell_sessions import ShellExecTool, ShellKillTool, ShellViewTool, ShellWaitTool, ShellWriteTool
+from .slides import SlidesTool
 from .system import CodeExecTool, ShellTool
 
 __all__ = [
@@ -43,6 +44,7 @@ __all__ = [
     "ServerStatusTool",
     "SheetsTool",
     "ShellTool",
+    "SlidesTool",
     "ShellExecTool",
     "ShellKillTool",
     "ShellViewTool",
@@ -79,6 +81,7 @@ def build_default_registry() -> ToolRegistry:
         PlanStepTool(),  # plan-mode: capstone progress reports
         SheetsTool(),  # sheet_generate: write .xlsx with live formulas
         AudioOverviewTool(),  # audio_overview: two-voice TTS from finished report
+        SlidesTool(),  # slides_generate: Marp-rendered slide decks (HTML/PDF/PPTX)
     ):
         registry.register(tool)
     return registry
