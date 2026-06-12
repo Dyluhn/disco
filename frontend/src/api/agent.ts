@@ -494,3 +494,24 @@ export async function fetchShareBundle(token: string): Promise<ShareBundle | nul
     return null;
   }
 }
+
+/** Import an exported bundle as a READ-ONLY local conversation. The server
+ *  validates + re-scrubs + mints a fresh cid + marks it imported; returns the new
+ *  cid. Throws ApiError (422) on an invalid/unsupported bundle. */
+export async function importShareBundle(bundle: unknown): Promise<{ conversation_id: string }> {
+  return agentSend<{ conversation_id: string }>("POST", "/api/share/import", bundle);
+}
+
+/** Fetch a finished conversation's event log + final status for a static (read-only)
+ *  render — used by ImportedRunView. No WebSocket: the log is already complete. */
+export async function fetchConversationRun(
+  cid: string,
+): Promise<{ events: Array<Record<string, unknown>>; status: string }> {
+  const ev = await agentGet<{ events: Array<Record<string, unknown>> }>(
+    `/conversations/${encodeURIComponent(cid)}/events`,
+  );
+  const state = await agentGet<{ execution_status?: string }>(
+    `/conversations/${encodeURIComponent(cid)}/state`,
+  );
+  return { events: ev.events ?? [], status: state.execution_status ?? "FINISHED" };
+}

@@ -29,6 +29,16 @@ export const CONVERSATIONS: ConversationSummary[] = [
     created_at: "2026-05-25T19:05:00Z",
   },
   {
+    // An imported share bundle — read-only, routes to /imported/:cid, badged.
+    id: "c-imported",
+    owner_id: CURRENT_OWNER,
+    title: "Imported: a colleague's landing-page build",
+    created_at: "2026-05-31T11:30:00Z",
+    status: "FINISHED",
+    surface: "build",
+    origin: "imported",
+  },
+  {
     // Belongs to someone else — must NOT appear in the current owner's list.
     id: "c-other",
     owner_id: "owner-someone-else",

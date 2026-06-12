@@ -47,7 +47,8 @@ class ConversationSummary(BaseModel):
     title: str | None = None
     created_at: str  # ISO-8601
     status: str | None = None
-    surface: str = "research"  # "research" | "build" | "deep_research" — for History routing
+    surface: str = "research"  # "research" | "build" | "agent" | "deep_research" — History routing
+    origin: str | None = None  # "imported" for a read-only bundle import; None otherwise
 
 
 @runtime_checkable

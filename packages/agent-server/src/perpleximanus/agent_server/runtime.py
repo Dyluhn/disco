@@ -32,6 +32,7 @@ from perpleximanus.core import (
     AgentErrorEvent,
     CondensationEvent,
     ConversationStatus,
+    Event,
     EventFilter,
     EventSource,
     KnowledgeEvent,
@@ -2092,6 +2093,64 @@ class ConversationRuntime:
             "events": scrubbed_events,
         }
         return {"ok": True, "bundle": bundle}
+
+    _IMPORT_MAX_EVENTS = 20_000
+
+    async def share_import(
+        self, bundle: Any, *, owner_id: str = DEFAULT_OWNER_ID
+    ) -> dict[str, Any]:
+        """Import an exported share bundle as a READ-ONLY local conversation (rp-06
+        residue). A bundle is UNTRUSTED third-party data: fail-closed validation, an
+        importer-minted cid (never trust the bundle's), re-scrub on ingest (exporter
+        scrubbing is a claim, not a property — re-running the idempotent redactor
+        protects this instance's future re-export), and an `origin="imported"` marker
+        that the server edge enforces read-only against. Returns {ok, conversation_id}
+        or {ok: False, reason} — the endpoint maps reason → 422. No partial imports."""
+        import uuid as _uuid
+
+        from perpleximanus.core import EventAdapter, migrate_event
+
+        from .redaction import redact_event_payload
+
+        if not isinstance(bundle, dict):
+            return {"ok": False, "reason": "bundle_not_an_object"}
+        if bundle.get("bundle_version") != 1:
+            return {"ok": False, "reason": "unsupported_bundle_version"}
+        raw_events = bundle.get("events")
+        if not isinstance(raw_events, list) or not raw_events:
+            return {"ok": False, "reason": "bundle_has_no_events"}
+        if len(raw_events) > self._IMPORT_MAX_EVENTS:
+            return {"ok": False, "reason": "bundle_too_large"}
+
+        # Surface coerced into the known set (an attacker-set surface can't pick an
+        # unhandled code path); title is text, truncated (React escapes it on render).
+        surface = bundle.get("surface")
+        if surface not in self._VALID_SURFACES:
+            surface = "build"
+        raw_title = bundle.get("title")
+        title = (raw_title[:200] if isinstance(raw_title, str) else None) or "(imported)"
+
+        # Validate + RE-SCRUB every event. Reject the WHOLE bundle on the first bad
+        # event (no partial import). Event ids are preserved (action/observation
+        # pairing is by id); seqs are reassigned by the store under the fresh cid.
+        events: list[Event] = []
+        for raw in raw_events:
+            if not isinstance(raw, dict):
+                return {"ok": False, "reason": "malformed_event"}
+            try:
+                migrated = migrate_event(raw)
+                validated = EventAdapter.validate_python(migrated)  # extra="forbid"
+                rescrubbed = redact_event_payload(validated.model_dump(mode="json"))
+                events.append(EventAdapter.validate_python(migrate_event(rescrubbed)))
+            except Exception:  # noqa: BLE001 — any validation failure rejects the bundle
+                return {"ok": False, "reason": "malformed_event"}
+
+        cid = f"conv_{_uuid.uuid4().hex}"  # importer-minted — never trust bundle.conversation_id
+        self._store.create_conversation(
+            cid, owner_id=owner_id, title=title, surface=surface, origin="imported"
+        )
+        await self._store.append_many(cid, events)
+        return {"ok": True, "conversation_id": cid}
 
     @staticmethod
     def _has_fresh_user_message(

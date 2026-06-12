@@ -53,7 +53,8 @@ class ConversationSummaryDTO(BaseModel):
     title: str | None = None
     created_at: str
     status: str | None = None
-    surface: str = "research"  # "research" | "build" | "deep_research" — History routing
+    surface: str = "research"  # "research" | "build" | "agent" | "deep_research" — routing
+    origin: str | None = None  # "imported" → read-only, routes to /imported/:cid
 
 
 def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> FastAPI:
@@ -279,6 +280,7 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
                 created_at=s.created_at,
                 status=s.status,
                 surface=s.surface,
+                origin=s.origin,
             )
             for s in summaries
         ]

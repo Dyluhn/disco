@@ -10,6 +10,7 @@ import { Shell } from "@/shell/Shell";
 import { useMode } from "@/shell/mode";
 import { ActivityView } from "@/views/ActivityView";
 import { HistoryView } from "@/views/HistoryView";
+import { ImportedRunView } from "@/views/ImportedRunView";
 import { ProjectsView } from "@/views/ProjectsView";
 import { SettingsView } from "@/views/SettingsView";
 import { ShareView } from "@/views/ShareView";
@@ -72,6 +73,7 @@ export default function App() {
               <Route path="projects" element={<ProjectsView />} />
               <Route path="build/:cid" element={<ResumeProject />} />
               <Route path="agent/:cid" element={<ResumeAgent />} />
+              <Route path="imported/:cid" element={<ImportedRunView />} />
               <Route path="deep/:cid" element={<ResumeDeepResearch />} />
               <Route path="share/:token" element={<ShareView />} />
               <Route path="settings" element={<SettingsView />} />

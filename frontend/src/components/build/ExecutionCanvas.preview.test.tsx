@@ -84,3 +84,23 @@ describe("ExecutionCanvas — auto-switch to Preview on finish", () => {
     );
   });
 });
+
+describe("ExecutionCanvas — untrusted preview hardening (rp-06 import)", () => {
+  it("keeps allow-scripts for a trusted (own) run", () => {
+    render(
+      withClient(<ExecutionCanvas events={[NOTE, HTML]} status="FINISHED" cid="c3" />),
+    );
+    expect(screen.getByTitle("Static preview")).toHaveAttribute("sandbox", "allow-scripts");
+  });
+
+  it("drops allow-scripts (empty sandbox) for an untrusted shared/imported run", () => {
+    render(
+      withClient(
+        <ExecutionCanvas events={[NOTE, HTML]} status="FINISHED" cid={null} untrusted />,
+      ),
+    );
+    // empty sandbox attr = no scripts: a script here could reach open-CORS APIs
+    expect(screen.getByTitle("Static preview")).toHaveAttribute("sandbox", "");
+    expect(screen.getByText(/Scripted preview is disabled/i)).toBeInTheDocument();
+  });
+});

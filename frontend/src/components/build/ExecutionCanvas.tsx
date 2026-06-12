@@ -12,7 +12,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, FileCode2, MonitorPlay, PenLine, RotateCw, SquareTerminal } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { deriveFiles, deriveSrcDoc, deriveTerminal } from "@/lib/buildTrace";
-import { agentHttpBase, previewHostUrl } from "@/api/client";
+import { previewHostUrl } from "@/api/client";
 import { restartPreview } from "@/api/agent";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
 import { useSessions } from "@/hooks/useSessions";
@@ -224,10 +224,15 @@ function PreviewPane({
   status,
   cid,
   events,
+  untrusted = false,
 }: {
   status: ConversationStatus;
   cid: string | null;
   events: AgentEvent[];
+  /** The events are UNTRUSTED third-party content (a shared/imported run). Drop
+   * `allow-scripts` from the static-preview iframe — with open-CORS no-auth APIs,
+   * a script in that frame could fetch this instance's endpoints. */
+  untrusted?: boolean;
 }) {
   // Keep the backend preview active through FINISHED/STUCK too (UI 2.2): the
   // pane shouldn't go MORE dead at the moment of completion.
@@ -384,11 +389,18 @@ function PreviewPane({
             )}
           </div>
         </div>
+        {untrusted && (
+          <div className="shrink-0 border-b border-hairline bg-surface-1 px-body py-hair font-ui text-[0.72rem] text-text-faint">
+            Scripted preview is disabled for shared/imported runs (untrusted content).
+          </div>
+        )}
         <iframe
           key={reloadKey}
           title="Static preview"
           srcDoc={srcDoc}
-          sandbox="allow-scripts"
+          // untrusted → empty sandbox (no scripts): a script here could reach this
+          // instance's open-CORS APIs. Trusted (your own run) keeps allow-scripts.
+          sandbox={untrusted ? "" : "allow-scripts"}
           className="min-h-0 flex-1 border-0 bg-white"
         />
       </div>
@@ -445,11 +457,14 @@ export function ExecutionCanvas({
   status,
   cid,
   streamingFile = null,
+  untrusted = false,
 }: {
   events: AgentEvent[];
   status: ConversationStatus;
   cid: string | null;
   streamingFile?: StreamingFile | null;
+  /** Third-party events (shared/imported run) → harden the preview iframe. */
+  untrusted?: boolean;
 }) {
   // Cluster 5: when there's a renderable artifact, Preview is the hero — the
   // user's first instinct should be to WATCH it build, not read logs. Else
@@ -555,7 +570,7 @@ export function ExecutionCanvas({
           />
         </Tabs.Content>
         <Tabs.Content value="preview" className="h-full focus:outline-none">
-          <PreviewPane status={status} cid={cid} events={events} />
+          <PreviewPane status={status} cid={cid} events={events} untrusted={untrusted} />
         </Tabs.Content>
       </div>
     </Tabs.Root>

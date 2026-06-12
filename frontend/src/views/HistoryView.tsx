@@ -1,6 +1,7 @@
-import { AlertTriangle, MessageSquareText, Search, Trash2 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { AlertTriangle, MessageSquareText, Search, Trash2, Upload } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
+import { importShareBundle } from "@/api/agent";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { formatDate } from "@/lib/date";
 import { useConversations, useDeleteConversation } from "@/hooks/useConversations";
@@ -89,6 +90,26 @@ export function HistoryView() {
   const navigate = useNavigate();
   const [q, setQ] = useState("");
   const [deferredQ, setDeferredQ] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [importErr, setImportErr] = useState<string | null>(null);
+
+  // Import a previously-exported share bundle (a .json file) as a READ-ONLY local
+  // conversation. The server validates + re-scrubs + marks it imported; we then jump
+  // to its read-only view. Invalid JSON / unsupported bundle → an inline message.
+  async function onImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-importing the same file
+    if (!file) return;
+    setImportErr(null);
+    try {
+      const json = JSON.parse(await file.text());
+      const { conversation_id } = await importShareBundle(json);
+      await refetch();
+      navigate(`/imported/${conversation_id}`);
+    } catch (err) {
+      setImportErr(err instanceof Error ? err.message : "Couldn't import that file.");
+    }
+  }
 
   // Debounce the search query to keep the UI responsive during fast typing.
   useEffect(() => {
@@ -104,12 +125,36 @@ export function HistoryView() {
   return (
     <div className="mx-auto w-full max-w-doc px-body py-section">
       <div className="mx-auto flex w-full max-w-[46rem] flex-col gap-section">
-        <header>
-          <h1 className="font-display text-[2rem] tracking-tight text-text">History</h1>
-          <p className="font-ui text-[0.88rem] text-text-muted">
-            Your past conversations — each answer kept with the sources it was grounded in.
-          </p>
+        <header className="flex items-start justify-between gap-inline">
+          <div>
+            <h1 className="font-display text-[2rem] tracking-tight text-text">History</h1>
+            <p className="font-ui text-[0.88rem] text-text-muted">
+              Your past conversations — each answer kept with the sources it was grounded in.
+            </p>
+          </div>
+          <div className="shrink-0">
+            <input
+              ref={fileRef}
+              type="file"
+              accept="application/json,.json"
+              hidden
+              onChange={onImportFile}
+            />
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              title="Import an exported share bundle (read-only)"
+              className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
+            >
+              <Upload className="size-3.5" aria-hidden /> Import
+            </button>
+          </div>
         </header>
+        {importErr && (
+          <p role="alert" className="font-ui text-[0.8rem] text-warn">
+            {importErr}
+          </p>
+        )}
 
         {/* search is shown whenever there's a populated list to filter */}
         {!isLoading && !isError && all.length > 0 && (
@@ -167,13 +212,15 @@ export function HistoryView() {
                       type="button"
                       onClick={() =>
                         navigate(
-                          c.surface === "deep_research"
-                            ? `/deep/${c.id}`
-                            : c.surface === "agent"
-                              ? `/agent/${c.id}`
-                              : c.surface === "build"
-                                ? `/build/${c.id}`
-                                : "/",
+                          c.origin === "imported"
+                            ? `/imported/${c.id}`
+                            : c.surface === "deep_research"
+                              ? `/deep/${c.id}`
+                              : c.surface === "agent"
+                                ? `/agent/${c.id}`
+                                : c.surface === "build"
+                                  ? `/build/${c.id}`
+                                  : "/",
                         )
                       }
                       className="group min-w-0 flex-1 text-left"
@@ -196,6 +243,11 @@ export function HistoryView() {
                         {c.surface === "agent" && (
                           <span className="shrink-0 rounded-full border border-hairline px-hair font-ui text-[0.62rem] uppercase tracking-wide text-text-faint">
                             agent
+                          </span>
+                        )}
+                        {c.origin === "imported" && (
+                          <span className="shrink-0 rounded-full border border-warn/40 px-hair font-ui text-[0.62rem] uppercase tracking-wide text-warn">
+                            imported
                           </span>
                         )}
                       </div>

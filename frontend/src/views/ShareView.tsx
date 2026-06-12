@@ -8,19 +8,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { fetchShareBundle, type ShareBundle } from "@/api/agent";
-import {
-  deriveActivity,
-  deriveDeliverable,
-  deriveFiles,
-  derivePlan,
-  derivePlanProgress,
-  deriveTerminal,
-  latestAgentMessage,
-} from "@/lib/buildTrace";
-import { ActivityFeed } from "@/components/build/ActivityFeed";
-import { ExecutionCanvas } from "@/components/build/ExecutionCanvas";
-import { PlanPanel } from "@/components/build/PlanPanel";
-import { Markdown } from "@/components/Markdown";
+import { StaticRunView } from "@/components/StaticRunView";
 import { Loader2, AlertTriangle, Share2 } from "lucide-react";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
@@ -91,31 +79,6 @@ export function ShareView() {
     );
   }, [state]);
 
-  const activity = useMemo(() => {
-    if (state.tag !== "done") return [];
-    return deriveActivity(state.events, null, status);
-  }, [state, status]);
-
-  const plan = useMemo(() => {
-    if (state.tag !== "done") return null;
-    return derivePlan(state.events);
-  }, [state]);
-
-  const planProgress = useMemo(() => {
-    if (state.tag !== "done") return new Map();
-    return derivePlanProgress(state.events, status);
-  }, [state, status]);
-
-  const finalMessage = useMemo(() => {
-    if (state.tag !== "done") return null;
-    return latestAgentMessage(state.events);
-  }, [state]);
-
-  const deliverable = useMemo(() => {
-    if (state.tag !== "done") return null;
-    return deriveDeliverable(state.events);
-  }, [state]);
-
   // ═══════════════════════════════════════════════════════════════════════
   // Loading / error states
   // ═══════════════════════════════════════════════════════════════════════
@@ -155,80 +118,26 @@ export function ShareView() {
   // ═══════════════════════════════════════════════════════════════════════
 
   const { bundle } = state;
-  const isResearch = bundle.surface === "research";
 
-  return (
-    <div className="flex min-h-full flex-col">
-      {/* Header: provenance banner */}
-      <div className="border-b border-hairline bg-surface-1 px-body py-inline">
-        <div className="flex flex-wrap items-center gap-inline">
-          <Share2 className="size-4 text-text-faint" aria-hidden />
-          <h1 className="font-display text-[1.1rem] font-medium leading-tight text-text">
-            {bundle.title || `Shared run ${bundle.conversation_id.slice(0, 8)}`}
-          </h1>
-          {bundle.share?.created_at && (
-            <span className="font-ui text-[0.7rem] text-text-faint">
-              shared {new Date(bundle.share.created_at).toLocaleDateString()}
-            </span>
-          )}
-          <span className="ml-auto shrink-0 rounded-full border border-hairline px-hair font-ui text-[0.62rem] uppercase tracking-wide text-text-faint">
-            {bundle.surface ?? "build"}
+  const banner = (
+    <div className="border-b border-hairline bg-surface-1 px-body py-inline">
+      <div className="flex flex-wrap items-center gap-inline">
+        <Share2 className="size-4 text-text-faint" aria-hidden />
+        <h1 className="font-display text-[1.1rem] font-medium leading-tight text-text">
+          {bundle.title || `Shared run ${bundle.conversation_id.slice(0, 8)}`}
+        </h1>
+        {bundle.share?.created_at && (
+          <span className="font-ui text-[0.7rem] text-text-faint">
+            shared {new Date(bundle.share.created_at).toLocaleDateString()}
           </span>
-        </div>
-      </div>
-
-      {/* Body: left = activity feed + plan, right = inspector */}
-      <div className="flex flex-1 min-h-0 lg:flex-row flex-col">
-        {/* Left pane — Activity Feed + Plan */}
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-body py-inline lg:max-w-[45%]">
-          {plan && (
-            <div className="mb-section">
-              <PlanPanel plan={plan} progress={planProgress} />
-            </div>
-          )}
-
-          {activity.length === 0 && !plan && (
-            <p className="font-ui text-[0.82rem] text-text-faint">
-              This shared run has no activity to show.
-            </p>
-          )}
-
-          <ActivityFeed
-            items={activity}
-            conversationId={bundle.conversation_id}
-          />
-
-          {finalMessage && (
-            <div className="mt-section rounded-card border border-hairline bg-surface-1 px-body py-inline text-[0.95rem]">
-              <Markdown>{finalMessage}</Markdown>
-            </div>
-          )}
-
-          {deliverable && (
-            <div className="mt-inline rounded-card border border-accent/30 bg-accent/5 px-body py-inline">
-              <p className="font-ui text-[0.74rem] uppercase tracking-wide text-accent">
-                Deliverable
-              </p>
-              <p className="mt-hair font-ui text-[0.84rem] text-text">
-                {deliverable.title}
-              </p>
-              <p className="font-mono text-[0.7rem] text-text-faint">
-                {deliverable.path}
-              </p>
-            </div>
-          )}
-        </div>
-
-        {/* Right pane — Inspector (Files · Terminal) */}
-        <div className="min-h-0 flex-1 border-t border-hairline lg:border-l lg:border-t-0">
-          <ExecutionCanvas
-            events={state.events}
-            status={status}
-            cid={null}
-            streamingFile={null}
-          />
-        </div>
+        )}
+        <span className="ml-auto shrink-0 rounded-full border border-hairline px-hair font-ui text-[0.62rem] uppercase tracking-wide text-text-faint">
+          {bundle.surface ?? "build"}
+        </span>
       </div>
     </div>
   );
+
+  // A shared bundle is third-party content viewed in YOUR browser → untrusted.
+  return <StaticRunView events={state.events} status={status} banner={banner} untrusted />;
 }

@@ -13,4 +13,7 @@ export interface ConversationSummary {
   /** which surface produced it — History routes by this (read-only open).
    *  "agent" is the general-task framing of "build" (same machinery). */
   surface?: "research" | "build" | "agent" | "deep_research";
+  /** "imported" for a read-only share-bundle import (routes to /imported/:cid and
+   *  refuses every mutating action at the server edge); undefined for first-party. */
+  origin?: "imported" | null;
 }

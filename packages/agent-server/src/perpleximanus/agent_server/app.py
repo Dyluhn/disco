@@ -304,10 +304,20 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             return {"models": [], "default": None}
         return runtime.driver_models()
 
+    def _reject_if_imported(conversation_id: str) -> None:
+        """Imported share-bundle conversations are READ-ONLY — they hold untrusted
+        third-party events, so reviving them would feed an attacker's content to the
+        agent with this instance's tools/credentials. Every loop-kicking / mutating
+        endpoint rejects them at the server EDGE (409); the UI hiding the affordance
+        is defense-in-depth, never the boundary."""
+        if store.conversation_origin(conversation_id) == "imported":
+            raise HTTPException(status_code=409, detail={"reason": "imported_read_only"})
+
     @app.post("/conversations/{conversation_id}/messages")
     async def post_message(conversation_id: str, body: SendMessageBody) -> dict:
         # Append a USER message, then KICK the loop (Stage 2): it runs in the
         # background and streams its events over the conversation's WebSocket.
+        _reject_if_imported(conversation_id)
         stored = await store.append(conversation_id, _user_message(body.content))
         if runtime is not None:
             runtime.kick(conversation_id)
@@ -322,6 +332,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         that reuses the report's passages as grounding."""
         if runtime is None:
             raise HTTPException(status_code=503, detail="runtime not available")
+        _reject_if_imported(conversation_id)
         state = await store.get_state(conversation_id)
         # Only accept follow-ups on FINISHED conversations.
         if state.execution_status not in (
@@ -349,6 +360,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         Returns 200 {"saved": [...], "rejected": [...]} unless ALL files are
         rejected (413).  Allowed in every state except terminal ERROR.
         """
+        _reject_if_imported(conversation_id)
         state = await store.get_state(conversation_id)
         if state.execution_status == ConversationStatus.ERROR:
             raise HTTPException(status_code=409, detail={"reason": "conversation_in_error_state"})
@@ -704,6 +716,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
                 status_code=409,
                 detail={"ok": False, "reason": "runtime_unavailable"},
             )
+        _reject_if_imported(conversation_id)
         result = await runtime.resume_conversation(conversation_id)
         if not result["ok"]:
             raise HTTPException(status_code=409, detail=result)
@@ -909,6 +922,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         expression returns 422 (never silent — the user must fix it)."""
         if runtime is None:
             raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
+        _reject_if_imported(conversation_id)  # a schedule would revive a read-only import
         try:
             result = runtime.create_schedule(
                 conversation_id=conversation_id,
@@ -1288,6 +1302,22 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             )
         return result["bundle"]
 
+    @app.post("/api/share/import")
+    async def import_share_bundle(bundle: dict) -> dict:
+        """Import an exported bundle as a READ-ONLY local conversation. Untrusted
+        input → fail-closed validation + re-scrub on ingest + an importer-minted cid
+        + an `origin="imported"` marker the read-only guard keys on. 422 (typed
+        reason) on any validation failure — never a partial import."""
+        if runtime is None:
+            raise HTTPException(status_code=503, detail={"ok": False, "reason": "no_runtime"})
+        result = await runtime.share_import(bundle, owner_id=DEFAULT_OWNER_ID)
+        if not result.get("ok"):
+            raise HTTPException(
+                status_code=422,
+                detail={"ok": False, "reason": result.get("reason", "invalid_bundle")},
+            )
+        return result
+
     @app.get("/share/{token}")
     async def share_viewer(token: str) -> HTMLResponse:
         """Serve the read-only static viewer for a shared conversation.
@@ -1557,6 +1587,14 @@ async def _handle_frame(
     A message KICKS the loop (Stage 2) so a real answer streams back."""
     if frame.type == "ping":
         await websocket.send_json(WSServerFrame(type="pong").model_dump(mode="json"))
+    elif frame.type in ("send_message", "steer", "confirm", "reject") and (
+        store.conversation_origin(conversation_id) == "imported"
+    ):
+        # Imported (untrusted, read-only) conversations refuse every revive path —
+        # the WS is one of them (the easy-to-miss kick site). Refuse, don't kick.
+        await websocket.send_json(
+            WSServerFrame(type="error", error="imported_read_only").model_dump(mode="json")
+        )
     elif frame.type == "send_message" and frame.content is not None:
         await store.append(conversation_id, _user_message(frame.content))
         if runtime is not None:

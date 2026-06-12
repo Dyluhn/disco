@@ -152,6 +152,13 @@ class SqliteEventStore:
             self._conn.execute("ALTER TABLE conversations ADD COLUMN status TEXT")
         except sqlite3.OperationalError:
             pass  # column already exists
+        try:
+            # `origin` marks a conversation that was IMPORTED from a share bundle
+            # (untrusted third-party data) — used to enforce read-only at the server
+            # edge and badge it in the UI. NULL = a normal first-party conversation.
+            self._conn.execute("ALTER TABLE conversations ADD COLUMN origin TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
         self._conn.commit()
         self._write_lock = asyncio.Lock()
         # conversation_id -> set of live subscriber queues.
@@ -177,18 +184,19 @@ class SqliteEventStore:
         space_id: str | None = None,
         title: str | None = None,
         surface: str | None = None,
+        origin: str | None = None,
     ) -> None:
         """Register a conversation with explicit ownership (§6.1). Idempotent.
         Auto-creation on first append uses DEFAULT_OWNER_ID; call this to set a
         real owner/space/title/surface up front (the §7.5 POST /conversations path).
-        `surface` ("research"|"build"|"deep_research") is persisted so History can
-        route an item to the right surface — even a still-running one with no
-        report yet (the durable answer to which kind of task this is)."""
+        `surface` ("research"|"build"|"agent"|"deep_research") is persisted so History
+        can route an item to the right surface. `origin="imported"` marks a bundle
+        import (untrusted, read-only) — NULL for a normal first-party conversation."""
         self._conn.execute(
             "INSERT OR IGNORE INTO conversations "
-            "(conversation_id, owner_id, space_id, title, created_at, surface) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (conversation_id, owner_id, space_id, title, datetime.now().isoformat(), surface),
+            "(conversation_id, owner_id, space_id, title, created_at, surface, origin) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (conversation_id, owner_id, space_id, title, datetime.now().isoformat(), surface, origin),
         )
         self._conn.commit()
 
@@ -380,7 +388,8 @@ class SqliteEventStore:
         no cross-owner data, ever."""
         offset = int(cursor) if cursor else 0
         rows = self._conn.execute(
-            "SELECT conversation_id, owner_id, title, created_at, status, surface FROM conversations "
+            "SELECT conversation_id, owner_id, title, created_at, status, surface, origin "
+            "FROM conversations "
             "WHERE owner_id = ? ORDER BY created_at DESC, conversation_id DESC LIMIT ? OFFSET ?",
             (owner_id, limit, offset),
         ).fetchall()
@@ -403,6 +412,7 @@ class SqliteEventStore:
                     created_at=r["created_at"],
                     status=status,
                     surface=r["surface"] or "research",  # null (pre-migration) → research
+                    origin=r["origin"],  # None for first-party; "imported" for a bundle import
                 )
             )
 
@@ -414,6 +424,15 @@ class SqliteEventStore:
             self._conn.commit()
 
         return summaries
+
+    def conversation_origin(self, conversation_id: str) -> str | None:
+        """The `origin` marker ("imported" or None) — the server-edge gate for
+        read-only enforcement on imported conversations. Cheap sync lookup."""
+        row = self._conn.execute(
+            "SELECT origin FROM conversations WHERE conversation_id = ?",
+            (conversation_id,),
+        ).fetchone()
+        return row["origin"] if row is not None else None
 
     async def delete_conversation(self, conversation_id: str, *, owner_id: str) -> bool:
         """Delete a conversation and all its events — OWNER-SCOPED (a caller can
