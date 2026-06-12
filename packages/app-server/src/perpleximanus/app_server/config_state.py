@@ -114,6 +114,26 @@ class EncodersConfigDTO(BaseModel):
     nli_url: str = ""
 
 
+class TtsConfigDTO(BaseModel):
+    """Audio-overview TTS (RP-09). `enabled=False` turns the feature off AND lets the
+    agent-server unload the Kokoro model to free RAM. `remote=False` (default) =
+    BUNDLED in-process Kokoro (ONNX/CPU, weights download on first use; lazy-loaded so
+    enabled-but-unused costs nothing). `remote=True` = an external Speaches
+    `/v1/audio/speech` endpoint (`speaches_url`; empty → SPEACHES_URL env default). The
+    wire mirror of core's TtsSettings — the agent-server honors it on the next overview.
+    NOT an LLM-router role assignment.
+
+    No `loaded` indicator: the Kokoro model is resident in the AGENT-server process,
+    which this (app) server cannot introspect — a field here would always read False
+    and mislead. The UI shows a static "loads ~0.5 GB on first use" note instead."""
+
+    enabled: bool = True
+    remote: bool = False
+    speaches_url: str = ""
+    voice_a: str = "af_heart"
+    voice_b: str = "af_bella"
+
+
 class DataSourcesConfigDTO(BaseModel):
     """The universal web-data providers (§B). Each slot has three tiers; the bundled
     defaults (`ddgs` / `local`) need no key. `api_key_env` is the NAME of the env var
@@ -353,6 +373,17 @@ def _encoders_from(config: RouterConfig) -> EncodersConfigDTO:
     )
 
 
+def _tts_from(config: RouterConfig) -> TtsConfigDTO:
+    t = config.tts
+    return TtsConfigDTO(
+        enabled=t.enabled,
+        remote=t.remote,
+        speaches_url=t.speaches_url,
+        voice_a=t.voice_a,
+        voice_b=t.voice_b,
+    )
+
+
 def _data_sources_from(config: RouterConfig) -> DataSourcesConfigDTO:
     s, x = config.search, config.extraction
     return DataSourcesConfigDTO(
@@ -539,6 +570,28 @@ class ConfigState:
             )
         )
         return _encoders_from(self._store.load())
+
+    # TTS: audio-overview toggle / bundled-vs-remote / voices (persisted) --------
+
+    def tts_config(self) -> TtsConfigDTO:
+        return _tts_from(self._store.load())
+
+    def update_tts_config(self, dto: TtsConfigDTO) -> TtsConfigDTO:
+        """Persist the audio-overview TTS settings. The agent-server reloads the config
+        per request, so a toggle takes effect on the NEXT overview; disabling it also
+        lets the agent-server unload the Kokoro model to free RAM."""
+        from perpleximanus.core.llm import TtsSettings
+
+        self._store.save_tts(
+            TtsSettings(
+                enabled=dto.enabled,
+                remote=dto.remote,
+                speaches_url=dto.speaches_url.strip(),
+                voice_a=dto.voice_a.strip() or "af_heart",
+                voice_b=dto.voice_b.strip() or "af_bella",
+            )
+        )
+        return _tts_from(self._store.load())
 
     # data sources: web search + extraction provider tiers (persisted) ----------
 

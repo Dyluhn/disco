@@ -130,6 +130,38 @@ def test_encoders_config_round_trips(client):
     assert client.put("/api/encoders/config", json={"remote": False}).json()["remote"] is False
 
 
+def test_tts_config_round_trips(client):
+    # Default: feature on, bundled in-process, ratified voices.
+    d = client.get("/api/tts/config").json()
+    assert d["enabled"] is True
+    assert d["remote"] is False
+    assert d["voice_a"] == "af_heart"
+    assert d["voice_b"] == "af_bella"
+    # Disable (the RAM gate) + flip to remote with an endpoint — persisted.
+    put = client.put(
+        "/api/tts/config",
+        json={
+            "enabled": False,
+            "remote": True,
+            "speaches_url": "http://localhost:8000",
+            "voice_a": "af_heart",
+            "voice_b": "af_bella",
+        },
+    ).json()
+    assert put["enabled"] is False
+    assert put["remote"] is True
+    assert put["speaches_url"] == "http://localhost:8000"
+    got = client.get("/api/tts/config").json()
+    assert got["enabled"] is False and got["remote"] is True
+    # An empty voice falls back to the ratified default rather than persisting "".
+    back = client.put(
+        "/api/tts/config",
+        json={"enabled": True, "remote": False, "voice_a": "", "voice_b": ""},
+    ).json()
+    assert back["voice_a"] == "af_heart"
+    assert back["voice_b"] == "af_bella"
+
+
 def test_model_crud_add_edit_remove(client):
     new = {
         "id": "my-llama",

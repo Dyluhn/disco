@@ -1,29 +1,40 @@
 """Audio overview tool — two-voice TTS from a finished deep-research report.
 
 Pipeline:
+  0. Resolve TTS settings from ConfigStore (toggle / backend / voices). If the
+     feature is disabled, fail soft so the model never loads (saves RAM).
   1. Accept the report text.
   2. Call an LLM (OpenAI-compatible chat completions) to generate a JSON
      turn-script: [{"speaker": "A"|"B", "text": "..."}].
   3. Validate the JSON schema + retry ONCE on malformed output.
-  4. Call Speaches per turn to synthesise each voice line as MP3.
-  5. Concatenate per-turn MP3s with inter-turn silence via _audio_mixer.
+  4. Synthesise each turn to float32 PCM @ 24 kHz — bundled in-process Kokoro
+     (default, ONNX/CPU) or a remote Speaches endpoint, per Settings → Audio.
+  5. Mix the per-turn PCM with inter-turn silence, then encode the whole
+     overview to MP3 ONCE via _audio_mixer (one sample rate end to end).
   6. Write MP3 + transcript through ctx.sandbox.write_file (jailed).
   7. Return ToolOutcome with artifact paths.
 
-Fail-soft: if Speaches is unreachable, return success=False with a clear
-message — never crash the loop.
+Fail-soft: if the chosen TTS backend is unreachable/disabled, return
+success=False with a clear message — never crash the loop.
 """
 
 from __future__ import annotations
 
+import io
 import json
 import re
+import wave
+from typing import Any
 
 import httpx
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
-from ._audio_mixer import mix_turns
+from ._audio_mixer import encode_mp3, mix_pcm
+
+# Kokoro v1.0 (and Speaches-Kokoro) output 24 kHz mono. Both backends produce PCM
+# at this rate, so the overview is mixed in PCM and encoded to MP3 once.
+TTS_SAMPLE_RATE = 24000
 
 # ---- turn-script schema -----------------------------------------------------
 
@@ -138,15 +149,45 @@ def _validate_turn_script(raw_json: str) -> tuple[list[Turn] | None, str | None]
     return turns, None
 
 
-async def _synthesize(text: str, voice: str, speaches_url: str) -> bytes | None:
-    """Call Speaches to synthesise text as MP3. Returns MP3 bytes or None on failure."""
+async def _synthesize_local(text: str, voice: str) -> Any:
+    """Bundled in-process Kokoro (default). Returns float32 PCM @ 24 kHz. Lazy-
+    imports the agent-server TTS module (loads the model on first use)."""
+    from perpleximanus.agent_server.tts_local import synthesize
+
+    return await synthesize(text, voice)
+
+
+async def _synthesize_remote(text: str, voice: str, speaches_url: str) -> Any:
+    """Remote Speaches tier. Request WAV (so we mix in PCM like the local path) and
+    decode it to float32 mono. Returns a numpy float32 array.
+
+    The whole overview is mixed at TTS_SAMPLE_RATE (24 kHz) mono, so we REQUIRE the
+    remote stream to match — a mismatched rate/channel count would otherwise be mixed
+    as-is and play back pitch-shifted/garbled. Speaches-Kokoro emits 24 kHz mono; we
+    assert it rather than trust the docstring (mirrors the local path's sr guard)."""
+    import numpy as np
+
     async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
         resp = await client.post(
             f"{speaches_url}/v1/audio/speech",
-            json={"input": text, "voice": voice, "response_format": "mp3"},
+            json={"input": text, "voice": voice, "response_format": "wav"},
         )
         resp.raise_for_status()
-        return resp.content
+        with wave.open(io.BytesIO(resp.content), "rb") as w:
+            frames = w.readframes(w.getnframes())
+            width = w.getsampwidth()
+            rate = w.getframerate()
+            channels = w.getnchannels()
+    if channels != 1 or rate != TTS_SAMPLE_RATE:
+        raise RuntimeError(
+            f"Speaches returned {rate} Hz / {channels}ch; the mixer needs "
+            f"{TTS_SAMPLE_RATE} Hz mono. Configure Speaches to emit 24 kHz mono."
+        )
+    if width == 2:
+        return np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
+    if width == 4:
+        return np.frombuffer(frames, dtype="<f4").astype(np.float32)
+    raise RuntimeError(f"unsupported WAV sample width {width} from Speaches")
 
 
 # ---- tool implementation ----------------------------------------------------
@@ -183,12 +224,29 @@ class AudioOverviewTool:
             LLM_URL,
             SILENCE_MS_DEFAULT,
             SPEACHES_URL,
-            VOICE_A,
-            VOICE_B,
         )
+        from perpleximanus.core.llm import ConfigStore
 
         report_text = args.report_text
         filename = args.filename
+
+        # --- Step 0: Resolve TTS settings (toggle + backend + voices) -------
+        # ConfigStore is the single source of truth; the agent-server reloads it
+        # per request, so a Settings change drives the NEXT overview. `enabled`
+        # is the RAM gate — when off we fail soft rather than loading the model.
+        tts = ConfigStore().load().tts
+        if not tts.enabled:
+            return ToolOutcome(
+                success=False,
+                content=(
+                    "Audio overview is disabled in Settings → Audio. Enable it "
+                    "(bundled in-process or remote Speaches) to generate overviews."
+                ),
+                error="tts disabled",
+            )
+        voice_a = tts.voice_a
+        voice_b = tts.voice_b
+        speaches_url = (tts.speaches_url or SPEACHES_URL).rstrip("/") if tts.remote else ""
 
         # --- Step 1: Generate turn-script via LLM ---------------------------
         payload = _build_llm_payload(report_text)
@@ -244,51 +302,61 @@ class AudioOverviewTool:
                     error=error2,
                 )
 
-        # --- Step 3: Synthesise each turn via Speaches ----------------------
+        # --- Step 3: Synthesise each turn to PCM ----------------------------
+        # Bundled in-process Kokoro (default) or remote Speaches, per Settings.
+        # Both backends return float32 mono PCM @ 24 kHz so the overview is mixed
+        # in PCM and encoded to MP3 exactly once (Step 4).
         assert turns is not None  # validated above
-        turn_mp3s: list[bytes] = []
+        backend = "remote Speaches" if tts.remote else "bundled Kokoro"
+        pcm_turns: list[Any] = []
         for i, turn in enumerate(turns):
-            voice = VOICE_A if turn.speaker == "A" else VOICE_B
+            voice = voice_a if turn.speaker == "A" else voice_b
             try:
-                mp3_bytes = await _synthesize(turn.text, voice, SPEACHES_URL)
+                if tts.remote:
+                    pcm = await _synthesize_remote(turn.text, voice, speaches_url)
+                else:
+                    pcm = await _synthesize_local(turn.text, voice)
             except httpx.ConnectError:
                 return ToolOutcome(
                     success=False,
                     content=(
-                        f"Speaches is unreachable at {SPEACHES_URL}. "
+                        f"Remote Speaches is unreachable at {speaches_url}. "
                         f"Turn {i + 1}/{len(turns)} could not be synthesised. "
-                        f"Audio overview cannot be generated."
+                        f"Switch Settings → Audio to bundled, or start Speaches."
                     ),
-                    error=f"Speaches offline: {SPEACHES_URL}",
+                    error=f"Speaches offline: {speaches_url}",
                 )
             except Exception as e:
                 return ToolOutcome(
                     success=False,
                     content=(
-                        f"Speaches call failed for turn {i + 1}/{len(turns)} "
+                        f"TTS ({backend}) failed for turn {i + 1}/{len(turns)} "
                         f"(speaker {turn.speaker}): {e}"
                     ),
                     error=str(e),
                 )
-            if mp3_bytes is None or len(mp3_bytes) == 0:
+            if pcm is None or getattr(pcm, "size", len(pcm) if pcm is not None else 0) == 0:
                 return ToolOutcome(
                     success=False,
                     content=(
-                        f"Speaches returned empty audio for turn {i + 1}/{len(turns)} "
-                        f"(speaker {turn.speaker})"
+                        f"TTS ({backend}) returned empty audio for turn "
+                        f"{i + 1}/{len(turns)} (speaker {turn.speaker})"
                     ),
-                    error="Empty audio from Speaches",
+                    error="Empty audio from TTS",
                 )
-            turn_mp3s.append(mp3_bytes)
+            pcm_turns.append(pcm)
 
-        # --- Step 4: Mix with inter-turn silence ---------------------------
-        mixed_mp3 = mix_turns(turn_mp3s, silence_ms=SILENCE_MS_DEFAULT)
+        # --- Step 4: Mix in PCM, then encode the whole overview to MP3 once --
+        mixed_pcm = mix_pcm(
+            pcm_turns, silence_ms=SILENCE_MS_DEFAULT, sample_rate=TTS_SAMPLE_RATE
+        )
+        mixed_mp3 = encode_mp3(mixed_pcm, sample_rate=TTS_SAMPLE_RATE)
 
         # --- Step 5: Build transcript ---------------------------------------
         transcript_lines: list[str] = [
             "# Audio Overview Transcript",
             "",
-            f"Voices: Host A = {VOICE_A}, Host B = {VOICE_B}",
+            f"Voices: Host A = {voice_a}, Host B = {voice_b}",
             f"Turns: {len(turns)}",
             "",
         ]
@@ -311,8 +379,8 @@ class AudioOverviewTool:
                 f"Audio overview generated.\n"
                 f"  MP3: {mp3_path} ({len(mixed_mp3)} bytes)\n"
                 f"  Transcript: {transcript_path}\n"
-                f"  Turns: {len(turns)} | Voices: {VOICE_A} (A) + {VOICE_B} (B)\n"
-                f"  Silence between turns: {SILENCE_MS_DEFAULT}ms"
+                f"  Turns: {len(turns)} | Voices: {voice_a} (A) + {voice_b} (B)\n"
+                f"  Backend: {backend} | Silence between turns: {SILENCE_MS_DEFAULT}ms"
             ),
             artifacts=[mp3_path, transcript_path],
             structured={
@@ -320,8 +388,9 @@ class AudioOverviewTool:
                 "transcript_path": transcript_path,
                 "turn_count": len(turns),
                 "mp3_bytes": len(mixed_mp3),
-                "voice_a": VOICE_A,
-                "voice_b": VOICE_B,
+                "voice_a": voice_a,
+                "voice_b": voice_b,
+                "backend": "remote" if tts.remote else "bundled",
                 "silence_ms": SILENCE_MS_DEFAULT,
             },
         )

@@ -6,6 +6,7 @@ import {
   getAssignments,
   getDataSourcesConfig,
   getEncodersConfig,
+  getTtsConfig,
   getOpenRouterKeyStatus,
   getSandboxConfig,
   listModels,
@@ -14,6 +15,7 @@ import {
   updateAssignments,
   updateDataSourcesConfig,
   updateEncodersConfig,
+  updateTtsConfig,
   updateModel,
   updateSandboxConfig,
 } from "@/api/models";
@@ -21,6 +23,7 @@ import type {
   AssignmentsPatch,
   DataSourcesConfig,
   EncodersConfig,
+  TtsConfig,
   ModelAssignments,
   ModelInfo,
   ModelUpsert,
@@ -83,6 +86,20 @@ export function useUpdateEncodersConfig() {
   return useMutation({
     mutationFn: (cfg: EncodersConfig) => updateEncodersConfig(cfg),
     onSuccess: (next) => qc.setQueryData(ENCODERS_KEY, next),
+  });
+}
+
+const TTS_KEY = ["tts-config"] as const;
+
+export function useTtsConfig() {
+  return useQuery<TtsConfig>({ queryKey: TTS_KEY, queryFn: getTtsConfig });
+}
+
+export function useUpdateTtsConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (cfg: TtsConfig) => updateTtsConfig(cfg),
+    onSuccess: (next) => qc.setQueryData(TTS_KEY, next),
   });
 }
 

@@ -102,10 +102,14 @@ _last_used: float = 0.0
 
 async def _get_engine() -> _KokoroEngine:
     """Lazy warm-once load under a lock (first call also downloads weights)."""
-    global _engine
+    global _engine, _last_used
     async with _lock:
         if _engine is None:
             _engine = await asyncio.to_thread(_KokoroEngine)
+            # Stamp the idle clock at LOAD, not just after a successful synth — so a
+            # model that loads but whose synth then raises (e.g. a typo'd voice) is
+            # still reclaimable by the idle sweep, not pinned resident until restart.
+            _last_used = time.monotonic()
     return _engine
 
 

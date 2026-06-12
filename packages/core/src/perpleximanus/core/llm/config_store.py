@@ -28,6 +28,7 @@ from .config import (
     RouterConfig,
     SandboxSettings,
     SearchSettings,
+    TtsSettings,
     apply_runtime_capabilities,
     default_config,
 )
@@ -87,6 +88,11 @@ class ConfigStore:
         """Persist the encoder mode (bundled-local vs remote) over the current config.
         The agent-server reloads per-request, so a change drives the NEXT research run."""
         return self.save(self.load().model_copy(update={"encoders": encoders}))
+
+    def save_tts(self, tts: TtsSettings) -> RouterConfig:
+        """Persist the audio-overview TTS settings (toggle, bundled-vs-remote, voices).
+        The agent-server reloads per-request; disabling it also frees the model."""
+        return self.save(self.load().model_copy(update={"tts": tts}))
 
     def save_search(self, search: SearchSettings) -> RouterConfig:
         """Persist the web-discovery provider (ddgs/searxng/tavily) over the config."""

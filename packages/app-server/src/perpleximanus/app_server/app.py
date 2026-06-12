@@ -38,6 +38,7 @@ from .config_state import (
     SkillCreate,
     SkillDTO,
     SkillPatch,
+    TtsConfigDTO,
     normalize_openrouter,
 )
 
@@ -122,6 +123,14 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
     @app.put("/api/encoders/config")
     async def put_encoders_config(dto: EncodersConfigDTO) -> EncodersConfigDTO:
         return state.update_encoders_config(dto)
+
+    @app.get("/api/tts/config")
+    async def get_tts_config() -> TtsConfigDTO:
+        return state.tts_config()
+
+    @app.put("/api/tts/config")
+    async def put_tts_config(dto: TtsConfigDTO) -> TtsConfigDTO:
+        return state.update_tts_config(dto)
 
     @app.get("/api/data-sources/config")
     async def get_data_sources_config() -> DataSourcesConfigDTO:

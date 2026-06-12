@@ -1,11 +1,20 @@
-"""Integration test: mock-Speaches + mock-LLM end-to-end audio overview pipeline.
+"""Integration test: mock-TTS + mock-LLM end-to-end audio overview pipeline.
 
 Drives the AudioOverviewTool over function-level mocks:
-  report → LLM → JSON turn-script → Speaches per-turn synth → mixed MP3 + transcript.
+  report → LLM → JSON turn-script → per-turn PCM synth → mix in PCM → MP3 + transcript.
+
+The TTS backend is selected from ConfigStore (Settings → Audio); these tests patch
+`ConfigStore.load` so the toggle/backend/voices are deterministic rather than reading
+the live perpleximanus-config.json. The synth seam is now PCM (float32 mono @ 24 kHz):
+the bundled path is `_synthesize_local(text, voice)`, the remote path is
+`_synthesize_remote(text, voice, url)`. Both return numpy arrays; the mixer encodes
+the whole overview to MP3 once.
+
 Tests:
-  - Full happy path with asserted artifact paths + file contents
+  - Full happy path (bundled-local) with asserted artifact paths + file contents
   - Malformed-then-retry JSON path
-  - Offline Speaches → clean failure (success=False + clear message)
+  - Disabled toggle → clean failure, model never loads
+  - Remote backend unreachable → clean failure (success=False + clear message)
   - Sandbox-backed file writes (jailed, not host fs)
   - Transcript matches script verbatim
   - LLM unreachable returns clean failure
@@ -15,17 +24,18 @@ from __future__ import annotations
 
 import json
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
 import httpx
+import numpy as np
 import pytest
+from perpleximanus.core.llm import ConfigStore, TtsSettings, default_config
 from perpleximanus.tools.anatomy import ToolContext
 from perpleximanus.tools.builtin.audio_overview import (
     AudioOverviewArgs,
     AudioOverviewTool,
-    _call_llm,
-    _synthesize,
 )
 from perpleximanus.tools.sandbox.base import SandboxSpec
 from perpleximanus.tools.sandbox.process import ProcessSandboxInstance
@@ -64,21 +74,17 @@ VALID_JSON_RESPONSE = json.dumps(VALID_TURN_SCRIPT)
 
 MALFORMED_SCRIPT = "Sure! Here's the script: [Bad JSON without closing"
 
-# ---- mock MP3 frame (same as _audio_mixer._SILENCE_FRAME) -------------------
-
-_MOCK_MP3_FRAME = (
-    b"\xff\xfb\x90\x00"
-    + b"\x00" * 413
-)
-
-
-def _make_speaches_response(text: str, voice: str) -> bytes:
-    """Generate synthetic MP3 response. Varies length by text length."""
-    n_frames = max(1, len(text) // 3)
-    return _MOCK_MP3_FRAME * n_frames
-
 
 # ---- helpers ----------------------------------------------------------------
+
+
+@contextmanager
+def _patch_tts(tts: TtsSettings):
+    """Pin ConfigStore.load to a config with the given TTS settings so the tool's
+    Step 0 resolves deterministically (independent of the repo config file)."""
+    cfg = default_config().model_copy(update={"tts": tts})
+    with mock.patch.object(ConfigStore, "load", return_value=cfg):
+        yield
 
 
 def _jailed_sandbox(workspace: Path) -> ProcessSandboxInstance:
@@ -102,7 +108,7 @@ def _ctx(sandbox) -> ToolContext:
     )
 
 
-# ---- mocks for LLM + Speaches calls -----------------------------------------
+# ---- mocks for LLM + TTS calls ----------------------------------------------
 
 
 def _mock_llm_happy(payload: dict, llm_url: str) -> str:
@@ -126,19 +132,32 @@ def _mock_llm_fail(payload: dict, llm_url: str) -> str:
     raise httpx.ConnectError("LLM offline")
 
 
-async def _mock_synthesize_happy(text: str, voice: str, speaches_url: str) -> bytes:
-    return _make_speaches_response(text, voice)
+async def _mock_synth_local(text: str, voice: str):
+    """Bundled-Kokoro stand-in: float32 mono PCM whose length scales with the text
+    (so the mixer assembles a non-trivial waveform). Recognizable low-amplitude tone."""
+    n = max(240, len(text) * 200)  # >= a few ms even for short turns
+    t = np.arange(n, dtype=np.float32) / 24000.0
+    return (0.2 * np.sin(2 * np.pi * 180.0 * t)).astype(np.float32)
 
 
-async def _mock_synthesize_offline(text: str, voice: str, speaches_url: str) -> bytes:
+async def _mock_synth_remote_offline(text: str, voice: str, speaches_url: str):
     raise httpx.ConnectError("Connection refused")
+
+
+def _assert_mp3_head(data: bytes) -> None:
+    """MP3 must carry an MPEG frame sync (0xFF Ex) within its head."""
+    assert len(data) > 0
+    head = data[:64]
+    assert any(
+        head[i] == 0xFF and (head[i + 1] & 0xE0) == 0xE0 for i in range(len(head) - 1)
+    ), "no MPEG frame sync in MP3 head"
 
 
 # ---- tests ------------------------------------------------------------------
 
 
 async def test_full_happy_path():
-    """Report → LLM → valid JSON → Speaches per-turn → mixed MP3 + transcript."""
+    """Report → LLM → valid JSON → bundled-local PCM synth → mixed MP3 + transcript."""
     with tempfile.TemporaryDirectory() as td:
         workspace = Path(td)
         sb = _jailed_sandbox(workspace)
@@ -146,13 +165,14 @@ async def test_full_happy_path():
         ctx = _ctx(sb)
 
         with (
+            _patch_tts(TtsSettings(enabled=True, remote=False)),
             mock.patch(
                 "perpleximanus.tools.builtin.audio_overview._call_llm",
                 side_effect=_mock_llm_happy,
             ),
             mock.patch(
-                "perpleximanus.tools.builtin.audio_overview._synthesize",
-                side_effect=_mock_synthesize_happy,
+                "perpleximanus.tools.builtin.audio_overview._synthesize_local",
+                side_effect=_mock_synth_local,
             ),
         ):
             outcome = await tool.run(
@@ -174,19 +194,17 @@ async def test_full_happy_path():
         for turn in VALID_TURN_SCRIPT:
             assert turn["text"] in transcript_text
 
-        # MP3 file landed in workspace
+        # MP3 file landed in workspace, real encoded frames
         mp3_path = workspace / "test_audio.mp3"
         assert mp3_path.exists()
-        mp3_data = mp3_path.read_bytes()
-        assert len(mp3_data) > 0
-        assert mp3_data[0] == 0xFF
-        assert (mp3_data[1] & 0xE0) == 0xE0
+        _assert_mp3_head(mp3_path.read_bytes())
 
         # Structured output
         assert outcome.structured is not None
         assert outcome.structured["turn_count"] == len(VALID_TURN_SCRIPT)
         assert outcome.structured["voice_a"] == "af_heart"
         assert outcome.structured["voice_b"] == "af_bella"
+        assert outcome.structured["backend"] == "bundled"
 
 
 async def test_malformed_then_retry():
@@ -205,13 +223,14 @@ async def test_malformed_then_retry():
             return llm_mock(payload, llm_url)
 
         with (
+            _patch_tts(TtsSettings(enabled=True, remote=False)),
             mock.patch(
                 "perpleximanus.tools.builtin.audio_overview._call_llm",
                 side_effect=tracking_llm,
             ),
             mock.patch(
-                "perpleximanus.tools.builtin.audio_overview._synthesize",
-                side_effect=_mock_synthesize_happy,
+                "perpleximanus.tools.builtin.audio_overview._synthesize_local",
+                side_effect=_mock_synth_local,
             ),
         ):
             outcome = await tool.run(
@@ -233,8 +252,39 @@ async def test_malformed_then_retry():
         assert (workspace / "retry_test.md").exists()
 
 
-async def test_speaches_offline():
-    """Speaches unreachable → clean failure, never crashes."""
+async def test_disabled_toggle_fails_soft():
+    """enabled=False → clean failure, and the model is NEVER loaded (no synth call)."""
+    with tempfile.TemporaryDirectory() as td:
+        workspace = Path(td)
+        sb = _jailed_sandbox(workspace)
+        tool = AudioOverviewTool()
+        ctx = _ctx(sb)
+
+        synth = mock.AsyncMock(side_effect=_mock_synth_local)
+        with (
+            _patch_tts(TtsSettings(enabled=False)),
+            mock.patch(
+                "perpleximanus.tools.builtin.audio_overview._call_llm",
+                side_effect=_mock_llm_happy,
+            ),
+            mock.patch(
+                "perpleximanus.tools.builtin.audio_overview._synthesize_local",
+                synth,
+            ),
+        ):
+            outcome = await tool.run(
+                AudioOverviewArgs(report_text=SAMPLE_REPORT, filename="disabled_test"),
+                ctx,
+            )
+
+        assert not outcome.success
+        assert "disabled" in outcome.content.lower()
+        synth.assert_not_awaited()  # the RAM gate held: no model load
+        assert not (workspace / "disabled_test.mp3").exists()
+
+
+async def test_remote_backend_offline():
+    """Remote Speaches unreachable → clean failure, never crashes."""
     with tempfile.TemporaryDirectory() as td:
         workspace = Path(td)
         sb = _jailed_sandbox(workspace)
@@ -242,13 +292,16 @@ async def test_speaches_offline():
         ctx = _ctx(sb)
 
         with (
+            _patch_tts(
+                TtsSettings(enabled=True, remote=True, speaches_url="http://localhost:8000")
+            ),
             mock.patch(
                 "perpleximanus.tools.builtin.audio_overview._call_llm",
                 side_effect=_mock_llm_happy,
             ),
             mock.patch(
-                "perpleximanus.tools.builtin.audio_overview._synthesize",
-                side_effect=_mock_synthesize_offline,
+                "perpleximanus.tools.builtin.audio_overview._synthesize_remote",
+                side_effect=_mock_synth_remote_offline,
             ),
         ):
             outcome = await tool.run(
@@ -256,7 +309,7 @@ async def test_speaches_offline():
                 ctx,
             )
 
-        assert not outcome.success, "Should fail when Speaches is offline"
+        assert not outcome.success, "Should fail when remote Speaches is offline"
         assert outcome.error is not None
         assert "unreachable" in outcome.content.lower() or "offline" in outcome.content.lower()
         assert not (workspace / "offline_test.mp3").exists()
@@ -271,13 +324,14 @@ async def test_sandbox_jailed_write():
         ctx = _ctx(sb)
 
         with (
+            _patch_tts(TtsSettings(enabled=True, remote=False)),
             mock.patch(
                 "perpleximanus.tools.builtin.audio_overview._call_llm",
                 side_effect=_mock_llm_happy,
             ),
             mock.patch(
-                "perpleximanus.tools.builtin.audio_overview._synthesize",
-                side_effect=_mock_synthesize_happy,
+                "perpleximanus.tools.builtin.audio_overview._synthesize_local",
+                side_effect=_mock_synth_local,
             ),
         ):
             outcome = await tool.run(
@@ -304,13 +358,14 @@ async def test_transcript_matches_script():
         ctx = _ctx(sb)
 
         with (
+            _patch_tts(TtsSettings(enabled=True, remote=False)),
             mock.patch(
                 "perpleximanus.tools.builtin.audio_overview._call_llm",
                 side_effect=_mock_llm_happy,
             ),
             mock.patch(
-                "perpleximanus.tools.builtin.audio_overview._synthesize",
-                side_effect=_mock_synthesize_happy,
+                "perpleximanus.tools.builtin.audio_overview._synthesize_local",
+                side_effect=_mock_synth_local,
             ),
         ):
             outcome = await tool.run(
@@ -334,9 +389,12 @@ async def test_llm_failure_returned_cleanly():
         tool = AudioOverviewTool()
         ctx = _ctx(sb)
 
-        with mock.patch(
-            "perpleximanus.tools.builtin.audio_overview._call_llm",
-            side_effect=_mock_llm_fail,
+        with (
+            _patch_tts(TtsSettings(enabled=True, remote=False)),
+            mock.patch(
+                "perpleximanus.tools.builtin.audio_overview._call_llm",
+                side_effect=_mock_llm_fail,
+            ),
         ):
             outcome = await tool.run(
                 AudioOverviewArgs(report_text=SAMPLE_REPORT, filename="llm_fail"),
@@ -356,13 +414,14 @@ async def test_artifact_list_includes_both_files():
         ctx = _ctx(sb)
 
         with (
+            _patch_tts(TtsSettings(enabled=True, remote=False)),
             mock.patch(
                 "perpleximanus.tools.builtin.audio_overview._call_llm",
                 side_effect=_mock_llm_happy,
             ),
             mock.patch(
-                "perpleximanus.tools.builtin.audio_overview._synthesize",
-                side_effect=_mock_synthesize_happy,
+                "perpleximanus.tools.builtin.audio_overview._synthesize_local",
+                side_effect=_mock_synth_local,
             ),
         ):
             outcome = await tool.run(

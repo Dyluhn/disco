@@ -116,6 +116,21 @@ class EncodersSettings(BaseModel):
     nli_url: str = ""  # empty → PMX_NLI_URL env default
 
 
+class TtsSettings(BaseModel):
+    """[settings] Audio-overview TTS (RP-09). `enabled=False` turns the feature off
+    AND lets the agent-server unload the model to free RAM. `remote=False` (default)
+    = BUNDLED in-process Kokoro (ONNX/CPU, weights download on first use — same
+    doctrine as EncodersSettings; lazy-loaded, so enabled-but-unused costs no RAM).
+    `remote=True` = an external Speaches `/v1/audio/speech` endpoint (`speaches_url`;
+    empty → the SPEACHES_URL env default). Voices are the ratified af_heart/af_bella."""
+
+    enabled: bool = True
+    remote: bool = False
+    speaches_url: str = ""  # empty → SPEACHES_URL env default (remote tier only)
+    voice_a: str = "af_heart"
+    voice_b: str = "af_bella"
+
+
 class SearchSettings(BaseModel):
     """[settings] Web DISCOVERY provider. The THREE tiers of the universal design:
     (a) self-host `searxng` (base_url), (b) a paid API `tavily`/`brave` (BYO key
@@ -158,6 +173,8 @@ class RouterConfig(BaseModel):
     projects: ProjectStorageSettings = Field(default_factory=ProjectStorageSettings)
     # where the bundled-vs-remote encoders run (settings-driven; agent-server honors it).
     encoders: EncodersSettings = Field(default_factory=EncodersSettings)
+    # audio-overview TTS: bundled in-process Kokoro vs remote Speaches, + the toggle.
+    tts: TtsSettings = Field(default_factory=TtsSettings)
     # universal data providers — bundled (ddgs / local) by default so a fresh
     # install works with no keys; upgradeable to self-host or paid in Settings.
     search: SearchSettings = Field(default_factory=SearchSettings)

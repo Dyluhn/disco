@@ -8,15 +8,14 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
 import pytest
-from conftest import FakeSandboxInstance
 from perpleximanus.tools.anatomy import ToolContext
 from perpleximanus.tools.builtin import build_default_registry
 from perpleximanus.tools.builtin._audio_mixer import (
-    generate_silence_mp3,
-    mix_turns,
+    encode_mp3,
+    mix_pcm,
     mix_turns_count,
-    mp3_duration_ms,
 )
 from perpleximanus.tools.builtin.audio_overview import (
     _extract_json,
@@ -24,7 +23,6 @@ from perpleximanus.tools.builtin.audio_overview import (
 )
 from perpleximanus.tools.registry import agent_scope, research_scope
 from perpleximanus.tools.secrets import CapabilityBroker
-
 
 
 def _ctx(sandbox) -> ToolContext:
@@ -146,37 +144,21 @@ def test_validate_non_dict_turn():
     assert "object" in error.lower()
 
 
-# ---- mixer: silence generation + duration ----------------------------------
+# ---- mixer: PCM concatenation + MP3 encoding -------------------------------
+# The mixer now works in float32 mono PCM: per-turn arrays are spliced with a
+# silence gap of `sample_rate * silence_ms/1000` zeros, then the WHOLE overview
+# is encoded to MP3 once. This is correct-by-construction at a single sample
+# rate (the old MP3-frame splice glitched when silence was 44.1k and turns 24k).
+
+_SR = 24000
 
 
-def test_generate_silence_mp3_500ms():
-    """Silence MP3 of ~500ms should have roughly the right frame count."""
-    data = generate_silence_mp3(500)
-    duration = mp3_duration_ms(data)
-    # Expect ~500ms, allow 100ms tolerance (frame granularity ~26ms)
-    assert 400 <= duration <= 650, f"Expected ~500ms, got {duration:.0f}ms"
-    assert len(data) > 0
-
-
-def test_generate_silence_mp3_zero():
-    assert generate_silence_mp3(0) == b""
-
-
-def test_generate_silence_mp3_small():
-    """Even 1ms should produce at least 1 frame."""
-    data = generate_silence_mp3(1)
-    duration = mp3_duration_ms(data)
-    assert duration > 0
-    assert len(data) >= 417  # at least one frame
-
-
-def test_mp3_duration_known_silence():
-    """Duration of a known number of frames should be accurate."""
-    # 10 frames at 1152 samples/frame, 44100 Hz = 10 * 1152/44100 * 1000 ≈ 261.2ms
-    data = _SILENCE_FRAME * 10
-    duration = mp3_duration_ms(data)
-    expected = (10 * 1152 / 44100) * 1000
-    assert abs(duration - expected) < 5.0, f"Expected ~{expected:.1f}ms, got {duration:.1f}ms"
+def _tone(ms: int, freq: float = 220.0, sr: int = _SR) -> np.ndarray:
+    """A recognizable mono float32 sine of `ms` milliseconds — stands in for a
+    synthesized turn so we can assert on placement and length."""
+    n = int(sr * ms / 1000)
+    t = np.arange(n, dtype=np.float32) / sr
+    return (0.5 * np.sin(2 * np.pi * freq * t)).astype(np.float32)
 
 
 def test_mix_turns_count():
@@ -187,66 +169,87 @@ def test_mix_turns_count():
     assert mix_turns_count(5) == 4
 
 
-def test_mix_turns_empty():
-    assert mix_turns([]) == b""
+def test_mix_pcm_empty():
+    out = mix_pcm([], silence_ms=500, sample_rate=_SR)
+    assert out.size == 0
+    assert out.dtype == np.float32
 
 
-def test_mix_turns_single():
-    data = generate_silence_mp3(200)
-    result = mix_turns([data])
-    assert result == data
+def test_mix_pcm_single_no_gap():
+    """One turn → exactly that turn, no leading/trailing silence."""
+    t = _tone(100)
+    out = mix_pcm([t], silence_ms=500, sample_rate=_SR)
+    assert out.size == t.size
+    assert np.allclose(out, t)
 
 
-def test_mix_turns_two():
-    """Two turns: one silence gap between them."""
-    t1 = generate_silence_mp3(100)  # recognizable first chunk
-    t2 = generate_silence_mp3(200)  # different length second chunk
-    result = mix_turns([t1, t2], silence_ms=300)
-    # Result should be longer than t1 + t2
-    assert len(result) > len(t1) + len(t2)
-    # t1 at the start
-    assert result[: len(t1)] == t1
-    # t2 at the end
-    assert result[-len(t2) :] == t2
+def test_mix_pcm_two_inserts_one_gap():
+    """Two turns → t1 + (gap of sample_rate*silence_ms/1000 zeros) + t2."""
+    t1 = _tone(100, freq=220.0)
+    t2 = _tone(120, freq=330.0)
+    silence_ms = 300
+    gap = int(_SR * silence_ms / 1000)
+    out = mix_pcm([t1, t2], silence_ms=silence_ms, sample_rate=_SR)
+    assert out.size == t1.size + gap + t2.size
+    # t1 at the head, t2 at the tail, zeros in the middle
+    assert np.allclose(out[: t1.size], t1)
+    assert np.allclose(out[-t2.size :], t2)
+    assert np.all(out[t1.size : t1.size + gap] == 0.0)
 
 
-def test_mix_turns_three():
-    """Three turns: two silence gaps."""
-    t = generate_silence_mp3(100)
-    result = mix_turns([t, t, t], silence_ms=300)
-    # t at start, t at end
-    assert result[: len(t)] == t
-    assert result[-len(t) :] == t
-    # Middle chunk has silence in it
-    total_silence_inserted = len(result) - 3 * len(t)
-    assert total_silence_inserted > 0
+def test_mix_pcm_three_inserts_two_gaps():
+    t = _tone(80)
+    silence_ms = 200
+    gap = int(_SR * silence_ms / 1000)
+    out = mix_pcm([t, t, t], silence_ms=silence_ms, sample_rate=_SR)
+    assert out.size == 3 * t.size + 2 * gap
 
 
-def test_mix_turns_silence_segment_explicit():
-    """Using an explicit silence_segment parameter."""
-    t1 = generate_silence_mp3(100)
-    t2 = generate_silence_mp3(100)
-    silence_seg = generate_silence_mp3(50)
-    result = mix_turns([t1, t2], silence_ms=500, silence_segment=silence_seg)
-    assert len(result) > len(t1) + len(t2)
-    assert result[: len(t1)] == t1
-    assert result[-len(t2) :] == t2
+def test_mix_pcm_gap_scales_with_sample_rate():
+    """Same silence_ms at double the rate → double the gap samples."""
+    t = _tone(50, sr=_SR)
+    g1 = mix_pcm([t, t], silence_ms=400, sample_rate=_SR).size - 2 * t.size
+    g2 = mix_pcm([t, t], silence_ms=400, sample_rate=_SR * 2).size - 2 * t.size
+    assert g2 == 2 * g1
 
 
-# ---- silcence frame size ---------------------------------------------------
-# Use the mixer internals for frame size validation
-from perpleximanus.tools.builtin._audio_mixer import _SILENCE_FRAME
+def test_mix_pcm_skips_empty_turns():
+    """Empty arrays are dropped so they don't create phantom gaps."""
+    t = _tone(60)
+    empty = np.zeros(0, dtype=np.float32)
+    out = mix_pcm([empty, t, empty], silence_ms=300, sample_rate=_SR)
+    assert out.size == t.size  # only the one real turn, no gaps
 
 
-def test_silence_frame_size():
-    """Each silence frame should be 417 bytes (MPEG1, 128kbps, 44100Hz, no pad)."""
-    assert len(_SILENCE_FRAME) == 417
+# ---- mixer: MP3 encoding ----------------------------------------------------
 
 
-def test_silence_frame_has_sync():
-    """Frame must start with sync bytes 0xFF 0xFB (or 0xFF 0xFA)."""
-    assert _SILENCE_FRAME[0] == 0xFF
-    assert (_SILENCE_FRAME[1] & 0xE0) == 0xE0
+def test_encode_mp3_produces_valid_frames():
+    """Encoding non-trivial PCM yields MP3 bytes that start with a frame sync."""
+    pcm = _tone(500)
+    mp3 = encode_mp3(pcm, sample_rate=_SR)
+    assert isinstance(mp3, bytes)
+    assert len(mp3) > 0
+    # MPEG audio frame sync: 0xFF followed by top 3 bits set (0xE0). Some encoders
+    # emit an ID3/info header first; scan a small prefix for the sync word.
+    head = mp3[:64]
+    assert any(
+        head[i] == 0xFF and (head[i + 1] & 0xE0) == 0xE0 for i in range(len(head) - 1)
+    ), "no MPEG frame sync found in MP3 head"
+
+
+def test_encode_mp3_clips_out_of_range():
+    """Out-of-[-1,1] PCM must not raise — it's clipped, not wrapped."""
+    pcm = np.array([2.0, -2.0, 0.0, 1.5, -1.5] * 5000, dtype=np.float32)
+    mp3 = encode_mp3(pcm, sample_rate=_SR)
+    assert len(mp3) > 0
+
+
+def test_encode_mp3_roundtrip_size_grows_with_audio():
+    """A longer overview encodes to more bytes (sanity that PCM length matters)."""
+    short = encode_mp3(_tone(200), sample_rate=_SR)
+    long = encode_mp3(_tone(1000), sample_rate=_SR)
+    assert len(long) > len(short)
 
 
 # ---- tool registration + scoping -------------------------------------------

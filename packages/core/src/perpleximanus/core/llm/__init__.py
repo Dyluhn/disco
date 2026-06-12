@@ -24,6 +24,7 @@ from .config import (
     RouterConfig,
     SandboxSettings,
     SearchSettings,
+    TtsSettings,
     default_config,
 )
 from .config_store import ConfigStore
@@ -111,6 +112,7 @@ __all__ = [
     "ProjectStorageSettings",
     "SandboxSettings",
     "EncodersSettings",
+    "TtsSettings",
     "ExtractionSettings",
     "SearchSettings",
     "RouterSummarizer",

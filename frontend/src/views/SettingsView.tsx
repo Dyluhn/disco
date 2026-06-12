@@ -1,3 +1,4 @@
+import { AudioSection } from "@/components/settings/AudioSection";
 import { DataSourcesSection } from "@/components/settings/DataSourcesSection";
 import { EncoderSection } from "@/components/settings/EncoderSection";
 import { McpSection } from "@/components/settings/McpSection";
@@ -24,6 +25,7 @@ export function SettingsView() {
 
         <ModelMatrix />
         <EncoderSection />
+        <AudioSection />
         <DataSourcesSection />
         <SandboxSection />
         <ProjectStorageSection />

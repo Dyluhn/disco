@@ -1653,7 +1653,13 @@ class ConversationRuntime:
 
     async def _idle_sweep_loop(self) -> None:
         """Background task: periodically sweep idle sandboxes. Created by the app
-        lifespan alongside reconcile_orphaned_runs; cancelled cleanly on shutdown."""
+        lifespan alongside reconcile_orphaned_runs; cancelled cleanly on shutdown.
+
+        Also reclaims the bundled audio-overview TTS model (RP-09): the in-process
+        Kokoro engine stays resident after a synth, so this sweep unloads it once it
+        has been idle past its TTL — freeing ~0.5 GB without the user toggling Audio
+        off. Lazy-imported and suppressed so the optional `tts` extra need not be
+        installed, and a sweep failure never disturbs the sandbox sweep."""
         while True:
             interval_s = float(os.environ.get("PMX_IDLE_SWEEP_INTERVAL_S", "60"))
             try:
@@ -1662,6 +1668,11 @@ class ConversationRuntime:
                 return
             with contextlib.suppress(Exception):
                 await self.sweep_idle_once()
+            with contextlib.suppress(Exception):
+                ttl_s = float(os.environ.get("PMX_TTS_IDLE_TTL_S", "1800"))
+                from perpleximanus.agent_server import tts_local
+
+                await tts_local.maybe_unload_if_idle(ttl_s=ttl_s)
 
     async def _maybe_run_deep_research(self, conversation_id: str) -> None:
         """The Deep Research driver. Inspects the conversation state to decide

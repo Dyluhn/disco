@@ -1,253 +1,56 @@
-"""Pure MP3 concatenator + silence inserter — zero network, zero LLM.
+"""PCM mixer for audio overviews — concatenate per-turn PCM with inter-turn
+silence, then encode the WHOLE overview to MP3 once.
 
-Unit-testable in isolation: takes per-turn MP3 byte segments and a
-pre-synthesized silence MP3 segment, inserts the right number of silence
-copies between turns, returns the concatenated MP3.
+This replaces the old MP3-frame-concatenation approach, which hand-built MPEG
+frames and broke when turns and silence had different sample rates (44.1 kHz
+silence vs 24 kHz Kokoro turns → decoder glitches). Mixing in PCM and encoding
+once is simpler and correct: every turn is float32 mono PCM at one sample rate,
+we splice silence as zeros, and `lameenc` encodes the result a single time.
 
-No pydub, no ffmpeg-python, no external deps beyond the stdlib. MP3 duration
-is computed by scanning frame headers so we know how many silence copies to
-insert for the requested inter-turn gap.
+numpy + lameenc are lazy-imported inside the functions so the tools package stays
+importable without the optional `tts` extra installed (audio_overview only needs
+them when it actually synthesizes).
 """
 
 from __future__ import annotations
 
-import io
-import struct
-
-# ---- MP3 frame header decoder -----------------------------------------------
-
-# Sample rates indexed by MPEG version + sample-rate bits.
-_SAMPLE_RATES: dict[tuple[int, int], int] = {
-    # MPEG1
-    (1, 0): 44100,
-    (1, 1): 48000,
-    (1, 2): 32000,
-    # MPEG2
-    (2, 0): 22050,
-    (2, 1): 24000,
-    (2, 2): 16000,
-    # MPEG2.5
-    (0, 0): 11025,
-    (0, 1): 12000,
-    (0, 2): 8000,
-}
-
-# Bitrates (kbps) indexed by MPEG version + layer + bitrate index.
-_BITRATES: dict[tuple[int, int, int], int] = {
-    # MPEG1 Layer 3
-    (1, 3, 1): 32,
-    (1, 3, 2): 40,
-    (1, 3, 3): 48,
-    (1, 3, 4): 56,
-    (1, 3, 5): 64,
-    (1, 3, 6): 80,
-    (1, 3, 7): 96,
-    (1, 3, 8): 112,
-    (1, 3, 9): 128,
-    (1, 3, 10): 160,
-    (1, 3, 11): 192,
-    (1, 3, 12): 224,
-    (1, 3, 13): 256,
-    (1, 3, 14): 320,
-    # MPEG2/2.5 Layer 3
-    (2, 3, 1): 8,
-    (2, 3, 2): 16,
-    (2, 3, 3): 24,
-    (2, 3, 4): 32,
-    (2, 3, 5): 40,
-    (2, 3, 6): 48,
-    (2, 3, 7): 56,
-    (2, 3, 8): 64,
-    (2, 3, 9): 80,
-    (2, 3, 10): 96,
-    (2, 3, 11): 112,
-    (2, 3, 12): 128,
-    (2, 3, 13): 144,
-    (2, 3, 14): 160,
-}
-
-_SAMPLES_PER_FRAME: dict[tuple[int, int], int] = {
-    (1, 3): 1152,  # MPEG1 Layer 3
-    (2, 3): 576,  # MPEG2/2.5 Layer 3
-}
+from typing import Any
 
 
-def _parse_mp3_frame_header(header: bytes) -> tuple[int, int, int, int] | None:
-    """Parse a 4-byte MP3 frame header.
+def mix_pcm(turns: list[Any], *, silence_ms: int, sample_rate: int) -> Any:
+    """Concatenate per-turn mono float32 PCM with `silence_ms` of silence between
+    turns. Returns a single float32 numpy array. Empty input → empty array."""
+    import numpy as np
 
-    Returns (mpeg_version, layer, bitrate_kbps, sample_rate_hz) or None.
-    mpeg_version: 1=MPEG1, 2=MPEG2, 0=MPEG2.5
-    """
-    if len(header) < 4:
-        return None
-    b0, b1, b2, b3 = struct.unpack("BBBB", header[:4])
-
-    # Sync: 0xFFE (11 bits)
-    if b0 != 0xFF or (b1 & 0xE0) != 0xE0:
-        return None
-
-    # MPEG version (bits 19-20 of header)
-    version_bits = (b1 >> 3) & 0x03
-    version_map: dict[int, int] = {3: 1, 2: 2, 0: 0}  # 11=MPEG1, 10=MPEG2, 00=MPEG2.5
-    mpeg_ver = version_map.get(version_bits, 1)
-    if version_bits not in version_map:
-        return None
-
-    # Layer (bits 17-18)
-    layer_bits = (b1 >> 1) & 0x03
-    layer_map: dict[int, int] = {1: 3}  # 01=Layer3
-    layer = layer_map.get(layer_bits)
-    if layer is None:
-        return None
-
-    # Bitrate index (bits 12-15)
-    bitrate_idx = (b2 >> 4) & 0x0F
-    bitrate = _BITRATES.get((mpeg_ver, layer, bitrate_idx), 0)
-    if bitrate == 0:
-        return None
-
-    # Sample rate (bits 10-11)
-    sr_idx = (b2 >> 2) & 0x03
-    sample_rate = _SAMPLE_RATES.get((mpeg_ver, sr_idx), 0)
-    if sample_rate == 0:
-        return None
-
-    return (mpeg_ver, layer, bitrate, sample_rate)
+    arrays = [np.asarray(t, dtype=np.float32).reshape(-1) for t in turns]
+    arrays = [a for a in arrays if a.size]
+    if not arrays:
+        return np.zeros(0, dtype=np.float32)
+    gap = np.zeros(max(0, int(sample_rate * silence_ms / 1000)), dtype=np.float32)
+    out: list[Any] = []
+    for i, a in enumerate(arrays):
+        if i:
+            out.append(gap)
+        out.append(a)
+    return np.concatenate(out)
 
 
-def _mp3_frame_size(bitrate_kbps: int, sample_rate: int, mpeg_version: int, padding: bool) -> int:
-    """Compute MP3 frame size in bytes."""
-    if mpeg_version == 1:
-        return (144 * bitrate_kbps * 1000) // sample_rate + (1 if padding else 0)
-    else:
-        return (72 * bitrate_kbps * 1000) // sample_rate + (1 if padding else 0)
+def encode_mp3(pcm: Any, *, sample_rate: int, bitrate_kbps: int = 128) -> bytes:
+    """Encode mono float32 PCM in [-1, 1] to MP3 bytes via lameenc (one pass)."""
+    import lameenc
+    import numpy as np
+
+    pcm16 = (np.clip(np.asarray(pcm, dtype=np.float32), -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+    enc = lameenc.Encoder()
+    enc.set_bit_rate(bitrate_kbps)
+    enc.set_in_sample_rate(int(sample_rate))
+    enc.set_channels(1)
+    enc.set_quality(2)  # 0=best/slowest .. 9=worst/fastest
+    # lameenc returns bytearray; coerce to bytes so downstream write_file / length
+    # checks see an immutable bytes object (the tool's structured output asserts it).
+    return bytes(enc.encode(pcm16)) + bytes(enc.flush())
 
 
-def mp3_duration_ms(data: bytes) -> float:
-    """Compute total duration of raw MP3 bytes in milliseconds by scanning
-    frame headers. Returns 0.0 if no valid frames found."""
-    frames = 0
-    sr = 44100  # fallback
-    mpeg_ver = 1  # fallback
-    pos = 0
-    # Skip ID3v2 tag if present
-    if data[:3] == b"ID3":
-        # ID3v2 header is 10 bytes; size is a 4-byte synchsafe integer at bytes 6-9
-        if len(data) >= 10:
-            sz = (data[6] << 21) | (data[7] << 14) | (data[8] << 7) | data[9]
-            pos = 10 + sz
-
-    while pos + 4 <= len(data):
-        parsed = _parse_mp3_frame_header(data[pos : pos + 4])
-        if parsed is None:
-            pos += 1
-            continue
-        mpeg_ver, layer, bitrate, sample_rate = parsed
-        sr = sample_rate
-        # padding bit (bit 9 of header = b2 bit 1)
-        padding = (data[pos + 2] >> 1) & 1
-        frame_sz = _mp3_frame_size(bitrate, sample_rate, mpeg_ver, bool(padding))
-        if frame_sz <= 0:
-            pos += 1
-            continue
-        frames += 1
-        pos += frame_sz
-
-    if frames == 0:
-        return 0.0
-
-    # Determine samples per frame
-    spf = _SAMPLES_PER_FRAME.get((mpeg_ver, layer), 1152)
-    total_samples = frames * spf
-    return (total_samples / sr) * 1000.0
-
-
-# ---- silence generation (pure, zero deps) ----------------------------------
-
-# Pre-computed silence MP3 frame: an MPEG1 Layer3 128kbps 44100Hz stereo frame
-# containing all-zero audio (silence). The side-info + main data are zeroed
-# out, which produces a valid but silent frame. Generated by constructing a
-# minimal valid frame manually.
-# Frame header: FF FB 90 00
-#   FF = sync word byte 0
-#   FB = sync continuation (111) | MPEG1 (11) | Layer3 (01) | no CRC (1) = 0xFB
-#   90 = bitrate 128kbps (1001) | sample rate 44100 (00) = 0x90
-#   00 = no padding | private=0 | stereo | no copyright/original/emphasis = 0x00
-# Side info + main data: 413 bytes of zeros for a 417-byte frame.
-# Each frame = ~26.12 ms of silence.
-_SILENCE_FRAME: bytes = (
-    b"\xff\xfb\x90\x00"  # header
-    + b"\x00" * 413  # side info (32) + main data (granule 2 * 576 / 8) ≈ 381
-)
-
-
-def generate_silence_mp3(duration_ms: int) -> bytes:
-    """Generate a valid CBR MP3 containing `duration_ms` of silence.
-
-    Produces N frames of silent audio at 128kbps / 44100Hz / stereo.
-    No external dependencies — constructs frames manually.
-    """
-    if duration_ms <= 0:
-        return b""
-
-    spf = 1152  # MPEG1 Layer3
-    sr = 44100
-    frame_duration_ms = (spf / sr) * 1000.0  # ~26.12 ms
-
-    num_frames = max(1, round(duration_ms / frame_duration_ms))
-    return _SILENCE_FRAME * num_frames
-
-
-# ---- public mixer API ------------------------------------------------------
-
-
-def mix_turns(
-    turn_mp3s: list[bytes],
-    *,
-    silence_ms: int = 500,
-    silence_segment: bytes | None = None,
-) -> bytes:
-    """Concatenate per-turn MP3 segments with inter-turn silence.
-
-    Args:
-        turn_mp3s: Per-turn MP3 byte segments (at least one).
-        silence_ms: Desired inter-turn silence in milliseconds.
-        silence_segment: Pre-synthesized silence MP3 segment. If None,
-            silence is generated internally via `generate_silence_mp3`.
-
-    Returns:
-        Concatenated MP3 bytes.
-    """
-    if not turn_mp3s:
-        return b""
-
-    if len(turn_mp3s) == 1:
-        return turn_mp3s[0]
-
-    # Get or generate silence block
-    if silence_segment is not None:
-        seg_duration = mp3_duration_ms(silence_segment)
-        if seg_duration <= 0:
-            silence_block = generate_silence_mp3(silence_ms)
-        else:
-            copies = max(1, round(silence_ms / seg_duration))
-            silence_block = silence_segment * copies
-    else:
-        silence_block = generate_silence_mp3(silence_ms)
-
-    parts: list[bytes] = [turn_mp3s[0]]
-    for mp3 in turn_mp3s[1:]:
-        parts.append(silence_block)
-        parts.append(mp3)
-
-    return b"".join(parts)
-
-
-def mix_turns_count(
-    n_turns: int,
-) -> int:
-    """Return the expected number of silence insertions for N turns.
-    N turns produce N-1 silence gaps (0 gaps for 0 or 1 turn)."""
-    if n_turns <= 1:
-        return 0
-    return n_turns - 1
+def mix_turns_count(n_turns: int) -> int:
+    """Expected number of inter-turn silence gaps for N turns (N-1, min 0)."""
+    return max(0, n_turns - 1)

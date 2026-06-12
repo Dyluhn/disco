@@ -9,6 +9,7 @@ import type {
   ModelUpsert,
   OpenRouterKeyStatus,
   OpenRouterModel,
+  TtsConfig,
 } from "@/types/models";
 import type { SandboxConfig } from "@/types/sandbox";
 import { apiGet, apiSend, fixtureDelay, isLive } from "./client";
@@ -161,6 +162,29 @@ export async function updateEncodersConfig(cfg: EncodersConfig): Promise<Encoder
   await fixtureDelay();
   fixtureEncoders = { ...cfg };
   return { ...fixtureEncoders };
+}
+
+// ---- TTS (audio-overview toggle / bundled-vs-remote / voices) --------------
+
+let fixtureTts: TtsConfig = {
+  enabled: true,
+  remote: false,
+  speaches_url: "",
+  voice_a: "af_heart",
+  voice_b: "af_bella",
+};
+
+export async function getTtsConfig(): Promise<TtsConfig> {
+  if (isLive()) return apiGet<TtsConfig>("/api/tts/config");
+  await fixtureDelay();
+  return { ...fixtureTts };
+}
+
+export async function updateTtsConfig(cfg: TtsConfig): Promise<TtsConfig> {
+  if (isLive()) return apiSend<TtsConfig>("PUT", "/api/tts/config", cfg);
+  await fixtureDelay();
+  fixtureTts = { ...cfg };
+  return { ...fixtureTts };
 }
 
 // ---- data sources (search + extraction provider tiers) ---------------------
