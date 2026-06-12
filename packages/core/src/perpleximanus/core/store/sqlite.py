@@ -617,6 +617,25 @@ class SqliteEventStore:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def list_recent_schedule_runs(self, owner_id: str, limit: int = 50) -> list[dict]:
+        """Owner-scoped recent scheduled-run history for the activity dashboard, newest
+        first, joined with the schedule description + conversation title for display.
+        Scoped by JOINing schedule_runs → schedules (which carries owner_id); a run
+        whose schedule was deleted drops out (its history is gone with it, by design).
+        Returns rows: run_id, schedule_id, conversation_id, fired_at, coalesced,
+        description, title."""
+        rows = self._conn.execute(
+            "SELECT sr.run_id, sr.schedule_id, sr.conversation_id, sr.fired_at, "
+            "       sr.coalesced, s.description, c.title "
+            "FROM schedule_runs sr "
+            "JOIN schedules s ON s.schedule_id = sr.schedule_id "
+            "LEFT JOIN conversations c ON c.conversation_id = sr.conversation_id "
+            "WHERE s.owner_id = ? "
+            "ORDER BY sr.fired_at DESC LIMIT ?",
+            (owner_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     async def _subscribe(self, conversation_id: str, after_seq: int | None) -> AsyncIterator[Event]:
         # Register the live queue FIRST so no append is missed between the
         # history snapshot and going live; the overlap is deduped by seq.

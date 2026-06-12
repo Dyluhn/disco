@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -6,19 +7,24 @@ import { ModeProvider } from "./ModeProvider";
 import { Shell } from "./Shell";
 
 function renderShell(initial = "/") {
+  // The Shell is always mounted under QueryClientProvider in production (App.tsx);
+  // the NavRail's live "N running" badge reads a query, so mirror that here.
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MemoryRouter initialEntries={[initial]}>
-      <ModeProvider>
-        <Routes>
-          <Route element={<Shell />}>
-            <Route index element={<div>Home surface</div>} />
-            <Route path="history" element={<div>History view content</div>} />
-            <Route path="settings" element={<div>Settings view content</div>} />
-            <Route path="*" element={<div>Home surface</div>} />
-          </Route>
-        </Routes>
-      </ModeProvider>
-    </MemoryRouter>,
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={[initial]}>
+        <ModeProvider>
+          <Routes>
+            <Route element={<Shell />}>
+              <Route index element={<div>Home surface</div>} />
+              <Route path="history" element={<div>History view content</div>} />
+              <Route path="settings" element={<div>Settings view content</div>} />
+              <Route path="*" element={<div>Home surface</div>} />
+            </Route>
+          </Routes>
+        </ModeProvider>
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 

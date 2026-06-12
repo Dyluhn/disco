@@ -8,6 +8,7 @@ import { ModeProvider } from "@/shell/ModeProvider";
 import { ToastProvider } from "@/components/Toast";
 import { Shell } from "@/shell/Shell";
 import { useMode } from "@/shell/mode";
+import { ActivityView } from "@/views/ActivityView";
 import { HistoryView } from "@/views/HistoryView";
 import { ProjectsView } from "@/views/ProjectsView";
 import { SettingsView } from "@/views/SettingsView";
@@ -66,6 +67,7 @@ export default function App() {
           <Routes>
             <Route element={<Shell />}>
               <Route index element={<MainSurface />} />
+              <Route path="activity" element={<ActivityView />} />
               <Route path="history" element={<HistoryView />} />
               <Route path="projects" element={<ProjectsView />} />
               <Route path="build/:cid" element={<ResumeProject />} />

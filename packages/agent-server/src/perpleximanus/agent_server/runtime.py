@@ -3277,3 +3277,20 @@ class ConversationRuntime:
             dt.isoformat()
             for dt in self._schedule_manager().preview_next_runs(rrule, n)
         ]
+
+    # -- activity dashboard ----------------------------------------------------
+
+    def running_conversation_ids(self) -> set[str]:
+        """The conversation ids with a LIVE (not-yet-done) run task in THIS process —
+        the ground truth of "what's executing right now" (cached status can lag a
+        crash). Done tasks are filtered, so a finished-but-uncleaned entry never
+        counts. Not owner-scoped; the endpoint intersects with the owner's summaries."""
+        return {cid for cid, task in self._tasks.items() if not task.done()}
+
+    def list_recent_schedule_runs(self, *, owner_id: str, limit: int = 50) -> list[dict]:
+        """Owner-scoped recent scheduled-run history for the activity dashboard
+        (delegates to the store; newest first, with schedule description + title)."""
+        fn = getattr(self._store, "list_recent_schedule_runs", None)
+        if fn is None:  # a store without the audit table (defensive)
+            return []
+        return fn(owner_id, limit)

@@ -1,4 +1,5 @@
 import {
+  Activity,
   Boxes,
   Clock,
   FolderGit2,
@@ -10,6 +11,7 @@ import {
 import type { ComponentType } from "react";
 import { NavLink } from "react-router-dom";
 import { cn } from "@/lib/cn";
+import { useRunningCount } from "@/hooks/useActivity";
 
 interface NavItem {
   to: string;
@@ -23,6 +25,9 @@ interface NavItem {
 
 const ITEMS: NavItem[] = [
   { to: "/", label: "New", icon: Plus, end: true },
+  // Activity is the background-task dashboard — what's running now + scheduled-run
+  // history. It carries the live "N running" badge (the global indicator).
+  { to: "/activity", label: "Activity", icon: Activity },
   { to: "/history", label: "History", icon: Clock },
   // Projects is its OWN surface — distinct from History (ephemeral research) and
   // Spaces (research corpora). This is for resumable Build workspaces.
@@ -44,6 +49,7 @@ interface Props {
  * as accessible names); expanded → icon + label. Spaces is present-but-dormant.
  */
 export function NavRail({ collapsed, onToggleCollapse, onNavigate }: Props) {
+  const running = useRunningCount();
   return (
     <nav
       aria-label="Primary"
@@ -89,16 +95,19 @@ export function NavRail({ collapsed, onToggleCollapse, onNavigate }: Props) {
               </li>
             );
           }
+          // The Activity item carries the live "N running" badge — the global
+          // indicator, visible from every screen (the rail is always mounted).
+          const badge = item.to === "/activity" && running > 0 ? running : 0;
           return (
             <li key={item.to}>
               <NavLink
                 to={item.to}
                 end={item.end}
                 onClick={onNavigate}
-                aria-label={item.label}
+                aria-label={badge > 0 ? `${item.label} (${badge} running)` : item.label}
                 className={({ isActive }) =>
                   cn(
-                    "flex items-center gap-inline rounded-control px-inline py-inline font-ui text-[0.86rem] transition-colors",
+                    "relative flex items-center gap-inline rounded-control px-inline py-inline font-ui text-[0.86rem] transition-colors",
                     collapsed && "justify-center",
                     isActive
                       ? "bg-surface-2 text-accent"
@@ -108,6 +117,18 @@ export function NavRail({ collapsed, onToggleCollapse, onNavigate }: Props) {
               >
                 <Icon className="size-4 shrink-0" aria-hidden />
                 {!collapsed && <span className="flex-1">{item.label}</span>}
+                {/* expanded → count pill; collapsed → a small accent dot on the icon */}
+                {badge > 0 &&
+                  (collapsed ? (
+                    <span
+                      aria-hidden
+                      className="absolute right-1 top-1 size-2 rounded-full bg-accent"
+                    />
+                  ) : (
+                    <span className="rounded-full bg-accent/15 px-1.5 font-ui text-[0.68rem] text-accent">
+                      {badge}
+                    </span>
+                  ))}
               </NavLink>
             </li>
           );
