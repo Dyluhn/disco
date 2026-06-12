@@ -10,9 +10,11 @@
 import { AlertTriangle, CircleDot, Loader2 } from "lucide-react";
 import { CitedText } from "@/components/blocks";
 import { Markdown } from "@/components/Markdown";
+import { ClaimVerdicts } from "@/components/research/ClaimVerdicts";
+import { SupportMeter } from "@/components/research/SupportMeter";
 import { cn } from "@/lib/cn";
 import type { AssemblingSection } from "@/lib/deepResearchTrace";
-import type { GroundedAnswer, Passage, SearchHit } from "@/types/grounded";
+import type { GroundedAnswer, Passage, SearchHit, VerifiedClaim } from "@/types/grounded";
 import type { ReportEvent } from "@/types/agent";
 
 interface Props {
@@ -56,12 +58,29 @@ function asGroundedAnswer(report: ReportEvent | null, query: string): GroundedAn
   return {
     query,
     blocks: [],
-    claims: [],
+    claims: (report as Record<string, unknown>).claims as VerifiedClaim[] ?? [],
     passages: report.passages as unknown as Passage[],
     all_hits: report.all_hits as unknown as SearchHit[],
     unsupported_count: report.unsupported_count,
     follow_ups: [],
   };
+}
+
+/** REAL verdict counts from the report's per-claim NLI verdicts. These exist
+ *  GLOBALLY (GroundedAnswer.claims) — a ReportSection carries only
+ *  `unsupported_count`, NOT a per-claim breakdown, so the support meter is a
+ *  report-level signal. We never fabricate a denominator (an earlier version
+ *  used cited_passage_ids.length as a fake "total claims" — passages != claims). */
+function claimVerdictCounts(claims: VerifiedClaim[]) {
+  let supported = 0;
+  let weak = 0;
+  let unsupported = 0;
+  for (const c of claims) {
+    if (c.verdict === "unsupported") unsupported += 1;
+    else if (c.verdict === "weak") weak += 1;
+    else supported += 1;
+  }
+  return { supported, weak, unsupported };
 }
 
 function SectionSkeleton({ title, state }: { title: string; state: "pending" | "writing" }) {
@@ -113,21 +132,35 @@ function SectionView({
 }) {
   const real = section.section!;
   const conf = CONFIDENCE_VARIANT[real.confidence] ?? CONFIDENCE_VARIANT.high;
+  const sectionUnsupported = real.unsupported_count ?? 0;
   return (
     <section id={section.id} className="pmx-rise scroll-mt-24">
       <header className="mb-section flex flex-wrap items-baseline gap-inline border-b border-hairline pb-inline">
         <h2 className="font-display text-[1.4rem] font-medium leading-tight tracking-tight text-text">
           {real.title}
         </h2>
-        <span
-          className={cn(
-            "ml-auto flex shrink-0 items-center gap-hair font-ui text-[0.72rem] uppercase tracking-wide",
-            conf.tone,
+        <span className="ml-auto flex shrink-0 items-center gap-section">
+          {/* Per-section: only the HONEST datum the section carries —
+              unsupported_count. No fabricated "supported total". */}
+          {sectionUnsupported > 0 && (
+            <span
+              className="flex items-center gap-hair font-ui text-[0.72rem] uppercase tracking-wide text-unsupported"
+              title="Claims in this section NLI could not verify against the sources"
+            >
+              <span className="inline-block size-1.5 rounded-full bg-unsupported" />
+              {sectionUnsupported} unsupported
+            </span>
           )}
-          title={`Per-claim NLI verification: ${real.confidence}`}
-        >
-          <span className={cn("inline-block size-1.5 rounded-full", conf.dot)} />
-          {conf.label}
+          <span
+            className={cn(
+              "flex items-center gap-hair font-ui text-[0.72rem] uppercase tracking-wide",
+              conf.tone,
+            )}
+            title={`Per-claim NLI verification: ${real.confidence}`}
+          >
+            <span className={cn("inline-block size-1.5 rounded-full", conf.dot)} />
+            {conf.label}
+          </span>
         </span>
       </header>
 
@@ -147,6 +180,11 @@ function SectionView({
       <div className="prose-reading">
         <Markdown answer={answer}>{real.markdown}</Markdown>
       </div>
+
+      <ClaimVerdicts
+        claims={answer?.claims ?? []}
+        passages={answer?.passages ?? []}
+      />
     </section>
   );
 }
@@ -158,10 +196,16 @@ export function DeepReportView({ query, summary, assembling, report }: Props) {
   return (
     <div className="mx-auto grid w-full max-w-doc grid-cols-1 gap-major px-body lg:grid-cols-[1fr_14rem]">
       <article className="mx-auto flex w-full max-w-measure flex-col gap-section">
-        <header className="border-b border-hairline pb-section">
+        <header className="flex flex-wrap items-baseline gap-inline border-b border-hairline pb-section">
           <h1 className="font-display text-[2.25rem] font-medium leading-tight tracking-tight text-text">
             {query}
           </h1>
+          {/* Report-level NLI support signal — REAL per-claim verdict counts. */}
+          {answer && answer.claims.length > 0 && (
+            <span className="ml-auto shrink-0 self-center">
+              <SupportMeter {...claimVerdictCounts(answer.claims)} />
+            </span>
+          )}
         </header>
 
         {summary && (

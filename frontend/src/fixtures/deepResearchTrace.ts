@@ -222,7 +222,7 @@ export const fixtureRunningEvents: AgentEvent[] = [
 ];
 
 /** The final ReportEvent emitted after the synthesis phase completes. */
-export const fixtureReport: ReportEvent = {
+export const fixtureReport: ReportEvent & { claims: import("@/types/grounded").VerifiedClaim[] } = {
   id: "evt_report",
   kind: "report",
   source: "agent",
@@ -231,6 +231,38 @@ export const fixtureReport: ReportEvent = {
   query: FIXTURE_DEEP_QUERY,
   summary:
     "As of early 2026, solid-state battery (SSB) commercialization remains in the pilot production phase, with no major manufacturer having achieved full-scale mass production for mainstream automotive applications. Despite industry narratives emphasizing a rapid transition from R&D, the sector has not yet moved beyond limited-scale manufacturing.\n\nThis delay is driven by a triad of interdependent technical barriers: interfacial instability, dendritic growth, and the absence of scalable manufacturing processes. Economically, SSBs are currently uncompetitive with conventional lithium-ion standards, with manufacturing costs estimated at three to five times higher.",
+  claims: [
+    {
+      claim: { text: "SSB technology is currently confined to pilot production phases.", cited_passage_ids: ["2f1033_p0"] },
+      verdict: "supported" as const,
+      best_passage_id: "2f1033_p0",
+      entailment_score: 0.92,
+    },
+    {
+      claim: { text: "SK On has opened a 4,600-square-meter pilot plant in Daejeon.", cited_passage_ids: ["12afc7_p1"] },
+      verdict: "supported" as const,
+      best_passage_id: "12afc7_p1",
+      entailment_score: 0.95,
+    },
+    {
+      claim: { text: "Mass production is largely projected to occur around 2030.", cited_passage_ids: ["bbeab3_p1"] },
+      verdict: "supported" as const,
+      best_passage_id: "bbeab3_p1",
+      entailment_score: 0.88,
+    },
+    {
+      claim: { text: "Commercialization timelines have been clarified by recent mass-production schedules.", cited_passage_ids: ["12afc7_p0"] },
+      verdict: "weak" as const,
+      best_passage_id: "12afc7_p0",
+      entailment_score: 0.51,
+    },
+    {
+      claim: { text: "Dendrite suppression has been fully solved in mass-production environments.", cited_passage_ids: ["258fcf_p2"] },
+      verdict: "unsupported" as const,
+      best_passage_id: "258fcf_p2",
+      entailment_score: 0.07,
+    },
+  ],
   sections: [
     {
       id: "s0",

@@ -1,9 +1,9 @@
 import * as Tabs from "@radix-ui/react-tabs";
-import { Ban, FileX2, Filter, Lock, RefreshCw } from "lucide-react";
-import { useState } from "react";
+import { Ban, CheckCircle2, FileX2, Filter, Lock, MinusCircle, RefreshCw, XCircle } from "lucide-react";
+import { useMemo, useState } from "react";
 import { cn } from "@/lib/cn";
 import { STATUS_LABEL, cleanDomain, isFailedStatus, monogram } from "@/lib/sources";
-import type { ExtractStatus, GroundedAnswer, SearchHit } from "@/types/grounded";
+import type { ExtractStatus, GroundedAnswer, SearchHit, Verdict } from "@/types/grounded";
 
 const FAIL_ICON: Partial<Record<ExtractStatus, typeof Lock>> = {
   paywalled: Lock,
@@ -64,6 +64,42 @@ export function SourcePanel({ answer, onReScope }: Props) {
   const allHits = answer?.all_hits ?? [];
   const cited = answer?.passages ?? [];
   const hasWeak = (answer?.unsupported_count ?? 0) > 0 || (answer?.claims.some((c) => c.verdict !== "supported") ?? false);
+
+  /** Per-source verdict rollup: for each cited passage, collect the worst
+   *  verdict among claims that cite it so the source list can annotate which
+   *  sources back weak/unsupported claims. */
+  const passageVerdict = useMemo(() => {
+    const map = new Map<string, Verdict>();
+    if (!answer) return map;
+    for (const c of answer.claims) {
+      for (const pid of c.claim.cited_passage_ids) {
+        const cur = map.get(pid);
+        if (cur === "unsupported") continue;
+        if (cur === "weak" && c.verdict === "supported") continue;
+        map.set(pid, c.verdict);
+      }
+    }
+    return map;
+  }, [answer]);
+
+  /** Sort cited passages: those backing unsupported/weak claims first. */
+  const sortedCited = useMemo(() => {
+    const order: Record<Verdict, number> = { unsupported: 0, weak: 1, supported: 2 };
+    const cite = [...(answer?.passages ?? [])];
+    cite.sort((a, b) => {
+      const va = passageVerdict.get(a.id);
+      const vb = passageVerdict.get(b.id);
+      return (va ? order[va] : 3) - (vb ? order[vb] : 3);
+    });
+    return cite;
+  }, [answer, passageVerdict]);
+
+  const verdictIcon = (v: Verdict | undefined) => {
+    if (v === "supported") return <CheckCircle2 className="mt-px size-3 shrink-0 text-supported" aria-label="Supported" />;
+    if (v === "weak") return <MinusCircle className="mt-px size-3 shrink-0 text-weak" aria-label="Weak" />;
+    if (v === "unsupported") return <XCircle className="mt-px size-3 shrink-0 text-unsupported" aria-label="Unsupported" />;
+    return null;
+  };
 
   const toggleDeny = (domain: string) => {
     const next = denied.includes(domain) ? denied.filter((d) => d !== domain) : [...denied, domain];
@@ -141,27 +177,31 @@ export function SourcePanel({ answer, onReScope }: Props) {
 
         <Tabs.Content value="cited" className="min-h-0 flex-1 overflow-y-auto px-body">
           <ul className="flex flex-col">
-            {cited.map((p, i) => (
-              <li
-                key={p.id}
-                className="flex items-start gap-inline border-b border-hairline py-inline last:border-0"
-              >
-                <span className="mt-px font-ui text-[0.72rem] text-accent">[{i + 1}]</span>
-                <div className="min-w-0">
-                  <a
-                    href={p.source_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="block truncate font-ui text-[0.82rem] text-text hover:text-link"
-                  >
-                    {p.source_title}
-                  </a>
-                  <span className="font-ui text-[0.72rem] text-text-faint">
-                    {cleanDomain(p.source_url)}
-                  </span>
-                </div>
-              </li>
-            ))}
+            {sortedCited.map((p, i) => {
+              const v = passageVerdict.get(p.id);
+              return (
+                <li
+                  key={p.id}
+                  className="flex items-start gap-inline border-b border-hairline py-inline last:border-0"
+                >
+                  <span className="mt-px font-ui text-[0.72rem] text-accent">[{i + 1}]</span>
+                  {verdictIcon(v)}
+                  <div className="min-w-0">
+                    <a
+                      href={p.source_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block truncate font-ui text-[0.82rem] text-text hover:text-link"
+                    >
+                      {p.source_title}
+                    </a>
+                    <span className="font-ui text-[0.72rem] text-text-faint">
+                      {cleanDomain(p.source_url)}
+                    </span>
+                  </div>
+                </li>
+              );
+            })}
             {cited.length === 0 && (
               <li className="py-section font-ui text-[0.82rem] text-text-faint">
                 Nothing cited yet.

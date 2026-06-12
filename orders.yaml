@@ -837,3 +837,20 @@ rp-13: committed
   - frontend/src/api/agent.ts
   - frontend/e2e/clarify-gate.spec.ts
   - test-record/rp-13/units-core.log
+
+# --- Phase 2 differentiator (un-ordered roadmap item, scoped 2026-06-12) -------
+cs-01: committed
+  # Contradiction & confidence surfacing (FRONTEND-ONLY v1): per-section support
+  # meters + per-claim verdict breakdown + verdict-weighted sources, from the NLI
+  # data the pipeline already ships. Structured "A contradicts B" is v2 (needs a
+  # backend NLI-pairs change — flagged, not faked). Zero engine/backend risk.
+  - frontend/src/components/research/SupportMeter.tsx
+  - frontend/src/components/research/ClaimVerdicts.tsx
+  - frontend/src/components/research/SupportMeter.test.tsx
+  - frontend/src/components/research/ClaimVerdicts.test.tsx
+  - frontend/src/components/research/DeepReportView.tsx
+  - frontend/src/components/SourcePanel.tsx
+  - frontend/src/fixtures/deepResearchTrace.ts
+  - frontend/src/fixtures/answers.ts
+  - frontend/e2e/contradiction-surfacing.spec.ts
+  - test-record/cs-01/vitest.log

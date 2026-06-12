@@ -1,0 +1,133 @@
+
+> perpleximanus-web@0.1.0 test
+> vitest run --run
+
+
+ RUN  v3.2.4 /var/home/dylan/projects/perpleximanus build/frontend
+
+ ✓ src/components/build/ExecutionCanvas.terminal.test.tsx (7 tests) 237ms
+ ✓ src/components/settings/McpSection.approval.test.tsx (4 tests) 229ms
+ ✓ src/shell/Shell.test.tsx (6 tests) 281ms
+ ✓ src/components/settings/McpSection.live.test.tsx (6 tests) 367ms
+ ✓ src/components/controls.test.tsx (5 tests) 309ms
+ ✓ src/views/history.test.tsx (4 tests) 568ms
+ ✓ src/components/mainSurface.test.tsx (2 tests) 625ms
+   ✓ Main surface — empty state + reactive provider errors > surfaces a provider error with its REAL content, not a generic failure  375ms
+ ✓ src/components/SourcePanel.test.tsx (3 tests) 232ms
+stderr | src/components/CommandPalette.test.tsx > CommandPalette > should open on Ctrl+K
+`DialogContent` requires a `DialogTitle` for the component to be accessible for screen reader users.
+
+If you want to hide the `DialogTitle`, you can wrap it with our VisuallyHidden component.
+
+For more information, see https://radix-ui.com/primitives/docs/components/dialog
+Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.
+
+stderr | src/components/CommandPalette.test.tsx > CommandPalette > should filter commands
+`DialogContent` requires a `DialogTitle` for the component to be accessible for screen reader users.
+
+If you want to hide the `DialogTitle`, you can wrap it with our VisuallyHidden component.
+
+For more information, see https://radix-ui.com/primitives/docs/components/dialog
+Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.
+
+stderr | src/components/CommandPalette.test.tsx > CommandPalette > should close on Escape
+`DialogContent` requires a `DialogTitle` for the component to be accessible for screen reader users.
+
+If you want to hide the `DialogTitle`, you can wrap it with our VisuallyHidden component.
+
+For more information, see https://radix-ui.com/primitives/docs/components/dialog
+Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.
+
+ ✓ src/components/CommandPalette.test.tsx (3 tests) 164ms
+ ✓ src/components/build/cluster6.test.tsx (12 tests) 287ms
+ ✓ src/components/research/DeepReportView.table.test.tsx (3 tests) 155ms
+ ✓ src/components/build/AskPanel.test.tsx (3 tests) 315ms
+ ✓ src/components/build/ExecutionCanvas.preview.test.tsx (6 tests) 144ms
+ ✓ src/components/build/DeliverablePanel.test.tsx (8 tests) 155ms
+ ✓ src/components/build/AgentStatusBar.resume.test.tsx (6 tests) 171ms
+ ✓ src/components/Citation.test.tsx (2 tests) 143ms
+stderr | src/components/build/BuildSurface.upload.test.tsx > UploadComposer > calls uploadFiles with dropped files
+An update to UploadComposer inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+ ✓ src/components/build/BuildSurface.upload.test.tsx (8 tests) 160ms
+ ✓ src/components/Markdown.test.tsx (5 tests) 96ms
+stderr | src/components/ChartBlock.test.tsx > ChartBlock component > renders table fallback when Chart.js throws (error degrade)
+Chart.js init failed Error: Rendering failed
+    at t.<anonymous> [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39msrc/components/ChartBlock.test.tsx:133:13[90m)[39m
+    at new mockCall [90m(file:///var/home/dylan/projects/perpleximanus%20build/frontend/[39mnode_modules/[4m@vitest/spy[24m/dist/index.js:96:15[90m)[39m
+    at new spy [90m(file:///var/home/dylan/projects/perpleximanus%20build/frontend/[39mnode_modules/[4mtinyspy[24m/dist/index.js:47:34[90m)[39m
+    at [90m/var/home/dylan/projects/perpleximanus build/frontend/[39msrc/components/blocks.tsx:228:15
+    at Object.react_stack_bottom_frame [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:25989:20[90m)[39m
+    at runWithFiberInDEV [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:874:13[90m)[39m
+    at commitHookEffectListMount [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:13249:29[90m)[39m
+    at commitHookPassiveMountEffects [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:13336:11[90m)[39m
+    at commitPassiveMountOnFiber [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:15484:13[90m)[39m
+    at recursivelyTraversePassiveMountEffects [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:15439:11[90m)[39m
+
+stderr | src/components/ChartBlock.test.tsx > ChartBlock component > renders table fallback when Chart.js throws even with partial data
+Chart.js init failed Error: Rendering failed
+    at t.<anonymous> [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39msrc/components/ChartBlock.test.tsx:155:13[90m)[39m
+    at new mockCall [90m(file:///var/home/dylan/projects/perpleximanus%20build/frontend/[39mnode_modules/[4m@vitest/spy[24m/dist/index.js:96:15[90m)[39m
+    at new spy [90m(file:///var/home/dylan/projects/perpleximanus%20build/frontend/[39mnode_modules/[4mtinyspy[24m/dist/index.js:47:34[90m)[39m
+    at [90m/var/home/dylan/projects/perpleximanus build/frontend/[39msrc/components/blocks.tsx:228:15
+    at Object.react_stack_bottom_frame [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:25989:20[90m)[39m
+    at runWithFiberInDEV [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:874:13[90m)[39m
+    at commitHookEffectListMount [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:13249:29[90m)[39m
+    at commitHookPassiveMountEffects [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:13336:11[90m)[39m
+    at commitPassiveMountOnFiber [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:15484:13[90m)[39m
+    at recursivelyTraversePassiveMountEffects [90m(/var/home/dylan/projects/perpleximanus build/frontend/[39mnode_modules/[4mreact-dom[24m/cjs/react-dom-client.development.js:15439:11[90m)[39m
+
+ ✓ src/components/ChartBlock.test.tsx (9 tests) 122ms
+ ✓ src/components/research/ClaimVerdicts.test.tsx (8 tests) 147ms
+ ✓ src/views/settings.test.tsx (10 tests) 2610ms
+   ✓ Settings — model-assignment matrix > changes a role assignment (the picker is enabled and the row reflects it)  341ms
+   ✓ Settings — model catalogue (CRUD) > adds a new model via the form and it appears in the catalogue  365ms
+   ✓ Settings — OpenRouter > saves the key and adds an OpenRouter model to the catalogue  446ms
+ ✓ src/components/states.test.tsx (2 tests) 110ms
+ ✓ src/components/build/ActivityFeed.screenshot.test.tsx (8 tests) 118ms
+ ✓ src/components/build/StreamingFile.test.tsx (2 tests) 106ms
+ ✓ src/views/HistoryView.status.test.tsx (2 tests) 104ms
+ ✓ src/hooks/useSessions.test.ts (9 tests) 68ms
+ ✓ src/components/Toast.test.tsx (2 tests) 61ms
+ ✓ src/components/SheetBlock.test.tsx (7 tests) 74ms
+ ✓ src/components/build/AgentStatusBar.suspend.test.tsx (4 tests) 56ms
+ ✓ src/components/build/AgentStatusBar.cost.test.tsx (3 tests) 51ms
+ ✓ src/components/research/SupportMeter.test.tsx (7 tests) 52ms
+ ✓ src/hooks/useBuildNotifications.test.ts (5 tests) 41ms
+ ✓ src/lib/useReplay.test.ts (14 tests) 46ms
+ ✓ src/lib/useTheme.test.ts (2 tests) 21ms
+ ✓ src/hooks/useBuildStream.suspend.test.ts (3 tests) 23ms
+ ✓ src/components/research/DeepResearchSurface.test.tsx (10 tests) 3767ms
+   ✓ Deep Research surface — full lifecycle > after submit, shows the plan gate with editable sub-questions  960ms
+   ✓ Deep Research surface — full lifecycle > after approve, streams the progress + assembles the report + shows bounded notice  2712ms
+ ✓ src/hooks/useBuildStream.askgate.test.ts (2 tests) 22ms
+ ✓ src/api/agent.upload.test.ts (5 tests) 8ms
+ ✓ src/api/agent.reconnect.test.ts (2 tests) 4ms
+ ✓ src/lib/srcdoc.test.ts (10 tests) 5ms
+ ✓ src/lib/isolation.test.ts (7 tests) 3ms
+ ✓ src/lib/buildTrace.test.ts (5 tests) 4ms
+ ✓ src/lib/cost.test.ts (4 tests) 3ms
+ ✓ src/components/ResearchSurface.test.tsx (2 tests) 6407ms
+   ✓ Research surface (integration + streaming reconcile) > goes empty → query → a finished, grounded, structured answer  4566ms
+   ✓ Research surface (integration + streaming reconcile) > renders verification verdicts as citations (the unsupported claim is marked)  1839ms
+ ✓ src/components/BuildSurface.test.tsx (12 tests) 7445ms
+   ✓ Build surface (plan gate → build → action gate) > pauses on a plan-approval gate FIRST, showing the proposed steps + rationale  495ms
+   ✓ Build surface (plan gate → build → action gate) > after plan approval, shows the activity feed and pauses at the per-action gate  1503ms
+   ✓ Build surface (plan gate → build → action gate) > Approve resumes the loop to a finished answer rendered as markdown  1767ms
+   ✓ Build surface (plan gate → build → action gate) > Reject records a denial without executing the action  1612ms
+   ✓ Build surface (plan gate → build → action gate) > after FINISHED, the bottom input becomes the 'Plan a change' box (re-enter plan mode)  1726ms
+
+ Test Files  45 passed (45)
+      Tests  249 passed (249)
+   Start at  01:10:41
+   Duration  8.93s (transform 1.37s, setup 1.95s, collect 10.10s, tests 26.12s, environment 14.12s, prepare 3.21s)
+
