@@ -11,30 +11,54 @@ Covers:
 
 from __future__ import annotations
 
-import io
-import json
-import subprocess
-import sys
-
 import pytest
 from fastapi.testclient import TestClient
 from perpleximanus.agent_server import ConversationRuntime, create_app
 from perpleximanus.agent_server.report_export import (
-    _find_pandoc,
     _markdown_to_html,
     export_report,
+    pdf_available,
     serialize_docx,
     serialize_markdown,
     serialize_pdf,
 )
 from perpleximanus.core import (
+    EventSource,
     ReportEvent,
     ReportSection,
     SqliteEventStore,
-    StatusEvent,
-    ConversationStatus,
-    EventSource,
 )
+
+
+class _FakeRenderSandbox:
+    """Minimal sandbox stand-in for the DOCX render path: records the md written
+    in, runs a scripted pandoc result, and hands back canned .docx bytes."""
+
+    def __init__(self, *, exit_code: int = 0, stderr: str = "", out: bytes = b"PKfake-docx"):
+        self.exit_code = exit_code
+        self.stderr = stderr
+        self.out = out
+        self.written: dict[str, bytes] = {}
+        self.commands: list[str] = []
+
+    async def write_file(self, path: str, data: bytes) -> None:
+        self.written[path] = data
+
+    async def exec_shell(self, cmd: str, *, timeout_s: int):
+        self.commands.append(cmd)
+
+        class _Res:
+            pass
+
+        r = _Res()
+        r.exit_code = self.exit_code
+        r.stdout = ""
+        r.stderr = self.stderr
+        r.timed_out = False
+        return r
+
+    async def read_file(self, path: str) -> bytes:
+        return self.out
 
 
 # ---- shared helpers --------------------------------------------------------
@@ -345,28 +369,24 @@ def test_markdown_to_html_produces_valid_html() -> None:
 # ---- DOCX tests (acceptance #4) --------------------------------------------
 
 
-def test_serialize_docx_finds_pandoc_or_skips() -> None:
-    """If pandoc is present, serialize_docx returns non-empty bytes.
-    If absent, raises FileNotFoundError → test skips cleanly."""
-    pandoc = _find_pandoc()
-    if pandoc is None:
-        pytest.skip("pandoc not found on PATH (image rebuild needed)")
+async def test_serialize_docx_renders_in_sandbox() -> None:
+    """serialize_docx writes the report markdown into the sandbox, runs pandoc
+    in-box, and returns the .docx bytes it reads back."""
     report = _make_sample_report()
-    result = serialize_docx(report)
-    assert isinstance(result, bytes)
-    assert len(result) > 0
-    # DOCX is a ZIP file with a specific structure
-    assert result[:2] == b"PK"  # ZIP magic number
+    sbx = _FakeRenderSandbox(out=b"PKzipdocx")
+    result = await serialize_docx(report, sbx)
+    assert result == b"PKzipdocx"
+    # the markdown was written into the sandbox and pandoc was invoked there
+    assert "_export.md" in sbx.written
+    assert any("pandoc" in c and "-t docx" in c for c in sbx.commands)
 
 
-def test_serialize_docx_file_not_found() -> None:
-    """When pandoc is absent, the error message is clear."""
-    pandoc = _find_pandoc()
-    if pandoc is not None:
-        pytest.skip("pandoc is present — cannot test missing-pandoc path")
+async def test_serialize_docx_sandbox_failure_raises() -> None:
+    """A non-zero pandoc exit in the sandbox surfaces a clear RuntimeError."""
     report = _make_sample_report()
-    with pytest.raises(FileNotFoundError, match="pandoc not found"):
-        serialize_docx(report)
+    sbx = _FakeRenderSandbox(exit_code=1, stderr="pandoc: bad input")
+    with pytest.raises(RuntimeError, match="pandoc failed in the sandbox"):
+        await serialize_docx(report, sbx)
 
 
 # ---- Export report function edge cases --------------------------------------
@@ -389,11 +409,15 @@ def test_export_report_pdf_named_tuple_if_present() -> None:
     assert ext == ".pdf"
 
 
-def test_export_report_docx_named_tuple_if_present() -> None:
-    """Verify the tuple shape for docx when pandoc is available."""
-    if _find_pandoc() is None:
-        pytest.skip("pandoc not found")
+def test_export_report_docx_not_in_process() -> None:
+    """export_report (the in-process md/pdf path) refuses docx — it renders in a
+    sandbox via serialize_docx(report, sandbox), driven by the runtime."""
     report = _make_sample_report()
-    payload, media_type, ext = export_report(report, "docx")
-    assert media_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    assert ext == ".docx"
+    with pytest.raises(ValueError, match="docx is rendered in a sandbox"):
+        export_report(report, "docx")
+
+
+def test_pdf_available_returns_bool() -> None:
+    """pdf_available() reflects whether weasyprint is importable (drives the
+    /api/export/capabilities pdf flag — no false affordance)."""
+    assert isinstance(pdf_available(), bool)

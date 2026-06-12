@@ -2238,8 +2238,36 @@ class ConversationRuntime:
         # The latest report (deep research emits only one; safe for future
         # multi-report conversations).
         report = reports[-1]
-        payload, media_type, ext = _export(report, fmt)
+        if fmt == "docx":
+            # DOCX renders via pandoc INSIDE a transient sandbox (pandoc ships in
+            # the sandbox image, not the host) — jailed like marp, no host install.
+            from .report_export import EXTENSIONS, MEDIA_TYPES
+
+            payload = await self._render_docx_in_sandbox(report, owner_id=owner_id)
+            return payload, MEDIA_TYPES["docx"], EXTENSIONS["docx"]
+        payload, media_type, ext = _export(report, fmt)  # md, pdf — in-process
         return payload, media_type, ext
+
+    async def _render_docx_in_sandbox(self, report: Any, *, owner_id: str) -> bytes:
+        """Spin a throwaway render sandbox, render the report to .docx via pandoc
+        in-box, read the bytes, destroy the sandbox. The export endpoint isn't tied
+        to a live conversation sandbox, so it gets its own transient one."""
+        import uuid as _uuid
+
+        from .report_export import serialize_docx
+
+        svc = self._sandbox_service_now()
+        cid = f"export-docx-{_uuid.uuid4().hex[:12]}"
+        instance = await svc.create(
+            self._sandbox_spec, owner_id=owner_id, conversation_id=cid
+        )
+        try:
+            return await serialize_docx(report, instance)
+        finally:
+            try:
+                await instance.destroy()
+            except Exception:  # noqa: BLE001 — teardown best-effort
+                _LOG.exception("export render sandbox teardown failed (cid=%s)", cid)
 
     def create_share_link(
         self,

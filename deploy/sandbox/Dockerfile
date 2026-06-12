@@ -35,6 +35,14 @@ RUN npm install -g @marp-team/marp-cli \
 ENV CHROME_PATH=/usr/local/bin/marp-chromium \
     CHROME_NO_SANDBOX=true
 
+# RP-07: DOCX export — pandoc, run INSIDE a transient render sandbox by the export
+# endpoint (so DOCX works with NO host install, jailed like marp). pandoc renders
+# the report's server-generated markdown to .docx in /workspace, the bytes are read
+# back, the throwaway sandbox is destroyed. (PDF stays in-process — weasyprint is
+# pure-Python, safe on trusted report data.)
+RUN apt-get update && apt-get install -y --no-install-recommends pandoc \
+    && rm -rf /var/lib/apt/lists/*
+
 # Non-root user available (gVisor is the isolation boundary; app may pick --user)
 RUN useradd -m -u 1000 -s /bin/bash agent && mkdir -p /workspace && chown agent:agent /workspace
 WORKDIR /workspace

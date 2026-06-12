@@ -16,9 +16,7 @@ which formats are actually usable so the UI never offers a button that 500s.
 from __future__ import annotations
 
 import logging
-import subprocess
-import tempfile
-from pathlib import Path
+from typing import Any
 
 from perpleximanus.core import ReportEvent
 
@@ -160,56 +158,29 @@ def serialize_pdf(report: ReportEvent) -> bytes:
         raise RuntimeError(f"WeasyPrint PDF generation failed: {exc}") from exc
 
 
-# ---- DOCX serializer (md → pandoc subprocess) -----------------------------
+# ---- DOCX serializer (md → pandoc, INSIDE a sandbox) ----------------------
 
 
-def _find_pandoc() -> str | None:
-    """Return the pandoc binary path, or None if not found."""
-    import shutil
+async def serialize_docx(report: ReportEvent, sandbox: Any) -> bytes:
+    """Serialize a ReportEvent to DOCX via `pandoc` INSIDE a sandbox container.
 
-    return shutil.which("pandoc")
-
-
-def serialize_docx(report: ReportEvent) -> bytes:
-    """Serialize a ReportEvent to DOCX via pandoc subprocess.
-
-    Converts markdown → docx using the pandoc system binary (NOT pypandoc). Runs
-    in the AGENT-SERVER process, so `pandoc` must be on PATH there.
-
-    Raises FileNotFoundError if pandoc is not on PATH (test skips cleanly).
-    Raises RuntimeError on conversion failure.
+    pandoc ships in the sandbox image (NOT the host), so the runtime creates a
+    transient render sandbox and passes it here: the report markdown is written
+    into the jailed workspace, pandoc renders it to .docx in-box, the bytes are
+    read back, and the runtime destroys the throwaway sandbox. No host install,
+    jailed like marp. Raises RuntimeError on failure.
     """
-    pandoc = _find_pandoc()
-    if pandoc is None:
-        raise FileNotFoundError(
-            "pandoc not found on PATH — DOCX export needs pandoc on the agent-server host."
-        )
-
     md = serialize_markdown(report)
-
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".md", delete=False, encoding="utf-8"
-    ) as tmp_md:
-        tmp_md.write(md)
-        md_path = tmp_md.name
-
-    try:
-        result = subprocess.run(
-            [pandoc, md_path, "-f", "markdown", "-t", "docx", "-o", "-"],
-            capture_output=True,
-            timeout=60,
-            check=False,
-        )
-        if result.returncode != 0:
-            stderr = result.stderr.decode("utf-8", errors="replace").strip()
-            raise RuntimeError(
-                f"pandoc failed (exit code {result.returncode}): {stderr}"
-            )
-        return result.stdout
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("pandoc timed out after 60s") from exc
-    finally:
-        Path(md_path).unlink(missing_ok=True)
+    await sandbox.write_file("_export.md", md.encode("utf-8"))
+    res = await sandbox.exec_shell(
+        "pandoc _export.md -f markdown -t docx -o _export.docx", timeout_s=60
+    )
+    if getattr(res, "timed_out", False):
+        raise RuntimeError("pandoc timed out after 60s")
+    if res.exit_code != 0:
+        detail = (res.stderr or "").strip() or f"exit code {res.exit_code}"
+        raise RuntimeError(f"pandoc failed in the sandbox: {detail}")
+    return await sandbox.read_file("_export.docx")
 
 
 # ---- Format dispatch -------------------------------------------------------
@@ -231,11 +202,12 @@ EXTENSIONS: dict[str, str] = {
 
 
 def export_report(report: ReportEvent, fmt: str) -> tuple[bytes, str, str]:
-    """Export a ReportEvent to the requested format.
+    """Export a ReportEvent to MD or PDF (both rendered in-process).
 
-    Returns (payload_bytes, media_type, filename_suffix).
-    Raises ValueError for unknown formats (caller converts to 400).
-    """
+    DOCX is NOT handled here — it renders inside a transient sandbox (pandoc ships
+    in the sandbox image, not the host), so the runtime calls `serialize_docx`
+    directly with a sandbox instance. Returns (payload, media_type, suffix).
+    Raises ValueError for unknown formats (caller converts to 400)."""
     if fmt not in _EXPORT_FORMATS:
         raise ValueError(f"Unknown export format: {fmt!r}. Valid: md, pdf, docx")
 
@@ -244,7 +216,7 @@ def export_report(report: ReportEvent, fmt: str) -> tuple[bytes, str, str]:
     elif fmt == "pdf":
         payload = serialize_pdf(report)
     elif fmt == "docx":
-        payload = serialize_docx(report)
+        raise ValueError("docx is rendered in a sandbox — call serialize_docx(report, sandbox)")
     else:
         raise ValueError(f"Unknown export format: {fmt!r}")  # pragma: no cover
 
@@ -253,16 +225,10 @@ def export_report(report: ReportEvent, fmt: str) -> tuple[bytes, str, str]:
     return payload, media_type, ext
 
 
-def export_capabilities() -> dict[str, bool]:
-    """Which export formats are usable in THIS agent-server environment.
-
-    md is always available; pdf needs `weasyprint` importable (+ its pango/cairo
-    libs); docx needs `pandoc` on PATH. The UI reads this to enable each download
-    button only when it will actually work — no false affordance, and it adapts to
-    whatever environment the agent-server runs in (dev host today, app image later)."""
+def pdf_available() -> bool:
+    """True if PDF export can run in-process (weasyprint + its pango/cairo libs)."""
     try:
         _lazy_import_weasyprint()
-        pdf_ok = True
+        return True
     except Exception:
-        pdf_ok = False
-    return {"md": True, "pdf": pdf_ok, "docx": _find_pandoc() is not None}
+        return False
