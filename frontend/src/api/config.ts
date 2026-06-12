@@ -56,6 +56,7 @@ export async function createSkill(create: SkillCreate): Promise<Skill> {
     description: create.description ?? "",
     body: create.body ?? "",
     enabled: create.enabled ?? true,
+    surfaces: create.surfaces ?? [],
   };
   writeLocalSkills([...skills, skill]);
   return skill;

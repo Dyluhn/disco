@@ -52,9 +52,42 @@ interface DraftState {
   name: string;
   description: string;
   body: string;
+  surfaces: string[];
 }
 
-const EMPTY_DRAFT: DraftState = { name: "", description: "", body: "" };
+// New skills default to both build-like surfaces (the prior "applies everywhere"
+// behavior, made explicit). Empty = everywhere (back-compat for legacy files).
+const EMPTY_DRAFT: DraftState = { name: "", description: "", body: "", surfaces: ["build", "agent"] };
+
+const SURFACES = [
+  { id: "build", label: "Build" },
+  { id: "agent", label: "Agent" },
+] as const;
+
+/** A skill with no surfaces applies everywhere → show both chips on. */
+function surfaceOn(surfaces: string[], kind: string): boolean {
+  return surfaces.length === 0 || surfaces.includes(kind);
+}
+
+/** Toggle a surface, expanding "everywhere" to the explicit pair first, and never
+ *  letting the set go empty via the UI (a skill must apply to at least one surface;
+ *  turning the last one off resets to both). */
+function toggleSurface(surfaces: string[], kind: string): string[] {
+  const expanded = surfaces.length === 0 ? SURFACES.map((s) => s.id) : [...surfaces];
+  const next = expanded.includes(kind)
+    ? expanded.filter((k) => k !== kind)
+    : [...expanded, kind];
+  return next.length === 0 ? SURFACES.map((s) => s.id) : next;
+}
+
+/** A compact "Build · Agent" label for the collapsed skill row. */
+function surfaceLabel(surfaces?: string[]): string {
+  const s = surfaces ?? [];
+  if (s.length === 0) return "Build · Agent";
+  return SURFACES.filter((x) => s.includes(x.id))
+    .map((x) => x.label)
+    .join(" · ");
+}
 
 function SkillEditor({
   initial,
@@ -95,6 +128,34 @@ function SkillEditor({
         rows={8}
         className="resize-y rounded-control border border-hairline bg-surface-2 px-inline py-hair font-mono text-[0.8rem] leading-relaxed text-text outline-none focus:border-accent"
       />
+      {/* Which surfaces this skill applies to — keeps a "house style" skill off the
+          builder and an "hourly screenshot" skill off the agent. */}
+      <div className="flex items-center gap-inline">
+        <span className="font-ui text-[0.78rem] text-text-muted">Applies to</span>
+        <div className="flex gap-hair">
+          {SURFACES.map((sf) => {
+            const on = surfaceOn(draft.surfaces, sf.id);
+            return (
+              <button
+                key={sf.id}
+                type="button"
+                role="checkbox"
+                aria-checked={on}
+                aria-label={`${sf.label} surface`}
+                onClick={() => setDraft({ ...draft, surfaces: toggleSurface(draft.surfaces, sf.id) })}
+                className={cn(
+                  "rounded-full border px-inline py-hair font-ui text-[0.76rem] transition-colors",
+                  on
+                    ? "border-accent/50 bg-accent/15 text-text"
+                    : "border-hairline text-text-faint hover:text-text",
+                )}
+              >
+                {sf.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
       <div className="flex items-center justify-end gap-inline">
         <button
           type="button"
@@ -147,10 +208,11 @@ export function SkillsSection() {
         )}
       </div>
       <p className="font-ui text-[0.84rem] text-text-muted">
-        Reusable instruction files (like Claude Code's SKILL.md). Enabled skills
-        are handed to the Build agent so it follows your standing guidance — API
-        recipes, house style, conventions — without you re-explaining each run.
-        Saved across reloads.
+        Reusable instruction files (like Claude Code's SKILL.md) — API recipes, house
+        style, conventions — handed to the agent so it follows your standing guidance
+        without you re-explaining each run. Scope each to <strong>Build</strong>,{" "}
+        <strong>Agent</strong>, or both, so a builder skill doesn't clutter the agent
+        and vice versa. Saved across reloads.
       </p>
 
       {(create.error || update.error || remove.error) && (
@@ -166,7 +228,12 @@ export function SkillsSection() {
           onCancel={closeEditors}
           onSave={(draft) =>
             create.mutate(
-              { name: draft.name, description: draft.description, body: draft.body },
+              {
+                name: draft.name,
+                description: draft.description,
+                body: draft.body,
+                surfaces: draft.surfaces,
+              },
               { onSuccess: closeEditors },
             )
           }
@@ -188,7 +255,12 @@ export function SkillsSection() {
           editingId === s.id ? (
             <li key={s.id}>
               <SkillEditor
-                initial={{ name: s.name, description: s.description, body: s.body ?? "" }}
+                initial={{
+                  name: s.name,
+                  description: s.description,
+                  body: s.body ?? "",
+                  surfaces: s.surfaces ?? [],
+                }}
                 busy={update.isPending}
                 onCancel={closeEditors}
                 onSave={(draft) =>
@@ -199,6 +271,7 @@ export function SkillsSection() {
                         name: draft.name,
                         description: draft.description,
                         body: draft.body,
+                        surfaces: draft.surfaces,
                       },
                     },
                     { onSuccess: closeEditors },
@@ -217,6 +290,9 @@ export function SkillsSection() {
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-hair">
                   <span className="font-ui text-[0.88rem] font-medium text-text">{s.name}</span>
+                  <span className="rounded-full border border-hairline px-hair font-ui text-[0.64rem] uppercase tracking-wide text-text-faint">
+                    {surfaceLabel(s.surfaces)}
+                  </span>
                   {!s.enabled && (
                     <span className="font-ui text-[0.68rem] uppercase tracking-wide text-text-faint">
                       disabled

@@ -9,6 +9,9 @@ export interface Skill {
   /** The markdown instructions handed to the agent (SKILL.md body). Optional on
    *  read for back-compat; always present from the live backend. */
   body?: string;
+  /** Which surfaces this skill applies to (["build"], ["agent"], or both). Empty/
+   *  absent = applies everywhere (back-compat). */
+  surfaces?: string[];
 }
 
 export interface SkillCreate {
@@ -16,6 +19,7 @@ export interface SkillCreate {
   description?: string;
   body?: string;
   enabled?: boolean;
+  surfaces?: string[];
 }
 
 export interface SkillPatch {
@@ -23,6 +27,7 @@ export interface SkillPatch {
   description?: string;
   body?: string;
   enabled?: boolean;
+  surfaces?: string[];
 }
 
 export type McpStatus = "connected" | "disconnected" | "error";

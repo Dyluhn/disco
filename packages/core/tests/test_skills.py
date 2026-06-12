@@ -213,3 +213,50 @@ def test_scope_round_trips_through_markdown(tmp_path):
     store.save(s.model_copy(update={"scope": "src/**/*.ts"}))
     reloaded = store.get("scoped")
     assert reloaded is not None and reloaded.scope == "src/**/*.ts"
+
+
+# ---- per-surface scoping (a skill targets build / agent / both) -------------
+
+
+def test_surfaces_round_trip_through_the_md_file(tmp_path):
+    store = SkillStore(tmp_path)
+    store.create(name="House Style", body="2-space indent", surfaces=["agent"])
+    reloaded = store.list()[0]
+    assert reloaded.surfaces == ["agent"]
+    assert "surfaces: agent" in (tmp_path / f"{reloaded.id}.md").read_text()
+
+
+def test_empty_surfaces_applies_everywhere_back_compat():
+    s = Skill(id="x", name="Always", body="b", surfaces=[])
+    assert s.applies_to_surface("build")
+    assert s.applies_to_surface("agent")
+    assert s.applies_to_surface(None)
+
+
+def test_scoped_skill_only_applies_to_its_surfaces():
+    agent_only = Skill(id="a", name="Style", body="b", surfaces=["agent"])
+    assert agent_only.applies_to_surface("agent")
+    assert not agent_only.applies_to_surface("build")
+    # surface=None (caller with no surface in hand) → applies (back-compat)
+    assert agent_only.applies_to_surface(None)
+
+
+def test_render_filters_by_surface():
+    skills = [
+        Skill(id="a", name="House Style", body="indent 2", surfaces=["agent"]),
+        Skill(id="b", name="Hourly Shot", body="screenshot", surfaces=["build"]),
+        Skill(id="c", name="Always", body="global rule", surfaces=[]),
+    ]
+    agent_block = render_skills_for_prompt(skills, surface="agent")
+    assert "House Style" in agent_block
+    assert "Always" in agent_block
+    assert "Hourly Shot" not in agent_block
+
+    build_block = render_skills_for_prompt(skills, surface="build")
+    assert "Hourly Shot" in build_block
+    assert "Always" in build_block
+    assert "House Style" not in build_block
+
+    # No surface → no filter (every enabled skill), the back-compat default.
+    all_block = render_skills_for_prompt(skills, surface=None)
+    assert "House Style" in all_block and "Hourly Shot" in all_block and "Always" in all_block

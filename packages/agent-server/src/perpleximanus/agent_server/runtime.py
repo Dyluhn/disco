@@ -433,7 +433,11 @@ class ConversationRuntime:
     )
 
     def _router_now(
-        self, pick: str | None = None, *, enable_thinking: bool | None = None
+        self,
+        pick: str | None = None,
+        *,
+        enable_thinking: bool | None = None,
+        surface: str | None = None,
     ) -> DefaultLLMRouter:
         """The router for the CURRENT assignments. Cheap to rebuild (providers are
         plain objects; the HTTP client is created per call), so we reload the config
@@ -467,7 +471,8 @@ class ConversationRuntime:
         # provider, so Research is unaffected. Enabled SKILLS (the user's reusable
         # .md instructions) are rendered and prepended to the driver prompts —
         # read fresh each request so a Settings toggle takes effect next run.
-        skills_block = render_skills_for_prompt(self._skill_store.enabled())
+        # `surface` filters to skills scoped to it (build vs agent) — None = all.
+        skills_block = render_skills_for_prompt(self._skill_store.enabled(), surface=surface)
         return DefaultLLMRouter(
             cfg,
             providers,
@@ -720,8 +725,10 @@ class ConversationRuntime:
             # condensation) AND any other generative role all run on the picked
             # model — not just the driver while local models summarize underneath.
             override = self._model_override.get(conversation_id)
-            router = self._router_now(pick=override)
+            # Surface FIRST: it scopes which skills the router injects (a build-only
+            # skill shouldn't reach an agent conversation's prompt, and vice versa).
             surface = self._surface_of(conversation_id)
+            router = self._router_now(pick=override, surface=surface)
             # Research↔Build isolation: the SURFACE picks the agent class, so
             # completion semantics (prose=answer for Research vs affirmative
             # `finish` for Build) are owned by type, not a shared mode flag.

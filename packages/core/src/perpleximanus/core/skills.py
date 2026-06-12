@@ -48,16 +48,29 @@ class Skill(BaseModel):
     # agent is touching a matching path; otherwise only a one-line manifest
     # entry is shown (Claude-Code CLAUDE.md style). Empty scope → always full.
     scope: str = ""
+    # Which SURFACES this skill applies to (e.g. ["build"], ["agent"], or both).
+    # EMPTY = applies to all surfaces (back-compat: a skill file with no surfaces
+    # line keeps its old "everywhere" behavior). Lets a "house style" skill target
+    # the agent while a "screenshot this page hourly" skill targets build, instead
+    # of both polluting every surface's prompt.
+    surfaces: list[str] = Field(default_factory=list)
+
+    def applies_to_surface(self, surface: str | None) -> bool:
+        """True if this skill should be injected for `surface`. Empty `surfaces`
+        (or no surface in hand) → applies everywhere."""
+        return not self.surfaces or surface is None or surface in self.surfaces
 
     def to_markdown(self) -> str:
         """Serialize to a .md file with frontmatter. The body is preserved verbatim."""
         scope_line = f"scope: {self.scope}\n" if self.scope else ""
+        surfaces_line = f"surfaces: {', '.join(self.surfaces)}\n" if self.surfaces else ""
         fm = (
             "---\n"
             f"name: {self.name}\n"
             f"description: {self.description}\n"
             f"enabled: {'true' if self.enabled else 'false'}\n"
             f"{scope_line}"
+            f"{surfaces_line}"
             "---\n"
         )
         return fm + (self.body or "")
@@ -153,7 +166,12 @@ class SkillStore:
         return skill
 
     def create(
-        self, name: str, description: str = "", body: str = "", enabled: bool = True
+        self,
+        name: str,
+        description: str = "",
+        body: str = "",
+        enabled: bool = True,
+        surfaces: list[str] | None = None,
     ) -> Skill:
         """Create a new skill, deriving a unique id from the name."""
         base = slugify(name)
@@ -163,7 +181,14 @@ class SkillStore:
             skill_id = f"{base}-{i}"
             i += 1
         return self.save(
-            Skill(id=skill_id, name=name, description=description, body=body, enabled=enabled)
+            Skill(
+                id=skill_id,
+                name=name,
+                description=description,
+                body=body,
+                enabled=enabled,
+                surfaces=surfaces or [],
+            )
         )
 
     def delete(self, skill_id: str) -> bool:
@@ -180,21 +205,27 @@ class SkillStore:
         except OSError:
             return None
         fm, body = _parse_frontmatter(text)
+        surfaces = [s.strip() for s in fm.get("surfaces", "").split(",") if s.strip()]
         return Skill(
             id=f.stem,
             name=fm.get("name", f.stem),
             description=fm.get("description", ""),
             enabled=fm.get("enabled", "true").lower() != "false",
             scope=fm.get("scope", ""),
+            surfaces=surfaces,
             body=body.strip("\n"),
         )
 
 
 def render_skills_for_prompt(
-    skills: list[Skill], *, active_paths: list[str] | None = None
+    skills: list[Skill], *, surface: str | None = None, active_paths: list[str] | None = None
 ) -> str:
     """Render enabled skills as a system-prompt block. Empty string when there
     are none.
+
+    `surface` filters to skills that apply to it (a skill's `surfaces` list; empty
+    = everywhere). None → no surface filter (every enabled skill), the back-compat
+    default for callers that don't run on a specific surface.
 
     Cluster 4 LAZY injection: a SCOPED skill (with a `scope` glob) shows only a
     one-line manifest entry by default, and its FULL body only when one of
@@ -206,7 +237,9 @@ def render_skills_for_prompt(
     """
     import fnmatch
 
-    enabled = [s for s in skills if s.enabled and s.body.strip()]
+    enabled = [
+        s for s in skills if s.enabled and s.body.strip() and s.applies_to_surface(surface)
+    ]
     if not enabled:
         return ""
     paths = active_paths or []

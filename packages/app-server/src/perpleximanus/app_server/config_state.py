@@ -167,6 +167,9 @@ class SkillDTO(BaseModel):
     description: str
     enabled: bool
     body: str = ""  # the markdown instructions handed to the agent
+    # Which surfaces the skill applies to (["build"], ["agent"], or both). Empty =
+    # all surfaces (back-compat). The agent-server filters by this per conversation.
+    surfaces: list[str] = []
 
 
 class SkillPatch(BaseModel):
@@ -176,6 +179,7 @@ class SkillPatch(BaseModel):
     description: str | None = None
     enabled: bool | None = None
     body: str | None = None
+    surfaces: list[str] | None = None
 
 
 class SkillCreate(BaseModel):
@@ -183,6 +187,7 @@ class SkillCreate(BaseModel):
     description: str = ""
     body: str = ""
     enabled: bool = True
+    surfaces: list[str] = []
 
 
 class McpServerConfigDTO(BaseModel):
@@ -650,7 +655,12 @@ class ConfigState:
     @staticmethod
     def _skill_dto(s) -> SkillDTO:
         return SkillDTO(
-            id=s.id, name=s.name, description=s.description, enabled=s.enabled, body=s.body
+            id=s.id,
+            name=s.name,
+            description=s.description,
+            enabled=s.enabled,
+            body=s.body,
+            surfaces=s.surfaces,
         )
 
     def skills(self) -> list[SkillDTO]:
@@ -662,6 +672,7 @@ class ConfigState:
             description=create.description,
             body=create.body,
             enabled=create.enabled,
+            surfaces=create.surfaces,
         )
         return self._skill_dto(s)
 
@@ -677,6 +688,7 @@ class ConfigState:
                     "description": patch.description,
                     "enabled": patch.enabled,
                     "body": patch.body,
+                    "surfaces": patch.surfaces,
                 }.items()
                 if v is not None
             }
