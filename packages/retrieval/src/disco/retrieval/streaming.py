@@ -26,6 +26,7 @@ from disco.core.llm import (
     ModelRole,
 )
 
+from .local_encoders import EncoderUnavailable
 from .models import Passage
 from .providers import ExtractionProvider, SearchProvider
 from .ranking import Reranker
@@ -433,5 +434,10 @@ async def stream_research_answer(
             answer = _drop_weak(answer)
         yield {"type": "final", "answer": answer}
         yield {"type": "state", "status": "finished"}
+    except EncoderUnavailable as exc:
+        # RAM guard: the encoder pre-check stopped a model load that would OOM the
+        # process.  Emit an honest, actionable error frame so the UI shows the real
+        # reason rather than a dead socket or a silent empty-answer page.
+        yield {"type": "error", "message": str(exc)}
     except Exception as exc:  # noqa: BLE001 — surface the real reason, don't swallow
         yield {"type": "error", "message": f"{type(exc).__name__}: {exc}"}

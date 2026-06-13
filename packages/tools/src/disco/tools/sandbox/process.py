@@ -196,3 +196,45 @@ class ProcessSandboxService:
         except Exception:  # noqa: BLE001 — root may not exist
             pass
         return removed
+
+    async def sweep_stale_roots(self, max_age_s: float = 86400) -> int:
+        """Remove orphaned /tmp/pmx-sbx-* root dirs left by prior process runs.
+
+        Scans the parent of _root (typically /tmp) for directories whose name
+        starts with ``pmx-sbx-`` and whose mtime is older than *max_age_s*
+        seconds (default 1 day).  The live ``_root`` is always excluded.
+
+        Safety properties:
+        - Only touches entries whose name starts with ``pmx-sbx-``; all other
+          siblings are unconditionally skipped.
+        - Never follows or removes symlinks (uses ``lstat`` + ``is_symlink``
+          guard before ``rmtree``).
+        - Best-effort: per-entry errors are swallowed so a busy/unremovable dir
+          cannot abort the overall sweep.
+
+        Returns the count of roots removed.
+        """
+        removed = 0
+        now = time.time()
+        parent = self._root.parent  # typically /tmp
+        prefix = "pmx-sbx-"
+        try:
+            for sibling in parent.iterdir():
+                if not sibling.name.startswith(prefix):
+                    continue  # prefix guard — never touch unrelated dirs
+                if sibling == self._root:
+                    continue  # never delete the live root
+                if sibling.is_symlink():
+                    continue  # never follow or remove symlinks
+                if not sibling.is_dir():
+                    continue
+                try:
+                    age_s = now - sibling.lstat().st_mtime
+                    if age_s >= max_age_s:
+                        shutil.rmtree(sibling, ignore_errors=True)
+                        removed += 1
+                except Exception:  # noqa: BLE001 — one bad dir must not abort the sweep
+                    pass
+        except Exception:  # noqa: BLE001 — parent may not exist / unreadable
+            pass
+        return removed

@@ -51,6 +51,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ValidationError
 
+from disco.retrieval.local_encoders import EncoderUnavailable
+
 from .host_proxy import HostPreviewProxyMiddleware
 from .runtime import ConversationRuntime
 from .schedule_models import CreateScheduleBody, PreviewScheduleBody
@@ -1174,6 +1176,12 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
                 await websocket.send_json(frame)
         except WebSocketDisconnect:
             return  # client cancelled mid-stream
+        except EncoderUnavailable as exc:
+            # RAM guard: in-process encoder couldn't load due to insufficient RAM.
+            # Emit an honest, actionable error frame instead of closing the socket
+            # silently (which is what an OOM kill / exit 137 would do).
+            with contextlib.suppress(Exception):
+                await websocket.send_json({"type": "error", "message": str(exc)})
         except Exception as exc:  # noqa: BLE001 — surface the real reason, then close
             with contextlib.suppress(Exception):
                 await websocket.send_json(

@@ -163,8 +163,10 @@ subdomain previews are a localhost convenience.
 
 Rough steady-state: the server image is ~1.3–1.8 GB, the sandbox image ~2.5–3 GB,
 nginx ~60 MB. RAM: ~1 GB for the servers + ~1–2 GB once the encoders load on the first
-grounded answer + ~5–6 GB for the bundled 4B model. An 8 GB machine works with BYO
-model; 12–16 GB is comfortable with `bundled-llm`. Disk ~7–8 GB after first run.
+grounded answer + ~4 GB for the bundled 4B model at default 8K ctx + q8_0 KV quant.
+An 8 GB machine fits `bundled-llm` at these defaults; raise `PMX_LLM_CTX` to 16K/32K
+or set `PMX_LLM_CTK=f16` for full-precision KV if you have ≥16 GB.
+Disk ~7–8 GB after first run.
 
 ## Persisting / backing up
 

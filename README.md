@@ -95,9 +95,10 @@ workspace member shares the `disco.*` namespace.
 ## Quickstart (self-host)
 
 A clean Linux box (or WSL2) with a container runtime. **The bundled model needs
-~12–16 GB RAM** — the LLM (~6.6 GB) and the search encoders (~4 GB, loaded on a
-grounded answer) don't both fit in 8 GB, where the kernel OOM-kills the stack and a
-query dies *silently*. On 8 GB, lower `PMX_LLM_CTX=8192` or bring your own endpoint.
+~8 GB RAM** — the LLM (~4 GB at the default 8K ctx + q8_0 KV quant) and the search
+encoders (~4 GB, loaded on a grounded answer) fit on an 8 GB box. Raising
+`PMX_LLM_CTX` to 16K/32K or disabling KV quant (`PMX_LLM_CTK=f16`) needs ≥16 GB;
+or bring your own endpoint for a larger model.
 
 ```bash
 cp .env.example .env            # then skim it — at least the model + security notes

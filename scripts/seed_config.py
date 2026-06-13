@@ -37,7 +37,7 @@ def main() -> None:
 
     base_url = os.environ.get("PMX_DRIVER_BASE_URL", "http://llm:8080/v1")
     model_id = os.environ.get("PMX_DRIVER_MODEL_ID", "local-model")
-    ctx = int(os.environ.get("PMX_DRIVER_CTX", "32768"))
+    ctx = int(os.environ.get("PMX_DRIVER_CTX", "8192"))
     projects_root = os.environ.get("PMX_PROJECTS_ROOT", "/data/projects")
 
     driver = ModelEntry(

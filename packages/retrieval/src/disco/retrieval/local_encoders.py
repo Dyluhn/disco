@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import os
 from typing import Any
 
 from .models import Passage
@@ -30,9 +31,82 @@ from .nli import Entailment
 
 _log = logging.getLogger(__name__)
 
+
+class EncoderUnavailable(RuntimeError):
+    """Raised when an in-process encoder cannot be loaded due to insufficient RAM.
+
+    This is a typed signal the WebSocket handler can catch to emit an honest error
+    frame instead of letting an OOM kill the process (exit 137 with a dead socket)."""
+
+
+def _mem_available_gb() -> float:
+    """Return available system RAM in GB by reading /proc/meminfo MemAvailable.
+
+    Returns float('inf') on any read failure (non-Linux or /proc unavailable) so
+    the guard becomes a no-op in those environments rather than a false block."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    kb = int(line.split()[1])
+                    return kb / (1024 * 1024)
+    except Exception:  # noqa: BLE001
+        pass
+    return float("inf")  # non-Linux or read failure → skip the guard
+
+
+# Minimum free RAM (GB) required before loading an encoder model (per-tier constant).
+# full tier: two large ONNX models (~1 GB each) + runtime overhead → 4 GB guard.
+# lite tier: two small ONNX models (~80 MB total) + runtime overhead → 0.5 GB guard.
+_HEADROOM_GB_FULL = 4.0
+_HEADROOM_GB_LITE = 0.5
+
+
+def _require_ram(model_name: str) -> None:
+    """Raise EncoderUnavailable if available system RAM is below the tier-appropriate
+    headroom threshold.  Called BEFORE each lazy model instantiation so an OOM never
+    silently kills the process — the caller gets a typed exception to handle."""
+    tier = os.environ.get("PMX_ENCODER_TIER", _TIER_FULL).lower()
+    headroom = _HEADROOM_GB_LITE if tier == _TIER_LITE else _HEADROOM_GB_FULL
+    available = _mem_available_gb()
+    if available < headroom:
+        raise EncoderUnavailable(
+            f"encoder load aborted: {available:.1f} GB RAM available, "
+            f"need ~{headroom:.0f} GB for {model_name!r}. "
+            f"Lower PMX_ENCODER_TIER to 'lite' or free RAM before retrying."
+        )
+
+
 # Equivalent-class multilingual models fastembed ships as ready ONNX.
 EMBED_MODEL = "intfloat/multilingual-e5-large"
 RERANK_MODEL = "jinaai/jina-reranker-v2-base-multilingual"
+
+# "lite" tier: small ONNX models for keyless / ≤8 GB boxes (~0.15 GB total).
+# Both confirmed in fastembed's list_supported_models() on 2026-06-13.
+#   BAAI/bge-small-en-v1.5   — 0.067 GB, 384-d, English, MIT
+#   Xenova/ms-marco-MiniLM-L-6-v2 — 0.08 GB, Apache-2.0
+EMBED_MODEL_LITE = "BAAI/bge-small-en-v1.5"
+RERANK_MODEL_LITE = "Xenova/ms-marco-MiniLM-L-6-v2"
+
+# PMX_ENCODER_TIER: "lite" | "full" (default: "full")
+# Defaults to "full" to preserve existing behaviour for any deployment that was
+# already running the large models.  Set PMX_ENCODER_TIER=lite explicitly for a
+# keyless / ≤8 GB box.  An explicit PMX_EMBED_MODEL or PMX_RERANK_MODEL always
+# wins over the tier default (B1a precedence preserved).
+_TIER_LITE = "lite"
+_TIER_FULL = "full"
+
+
+def _tier_embed_default() -> str:
+    """Return the tier-appropriate embed model id (no explicit override applied here)."""
+    tier = os.environ.get("PMX_ENCODER_TIER", _TIER_FULL).lower()
+    return EMBED_MODEL_LITE if tier == _TIER_LITE else EMBED_MODEL
+
+
+def _tier_rerank_default() -> str:
+    """Return the tier-appropriate rerank model id (no explicit override applied here)."""
+    tier = os.environ.get("PMX_ENCODER_TIER", _TIER_FULL).lower()
+    return RERANK_MODEL_LITE if tier == _TIER_LITE else RERANK_MODEL
 
 # A cross-encoder's attention is O(seq_len^2) per (query, passage) pair, and
 # fastembed does NOT truncate inputs to the model's window — so reranking
@@ -55,7 +129,11 @@ def _embedding() -> Any:
     if _embedding_model is None:
         from fastembed import TextEmbedding
 
-        _embedding_model = TextEmbedding(model_name=EMBED_MODEL)
+        # Explicit PMX_EMBED_MODEL wins; fall back to tier-aware default.
+        model_name = os.environ.get("PMX_EMBED_MODEL") or _tier_embed_default()
+        # RAM guard: raises EncoderUnavailable instead of letting an OOM kill the process.
+        _require_ram(model_name)
+        _embedding_model = TextEmbedding(model_name=model_name)
     return _embedding_model
 
 
@@ -64,7 +142,11 @@ def _reranker() -> Any:
     if _cross_encoder is None:
         from fastembed.rerank.cross_encoder import TextCrossEncoder
 
-        _cross_encoder = TextCrossEncoder(model_name=RERANK_MODEL)
+        # Explicit PMX_RERANK_MODEL wins; fall back to tier-aware default.
+        model_name = os.environ.get("PMX_RERANK_MODEL") or _tier_rerank_default()
+        # RAM guard: raises EncoderUnavailable instead of letting an OOM kill the process.
+        _require_ram(model_name)
+        _cross_encoder = TextCrossEncoder(model_name=model_name)
     return _cross_encoder
 
 
@@ -106,6 +188,8 @@ class FastEmbedReranker:
 
         try:
             scores = await asyncio.to_thread(_run)
+        except EncoderUnavailable:
+            raise  # RAM guard: propagate so the WS handler emits an honest error frame
         except Exception as e:  # noqa: BLE001 — degrade to input order, like the remote path
             # Degrade gracefully, but NEVER silently: a swallowed rerank failure
             # means the pipeline ships unranked results with no signal. Log it loud.
@@ -133,6 +217,8 @@ class FastEmbedNLIVerifier:
             try:
                 raw = list(_reranker().rerank(hypothesis, [premise]))[0]
                 self._cache[key] = _sigmoid(float(raw))
+            except EncoderUnavailable:
+                raise  # RAM guard: propagate so the caller gets an honest error, not a wrong neutral
             except Exception:  # noqa: BLE001 — failure → neutral, never crash
                 self._cache[key] = 0.0
         return self._cache[key]

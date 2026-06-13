@@ -1577,6 +1577,13 @@ class ConversationRuntime:
                 stale = await service.sweep_stale_workspaces()
                 if stale:
                     _LOG.info("swept %d stale process workspace dir(s)", stale)
+            # Also sweep orphaned /tmp/pmx-sbx-* root dirs from prior process runs
+            # (each ProcessSandboxService.__init__ creates a NEW root via mkdtemp,
+            # so roots accumulate across restarts without this cleanup).
+            with contextlib.suppress(Exception):
+                stale_roots = await service.sweep_stale_roots()
+                if stale_roots:
+                    _LOG.info("swept %d orphaned pmx-sbx-* root dir(s)", stale_roots)
         if destroyed:
             _LOG.info("swept %d orphan container(s) at startup", destroyed)
         return destroyed
