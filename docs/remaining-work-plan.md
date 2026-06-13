@@ -26,6 +26,7 @@ blocks the stated goal · **P1** product-quality moat · **P2** feature complete
 | A4 | De-flake `make test` — the auto-preview TOCTOU race (#25 area) | S | `make test` is flaky-red today; a CI hazard |
 | A5 | Ruff/eslint real errors (F821, B904; ignore cosmetic test E501) | S–M | eslint 67, ruff debt |
 | A6 | `PMX_` → `DISCO_` rename (compat fallback for the secret key; keep `pmx-data` volume) | M | before any public release; coordinate with `.env`, compose, docs |
+| A7 | **Docs honesty (NOT-STARTED — release blocker)** — README + `project-status.md` are months stale (still say *"Status: Phase 0 — the brain isn't plugged in"*) and misrepresent the product; write a real install guide + provider/VRAM matrix (drafts exist: `provider-matrix.md`, `self-host.md`) + a demo gallery | M | release-execution-plan "Docs + gallery" |
 
 ---
 
@@ -86,6 +87,8 @@ blocks the stated goal · **P1** product-quality moat · **P2** feature complete
 | D8 | 2.4 headless-browser/screenshot verify gate — `verify="app"` does an HTTP-200 check, but a PIXEL screenshot needs a browser in the sandbox image (absent on the process backend) | M | addendum 2.4 PARTIAL |
 | D9 | 2.5 image generation + binary-safe file write | M | addendum 2.5 OPEN |
 | D10 | Share-bundle ↔ harness-cassette unification (one projection, two consumers) — share bundle feeds replay_runner but the service-call cassette is still a separate format | S-M | RP-00 PARTIAL |
+| D11 | Background-task **running-tasks dashboard** — "dashboard lite" exists (status write-through + History chips + read-repair), but NO dedicated running-tasks view, no global "N tasks running" indicator, no schedule-run history surface ("the one Phase-2 item still user-visibly open") | M | release-execution-plan PARTIAL |
+| D12 | In-block artifact download (sheet/Univer) — needs cid threading into the block | S | RP-11 deferred |
 
 ---
 
@@ -181,6 +184,29 @@ Track-F toggle.*
 | G6 (HS-06) | Epochal observation masking — batched keep/remove at polling boundaries to keep the KV prefix stable | S/M | **DESIGN-BLOCKED** | **needs a Dylan decision:** per-step masking vs KV stability conflict — pick ONE; never mask per-step |
 | G7 (HS-07) | ThinkTool — no-op reasoning-dump tool (cheap prose-degeneration mitigation) | XS | backlog | fill-in-when-idle; composes with degeneracy-condensation |
 | G8 (HS-08) | Reroute-to-hidden-`invalid`-tool repair — malformed/unknown tool call becomes an ordinary error tool_result via a registered-but-unoffered `invalid` tool; the turn never aborts, message invariants hold — OpenCode | S | verify-overlap | composes with **F1**; check rp-12's requery path doesn't already preserve invariants |
+
+---
+
+## Track H — Build & serve parity (`docs/build-parity-cluster.md`, G1–G12)
+*The build-loop's serving/shell/verification coherence gaps. `BP-G` ids = this doc's
+native G-ids (distinct from Track G's HS-ids). Some overlap C2/C3/D8/E8 — dedup at
+brief time. G7/G8/G11 are DONE (persistent kernel `edf0185`; DC-05 loop survival +
+resume) and listed only for closure.*
+
+| ID | Item | Effort | Status |
+|----|------|--------|--------|
+| BP-G1 | **Persistent, inspectable shell sessions** — named sessions + `shell_view` (see the real process output anytime), OpenHands-tmux style | M | OPEN — overlaps SmallCode F-tier persistent shell + HS; release-roadmap §Phase 0.5 |
+| BP-G2 | **Single-owner serving** — the container PID-1 keepalive (`while true; http.server 8000`, `gvisor.py:50`) RACES `run_server`'s `pkill -f http.server` (`preview.py:178`); on crash the keepalive silently recaptures the port | M | OPEN — kill the auto-serve; one process per named session |
+| BP-G3 | **Truthful server status** — `preview_status` probes BIND only (`_LISTEN_PROBE`, `preview.py:31-34`) → reports "serving" when the keepalive stub holds the port, not the agent's app | S-M | OPEN — observe the real process, never infer |
+| BP-G4 | **Sanctioned kill / ownership model** — explicit process ownership so kill targets the right thing | S | OPEN |
+| BP-G5 | **Agent-driven browser verification** — real headless browser at finish | M | OPEN — merge with D8 (screenshot gate) |
+| BP-G6 | **Vision feedback for the driver** — wire the mmproj (27b-vision profile exists) into build self-verify so the driver SEES the rendered result | M | OPEN |
+| BP-G7 | Flat-latency code execution | — | ✅ DONE (persistent IPython kernel, `edf0185`) |
+| BP-G8 | Loop survival on long builds | — | ✅ DONE (DC-05 SIGTERM→respawn→resume) |
+| BP-G9 | **Multi-service builds** — run > 1 service (e.g. API + frontend) | M | OPEN/PARTIAL — overlaps C3 dev-server rematerialization |
+| BP-G10 | **Dependency installs — verified + filtered egress posture** — Build grants NETWORK → egress "open" (`_container.py:55-58`); never live-verified in gVisor, and "open" is the weakest posture (the filtered allowlist proxy exists) | M | PARTIAL — overlaps D7/E8; move Build "open" → "filtered" |
+| BP-G11 | Resumable builds | — | ✅ DONE (DC-05b/BP resume) |
+| BP-G12 | **Cockpit UX** — the build operator surface (shell view, server status, process list) | M | OPEN/PARTIAL |
 
 ---
 
