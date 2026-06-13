@@ -210,7 +210,8 @@ export interface ConversationState {
   // The ClarifyEvent id, if status is AWAITING_USER_QUESTION and the gate is a clarify card.
   pending_clarify_id?: string | null;
   // Runtime-overlaid sandbox liveness; absent for non-build surfaces.
-  extras?: { sandbox?: "active" | "suspended" };
+  // `autonomous` is set when the run is headless (no ask_user, auto-approved plan).
+  extras?: { sandbox?: "active" | "suspended"; autonomous?: boolean };
   // BP-15: the active sandbox backend name ('gvisor'|'podman'|'local'|'process').
   // Absent until the first state frame; wire value only — never guessed client-side.
   sandbox_backend?: string;

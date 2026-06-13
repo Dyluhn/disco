@@ -53,12 +53,14 @@ export interface AgentHandle {
 export async function createBuildConversation(
   modelOverride?: string | null,
   surface: "build" | "agent" = "build",
+  autonomous = false,
 ): Promise<string> {
   if (!agentLive()) return FIXTURE_CID;
   const res = await agentSend<{ conversation_id: string }>("POST", "/conversations", {
     owner_id: import.meta.env.VITE_OWNER_ID ?? "local",
     surface,
     model_override: modelOverride ?? null,
+    autonomous,
   });
   return res.conversation_id;
 }

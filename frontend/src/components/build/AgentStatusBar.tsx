@@ -52,6 +52,7 @@ export function AgentStatusBar({
   status,
   isolation,
   sandboxState,
+  autonomous,
   onKill,
   onStop,
   onResume,
@@ -63,6 +64,8 @@ export function AgentStatusBar({
   isolation: IsolationInfo | null;
   /** Runtime sandbox liveness overlay ('active' | 'suspended' | undefined). */
   sandboxState?: "active" | "suspended";
+  /** Headless run: no ask_user, auto-approved plan, clean forfeit instead of halting. */
+  autonomous?: boolean;
   onKill: () => void;
   /** Cluster 6: graceful stop (cooperative cancel — no sandbox teardown). */
   onStop?: () => void;
@@ -132,6 +135,14 @@ export function AgentStatusBar({
           >
             <Shield className="size-3" aria-hidden />
             {isolation.tier}
+          </span>
+        )}
+        {autonomous && (
+          <span
+            title="Autonomous run — the agent works headless: it won't ask you questions, auto-approves its own plan, and stops cleanly instead of waiting for you"
+            className="flex items-center gap-hair rounded-full border border-accent/40 px-inline py-px font-ui text-[0.7rem] text-accent"
+          >
+            autonomous
           </span>
         )}
         {sandboxState === "suspended" && (

@@ -187,7 +187,21 @@ export function BuildSurface({
           <div className="w-full max-w-measure">
             <div className="mb-inline flex items-center justify-between gap-inline">
               <BuildModelPicker value={b.modelId} onChange={b.setModelId} />
-              <span className="font-ui text-[0.72rem] text-text-faint">runs the agent</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={b.autonomousChoice}
+                onClick={() => b.setAutonomousChoice(!b.autonomousChoice)}
+                title="Autonomous: the agent runs headless — it won't ask you questions, auto-approves its own plan, and stops cleanly instead of waiting for you. Best for unattended runs; for tricky tasks leave it off so the agent can ask."
+                className={cn(
+                  "flex items-center gap-hair rounded-full border px-inline py-px font-ui text-[0.72rem] transition-colors",
+                  b.autonomousChoice
+                    ? "border-accent/50 bg-accent/5 text-accent"
+                    : "border-hairline text-text-faint hover:text-text-muted",
+                )}
+              >
+                {b.autonomousChoice ? "autonomous: on" : "autonomous: off"}
+              </button>
             </div>
             <QueryInput
               onSubmit={b.submit}
@@ -196,7 +210,10 @@ export function BuildSurface({
               placeholder={copy.placeholder}
             />
             <p className="mt-inline text-center font-ui text-[0.78rem] text-text-faint">
-              The agent works in a sandbox and shows its plan. Risky steps pause for your approval.
+              The agent works in a sandbox and shows its plan.{" "}
+              {b.autonomousChoice
+                ? "It runs headless — risky steps auto-approve and it won't stop to ask."
+                : "Risky steps pause for your approval."}
             </p>
             {/* Agent surface: foreground the MCP tools it can reach (its reason for being). */}
             {framing === "agent" && <ConnectionsStrip />}
@@ -219,6 +236,7 @@ export function BuildSurface({
             status={b.status}
             isolation={isolationForBackend(sandboxBackend)}
             sandboxState={b.sandboxState ?? undefined}
+            autonomous={b.autonomous}
             onKill={b.kill}
             onStop={b.cancel}
             onResume={b.canResume ? b.resume : undefined}

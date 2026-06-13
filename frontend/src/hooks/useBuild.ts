@@ -17,6 +17,9 @@ import { useBuildStream, type BuildSession } from "./useBuildStream";
 export function useBuild(resumeCid?: string | null, surface: "build" | "agent" = "build") {
   const [session, setSession] = useState<BuildSession | null>(null);
   const [modelId, setModelId] = useState<string | null>(null); // null → server default
+  // Create-time choice: run this build headless (no questions, auto-approve plan).
+  // Off by default. Locked once the conversation is created (it's a per-run mode).
+  const [autonomousChoice, setAutonomousChoice] = useState(false);
   const stream = useBuildStream(session);
 
   // Resume path: when a route param hands us a cid, jump straight in. The
@@ -28,18 +31,20 @@ export function useBuild(resumeCid?: string | null, surface: "build" | "agent" =
   }, [resumeCid, session]);
 
   const create = useMutation({
-    mutationFn: (modelOverride: string | null) => createBuildConversation(modelOverride, surface),
+    mutationFn: (opts: { modelOverride: string | null; autonomous: boolean }) =>
+      createBuildConversation(opts.modelOverride, surface, opts.autonomous),
   });
 
   const submit = useCallback(
     (task: string) => {
       const trimmed = task.trim();
       if (!trimmed) return;
-      create.mutate(modelId, {
-        onSuccess: (cid) => setSession({ cid, task: trimmed, kick: true }),
-      });
+      create.mutate(
+        { modelOverride: modelId, autonomous: autonomousChoice },
+        { onSuccess: (cid) => setSession({ cid, task: trimmed, kick: true }) },
+      );
     },
-    [create, modelId],
+    [create, modelId, autonomousChoice],
   );
 
   const kill = useCallback(async () => {
@@ -57,6 +62,8 @@ export function useBuild(resumeCid?: string | null, surface: "build" | "agent" =
     submitting: create.isPending,
     modelId,
     setModelId,
+    autonomousChoice,
+    setAutonomousChoice,
     submit,
     kill,
     reset,
