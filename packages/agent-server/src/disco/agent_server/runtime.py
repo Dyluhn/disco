@@ -292,6 +292,10 @@ def _model_label(model_id: str) -> str:
 # as the build loop's live workspace snapshot: read the truth, don't assume it.
 # Best-effort + cached per base_url; ANY failure falls back to the static config.
 _LIVE_MODEL_PROBE_CACHE: dict[str, dict[str, Any]] = {}
+# base_urls with a probe thread currently in flight — so N concurrent on-loop
+# callers (a /models + /health + first kick arriving together) schedule at most ONE
+# worker thread per url instead of one each.
+_LIVE_MODEL_PROBE_INFLIGHT: set[str] = set()
 
 
 def _do_live_model_probe(base_url: str, api_key: str | None) -> dict[str, Any]:
@@ -347,8 +351,22 @@ def _probe_live_model(base_url: str | None, api_key: str | None = None) -> dict[
     except RuntimeError:
         running = None
     if running is not None:
-        # Don't block the loop. Schedule the probe in a thread; it self-caches.
-        running.run_in_executor(None, _do_live_model_probe, base_url, api_key)
+        # Don't block the loop. Schedule ONE probe thread per base_url; concurrent
+        # callers that arrive before the cache fills skip (in-flight) rather than each
+        # spawning a redundant thread. The wrapper clears the in-flight marker in a
+        # finally, so a FAILED probe (cache stays empty) can be retried on a later
+        # call. The in-flight check runs only on the single-threaded loop, so the
+        # check-then-add is race-free; the worker thread only discards.
+        if base_url not in _LIVE_MODEL_PROBE_INFLIGHT:
+            _LIVE_MODEL_PROBE_INFLIGHT.add(base_url)
+
+            def _probe_then_clear(u: str = base_url, k: str | None = api_key) -> None:
+                try:
+                    _do_live_model_probe(u, k)
+                finally:
+                    _LIVE_MODEL_PROBE_INFLIGHT.discard(u)
+
+            running.run_in_executor(None, _probe_then_clear)
         return {"model_id": None, "n_ctx": None}
     return _do_live_model_probe(base_url, api_key)
 

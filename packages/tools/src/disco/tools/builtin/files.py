@@ -268,6 +268,22 @@ class FileEditTool:
 
     async def run(self, args: FileEditArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
+        # Intent no-op: old and new are LITERALLY identical (after stripping any
+        # line-number prefixes the model copied). This is distinct from a
+        # whitespace-only edit (old≠new, which must apply) — here the model asked
+        # for no change at all, so refuse before touching the file regardless of how
+        # the file's own whitespace happens to differ. The ground-truth guard below
+        # still catches the "applied result is unchanged" case.
+        if _strip_line_numbers(args.old) == _strip_line_numbers(args.new):
+            return ToolOutcome(
+                success=False,
+                content=(
+                    f"file_edit refused: `old` and `new` are identical — this asks for "
+                    f"no change to {args.path}. If you already applied this edit, move "
+                    "on; otherwise give the NEW content you want."
+                ),
+                error="no_op_edit",
+            )
         text = (await ctx.sandbox.read_file(args.path)).decode("utf-8", errors="replace")
         updated, how = _forgiving_replace(text, args.old, _strip_line_numbers(args.new))
         if updated is None:
