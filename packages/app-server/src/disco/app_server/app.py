@@ -257,7 +257,7 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
         try:
             return state.approve_mcp_server(name, body)
         except KeyError:
-            raise HTTPException(status_code=404, detail=f"unknown server {name!r}")
+            raise HTTPException(status_code=404, detail=f"unknown server {name!r}") from None
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 

@@ -43,6 +43,7 @@ from .types import (
     Requirement,
     StreamChunk,
     TokenUsage,
+    ToolSpec,
 )
 
 FinishReason = Literal["stop", "length", "tool_calls", "content_filter", "error"]

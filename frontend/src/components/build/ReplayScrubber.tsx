@@ -11,7 +11,7 @@ interface ReplayScrubberProps {
 }
 
 export function ReplayScrubber({ replay }: ReplayScrubberProps) {
-  const { position, max, atLive, seek } = replay;
+  const { position, max, seek } = replay;
   const label = max > 0 ? `Event ${position} of ${max}` : "No events";
 
   return (

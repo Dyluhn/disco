@@ -25,7 +25,7 @@
  * subscription, the Build status state machine.
  */
 
-import { Ban, Download, File, FileText, FileType, Play, RotateCcw, Settings as SettingsIcon, Square } from "lucide-react";
+import { Ban, File, FileText, FileType, Play, RotateCcw, Settings as SettingsIcon, Square } from "lucide-react";
 import { Link } from "react-router-dom";
 import { PlanPanel } from "@/components/build/PlanPanel";
 import { useDeepResearch } from "@/hooks/useDeepResearch";

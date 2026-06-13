@@ -11,7 +11,6 @@
 import { useState } from "react";
 import { CalendarClock, Plus, Trash2 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { cn } from "@/lib/cn";
 import { parseScheduleNL } from "@/lib/scheduleNL";
 
 const API = "";  // relative — same origin

@@ -5,6 +5,8 @@
  * Research's ephemeral token stream: here the EVENTS are the source of truth.
  */
 
+import type { VerifiedClaim } from "@/types/grounded";
+
 export type ConversationStatus =
   | "IDLE"
   | "RUNNING"
@@ -34,6 +36,9 @@ export interface ToolCall {
 }
 
 export interface ToolResult {
+  /** Correlates the result back to its ToolCall (contract §2.3, VOLATILE).
+   *  The backend always emits it; the UI treats it as optional metadata. */
+  call_id?: string;
   tool_name: string;
   success: boolean;
   content: string;
@@ -45,6 +50,10 @@ interface EventBase {
   id: string;
   seq?: number | null;
   source?: EventSource;
+  /** ISO-8601 instant the event was produced (contract §2.1 BaseEvent.timestamp,
+   *  VOLATILE). Sent on every event; the UI doesn't rely on it for ordering
+   *  (seq is authoritative) so it's optional here. */
+  timestamp?: string;
 }
 
 export interface MessageEvent extends EventBase {
@@ -127,6 +136,11 @@ export interface ReportEvent extends EventBase {
   unsupported_count: number;
   bounded_by: string | null;
   depth_tier: string | null;
+  /** Optional per-claim verification verdicts. Absent on base-engine reports
+   *  (a section carries only `unsupported_count`, not a per-claim breakdown);
+   *  present when a verification overlay / the demo fixture supplies them, and
+   *  rendered by the report's claim-verdicts surface when set. */
+  claims?: VerifiedClaim[];
 }
 
 /** One concrete next-step option proposed by the agent after repeated failures.

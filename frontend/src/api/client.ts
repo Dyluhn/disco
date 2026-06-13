@@ -31,6 +31,14 @@ export function isLive(): boolean {
   return BASE.length > 0;
 }
 
+/** True when neither backend (app-server nor agent-server) is configured —
+ * the UI is running entirely on fixture data because /env.js was absent, failed
+ * to load, or yielded no URLs. The shell surfaces a "Demo data — no backend
+ * connected" badge whenever this is true. */
+export function isDemoMode(): boolean {
+  return !isLive() && !agentLive();
+}
+
 /** The agent-server research WebSocket URL (ws://… derived from VITE_AGENT_BASE),
  * or null when unconfigured — callers fall back to the fixture stream. */
 export function researchWsUrl(): string | null {

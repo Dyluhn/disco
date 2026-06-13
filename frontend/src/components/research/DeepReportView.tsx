@@ -8,7 +8,6 @@
  */
 
 import { AlertTriangle, CircleDot, Loader2 } from "lucide-react";
-import { CitedText } from "@/components/blocks";
 import { Markdown } from "@/components/Markdown";
 import { ClaimVerdicts } from "@/components/research/ClaimVerdicts";
 import { SupportMeter } from "@/components/research/SupportMeter";
@@ -58,7 +57,7 @@ function asGroundedAnswer(report: ReportEvent | null, query: string): GroundedAn
   return {
     query,
     blocks: [],
-    claims: (report as Record<string, unknown>).claims as VerifiedClaim[] ?? [],
+    claims: report.claims ?? [],
     passages: report.passages as unknown as Passage[],
     all_hits: report.all_hits as unknown as SearchHit[],
     unsupported_count: report.unsupported_count,
@@ -225,7 +224,13 @@ export function DeepReportView({ query, summary, assembling, report }: Props) {
           s.state === "done" && s.section ? (
             <SectionView key={s.id} section={s} answer={answer} />
           ) : (
-            <SectionSkeleton key={s.id} title={s.title} state={s.state} />
+            // A section reaches "done" only once its ReportSection is present
+            // (deriveAssemblingSections), so here state is "pending" | "writing".
+            <SectionSkeleton
+              key={s.id}
+              title={s.title}
+              state={s.state === "writing" ? "writing" : "pending"}
+            />
           ),
         )}
       </article>

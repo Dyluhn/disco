@@ -141,11 +141,11 @@ class McpHttpClient:
                 await asyncio.wait_for(
                     session.initialize(), timeout=self._init_timeout_s
                 )
-            except TimeoutError:
+            except TimeoutError as err:
                 raise TimeoutError(
                     f"MCP server {self._name!r} at {self._url} did not respond "
                     f"to initialize() within {self._init_timeout_s}s"
-                )
+                ) from err
 
             return session
         except Exception:

@@ -76,8 +76,8 @@ export function useDeepResearch(resumeCid?: string | null) {
     if (session) await killConversation(session.cid);
   }, [session, stream]);
 
-  // Resume = continue a stopped/incomplete run (explicit; never on open).
-  const resume = stream.resume;
+  // Resume = continue a stopped/incomplete run (explicit; never on open). It's
+  // surfaced via `...stream` below — no need to re-export it here.
 
   // Retry = a fresh run of the same query (a NEW conversation).
   const retry = useCallback(() => {
@@ -122,7 +122,6 @@ export function useDeepResearch(resumeCid?: string | null) {
     submit,
     stop,
     kill,
-    resume,
     retry,
     reset,
     exportReport,

@@ -90,11 +90,11 @@ class McpStdioClient:
             await asyncio.wait_for(
                 session.initialize(), timeout=self._init_timeout_s
             )
-        except TimeoutError:
+        except TimeoutError as err:
             raise TimeoutError(
                 f"MCP server {self._command[0]!r} did not respond to initialize() "
                 f"within {self._init_timeout_s}s"
-            )
+            ) from err
 
         # Read captured stderr into our buffer (D4: real stderr capture)
         try:

@@ -1,0 +1,104 @@
+name: CI
+
+# Minimal HONEST CI (backlog A3). The `required` job runs only deterministic
+# gates that are green today: the unit test suite (integration tests that need a
+# real browser / shell / docker are EXCLUDED via `-m "not integration"` — they
+# are not hidden, they run in the advisory job below), the frontend SHIPPING-file
+# typecheck (tsconfig.build.json, which excludes test files), the production vite
+# build, and the vitest suite.
+#
+# The `advisory` job runs the broader, environment-dependent checks
+# (full pytest incl. integration, eslint, full `tsc -b` over tests). It is
+# `continue-on-error` so it informs without blocking — those carry known debt /
+# need external services not present on a vanilla runner.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  required:
+    name: required (unit + build + vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Sync Python deps
+        run: uv sync
+
+      - name: Unit tests (excludes integration — see advisory job)
+        run: uv run pytest -m "not integration"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Frontend shipping-file typecheck (honest gate)
+        working-directory: frontend
+        run: npm run typecheck:build
+
+      - name: Frontend production build
+        working-directory: frontend
+        run: npx vite build
+
+      - name: Frontend unit tests (vitest)
+        working-directory: frontend
+        run: npm run test
+
+  advisory:
+    name: advisory (full suite, eslint, full tsc)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Sync Python deps
+        run: uv sync
+
+      - name: Full pytest (incl. integration — needs browser/shell/docker)
+        run: uv run pytest
+
+      # Advisory: harness/tests includes a contract suite that currently flags a
+      # KNOWN PRE-EXISTING drift — the RP-08 `schedule` / `schedule_run` event
+      # kinds have no TypeScript mirror (tracked as a follow-up). It runs here so
+      # the drift stays visible without blocking the required gate.
+      - name: Harness tests (contract/fuzz/eval — advisory)
+        run: PYTHONPATH=. uv run pytest harness/tests
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: ESLint (style debt — advisory)
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Full project typecheck (includes test files — advisory)
+        working-directory: frontend
+        run: npx tsc -b

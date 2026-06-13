@@ -339,17 +339,16 @@ export function BuildSurface({
                 {finalMessage &&
                   (b.status === "FINISHED" ||
                     b.status === "STUCK" ||
-                    b.status === "ERROR" ||
                     b.status === "AWAITING_USER_DECISION") && (
                     <div
                       className={cn(
                         "mt-section rounded-card border px-body py-inline text-[0.95rem]",
-                        b.status === "STUCK" || b.status === "ERROR"
+                        b.status === "STUCK"
                           ? "border-warn/40 bg-warn/5"
                           : "border-hairline bg-surface-1",
                       )}
                     >
-                      {(b.status === "STUCK" || b.status === "ERROR") && (
+                      {b.status === "STUCK" && (
                         <p className="mb-hair font-ui text-[0.74rem] uppercase tracking-wide text-warn">
                           Agent's latest reply
                         </p>

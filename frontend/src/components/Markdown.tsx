@@ -56,12 +56,12 @@ function processCitations(children: React.ReactNode, answer: GroundedAnswer | nu
       }
       return result;
     }
-    if (React.isValidElement(child) && child.props.children) {
+    if (React.isValidElement<{ children?: React.ReactNode }>(child) && child.props.children) {
       // Skip recursion for code/pre blocks
       if (child.type === "code" || child.type === "pre") return child;
       return React.cloneElement(child, {
         children: processCitations(child.props.children, answer),
-      } as any);
+      });
     }
     return child;
   });
@@ -140,17 +140,27 @@ interface MarkdownProps {
 export function Markdown({ children, className, answer = null }: MarkdownProps) {
   const components = useMemo(() => {
     if (!answer) return COMPONENTS;
-    const wrapped: Components = { ...COMPONENTS };
-    const tagsToWrap = ["p", "li", "td", "th", "h1", "h2", "h3", "blockquote"];
-    for (const tag of tagsToWrap) {
-      const Original = (COMPONENTS as any)[tag];
-      if (Original) {
-        wrapped[tag as keyof Components] = (props: any) => (
-          <Original {...props}>{processCitations(props.children, answer)}</Original>
-        );
-      }
-    }
-    return wrapped;
+    // Wrap the prose-bearing tags so [[id]] markers in their children render as
+    // citation chips. Each override is listed explicitly (rather than assigned
+    // through a `Components[keyof Components]` index) because that union is too
+    // large for TS to represent on a computed-key assignment (TS2590).
+    const wrap =
+      (tag: "p" | "li" | "td" | "th" | "h1" | "h2" | "h3" | "blockquote") =>
+      (props: { children?: React.ReactNode }) => {
+        const Original = (COMPONENTS as any)[tag];
+        return <Original {...props}>{processCitations(props.children, answer)}</Original>;
+      };
+    return {
+      ...COMPONENTS,
+      p: wrap("p"),
+      li: wrap("li"),
+      td: wrap("td"),
+      th: wrap("th"),
+      h1: wrap("h1"),
+      h2: wrap("h2"),
+      h3: wrap("h3"),
+      blockquote: wrap("blockquote"),
+    } satisfies Components;
   }, [answer]);
 
   return (

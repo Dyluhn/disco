@@ -344,6 +344,7 @@ export function deriveLiveTrace(
     else st = "done";
     const item: ActivityItem = {
       id: e.id,
+      kind: "action",
       label,
       detail,
       status: st,

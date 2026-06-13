@@ -161,6 +161,9 @@ function reducer(state: BuildStreamState, action: Action): BuildStreamState {
     const events = upsert(working, f.event);
     if (f.event.kind === "status") {
       const status = f.event.status;
+      // Hoist out of the closures below: TS only preserves the `f.event` status
+      // narrowing in the immediate scope, not inside the `.find` callback.
+      const statusDetail = f.event.detail;
       return {
         ...state,
         events,
@@ -193,7 +196,7 @@ function reducer(state: BuildStreamState, action: Action): BuildStreamState {
             : null,
         pendingClarifyId:
           status === "AWAITING_USER_QUESTION"
-            ? (events.find((e) => e.id === f.event.detail && e.kind === "clarify")?.id ?? null)
+            ? (events.find((e) => e.id === statusDetail && e.kind === "clarify")?.id ?? null)
             : null,
       };
     }

@@ -11,14 +11,11 @@ RUN npm ci
 # Build the SPA. No VITE_* env is baked in — backend URLs are injected at
 # RUNTIME via /env.js (window.__PMX_ENV), so one image works at any host/port.
 #
-# We invoke `vite build` (the artifact-producing half of `npm run build`)
-# directly rather than the full `tsc -b && vite build` script: the repo's
-# `tsc -b` type-check gate currently fails on pre-existing type errors in
-# fixtures/hooks/test files (a CI concern, unrelated to the production bundle
-# and not introduced here). Type-checking belongs in CI, not the image build;
-# `vite build` (esbuild) produces the identical deployable dist/.
+# Gate the bundle on a real type-check of the SHIPPING sources
+# (tsconfig.build.json = the app config minus test files), then produce the
+# artifact with `vite build` (esbuild). A type error fails the image build.
 COPY . .
-RUN npx vite build
+RUN npm run typecheck:build && npx vite build
 
 # ---- Stage 2: serve with nginx ----
 FROM nginx:alpine AS serve

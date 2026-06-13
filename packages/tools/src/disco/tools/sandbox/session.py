@@ -63,6 +63,7 @@ class SandboxSession:
         self._closed = False
         self._generation = 0  # bumped on every (re)create — telemetry + tests
         self._lock = asyncio.Lock()
+        self._preview_task: asyncio.Task[None] | None = None  # tracked so destroy() can cancel
         
         from .shell_sessions import ShellSessionManager
         # Process backend shares the host tmux server across conversations, so
@@ -161,7 +162,7 @@ class SandboxSession:
             except Exception:  # noqa: BLE001 — best-effort; the box must not care
                 _LOG.debug("auto preview start failed", exc_info=True)
 
-        asyncio.create_task(_auto())
+        self._preview_task = asyncio.create_task(_auto())
 
     async def _resilient(self, op):
         """Run one instance op; on a typed mid-session death, re-create and raise a
@@ -217,8 +218,21 @@ class SandboxSession:
         return True
 
     async def destroy(self) -> None:
-        """Close the session at task end: no further use, and the live box torn down."""
+        """Close the session at task end: no further use, and the live box torn down.
+
+        Cancels any in-flight auto-preview task before tearing down the instance so
+        teardown never races a half-started preview (TOCTOU fix — the task is now
+        tracked as self._preview_task and cancelled here).
+        """
         self._closed = True
+        # Cancel the auto-preview task first so it can't race the instance teardown.
+        task, self._preview_task = self._preview_task, None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001 — swallow cleanly
+                pass
         inst, self._instance = self._instance, None
         if inst is not None:
             await inst.destroy()
