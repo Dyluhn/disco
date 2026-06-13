@@ -43,7 +43,7 @@ blocks the stated goal · **P1** product-quality moat · **P2** feature complete
 ---
 
 ## Track C — Agent-loop correctness (P1, the moat)
-*Source: fable-plan-reconciliation top-OPEN + decomplexity carry-forwards. This is where weak-model reliability is won.*
+*Source: the FULL fable reconciliation tail (manus-gap-analysis + addendum + arch-rebuild B1–B9) + decomplexity carry-forwards + pending-items future-plans. This is where weak-model reliability is won.*
 
 | ID | Item | Effort | Notes |
 |----|------|--------|-------|
@@ -55,11 +55,24 @@ blocks the stated goal · **P1** product-quality moat · **P2** feature complete
 | C6 | Recitation on cadence/drift, not every step (B6) | S | Manus: constant rewrite wastes ~⅓ of actions |
 | C7 | Serialization jitter + nudge-pool variants (anti-self-imitation; temp jitter half-done) | S | 2.6/3.5 |
 | C8 | propose_plan_update loop bound in autonomous (feed identical re-proposals into the bookkeeping streak cap) | S | this session's deferred engine review #1 |
+| C9 | Condenser still caps at a 24k/32k working budget despite the window-fraction soft/hard thresholds — honor the live window (`view.py:494-499`) | S-M | GAP A PARTIAL |
+| C10 | `keep_recent` counts raw EVENTS not tool-turns (`view.py`) — a long tool chain evicts too aggressively | S | GAP A caveat |
+| C11 | Reversible-compaction tier — tombstoned spans recoverable on demand (the 3.1 S1–S5 cascade's missing tier) | M | addendum 3.1 |
+| C12 | B2 programmatic tool-calling / CodeAct-as-default — keep big tool outputs OUT of context by running code. **Caveat [H]:** `tool_choice:required`/`grammar`/`json_schema` are DEAD on our llama.cpp stack → only assistant-prefill or a grammar-constrained tool template works (ties to G8/F1) | M-L | arch-rebuild B2, "largest controlled win" |
+| C13 | B9 prefill masking — FULL lifecycle (only PLANNING prefill exists, behind `PMX_PLAN_PREFILL=1`, default OFF) | M | arch-rebuild B9 PARTIAL |
+| C14 | DR isolated sub-contexts — concurrent gather uses a SHARED router, not true isolated sub-contexts | M | arch-rebuild §4 PARTIAL |
+| C15 | B8 idle-kernel cull — the persistent CodeAct kernel is never culled (+ RLIMIT_AS not cgroup) | S | arch-rebuild B8 minor |
+| C16 | 3.1-S5 pointer-only flush — `hard_reset` is a normal summarize, NOT a filesystem-pointer-only flush | M | addendum 3.1-S5 |
+| C17 | 3.6-1 rolling transcript cache markers (#3/#4) + 3.6-4 cache-write cost tracking | S | addendum 3.6 |
+| C18 | §4 plan-step verify predicates — per-step done-conditions checked, not just the model's assertion | M | addendum §4; ties to C1/G5 |
+| C19 | System-reminder patterns (respect the no-automatic-nudge invariant): 2A consecutive-tool-error reminder · 2B iteration-ceiling warning · 2C stuck precursor · 3A re-plan-entry reminder · 3B browser-injection reinforcement | S ea | pending-items "future-plans" |
+| C20 | Subagent fan-out (Explore/Plan) inside the build/agent loop | M | pending-items follow-up |
+| C21 | Execution-prompt tuning for small open models | S | pending-items follow-up |
 
 ---
 
 ## Track D — Feature completion (P2)
-*Source: RP-pack + task list.*
+*Source: RP-pack + task list + addendum §2.*
 
 | ID | Item | Effort | Notes |
 |----|------|--------|-------|
@@ -70,11 +83,14 @@ blocks the stated goal · **P1** product-quality moat · **P2** feature complete
 | D5 | RP-09 in-process Kokoro TTS + Settings toggle (#21) | M | Fable design |
 | D6 | DatasourceEvent emission path (events exist + pinned, no producer) | S | GAP G |
 | D7 | Egress allowlist LIVE VM test (close the HARDWARE-UNVERIFIED gap, 2.3B) | S | security |
+| D8 | 2.4 headless-browser/screenshot verify gate — `verify="app"` does an HTTP-200 check, but a PIXEL screenshot needs a browser in the sandbox image (absent on the process backend) | M | addendum 2.4 PARTIAL |
+| D9 | 2.5 image generation + binary-safe file write | M | addendum 2.5 OPEN |
+| D10 | Share-bundle ↔ harness-cassette unification (one projection, two consumers) — share bundle feeds replay_runner but the service-call cassette is still a separate format | S-M | RP-00 PARTIAL |
 
 ---
 
-## Track E — Polish / debt (P3, deferred review findings)
-*Source: this session's MiniMax reviews (the LOW/MED items not yet done).*
+## Track E — Polish / debt (P3)
+*Source: this session's MiniMax reviews + standing process debt.*
 
 | ID | Item | Effort | Notes |
 |----|------|--------|-------|
@@ -84,6 +100,8 @@ blocks the stated goal · **P1** product-quality moat · **P2** feature complete
 | E4 | Snapshot binary-file skip (null-byte check) + deleted-file note in the omitted notice | S | lane-1 L1/M4 |
 | E5 | #25 root fix — sandbox Settings hot-apply + wrap docker client so a failing client can't wedge the loop | M | also an A4/North-Star item |
 | E6 | #10 ApprovalDiff real new-hash from the agent-server probe | S | task list |
+| E7 | Rebuild synthetic-fake harnesses (streaming / providers / DR lifecycle) from REAL captures — they used `_ScriptedRouter`/hand-made docs, violating the real-captured-samples rule | M | pending-items process debt |
+| E8 | Egress podman/local — proxied allowlist instead of sealed deny-all (gVisor already proxies; podman/local just deny-all) | M | Cluster-3 PARTIAL |
 
 ---
 
@@ -143,6 +161,26 @@ it). MiniMax's independent review will be merged when it lands.
   bypasses (our gVisor egress proxy is the right layer instead).
 
 **Routing:** F1 is a new small subsystem (its own item, near Track C). F2–F4, F6 → Track C/E. F5,F7,F8 → Track E. F10 → merge into C1's design.
+
+---
+
+## Track G — OSS-harvest backlog (HS-01…08, `docs/harvest-backlog.md`)
+*A SEPARATE harvest from Track F's SmallCode — these are pi / OpenHands / SWE-agent /
+OpenCode / smolagents / OpenManus steals that got an `HS-` id but no order. Several
+overlap Tracks C/F; the brief author MUST diff against current code first. Per the
+weak-model-assist gate, the model-compensation ones (G4/G5/G8) also belong behind the
+Track-F toggle.*
+
+| ID | Item (source) | Effort | Status | Overlap |
+|----|---------------|--------|--------|---------|
+| G1 (HS-01) | **Shell spill-to-file** — rolling tail buffer + full-output temp file + path in result (50KB threshold; tail-keep shell, head-keep reads); prescriptive truncation marker (say WHAT to do next) — pi `executeShellWithCapture` | S | backlog | the canonical version of C5/GAP-C auto-spill — **do this one** |
+| G2 (HS-02) | Anchored-checkpoint compaction template (Goal/Constraints/Progress/Decisions/Next/Files as an UPDATE target) — pi `compaction.ts` + OpenCode | M | verify-overlap | the BP reality-block builder may already template some |
+| G3 (HS-03) | Scheduled facts re-grounding every N steps + once post-restart — smolagents `planning_interval` | S | verify-overlap | composes with G2; check the resume path |
+| G4 (HS-04) | Stuck-detector upgrade: exact-match → n-gram/format similarity + OpenHands scenarios (period-2 A-B-A-B, action-error×3, ID-insensitive repeated action-obs) | S | verify-overlap | **UPGRADE to `stuck.py`** (exists); keep our nudge→cap→pause valve, port scenarios not the hard-halt |
+| G5 (HS-05) | Critic finish-gate — score the finish; sub-threshold → followup prompt not finish; bounded max_iter — OpenHands `critic_mixin` | M | verify-overlap | **merge into C1** (B7 evaluator); swap "git patch non-empty" for "deliverables exist" |
+| G6 (HS-06) | Epochal observation masking — batched keep/remove at polling boundaries to keep the KV prefix stable | S/M | **DESIGN-BLOCKED** | **needs a Dylan decision:** per-step masking vs KV stability conflict — pick ONE; never mask per-step |
+| G7 (HS-07) | ThinkTool — no-op reasoning-dump tool (cheap prose-degeneration mitigation) | XS | backlog | fill-in-when-idle; composes with degeneracy-condensation |
+| G8 (HS-08) | Reroute-to-hidden-`invalid`-tool repair — malformed/unknown tool call becomes an ordinary error tool_result via a registered-but-unoffered `invalid` tool; the turn never aborts, message invariants hold — OpenCode | S | verify-overlap | composes with **F1**; check rp-12's requery path doesn't already preserve invariants |
 
 ---
 
