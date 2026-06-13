@@ -15,6 +15,21 @@ blocks the stated goal · **P1** product-quality moat · **P2** feature complete
 
 ---
 
+## ⚠ Verification status (2026-06-13)
+This plan was compiled from docs spanning Jun 7–12 of varying freshness. The
+items from **today's** code-verified reconciliations (fable/RP/decomplexity) +
+this session's reviews are trustworthy. The items bolted on from **older docs**
+(pending-items 06-08, build-parity, release-execution, harvest-backlog) were
+re-verified against the LIVE code and several were **already done, obsolete, or
+deliberately rejected** — struck through below. **Pruned in this pass:** A7
+(README/matrix shipped `fba3b81`/`359442e`), C19 (violates the no-automatic-nudge
+invariant `c97c1b3` — would BREAK), BP-G1/G4 (`shell_sessions.py` done), BP-G2/G3
+(DC-01 `host_proxy.py` superseded the keepalive model), HS-04 (`stuck.py` scenarios
+done); BP-G5/G6→D8 and HS-05→C1 deduped. **Rule: any item not from today's fresh
+reconciliation must be re-checked against current code before a brief is written**
+(some remaining rows are tagged "VERIFY at impl"). Verified-still-real: D6, HS-01,
+F1, BP-G10 (flip-only), C9.
+
 ## Track A — Release honesty & CI (P0, the gate)
 *Source: North Star §2. These make "green" mean something.*
 
@@ -26,7 +41,7 @@ blocks the stated goal · **P1** product-quality moat · **P2** feature complete
 | A4 | De-flake `make test` — the auto-preview TOCTOU race (#25 area) | S | `make test` is flaky-red today; a CI hazard |
 | A5 | Ruff/eslint real errors (F821, B904; ignore cosmetic test E501) | S–M | eslint 67, ruff debt |
 | A6 | `PMX_` → `DISCO_` rename (compat fallback for the secret key; keep `pmx-data` volume) | M | before any public release; coordinate with `.env`, compose, docs |
-| A7 | **Docs honesty (NOT-STARTED — release blocker)** — README + `project-status.md` are months stale (still say *"Status: Phase 0 — the brain isn't plugged in"*) and misrepresent the product; write a real install guide + provider/VRAM matrix (drafts exist: `provider-matrix.md`, `self-host.md`) + a demo gallery | M | release-execution-plan "Docs + gallery" |
+| ~~A7~~ | ~~Docs honesty~~ — **MOSTLY DONE** (verified): README updated (`fba3b81`, no "Phase 0"), CONTRIBUTING + provider/VRAM matrix shipped (`359442e`). Remainder: a demo gallery (optional, P3) | S | release-execution-plan was STALE |
 
 ---
 
@@ -66,8 +81,8 @@ blocks the stated goal · **P1** product-quality moat · **P2** feature complete
 | C16 | 3.1-S5 pointer-only flush — `hard_reset` is a normal summarize, NOT a filesystem-pointer-only flush | M | addendum 3.1-S5 |
 | C17 | 3.6-1 rolling transcript cache markers (#3/#4) + 3.6-4 cache-write cost tracking | S | addendum 3.6 |
 | C18 | §4 plan-step verify predicates — per-step done-conditions checked, not just the model's assertion | M | addendum §4; ties to C1/G5 |
-| C19 | System-reminder patterns (respect the no-automatic-nudge invariant): 2A consecutive-tool-error reminder · 2B iteration-ceiling warning · 2C stuck precursor · 3A re-plan-entry reminder · 3B browser-injection reinforcement | S ea | pending-items "future-plans" |
-| C20 | Subagent fan-out (Explore/Plan) inside the build/agent loop | M | pending-items follow-up |
+| ~~C19~~ | ~~System-reminder patterns 2A/2B/2C/3A/3B~~ — **DROP (verified OBSOLETE):** these violate the deliberate **no-automatic-nudge invariant** (`c97c1b3`: stuck-escape was kept reminder-free ON PURPOSE). Rejected ideas, not gaps — introducing them would break the design. | — | pending-items was STALE |
+| C20 | Subagent fan-out (Explore/Plan) inside the build/agent loop | M | pending-items follow-up — VERIFY at impl |
 | C21 | Execution-prompt tuning for small open models | S | pending-items follow-up |
 
 ---
@@ -179,8 +194,8 @@ Track-F toggle.*
 | G1 (HS-01) | **Shell spill-to-file** — rolling tail buffer + full-output temp file + path in result (50KB threshold; tail-keep shell, head-keep reads); prescriptive truncation marker (say WHAT to do next) — pi `executeShellWithCapture` | S | backlog | the canonical version of C5/GAP-C auto-spill — **do this one** |
 | G2 (HS-02) | Anchored-checkpoint compaction template (Goal/Constraints/Progress/Decisions/Next/Files as an UPDATE target) — pi `compaction.ts` + OpenCode | M | verify-overlap | the BP reality-block builder may already template some |
 | G3 (HS-03) | Scheduled facts re-grounding every N steps + once post-restart — smolagents `planning_interval` | S | verify-overlap | composes with G2; check the resume path |
-| G4 (HS-04) | Stuck-detector upgrade: exact-match → n-gram/format similarity + OpenHands scenarios (period-2 A-B-A-B, action-error×3, ID-insensitive repeated action-obs) | S | verify-overlap | **UPGRADE to `stuck.py`** (exists); keep our nudge→cap→pause valve, port scenarios not the hard-halt |
-| G5 (HS-05) | Critic finish-gate — score the finish; sub-threshold → followup prompt not finish; bounded max_iter — OpenHands `critic_mixin` | M | verify-overlap | **merge into C1** (B7 evaluator); swap "git patch non-empty" for "deliverables exist" |
+| ~~G4 (HS-04)~~ | ~~Stuck-detector n-gram + scenarios~~ | S | ✅ **mostly DONE (verified)** — `stuck.py` already uses `event_content_eq` (semantic, not byte) + A-B-A-B alternating + repeated action-obs scenarios. Only the n-gram/format-similarity nuance might remain (LOW). |
+| ~~G5 (HS-05)~~ | ~~Critic finish-gate~~ | M | → **DEDUP into C1** — the independent critic-at-finish IS the B7 fresh-context evaluator |
 | G6 (HS-06) | Epochal observation masking — batched keep/remove at polling boundaries to keep the KV prefix stable | S/M | **DESIGN-BLOCKED** | **needs a Dylan decision:** per-step masking vs KV stability conflict — pick ONE; never mask per-step |
 | G7 (HS-07) | ThinkTool — no-op reasoning-dump tool (cheap prose-degeneration mitigation) | XS | backlog | fill-in-when-idle; composes with degeneracy-condensation |
 | G8 (HS-08) | Reroute-to-hidden-`invalid`-tool repair — malformed/unknown tool call becomes an ordinary error tool_result via a registered-but-unoffered `invalid` tool; the turn never aborts, message invariants hold — OpenCode | S | verify-overlap | composes with **F1**; check rp-12's requery path doesn't already preserve invariants |
@@ -195,18 +210,15 @@ resume) and listed only for closure.*
 
 | ID | Item | Effort | Status |
 |----|------|--------|--------|
-| BP-G1 | **Persistent, inspectable shell sessions** — named sessions + `shell_view` (see the real process output anytime), OpenHands-tmux style | M | OPEN — overlaps SmallCode F-tier persistent shell + HS; release-roadmap §Phase 0.5 |
-| BP-G2 | **Single-owner serving** — the container PID-1 keepalive (`while true; http.server 8000`, `gvisor.py:50`) RACES `run_server`'s `pkill -f http.server` (`preview.py:178`); on crash the keepalive silently recaptures the port | M | OPEN — kill the auto-serve; one process per named session |
-| BP-G3 | **Truthful server status** — `preview_status` probes BIND only (`_LISTEN_PROBE`, `preview.py:31-34`) → reports "serving" when the keepalive stub holds the port, not the agent's app | S-M | OPEN — observe the real process, never infer |
-| BP-G4 | **Sanctioned kill / ownership model** — explicit process ownership so kill targets the right thing | S | OPEN |
-| BP-G5 | **Agent-driven browser verification** — real headless browser at finish | M | OPEN — merge with D8 (screenshot gate) |
-| BP-G6 | **Vision feedback for the driver** — wire the mmproj (27b-vision profile exists) into build self-verify so the driver SEES the rendered result | M | OPEN |
-| BP-G7 | Flat-latency code execution | — | ✅ DONE (persistent IPython kernel, `edf0185`) |
-| BP-G8 | Loop survival on long builds | — | ✅ DONE (DC-05 SIGTERM→respawn→resume) |
-| BP-G9 | **Multi-service builds** — run > 1 service (e.g. API + frontend) | M | OPEN/PARTIAL — overlaps C3 dev-server rematerialization |
-| BP-G10 | **Dependency installs — verified + filtered egress posture** — Build grants NETWORK → egress "open" (`_container.py:55-58`); never live-verified in gVisor, and "open" is the weakest posture (the filtered allowlist proxy exists) | M | PARTIAL — overlaps D7/E8; move Build "open" → "filtered" |
-| BP-G11 | Resumable builds | — | ✅ DONE (DC-05b/BP resume) |
-| BP-G12 | **Cockpit UX** — the build operator surface (shell view, server status, process list) | M | OPEN/PARTIAL |
+| ~~BP-G1~~ | ~~Persistent inspectable shell sessions~~ | — | ✅ **DONE (verified)** — `shell_sessions.py` has named `session` + `shell_view` + `shell_write_to_process` (DC-04) |
+| ~~BP-G2~~ | ~~Single-owner serving (keepalive race)~~ | — | ❌ **OBSOLETE (verified)** — the `while true http.server` keepalive is GONE; DC-01's `host_proxy.py` replaced the preview model. Fixing this would fight a solved problem. |
+| ~~BP-G3~~ | ~~Truthful server status (bind-only)~~ | — | ❌ **OBSOLETE (verified)** — superseded by DC-01 hostname-routed preview |
+| ~~BP-G4~~ | ~~Kill / ownership model~~ | — | ✅ mostly DONE via named shell sessions (verify the kill targeting at impl) |
+| ~~BP-G5/G6~~ | ~~Browser verification / vision feedback~~ | M | → **DEDUP into D8** (one screenshot/vision verify gate; needs a browser in the sandbox image) |
+| BP-G7/G8/G11 | Flat-latency exec / loop survival / resumable | — | ✅ DONE (persistent kernel `edf0185`; DC-05) |
+| BP-G9 | **Multi-service builds** — run > 1 service (API + frontend) | M | OPEN/PARTIAL — overlaps C3; VERIFY at impl |
+| BP-G10 | **Move Build egress "open" → "filtered"** + live-verify in gVisor | M | PARTIAL — filtered-proxy infra EXISTS (`_container.py` `egress_mode`/8888); just flip Build's default + the D7 live test |
+| BP-G12 | **Cockpit UX** — build operator surface (shell view, server status, process list) — note `shell_view`/sessions now exist, so this is the UI surfacing | M | OPEN/PARTIAL — VERIFY scope at impl |
 
 ---
 
