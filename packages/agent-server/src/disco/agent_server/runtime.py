@@ -1803,7 +1803,11 @@ class ConversationRuntime:
         # Decompose via QUERY_REWRITER. The decompose call IS the planning
         # step; we emit the result as a PlanEvent directly (no LLM "planning
         # mode" loop needed — the engine owns the work).
-        router = self._router_now()
+        # Honor the model pill here too: the post-approval engine already passes
+        # the override (see the DeepResearchRun compose below) — without it HERE,
+        # a user's pick silently applied to gather/synthesis but NOT to the
+        # decompose/plan step (the exact half-applied-pill bug).
+        router = self._router_now(pick=self._model_override.get(conversation_id))
         try:
             subqs = await decompose_query(
                 router, query, max_subq=bound.max_subquestions
@@ -1918,19 +1922,46 @@ class ConversationRuntime:
 
         # Emit callback: every engine event becomes an Action/Observation pair
         # on the conversation log so the UI's activity feed reflects progress.
+        #
+        # CORRELATION: gather runs sub-questions CONCURRENTLY, so "the last
+        # ActionEvent appended" is usually some OTHER sub-question's search by the
+        # time an observation arrives — which left 5 of 6 searches permanently
+        # "running" in the UI (the observation pointed at the wrong action). The
+        # engine's payloads already carry `subquestion` (+ `round` for search/
+        # observation), so we correlate per sub-question here, in this run-scoped
+        # map — no engine/protocol change.
+        action_by_key: dict[str, str] = {}
+
+        def _corr_key(payload: dict[str, Any]) -> str | None:
+            subq = payload.get("subquestion")
+            if subq is None:
+                return None
+            rnd = payload.get("round")
+            # gap_reason has no round → correlate to the sub-question's latest search.
+            return f"{subq}|{rnd}" if rnd is not None else f"{subq}|latest"
+
         async def emit(kind: str, payload: dict[str, Any]) -> None:
             # Treat phase + search + synthesize_section as actions (the agent
             # "doing something"), observation kinds as observations (results).
             if kind == "observation" or kind == "gap_reason":
-                # last action_id we appended (best-effort correlation)
-                last_action = next(
-                    (
-                        e
-                        for e in reversed(await self._store.get_events(conversation_id))
-                        if isinstance(e, ActionEvent)
-                    ),
-                    None,
+                key = _corr_key(payload)
+                action_id = action_by_key.get(key or "") or action_by_key.get(
+                    f"{payload.get('subquestion')}|latest", ""
                 )
+                if not action_id:
+                    # No subquestion in the payload (or pre-correlation emit) —
+                    # fall back to the previous best-effort "last action".
+                    last_action = next(
+                        (
+                            e
+                            for e in reversed(
+                                await self._store.get_events(conversation_id)
+                            )
+                            if isinstance(e, ActionEvent)
+                        ),
+                        None,
+                    )
+                    action_id = last_action.id if last_action else ""
                 await self._store.append(
                     conversation_id,
                     ObservationEvent(
@@ -1943,18 +1974,20 @@ class ConversationRuntime:
                             ),
                             structured=payload,
                         ),
-                        action_id=last_action.id if last_action else "",
+                        action_id=action_id,
                     ),
                 )
                 return
             # action-shaped events
-            await self._store.append(
-                conversation_id,
-                ActionEvent(
-                    thought=f"Deep Research: {kind}",
-                    tool_call=ToolCall(tool_name=kind, arguments=payload),
-                ),
+            event = ActionEvent(
+                thought=f"Deep Research: {kind}",
+                tool_call=ToolCall(tool_name=kind, arguments=payload),
             )
+            await self._store.append(conversation_id, event)
+            key = _corr_key(payload)
+            if key is not None:
+                action_by_key[key] = event.id
+                action_by_key[f"{payload.get('subquestion')}|latest"] = event.id
 
         # Checkpointed resume: rebuild the retrieval-typed passages/hits from the
         # prior partial ReportEvent's plain dicts so the engine can carry its
@@ -2859,26 +2892,30 @@ class ConversationRuntime:
 
     async def confirm(self, conversation_id: str) -> None:
         """Approve the pending action: execute EXACTLY it (the loop's `confirm`), then
-        resume the loop for the next steps."""
-        loop = self._loops.get(conversation_id)
-        if loop is not None:
-            await loop.confirm()
-            self.kick(conversation_id)  # continue plan→act→observe past the gate
+        resume the loop for the next steps.
+
+        Lazy-composes (`_loop_for`) like `request_plan` below: after a server restart
+        `_loops` is empty, and the old `.get()` guard SILENTLY dropped the frame — the
+        user clicked Approve and nothing happened (state is event-sourced, so the
+        recomposed loop sees the same pending gate)."""
+        loop = self._loop_for(conversation_id)
+        await loop.confirm()
+        self.kick(conversation_id)  # continue plan→act→observe past the gate
 
     async def reject(self, conversation_id: str, reason: str = "rejected by user") -> None:
-        """Deny the pending action: record the denial (no execution), then resume."""
-        loop = self._loops.get(conversation_id)
-        if loop is not None:
-            await loop.reject(reason)
-            self.kick(conversation_id)
+        """Deny the pending action: record the denial (no execution), then resume.
+        Lazy-composes — see `confirm` (the post-restart silent-drop hole)."""
+        loop = self._loop_for(conversation_id)
+        await loop.reject(reason)
+        self.kick(conversation_id)
 
     async def approve_plan(self, conversation_id: str) -> None:
         """Approve the pending plan: flip the loop into execution mode (full tools)
-        and run it. The per-action BlastRadiusConfirm gate still governs the build."""
-        loop = self._loops.get(conversation_id)
-        if loop is not None:
-            await loop.approve_plan()
-            self.kick(conversation_id)  # start building the approved plan
+        and run it. The per-action BlastRadiusConfirm gate still governs the build.
+        Lazy-composes — see `confirm` (the post-restart silent-drop hole)."""
+        loop = self._loop_for(conversation_id)
+        await loop.approve_plan()
+        self.kick(conversation_id)  # start building the approved plan
 
     async def request_plan(self, conversation_id: str, text: str = "") -> None:
         """(Re-)enter plan mode with the user's instruction — the first plan AND the
@@ -2896,10 +2933,10 @@ class ConversationRuntime:
     async def pick_alternative(self, conversation_id: str, option_id: str) -> None:
         """Resume from AWAITING_USER_DECISION by selecting the agent's proposed
         alternative path. The loop synthesizes an ActionEvent from the option's
-        ToolCall and executes it directly, then resumes."""
-        loop = self._loops.get(conversation_id)
-        if loop is not None:
-            await loop.pick_alternative(option_id)
+        ToolCall and executes it directly, then resumes.
+        Lazy-composes — see `confirm` (the post-restart silent-drop hole)."""
+        loop = self._loop_for(conversation_id)
+        await loop.pick_alternative(option_id)
 
     async def cancel(self, conversation_id: str) -> None:
         """Cooperative stop (distinct from the hard kill): the loop winds down. For
