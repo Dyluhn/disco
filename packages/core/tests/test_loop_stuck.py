@@ -128,3 +128,119 @@ async def test_loop_goes_stuck_then_resumes_on_new_message():
     statuses = [e.status for e in await store.get_events(CID) if isinstance(e, StatusEvent)]
     assert ConversationStatus.STUCK in statuses
     assert statuses[-1] == ConversationStatus.FINISHED
+
+
+# ---- bookkeeping streak (issue C) must scale with plan size (T7 / E3) --------
+
+
+def _seed_approved_plan(store, *, n_steps: int):
+    """Pre-populate the store with user msg + a PlanEvent with n_steps steps +
+    a `plan_approved` RUNNING marker so a fresh loop enters execution mode
+    against an active plan. Returns nothing (mutates store)."""
+    from disco.core import EventSource, LLMMessage, MessageEvent, PlanEvent
+    from disco.core.events import ConversationStatus
+
+    async def _seed():
+        await store.append(
+            CID,
+            MessageEvent(
+                source=EventSource.USER, message=LLMMessage(role="user", content="build it")
+            ),
+        )
+        await store.append(
+            CID,
+            PlanEvent(
+                summary="p",
+                steps=[{"title": f"step {i}"} for i in range(1, n_steps + 1)],
+                revision=1,
+            ),
+        )
+        await store.append(
+            CID,
+            StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"),
+        )
+
+    return _seed
+
+
+async def test_bookkeeping_halt_caps_genuine_spam_on_tiny_plan():
+    """E3: a 1-step plan is a TINY plan. Eight `plan_step` calls on it are clearly
+    spam (only 1 step exists to mark), so the bookkeeping cap MUST halt the
+    run with `bookkeeping_only`. The cap is a guard against a model that just
+    shuffles the plan tracker forever; it must still fire on this case."""
+    from disco.core import ConversationStatus, EventSource, LLMMessage, MessageEvent, PlanEvent
+    from disco.core.events import StatusEvent as CoreStatusEvent
+    from disco.core.llm import OperatingMode
+    from disco.core import SqliteEventStore as Store
+
+    store = Store(":memory:")
+    await _seed_approved_plan(store, n_steps=1)()
+    # Vary the `thought` so the StuckDetector's repeat_action_observation
+    # doesn't fire first — we want THIS test to exercise the bookkeeping
+    # halt specifically (the StuckDetector has its own coverage).
+    steps = [
+        action_step("plan_step", {"index": 1, "state": "done"}, thought=f"marking {i}")
+        for i in range(8)
+    ]
+    # Cap the script so a broken loop can't burn the suite.
+    agent = ScriptedAgent(steps + [finish_step()])
+    loop, _ = build_loop(agent, store=store, mode=OperatingMode.LONG_HORIZON)
+    state = await loop.run()
+
+    # bookkeeping halt fired with the right detail
+    assert state.execution_status == ConversationStatus.STUCK, (
+        f"expected STUCK bookkeeping_only, got {state.execution_status}"
+    )
+    events = await store.get_events(CID)
+    stuck_statuses = [
+        e
+        for e in events
+        if isinstance(e, CoreStatusEvent) and e.status == ConversationStatus.STUCK
+    ]
+    assert any(e.detail == "bookkeeping_only" for e in stuck_statuses), (
+        f"expected detail='bookkeeping_only' in {[e.detail for e in stuck_statuses]}"
+    )
+    # And the model wasn't allowed to keep going — no FINISHED, no plan_step count > 6.
+    assert state.execution_status != ConversationStatus.FINISHED
+
+
+async def test_bookkeeping_halt_does_not_trip_legit_burst_on_long_plan():
+    """E3 inverse: an 8-step plan legitimately needs 8 `plan_step` calls to
+    mark each step done. Eight such calls in a row is NOT spam — it's the
+    plan-tracker being kept honest. The bookkeeping cap MUST NOT halt on this
+    case; the run should reach FINISHED once the agent declares done."""
+    from disco.core import ConversationStatus
+    from disco.core.events import StatusEvent as CoreStatusEvent
+    from disco.core.llm import OperatingMode
+    from disco.core import SqliteEventStore as Store
+
+    store = Store(":memory:")
+    await _seed_approved_plan(store, n_steps=8)()
+    # Each plan_step has a different index (1..8) so the actions are
+    # semantically distinct — the StuckDetector wouldn't fire anyway, but
+    # this matches what a real model would emit.
+    steps = [
+        action_step(
+            "plan_step", {"index": i, "state": "done"}, thought=f"marking step {i}"
+        )
+        for i in range(1, 9)
+    ]
+    agent = ScriptedAgent(steps + [finish_step()])
+    loop, _ = build_loop(agent, store=store, mode=OperatingMode.LONG_HORIZON)
+    state = await loop.run()
+
+    events = await store.get_events(CID)
+    stuck_statuses = [
+        e
+        for e in events
+        if isinstance(e, CoreStatusEvent) and e.status == ConversationStatus.STUCK
+    ]
+    bookkeeping_halts = [e for e in stuck_statuses if e.detail == "bookkeeping_only"]
+    assert bookkeeping_halts == [], (
+        f"8 plan_step calls on an 8-step plan MUST NOT trip the bookkeeping halt, "
+        f"but got {len(bookkeeping_halts)} bookkeeping_only STUCK events"
+    )
+    # And the run landed cleanly (the plan is complete, the finish was accepted).
+    assert state.execution_status == ConversationStatus.FINISHED, (
+        f"expected FINISHED, got {state.execution_status}"
+    )

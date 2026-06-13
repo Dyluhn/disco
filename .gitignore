@@ -53,3 +53,10 @@ review-queue/
 /selected.csv
 /sensor_readings.csv
 /wind_dataset.csv
+.omo/
+# generated runtime state (sqlite db + per-conversation sidecars)
+disco.db
+disco.db-*
+disco.db.*.json
+# local model-swap backup of the live config
+*.gemma-bak

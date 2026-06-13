@@ -89,6 +89,7 @@ class RouterAgent:
         overflow_signal: OverflowSignal,
         on_stream: StreamHook | None = None,
         temperature: float | None = None,
+        assist: bool = False,
     ) -> AgentStep:
         # B9: Assistant prefill. In PLANNING mode, force
         # the model to start its thought with an honest acknowledgment of
@@ -107,6 +108,7 @@ class RouterAgent:
             messages=view.messages,
             tools=tools,
             assistant_prefill=prefill,
+            assist=assist,  # weak-model assist gate → F1 reads req.assist for recovery
             # Cluster 9: a small non-zero temperature for the driver (anti-fewshot).
             # A long uniform run at temp 0.0 is a near-deterministic self-imitation
             # chain — maximally prone to repeating a prior failing pattern. The

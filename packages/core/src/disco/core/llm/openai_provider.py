@@ -35,6 +35,7 @@ from .errors import (
     LLMError,
     LLMTransientError,
 )
+from .toolcall_recovery import recover_tool_calls
 from .types import (
     CompletionRequest,
     CompletionResponse,
@@ -307,20 +308,31 @@ class OpenAIProvider:
         choice = (data.get("choices") or [{}])[0]
         msg = choice.get("message") or {}
         usage = data.get("usage") or {}
-        text = msg.get("content") or ""
+        model_content = msg.get("content") or ""
         # B9: Completion is a continuation of the prefill.
-        if req.assistant_prefill:
-            text = req.assistant_prefill + text
+        text = (req.assistant_prefill or "") + model_content
+        # F1: weak-model recovery. When the structured tool_calls channel is empty
+        # and req.assist is on, scan this response's content + reasoning_content
+        # for the multi-format text encodings weak models leak (Hermes, fenced
+        # json, bare json, etc). Structured wins when present; capable models
+        # (req.assist=False) see byte-identical behavior to today.
+        raw_tool_calls = self._tool_calls(msg.get("tool_calls"), tools=req.tools)
+        recovered: list[ProposedToolCall] = []
+        finish_reason = _map_finish(choice.get("finish_reason"))
+        if not raw_tool_calls and req.assist:
+            recovered = recover_tool_calls(model_content, msg.get("reasoning_content"))
+            if recovered:
+                finish_reason = "tool_calls"
         return CompletionResponse(
             text=text,
-            tool_calls=self._tool_calls(msg.get("tool_calls"), tools=req.tools),
+            tool_calls=raw_tool_calls or recovered,
             usage=TokenUsage(
                 input_tokens=int(usage.get("prompt_tokens", 0) or 0),
                 output_tokens=int(usage.get("completion_tokens", 0) or 0),
                 cost_usd=0.0,  # local models are free
                 cached_tokens=self._cached_tokens(usage),
             ),
-            finish_reason=_map_finish(choice.get("finish_reason")),
+            finish_reason=finish_reason,
             model_used=data.get("model", model),
             request_id=req.request_id,
             routing=None,  # the router attaches the RoutingDecision (RT1)
@@ -452,6 +464,10 @@ class OpenAIProvider:
         self, req: CompletionRequest, *, model: str
     ) -> AsyncIterator[StreamChunk]:
         content: list[str] = [req.assistant_prefill] if req.assistant_prefill else []
+        # F1: accumulator for reasoning_content deltas (reasoning models stream
+        # the thinking separately from `content`; weak models may emit the
+        # tool call in the thinking channel instead of the answer channel).
+        reasoning_buf: list[str] = []
         tool_buf: dict[int, dict] = {}
         finish: str | None = None
         usage: dict = {}
@@ -490,6 +506,11 @@ class OpenAIProvider:
                         if piece:
                             content.append(piece)
                             yield StreamChunk(delta_text=piece)
+                        # F1: weak models may stream the tool call as thinking;
+                        # capture reasoning_content for the recovery scan below.
+                        reasoning_piece = delta.get("reasoning_content")
+                        if reasoning_piece:
+                            reasoning_buf.append(reasoning_piece)
                         for tc in delta.get("tool_calls") or []:
                             idx = tc.get("index", 0)
                             slot = tool_buf.setdefault(
@@ -516,6 +537,7 @@ class OpenAIProvider:
         except httpx.HTTPError as exc:
             raise LLMTransientError(f"connection error: {exc}", provider=self.name) from exc
 
+        accumulated_text = "".join(content)
         tool_calls: list[ProposedToolCall] = self._tool_calls(
             [
                 {
@@ -526,8 +548,18 @@ class OpenAIProvider:
             ],
             tools=req.tools,
         )
+        # F1: weak-model recovery. Mirror the non-streaming gate: structured
+        # empty + req.assist on -> scan this response's accumulated content +
+        # reasoning_content. Structured wins; capable models (req.assist=False)
+        # see byte-identical behavior to today.
+        finish_reason = _map_finish(finish)
+        if not tool_calls and req.assist:
+            recovered = recover_tool_calls(accumulated_text, "".join(reasoning_buf))
+            if recovered:
+                tool_calls = recovered
+                finish_reason = "tool_calls"
         final = CompletionResponse(
-            text="".join(content),
+            text=accumulated_text,
             tool_calls=tool_calls,
             usage=TokenUsage(
                 input_tokens=int(usage.get("prompt_tokens", 0) or 0),
@@ -535,7 +567,7 @@ class OpenAIProvider:
                 cost_usd=0.0,
                 cached_tokens=self._cached_tokens(usage),
             ),
-            finish_reason=_map_finish(finish),
+            finish_reason=finish_reason,
             model_used=model_used,
             request_id=req.request_id,
             routing=None,

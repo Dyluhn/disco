@@ -140,4 +140,5 @@ def test_tool_context_has_no_secret_field():
         "conversation_id",
         "sessions",
         "kernel",
+        "assist",  # T1: weak-model-assist gate flag (a bool, not a secret)
     }

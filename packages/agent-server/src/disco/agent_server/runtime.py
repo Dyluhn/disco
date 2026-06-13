@@ -20,6 +20,7 @@ import hashlib
 import json
 import logging
 import os
+import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -291,7 +292,15 @@ def _model_label(model_id: str) -> str:
 # whatever -c it was launched with). Same ground-truth-over-declaration principle
 # as the build loop's live workspace snapshot: read the truth, don't assume it.
 # Best-effort + cached per base_url; ANY failure falls back to the static config.
-_LIVE_MODEL_PROBE_CACHE: dict[str, dict[str, Any]] = {}
+# Each entry is (result, monotonic_ts) so a model hot-swap (the driver is
+# restarted with a different served model / n_ctx) is re-probed once the
+# cached entry ages past _PROBE_TTL_S. Bare-dict entries are tolerated as a
+# legacy / test-only direct-set form and are always served fresh.
+_LIVE_MODEL_PROBE_CACHE: dict[str, tuple[dict[str, Any], float] | dict[str, Any]] = {}
+# 60s is long enough that an idle agent-server isn't re-probing on every
+# /models or /health hit, and short enough that a llama.cpp restart with a
+# different served model is picked up within a minute.
+_PROBE_TTL_S: float = 60.0
 # base_urls with a probe thread currently in flight — so N concurrent on-loop
 # callers (a /models + /health + first kick arriving together) schedule at most ONE
 # worker thread per url instead of one each.
@@ -326,9 +335,11 @@ def _do_live_model_probe(base_url: str, api_key: str | None) -> dict[str, Any]:
         pass
     # Cache only a SUCCESSFUL probe — so a server that was down at first call is
     # picked up once it comes online (self-healing), instead of being pinned to
-    # the static fallback for the agent-server's whole lifetime.
+    # the static fallback for the agent-server's whole lifetime. Store the
+    # monotonic ts alongside the value so _probe_live_model can apply a TTL
+    # and re-probe on a model hot-swap (T6/E2).
     if out["model_id"] is not None or out["n_ctx"] is not None:
-        _LIVE_MODEL_PROBE_CACHE[base_url] = out
+        _LIVE_MODEL_PROBE_CACHE[base_url] = (out, time.monotonic())
     return out
 
 
@@ -344,8 +355,22 @@ def _probe_live_model(base_url: str | None, api_key: str | None = None) -> dict[
     blocks directly. Best-effort: Nones on any miss → caller uses the static config."""
     if not base_url:
         return {"model_id": None, "n_ctx": None}
-    if base_url in _LIVE_MODEL_PROBE_CACHE:
-        return _LIVE_MODEL_PROBE_CACHE[base_url]
+    cached = _LIVE_MODEL_PROBE_CACHE.get(base_url)
+    if cached is not None:
+        # Canonical form: (result, monotonic_ts). Within _PROBE_TTL_S the
+        # cached value is served as-is — no second /props call. Past the
+        # TTL we fall through to re-probe so a model hot-swap (driver
+        # restarted with a different served model / n_ctx) is observed
+        # within a minute (T6/E2).
+        if isinstance(cached, tuple) and len(cached) == 2:
+            value, ts = cached
+            if (time.monotonic() - ts) <= _PROBE_TTL_S:
+                return value
+        else:
+            # Legacy / test-only direct-set: bare dict, no ts. Treat as
+            # fresh — preserves the existing non-blocking test that
+            # simulates a worker thread filling the cache directly.
+            return cached
     try:
         running = asyncio.get_running_loop()
     except RuntimeError:
@@ -448,6 +473,9 @@ class ConversationRuntime:
         # approves the plan, and forfeits cleanly instead of halting for a human.
         self._autonomous_path = f"{db_path}.autonomous.json" if db_path else ""
         self._autonomous: dict[str, bool] = self._load_autonomous()
+        # Per-conversation ASSIST tier flag (T1), same B0 sidecar pattern.
+        self._assist_path = f"{db_path}.assist.json" if db_path else ""
+        self._assist: dict[str, bool] = self._load_assist()
         # Per-conversation server-side uploads sidecar directory (B0 pattern).
         # DC-07 (2026-06-11): uploads survive sandbox recreation.
         self._uploads_base = f"{db_path}.uploads" if db_path else ""
@@ -731,9 +759,13 @@ class ConversationRuntime:
     def _save_overrides(self) -> None:
         if not self._override_path:
             return
+        import tempfile
         try:
-            with open(self._override_path, "w") as f:
+            dir_name = os.path.dirname(self._override_path)
+            with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
                 json.dump(self._model_override, f)
+                tmp_name = f.name
+            os.replace(tmp_name, self._override_path)
         except Exception:  # noqa: BLE001 — persistence is best-effort, never fatal
             pass
 
@@ -755,9 +787,13 @@ class ConversationRuntime:
     def _save_surfaces(self) -> None:
         if not self._surface_path:
             return
+        import tempfile
         try:
-            with open(self._surface_path, "w") as f:
+            dir_name = os.path.dirname(self._surface_path)
+            with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
                 json.dump(self._surface, f)
+                tmp_name = f.name
+            os.replace(tmp_name, self._surface_path)
         except Exception:  # noqa: BLE001 — persistence is best-effort, never fatal
             pass
 
@@ -773,9 +809,13 @@ class ConversationRuntime:
     def _save_autonomous(self) -> None:
         if not self._autonomous_path:
             return
+        import tempfile
         try:
-            with open(self._autonomous_path, "w") as f:
+            dir_name = os.path.dirname(self._autonomous_path)
+            with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
                 json.dump(self._autonomous, f)
+                tmp_name = f.name
+            os.replace(tmp_name, self._autonomous_path)
         except Exception:  # noqa: BLE001 — best-effort
             pass
 
@@ -801,6 +841,56 @@ class ConversationRuntime:
         # The public read (UI badge via /state extras) — gated, so the badge can't
         # show "autonomous" on a surface that has no headless affordance.
         return self._effective_autonomous(conversation_id)
+
+    def _is_small_assist_default(self, entry: Any) -> bool:
+        if not entry or not getattr(entry, "base_url", None):
+            return False
+        base_url = str(entry.base_url).lower()
+        is_local = any(x in base_url for x in ("localhost", "127.0.0.1", "192.168.", ".local"))
+        return is_local and "openrouter" not in base_url
+
+    def _load_assist(self) -> dict[str, bool]:
+        if self._assist_path and os.path.exists(self._assist_path):
+            try:
+                with open(self._assist_path) as f:
+                    return {str(k): bool(v) for k, v in json.load(f).items()}
+            except Exception:  # noqa: BLE001
+                return {}
+        return {}
+
+    def _save_assist(self) -> None:
+        if not self._assist_path:
+            return
+        import tempfile
+        try:
+            dir_name = os.path.dirname(self._assist_path)
+            with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
+                json.dump(self._assist, f)
+                tmp_name = f.name
+            os.replace(tmp_name, self._assist_path)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def set_assist(self, conversation_id: str, value: bool = True) -> None:
+        """Mark a conversation assist tier (T1). Persisted."""
+        self._assist[conversation_id] = bool(value)
+        self._save_assist()
+
+    def _effective_assist(self, conversation_id: str) -> bool:
+        """The SINGLE source of truth for the assist gate."""
+        if conversation_id in self._assist:
+            return self._assist[conversation_id]
+        
+        # Default policy
+        override = self._model_override.get(conversation_id)
+        router = self._router_now(pick=override)
+        from disco.core.llm import ModelRole
+        key = router._config.model_for(ModelRole.AGENT_DRIVER, override=override)
+        entry = router._config.models.get(key)
+        return self._is_small_assist_default(entry)
+
+    def is_assist(self, conversation_id: str) -> bool:
+        return self._effective_assist(conversation_id)
 
     def set_model_override(self, conversation_id: str, model_id: str | None) -> None:
         """Pin the driver model for a conversation (the Build chat model picker). The id
@@ -1078,6 +1168,7 @@ class ConversationRuntime:
             sandbox=session,
             broker=broker,
             conversation_id=conversation_id,
+            assist=self._effective_assist(conversation_id),
         )
         # RP-05 rung A+B: extend the registry with MCP tools from the pool
         # snapshot (stdio) AND the HTTP-managed tools (rung B streamable_http).
@@ -1153,6 +1244,7 @@ class ConversationRuntime:
             # the gated value means a future caller can't desync the loop's behavior
             # from the prompt prefix.
             autonomous=self._effective_autonomous(conversation_id),
+            assist=self._effective_assist(conversation_id),
         )
 
     # ---- deep research surface ---------------------------------------------

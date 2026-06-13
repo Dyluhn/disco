@@ -100,6 +100,7 @@ class CompletionRequest(BaseModel):
     temperature: float = 0.0
     max_tokens: int | None = None
     response_format: Literal["text", "json"] = "text"
+    assist: bool = False
     # Per-call control of a reasoning model's "thinking" (Qwen3.6 et al). None →
     # use the provider/model default; False → force thinking OFF for this call.
     # Grounded extraction (RAG_ANSWERER) sets False: it does NOT need to reason, and

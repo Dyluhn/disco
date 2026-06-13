@@ -109,3 +109,108 @@ async def test_genuinely_unknown_tool_still_requeried():
         f"Expected ≥3 agent calls (initial + 2 requery bounces); got {agent.calls}. "
         "The requery gate no longer catches genuinely unknown tool names."
     )
+
+
+# ---------------------------------------------------------------------------
+# T9 (F2): augment Rung-7 with an edit-distance "did you mean" suggestion.
+# Gate: ONLY when self._assist is ON. With assist OFF the hint must be
+# byte-identical to today (no new text, no new cap, no new reroute path).
+# ---------------------------------------------------------------------------
+
+
+def _requery_hint_contents(view):
+    """Return the content of every 'Unknown tool' user message in view.messages.
+
+    The Rung-7 reroute appends its hint as a transient user message; if the
+    model keeps hallucinating the same tool name, subsequent views stack more
+    such messages. Tests should grab the first one -- that's the one the model
+    saw immediately after the first requery bounce.
+    """
+    return [
+        m.content
+        for m in view.messages
+        if m.role == "user" and "Unknown tool" in (m.content or "")
+    ]
+
+
+def _tools_with_file_write():
+    return [
+        ToolSpec(name="file_read", description="read", parameters_schema={}),
+        ToolSpec(name="file_write", description="write", parameters_schema={}),
+        ToolSpec(name="shell", description="run a shell command", parameters_schema={}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unknown_tool_hint_suggests_nearest_with_assist_on():
+    """Assist ON: the Rung-7 hint appends 'did you mean <name>?' naming the
+    nearest real tool by edit distance (file_writ -> file_write).
+
+    Same shape as the existing requery test, but asserts the *content* of the
+    hint, not just that the requery fired. The ScriptedAgent repeats the bad
+    action, so the requery bounces (requery_count 0 -> 1); the view on call #1
+    (the second agent.step) is the first view that carries the hint.
+    """
+    executor = _SplitExecutor(
+        advertised=_tools_with_file_write(),
+        callable_names={"file_read", "file_write", "shell"},
+    )
+    agent = ScriptedAgent([action_step("file_writ")])
+    loop, _ = build_loop(agent, executor=executor, max_iterations=1)
+    loop._assist = True
+
+    await loop.send_message("go")
+    await asyncio.wait_for(loop.run(), timeout=5.0)
+
+    # Requery must have fired at least once (we only need to inspect its hint).
+    assert agent.calls >= 2, (
+        f"Expected the requery to fire at least once; got {agent.calls} agent calls."
+    )
+    hints = _requery_hint_contents(agent.seen_views[1])
+    assert hints, (
+        f"Expected an 'Unknown tool' hint in call #2's view; messages were: "
+        f"{[m.content for m in agent.seen_views[1].messages]!r}"
+    )
+    hint = hints[0]
+    # The original hint shape must still be present.
+    assert "Unknown tool 'file_writ'" in hint, f"Hint should still name the unknown tool: {hint!r}"
+    assert "Available:" in hint, f"Hint should still list available tools: {hint!r}"
+    # The new assist-gated suggestion must be present.
+    assert "did you mean" in hint, (
+        f"Hint should contain 'did you mean' when assist is ON: {hint!r}"
+    )
+    assert "file_write" in hint, (
+        f"Hint should suggest 'file_write' as the nearest real tool: {hint!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_unknown_tool_hint_unchanged_with_assist_off():
+    """Assist OFF (the default): the Rung-7 hint is byte-identical to today --
+    NO 'did you mean' suffix, NO new path. Regression guard for the gate.
+
+    If a future change makes the suggestion always-on, this test fails.
+    """
+    executor = _SplitExecutor(
+        advertised=_tools_with_file_write(),
+        callable_names={"file_read", "file_write", "shell"},
+    )
+    agent = ScriptedAgent([action_step("file_writ")])
+    loop, _ = build_loop(agent, executor=executor, max_iterations=1)
+    # Default: loop._assist is False (never set it on this loop).
+    assert loop._assist is False
+
+    await loop.send_message("go")
+    await asyncio.wait_for(loop.run(), timeout=5.0)
+
+    assert agent.calls >= 2
+    hints = _requery_hint_contents(agent.seen_views[1])
+    assert hints, "Expected an 'Unknown tool' hint in call #2's view"
+    hint = hints[0]
+    # Original shape preserved.
+    assert "Unknown tool 'file_writ'" in hint
+    assert "Available:" in hint
+    # The augment MUST NOT fire when the gate is off.
+    assert "did you mean" not in hint, (
+        f"Hint must be byte-identical to today when assist is OFF; got: {hint!r}"
+    )

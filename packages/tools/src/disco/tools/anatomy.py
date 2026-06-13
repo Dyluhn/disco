@@ -53,6 +53,7 @@ class ToolContext(BaseModel):
     capabilities: Any  # CapabilitySet (scoped grants; secrets.py)
     owner_id: str
     conversation_id: str
+    assist: bool = False
 
 
 class ToolOutcome(BaseModel):

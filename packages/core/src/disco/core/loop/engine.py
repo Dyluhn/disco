@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -65,6 +66,53 @@ _LOG = logging.getLogger("disco.loop")
 _sleep = asyncio.sleep
 _DRIVER_RETRY_BACKOFFS_S: tuple = (10.0, 30.0, 90.0)
 
+
+def _levenshtein(a: str, b: str) -> int:
+    """Small inline Levenshtein distance (edit cost 1 per ins/del/sub).
+
+    O(len(a) * len(b)) time, O(len(b)) space. Used only to nudge a hallucinated
+    tool name toward a real one in the Rung-7 hint when the assist gate is on
+    (F2 / T9). Tool names are short (a few dozen chars at most), so no
+    micro-optimisation is warranted; readability over cleverness.
+    """
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    # Make `b` the shorter string — the inner loop is the memory hot spot.
+    if len(a) < len(b):
+        a, b = b, a
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        curr = [i] + [0] * len(b)
+        for j, cb in enumerate(b, 1):
+            cost = 0 if ca == cb else 1
+            curr[j] = min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost)
+        prev = curr
+    return prev[-1]
+
+
+def _nearest_tool_name(target: str, candidates: set[str]) -> str | None:
+    """Return the candidate with the smallest Levenshtein distance to `target`.
+
+    None if `candidates` is empty. The candidate set is whatever pool the
+    caller wants to suggest from — for the Rung-7 hint, that's the set the
+    model was *just* shown (`offered_names`); suggesting a tool the model
+    can't see would be a worse recovery than no suggestion.
+    """
+    if not candidates:
+        return None
+    best_name: str | None = None
+    best_dist = -1
+    for name in candidates:
+        d = _levenshtein(target, name)
+        if best_dist < 0 or d < best_dist:
+            best_dist = d
+            best_name = name
+    return best_name
+
 # Plan/meta tools that mutate bookkeeping state but do no real work. Excluded
 # from "did the agent act?" accounting everywhere (valve taxonomy + the
 # actionless streak) so a model can't look productive by shuffling plan state.
@@ -79,6 +127,22 @@ _BOOKKEEPING_TOOLS = frozenset({"submit_plan", "propose_plan_update", "plan_step
 # model doing a small legitimate bookkeeping burst is never penalized.
 _BOOKKEEPING_STREAK_NUDGE_AT = 3
 _BOOKKEEPING_STREAK_HALT_AT = 6
+# Slack added to the active plan's step count when sizing the HALT cap, so a
+# model that legitimately marks each plan step done (one `plan_step` per step)
+# plus a couple of over-corrections/verifications isn't penalized. T7 (E3):
+# without this, a model emitting N plan_step calls on an N-step plan tripped
+# the cap and halted the run mid-way through the legitimate burst.
+_BOOKKEEPING_PLAN_SLACK = 2
+
+# C8 (T11): bound the autonomous `propose_plan_update` loop. A weak model in
+# autonomous mode can hammer the same plan revision over and over, never
+# realizing there's no human to approve it. When the proposed plan's steps
+# are byte-identical to the immediately-prior plan (ignoring summary; appends
+# count as different) for >= this many consecutive auto-approved revisions,
+# feed the existing bookkeeping-stuck valve so the run halts (STUCK) rather
+# than looping. The existing (c.3) bookkeeping valve emits `bookkeeping_only`
+# — we reuse that signal instead of inventing a new one.
+_PROPOSE_PLAN_UPDATE_REPEAT_CAP = 3
 
 # finish-verify cap (issue B). The model-authored `verify` gate was the ONLY uncapped
 # gate in the loop — a broken/always-failing verify command could refuse `finish`
@@ -870,6 +934,7 @@ class AgentLoop:
         plan_tool: str = "submit_plan",
         execution_mode: OperatingMode = OperatingMode.LONG_HORIZON,
         autonomous: bool = False,
+        assist: bool = False,
     ) -> None:
         # Autonomous mode (issue A): no human is available to answer questions or
         # approve plans (headless / unattended runs). Default False = today's
@@ -878,6 +943,8 @@ class AgentLoop:
         # circuit-breaker's "hand off to the user" becomes a clean forfeit (STUCK)
         # instead of an indefinite AWAITING_USER_DECISION stall.
         self._autonomous = autonomous
+        # Assist mode (T1): signals weak-model assist tier
+        self._assist = assist
         self.conversation_id = conversation_id
         self.store = store
         self.agent = agent
@@ -898,6 +965,13 @@ class AgentLoop:
         self._plan_nudges = 0  # consecutive nudges while planning (safety cap)
         self._execution_nudges = 0  # consecutive "you must act" nudges in execution
         self._browser_verify_refusals = 0  # consecutive browser-verification refusals
+        self._identical_plan_revisions = 0  # C8 (T11): consecutive identical-steps
+                                            # propose_plan_update auto-approvals in
+                                            # autonomous mode. Increments when the
+                                            # new plan's steps match the immediately
+                                            # prior plan's; resets on a different
+                                            # (incl. appended) plan. The cap lives
+                                            # at module-level so tests can pin it.
         self._finish_verify_refusals = 0  # consecutive finish-verify failures (cap-3 release)
         self._finish_verify_strips = 0  # malformed verifies auto-stripped (anti-gaming cap)
         # Actionless-step breaker cap (DEFECT-4)
@@ -1617,6 +1691,23 @@ class AgentLoop:
         return streak
 
     @staticmethod
+    def _active_plan_step_count(events: list[Event]) -> int:
+        # Step count of the latest PlanEvent, or 0 if no plan has been
+        # approved yet. Used by the (c.3) bookkeeping halt (T7 / E3) to scale
+        # the spam cap with the plan's actual size -- a model finishing an
+        # N-step plan may legitimately emit up to ~N `plan_step` calls; the
+        # halt threshold becomes max(HALT_AT, N + slack) so a legit burst
+        # does not trip it.
+        plan = None
+        for e in events:
+            if isinstance(e, PlanEvent):
+                if plan is None or e.revision >= plan.revision:
+                    plan = e
+        if plan is None or not plan.steps:
+            return 0
+        return len(plan.steps)
+
+    @staticmethod
     def initial_mode(
         events: list[Event],
         *,
@@ -1680,11 +1771,26 @@ class AgentLoop:
             "based on the content below cannot miscount.\n\n"
         )
         blocks: list[str] = []
+        # E4 (T8) — per-file notes appended to the trailing omitted-notice.
+        # Each note tells the model exactly WHY a file it touched is NOT
+        # rendered as a BEGIN/END block (binary, deleted, permission). The
+        # model can then `file_read` it itself when it needs the content.
+        omitted_notes: list[str] = []
         budget = _WS_TOTAL_CHARS - len(preamble)
         shown_count = 0
+        # E4 (T8) — .disco-spill-* are T10's overflow logs (head/tail markers
+        # of an oversize stdout), not deliverables. They pollute the working
+        # set with multi-MB noise and dwarf every real file. Skip them
+        # outright: the model has no business re-reading its own spill log.
+        # Match the leaf filename (basename) so an absolute path the model
+        # might use (e.g. /workspace/.disco-spill-abc.log) is caught too.
+        spill_basename_prefix = ".disco-spill-"
         for path in ordered:
             if shown_count >= _WS_MAX_FILES or budget <= 0:
                 break
+            # E4 (T8) — skip T10's overflow-log paths up-front
+            if os.path.basename(path).startswith(spill_basename_prefix):
+                continue
             try:
                 raw = await asyncio.wait_for(
                     sbx.read_file(path), timeout=_WS_READ_TIMEOUT_S
@@ -1697,7 +1803,41 @@ class AgentLoop:
                 # action goes through _execute_and_observe, which detects the dead
                 # sandbox and emits the restart notice.
                 break
+            except FileNotFoundError:
+                # E4 (T8) — file was deleted between the action and this read.
+                # Surface that as an explicit note (the model can re-decide
+                # whether to re-create the file); don't silently lose it.
+                omitted_notes.append(f"[file gone: {path}]")
+                continue
+            except PermissionError:
+                # E4 (T8) — the sandbox denied this read. Note it so the
+                # model knows the path exists in its working set but the
+                # snapshot cannot show it (the model can still try file_read).
+                omitted_notes.append(f"[unreadable: permission: {path}]")
+                continue
+            except (IsADirectoryError, NotADirectoryError, OSError) as e:
+                # E4 (T8) — a directory slipped into the working set (e.g. the
+                # model `file_write`d a directory path by mistake). Skip with
+                # a brief note; do not include its binary directory listing.
+                if isinstance(e, IsADirectoryError) or (
+                    isinstance(e, OSError) and getattr(e, "errno", None) == 21  # EISDIR
+                ):
+                    omitted_notes.append(f"[directory: {path}]")
+                    continue
+                # Any other OSError — keep the prior silent-skip behavior
+                # (the existing contract was "file gone/unreadable: skip").
+                continue
             except Exception:  # noqa: BLE001 — file gone/unreadable this turn: skip it
+                continue
+            # E4 (T8) — binary sniff. A NUL byte in the first 1KB is a near-
+            # certain signal of binary content (text decoders reject it;
+            # editors render garbage; the snapshot's only value is showing
+            # the model something it can act on). Bounded sample (1KB, not
+            # the whole file) so a huge text file with one stray NUL past
+            # the head — e.g. an embedded null in a template — still
+            # renders normally via `errors="replace"`.
+            if b"\x00" in raw[:1024]:
+                omitted_notes.append(f"[binary omitted: {path}]")
                 continue
             text = raw.decode("utf-8", "replace")
             cap = min(_WS_PER_FILE_CHARS, budget)
@@ -1725,15 +1865,25 @@ class AgentLoop:
             budget -= len(block)  # charge the WHOLE block incl header/markers (#6)
             blocks.append(block)
             shown_count += 1
-        if not blocks:
+        # E4 (T8) — return None only when there is NOTHING to tell the model.
+        # If every file was omitted (binary / gone / permission / spill) we
+        # still want to surface the notes so the model knows the working
+        # set is not empty on disk — it just couldn't be rendered.
+        if not blocks and not omitted_notes:
             return None
         omitted = len(ordered) - shown_count
-        notice = (
-            f"\n\n[{omitted} more file(s) you have touched are not shown here "
-            f"(snapshot budget) — file_read them when you need their content.]"
-            if omitted > 0
-            else ""
-        )
+        # Compose the trailing notice: budget-omitted count (existing
+        # behavior) PLUS the E4 per-file notes. A single trailing paragraph
+        # keeps the snapshot's shape consistent; the notes are short
+        # one-liners the model can act on (`file_read`, recreate, etc.).
+        notice_parts: list[str] = []
+        if omitted > 0:
+            notice_parts.append(
+                f"[{omitted} more file(s) you have touched are not shown here "
+                f"(snapshot budget) — file_read them when you need their content.]"
+            )
+        notice_parts.extend(omitted_notes)
+        notice = ("\n\n" + "\n".join(notice_parts)) if notice_parts else ""
         return LLMMessage(role="user", content=preamble + "\n\n".join(blocks) + notice)
 
     async def _materialize_view(self, events: list[Event]) -> View:
@@ -2260,26 +2410,38 @@ class AgentLoop:
                         )
                     )
                     events = await self._events()
-                elif _bk_streak >= _BOOKKEEPING_STREAK_HALT_AT:
-                    await self._emit(
-                        MessageEvent(
-                            source=EventSource.ENVIRONMENT,
-                            message=LLMMessage(
-                                role="user",
-                                content=(
-                                    "⚠ Stopped: the agent kept updating the plan checklist "
-                                    "without doing any real work. Re-run or steer it toward a "
-                                    "concrete action."
+                else:
+                    # Spam cap scales with the active plan's step count (T7 / E3):
+                    # a model finishing an N-step plan may legitimately emit
+                    # ~N `plan_step` calls (one per step) plus a couple of
+                    # over-corrections. Capping at N + slack lets the legit
+                    # burst complete; the original `_BOOKKEEPING_STREAK_HALT_AT`
+                    # floor still catches spam on a small/no-plan run.
+                    _plan_steps = self._active_plan_step_count(events)
+                    _bk_halt_cap = max(
+                        _BOOKKEEPING_STREAK_HALT_AT,
+                        _plan_steps + _BOOKKEEPING_PLAN_SLACK,
+                    )
+                    if _bk_streak >= _bk_halt_cap:
+                        await self._emit(
+                            MessageEvent(
+                                source=EventSource.ENVIRONMENT,
+                                message=LLMMessage(
+                                    role="user",
+                                    content=(
+                                        "⚠ Stopped: the agent kept updating the plan checklist "
+                                        "without doing any real work. Re-run or steer it toward a "
+                                        "concrete action."
+                                    ),
                                 ),
-                            ),
+                            )
                         )
-                    )
-                    await self._emit(
-                        StatusEvent(
-                            status=ConversationStatus.STUCK, detail="bookkeeping_only"
+                        await self._emit(
+                            StatusEvent(
+                                status=ConversationStatus.STUCK, detail="bookkeeping_only"
+                            )
                         )
-                    )
-                    return await self.get_state()
+                        return await self.get_state()
 
                 # (d) build the model-facing View, condensing if triggered (§8)
                 view = await self._materialize_view(events)
@@ -2319,6 +2481,7 @@ class AgentLoop:
                                 overflow_signal=self._overflow_signal(events),
                                 on_stream=self._build_stream_hook(),
                                 temperature=escape_temp,
+                                assist=self._assist,
                             )
 
                             # Rung 7: Invalid-tool reroute (weak-model FC kit).
@@ -2392,13 +2555,27 @@ class AgentLoop:
                                             ],
                                         )
                                     )
+                                    # F2 / T9 (assist-gated): when self._assist is on, append
+                                    # a "did you mean <name>?" suggestion computed by
+                                    # Levenshtein distance over the offered tool names.
+                                    # The existing Rung-7 hint and requery bound (cap=2)
+                                    # are reused — no new reroute path, no new cap.
+                                    # Assist OFF (capable-model default) leaves the hint
+                                    # byte-identical to today.
+                                    _hint = (
+                                        f"ERROR: Unknown tool '{step.tool_call.tool_name}'. "
+                                        f"Available: {sorted(list(offered_names))}"
+                                    )
+                                    if self._assist:
+                                        _suggestion = _nearest_tool_name(
+                                            step.tool_call.tool_name, offered_names
+                                        )
+                                        if _suggestion is not None:
+                                            _hint = f"{_hint} did you mean '{_suggestion}'?"
                                     transient_messages.append(
                                         LLMMessage(
                                             role="user",
-                                            content=(
-                                                f"ERROR: Unknown tool '{step.tool_call.tool_name}'. "
-                                                f"Available: {sorted(list(offered_names))}"
-                                            ),
+                                            content=_hint,
                                         )
                                     )
                                     continue
@@ -3226,6 +3403,60 @@ class AgentLoop:
                         # run that follows the loop's OWN "call propose_plan_update to
                         # revise the plan" guidance (the auto-continue nudge below) would
                         # halt at AWAITING_PLAN_APPROVAL forever — a headless stall.
+                        #
+                        # C8 (T11): bound the propose_plan_update loop. A weak model
+                        # in autonomous mode can hammer the same plan revision over
+                        # and over, never realizing there's no human to approve it.
+                        # Compare new_plan.steps to the immediately-prior plan's steps
+                        # (ignore summary; an appended/added step counts as DIFFERENT
+                        # because list lengths differ). Increment the consecutive-
+                        # identical counter on a match, reset on a diff. At >= the
+                        # cap, feed the existing bookkeeping-stuck valve (emit the
+                        # same `bookkeeping_only` warning + STUCK status the (c.3)
+                        # valve emits) — do NOT invent a new halt path. Only in
+                        # autonomous mode; interactive path is byte-identical.
+                        prior_plan: PlanEvent | None = None
+                        for e in reversed(events):
+                            if e is new_plan:
+                                continue  # skip the just-emitted new_plan
+                            if isinstance(e, PlanEvent):
+                                prior_plan = e
+                                break
+                        if (
+                            prior_plan is not None
+                            and [s.title for s in prior_plan.steps]
+                            == [s.title for s in new_plan.steps]
+                        ):
+                            self._identical_plan_revisions += 1
+                        else:
+                            self._identical_plan_revisions = 0
+                        if (
+                            self._identical_plan_revisions
+                            >= _PROPOSE_PLAN_UPDATE_REPEAT_CAP
+                        ):
+                            # Reuse the existing bookkeeping-stuck valve: same
+                            # message + STUCK/detail pair (c.3) emits.
+                            await self._emit(
+                                MessageEvent(
+                                    source=EventSource.ENVIRONMENT,
+                                    message=LLMMessage(
+                                        role="user",
+                                        content=(
+                                            "⚠ Stopped: the agent kept updating the "
+                                            "plan checklist without doing any real "
+                                            "work. Re-run or steer it toward a "
+                                            "concrete action."
+                                        ),
+                                    ),
+                                )
+                            )
+                            await self._emit(
+                                StatusEvent(
+                                    status=ConversationStatus.STUCK,
+                                    detail="bookkeeping_only",
+                                )
+                            )
+                            return await self.get_state()
                         self.mode = self._execution_mode
                         await self._emit(
                             StatusEvent(

@@ -92,3 +92,219 @@ async def test_interactive_still_halts_for_plan_update():
     await loop.approve_plan()
     s2 = await loop.run()  # file_write, then propose_plan_update → halts AGAIN
     assert s2.execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+
+
+# ---- C8 (T11): bound the autonomous propose_plan_update loop ----------------
+
+
+def _identical_steps_script():
+    """Three propose_plan_update calls in autonomous mode, each with steps
+    BYTE-IDENTICAL to the immediately-prior plan (only the summary changes).
+    A weak model in autonomous mode can hammer this loop forever hoping a
+    human will approve — the loop must bound it (C8) by feeding the
+    existing bookkeeping-stuck valve when the streak hits the cap (3)."""
+    return ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+            action_step("shell", {"command": "echo one"}),
+            # 3x propose_plan_update with identical step TITLES, varying summary
+            # (the bug ignores summary — only step bytes matter).
+            action_step(
+                "propose_plan_update",
+                {"summary": "p2", "steps": [{"title": "1"}]},
+            ),
+            action_step("shell", {"command": "echo two"}),
+            action_step(
+                "propose_plan_update",
+                {"summary": "p3", "steps": [{"title": "1"}]},
+            ),
+            action_step("shell", {"command": "echo three"}),
+            action_step(
+                "propose_plan_update",
+                {"summary": "p4", "steps": [{"title": "1"}]},
+            ),
+            # If the bound failed to trip, the loop would reach these steps.
+            # We cap the script so a broken loop can't burn the suite.
+            action_step("shell", {"command": "echo four"}),
+            finish_step(),
+        ]
+    )
+
+
+def _appended_steps_script():
+    """Negative case for C8 (T11): APPENDING a step counts as DIFFERENT, so
+    the consecutive-identical streak resets and the bound MUST NOT trip. The
+    run should reach FINISHED normally (loop continues past the revisions)."""
+    return ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+            action_step("shell", {"command": "echo one"}),
+            # First revision APPENDS a step → resets the streak.
+            action_step(
+                "propose_plan_update",
+                {"summary": "p2", "steps": [{"title": "1"}, {"title": "2"}]},
+            ),
+            action_step("shell", {"command": "echo two"}),
+            # Second revision is identical to the appended one (streak = 1).
+            action_step(
+                "propose_plan_update",
+                {"summary": "p3", "steps": [{"title": "1"}, {"title": "2"}]},
+            ),
+            action_step("shell", {"command": "echo three"}),
+            # Third revision is identical again (streak = 2). Still < 3 cap.
+            action_step(
+                "propose_plan_update",
+                {"summary": "p4", "steps": [{"title": "1"}, {"title": "2"}]},
+            ),
+            action_step("shell", {"command": "echo four"}),
+            finish_step(),
+        ]
+    )
+
+
+def _changed_steps_script():
+    """Negative case for C8 (T11): CHANGING a step title counts as DIFFERENT,
+    so the consecutive-identical streak resets and the bound MUST NOT trip.
+    The run should reach FINISHED normally."""
+    return ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+            action_step("shell", {"command": "echo one"}),
+            # First revision CHANGES the title → resets the streak.
+            action_step(
+                "propose_plan_update",
+                {"summary": "p2", "steps": [{"title": "2"}]},
+            ),
+            action_step("shell", {"command": "echo two"}),
+            # Second revision is identical to the changed one (streak = 1).
+            action_step(
+                "propose_plan_update",
+                {"summary": "p3", "steps": [{"title": "2"}]},
+            ),
+            action_step("shell", {"command": "echo three"}),
+            # Third revision is identical again (streak = 2). Still < 3 cap.
+            action_step(
+                "propose_plan_update",
+                {"summary": "p4", "steps": [{"title": "2"}]},
+            ),
+            action_step("shell", {"command": "echo four"}),
+            finish_step(),
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_autonomous_propose_plan_update_halts_on_repeat_identical_steps():
+    """C8 (T11): when the loop auto-approves a `propose_plan_update` in
+    autonomous mode and the proposed plan's steps are byte-identical to the
+    immediately-prior plan for >=3 consecutive times, the repeated re-proposal
+    MUST feed the existing bookkeeping-stuck valve so the run halts (STUCK)
+    rather than looping forever. The bookkeeping_only detail is the exact
+    signal the existing (c.3) valve uses — we reuse it, not invent a new one."""
+    from disco.core import SqliteEventStore as Store
+
+    store = Store(":memory:")
+    loop, store = build_loop(_identical_steps_script(), store=store)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    loop._autonomous = True  # the property under test
+
+    await loop.send_message("go")
+    state = await loop.run()
+
+    events = await store.get_events(CID)
+    # The bound fired: the run halted, and with the same bookkeeping_only
+    # signal the existing (c.3) valve emits. The model did NOT get to keep
+    # proposing the same plan forever.
+    assert state.execution_status == ConversationStatus.STUCK, (
+        f"expected STUCK on repeat-identical-steps loop, got {state.execution_status}"
+    )
+    stuck_statuses = [
+        e
+        for e in events
+        if isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.STUCK
+        and e.detail == "bookkeeping_only"
+    ]
+    assert stuck_statuses, (
+        "expected the existing bookkeeping_only STUCK signal (C8 reuses the "
+        "valve, does not invent a new one)"
+    )
+    # The AWAITING_PLAN_APPROVAL gate was never reached — autonomous was
+    # respected for the first revisions, then the cap fired.
+    assert not _awaiting_plan(events), (
+        "autonomous run halted at AWAITING_PLAN_APPROVAL (should have been "
+        "halting via the bookkeeping valve instead)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_autonomous_propose_plan_update_appended_steps_do_not_trip():
+    """C8 (T11) negative: an APPENDED step counts as DIFFERENT, so the
+    consecutive-identical streak resets and the bound MUST NOT trip. The
+    run should reach FINISHED normally — appending a step is a legitimate
+    plan revision, not a stuck-model symptom."""
+    from disco.core import SqliteEventStore as Store
+
+    store = Store(":memory:")
+    loop, store = build_loop(_appended_steps_script(), store=store)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    loop._autonomous = True  # the property under test
+
+    await loop.send_message("go")
+    state = await loop.run()
+
+    events = await store.get_events(CID)
+    # The bound did NOT fire: the run completed (FINISHED), and the
+    # bookkeeping_only STUCK signal was never emitted.
+    assert state.execution_status == ConversationStatus.FINISHED, (
+        f"expected FINISHED (append is not a trip), got {state.execution_status}"
+    )
+    stuck_statuses = [
+        e
+        for e in events
+        if isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.STUCK
+        and e.detail == "bookkeeping_only"
+    ]
+    assert not stuck_statuses, (
+        "appending a step must reset the streak — bookkeeping_only STUCK "
+        "should NOT have fired"
+    )
+
+
+@pytest.mark.asyncio
+async def test_autonomous_propose_plan_update_changed_steps_do_not_trip():
+    """C8 (T11) negative: CHANGING a step title counts as DIFFERENT, so the
+    consecutive-identical streak resets and the bound MUST NOT trip. The
+    run should reach FINISHED normally — a different plan is a legitimate
+    plan revision, not a stuck-model symptom."""
+    from disco.core import SqliteEventStore as Store
+
+    store = Store(":memory:")
+    loop, store = build_loop(_changed_steps_script(), store=store)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    loop._autonomous = True  # the property under test
+
+    await loop.send_message("go")
+    state = await loop.run()
+
+    events = await store.get_events(CID)
+    # The bound did NOT fire: the run completed (FINISHED), and the
+    # bookkeeping_only STUCK signal was never emitted.
+    assert state.execution_status == ConversationStatus.FINISHED, (
+        f"expected FINISHED (changed step is not a trip), got {state.execution_status}"
+    )
+    stuck_statuses = [
+        e
+        for e in events
+        if isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.STUCK
+        and e.detail == "bookkeeping_only"
+    ]
+    assert not stuck_statuses, (
+        "changing a step must reset the streak — bookkeeping_only STUCK "
+        "should NOT have fired"
+    )

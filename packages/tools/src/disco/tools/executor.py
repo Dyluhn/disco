@@ -41,6 +41,7 @@ class DefaultToolExecutor:
         owner_id: str = "local",
         conversation_id: str = "conv",
         default_timeout_s: int = 300,
+        assist: bool = False,
     ) -> None:
         self._registry = registry
         self._scope = scope
@@ -49,6 +50,7 @@ class DefaultToolExecutor:
         self._owner_id = owner_id
         self._conversation_id = conversation_id
         self._default_timeout_s = default_timeout_s
+        self._assist = assist  # weak-model assist gate → stamped onto every ToolContext
         self._killed = False
 
     @property
@@ -184,6 +186,7 @@ class DefaultToolExecutor:
             capabilities=self._broker.grant(tool_def.uses_capabilities),
             owner_id=self._owner_id,
             conversation_id=self._conversation_id,
+            assist=self._assist,
         )
 
     def _fail(
