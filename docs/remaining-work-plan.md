@@ -93,6 +93,19 @@ catalogued 21 small-model adaptations; below is the steal-list TRIAGED against w
 Disco actually has (verified by reading our source, since the reviewers didn't have
 it). MiniMax's independent review will be merged when it lands.
 
+> **GATING IS THE ARCHITECTURE (Dylan, 2026-06-13).** Every item below is a
+> *weak-model COMPENSATION*. NONE ships as a standard always-on addition — each is a
+> **toggle-gated "weak-model assist" tier, DEFAULT-OFF for capable models.** Forcing
+> these on a good model makes it WORSE: a read-before-write gate annoys a model that
+> already knows the file, quality-monitor "corrections" and forced patch-rewrites
+> override better judgment, thinking-truncation cuts a strong model's reasoning. The
+> harvest's value is conditional on the model being weak. Implementation: one
+> assist-tier toggle (per-conversation, like autonomous mode) that defaults from the
+> probed model — small/local → on, capable/frontier → off — and is overridable.
+> **Build the gate FIRST; add features behind it.** The ONLY near-exception is F1
+> (pure empty-`tool_calls` fallback — it can't fire on a capable model whose calls
+> are always structured), but it still lives in the tier for consistency.
+
 **Tier 1 — port soon (verified gaps that hurt weak models):**
 | ID | Item | Why it matters to Disco | Sev |
 |----|------|--------------------------|-----|
