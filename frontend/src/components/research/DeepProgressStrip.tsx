@@ -75,6 +75,39 @@ function StatsRow({ stats, status }: { stats: DeepStats; status: ConversationSta
   );
 }
 
+/** The "now" line — what the engine is doing RIGHT NOW, so a long quiet stretch
+ * (a 30-60s section write on a local model) reads as work, not a hang. */
+function Heartbeat({ stats, status }: { stats: DeepStats; status: ConversationStatus }) {
+  if (status !== "RUNNING") return null;
+  let now: string | null = null;
+  if (stats.activeSection) {
+    const n = stats.activeSection.index || stats.subquestionsDone + 1;
+    now = `Writing section ${n} of ${stats.subquestionsTotal}: “${stats.activeSection.title}”`;
+  } else if (stats.phase === "coherence") {
+    now = "Cross-checking the report for coherence…";
+  } else if (stats.activeSubquestion) {
+    now = `Searching: “${stats.activeSubquestion.title}”`;
+  } else if (stats.phase === "synthesize") {
+    now = "Preparing the next section…";
+  }
+  if (!now && !stats.lastThought) return null;
+  return (
+    <div className="border-b border-hairline px-body py-inline">
+      {now && (
+        <div className="flex items-center gap-hair font-ui text-[0.8rem] text-text">
+          <Loader2 className="size-3 shrink-0 animate-spin text-accent" aria-hidden />
+          <span className="truncate">{now}</span>
+        </div>
+      )}
+      {stats.lastThought && (
+        <div className="mt-hair truncate font-reading text-[0.78rem] italic text-text-muted">
+          {stats.lastThought}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function DeepProgressStrip({ plan, progress, trace, stats, status }: Props) {
   const isFinished = status === "FINISHED" || status === "IDLE";
   const [collapsedManually, setCollapsedManually] = useState(false);
@@ -130,6 +163,9 @@ export function DeepProgressStrip({ plan, progress, trace, stats, status }: Prop
         )}
         <StatsRow stats={stats} status={status} />
       </header>
+
+      {/* The heartbeat — what's happening RIGHT NOW + the engine's latest thought. */}
+      <Heartbeat stats={stats} status={status} />
 
       {/* Plan checklist — reuses Build's PlanPanel in read-only mode. */}
       {planForPanel && (

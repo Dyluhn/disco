@@ -181,6 +181,10 @@ export const fixtureRunningEvents: AgentEvent[] = [
     section: subq1,
     passages_used: 6,
   }),
+  action("evt_secdone_1", 21, "section_done", {
+    section_id: "sec_1",
+    title: subq1,
+  }),
   action("evt_search_2_1", 30, "search", {
     subquestion: subq2,
     query: "solid-state battery interface stability dendrite suppression",
@@ -199,6 +203,10 @@ export const fixtureRunningEvents: AgentEvent[] = [
     section: subq2,
     passages_used: 5,
   }),
+  action("evt_secdone_2", 36, "section_done", {
+    section_id: "sec_2",
+    title: subq2,
+  }),
   action("evt_search_3_1", 40, "search", {
     subquestion: subq3,
     query: "solid-state battery cost per kWh manufacturing scale economy",
@@ -216,6 +224,10 @@ export const fixtureRunningEvents: AgentEvent[] = [
   action("evt_synth_3", 50, "synthesize_section", {
     section: subq3,
     passages_used: 5,
+  }),
+  action("evt_secdone_3", 51, "section_done", {
+    section_id: "sec_3",
+    title: subq3,
   }),
   action("evt_phase_synth", 55, "phase", { phase: "synthesize", sections: 3, passages_total: 30 }),
   action("evt_phase_coher", 60, "phase", { phase: "coherence" }),

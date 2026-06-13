@@ -78,8 +78,15 @@ export function derivePlanProgress(
         map.set(idx, "active");
       }
     } else if (name === "synthesize_section") {
+      // Writing STARTED — the step is being worked, not finished. Marking it
+      // done here (the old behavior) checked steps off ~30-60s early on local
+      // models and left the strip lying about progress.
       const section = String(args.section ?? "");
       const idx = titleIndex.get(section);
+      if (idx !== undefined && map.get(idx) !== "done") map.set(idx, "active");
+    } else if (name === "section_done") {
+      const title = String(args.title ?? "");
+      const idx = titleIndex.get(title);
       if (idx !== undefined) map.set(idx, "done");
     }
   }
@@ -100,6 +107,15 @@ export interface DeepStats {
   sourcesDiscovered: number;
   /** Wall-clock seconds since the first event (for the live stats display). */
   elapsedSeconds: number | null;
+  /** The engine phase from the latest `phase` action (gather/synthesize/coherence). */
+  phase: string | null;
+  /** Section currently being WRITTEN (synthesize_section fired, section_done not
+   *  yet) — the heartbeat for the long quiet synthesis stretch on local models. */
+  activeSection: { title: string; index: number } | null;
+  /** The engine's latest "thought" — a gap_reason rationale ("found X, still
+   *  missing Y") or a section completion — surfaced so a working run never
+   *  reads as a hang. */
+  lastThought: string | null;
 }
 
 /** Live stats for the mono header strip. Computed from the event stream;
@@ -111,6 +127,9 @@ export function deriveStats(
   let activeSubq: { title: string; index: number } | null = null;
   let activeRound: { current: number; max: number } | null = null;
   let sourcesDiscovered = 0;
+  let phase: string | null = null;
+  let activeSection: { title: string; index: number } | null = null;
+  let lastThought: string | null = null;
   let firstSeq = Number.POSITIVE_INFINITY;
   let lastSeq = 0;
   const titleIndex = new Map<string, number>();
@@ -136,15 +155,29 @@ export function deriveStats(
           }
         }
       } else if (name === "synthesize_section") {
-        // synthesis means the sub-question is done — clear active marker
+        // Writing this section now — the heartbeat for the quiet stretch.
         const section = String(args.section ?? "");
+        const idx = titleIndex.get(section);
+        activeSection = { title: section, index: idx ?? 0 };
         if (activeSubq && activeSubq.title === section) activeSubq = null;
+        activeRound = null; // rounds are a gather concept
+      } else if (name === "section_done") {
+        const title = String(args.title ?? "");
+        if (activeSection && activeSection.title === title) activeSection = null;
+        lastThought = `Finished “${title}”`;
+      } else if (name === "phase") {
+        phase = String(args.phase ?? "") || null;
       }
     } else if (e.kind === "observation" && (e as ObservationEvent).tool_result) {
       const r = (e as ObservationEvent).tool_result;
       if (r.tool_name === "observation" && r.structured) {
         const added = Number(r.structured.added);
         if (Number.isFinite(added)) sourcesDiscovered += added;
+      } else if (r.tool_name === "gap_reason" && r.structured) {
+        // The engine's between-rounds reasoning: what it found, whether it's
+        // sufficient, what's still missing — the Google-style "thought" line.
+        const rationale = String(r.structured.rationale ?? "").trim();
+        if (rationale) lastThought = rationale;
       }
     }
   }
@@ -170,6 +203,9 @@ export function deriveStats(
     activeRound,
     sourcesDiscovered,
     elapsedSeconds,
+    phase,
+    activeSection,
+    lastThought,
   };
 }
 
