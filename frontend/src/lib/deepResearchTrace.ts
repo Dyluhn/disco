@@ -314,10 +314,20 @@ export function deriveLiveTrace(
       observed.set(e.action_id, e as ObservationEvent);
     }
   }
+  // "Writing section: X" items keyed by section title, so the engine's
+  // section_done checkpoint marks ITS row done instead of rendering as a raw
+  // internal name (the "section_done" leak).
+  const synthByTitle = new Map<string, ActivityItem>();
   for (const e of events) {
     if (e.kind !== "action" || !e.tool_call) continue;
     const tc = e.tool_call;
     if (tc.tool_name === "phase") continue; // engine internals — skip
+    if (tc.tool_name === "section_done") {
+      const item = synthByTitle.get(String(tc.arguments.title ?? ""));
+      if (item) item.status = "done";
+      continue; // a checkpoint, not a user-visible operation of its own
+    }
+    if (!(tc.tool_name in VERB)) continue; // NEVER render internals raw
     const action = e as ActionEvent;
     const obs = observed.get(action.id);
     const label = plainLabel(tc.tool_name, tc.arguments);
@@ -328,19 +338,24 @@ export function deriveLiveTrace(
         obs.tool_result.structured,
       );
     }
-    const isLast = false; // set below for the trailing running entry
     let st: ActivityItem["status"];
     if (obs) st = "done";
     else if (status === "RUNNING") st = "running";
     else st = "done";
-    items.push({
+    const item: ActivityItem = {
       id: e.id,
       label,
       detail,
       status: st,
       attention: false,
-    });
-    void isLast;
+    };
+    if (tc.tool_name === "synthesize_section") {
+      // No observation pairs with a section write — section_done (above) is its
+      // completion signal. Until then it runs; on terminal status it settles.
+      item.status = status === "RUNNING" ? "running" : "done";
+      synthByTitle.set(String(tc.arguments.section ?? ""), item);
+    }
+    items.push(item);
   }
   return items;
 }
