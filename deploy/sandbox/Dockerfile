@@ -1,8 +1,13 @@
 FROM debian:stable-slim
 # Agent toolset: shell, python, common CLI utils. NO secrets/keys — ever.
+# `python-is-python3` provides the `python` alias (Debian ships only `python3`):
+# agents overwhelmingly write `python script.py` / `python -m pip`, and without it
+# every such call exits 127 and the agent flails trying to recover (caught in a
+# Gemma build eval). `pip` is symlinked below for the same reason.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 python3-venv python3-pip ca-certificates curl git jq \
+      python3 python3-venv python3-pip python-is-python3 ca-certificates curl git jq \
       ripgrep procps less nano tmux \
+    && ln -sf /usr/bin/pip3 /usr/local/bin/pip \
     && rm -rf /var/lib/apt/lists/*
 # Node.js 22 LTS (current LTS) via NodeSource — gives node + npm + npx + corepack,
 # so the `code_exec` node path and JS/TS builds (vite/next/etc.) work in the box.
