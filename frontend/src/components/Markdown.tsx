@@ -8,8 +8,35 @@ import React, { useMemo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/cn";
-import { CitationMarker } from "./blocks";
+import { ChartBlockComponent, CitationMarker } from "./blocks";
 import type { GroundedAnswer } from "@/types/grounded";
+
+/** Parse a ```chart fence's JSON payload, or null when it isn't a valid chart.
+ * Deep-research report sections arrive as RAW markdown (the synthesis prompt embeds
+ * charts as ```chart fenced JSON), so the lift to a real chart must happen here —
+ * unlike the standard research surface, which gets structured chart blocks. */
+function parseChartPayload(node: React.ReactNode): {
+  chart_type: string;
+  data: unknown;
+  title?: string;
+  x_label?: string;
+  y_label?: string;
+} | null {
+  if (!React.isValidElement(node)) return null;
+  const props = node.props as { className?: string; children?: React.ReactNode };
+  if (!props.className?.includes("language-chart")) return null;
+  const raw = typeof props.children === "string" ? props.children : null;
+  if (!raw) return null;
+  try {
+    const payload = JSON.parse(raw);
+    if (payload && typeof payload === "object" && payload.chart_type && payload.data) {
+      return payload;
+    }
+  } catch {
+    /* malformed → fall through to an honest code fence */
+  }
+  return null;
+}
 
 const CITE = /\[\[(\w+)\]\]/g;
 
@@ -73,11 +100,27 @@ const COMPONENTS: Components = {
       </code>
     );
   },
-  pre: ({ children }) => (
-    <pre className="my-inline overflow-x-auto rounded-control border border-hairline bg-surface-1 px-body py-inline">
-      {children}
-    </pre>
-  ),
+  pre: ({ children }) => {
+    // ```chart fences render as real inline charts (Chart.js), not code blocks.
+    const charts = React.Children.toArray(children).map(parseChartPayload);
+    if (charts.length === 1 && charts[0]) {
+      const c = charts[0];
+      return (
+        <ChartBlockComponent
+          chart_type={c.chart_type}
+          data={c.data}
+          title={c.title}
+          x_label={c.x_label}
+          y_label={c.y_label}
+        />
+      );
+    }
+    return (
+      <pre className="my-inline overflow-x-auto rounded-control border border-hairline bg-surface-1 px-body py-inline">
+        {children}
+      </pre>
+    );
+  },
   table: ({ children }) => (
     <div className="my-inline overflow-x-auto">
       <table className="w-full border-collapse text-[0.85rem]">{children}</table>

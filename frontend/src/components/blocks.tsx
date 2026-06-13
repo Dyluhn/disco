@@ -177,7 +177,9 @@ function TableView({
 
 const COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"];
 
-function ChartBlockComponent({
+// Exported so Markdown.tsx can lift ```chart fences (deep-research report sections
+// arrive as raw markdown, not structured blocks) into real inline charts.
+export function ChartBlockComponent({
   chart_type,
   data,
   title,

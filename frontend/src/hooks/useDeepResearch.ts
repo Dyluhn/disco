@@ -18,7 +18,9 @@ import { useMutation } from "@tanstack/react-query";
 import {
   createDeepResearchConversation,
   exportReportAsMarkdown,
-  exportReport,
+  // Aliased: a local legacy `exportReport` (the MD-only button) used to SHADOW this
+  // import, so pdf/docx exports silently ran the markdown exporter instead.
+  exportReport as exportReportApi,
   type ReportExportFmt,
 } from "@/api/deepResearch";
 import { killConversation } from "@/api/agent";
@@ -99,7 +101,7 @@ export function useDeepResearch(resumeCid?: string | null) {
         return;
       }
       // Server-side export for pdf/docx. The UI reports errors via toast/surface.
-      await exportReport(session.cid, fmt);
+      await exportReportApi(session.cid, fmt);
     },
     [session?.cid, exportMd],
   );

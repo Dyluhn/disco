@@ -106,7 +106,7 @@ function ModelForm({
           <input
             className={field}
             value={form.base_url ?? ""}
-            placeholder="http://192.168.1.50:8080/v1"
+            placeholder="http://localhost:8080/v1"
             onChange={(e) => set("base_url", e.target.value)}
           />
         </label>

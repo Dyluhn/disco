@@ -6,8 +6,8 @@ import type { ModelAssignments, ModelInfo } from "@/types/models";
  * like the real deployment, not placeholder seed data. When VITE_API_BASE is set,
  * the live `/api/models` (read from the persisted config) replaces this entirely.
  */
-const QWEN = "http://192.168.1.231:18080/v1";
-const GEMMA = "http://192.168.1.81:8087/v1";
+const QWEN = "http://localhost:18080/v1";
+const GEMMA = "http://localhost:8087/v1";
 
 export const MODEL_CATALOGUE: ModelInfo[] = [
   {
@@ -17,7 +17,7 @@ export const MODEL_CATALOGUE: ModelInfo[] = [
     price_in_per_m: 0,
     price_out_per_m: 0,
     capabilities: ["tool_calling", "json_mode", "long_context"],
-    note: "131K ctx · Q5_K_XL · 192.168.1.231:18080",
+    note: "131K ctx · Q5_K_XL · localhost:18080",
     model_id: "Qwen3.6-27B-UD-Q5_K_XL.gguf",
     base_url: QWEN,
     context_window: 131072,
@@ -30,7 +30,7 @@ export const MODEL_CATALOGUE: ModelInfo[] = [
     price_in_per_m: 0,
     price_out_per_m: 0,
     capabilities: ["json_mode", "long_context"],
-    note: "131K ctx · Q5_K_XL · 192.168.1.231:18080",
+    note: "131K ctx · Q5_K_XL · localhost:18080",
     model_id: "Qwen3.6-27B-UD-Q5_K_XL.gguf",
     base_url: QWEN,
     context_window: 131072,
@@ -43,7 +43,7 @@ export const MODEL_CATALOGUE: ModelInfo[] = [
     price_in_per_m: 0,
     price_out_per_m: 0,
     capabilities: ["json_mode"],
-    note: "32K ctx · 192.168.1.81:8087",
+    note: "32K ctx · localhost:8087",
     model_id: "gemma-4-e2b-mtp",
     base_url: GEMMA,
     api_key_env: "PMX_GEMMA_API_KEY",
@@ -56,7 +56,7 @@ export const MODEL_CATALOGUE: ModelInfo[] = [
     price_in_per_m: 0,
     price_out_per_m: 0,
     capabilities: [],
-    note: "32K ctx · 192.168.1.81:8087",
+    note: "32K ctx · localhost:8087",
     model_id: "gemma-4-e2b-mtp",
     base_url: GEMMA,
     api_key_env: "PMX_GEMMA_API_KEY",
