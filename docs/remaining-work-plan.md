@@ -87,11 +87,35 @@ blocks the stated goal · **P1** product-quality moat · **P2** feature complete
 
 ---
 
-## Track F — SmallCode harvest (PENDING — 3 reviews in flight)
-Doorman11991/smallcode is a TS coding agent for 8B–35B local models — directly
-parallel (budget-managed context, forgiving multi-format tool parser, TODO-file
-planning, search-and-replace editing). Harvest items + steal-list to be appended
-when the Sonnet ×2 + MiniMax reviews complete, then triaged into Tracks C/E.
+## Track F — SmallCode harvest (from 2 Sonnet reviews; verified vs Disco's code)
+Doorman11991/smallcode — a TS coding agent for 8B–35B local models. Reviewers
+catalogued 21 small-model adaptations; below is the steal-list TRIAGED against what
+Disco actually has (verified by reading our source, since the reviewers didn't have
+it). MiniMax's independent review will be merged when it lands.
+
+**Tier 1 — port soon (verified gaps that hurt weak models):**
+| ID | Item | Why it matters to Disco | Sev |
+|----|------|--------------------------|-----|
+| F1 | **Multi-format tool-call recovery** — when the structured `tool_calls` array is empty, scan `content` + `reasoning_content` for Hermes `<tool_call>` tags / fenced JSON / bare JSON / Liquid `[func(kw=val)]`, with trailing-comma repair and a `write_file` path+content regex last-resort | **VERIFIED GAP:** `openai_provider.py:385 _tool_calls` reads ONLY the structured array — no text/reasoning fallback. This is exactly what dropped Gemma's calls under the wrong chat template → the STUCK we just saw. A text-fallback would have recovered them. | **HIGH** |
+| F2 | Quality monitor — hallucinated tool name → Levenshtein closest-match ("did you mean `file_edit`?"), cross-turn exact-repeat detection, capped at 2 corrections | cheap, high-leverage; weak models misname tools constantly | MED-HIGH |
+| F3 | Read-before-write guard — refuse the FIRST `file_write` to an unread existing file (allow the 2nd, for legit full-replace) | complements the live snapshot; stops blind overwrites | MED |
+| F4 | Bootstrap detection — project-type one-liner on turn 1 (build/test/entry cmds) | saves 3–5 discovery tool calls per session | MED |
+
+**Tier 2 — enhance what Disco already has:**
+| ID | Item | Disco status |
+|----|------|--------------|
+| F5 | Thinking-budget mgmt — emergency head+tail truncation of `<think>`, disable thinking on repair attempt ≥2 | Disco HAS `enable_thinking` on/off (`openai_provider.py:213`) but no truncation/repair-policy |
+| F6 | Patch-spiral detector (failures + total attempts per file → force full rewrite) | fold into the stuck-detector; the no-op half shipped this session |
+| F7 | Context-aware read trim — head-only + actionable "search then read a line range" directive under pressure | Disco likely fixed-cap; make it pressure-aware |
+| F8 | Mid-turn arg truncation — shrink old `file_write` args to a prefix once the result is confirmed | free, lossless compaction Disco's condenser doesn't do mid-turn |
+| F9 | Tool-call dedup — read-only sliding window + idempotent-write per-turn | evaluate vs observed behavior |
+| F10 | **Contract / Definition-of-Done guard** — external assertions the agent can't fake; block "done" until they pass | **directly informs Track C1 (B7 fresh-context evaluator)** — a concrete design to copy |
+
+**Do NOT copy (reviewer-flagged anti-patterns):** validation that EXECUTES user code (keep syntax-only — security); the "MarrowScript compilation" fiction (hand-written JS with a generated-by header); off-by-default safety (shell containment, auto-rollback); an over-aggressive compression target (~400 tokens on 8k); an adaptive router that can't distinguish a slow/dead server from an incapable model.
+
+**Disco is already ahead on:** the always-on live workspace snapshot (SmallCode's file-state diff tracker is OFF by default → its model must re-read to re-anchor and can read-loop); event-sourced provenance (supersedes SmallCode's manual evidence store); gVisor sandboxing (vs optional cwd-containment).
+
+**Routing:** F1 is a new small subsystem (its own item, near Track C). F2–F4, F6 → Track C/E. F5,F7,F8 → Track E. F10 → merge into C1's design.
 
 ---
 
