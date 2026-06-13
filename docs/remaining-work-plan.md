@@ -30,6 +30,37 @@ reconciliation must be re-checked against current code before a brief is written
 (some remaining rows are tagged "VERIFY at impl"). Verified-still-real: D6, HS-01,
 F1, BP-G10 (flip-only), C9.
 
+## ✓ BY-HAND VERIFICATION (2026-06-13) — authoritative disposition
+Every item below re-checked against LIVE code (file:line). This supersedes the
+track tables where they disagree. **This is the list the harness plans from.**
+
+**REAL & OPEN (verified, do these):**
+- A1 (no `tsconfig.build.json`; **36** tsc errors today) · A2 · A3 · A4 · A5 (ruff debt confirmed) · A6 (`PMX_` still the prefix)
+- B1 (encoders HARD-CODED to e5-large/jina-v2, no env knob) · B2 (ctx still 32K, no KV-quant) · B3 (no OOM guard) · B4 · B5 (**3,088** leaked dirs)
+- C1 **B7 evaluator — ZERO code (headline)** · C2 · C3 · C6 (recitation fires every step) · C8 · C9 · C10 · C14 (shared router confirmed) · C15 · C16 · C20 · C21
+- D2 · D3 · D4 · D6 (no DatasourceEvent producer) · D7 · **D8** (screenshot/vision gate = absorbs BP-G5/G6) · D9 (no image-gen) · D10 · D11 · D12
+- E1 · E2 · E3 · E4 · E5 (no docker-wedge guard) · E6 · E7 · E8 (podman/local SEALED, not proxied)
+- F1 (no tool-call text/`reasoning_content` fallback — the verified headline) · F2 · F3 (no read-before-write) · F4 (no bootstrap) · F5 · F6 · F7 · F8 — **all behind the F-gate**
+- G HS-01 (no shell spill-to-file) · HS-03 (verify) · HS-07
+- H BP-G9 (no multi-service) · BP-G10 (flip Build egress open→filtered; infra exists) · BP-G12
+
+**PARTIAL — reduced to the named residual only:**
+- C5 (spill-to-disk + MEMORY.md-style View recall EXIST → confirm residual) · C7 (temp-jitter DONE → only serialization-seed jitter + nudge-pool) · C11 (tombstones/microcompact exist → on-demand recovery) · C13 (prefill infra exists; full-lifecycle is a gated experiment — LOW) · C18 (model-authored `verify` exists → structured predicates) · D5 (**in-process Kokoro DONE** → only the Settings toggle) · F9 (remember-dedup exists → general read-dedup) · HS-02 (resume reality-block exists → compaction-as-update-template) · HS-08 (requery already reroutes unknown tools → only the invariant check)
+
+**DONE — remove:** A7 (README/CONTRIBUTING/matrix shipped `fba3b81`/`359442e`) · C17 (cache markers `prompt_cache_key`+`cache_control` shipped `eb302cc`; only cost-tracking nuance) · BP-G1/BP-G4 (`shell_sessions.py`) · HS-04 (`stuck.py` scenarios) · HS-05 (→ C1).
+
+**DROP — deferred-by-design or OBSOLETE (building these would be WRONG):**
+- C4 mode-boundary KV — DEFERRED low-value (`pending-items:86`, one-time-per-conversation)
+- C19 2A–3B nudges — violate the no-automatic-nudge invariant (`c97c1b3`)
+- BP-G2/BP-G3 — DC-01 `host_proxy.py` superseded the keepalive serving model
+- D1 `deploy_preview` — intentionally absent (`builtin/__init__.py:64`); re-decide if wanted
+
+**NEEDS A DYLAN DECISION before planning:**
+- C12 B2 programmatic-tool-calling/CodeAct-default — feasibility-gated (`tool_choice`/grammar DEAD on the llama.cpp stack; prefill/template only) — big arch change
+- HS-06 epochal observation masking — per-step-mask vs KV-stability conflict; pick one strategy
+
+---
+
 ## Track A — Release honesty & CI (P0, the gate)
 *Source: North Star §2. These make "green" mean something.*
 
