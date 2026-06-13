@@ -128,6 +128,20 @@ it). MiniMax's independent review will be merged when it lands.
 
 **Disco is already ahead on:** the always-on live workspace snapshot (SmallCode's file-state diff tracker is OFF by default → its model must re-read to re-anchor and can read-loop); event-sourced provenance (supersedes SmallCode's manual evidence store); gVisor sandboxing (vs optional cwd-containment).
 
+**Porting caveats (from MiniMax's independent review, which found 19 bugs in SmallCode):**
+- **F1**: SmallCode's own `reasoning_content` recovery has a bug — it extracts the
+  tool call AND then promotes the reasoning prose into `content`, so the model sees
+  its own thinking as assistant text next turn. When we port F1, recover the call
+  but DROP the reasoning (don't leak it as content).
+- Don't copy SmallCode's text-regex completion ("step N done" matches negations like
+  "step 3 isn't done") — Disco's affirmative `finish` tool is already better; keep it.
+- If we port trust-decay (F-tier), distinguish "tool returned no results" from "tool
+  errored" — SmallCode demotes `search` after 3 empty results, exactly when it's
+  needed to confirm absence.
+- Avoid SmallCode's structural smells generally: module-global mutable retry state
+  with mixed keyspaces, duplicate dead-code paths, and an SSRF guard the main loop
+  bypasses (our gVisor egress proxy is the right layer instead).
+
 **Routing:** F1 is a new small subsystem (its own item, near Track C). F2–F4, F6 → Track C/E. F5,F7,F8 → Track E. F10 → merge into C1's design.
 
 ---
