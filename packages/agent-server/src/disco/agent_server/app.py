@@ -121,6 +121,8 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
                 _LOG.warning("MCP pool startup failed", exc_info=True)
             with contextlib.suppress(Exception):  # never block boot on reconciliation
                 await runtime.reconcile_orphaned_runs()
+            with contextlib.suppress(Exception):  # warm the live /props cache off-loop
+                await runtime.prewarm_model_probe()
             idle_sweep_task = asyncio.create_task(runtime._idle_sweep_loop())
             # RP-08: start the schedule manager loop alongside the idle sweep.
             schedule_task = asyncio.create_task(runtime._schedule_manager_loop())

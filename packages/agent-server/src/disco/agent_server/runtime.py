@@ -679,6 +679,27 @@ class ConversationRuntime:
         except Exception:  # noqa: BLE001 — never block loop construction on this
             return None
 
+    async def prewarm_model_probe(self) -> None:
+        """Warm the live-model /props cache OFF the event loop at startup, so the
+        FIRST build's condenser budgets against the REAL context window, not the
+        static config. _probe_live_model is non-blocking on the loop (it returns the
+        static fallback and fills the cache from a worker thread), so without a
+        pre-warm the very first _compose_build_loop reads the fallback and caches it
+        for that loop's life. Here we await the blocking probe in a thread, so by the
+        time any conversation composes, the cache is hot. Best-effort: never blocks
+        boot."""
+        try:
+            cfg = self._config_store.load()
+            key = cfg.model_for(ModelRole.AGENT_DRIVER)
+            entry = cfg.entry_for(key)
+            if entry and entry.base_url:
+                api_key = (
+                    os.environ.get(entry.api_key_env) if entry.api_key_env else None
+                )
+                await asyncio.to_thread(_do_live_model_probe, entry.base_url, api_key)
+        except Exception:  # noqa: BLE001 — best effort; the static config is the fallback
+            pass
+
     def _load_overrides(self) -> dict[str, str]:
         if self._override_path and os.path.exists(self._override_path):
             try:
@@ -745,8 +766,23 @@ class ConversationRuntime:
         self._autonomous[conversation_id] = bool(value)
         self._save_autonomous()
 
+    def _effective_autonomous(self, conversation_id: str) -> bool:
+        """The SINGLE source of truth for "is this conversation actually running
+        headless". Autonomous is a BUILD/AGENT concept (it governs the plan-gate and
+        the ask/clarify tools — neither of which Research surfaces have), so the
+        stored flag only takes effect on a build-like surface. Gating in ONE place
+        keeps the prompt prefix (router), the loop's tool-suppression/auto-approve,
+        AND the UI badge from disagreeing — a Research convo created with
+        autonomous=True is uniformly treated as interactive everywhere."""
+        return (
+            self._autonomous.get(conversation_id, False)
+            and self._surface_of(conversation_id) in self._BUILD_LIKE_SURFACES
+        )
+
     def is_autonomous(self, conversation_id: str) -> bool:
-        return self._autonomous.get(conversation_id, False)
+        # The public read (UI badge via /state extras) — gated, so the badge can't
+        # show "autonomous" on a surface that has no headless affordance.
+        return self._effective_autonomous(conversation_id)
 
     def set_model_override(self, conversation_id: str, model_id: str | None) -> None:
         """Pin the driver model for a conversation (the Build chat model picker). The id
@@ -847,16 +883,9 @@ class ConversationRuntime:
             # Surface FIRST: it scopes which skills the router injects (a build-only
             # skill shouldn't reach an agent conversation's prompt, and vice versa).
             surface = self._surface_of(conversation_id)
-            # Autonomous is a BUILD/AGENT concept (it governs the plan-gate and the
-            # ask/clarify tools — neither of which Research surfaces have). Gate it to
-            # build-like surfaces so the flag can't be half-applied: the prompt prefix
-            # and the loop's tool-suppression/auto-approve must agree, or a Research
-            # convo would carry the "no user, don't ask" prefix while the loop ignored
-            # it. One source of truth here means every downstream consumer is consistent.
-            autonomous = (
-                self._autonomous.get(conversation_id, False)
-                and surface in self._BUILD_LIKE_SURFACES
-            )
+            # Single source of truth (gated by surface) shared with the loop compose
+            # below and the UI badge — they can't desync.
+            autonomous = self._effective_autonomous(conversation_id)
             router = self._router_now(pick=override, surface=surface, autonomous=autonomous)
             # Research↔Build isolation: the SURFACE picks the agent class, so
             # completion semantics (prose=answer for Research vs affirmative
@@ -1101,7 +1130,11 @@ class ConversationRuntime:
             planning_tools=frozenset(
                 {"submit_plan", "file_list", "file_read", "search", "extract"}
             ),
-            autonomous=self._autonomous.get(conversation_id, False),
+            # Same gated source of truth as the router prefix and the UI badge —
+            # _compose_build_loop only runs for build-like surfaces today, but reading
+            # the gated value means a future caller can't desync the loop's behavior
+            # from the prompt prefix.
+            autonomous=self._effective_autonomous(conversation_id),
         )
 
     # ---- deep research surface ---------------------------------------------

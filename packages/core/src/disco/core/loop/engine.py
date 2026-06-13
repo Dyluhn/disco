@@ -117,8 +117,8 @@ def _workspace_paths_from_events(events: list[Event]) -> tuple[list[str], list[s
     mutated: dict[str, None] = {}
     read_only: dict[str, None] = {}
     for e in events:
-        if not isinstance(e, ActionEvent):
-            continue
+        if not isinstance(e, ActionEvent) or e.tool_call is None:
+            continue  # defensive: a tool_call-less ActionEvent (finish mirror) has no path
         name = e.tool_call.tool_name
         p = e.tool_call.arguments.get("path")
         if not isinstance(p, str) or not p:
@@ -1692,8 +1692,10 @@ class AgentLoop:
             except asyncio.TimeoutError:
                 # A hung read implies a wedged/dead sandbox. STOP — don't hold the
                 # conversation lock for timeout×N files (that would block pause/steer/
-                # cancel). Degrade to the snapshot we have; the post-snapshot
-                # _maybe_emit_sandbox_restart heals the sandbox.
+                # cancel). Degrade to the snapshot collected so far. The sandbox isn't
+                # healed here (this is a pure projection step); the model's NEXT real
+                # action goes through _execute_and_observe, which detects the dead
+                # sandbox and emits the restart notice.
                 break
             except Exception:  # noqa: BLE001 — file gone/unreadable this turn: skip it
                 continue
@@ -1937,23 +1939,23 @@ class AgentLoop:
         # The caller auto-strips a malformed verify rather than counting it as a
         # failed acceptance. Detected from the result text.
         malformed = False
-        if not passed:
-            exit_code: int | None = None
-            blob = ""
-            if isinstance(obs, ObservationEvent):
-                st = obs.tool_result.structured or {}
-                ec = st.get("exit_code")
-                exit_code = ec if isinstance(ec, int) and not isinstance(ec, bool) else None
-                blob = f"{obs.tool_result.content or ''} {obs.tool_result.error or ''}"
-            elif obs is not None:
-                blob = getattr(obs, "error", "") or ""
-            low = blob.lower()
-            # The verify CARRIER is broken (not the deliverable) when the shell can't
-            # find/parse the command: exit 127 (command-not-found — authoritative from
-            # the structured result, so it's locale-independent and can't be faked by
-            # output text), or an interpreter SyntaxError. Use the real exit code, NOT a
-            # regex over output: "exit 1, 127 tests failed" is a REAL failure, not a
-            # malformed carrier, and must NOT be auto-stripped into a false success.
+        # Malformed = the verify CARRIER is broken, which only makes sense if the
+        # shell actually RAN the command and reported it (an ObservationEvent). An
+        # AgentErrorEvent means the executor raised BEFORE any observation (sandbox
+        # down, transport error) — that's an environmental failure, NOT a malformed
+        # verify, and must stay a real failure so it isn't auto-stripped into a false
+        # "done". (Earlier this read AgentErrorEvent.error text and a stray "command
+        # not found" substring there would wrongly strip an environmental failure.)
+        if not passed and isinstance(obs, ObservationEvent):
+            st = obs.tool_result.structured or {}
+            ec = st.get("exit_code")
+            exit_code = ec if isinstance(ec, int) and not isinstance(ec, bool) else None
+            low = f"{obs.tool_result.content or ''} {obs.tool_result.error or ''}".lower()
+            # The shell couldn't find/parse the command: exit 127 (command-not-found,
+            # authoritative from the structured result — locale-independent, can't be
+            # faked by output text) or an interpreter SyntaxError. Use the real exit
+            # code, NOT a regex over output: "exit 1, 127 tests failed" is a REAL
+            # failure, not a malformed carrier, and must NOT become a false success.
             malformed = (
                 exit_code == 127
                 or "syntaxerror" in low
