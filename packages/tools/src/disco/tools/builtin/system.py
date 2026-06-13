@@ -60,7 +60,12 @@ class ShellArgs(BaseModel):
 class ShellTool:
     definition = ToolDef(
         name="shell",
-        description="Run a shell command inside the sandbox and return its output.",
+        description=(
+            "Run a shell command inside the sandbox (installs, builds, tests, git) "
+            "and return its output. NOT for creating or editing files — use "
+            "file_write / file_edit / file_append for that, never `>`, `>>`, `sed`, "
+            "`tee`, or a here-doc."
+        ),
         args_model=ShellArgs,
         needs=frozenset({Capability.SHELL}),
         base_risk=SecurityRisk.MEDIUM,  # inherently riskier than read-only tools

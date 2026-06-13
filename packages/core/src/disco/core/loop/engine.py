@@ -70,6 +70,72 @@ _DRIVER_RETRY_BACKOFFS_S: tuple = (10.0, 30.0, 90.0)
 # actionless streak) so a model can't look productive by shuffling plan state.
 _BOOKKEEPING_TOOLS = frozenset({"submit_plan", "propose_plan_update", "plan_step", "finish"})
 
+# plan_step-spam guard (issue C). plan_step cycling through different step indices
+# evades BOTH the StuckDetector (each call's args differ → not "identical") AND the
+# noop valve (which deliberately skips bookkeeping tools). So it gets its own
+# trailing-streak guard, symmetric to _plan_step_lag_signal (which nudges the
+# OPPOSITE case — real work done but not checked off). Soft nudge first, hard halt
+# well below the 15-31× spam observed live; thresholds are conservative so a weak
+# model doing a small legitimate bookkeeping burst is never penalized.
+_BOOKKEEPING_STREAK_NUDGE_AT = 3
+_BOOKKEEPING_STREAK_HALT_AT = 6
+
+# finish-verify cap (issue B). The model-authored `verify` gate was the ONLY uncapped
+# gate in the loop — a broken/always-failing verify command could refuse `finish`
+# forever. Mirror the existing _browser_verify_refusals release valve: after N REAL
+# failures, finish anyway with a LOUD warning (the failure stays visible — important
+# for weak local models — rather than grinding to max_iterations). A MALFORMED verify
+# (SyntaxError / command-not-found) is a broken check, not a failed task, so it is
+# auto-stripped (bounded by _finish_verify_strips so it can't be gamed as a free finish).
+_FINISH_VERIFY_CAP = 3
+
+# A8 (file-state survival): single-file tools whose `path` arg names a file the
+# agent has touched — the working set re-read from disk each turn by
+# _workspace_snapshot_message. file_list is excluded (its path is a directory).
+# Files the agent MUTATED — the deliverable; these must never be evicted from the
+# snapshot by exploration reads (steelman finding #1).
+_WORKSPACE_MUTATING_TOOLS = frozenset({
+    "file_write", "file_append", "file_edit",
+    "file_replace_lines", "file_insert_lines",
+})
+_WORKSPACE_READ_TOOLS = frozenset({"file_read"})
+_WS_MAX_FILES = 8  # cap the snapshot breadth (most-recently-touched first)
+_WS_PER_FILE_CHARS = 6_000  # per-file cap; larger files head/tail-truncate with a marker
+_WS_TOTAL_CHARS = 16_000  # total snapshot budget (~4k tokens), bounded vs the condenser
+_WS_READ_TIMEOUT_S = 2.0  # per-file read cap — the snapshot runs under the conversation
+#                           lock, so a hung sandbox read must never freeze control ops
+
+
+def _workspace_paths_from_events(events: list[Event]) -> tuple[list[str], list[str]]:
+    """Return (mutated, read_only) working-set paths, each de-duplicated and
+    MOST-RECENT FIRST. A path counted as mutated if it was EVER written/edited —
+    a write outranks a later read, so the deliverable files the agent is building
+    are never pushed out of the snapshot window by read-heavy exploration
+    (steelman finding #1). Mirrors Aider's "files in the chat" — bounded +
+    relevant. Reads the raw event list directly, so a file touched long ago (and
+    since forgotten/condensed from the View) still counts: it is still on disk."""
+    mutated: dict[str, None] = {}
+    read_only: dict[str, None] = {}
+    for e in events:
+        if not isinstance(e, ActionEvent):
+            continue
+        name = e.tool_call.tool_name
+        p = e.tool_call.arguments.get("path")
+        if not isinstance(p, str) or not p:
+            continue
+        if name in _WORKSPACE_MUTATING_TOOLS:
+            read_only.pop(p, None)  # promote a previously read-only file to mutated
+            mutated.pop(p, None)
+            mutated[p] = None  # most-recent-wins
+        elif name in _WORKSPACE_READ_TOOLS:
+            if p in mutated:
+                mutated.pop(p, None)  # bump recency but keep it classified mutated
+                mutated[p] = None
+            else:
+                read_only.pop(p, None)
+                read_only[p] = None
+    return list(reversed(mutated.keys())), list(reversed(read_only.keys()))
+
 # D2: the reserved AlternativesEvent option id for "Continue anyway" — the bypass the
 # user can always pick at the circuit-breaker gate to reset the failure streak and let
 # the agent keep going. The frontend renders it as a distinct button; pick_alternative
@@ -532,7 +598,9 @@ _FINISH_DESCRIPTION = (
     "`summary` of what you built / accomplished. STRONGLY PREFERRED: attach a "
     "`verify` shell command that proves the deliverable works (the build "
     "compiles, the tests pass, the server responds) — exit 0 means good. If it "
-    "fails, the run does NOT finish and you'll see exactly what broke."
+    "fails you'll see exactly what broke and should fix it before finishing; after "
+    "a few failures the run finishes anyway with a warning, so make your check real "
+    "and your fix correct rather than relying on a broken verify to pass."
 )
 _FINISH_SCHEMA = {
     "type": "object",
@@ -801,7 +869,15 @@ class AgentLoop:
         planning_tools: frozenset[str] = frozenset(),
         plan_tool: str = "submit_plan",
         execution_mode: OperatingMode = OperatingMode.LONG_HORIZON,
+        autonomous: bool = False,
     ) -> None:
+        # Autonomous mode (issue A): no human is available to answer questions or
+        # approve plans (headless / unattended runs). Default False = today's
+        # interactive behavior, fully unchanged. When True: ask_user/clarify are
+        # withheld from the tool schema, the plan is auto-approved inline, and the
+        # circuit-breaker's "hand off to the user" becomes a clean forfeit (STUCK)
+        # instead of an indefinite AWAITING_USER_DECISION stall.
+        self._autonomous = autonomous
         self.conversation_id = conversation_id
         self.store = store
         self.agent = agent
@@ -822,6 +898,8 @@ class AgentLoop:
         self._plan_nudges = 0  # consecutive nudges while planning (safety cap)
         self._execution_nudges = 0  # consecutive "you must act" nudges in execution
         self._browser_verify_refusals = 0  # consecutive browser-verification refusals
+        self._finish_verify_refusals = 0  # consecutive finish-verify failures (cap-3 release)
+        self._finish_verify_strips = 0  # malformed verifies auto-stripped (anti-gaming cap)
         # Actionless-step breaker cap (DEFECT-4)
         self._ACTIONLESS_BREAK_CAP: int = 3
         # Steps consumed with NOTHING persisted to the log (empty-args serve,
@@ -1023,6 +1101,8 @@ class AgentLoop:
             # Ask-gate, same as in execution. clarify is the MULTI-QUESTION variant
             # for when several specifics are missing. Without this the planner is forced
             # to guess and bury the unknown in the plan instead of just asking.
+            if self._autonomous:
+                return planner_tools  # no ask gates headless; the prompt says assume+proceed
             return planner_tools + [_ask_user_tool_singleton(), _clarify_tool_singleton()]
         if self._planning_tools:
             tools = [t for t in tools if getattr(t, "name", None) not in self._planning_tools]
@@ -1033,9 +1113,12 @@ class AgentLoop:
         # a revision and the user accepts/refines via the plan-approval gate.
         virtuals = [_finish_tool_singleton()]
         if not suppress_meta_tools:
+            # Autonomous mode withholds the ask gates (no human to answer); the model
+            # is told to assume + proceed. The rest stay — propose_plan_update is the
+            # model's self-correction affordance (auto-approved when autonomous).
+            if not self._autonomous:
+                virtuals += [_ask_user_tool_singleton(), _clarify_tool_singleton()]
             virtuals += [
-                _ask_user_tool_singleton(),
-                _clarify_tool_singleton(),
                 _propose_plan_update_tool_singleton(),
                 _notify_user_tool_singleton(),
                 _remember_tool_singleton(),
@@ -1512,6 +1595,28 @@ class AgentLoop:
         return True
 
     @staticmethod
+    def _bookkeeping_streak_len(events: list[Event]) -> int:
+        """Trailing count of consecutive BOOKKEEPING-only actions (plan_step /
+        submit_plan / propose_plan_update — NOT `finish`, which is intercepted before
+        it lands as an ActionEvent) since the last real action, user message, or
+        resume/approval marker. This is the signal the StuckDetector and noop valve
+        both miss for plan_step spam (issue C)."""
+        plan_bk = _BOOKKEEPING_TOOLS - {"finish"}
+        streak = 0
+        for e in reversed(events):
+            if isinstance(e, MessageEvent) and e.source == EventSource.USER:
+                break
+            if isinstance(e, StatusEvent) and e.detail in ("resumed", "plan_approved"):
+                break
+            if isinstance(e, ActionEvent) and e.tool_call is not None:
+                if e.tool_call.tool_name in plan_bk:
+                    streak += 1
+                else:
+                    break  # a real (state-changing) action ends the streak
+            # observations / other status events between actions are skipped
+        return streak
+
+    @staticmethod
     def initial_mode(
         events: list[Event],
         *,
@@ -1531,6 +1636,104 @@ class AgentLoop:
 
     # ---- view materialization + condensation (§8) ---------------------------
 
+    async def _workspace_snapshot_message(self, events: list[Event]) -> LLMMessage | None:
+        """Re-derive the CURRENT on-disk content of the working-set files from the
+        sandbox each turn and render it as an authoritative, always-fresh message.
+
+        WHY (root cause, source-verified + reproduced live): a file_write's body is
+        elided at render time to "<N chars elided — use file_read>" (events._snip_args,
+        >1.5k chars), and observation-masking + condensation can later erase a
+        file_read's output too. A weak driver that doesn't proactively file_read
+        every turn therefore loses sight of what's on disk and regenerates files
+        from lossy memory — clobbering prior content (reproduced: a 4,441-char file
+        rewritten to 202 chars, all constants + fingerprint gone).
+
+        The OSS-proven fix (Aider's ChatChunks.chat_files re-read via io.read_text
+        each turn; OpenHands str_replace operating on current on-disk text) is to
+        re-derive file content from the SOURCE OF TRUTH (disk) every turn and keep
+        it OUT of the condensable history. This message is rebuilt here, post-
+        projection, so View.of's snip/mask/condense never touch it and the
+        condenser (which acts on EVENTS) can never erase it. Returns None if there
+        is no sandbox or no tracked files — degrading to prior behavior.
+
+        Layering-safe: reaches the sandbox via the same duck-typed
+        getattr(self.executor, "sandbox", None) seam as _execute_and_observe."""
+        sbx = getattr(self.executor, "sandbox", None)
+        if sbx is None:
+            return None
+        mutated, read_only = _workspace_paths_from_events(events)
+        ordered = mutated + read_only  # mutated first → never evicted by reads (#1)
+        if not ordered:
+            return None
+        preamble = (
+            "# CURRENT WORKSPACE — your files on disk RIGHT NOW (authoritative).\n"
+            "Below is the live, exact content of the files you are working on, "
+            "re-read from disk this turn. It OVERRIDES any earlier or elided copy of "
+            "these files shown above; trust THIS over your memory.\n"
+            "To change a file, the RELIABLE way is to call `file_write` with the FULL "
+            "new content = everything shown below for that file PLUS your change. "
+            "Keep the docstring, every constant, and every existing function you are "
+            "not deliberately removing — do not drop anything. Adding to a file is "
+            "expected and good. AVOID line-number edits (`file_replace_lines` / "
+            "`file_insert_lines`) for these changes: line numbers shift as you edit "
+            "and a wrong range silently deletes code — a whole-file `file_write` "
+            "based on the content below cannot miscount.\n\n"
+        )
+        blocks: list[str] = []
+        budget = _WS_TOTAL_CHARS - len(preamble)
+        shown_count = 0
+        for path in ordered:
+            if shown_count >= _WS_MAX_FILES or budget <= 0:
+                break
+            try:
+                raw = await asyncio.wait_for(
+                    sbx.read_file(path), timeout=_WS_READ_TIMEOUT_S
+                )
+            except asyncio.TimeoutError:
+                # A hung read implies a wedged/dead sandbox. STOP — don't hold the
+                # conversation lock for timeout×N files (that would block pause/steer/
+                # cancel). Degrade to the snapshot we have; the post-snapshot
+                # _maybe_emit_sandbox_restart heals the sandbox.
+                break
+            except Exception:  # noqa: BLE001 — file gone/unreadable this turn: skip it
+                continue
+            text = raw.decode("utf-8", "replace")
+            cap = min(_WS_PER_FILE_CHARS, budget)
+            if len(text) > cap:
+                head = cap * 3 // 4
+                tail = cap - head
+                shown = (
+                    f"{text[:head]}\n"
+                    f"… [{len(text) - head - tail:,} chars truncated in this snapshot — "
+                    f"file_read {path} for the middle] …\n"
+                    f"{text[-tail:]}"
+                )
+            else:
+                shown = text
+            # Plain text delimiters — NOT markdown ``` fences. A fenced snapshot
+            # invites the model to reflexively copy the ``` into its file_write
+            # (models are trained to wrap code in ```), polluting the real file and
+            # then thrashing to strip it (caught live on gpt-oss-120b). file_read
+            # returns raw content with no fences; the snapshot matches that.
+            block = (
+                f"----- BEGIN FILE {path} ({len(text):,} chars on disk) -----\n"
+                f"{shown}\n"
+                f"----- END FILE {path} -----"
+            )
+            budget -= len(block)  # charge the WHOLE block incl header/markers (#6)
+            blocks.append(block)
+            shown_count += 1
+        if not blocks:
+            return None
+        omitted = len(ordered) - shown_count
+        notice = (
+            f"\n\n[{omitted} more file(s) you have touched are not shown here "
+            f"(snapshot budget) — file_read them when you need their content.]"
+            if omitted > 0
+            else ""
+        )
+        return LLMMessage(role="user", content=preamble + "\n\n".join(blocks) + notice)
+
     async def _materialize_view(self, events: list[Event]) -> View:
         # S3 Microcompact (GAP A): a cheap, no-model pass FIRST — tombstone no-op
         # turns (a failed call an identical later call superseded) so the lossy
@@ -1542,7 +1745,15 @@ class AgentLoop:
                 await self._emit(tomb)
             events = await self._events()
         view = View.of(events)
-        est = self._estimate_tokens(view)
+        # A8: build the live workspace snapshot up-front so its size is counted in
+        # the condense decision (steelman finding #4 — otherwise the condenser
+        # undercounts the true prompt by ~4k tokens every turn, re-opening the same
+        # estimation gap the A-S1 fix closed). The snapshot content is disk-derived
+        # and independent of condensation, so building it before the condense check
+        # and attaching it after is sound.
+        snapshot = await self._workspace_snapshot_message(events)
+        snap_tokens = len(snapshot.content) // 4 if snapshot is not None else 0
+        est = self._estimate_tokens(view) + snap_tokens
         # H3: log the prompt size per step so cost regressions are visible (the 60k
         # bloat was invisible because nothing measured it). DEBUG-level; cheap.
         _LOG.debug("driver view: ~%d input tokens, %d messages", est, len(view.messages))
@@ -1554,6 +1765,15 @@ class AgentLoop:
                 view = View.of(await self._events())
             # Soft trigger with no tombstone this step: proceed uncondensed and
             # retry next iteration (§8). Non-fatal.
+        # Append the snapshot AFTER any condensation (so it is never rebuilt away by
+        # a re-projection) and outside View.of (so the render-time snip/mask never
+        # touch it). Disco's equivalent of Aider's always-fresh chat_files chunk.
+        if snapshot is not None:
+            _LOG.info(
+                "A8 workspace snapshot injected: %d chars across the working set",
+                len(snapshot.content),
+            )
+            view = view.model_copy(update={"messages": [*view.messages, snapshot]})
         return view
 
     async def _hard_reset(self, events: list[Event]) -> bool:
@@ -1680,7 +1900,7 @@ class AgentLoop:
                     tool_call_id=call.call_id,
                 )
             )
-            return False
+            return False, False
 
         risk = self.analyzer.assess(action)
         if self.policy.should_confirm(risk):
@@ -1699,7 +1919,7 @@ class AgentLoop:
                     tool_call_id=call.call_id,
                 )
             )
-            return False
+            return False, False
 
         await self._emit(action)
         await self._execute_and_observe(action)
@@ -1711,24 +1931,37 @@ class AgentLoop:
             None,
         )
         passed = isinstance(obs, ObservationEvent) and obs.tool_result.success
+        # malformed = the verify COMMAND ITSELF is broken (not the deliverable):
+        # command-not-found (127) or an interpreter SyntaxError. A non-zero exit from
+        # an unrunnable check is NOT evidence the task failed — the carrier was bad.
+        # The caller auto-strips a malformed verify rather than counting it as a
+        # failed acceptance. Detected from the result text.
+        malformed = False
         if not passed:
-            await self._emit(
-                MessageEvent(
-                    source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(
-                        role="user",
-                        content=(
-                            "<system-reminder>\n"
-                            f"You called finish, but the verify command `{command}` did not "
-                            "pass (see the result above). The task is NOT complete. Fix what "
-                            "it surfaced, then finish again — or finish without a verify "
-                            "command if the check itself is wrong.\n"
-                            "</system-reminder>"
-                        ),
-                    ),
-                )
+            exit_code: int | None = None
+            blob = ""
+            if isinstance(obs, ObservationEvent):
+                st = obs.tool_result.structured or {}
+                ec = st.get("exit_code")
+                exit_code = ec if isinstance(ec, int) and not isinstance(ec, bool) else None
+                blob = f"{obs.tool_result.content or ''} {obs.tool_result.error or ''}"
+            elif obs is not None:
+                blob = getattr(obs, "error", "") or ""
+            low = blob.lower()
+            # The verify CARRIER is broken (not the deliverable) when the shell can't
+            # find/parse the command: exit 127 (command-not-found — authoritative from
+            # the structured result, so it's locale-independent and can't be faked by
+            # output text), or an interpreter SyntaxError. Use the real exit code, NOT a
+            # regex over output: "exit 1, 127 tests failed" is a REAL failure, not a
+            # malformed carrier, and must NOT be auto-stripped into a false success.
+            malformed = (
+                exit_code == 127
+                or "syntaxerror" in low
+                # content fallbacks only when the structured exit code is unavailable
+                or (exit_code is None and "command not found" in low)
+                or (exit_code is None and ": not found" in low)
             )
-        return passed
+        return passed, malformed
 
     async def _stop_allowed(self, state: ConversationState, events: list[Event]) -> bool:
         for hook in self._stop_hooks:
@@ -1744,6 +1977,8 @@ class AgentLoop:
         # Fresh run segment → fresh invisible-step accounting (the counter only
         # measures spin WITHIN a segment; a resume/steer is a clean slate).
         self._invisible_steps = 0
+        self._finish_verify_refusals = 0  # fresh segment → fresh verify-cap streak
+        self._finish_verify_strips = 0
         state = await self.get_state()
         if state.execution_status in _TERMINAL_FOR_NOW and state.execution_status != (
             ConversationStatus.IDLE
@@ -1870,23 +2105,34 @@ class AgentLoop:
                     # (StatusEvent detail) guards against re-asking before it steps; the
                     # NEXT iteration falls through so the agent actually proposes.
                     errs = "\n".join(f"  • {err[:200]}" for err in recent_errors[:4])
+                    if self._autonomous:
+                        cb_content = (
+                            "<system-reminder>\n"
+                            f"You've failed {fails} times in a row:\n{errs}\n\n"
+                            "STOP repeating the same approach — no human is available to "
+                            "help. Diagnose the real blocker in one sentence, then take a "
+                            "DIFFERENT technical path (a different library, API, command, or "
+                            "algorithm). Narrate the pivot with `notify_user`. If it is "
+                            "genuinely impossible, call `finish` and state clearly in the "
+                            "summary what is blocked and why.\n"
+                            "</system-reminder>"
+                        )
+                    else:
+                        cb_content = (
+                            "<system-reminder>\n"
+                            f"You've failed {fails} times in a row:\n{errs}\n\n"
+                            "STOP retrying blindly. Call `ask_user` NOW with: a "
+                            "1–2 sentence DIAGNOSIS of what is actually blocking you "
+                            "as the `question`, and 2–3 concrete recovery `options`, "
+                            "each a SPECIFIC tool action that CHANGES the approach "
+                            "(not a repeat of what just failed). The user will pick "
+                            "one — or let you continue.\n"
+                            "</system-reminder>"
+                        )
                     await self._emit(
                         MessageEvent(
                             source=EventSource.ENVIRONMENT,
-                            message=LLMMessage(
-                                role="user",
-                                content=(
-                                    "<system-reminder>\n"
-                                    f"You've failed {fails} times in a row:\n{errs}\n\n"
-                                    "STOP retrying blindly. Call `ask_user` NOW with: a "
-                                    "1–2 sentence DIAGNOSIS of what is actually blocking you "
-                                    "as the `question`, and 2–3 concrete recovery `options`, "
-                                    "each a SPECIFIC tool action that CHANGES the approach "
-                                    "(not a repeat of what just failed). The user will pick "
-                                    "one — or let you continue.\n"
-                                    "</system-reminder>"
-                                ),
-                            ),
+                            message=LLMMessage(role="user", content=cb_content),
                         )
                     )
                     await self._emit(
@@ -1896,6 +2142,27 @@ class AgentLoop:
                     )
                     continue
                 if fails > self._circuit_breaker_threshold:
+                    if self._autonomous:
+                        # No human to hand off to → clean forfeit (STUCK), not an
+                        # indefinite AWAITING_USER_DECISION stall. Bounded: we only
+                        # reach here after the threshold + a failed recovery attempt,
+                        # so this is NOT an infinite-continue token burn. The failure
+                        # stays visible (STUCK + the error note) for a later human.
+                        await self._emit(
+                            MessageEvent(
+                                source=EventSource.ENVIRONMENT,
+                                message=LLMMessage(
+                                    role="user",
+                                    content=(
+                                        f"⚠ Autonomous run forfeited after {fails} consecutive "
+                                        "failures (recovery attempted, still failing). Recent errors:\n"
+                                        + "\n".join(f"  • {err[:200]}" for err in recent_errors[:4])
+                                    ),
+                                ),
+                            )
+                        )
+                        await self._emit(StatusEvent(status=ConversationStatus.STUCK))
+                        return await self.get_state()
                     # Recovery was already requested AND it failed again → hand off. The
                     # model never volunteered clickable options, so the HARNESS now
                     # SYNTHESIZES an AlternativesEvent (failure summary + the structural
@@ -1963,6 +2230,54 @@ class AgentLoop:
                         )
                     )
                     events = await self._events()  # include the nudge in this step's View
+
+                # (c.3) plan_step-spam guard (issue C). A soft nudge once at the
+                # streak threshold; a hard STUCK halt at the cap (the model is doing
+                # nothing but shuffling the plan tracker — every other valve misses
+                # this). STUCK (not a silent proceed) keeps the failure VISIBLE, which
+                # matters most for weak local models. Autonomous mode turns STUCK into
+                # a clean forfeit (issue A).
+                _bk_streak = self._bookkeeping_streak_len(events)
+                if _bk_streak == _BOOKKEEPING_STREAK_NUDGE_AT:
+                    await self._emit(
+                        MessageEvent(
+                            source=EventSource.ENVIRONMENT,
+                            message=LLMMessage(
+                                role="user",
+                                content=(
+                                    "<system-reminder>\n"
+                                    f"You've called plan-tracking tools {_bk_streak} times "
+                                    "in a row without doing any real work (no file edit, "
+                                    "shell command, or other state-changing action). Marking "
+                                    "steps does NOT advance the task. Take a REAL action now "
+                                    "to make progress, or call `finish` if the work is "
+                                    "already complete.\n"
+                                    "</system-reminder>"
+                                ),
+                            ),
+                        )
+                    )
+                    events = await self._events()
+                elif _bk_streak >= _BOOKKEEPING_STREAK_HALT_AT:
+                    await self._emit(
+                        MessageEvent(
+                            source=EventSource.ENVIRONMENT,
+                            message=LLMMessage(
+                                role="user",
+                                content=(
+                                    "⚠ Stopped: the agent kept updating the plan checklist "
+                                    "without doing any real work. Re-run or steer it toward a "
+                                    "concrete action."
+                                ),
+                            ),
+                        )
+                    )
+                    await self._emit(
+                        StatusEvent(
+                            status=ConversationStatus.STUCK, detail="bookkeeping_only"
+                        )
+                    )
+                    return await self.get_state()
 
                 # (d) build the model-facing View, condensing if triggered (§8)
                 view = await self._materialize_view(events)
@@ -2355,8 +2670,95 @@ class AgentLoop:
                     ):
                         _, _, _url = verify_cmd.partition(":")
                         verify_cmd = _app_verify_command(_url)
-                    if verify_cmd and not await self._finish_verify_passed(verify_cmd):
-                        continue  # verification failed/refused — keep working
+                    if verify_cmd:
+                        passed, malformed = await self._finish_verify_passed(verify_cmd)
+                        if passed:
+                            self._finish_verify_refusals = 0  # reset streak on clean pass
+                        elif malformed and self._finish_verify_strips < 3:
+                            # Broken CHECK, not a failed task → auto-strip and finish.
+                            self._finish_verify_strips += 1
+                            await self._emit(
+                                MessageEvent(
+                                    source=EventSource.ENVIRONMENT,
+                                    message=LLMMessage(
+                                        role="user",
+                                        content=(
+                                            "<system-reminder>\n"
+                                            f"Your verify command `{verify_cmd}` is not runnable "
+                                            "(syntax error / command-not-found) — that is a broken "
+                                            "CHECK, not a failed task, so it is being ignored and the "
+                                            "run is finishing. Next time pass a valid shell command "
+                                            "if you want real verification.\n"
+                                            "</system-reminder>"
+                                        ),
+                                    ),
+                                )
+                            )
+                            # fall through to finish
+                        elif self._finish_verify_refusals < _FINISH_VERIFY_CAP:
+                            # Real failure: refuse + keep working (the forcing function).
+                            self._finish_verify_refusals += 1
+                            await self._emit(
+                                MessageEvent(
+                                    source=EventSource.ENVIRONMENT,
+                                    message=LLMMessage(
+                                        role="user",
+                                        content=(
+                                            "<system-reminder>\n"
+                                            f"You called finish, but the verify command `{verify_cmd}` "
+                                            "did not pass (see the result above). The task is NOT "
+                                            "complete. Fix what it surfaced, then finish again — or "
+                                            "finish without a verify command if the check itself is "
+                                            "wrong.\n"
+                                            "</system-reminder>"
+                                        ),
+                                    ),
+                                )
+                            )
+                            continue  # verification failed — keep working
+                        else:
+                            # Cap reached: LOUD release — don't grind forever on a gate the
+                            # model can't satisfy (mirrors the browser-verify valve). The
+                            # failure stays visible (status detail + reminder + summary).
+                            await self._emit(
+                                StatusEvent(
+                                    status=ConversationStatus.RUNNING,
+                                    detail="finish_verify_release",
+                                )
+                            )
+                            await self._emit(
+                                MessageEvent(
+                                    source=EventSource.ENVIRONMENT,
+                                    message=LLMMessage(
+                                        role="user",
+                                        content=(
+                                            "<system-reminder>\n"
+                                            f"The verify command `{verify_cmd}` has failed "
+                                            f"{self._finish_verify_refusals} times. Finishing anyway "
+                                            "so the run does not loop forever — but the deliverable "
+                                            "may be incomplete. Note this clearly in your summary.\n"
+                                            "</system-reminder>"
+                                        ),
+                                    ),
+                                )
+                            )
+                            # ⚠ human-facing: surfaces in the UI as a warning chip so the
+                            # user knows the run finished with a failing check.
+                            await self._emit(
+                                MessageEvent(
+                                    source=EventSource.ENVIRONMENT,
+                                    message=LLMMessage(
+                                        role="user",
+                                        content=(
+                                            "⚠ Finished despite the verification check failing "
+                                            f"{self._finish_verify_refusals}× — the deliverable may "
+                                            "be incomplete; review it."
+                                        ),
+                                    ),
+                                )
+                            )
+                            self._finish_verify_refusals = 0
+                            # fall through to finish
                     summary = str(step.tool_call.arguments.get("summary") or "").strip()
                     step = step.model_copy(
                         update={
@@ -2378,6 +2780,17 @@ class AgentLoop:
                     if tc is not None and tc.tool_name == self._plan_tool:
                         plan = self._plan_from_args(tc.arguments, events)
                         await self._emit(plan)
+                        if self._autonomous:
+                            # No human to approve → auto-approve INLINE, emitting the
+                            # exact same events approve_plan() would, so the event log
+                            # is identical whether a human or the harness approved.
+                            self.mode = self._execution_mode
+                            await self._emit(
+                                StatusEvent(
+                                    status=ConversationStatus.RUNNING, detail="plan_approved"
+                                )
+                            )
+                            continue  # re-enter the loop already in execution mode
                         await self._emit(
                             StatusEvent(
                                 status=ConversationStatus.AWAITING_PLAN_APPROVAL,
@@ -2714,6 +3127,15 @@ class AgentLoop:
                     and step.tool_call.tool_name in ("ask_user", "clarify", "propose_plan_update")
                     and self.mode != OperatingMode.PLANNING
                     and self._actions_since_last_resume(events) == 0
+                    # In autonomous mode, ask_user/clarify are owned by the headless-
+                    # stall guard below (a clean "no user — decide yourself" nudge);
+                    # don't pre-empt them here with the interactive "do work, then ask"
+                    # message, which tells the model it can ask when it can't. (g.5)
+                    # still governs propose_plan_update on a fresh session.
+                    and not (
+                        self._autonomous
+                        and step.tool_call.tool_name in ("ask_user", "clarify")
+                    )
                 ):
                     self._invisible_steps += 1
                     await self._emit(
@@ -2738,12 +3160,77 @@ class AgentLoop:
                         return await self.get_state()
                     continue  # non-blocking — let the model act on the feedback
 
+                # AUTONOMOUS HEADLESS-STALL GUARD. _tools_for_step withholds
+                # ask_user/clarify from the schema in autonomous mode, but a weak
+                # model can still hallucinate the NAME (prefill, imitation of
+                # training data). The first-action guard above only fires before any
+                # real work; once work has happened a hallucinated ask_user/clarify
+                # would fall through to the handlers below and halt at
+                # AWAITING_USER_QUESTION — a silent headless stall, since there is no
+                # user to answer. Convert it into a self-directed nudge: record the
+                # proposed call (so the assistant tool_call stays PAIRED with a tool
+                # result — KV stability, same discipline as the hard-deny path),
+                # then feed back a system-reminder that there's no user and it must
+                # decide and continue. Gated on self._autonomous (default OFF) so the
+                # interactive path is byte-for-byte untouched.
+                if (
+                    self._autonomous
+                    and step.tool_call is not None
+                    and step.tool_call.tool_name in ("ask_user", "clarify")
+                ):
+                    asked = str(
+                        step.tool_call.arguments.get("question") or ""
+                    ).strip() or step.thought.strip()
+                    stall_action = ActionEvent(
+                        thought=step.thought,
+                        tool_call=step.tool_call,
+                        self_assessed_risk=step.self_assessed_risk,
+                        llm_response_id=step.llm_response_id,
+                    )
+                    await self._emit(stall_action)
+                    await self._emit(
+                        AgentErrorEvent(
+                            error=(
+                                "<system-reminder>\n"
+                                "Autonomous mode is ON — there is no user available "
+                                f"to answer. `{step.tool_call.tool_name}` is "
+                                "unavailable in this mode. Make the best decision you "
+                                "can from the information you already have and continue "
+                                "working toward the goal."
+                                + (f"\nYour question was: {asked}" if asked else "")
+                                + "\n</system-reminder>"
+                            ),
+                            action_id=stall_action.id,
+                            tool_call_id=(
+                                stall_action.tool_call.call_id
+                                if stall_action.tool_call
+                                else None
+                            ),
+                        )
+                    )
+                    continue  # non-blocking — let the model act on its own judgment
+
                 if (
                     step.tool_call is not None
                     and step.tool_call.tool_name == "propose_plan_update"
                 ):
                     new_plan = self._plan_from_args(step.tool_call.arguments, events)
                     await self._emit(new_plan)
+                    if self._autonomous:
+                        # No human to approve a mid-run plan revision → auto-approve
+                        # inline, emitting exactly what approve_plan() would (mode flip
+                        # + RUNNING/plan_approved), so the event log is identical whether
+                        # a human or the harness approved. Without this, an autonomous
+                        # run that follows the loop's OWN "call propose_plan_update to
+                        # revise the plan" guidance (the auto-continue nudge below) would
+                        # halt at AWAITING_PLAN_APPROVAL forever — a headless stall.
+                        self.mode = self._execution_mode
+                        await self._emit(
+                            StatusEvent(
+                                status=ConversationStatus.RUNNING, detail="plan_approved"
+                            )
+                        )
+                        continue
                     await self._emit(
                         StatusEvent(
                             status=ConversationStatus.AWAITING_PLAN_APPROVAL,

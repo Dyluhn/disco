@@ -51,6 +51,17 @@ class DefaultToolExecutor:
         self._default_timeout_s = default_timeout_s
         self._killed = False
 
+    @property
+    def sandbox(self) -> SandboxInstance | None:
+        """The live sandbox instance, or None for a sandbox-less executor.
+
+        The agent loop reaches the sandbox through this duck-typed accessor
+        (getattr(executor, "sandbox", None)) — both for mid-session-recreation
+        generation tracking (engine._execute_and_observe) and for re-reading the
+        current on-disk workspace each turn (engine._workspace_snapshot_message).
+        Exposing it read-only keeps that seam working without leaking _sandbox."""
+        return self._sandbox
+
     # ---- the ToolExecutor protocol ------------------------------------------
 
     def tool_scope(self, tool_name: str) -> str:

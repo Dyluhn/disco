@@ -279,6 +279,16 @@ _EXECUTION_DRIVER_PROMPT = (
 )
 
 
+_AUTONOMOUS_PROMPT_PREFIX = (
+    "AUTONOMOUS MODE — no human is available to answer questions or approve your "
+    "plan. Do NOT try to ask the user anything (the ask tools are not available). "
+    "When a detail is missing or ambiguous, choose the most reasonable default, "
+    "state the assumption with `notify_user`, and proceed. Do not end your turns "
+    "with questions. You must drive the task to `finish` yourself; if something is "
+    "genuinely impossible, call `finish` and explain what is blocked in the summary.\n\n"
+)
+
+
 class DriverPrompts:
     """[CONTRACT role] A PromptProvider that gives the AGENT_DRIVER role phase-aware
     system prompts: a PLANNING prompt (propose a plan via `submit_plan`, take no
@@ -300,8 +310,15 @@ class DriverPrompts:
         execution_prompt: str = _EXECUTION_DRIVER_PROMPT,
         skills_block: str = "",
         flavor: str = "build",
+        autonomous: bool = False,
     ) -> None:
         self._base = base or StaticPromptProvider()
+        # Autonomous mode (issue A): reinforce the tool-level suppression of ask_user
+        # with an explicit instruction to assume + proceed (OpenHands "never ask for
+        # human help" + Cline "make reasonable assumptions, don't end with questions").
+        if autonomous:
+            planning_prompt = _AUTONOMOUS_PROMPT_PREFIX + planning_prompt
+            execution_prompt = _AUTONOMOUS_PROMPT_PREFIX + execution_prompt
         # `flavor` reframes the driver's IDENTITY for the agent surface — a general
         # task agent rather than a software builder — while keeping every mechanic
         # (plan→approve→execute, the meta-tools, the finish/verify gates) byte-

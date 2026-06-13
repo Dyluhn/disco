@@ -70,9 +70,10 @@ class FileReadTool:
         description=(
             "Read a UTF-8 text file from the workspace, with 1-based LINE NUMBERS. "
             "For large files pass `offset` (1-based start line) + `limit` (line "
-            "count) to read a slice. Use the line numbers to edit precisely with "
-            "`file_replace_lines` / `file_insert_lines` — far more reliable than "
-            "reproducing exact text for `file_edit` on a big file."
+            "count) to read a slice. Prefer `file_edit` (pass the exact text you see "
+            "as `old`) for targeted changes; the line numbers also let you target "
+            "`file_replace_lines`, but re-read right before each line edit since they "
+            "shift after every change."
         ),
         args_model=FileReadArgs,
         needs=_FS,
@@ -123,7 +124,11 @@ class FileWriteArgs(BaseModel):
 class FileWriteTool:
     definition = ToolDef(
         name="file_write",
-        description="Write (create/overwrite) a UTF-8 text file in the workspace.",
+        description=(
+            "The PREFERRED way to author file content: write (create/overwrite) a "
+            "UTF-8 text file in the workspace with its full content. Use this instead "
+            "of shell redirection. To change part of an existing file, use file_edit."
+        ),
         args_model=FileWriteArgs,
         needs=_FS,
         runs_in="sandbox",
@@ -251,9 +256,10 @@ class FileEditTool:
         description=(
             "Replace the first occurrence of `old` with `new` in a workspace file. "
             "Matching is forgiving (tolerates indentation / trailing-space drift and "
-            "pasted-in line numbers). For a LARGE file, prefer `file_replace_lines` / "
-            "`file_insert_lines` (target by line number) — far more reliable than "
-            "reproducing a long exact `old`."
+            "pasted-in line numbers). This is the SAFEST targeted edit — it anchors on "
+            "the text you give, so it can't hit the wrong place. For a large file, read "
+            "the relevant section first (file_read with offset/limit) and pass that exact "
+            "snippet as `old`."
         ),
         args_model=FileEditArgs,
         needs=_FS,
@@ -273,6 +279,22 @@ class FileEditTool:
                     + " Tip: read the file for line numbers, then use file_replace_lines."
                 ),
                 error="old_text_not_found",
+            )
+        # No-op guard, on GROUND TRUTH: refuse only when the replacement leaves the
+        # file byte-identical. Checking the *applied* result (not an abstract
+        # old-vs-new compare) lets a legitimate whitespace-only edit through — a
+        # re-indent or trailing-space cleanup matches ws-tolerantly but writes
+        # `new` verbatim, so `updated != text` and it applies — while still catching
+        # the real no-op: an already-applied edit (or old≈new) that changes nothing.
+        if updated == text:
+            return ToolOutcome(
+                success=False,
+                content=(
+                    f"file_edit refused: this edit leaves {args.path} unchanged — the "
+                    "new content already matches what's on disk (it may have been "
+                    "applied on an earlier turn). No further action is needed; move on."
+                ),
+                error="no_op_edit",
             )
         await ctx.sandbox.write_file(args.path, updated.encode("utf-8"))
         return ToolOutcome(
@@ -296,9 +318,10 @@ class FileReplaceLinesTool:
         name="file_replace_lines",
         description=(
             "Replace lines [start_line, end_line] (1-based, inclusive) of a file with "
-            "`new_text`. Read the file first for line numbers. The robust way to edit a "
-            "large file — no exact-text reproduction needed. Use start_line>end_line via "
-            "file_insert_lines to insert without replacing."
+            "`new_text`. Good for large files where reproducing exact text is hard. "
+            "IMPORTANT: re-read the file IMMEDIATELY before each call — line numbers "
+            "shift after any edit, and a stale range silently overwrites the wrong lines. "
+            "Use file_insert_lines to insert without replacing."
         ),
         args_model=FileReplaceLinesArgs,
         needs=_FS,
@@ -318,6 +341,22 @@ class FileReplaceLinesTool:
                     f"({n} lines). start_line must be 1..{n + 1}, end_line >= start_line."
                 ),
                 error="bad_range",
+            )
+        # Deletion guard: empty new_text over a real range is the silent-data-loss path
+        # (a miscounted range replaced with nothing — the exact gpt-oss-120b failure).
+        if _strip_line_numbers(args.new_text).strip() == "":
+            end_g = min(args.end_line, n)
+            doomed = max(0, end_g - args.start_line + 1)
+            return ToolOutcome(
+                success=False,
+                content=(
+                    f"file_replace_lines refused: new_text is empty — this would DELETE "
+                    f"lines {args.start_line}-{end_g} ({doomed} lines) of {args.path} with "
+                    "no replacement, the usual symptom of a miscounted range. To remove "
+                    "code, use file_write to rewrite the file without those lines; to clear "
+                    "a block on purpose, replace it with a placeholder comment."
+                ),
+                error="empty_replacement_refused",
             )
         new_lines = _strip_line_numbers(args.new_text).split("\n")
         end = min(args.end_line, n)
