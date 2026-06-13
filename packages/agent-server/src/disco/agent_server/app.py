@@ -79,6 +79,7 @@ class CreateConversationBody(BaseModel):
     # the runtime then coerces to a toolless research loop (the DC-05 half-state).
     surface: Literal["research", "build", "agent", "deep_research"] = "research"
     model_override: str | None = None  # pin the driver model (catalogue key) for this convo
+    autonomous: bool = False  # headless/unattended: no ask_user, auto-approve plan, clean forfeit
     # Deep Research depth tier ("quick" | "standard_deep" | "exhaustive"). The UI's
     # depth picker sends it here; the runtime reads it via _depth_for. Without
     # wiring it through, every run silently used the standard_deep default.
@@ -285,6 +286,8 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         if runtime is not None:
             runtime.set_surface(conversation_id, body.surface)
             runtime.set_model_override(conversation_id, body.model_override)
+            if body.autonomous:
+                runtime.set_autonomous(conversation_id, True)
             # Deep Research depth tier (no-op for other surfaces). Was dropped before —
             # every DR run defaulted to standard_deep regardless of the UI picker.
             if body.depth_tier:
@@ -473,6 +476,9 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             sstate = runtime.sandbox_state(conversation_id)
             if sstate is not None:
                 state.extras["sandbox"] = sstate
+            # Surface the autonomous flag so the UI can badge the conversation.
+            if runtime.is_autonomous(conversation_id):
+                state.extras["autonomous"] = True
         result = state.model_dump(mode="json")
         # BP-15: overlay the real sandbox backend name so the UI shows the live tier.
         if runtime is not None:
@@ -1035,6 +1041,8 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             sstate = runtime.sandbox_state(conversation_id)
             if sstate is not None:
                 state.extras["sandbox"] = sstate
+            if runtime.is_autonomous(conversation_id):
+                state.extras["autonomous"] = True
         # BP-15: inject sandbox_backend at the top level of the state dict (same
         # parity as the HTTP /state overlay — the live spec polls HTTP for this).
         state_dict = state.model_dump(mode="json")

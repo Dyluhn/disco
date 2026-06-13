@@ -285,6 +285,74 @@ def _model_label(model_id: str) -> str:
     return base
 
 
+# Live model-server probe: derive the ACTUALLY-SERVED model name + context window
+# from the backend, rather than trusting the static ModelEntry — which drifts (a
+# config still saying "Qwen3.6-27B @131072" while llama.cpp serves gemma-4-E4B at
+# whatever -c it was launched with). Same ground-truth-over-declaration principle
+# as the build loop's live workspace snapshot: read the truth, don't assume it.
+# Best-effort + cached per base_url; ANY failure falls back to the static config.
+_LIVE_MODEL_PROBE_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def _do_live_model_probe(base_url: str, api_key: str | None) -> dict[str, Any]:
+    """The BLOCKING probe body. Must run OFF the event loop (worker thread / sync
+    context) — `httpx.get` here waits up to 2s. Populates the module cache on any
+    partial success. Never raises."""
+    out: dict[str, Any] = {"model_id": None, "n_ctx": None}
+    try:
+        import httpx
+
+        root = base_url.rstrip("/")
+        if root.endswith("/v1"):
+            root = root[:-3]
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        r = httpx.get(f"{root}/props", headers=headers, timeout=2.0)
+        if r.status_code == 200:
+            d = r.json()
+            gen = d.get("default_generation_settings") or {}
+            n = gen.get("n_ctx")
+            # bool is a subclass of int — exclude it so a stray {"n_ctx": true}
+            # can't masquerade as a context window of 1.
+            if isinstance(n, int) and not isinstance(n, bool) and n > 0:
+                out["n_ctx"] = n
+            mp = d.get("model_path") or d.get("model")
+            if isinstance(mp, str) and mp.strip():
+                out["model_id"] = mp
+    except Exception:  # noqa: BLE001 — best effort; the static ModelEntry is the fallback
+        pass
+    # Cache only a SUCCESSFUL probe — so a server that was down at first call is
+    # picked up once it comes online (self-healing), instead of being pinned to
+    # the static fallback for the agent-server's whole lifetime.
+    if out["model_id"] is not None or out["n_ctx"] is not None:
+        _LIVE_MODEL_PROBE_CACHE[base_url] = out
+    return out
+
+
+def _probe_live_model(base_url: str | None, api_key: str | None = None) -> dict[str, Any]:
+    """Return {"model_id": str|None, "n_ctx": int|None} for a llama.cpp /
+    OpenAI-compatible server, from a cached /props probe. NEVER blocks a running
+    event loop — that was the North Star #25 wedge: /props can hang the full 2s when
+    the backend is slow/down, and this is reached from async routes (/models,
+    /health) AND from kick()'s synchronous loop composition, all on the loop. When a
+    loop is running, the blocking probe is offloaded to the default threadpool
+    (fire-and-forget — it fills the cache) and THIS call returns the static fallback;
+    the next call is served live from cache. Off the loop (CLI / worker thread) it
+    blocks directly. Best-effort: Nones on any miss → caller uses the static config."""
+    if not base_url:
+        return {"model_id": None, "n_ctx": None}
+    if base_url in _LIVE_MODEL_PROBE_CACHE:
+        return _LIVE_MODEL_PROBE_CACHE[base_url]
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if running is not None:
+        # Don't block the loop. Schedule the probe in a thread; it self-caches.
+        running.run_in_executor(None, _do_live_model_probe, base_url, api_key)
+        return {"model_id": None, "n_ctx": None}
+    return _do_live_model_probe(base_url, api_key)
+
+
 class _NoToolExecutor:
     """A read-only surface with no tools: the model answers directly. Any tool the
     model hallucinates fails loudly as an observation (it has none to call)."""
@@ -357,6 +425,11 @@ class ConversationRuntime:
         # _surface_of ladder stays as the fallback for pre-fix sidecar-less DBs.
         self._surface_path = f"{db_path}.surfaces.json" if db_path else ""
         self._surface: dict[str, str] = self._load_surfaces()
+        # Per-conversation AUTONOMOUS flag (issue A), same B0 sidecar pattern as
+        # surface. True = headless/unattended: the loop withholds ask_user, auto-
+        # approves the plan, and forfeits cleanly instead of halting for a human.
+        self._autonomous_path = f"{db_path}.autonomous.json" if db_path else ""
+        self._autonomous: dict[str, bool] = self._load_autonomous()
         # Per-conversation server-side uploads sidecar directory (B0 pattern).
         # DC-07 (2026-06-11): uploads survive sandbox recreation.
         self._uploads_base = f"{db_path}.uploads" if db_path else ""
@@ -437,6 +510,7 @@ class ConversationRuntime:
         *,
         enable_thinking: bool | None = None,
         surface: str | None = None,
+        autonomous: bool = False,
     ) -> DefaultLLMRouter:
         """The router for the CURRENT assignments. Cheap to rebuild (providers are
         plain objects; the HTTP client is created per call), so we reload the config
@@ -478,7 +552,9 @@ class ConversationRuntime:
         return DefaultLLMRouter(
             cfg,
             providers,
-            prompt_provider=DriverPrompts(skills_block=skills_block, flavor=flavor),
+            prompt_provider=DriverPrompts(
+                skills_block=skills_block, flavor=flavor, autonomous=autonomous
+            ),
         )
 
     # Four surfaces: research (single-pass /ws/research stream), build (agent +
@@ -591,7 +667,15 @@ class ConversationRuntime:
         try:
             cfg = self._config_store.load()
             key = cfg.model_for(ModelRole.AGENT_DRIVER)
-            return cfg.entry_for(key).context_window
+            entry = cfg.entry_for(key)
+            # Prefer the model server's ACTUAL n_ctx over the static config — the
+            # condenser must budget against the window the backend really serves,
+            # not a config that may assume 128k (the "assuming 128k context" bug).
+            live = _probe_live_model(
+                entry.base_url,
+                os.environ.get(entry.api_key_env) if entry.api_key_env else None,
+            )
+            return live["n_ctx"] or entry.context_window
         except Exception:  # noqa: BLE001 — never block loop construction on this
             return None
 
@@ -638,6 +722,32 @@ class ConversationRuntime:
         except Exception:  # noqa: BLE001 — persistence is best-effort, never fatal
             pass
 
+    def _load_autonomous(self) -> dict[str, bool]:
+        if self._autonomous_path and os.path.exists(self._autonomous_path):
+            try:
+                with open(self._autonomous_path) as f:
+                    return {str(k): bool(v) for k, v in json.load(f).items()}
+            except Exception:  # noqa: BLE001 — corrupt/missing → start empty
+                return {}
+        return {}
+
+    def _save_autonomous(self) -> None:
+        if not self._autonomous_path:
+            return
+        try:
+            with open(self._autonomous_path, "w") as f:
+                json.dump(self._autonomous, f)
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
+
+    def set_autonomous(self, conversation_id: str, value: bool = True) -> None:
+        """Mark a conversation autonomous (headless) BEFORE it runs. Persisted (B0)."""
+        self._autonomous[conversation_id] = bool(value)
+        self._save_autonomous()
+
+    def is_autonomous(self, conversation_id: str) -> bool:
+        return self._autonomous.get(conversation_id, False)
+
     def set_model_override(self, conversation_id: str, model_id: str | None) -> None:
         """Pin the driver model for a conversation (the Build chat model picker). The id
         is a catalogue KEY; RouterAgent reassigns AGENT_DRIVER to it. Must be set before
@@ -661,13 +771,20 @@ class ConversationRuntime:
             if m.model_id in seen:
                 continue
             seen.add(m.model_id)
+            # Ground truth over declaration: prefer the live-served model name +
+            # context window; fall back to the static ModelEntry on any probe miss.
+            live = _probe_live_model(
+                m.base_url, os.environ.get(m.api_key_env) if m.api_key_env else None
+            )
+            label = _model_label(live["model_id"] or m.model_id)
+            ctx = live["n_ctx"] or m.context_window
             models.append(
                 {
                     "id": key,
-                    "label": _model_label(m.model_id),
+                    "label": label,
                     "provider": "openrouter" if m.provider == "openrouter" else "local",
                     "free": m.price_out_per_m == 0.0,
-                    "context_window": m.context_window,
+                    "context_window": ctx,
                 }
             )
         try:
@@ -730,7 +847,17 @@ class ConversationRuntime:
             # Surface FIRST: it scopes which skills the router injects (a build-only
             # skill shouldn't reach an agent conversation's prompt, and vice versa).
             surface = self._surface_of(conversation_id)
-            router = self._router_now(pick=override, surface=surface)
+            # Autonomous is a BUILD/AGENT concept (it governs the plan-gate and the
+            # ask/clarify tools — neither of which Research surfaces have). Gate it to
+            # build-like surfaces so the flag can't be half-applied: the prompt prefix
+            # and the loop's tool-suppression/auto-approve must agree, or a Research
+            # convo would carry the "no user, don't ask" prefix while the loop ignored
+            # it. One source of truth here means every downstream consumer is consistent.
+            autonomous = (
+                self._autonomous.get(conversation_id, False)
+                and surface in self._BUILD_LIKE_SURFACES
+            )
+            router = self._router_now(pick=override, surface=surface, autonomous=autonomous)
             # Research↔Build isolation: the SURFACE picks the agent class, so
             # completion semantics (prose=answer for Research vs affirmative
             # `finish` for Build) are owned by type, not a shared mode flag.
@@ -974,6 +1101,7 @@ class ConversationRuntime:
             planning_tools=frozenset(
                 {"submit_plan", "file_list", "file_read", "search", "extract"}
             ),
+            autonomous=self._autonomous.get(conversation_id, False),
         )
 
     # ---- deep research surface ---------------------------------------------
