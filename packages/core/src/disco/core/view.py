@@ -800,13 +800,18 @@ class LLMSummarizingCondenser:
                 reason="hard_reset",
             )
 
-        # GAP D: don't feed the pinned plan into the summarizer — it stays
-        # rendered verbatim (View.of exempts it), so summarizing it is waste.
-        pinned = _pinned_seqs(events)
-        span_for_summary = [e for e in span if e.seq not in pinned]
-        summary = await summarizer.summarize(
-            [e.to_llm_message() for e in span_for_summary]
-        )
+        # HS-02: hand the FULL `view.messages` to the summarizer (not just the
+        # slice) so the prior anchored summary — which View.of already placed
+        # at the chronological position of the forgotten span — is visible to
+        # it. The summarizer scans for the `GOAL:` marker and selects
+        # UPDATE-in-place vs CREATE-fresh accordingly; passing the slice would
+        # strip the prior summary and force a fresh recap on every condensation.
+        # The instructions themselves tell the model to leave the recent tail
+        # out of the structured summary, so the extra context is a feature, not
+        # noise. Pinned plans / knowledge / datasources (GAP D / Cluster 7)
+        # remain in `view.messages` because View.of exempts them from forgetting
+        # — the summarizer can read them and decide what to surface in PROGRESS.
+        summary = await summarizer.summarize(view.messages)
         if not summary.strip():
             return None  # an empty summary would forget context for nothing
         return CondensationEvent(
