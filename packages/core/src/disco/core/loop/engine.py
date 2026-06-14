@@ -805,6 +805,136 @@ def _workspace_paths_from_events(events: list[Event]) -> tuple[list[str], list[s
                 read_only[p] = None
     return list(reversed(mutated.keys())), list(reversed(read_only.keys()))
 
+
+def _hs03_reground_message(events: list[Event]) -> LLMMessage | None:
+    """HS-03 — build a short RECAP of the stable facts (goal, plan state,
+    recently-touched files, optional constraints from the plan's
+    exploration context). PURE function over the event log — no model
+    call, no emission. Returns None when there is no plan to recap (a
+    re-ground without a plan has nothing to anchor to; the calling
+    gate drops the emit).
+
+    The text is FACTS ONLY — the GOAL is stated as a present-tense
+    declarative ("Goal: ship the page"), the progress is a checklist
+    with checkmarks, the files are a list. There is NO "you should",
+    "next, do", "call X" — that would be a steer and would violate
+    the no-automatic-nudge invariant (commit c97c1b3). The HS-03
+    recap is a passive reminder of facts the model should already
+    know; it does not direct behavior.
+
+    The re-ground is built from three event-derived sources, in this
+    order — each is bounded so a runaway log doesn't bloat the
+    reminder into a second prompt:
+      1. Latest PlanEvent — goal summary, exploration `context` (the
+         planner's "findings + constraints" markdown; empty for plans
+         that skipped the rationale), per-step checkmarks (mirrors
+         _recitation_signature's done/active accounting).
+      2. _workspace_paths_from_events — top-N most-recently-touched
+         files (mutating tools first, then read-only), names only (no
+         body — the snapshot is the authoritative current state).
+      3. Concise fallback: when no plan exists, the recap is None and
+         the calling gate drops the emit. (A re-ground of "remember
+         the user said hello" would be cargo-cult; without a plan
+         there is no goal to anchor to.)
+
+    Length budget: each section is clamped to _HS03_REGROUND_SECTION_CHARS
+    (~200) so a long plan summary or many files can't push the recap past
+    a few hundred chars total. The sentinel-tagged wrapper adds < 50
+    chars. The full message stays under ~1k chars — a single, easily-
+    skipped block in the View, not a competing prompt.
+    """
+    plan = _latest_plan(events)
+    if plan is None or not plan.steps:
+        return None
+
+    def _clip(s: str, cap: int = _HS03_REGROUND_SECTION_CHARS) -> str:
+        s = (s or "").strip()
+        if len(s) > cap:
+            return s[: cap - 1] + "\u2026"
+        return s
+
+    # 1. GOAL: plan summary (the one-line "what this plan delivers").
+    goal = _clip(plan.summary or "(no summary)")
+
+    # 2. PROGRESS: per-step checklist. Mirrors _recitation_signature's
+    # accounting (only plan_step marks AFTER the current plan's seq),
+    # but with FACTS ONLY — "✓ 1. step title" — and no "next incomplete"
+    # line (the brief is explicit: this is a recap, not a steer). A
+    # strong model that can read a checklist doesn't need a pointer to
+    # the "next" step; the model itself decides.
+    plan_seq = plan.seq or 0
+    done: set[int] = set()
+    active: set[int] = set()
+    for e in events:
+        if not isinstance(e, ActionEvent) or e.tool_call is None:
+            continue
+        if e.tool_call.tool_name != "plan_step":
+            continue
+        if (e.seq or 0) < plan_seq:
+            continue  # mark belongs to a superseded plan
+        try:
+            idx = int(e.tool_call.arguments.get("index"))  # type: ignore[arg-type]
+            state = str(e.tool_call.arguments.get("state"))
+        except (TypeError, ValueError):
+            continue
+        if state == "done":
+            done.add(idx)
+        elif state == "active":
+            active.add(idx)
+    step_lines: list[str] = []
+    for i, step in enumerate(plan.steps, start=1):
+        if i in done:
+            mark = "✓"
+        elif i in active:
+            mark = "→"
+        else:
+            mark = "□"
+        step_lines.append(f"  {mark} {i}. {step.title}")
+    progress = _clip("\n".join(step_lines))
+
+    # 3. FILES: recently-touched paths, names only. Mutating paths first
+    # (the deliverable), then read-only (the exploration surface). Capped
+    # at _HS03_REGROUND_MAX_FILES so a 50-file sweep doesn't push the
+    # recap into a second prompt.
+    mutated, read_only = _workspace_paths_from_events(events)
+    file_paths: list[str] = list(mutated[:_HS03_REGROUND_MAX_FILES])
+    remaining = _HS03_REGROUND_MAX_FILES - len(file_paths)
+    if remaining > 0:
+        file_paths.extend(read_only[:remaining])
+    files_block = (
+        "\n".join(f"  - {p}" for p in file_paths) if file_paths else "  (none yet)"
+    )
+
+    # 4. CONSTRAINTS: the plan's `context` field, when present — the
+    # planner's exploration findings + trade-offs (Claude-Code-style
+    # rationale). Empty for plans that skipped the rationale, in which
+    # case the section is omitted entirely (no "(no constraints)" stub
+    # — silence is cheaper than noise). Clipped so a long rationale
+    # doesn't blow the budget.
+    constraints = ""
+    if plan.context:
+        constraints = _clip(plan.context)
+
+    # Assemble. Order: GOAL → CONSTRAINTS → PROGRESS → FILES. The order
+    # matches the HS-02 anchored template (which the brief cites) so a
+    # reader familiar with HS-02 sees the same shape. We omit
+    # DECISIONS / NEXT (no first-class field for decisions in the
+    # log, and NEXT would be a steer).
+    sections: list[str] = []
+    sections.append(f"GOAL: {goal}")
+    if constraints:
+        sections.append(f"CONSTRAINTS: {constraints}")
+    sections.append(f"PROGRESS ({len(done)}/{len(plan.steps)} done):\n{progress}")
+    sections.append(f"FILES:\n{files_block}")
+
+    body = (
+        f"{_HS03_REGROUND_SENTINEL}\n"
+        + "\n".join(sections)
+        + f"\n{_HS03_REGROUND_SENTINEL}"
+    )
+    return LLMMessage(role="user", content=body)
+
+
 # D2: the reserved AlternativesEvent option id for "Continue anyway" — the bypass the
 # user can always pick at the circuit-breaker gate to reset the failure streak and let
 # the agent keep going. The frontend renders it as a distinct button; pick_alternative
@@ -832,6 +962,33 @@ _RECITATION_CADENCE_DEFAULT = 5
 # message to decide whether to keep it — if it starts with this sentinel it
 # IS the recap, otherwise there is no plan to recite yet (no recap to gate).
 _RECITATION_SENTINEL = "<current-objective>"
+
+# HS-03 — scheduled facts re-grounding (assist tier only). A weak model that
+# has drifted through dozens of actions can lose track of the stable facts
+# (goal, plan state, recently-touched files). The fix mirrors the smolagents
+# `planning_interval` pattern: every N actions, re-anchor with a short
+# RECAP. The recap is FACTS ONLY — no imperative/steer language — so the
+# no-automatic-nudge invariant (commit c97c1b3) survives. Assist OFF
+# (capable-model default) is byte-identical to today: the gate is closed
+# and the helper is never called. Post-resume the recap fires ONCE on the
+# very first step (a pause may have lost context). Cadence thereafter:
+# `_HS03_REGROUND_INTERVAL` actions since the last resume. A per-boundary
+# guard (the last-emitted action count) prevents re-firing on consecutive
+# steps at the same boundary. Interval chosen at 12 (vs. C6's 5) so the
+# recaps don't pile up: the C6 recap fires every 5 steps for plan state;
+# the HS-03 recap fires every 12 steps and carries the broader
+# goal/files/constraints anchors a drifted model most often loses.
+_HS03_REGROUND_INTERVAL = 12
+# The view.py tag for the re-ground recap. A message that starts with this
+# sentinel IS the re-ground; the predicate and the tests inspect this tag
+# to count emits and assert content shape. Kept short and distinct from
+# _RECITATION_SENTINEL so the two recaps are unambiguous in the View.
+_HS03_REGROUND_SENTINEL = "<reground-anchors>"
+# Hard cap on the per-section body length inside the recap, so a long plan
+# summary or many recently-touched files can't bloat the re-ground into a
+# second prompt. The whole recap stays well under ~1k chars.
+_HS03_REGROUND_SECTION_CHARS = 200
+_HS03_REGROUND_MAX_FILES = 4  # only the most recent few files in the recap
 
 
 def _describe_llm_error(e: LLMError) -> str:
@@ -1710,6 +1867,17 @@ class AgentLoop:
         # `(step_number - 1) % interval == 0` (1-indexed: step 1, 1+N,
         # 1+2N, …). 0-indexed: 0, N, 2N, … — equivalent boundary set.
         recitation_cadence: int = _RECITATION_CADENCE_DEFAULT,
+        # HS-03 — cadence for the scheduled facts re-grounding (default:
+        # every 12 actions since the last resume). Mirrors the
+        # `recitation_cadence` seam: a test or operator can pin a
+        # smaller / larger interval without code changes. The brief's
+        # "e.g. 12" is the production default; tests inject a smaller
+        # value to keep the test loop tight. Set to 1 to recover the
+        # "re-ground on every step" behavior (NOT recommended — a
+        # re-ground on every step would be a token-bloat disaster; the
+        # point of the cadence is the throttling). 0 / negative are
+        # clamped to 1.
+        reground_cadence: int = _HS03_REGROUND_INTERVAL,
         # C1c — DoD evaluator factory (test seam; see _finish_dod_gate_passed).
         # The default (None) builds a DoDEvaluator over the executor's sandbox
         # workspace_root; tests inject a fake-seamed evaluator.
@@ -1811,6 +1979,15 @@ class AgentLoop:
         self._recitation_cadence = max(1, int(recitation_cadence))
         self._recitation_step_count = 0
         self._recitation_last_signature: str | None = None
+        # HS-03 — scheduled facts re-grounding cadence. Mirrors the
+        # C6 seam (testable, defaulted to the production constant).
+        # The instance attribute is what the predicate inspects so a
+        # test can pin a small cadence without monkey-patching the
+        # module constant. Clamped to >= 1 (a cadence of 0 would
+        # mean "every step" modulo zero, undefined; 1 is the
+        # degenerate "fire on every step" case which the brief
+        # explicitly disclaims as not the intent).
+        self._hs03_reground_cadence = max(1, int(reground_cadence))
         # C18 — per-(plan_revision, step_index) advisory done-condition
         # predicates, populated in `_plan_from_args` from the optional
         # `done_condition` field on each `PlanStepInput`. The map is keyed
@@ -1830,6 +2007,28 @@ class AgentLoop:
         # Assist OFF (default) leaves this flag dead — the gate is closed
         # before the detector is ever called.
         self._bootstrap_emitted: bool = False
+        # HS-03 — scheduled facts re-grounding. Two pieces of state,
+        # both assist-gated. Both are reset in run() so a fresh
+        # run segment (which is what a resume/restart starts) gets a
+        # fresh budget — the brief asks for "once right after a
+        # resume" and that "once" is per-resume, not per-conversation.
+        #   * _hs03_reground_post_resume_emitted: ONE-SHOT guard for
+        #     the post-resume recap. Mirrors _bootstrap_emitted's
+        #     shape (a boolean, flipped after the first eligible
+        #     step), but RESET in run() (where _bootstrap_emitted is
+        #     NOT reset) — a resume IS the moment we want to re-fire.
+        #   * _hs03_reground_last_action_count: PER-BOUNDARY guard
+        #     keyed off the action count. A boundary is
+        #     `actions_since_last_resume % N == 0` (N ==
+        #     _HS03_REGROUND_INTERVAL). The guard compares the
+        #     CURRENT count to the last one and skips emit when
+        #     equal — so two consecutive steps at the same boundary
+        #     (e.g. count 12 on two steps in a row, which can happen
+        #     if a step is a no-op) never produce two recap messages.
+        #     Reset in run() so a fresh segment starts the count
+        #     from -1 (no boundary yet).
+        self._hs03_reground_post_resume_emitted: bool = False
+        self._hs03_reground_last_action_count: int = -1
 
     # ---- emission + small helpers -------------------------------------------
 
@@ -2910,6 +3109,117 @@ class AgentLoop:
         # PlanEvent + plan_step events in the prior messages list, so
         # the plan info is not lost — just not redundantly re-rendered.
         return view.model_copy(update={"messages": view.messages[:-1]})
+
+    # ---- HS-03: scheduled facts re-grounding (assist-tier only) -------------
+
+    def _should_emit_reground(self, events: list[Event]) -> bool:
+        """HS-03 — pure predicate: should this step emit the re-ground
+        recap? Fires when EITHER of:
+          * POST-RESUME: this is the first eligible step of a fresh run
+            segment (actions_since_last_resume == 0) AND the post-resume
+            one-shot has not already fired. Mirrors the F4 _bootstrap_emitted
+            shape, but is reset on every run() so a resume gets a fresh
+            one-shot (the brief is explicit: "ONCE immediately after a
+            restart/resume"). The recap is anchored to the fresh
+            post-resume state so a model that lost context across the
+            pause re-anchors.
+          * CADENCE: the current action count is a multiple of
+            `self._hs03_reground_cadence` (default
+            `_HS03_REGROUND_INTERVAL` = 12; tests inject a smaller
+            value) AND we did not already emit at this exact boundary.
+            The per-boundary guard
+            (`_hs03_reground_last_action_count`) prevents re-firing on
+            consecutive steps at the same boundary — e.g. two steps
+            in a row both seeing count==12 (a noop interleaved) would
+            otherwise emit twice. Only actions since the last resume
+            count toward cadence (the brief's wording); a long-running
+            session that survives a resume restarts the count.
+
+        Pure predicate: no emission, no side effects on the store. The
+        caller is responsible for the actual emit and for updating the
+        flags. Returns False when assist is OFF (caller does not need to
+        check `self._assist` — this is the gate; the closed-end-to-end
+        guarantee lives here), or when the brief's preconditions
+        aren't met (no plan yet, no boundary yet, already-fired).
+
+        A no-plan conversation returns False even when the gate
+        conditions match: there is no goal to anchor to. The recap is
+        a re-ground on the existing plan, not a free-floating
+        "remember what we're doing" prompt.
+        """
+        if not self._assist:
+            return False  # closed end-to-end — capable-model default is byte-identical
+        if _hs03_reground_message(events) is None:
+            return False  # no plan → nothing to recap
+        actions = self._actions_since_last_resume(events)
+        if actions == 0 and not self._hs03_reground_post_resume_emitted:
+            return True  # first eligible step of a fresh segment
+        if actions > 0 and (actions % self._hs03_reground_cadence) == 0:
+            # Per-boundary guard: don't re-emit at the same boundary
+            # on two consecutive steps. The first time we see a
+            # boundary we emit; subsequent steps at the same count
+            # are silent.
+            return actions != self._hs03_reground_last_action_count
+        return False
+
+    async def _maybe_emit_reground(self, events: list[Event]) -> list[Event]:
+        """HS-03 — gate, build, emit. Returns the (possibly refreshed)
+        event list: when an emit fires, the caller should re-poll
+        `self._events()` so the materialize step on the same turn
+        sees the recap in the View. Mirrors the F4 bootstrap idiom
+        (emit + `events = await self._events()`).
+
+        Assist OFF → no-op, the input list is returned unchanged. The
+        gate is closed at `_should_emit_reground`; this method is a
+        thin wrapper that handles the emit + flag update + event-list
+        refresh so the run() call site stays one line.
+
+        Why a MessageEvent (not a separate RecapEvent): the existing
+        `MessageEvent` with `source=ENVIRONMENT` + role=user is the
+        contract for harness-injected system-reminders across F4
+        (bootstrap), F8 (file-write args), C7 (stuck escape), and the
+        actionless-valve. A new event type would be a new contract;
+        the sentinel-tagged body is enough to identify the recap in
+        tests + in the View.
+
+        Why a fresh MessageEvent (not a View-side append like C6): C6
+        drops a recap the View ALREADY rendered (the tail-recap is
+        built into view.py:_recitation_message and gated at materialize
+        time). HS-03 needs a recap that is independent of the View's
+        current render — it must persist to the event log so a future
+        View materialization includes it, and so tests can assert the
+        emit happened (the persisted event IS the test's evidence).
+        """
+        if not self._should_emit_reground(events):
+            return events
+        recap = _hs03_reground_message(events)
+        if recap is None:  # defensive: the predicate already checked
+            return events
+        # _actions_since_last_resume is computed again to keep the
+        # per-boundary flag precise (the predicate saw the same
+        # number; storing it here is the single point of truth).
+        actions = self._actions_since_last_resume(events)
+        await self._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=recap,
+            )
+        )
+        if actions == 0:
+            # Post-resume one-shot fired. Mark so subsequent steps
+            # with actions == 0 (e.g. a tool-less first turn) don't
+            # re-emit. Cadence still applies once actions > 0.
+            self._hs03_reground_post_resume_emitted = True
+        # Record the boundary we just emitted at. Even on the
+        # post-resume one-shot we record (at count 0) so a step that
+        # somehow also hit the cadence condition (count % N == 0
+        # trivially when count is 0) doesn't double-fire — though
+        # the post-resume flag already prevents that.
+        self._hs03_reground_last_action_count = actions
+        # Refresh the event list so the materialize step on the same
+        # turn sees the recap in the View (F4's idiom: emit then
+        # re-poll so the bootstrap is in the next render).
+        return await self._events()
 
     async def _materialize_view(self, events: list[Event]) -> View:
         # S3 Microcompact (GAP A): a cheap, no-model pass FIRST — tombstone no-op
@@ -3996,6 +4306,21 @@ class AgentLoop:
         # drift on the first post-resume step (it differs from None).
         self._recitation_step_count = 0
         self._recitation_last_signature = None
+        # HS-03 — fresh segment → fresh re-ground cadence. The brief
+        # asks for "ONCE immediately after a restart/resume" and a
+        # per-segment cadence thereafter. Both flags reset here so a
+        # resume (or a steer / first start) gets a fresh post-resume
+        # one-shot AND a fresh per-boundary counter (the per-boundary
+        # counter is what prevents re-emit on consecutive steps at
+        # the same boundary; resetting on every segment makes the
+        # cadence scoped to the current run, not the conversation).
+        # Contrast with _bootstrap_emitted (F4), which persists across
+        # run() segments — the F4 bootstrap is "fire once per
+        # conversation" (the model already saw it), while HS-03 is
+        # "fire once per resume" (a pause may have lost context, so
+        # a resume is exactly when the recap matters).
+        self._hs03_reground_post_resume_emitted = False
+        self._hs03_reground_last_action_count = -1
         # C18 — NOTE: `_plan_step_predicates` is intentionally NOT reset
         # here. The map is per-(plan_revision, step_index) and is
         # populated by `_plan_from_args` at submit_plan / re-plan time;
@@ -4139,6 +4464,40 @@ class AgentLoop:
                     # detector ran, there was nothing to surface, we don't
                     # re-run on later turns).
                     self._bootstrap_emitted = True
+
+                # HS-03 — scheduled facts re-grounding (assist-tier only).
+                # On the post-resume one-shot AND on a cadence boundary
+                # (every _HS03_REGROUND_INTERVAL actions since the last
+                # resume), emit a short recap of the stable facts (goal,
+                # plan state, recently-touched files, optional constraints
+                # from the planner's exploration context). Recap ONLY —
+                # no imperative/steer text (commit c97c1b3's
+                # no-automatic-nudge invariant). Three closures:
+                #   * self._assist — capable-model default keeps the
+                #     path closed end-to-end (the helper is never
+                #     called; the predicate short-circuits at the top
+                #     of `_should_emit_reground`);
+                #   * the per-boundary guards
+                #     (_hs03_reground_post_resume_emitted and
+                #     _hs03_reground_last_action_count) — fire EXACTLY
+                #     once per resume (the post-resume one-shot) and
+                #     at most once per cadence boundary (the
+                #     per-boundary action-count guard), so a model
+                #     that is between actions at the same boundary
+                #     doesn't see two consecutive recaps;
+                #   * the action count is
+                #     `_actions_since_last_resume(events)`, so the
+                #     cadence restarts on every resume/restart (a
+                #     long-lived conversation gets a fresh re-ground
+                #     budget at the start of every run segment).
+                # Re-poll events after the emit so the materialize step
+                # below sees the recap in this turn's View (F4's
+                # idiom). The gate runs BEFORE stuck-detection so a
+                # re-ground + a stuck-escape can both fire on the same
+                # turn (they don't conflict; the re-ground is a recap
+                # of facts, the stuck-escape is the C7 anti-imitation
+                # reminder — distinct purposes).
+                events = await self._maybe_emit_reground(events)
 
                 # (c) stuck detection BEFORE more work (§6). ESCAPE-then-halt: a
                 # repeating action→error loop first gets ONE reframe attempt (a strong
