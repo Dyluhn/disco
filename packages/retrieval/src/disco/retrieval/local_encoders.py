@@ -24,6 +24,8 @@ import asyncio
 import logging
 import math
 import os
+
+from disco.core.env import disco_env
 from typing import Any
 
 from .models import Passage
@@ -66,7 +68,7 @@ def _require_ram(model_name: str) -> None:
     """Raise EncoderUnavailable if available system RAM is below the tier-appropriate
     headroom threshold.  Called BEFORE each lazy model instantiation so an OOM never
     silently kills the process — the caller gets a typed exception to handle."""
-    tier = os.environ.get("PMX_ENCODER_TIER", _TIER_FULL).lower()
+    tier = disco_env("ENCODER_TIER", _TIER_FULL).lower()
     headroom = _HEADROOM_GB_LITE if tier == _TIER_LITE else _HEADROOM_GB_FULL
     available = _mem_available_gb()
     if available < headroom:
@@ -83,7 +85,7 @@ def _require_ram(model_name: str) -> None:
 # original behaviour when the env is unset. (Read once at import — for
 # per-call override in tests, set the env before importing; lazy loaders
 # re-read the env at call time below so the tier-aware defaults still work.)
-EMBED_MODEL = os.environ.get("PMX_EMBED_MODEL", "intfloat/multilingual-e5-large")
+EMBED_MODEL = disco_env("EMBED_MODEL", "intfloat/multilingual-e5-large")
 RERANK_MODEL = os.environ.get(
     "PMX_RERANK_MODEL", "jinaai/jina-reranker-v2-base-multilingual"
 )
@@ -106,13 +108,13 @@ _TIER_FULL = "full"
 
 def _tier_embed_default() -> str:
     """Return the tier-appropriate embed model id (no explicit override applied here)."""
-    tier = os.environ.get("PMX_ENCODER_TIER", _TIER_FULL).lower()
+    tier = disco_env("ENCODER_TIER", _TIER_FULL).lower()
     return EMBED_MODEL_LITE if tier == _TIER_LITE else EMBED_MODEL
 
 
 def _tier_rerank_default() -> str:
     """Return the tier-appropriate rerank model id (no explicit override applied here)."""
-    tier = os.environ.get("PMX_ENCODER_TIER", _TIER_FULL).lower()
+    tier = disco_env("ENCODER_TIER", _TIER_FULL).lower()
     return RERANK_MODEL_LITE if tier == _TIER_LITE else RERANK_MODEL
 
 # A cross-encoder's attention is O(seq_len^2) per (query, passage) pair, and
@@ -137,7 +139,7 @@ def _embedding() -> Any:
         from fastembed import TextEmbedding
 
         # Explicit PMX_EMBED_MODEL wins; fall back to tier-aware default.
-        model_name = os.environ.get("PMX_EMBED_MODEL") or _tier_embed_default()
+        model_name = disco_env("EMBED_MODEL") or _tier_embed_default()
         # RAM guard: raises EncoderUnavailable instead of letting an OOM kill the process.
         _require_ram(model_name)
         _embedding_model = TextEmbedding(model_name=model_name)
@@ -150,7 +152,7 @@ def _reranker() -> Any:
         from fastembed.rerank.cross_encoder import TextCrossEncoder
 
         # Explicit PMX_RERANK_MODEL wins; fall back to tier-aware default.
-        model_name = os.environ.get("PMX_RERANK_MODEL") or _tier_rerank_default()
+        model_name = disco_env("RERANK_MODEL") or _tier_rerank_default()
         # RAM guard: raises EncoderUnavailable instead of letting an OOM kill the process.
         _require_ram(model_name)
         _cross_encoder = TextCrossEncoder(model_name=model_name)

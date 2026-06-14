@@ -381,11 +381,11 @@ class SidecarNLIVerifier:
 # [VERIFY] LAN endpoints (overridable by env). Discovered at build; see
 # api-endpoints.md / the live-wiring build.
 _DEFAULTS = {
-    "PMX_SEARXNG_URL": "http://192.168.1.202:8888",
-    "PMX_CRAWL4AI_URL": "http://192.168.1.237:11235",
-    "PMX_RERANKER_URL": "http://192.168.1.81:8091",
-    "PMX_EMBEDDER_URL": "http://192.168.1.81:8090/v1",
-    "PMX_NLI_URL": "http://192.168.1.81:8092",
+    "DISCO_SEARXNG_URL": "http://192.168.1.202:8888",
+    "DISCO_CRAWL4AI_URL": "http://192.168.1.237:11235",
+    "DISCO_RERANKER_URL": "http://192.168.1.81:8091",
+    "DISCO_EMBEDDER_URL": "http://192.168.1.81:8090/v1",
+    "DISCO_NLI_URL": "http://192.168.1.81:8092",
 }
 
 
@@ -444,27 +444,34 @@ def build_live_retrieval(
     e = os.environ if env is None else env
 
     def url(key: str) -> str:
-        return e.get(key, _DEFAULTS[key])
+        # DISCO_<X> preferred; legacy PMX_<X> honored; else the LAN default.
+        v = e.get(key)
+        if v is None and key.startswith("DISCO_"):
+            v = e.get("PMX_" + key[len("DISCO_") :])
+        return v if v is not None else _DEFAULTS[key]
 
     if remote is None:
-        remote = e.get("PMX_ENCODERS", "local").lower() == "remote"
+        encoders = e.get("DISCO_ENCODERS")
+        if encoders is None:
+            encoders = e.get("PMX_ENCODERS", "local")
+        remote = encoders.lower() == "remote"
     use_remote = remote
     # B1/B2 — pluggable discovery + extraction. Bundled (ddgs/local) by default so a
     # fresh install works keyless; searxng/crawl4ai self-host (base_url, empty → env
     # default); tavily/firecrawl are paid (resolved api_key passed in by the runtime).
     providers: dict[str, Any] = {
         "search": _make_search(
-            search_provider, search_base_url or url("PMX_SEARXNG_URL"), search_api_key
+            search_provider, search_base_url or url("DISCO_SEARXNG_URL"), search_api_key
         ),
         "extraction": _make_extraction(
-            extraction_provider, extraction_base_url or url("PMX_CRAWL4AI_URL"), extraction_api_key
+            extraction_provider, extraction_base_url or url("DISCO_CRAWL4AI_URL"), extraction_api_key
         ),
     }
     if use_remote:
         # config override (non-empty) wins; else the env/default for that endpoint
-        providers["reranker"] = TeiReranker(reranker_url or url("PMX_RERANKER_URL"))
-        providers["embedder"] = OpenAIEmbedder(embedder_url or url("PMX_EMBEDDER_URL"))
-        providers["nli"] = SidecarNLIVerifier(nli_url or url("PMX_NLI_URL"))
+        providers["reranker"] = TeiReranker(reranker_url or url("DISCO_RERANKER_URL"))
+        providers["embedder"] = OpenAIEmbedder(embedder_url or url("DISCO_EMBEDDER_URL"))
+        providers["nli"] = SidecarNLIVerifier(nli_url or url("DISCO_NLI_URL"))
     else:
         # In-process ONNX/CPU encoders (imported lazily — models load on first use).
         from .local_encoders import FastEmbedEmbedder, FastEmbedNLIVerifier, FastEmbedReranker
