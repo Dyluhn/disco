@@ -20,6 +20,8 @@ import hashlib
 import json
 import logging
 import os
+
+from disco.core.env import disco_env
 import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -267,7 +269,7 @@ def build_sandbox_service(settings: SandboxSettings) -> SandboxService:
         workspace_root=settings.workspace_root,
         # the host previews are reachable at — set PMX_PREVIEW_HOST to a LAN/tailnet IP so
         # previews work from other devices, not just the agent-server's host (else derived).
-        preview_host=os.environ.get("PMX_PREVIEW_HOST", ""),
+        preview_host=disco_env("PREVIEW_HOST", ""),
     )
     if settings.backend == "gvisor":
         return GvisorSandboxService(cfg)
@@ -453,7 +455,7 @@ class ConversationRuntime:
         # B0: PERSISTED (not just in-memory) — a server restart used to silently revert
         # every conversation's picked model to the default. Persisted to a JSON sidecar
         # next to the event DB (PMX_DB) so a resumed conversation keeps its model.
-        db_path = os.environ.get("PMX_DB", "")
+        db_path = disco_env("DB", "")
         self._override_path = f"{db_path}.overrides.json" if db_path else ""
         self._model_override: dict[str, str] = self._load_overrides()
         # Per-conversation surface ("research" | "build" | "deep_research"); set at
@@ -1069,12 +1071,12 @@ class ConversationRuntime:
         PMX_BUILD_EGRESS=open) → None (direct). host comes from
         PMX_MCP_EGRESS_PROXY_HOST (default loopback). See
         docs/workorders/RP-05b-orchestrator-proxy-decision.md."""
-        posture = os.environ.get("PMX_BUILD_EGRESS", "filtered").lower().strip()
+        posture = disco_env("BUILD_EGRESS", "filtered").lower().strip()
         if posture != "filtered":
             return None
         from disco.tools.sandbox._container import EGRESS_PROXY_PORT, proxy_env
 
-        host = os.environ.get("PMX_MCP_EGRESS_PROXY_HOST", "127.0.0.1")
+        host = disco_env("MCP_EGRESS_PROXY_HOST", "127.0.0.1")
         return proxy_env(host, EGRESS_PROXY_PORT)
 
     def _build_sandbox_spec(
@@ -1093,7 +1095,7 @@ class ConversationRuntime:
         When mcp_egress_hosts is provided, they are UNIONed into the egress_allow set
         (SUPERSET, not replacement) — the pre-existing registry hosts AND the MCP
         hosts both survive (rung B egress-proxy routing)."""
-        egress = os.environ.get("PMX_BUILD_EGRESS", "filtered").lower().strip()
+        egress = disco_env("BUILD_EGRESS", "filtered").lower().strip()
         if egress == "filtered":
             base_allow = REGISTRY_EGRESS_ALLOW
             if mcp_egress_hosts:
@@ -2001,7 +2003,7 @@ class ConversationRuntime:
         PMX_IDLE_SUSPEND_S (default 1800 s). Returns the count suspended.
 
         Exposed so unit tests can drive it directly without sleeping."""
-        ttl_env = os.environ.get("PMX_IDLE_SUSPEND_S")
+        ttl_env = disco_env("IDLE_SUSPEND_S")
         if ttl_env is not None:
             ttl_s = float(ttl_env)
         else:
@@ -2042,7 +2044,7 @@ class ConversationRuntime:
         off. Lazy-imported and suppressed so the optional `tts` extra need not be
         installed, and a sweep failure never disturbs the sandbox sweep."""
         while True:
-            interval_s = float(os.environ.get("PMX_IDLE_SWEEP_INTERVAL_S", "60"))
+            interval_s = float(disco_env("IDLE_SWEEP_INTERVAL_S", "60"))
             try:
                 await asyncio.sleep(interval_s)
             except asyncio.CancelledError:
@@ -2050,7 +2052,7 @@ class ConversationRuntime:
             with contextlib.suppress(Exception):
                 await self.sweep_idle_once()
             with contextlib.suppress(Exception):
-                ttl_s = float(os.environ.get("PMX_TTS_IDLE_TTL_S", "1800"))
+                ttl_s = float(disco_env("TTS_IDLE_TTL_S", "1800"))
                 from disco.agent_server import tts_local
 
                 await tts_local.maybe_unload_if_idle(ttl_s=ttl_s)

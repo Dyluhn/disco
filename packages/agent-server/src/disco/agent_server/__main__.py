@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import os
 
+from disco.core.env import disco_env
+
 import uvicorn
 from disco.core.store.sqlite import SqliteEventStore
 
@@ -27,7 +29,7 @@ def _sandbox_service():
     """An OPTIONAL startup OVERRIDE of the Build sandbox backend. Unset → the runtime
     reads the backend from the persisted Settings (the Sandbox section) per request.
     Set PMX_SANDBOX=process|local|gvisor|podman to force one (with the env connection)."""
-    backend = os.environ.get("PMX_SANDBOX")
+    backend = disco_env("SANDBOX")
     if not backend:
         return None  # config-driven (the Settings selector)
     from disco.core.llm import SandboxSettings
@@ -37,11 +39,11 @@ def _sandbox_service():
     return build_sandbox_service(
         SandboxSettings(
             backend=backend.lower(),
-            runtime=os.environ.get("PMX_LOCAL_RUNTIME", "runc"),
+            runtime=disco_env("LOCAL_RUNTIME", "runc"),
             docker_socket=os.environ.get(
                 "PMX_LOCAL_SOCKET", "unix:///run/user/1000/podman/podman.sock"
             ),
-            image=os.environ.get("PMX_SANDBOX_IMAGE", "pmx-sandbox:base"),
+            image=disco_env("SANDBOX_IMAGE", "pmx-sandbox:base"),
         )
     )
 
@@ -52,8 +54,8 @@ def main() -> None:
     # INFO traces (e.g. "ddgs search …", "local extract …") are silently dropped.
     import logging
 
-    level = os.environ.get("PMX_LOG_LEVEL", "INFO").upper()
-    if os.environ.get("PMX_LOG_JSON") == "1":
+    level = disco_env("LOG_LEVEL", "INFO").upper()
+    if disco_env("LOG_JSON") == "1":
         # Structured JSON logs (core.obs span records become one JSON object/line —
         # greppable + trace-assertable). Plain text otherwise.
         from disco.core.obs import install_json_logging
@@ -63,13 +65,13 @@ def main() -> None:
         logging.basicConfig(
             level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
         )
-    store = SqliteEventStore(os.environ.get("PMX_DB", "disco.db"))
+    store = SqliteEventStore(disco_env("DB", "disco.db"))
     runtime = ConversationRuntime(store, sandbox_service=_sandbox_service())
     app = create_app(store, runtime=runtime)
     uvicorn.run(
         app,
-        host=os.environ.get("PMX_HOST", "127.0.0.1"),
-        port=int(os.environ.get("PMX_PORT", "8000")),
+        host=disco_env("HOST", "127.0.0.1"),
+        port=int(disco_env("PORT", "8000")),
     )
 
 

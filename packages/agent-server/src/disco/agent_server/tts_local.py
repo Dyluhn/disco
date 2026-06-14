@@ -17,6 +17,8 @@ import asyncio
 import hashlib
 import logging
 import os
+
+from disco.core.env import disco_env
 import time
 import urllib.request
 from pathlib import Path
@@ -41,7 +43,7 @@ _IDLE_TTL_S = 1800  # free the model after 30 min idle (mirrors SandboxSettings.
 
 
 def _data_dir() -> Path:
-    base = os.environ.get("PMX_TTS_DIR") or os.path.expanduser("~/.cache/disco-tts")
+    base = disco_env("TTS_DIR") or os.path.expanduser("~/.cache/disco-tts")
     d = Path(base)
     d.mkdir(parents=True, exist_ok=True)
     return d
