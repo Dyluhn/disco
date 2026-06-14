@@ -90,6 +90,7 @@ class RouterAgent:
         on_stream: StreamHook | None = None,
         temperature: float | None = None,
         assist: bool = False,
+        attempt: int = 1,
     ) -> AgentStep:
         # B9: Assistant prefill. In PLANNING mode, force
         # the model to start its thought with an honest acknowledgment of
@@ -126,6 +127,10 @@ class RouterAgent:
             # `temperature` override (the loop's stuck-escape bump) wins when given.
             temperature=temperature if temperature is not None else self._temperature,
             request_id=f"req_{uuid.uuid4().hex}",
+            # F5 — repair-attempt counter. The engine increments this on each
+            # retry of a failed call; the provider reads it to disable thinking
+            # on attempt ≥ 2. Default 1 = first try; assist-OFF callers ignore.
+            attempt=attempt,
         )
         ctx = CallContext(
             conversation_id=self._cid,

@@ -108,6 +108,14 @@ class CompletionRequest(BaseModel):
     # `content` (the "up but not grounding" failure the canary caught). The agent
     # driver leaves it None so it keeps its reasoning.
     enable_thinking: bool | None = None
+    # F5 — repair-attempt counter (1 = first try). Set by the engine/loop when
+    # this call is a retry of a prior failure (LLMTransientError or requery).
+    # The OpenAI provider reads it to FORCE `enable_thinking=False` on a
+    # repair attempt ≥ 2 so a failed call doesn't burn its whole budget
+    # thinking again. Assist-OFF callers ignore it; the field defaults to 1
+    # (first try) so it is byte-identical to today for any caller that
+    # does not set it. See openai_provider._payload / _truncate_think_block.
+    attempt: int = 1
     # Opaque per-call correlation id, surfaced back on the response and carried
     # into ActionEvent.llm_response_id (event contract). VOLATILE.
     request_id: str | None = None

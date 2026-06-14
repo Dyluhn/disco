@@ -87,6 +87,74 @@ def _is_context_overflow(err_type: str, message: str) -> bool:
     )
 
 
+# ---- F5: GATED thinking-budget (assist tier only) -------------------------
+# Prior art: SmallCode F5 (thinking_budget.js). When the assist gate is ON, a
+# reasoning model can dump a very long `<think>` block into its prior turn's
+# content. If that block survives into the next request it eats the context
+# budget for the model to actually ANSWER. F5 does two things, BOTH gated on
+# `req.assist`:
+#
+#   (a) EMERGENCY HEAD+TAIL TRUNCATE — when an assistant message contains a
+#       `<think>...</think>` block whose inner reasoning is over the budget,
+#       keep the head (the model's plan) and the tail (the model's
+#       conclusion), drop the verbose middle, and emit a recoverable marker.
+#       Under-budget blocks and messages without a closed `<think>` block are
+#       passed through byte-identically.
+#
+#   (b) DISABLE THINKING ON REPAIR ATTEMPT ≥ 2 — when the engine retries a
+#       call (the inner `attempts` counter in engine.py's driver loop is > 0),
+#       force `chat_template_kwargs.enable_thinking=False` so a failed call
+#       does NOT burn its whole budget re-thinking. This is the SmallCode
+#       `disable-repair` path.
+#
+# Assist OFF (the capable-model default) → both are skipped, the payload is
+# byte-identical to today. Per SmallCode, injecting `enable_thinking` on some
+# small models (e.g. lfm2) also suppresses tool-calls — the gate keeps the
+# capable-model path free of that risk.
+
+# Threshold above which a `<think>` block is over-budget and gets truncated.
+# 2,000 chars ~ 500 tokens; well below a 4K context but enough that a normal
+# reasoning pass is preserved. Tunable here (single source of truth).
+_F5_THINK_BUDGET_CHARS = 2_000
+# When truncating, keep the first 1,000 chars (where the model states its
+# plan) and the last 500 chars (where it concludes). The middle is dropped.
+_F5_THINK_BUDGET_HEAD = 1_000
+_F5_THINK_BUDGET_TAIL = 500
+
+# Match a `<think>...</think>` block. Non-greedy so consecutive blocks (rare,
+# but possible) each get handled independently. `re.DOTALL` so the inner
+# content can include newlines. Requires BOTH opening and closing tags — an
+# unclosed `<think>` (model ran out of tokens) is passed through unchanged;
+# the caller will see the truncation in `finish_reason: length` and the
+# condenser handles it via the existing path.
+_F5_THINK_BLOCK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+
+
+def _truncate_think_block(content: str) -> str:
+    """F5(a): head+tail truncate any over-budget `<think>` block in `content`.
+
+    Returns `content` unchanged when no closed block is present, or when the
+    block is within budget. Truncation preserves head + tail + a recoverable
+    marker so the model (or the engine) can recognize what was dropped. Pure
+    + deterministic (same input → same output) so the request payload stays
+    cache-stable across retries."""
+    def _maybe(m: re.Match) -> str:
+        inner = m.group(1)
+        if len(inner) <= _F5_THINK_BUDGET_CHARS:
+            return m.group(0)  # under budget — leave the block intact
+        head = inner[:_F5_THINK_BUDGET_HEAD]
+        tail = inner[-_F5_THINK_BUDGET_TAIL:]
+        dropped = len(inner) - _F5_THINK_BUDGET_HEAD - _F5_THINK_BUDGET_TAIL
+        return (
+            f"<think>{head}"
+            f"\n…[F5 truncated {dropped:,} chars of reasoning; "
+            f"head (plan) above, tail (conclusion) below]…\n"
+            f"{tail}</think>"
+        )
+
+    return _F5_THINK_BLOCK_RE.sub(_maybe, content)
+
+
 def _sanitize_tool_name(name: str) -> str:
     """Sanitize tool names for OpenAI boundary (dots are forbidden).
     Strip everything before the last dot and filter to [a-zA-Z0-9_-]."""
@@ -181,7 +249,21 @@ class OpenAIProvider:
         return d
 
     def _payload(self, req: CompletionRequest, model: str, *, stream: bool) -> dict:
-        msgs = [self._message(m) for m in req.messages]
+        # F5(a): GATED think-block truncation. When the assist gate is ON, scan
+        # every message for an over-long `<think>...</think>` block and head+tail
+        # truncate it. A frozen LLMMessage requires a `model_copy(update=...)` to
+        # mutate, so the transform may rebuild a subset of the message list.
+        # When `req.assist` is OFF (the capable-model default) `req.messages` is
+        # passed through untouched — byte-identical to today.
+        source_messages = req.messages
+        if req.assist:
+            source_messages = [
+                m.model_copy(update={"content": _truncate_think_block(m.content)})
+                if "<think>" in m.content and "</think>" in m.content
+                else m
+                for m in req.messages
+            ]
+        msgs = [self._message(m) for m in source_messages]
         # B9: Assistant prefill. Append as a trailing
         # assistant message; compatible servers (llama.cpp, vLLM, Anthropic)
         # will continue from here.
@@ -213,6 +295,17 @@ class OpenAIProvider:
         # Per-call override wins over the provider/model default (the answerer turns
         # thinking OFF so a reasoning model doesn't spend its whole budget thinking).
         et = req.enable_thinking if req.enable_thinking is not None else self._enable_thinking
+        # F5(b): GATED disable-thinking on a repair attempt ≥ 2. When the engine
+        # retries a call (`req.attempt >= 2` AND `req.assist` is ON), force
+        # `enable_thinking=False` so a failed call does NOT re-burn its whole
+        # budget on thinking. This is the SmallCode `disable-repair` path and
+        # overrides both the per-call `req.enable_thinking` and the provider
+        # default — the goal is to GUARANTEE thinking is off on a repair.
+        # Per SmallCode: injecting `enable_thinking` on some small models also
+        # suppresses tool-calls — the assist-OFF gate (above) keeps the
+        # capable-model path free of that risk.
+        if req.assist and (req.attempt or 1) >= 2:
+            et = False
         if et is not None:
             body["chat_template_kwargs"] = {"enable_thinking": et}
         if stream:
