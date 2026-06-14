@@ -7,7 +7,7 @@ from playwright.sync_api import sync_playwright
 
 # Configuration
 PORT = 8901
-WORKSPACE_ROOT = os.environ.get("PMX_WORKSPACE", "/workspace")
+WORKSPACE_ROOT = os.environ.get("DISCO_WORKSPACE", os.environ.get("PMX_WORKSPACE", "/workspace"))
 SCREENSHOT_DIR = os.path.join(WORKSPACE_ROOT, ".pmx/screenshots")
 MAX_CONSOLE = 200
 MAX_TEXT = 4000
