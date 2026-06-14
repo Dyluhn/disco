@@ -65,7 +65,7 @@ no API key, only outbound internet for the search + the first encoder download.
 ## Verify your setup
 
 The whole point of Disco is reliability on *your* model — so check it before
-you trust it. `pmx verify` runs a small battery against your configured driver and
+you trust it. `disco verify` runs a small battery against your configured driver and
 prints a pass/fail table: config resolves a driver, the endpoint completes, the model
 emits a structured **tool call** (the capability the whole agent loop rests on), and the
 full research pipeline returns a cited answer.

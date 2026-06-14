@@ -94,7 +94,7 @@ Live/heavy targets (need real config, secrets, or a running instance — kept ou
 ```bash
 make eval          # research eval, REPLAY mode (needs a cassette — run `make capture` first)
 make eval-real     # research eval against REAL services (slow)
-make verify        # `pmx verify`: does your configured model drive the loop? (ARGS=--quick)
+make verify        # `disco verify`: does your configured model drive the loop? (ARGS=--quick)
 make capture       # record the real research cassette (HEAVY: cold fastembed + LLM)
 make capture-loop  # record a real deep-research conversation (event-log + cassette)
 make canary        # live probe of a running agent-server: /health + a real grounded query

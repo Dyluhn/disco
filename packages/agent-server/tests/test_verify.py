@@ -1,9 +1,9 @@
-"""Unit tests for `pmx verify` (disco.agent_server.verify).
+"""Unit tests for `disco verify` (disco.agent_server.verify).
 
 We exercise the PASS/FAIL/SKIP decision logic of each capability check with a FAKE
 router + config (no network), using the REAL CompletionResponse/ProposedToolCall
 shapes the live router returns — so the assertions track the real contract. The live
-grounding path (network + encoders) is covered by the manual `pmx verify` run, not here.
+grounding path (network + encoders) is covered by the manual `disco verify` run, not here.
 """
 
 from __future__ import annotations

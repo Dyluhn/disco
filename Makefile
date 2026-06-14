@@ -23,7 +23,7 @@ help:
 	@echo "  make lint        ruff check (all packages + harness)"
 	@echo "  make eval        research eval, REPLAY mode (needs $(CASSETTE) — run 'make capture')"
 	@echo "  make eval-real   research eval, REAL services (slow; needs live config+secrets)"
-	@echo "  make verify      'pmx verify' — does YOUR configured model drive the loop? (ARGS=--quick)"
+	@echo "  make verify      'disco verify' — does YOUR configured model drive the loop? (ARGS=--quick)"
 	@echo "  make capture     record the real research cassette (HEAVY: cold fastembed + LLM)"
 	@echo "  make canary      live probe of $(BASE): /health + a real grounded research query"
 	@echo "  make canary-health  live /health probe only (no model call)"
@@ -65,7 +65,7 @@ eval:
 eval-real:
 	PYTHONPATH=. uv run python -m harness.eval_runner
 
-# `pmx verify` — the user-facing setup check: does YOUR configured model drive the
+# `disco verify` — the user-facing setup check: does YOUR configured model drive the
 # loop? (config + completion + tool-calling + grounding, pass/fail). --quick skips
 # the live grounding step. Reads the persisted config/secrets like the servers do.
 verify:

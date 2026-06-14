@@ -196,7 +196,7 @@ existing `research_demo` capture re-exported through `share_export`.
 **What & why:** The wedge is "reliable on open weights"; the field study found NO project
 lets a self-hoster verify their model/provider combo (field-gap #6). We have everything
 needed: eval_runner, fault injection, the marathon harness, baselines/scorecard.json, and
-now a portable cassette format. Ship `pmx verify` (CLI first, Settings panel second):
+now a portable cassette format. Ship `disco verify` (CLI first, Settings panel second):
 runs a graded battery against the user's configured driver — tool-call correctness under
 the FC kit, loop discipline (no actionless spirals), grounding faithfulness vs baseline,
 restart/resume survival (the marathon Phase-B scenario, time-boxed), artifact generation
@@ -211,7 +211,7 @@ battery must be honest about variance — pin seeds/sampling where the server al
 flaky verifier destroys the trust story it exists to build). **Deps:** C1.
 **First step:** define the capability taxonomy + scorecard JSON schema (extend
 `evals/baselines/scorecard.json`), then wrap the existing eval_runner + 2 cassettes
-behind a `pmx verify` entry point and run it against the local 27B as the reference
+behind a `disco verify` entry point and run it against the local 27B as the reference
 baseline.
 
 ---
@@ -341,7 +341,7 @@ while Wave A runs in parallel on the worker fleet — they don't collide.
 
 1. **D1 + D2** — compose up on a clean machine, pulling a published sandbox image,
    keyless defaults answering a real query with zero accounts.
-2. **C1 + C2** — `pmx verify` produces an honest per-capability scorecard against the
+2. **C1 + C2** — `disco verify` produces an honest per-capability scorecard against the
    user's own model; our reference scorecards (27B Q5, 35B-A3B) published.
 3. **B1** — the background-task dashboard, so the shipped lifecycle/scheduler machinery
    is visible product, not latent backend.
@@ -350,6 +350,6 @@ while Wave A runs in parallel on the worker fleet — they don't collide.
 
 Gate for calling it v0.1: a stranger on a clean Linux box (or WSL2) runs two commands,
 asks one research question and one build task with no API keys, watches the build verify
-itself, runs `pmx verify` against their own model, and reads honest docs about what the
+itself, runs `disco verify` against their own model, and reads honest docs about what the
 sandbox does and doesn't guarantee. Everything in that sentence except the compose file
 and the verifier already exists in the tree.

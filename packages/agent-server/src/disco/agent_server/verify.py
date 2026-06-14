@@ -1,4 +1,4 @@
-"""`pmx verify` — does YOUR configured model actually drive the loop?
+"""`disco verify` — does YOUR configured model actually drive the loop?
 
 The strategic wedge of disco is *reliability on local / open-weight models*.
 The corollary is that a self-hoster needs to find out their specific model works
@@ -263,7 +263,7 @@ def _render(results: list[Check]) -> int:
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        prog="pmx verify",
+        prog="disco verify",
         description="Verify your configured model/provider actually drives the agent loop.",
     )
     ap.add_argument(

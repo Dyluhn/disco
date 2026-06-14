@@ -33,10 +33,11 @@ tts = [
 ]
 
 [project.scripts]
-# `pmx verify` — verify a self-hoster's configured model actually drives the loop.
-# Installed into the venv, so it runs in the compose image as `pmx-verify` (or
+# `disco verify` — verify a self-hoster's configured model actually drives the loop.
+# Installed into the venv, so it runs in the compose image as `disco-verify` (or
 # `python -m disco.agent_server.verify`).
-pmx-verify = "disco.agent_server.verify:main"
+disco-verify = "disco.agent_server.verify:main"
+pmx-verify = "disco.agent_server.verify:main"  # deprecated alias — use disco-verify
 
 [build-system]
 requires = ["hatchling"]

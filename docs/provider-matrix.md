@@ -111,7 +111,7 @@ docker compose exec agent-server python -m disco.agent_server.verify
 # from a checkout: make verify   (add ARGS=--quick to skip live grounding)
 ```
 
-`pmx verify` runs a battery against *your* configured driver and prints a per-capability
+`disco verify` runs a battery against *your* configured driver and prints a per-capability
 PASS/FAIL/SKIP table:
 
 - **config** — a driver resolves (assignment or `default_model`).
@@ -126,4 +126,4 @@ It exits non-zero if any check fails. For a graded faithfulness *score* over a v
 corpus, that's the eval harness (`make eval`), separate from this go/no-go check.
 
 There is **no measured score in-repo** for any model — pick from the tier table above,
-start at the 24–32B class for real work, and confirm yours with `pmx verify`.
+start at the 24–32B class for real work, and confirm yours with `disco verify`.

@@ -19,7 +19,7 @@ and produces artifacts — all driveable from local open-weight models. It now a
 ([`docs/self-host.md`](./docs/self-host.md)), a published threat model
 ([`SECURITY.md`](./SECURITY.md)), a contributor guide
 ([`CONTRIBUTING.md`](./CONTRIBUTING.md)) + provider/VRAM matrix
-([`docs/provider-matrix.md`](./docs/provider-matrix.md)), and **`pmx verify`** — a
+([`docs/provider-matrix.md`](./docs/provider-matrix.md)), and **`disco verify`** — a
 command that checks *your* model actually drives the loop. What's left before a public
 v0.1 is small: a LICENSE + CI, and a mobile polish pass.
 
