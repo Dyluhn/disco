@@ -484,6 +484,236 @@ def _f8_confirmed_file_writes(events: list[Event]) -> dict[str, tuple[str, str]]
     return out
 
 
+# ---------------------------------------------------------------------------
+# F9 — GATED read-only sliding-window dedup (assist-tier context/latency
+# reclaim).
+#
+# When assist is ON, a read-only tool call that EXACTLY repeats a recent
+# read-only call (same tool name + same arguments) within the last
+# _F9_WINDOW_SIZE read-only calls is short-circuited: a pointer to the
+# prior result is emitted as the ObservationEvent INSTEAD of re-executing
+# the tool. This is a context/latency reclaim for weak models that
+# re-read the same file within a single turn or across a few turns.
+# Per-turn idempotent writes are already covered by the workspace
+# snapshot; F9 covers READS only.
+#
+# Invalidation: when a read's `path` arg is mutated by a write/edit
+# BETWEEN the prior read and now, the prior read is stale and MUST NOT
+# be deduped (a stale pointer would be wrong — the on-disk content is
+# now different from what the prior read returned). The invalidation
+# check uses the existing A8 working-set logic (_WORKSPACE_MUTATING_TOOLS):
+# any file_write / file_edit / file_append / file_replace_lines /
+# file_insert_lines on the same path invalidates the cached read.
+#
+# "Read-only" is determined by the SAME source the engine already uses
+# — executor.readonly_tool_names() via _readonly_tool_names(), with a
+# fallback to the narrow _WORKSPACE_READ_TOOLS frozenset when the
+# executor can't report it. The read-only signal is GROUNDED, not a
+# new hardcoded list (mirrors the planner-safety backstop).
+#
+# Assist OFF (capable-model default) → the dedup path is never entered;
+# every read re-executes, byte-identical to today. The dedup runs at
+# EXECUTION TIME (not render time, unlike F8) — we never call
+# executor.execute() for a deduped call. The persisted event shape
+# stays the same (ActionEvent + ObservationEvent pair); the
+# ObservationEvent's content is the F9 pointer, not the tool's actual
+# output. Lossless: the model can always `file_read` again to force a
+# fresh read.
+# ---------------------------------------------------------------------------
+
+# Sliding-window size: how far back (in read-only calls) to look for an
+# exact-args repeat. Small and bounded (8) so a model can't re-anchor to
+# a read from many turns ago. The window is in READ-ONLY CALLS, not
+# steps, so unrelated mutating work between two identical reads doesn't
+# burn the budget. When the window is exhausted without a match, the
+# call re-executes normally (the F9 spec: "the window evicts old
+# entries").
+_F9_WINDOW_SIZE = 8
+
+# Short pointer text emitted as the synthetic observation when a dedup
+# fires. Names the tool + the args summary so the model knows which
+# earlier read to look at. Lossless: file_read again recovers the live
+# content if the model suspects staleness. The marker is short on
+# purpose (a few dozen chars) — the goal is to reclaim the context the
+# duplicated read would have eaten, not to re-render the prior output.
+_F9_POINTER_TEMPLATE = (
+    "[F9 dedup: {tool_name}({arg_summary}) identical to a recent read "
+    "this turn — see the earlier result; file_read again only if you "
+    "suspect it changed]"
+)
+
+# Maximum length of the arg summary in the pointer text. Keep it small
+# (readable in one line) so a 2KB path doesn't bloat the pointer. The
+# full args are recoverable from the prior action's rendered message;
+# the pointer just needs to identify WHICH prior read.
+_F9_ARG_SUMMARY_MAX_CHARS = 120
+
+
+def _f9_arg_summary(args: dict | None) -> str:
+    """F9 — render a short, single-line summary of a tool call's args for
+    the dedup pointer text. Prefers the `path` (workspace reads), then
+    the first non-empty string arg in stable key order. Length-bounded
+    so a 2KB path or 1KB regex doesn't bloat the pointer."""
+    if not isinstance(args, dict):
+        return ""
+    p = args.get("path")
+    if isinstance(p, str) and p:
+        s = p
+    else:
+        # No path — pick the first non-empty string arg in stable key
+        # order (deterministic). Falls back to "" for empty args
+        # (the pointer template still renders cleanly with an empty
+        # arg summary — the tool name is the load-bearing identifier).
+        s = ""
+        for k in sorted(args.keys()):
+            v = args[k]
+            if isinstance(v, str) and v:
+                s = f"{k}={v}"
+                break
+    if len(s) > _F9_ARG_SUMMARY_MAX_CHARS:
+        s = s[: _F9_ARG_SUMMARY_MAX_CHARS - 1] + "\u2026"
+    return s
+
+
+def _f9_has_successful_observation(events: list[Event], action_id: str) -> bool:
+    """F9 — does `action_id` have a successful ObservationEvent in `events`?
+    A failed read returns empty/error content; pointing at a failed
+    read would tell the model "see the earlier result" when there IS
+    no useful earlier result. Only successful reads are dedupable. The
+    walk terminates at the first matching observation for this action
+    (the engine's one-observation-per-action invariant)."""
+    for e in events:
+        if isinstance(e, ObservationEvent) and e.action_id == action_id:
+            return bool(e.tool_result.success)
+    return False
+
+
+def _f9_path_was_mutated_after(events: list[Event], path: str, after_seq: int) -> bool:
+    """F9 — invalidation: was `path` mutated by a mutating tool call
+    STRICTLY AFTER `after_seq`? Uses the A8 mutating-tool set
+    (_WORKSPACE_MUTATING_TOOLS) as the single source of truth — a
+    write/edit to the same path between the prior read and now
+    invalidates the cached read (stale pointer).
+
+    `after_seq` is the seq of the prior read being considered; we walk
+    events with seq > after_seq looking for a write to `path`. The
+    current action (the one being deduped) is excluded by the walk in
+    _f9_dedupable_read (which feeds `events[:-1]`); a `file_read`
+    call can't itself be a mutation so the upper bound is unnecessary.
+    """
+    if not isinstance(path, str) or not path:
+        return False
+    for e in events:
+        if (e.seq or 0) <= after_seq:
+            continue
+        if not isinstance(e, ActionEvent) or e.tool_call is None:
+            continue
+        if e.tool_call.tool_name not in _WORKSPACE_MUTATING_TOOLS:
+            continue
+        ep = e.tool_call.arguments.get("path")
+        if isinstance(ep, str) and ep == path:
+            return True
+    return False
+
+
+def _f9_dedupable_read(
+    current_tool: str | None,
+    current_args: dict | None,
+    events: list[Event],
+    *,
+    readonly_names: frozenset[str] | None,
+    window: int = _F9_WINDOW_SIZE,
+) -> tuple[bool, str, str]:
+    """F9 — return (dedupable, prior_action_id, pointer_text) if the
+    current call is an exact repeat of a recent read-only call within
+    the window AND nothing has invalidated the prior result since.
+
+    Pure function: reads `events` only. The caller decides whether to
+    act on the result and emits the synthetic observation. Assist
+    gating is the caller's responsibility — this helper is
+    unconditional.
+
+    Args:
+        current_tool: name of the tool about to be called.
+        current_args: the arguments dict (must equal the prior call's
+            args for "exact repeat" — same path, same offset/limit,
+            etc.).
+        events: the full event list. The CURRENT action is the LAST
+            element (it was just emitted before the caller invokes
+            this helper); this helper walks events[:-1] to scan only
+            PRIOR events.
+        readonly_names: frozenset of read-only tool names from the
+            executor; None falls back to _WORKSPACE_READ_TOOLS (a
+            narrower set — see _readonly_tool_names for the rationale).
+        window: max number of recent read-only calls to scan. After
+            seeing `window` prior read-only calls without a clean
+            match, the helper gives up (window eviction).
+
+    Returns:
+        (True, prior_action_id, pointer_text) if dedupable.
+        (False, "", "") otherwise.
+
+    The search walks back through PRIOR events, finds the MOST RECENT
+    ActionEvent with the same tool name + same args, validates the
+    match (successful observation + no mutation since), and either
+    returns it or keeps scanning for an older match. The search
+    terminates early when the window is exhausted.
+    """
+    if not current_tool or not isinstance(current_args, dict):
+        return (False, "", "")
+    # Read-only check: ground on the executor's reported set when
+    # available. Falling back to the engine's narrow
+    # _WORKSPACE_READ_TOOLS frozenset (file_read) when the executor
+    # can't report — the same signal the planner backstop uses.
+    if readonly_names is not None:
+        if current_tool not in readonly_names:
+            return (False, "", "")
+    elif current_tool not in _WORKSPACE_READ_TOOLS:
+        return (False, "", "")
+
+    # Walk back through PRIOR events. The current action is excluded
+    # by indexing events[:-1] (the caller emitted it before invoking
+    # us; the dedup is over PAST reads).
+    prior_events = events[:-1] if events else []
+    ro_calls_seen = 0
+    for e in reversed(prior_events):
+        if not isinstance(e, ActionEvent) or e.tool_call is None:
+            continue
+        tool_name = e.tool_call.tool_name
+        is_ro = (
+            tool_name in readonly_names
+            if readonly_names is not None
+            else tool_name in _WORKSPACE_READ_TOOLS
+        )
+        if is_ro:
+            ro_calls_seen += 1
+            if ro_calls_seen > window:
+                break  # window exhausted — give up (F9 eviction)
+        # Not a candidate? Skip — keep walking back to find a match.
+        if tool_name != current_tool:
+            continue
+        prior_args = e.tool_call.arguments or {}
+        if prior_args != current_args:
+            continue
+        # Same tool + same args. Validate:
+        # 1. Prior action has a successful observation.
+        if not _f9_has_successful_observation(events, e.id):
+            continue  # failed read; keep looking for an earlier success
+        # 2. If the args name a path, no mutation to that path has
+        #    occurred between the prior action and now.
+        prior_path = prior_args.get("path")
+        if isinstance(prior_path, str) and prior_path:
+            if _f9_path_was_mutated_after(events, prior_path, e.seq or 0):
+                continue  # stale — keep looking for an older clean match
+        # Dedupable. Render the pointer.
+        pointer = _F9_POINTER_TEMPLATE.format(
+            tool_name=current_tool,
+            arg_summary=_f9_arg_summary(current_args),
+        )
+        return (True, e.id, pointer)
+    return (False, "", "")
+
+
 # plan_step-spam guard (issue C). plan_step cycling through different step indices
 # evades BOTH the StuckDetector (each call's args differ → not "identical") AND the
 # noop valve (which deliberately skips bookkeeping tools). So it gets its own
@@ -3018,9 +3248,64 @@ class AgentLoop:
         watches the trace and can steer at any moment, and the agent has a
         clean `ask_user` tool available when IT decides it needs human input.
 
+        F9 — GATED read-only sliding-window dedup (assist-tier). When
+        assist is ON and the current call is a read-only tool that
+        EXACTLY repeats a recent read-only call (same tool name + same
+        arguments) within the last _F9_WINDOW_SIZE read-only calls, AND
+        nothing has invalidated the prior result, short-circuit: emit a
+        synthetic ObservationEvent pointing to the prior result instead
+        of re-executing. The pointer is short (no content re-render) so
+        the model gets the dedup context-savings; the model can always
+        re-`file_read` to force a fresh read. Assist OFF → the dedup
+        path is never entered; the call falls through to
+        executor.execute() exactly as today.
+
         If the sandbox transparently RECREATED itself during this call (a mid-
         session death the session healed), append an implicit system-reminder
         so the model knows files-on-disk remain but processes/state were lost."""
+        # F9 — short-circuit identical read-only calls within the window.
+        # Gated on self._assist so capable-model (assist=OFF) runs are
+        # byte-identical to today. The dedup fires ONLY when:
+        #   1. self._assist is True (the gate — closeable end-to-end);
+        #   2. the action is a read-only tool call (per the executor's
+        #      readonly_tool_names, falling back to _WORKSPACE_READ_TOOLS);
+        #   3. a prior ActionEvent in the last _F9_WINDOW_SIZE read-only
+        #      calls has the SAME tool name + SAME arguments;
+        #   4. that prior call has a successful observation; AND
+        #   5. no mutating tool call has touched the same path between
+        #      the prior read and now (stale-read guard).
+        # When all five hold we emit a synthetic ObservationEvent
+        # carrying the F9 pointer, return WITHOUT calling
+        # executor.execute(). The persisted event shape is unchanged
+        # (ActionEvent + ObservationEvent pair) — only the observation
+        # content differs.
+        if self._assist and action.tool_call is not None:
+            _f9_events = await self._events()
+            _f9_deduped, _f9_prior_id, _f9_pointer = _f9_dedupable_read(
+                action.tool_call.tool_name,
+                action.tool_call.arguments,
+                _f9_events,
+                readonly_names=self._readonly_tool_names(),
+            )
+            if _f9_deduped:
+                _LOG.info(
+                    "F9 read-dedup: short-circuited %s (call_id=%s, prior_action_id=%s)",
+                    action.tool_call.tool_name,
+                    action.tool_call.call_id,
+                    _f9_prior_id,
+                )
+                await self._emit(
+                    ObservationEvent(
+                        tool_result=ToolResult(
+                            call_id=action.tool_call.call_id,
+                            tool_name=action.tool_call.tool_name,
+                            success=True,
+                            content=_f9_pointer,
+                        ),
+                        action_id=action.id,
+                    )
+                )
+                return
         sbx = getattr(self.executor, "sandbox", None)
         gen_before = getattr(sbx, "generation", 0) if sbx is not None else 0
         try:
