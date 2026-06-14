@@ -78,8 +78,15 @@ def _require_ram(model_name: str) -> None:
 
 
 # Equivalent-class multilingual models fastembed ships as ready ONNX.
-EMBED_MODEL = "intfloat/multilingual-e5-large"
-RERANK_MODEL = "jinaai/jina-reranker-v2-base-multilingual"
+# Both are env-overridable so an operator can swap encoder backends (e.g. a
+# self-hosted model) without a code change. The default ids preserve the
+# original behaviour when the env is unset. (Read once at import — for
+# per-call override in tests, set the env before importing; lazy loaders
+# re-read the env at call time below so the tier-aware defaults still work.)
+EMBED_MODEL = os.environ.get("PMX_EMBED_MODEL", "intfloat/multilingual-e5-large")
+RERANK_MODEL = os.environ.get(
+    "PMX_RERANK_MODEL", "jinaai/jina-reranker-v2-base-multilingual"
+)
 
 # "lite" tier: small ONNX models for keyless / ≤8 GB boxes (~0.15 GB total).
 # Both confirmed in fastembed's list_supported_models() on 2026-06-13.

@@ -5,6 +5,7 @@ Verifies that the startup sweep:
 - NEVER removes the live _root
 - NEVER touches dirs not matching the pmx-sbx- prefix
 - is symlink-safe (symlinks left untouched)
+- is best-effort: a busy / un-removable dir does NOT raise
 """
 
 from __future__ import annotations
@@ -105,3 +106,48 @@ async def test_sweep_stale_roots_skips_symlinks():
         # be swept (it IS a real dir matching prefix), but the symlink itself survives.
         assert link.exists() or link.is_symlink(), "symlink itself must not be removed"
         assert live_root.exists()
+
+
+@pytest.mark.asyncio
+async def test_sweep_stale_roots_does_not_raise_on_busy_dir():
+    """Best-effort: a pmx-sbx-* dir that cannot be removed (parent read-only,
+    contents un-removable) must NOT raise — the sweep continues, the busy dir
+    survives, and a non-matching neighbor is untouched.
+
+    The pattern mirrors sweep_stale_workspaces: per-entry errors are swallowed
+    by the ``shutil.rmtree(..., ignore_errors=True)`` + outer try/except, so a
+    single unremovable root can never abort the startup sweep.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        parent = Path(tmp)
+
+        live_root = parent / "pmx-sbx-live"
+        live_root.mkdir()
+        svc = ProcessSandboxService(root=str(live_root))
+
+        # Busy dir: parent dir is read-only (0o555) so the contained file cannot
+        # be unlinked, and rmtree(ignore_errors=True) will silently fail. Age it
+        # past the threshold so it WOULD be a candidate if it were removable.
+        busy = _make_dir(parent, "pmx-sbx-busy", age_s=2 * 86400)
+        (busy / "inner.txt").write_text("x")
+        os.chmod(busy, 0o555)  # no write bit → cannot delete inner.txt
+
+        # An unrelated dir that must also be untouched.
+        unrelated = _make_dir(parent, "other-thing", age_s=5 * 86400)
+
+        try:
+            # The sweep MUST complete without raising.
+            removed = await svc.sweep_stale_roots(max_age_s=86400)
+
+            # The busy dir survives (rmtree failed and we ignored it).
+            assert busy.exists(), "busy pmx-sbx-* dir must survive a failed sweep"
+            # The unrelated dir is untouched (prefix guard).
+            assert unrelated.exists(), "non-prefix dir must not be touched"
+            # The live root survives (live-root guard).
+            assert live_root.exists(), "live root must survive"
+            # The returned count reflects only the REMOVED roots (0 here — busy
+            # dir failed silently and the others were skipped or are live).
+            assert removed == 0, f"expected 0 removed, got {removed}"
+        finally:
+            # Restore perms so TemporaryDirectory cleanup can finish.
+            os.chmod(busy, 0o755)
