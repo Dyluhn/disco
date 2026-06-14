@@ -382,6 +382,108 @@ def _detect_project_bootstrap(workspace_path: str | os.PathLike[str]) -> str | N
         "</system-reminder>"
     )
 
+
+# ---------------------------------------------------------------------------
+# F8 — GATED mid-turn arg truncation (assist-tier context-window reclaim).
+#
+# When assist is ON, after a `file_write` tool call has been CONFIRMED
+# successful (a corresponding success tool-result exists), the stored
+# `content` argument in that historical assistant message is shrunk to a
+# short prefix + a marker, because the full content now lives on disk
+# and in the workspace snapshot. This reclaims context window. Lossless:
+# the content is recoverable via file_read or the snapshot.
+#
+# Truncate ONLY confirmed-successful writes. A write whose result is an
+# error/failure must keep its FULL args (needed for the model to retry
+# intelligently). A write with NO observation yet (unconfirmed) must also
+# keep its full args — the model might still need to retry, and the
+# transform has no evidence the write succeeded.
+#
+# Assist OFF (the capable-model default) → the transform is never
+# invoked; messages are byte-identical to today. The transform applies
+# at RENDER TIME only — the persisted event log is unchanged; the
+# on-disk full content is the recovery surface.
+# ---------------------------------------------------------------------------
+
+# Length of the kept prefix. 200 chars is small enough to reclaim real
+# context (~50 tokens per write) yet large enough to show the model the
+# shape of what it wrote (imports, top-of-file constants, the first
+# function signature) so a future turn that needs to recall "what's at
+# the top of X.py?" doesn't always have to file_read.
+_F8_PREFIX_CHARS = 200
+
+# Marker template — must include the file path so the model can
+# file_read the full content back when it needs to. The "\n… " prefix is
+# a visual cue that the original content was longer (matches the
+# existing snip convention in events._ARG_SNIP_CHARS).
+_F8_TRUNCATION_MARKER_TEMPLATE = (
+    "\n… [written to {path}; full content on disk — file_read to recover]"
+)
+
+
+def _f8_confirmed_file_writes(events: list[Event]) -> dict[str, tuple[str, str]]:
+    """For every file_write whose execution has been CONFIRMED successful,
+    return ``{call_id: (path, full_content)}``.
+
+    A file_write is "confirmed successful" when:
+
+      * an ``ActionEvent`` exists with ``tool_call.tool_name == "file_write"``
+        and ``tool_call.call_id == C``; AND
+      * a later ``ObservationEvent`` exists with
+        ``tool_result.success is True`` and ``tool_result.call_id == C``
+        (the executor echoes the proposed call_id per
+        ``DefaultToolExecutor.execute``); AND
+      * NO ``AgentErrorEvent`` exists with ``tool_call_id == C`` (a
+        failure "un-confirms" a prior success for the same call_id —
+        defensive; the engine's one-observation-per-action invariant
+        makes this rare in practice).
+
+    A write with NO matching observation is treated as not-yet-confirmed
+    (its full content stays — the model might still need it to retry or
+    to understand what it was about to write). The full content is the
+    ORIGINAL ``tool_call.arguments["content"]`` (the event-stored bytes),
+    NOT the snipped version in the rendered message. Returning the
+    original lets the F8 transform emit a real 200-char prefix instead
+    of a generic "<N chars elided>" marker.
+
+    Returns a dict keyed by call_id so the message-render pass can
+    correlate each assistant message's ``tool_calls[i]["id"]`` to the
+    transform output in O(1).
+    """
+    actions_by_call: dict[str, ActionEvent] = {}
+    failed_call_ids: set[str] = set()
+    confirmed_call_ids: set[str] = set()
+    for e in events:
+        if isinstance(e, ActionEvent) and e.tool_call is not None:
+            if e.tool_call.tool_name == "file_write":
+                actions_by_call[e.tool_call.call_id] = e
+        elif isinstance(e, ObservationEvent):
+            cid = e.tool_result.call_id
+            if e.tool_result.success:
+                confirmed_call_ids.add(cid)
+            else:
+                failed_call_ids.add(cid)
+        elif isinstance(e, AgentErrorEvent) and e.tool_call_id:
+            failed_call_ids.add(e.tool_call_id)
+    # A failure un-confirms a prior success (defensive — a single
+    # call_id should never have BOTH a success and a failure observation
+    # under the engine's contract, but be explicit).
+    confirmed_call_ids -= failed_call_ids
+    out: dict[str, tuple[str, str]] = {}
+    for cid in confirmed_call_ids:
+        action = actions_by_call.get(cid)
+        if action is None or action.tool_call is None:
+            continue
+        args = action.tool_call.arguments or {}
+        content = args.get("content")
+        if not isinstance(content, str):
+            continue
+        path = args.get("path")
+        path_str = str(path) if isinstance(path, str) and path else "?"
+        out[cid] = (path_str, content)
+    return out
+
+
 # plan_step-spam guard (issue C). plan_step cycling through different step indices
 # evades BOTH the StuckDetector (each call's args differ → not "identical") AND the
 # noop valve (which deliberately skips bookkeeping tools). So it gets its own
@@ -2620,6 +2722,24 @@ class AgentLoop:
         # is appended AFTER the gate regardless of the gate's verdict
         # (it's authoritative on-disk content the model needs).
         view = self._gate_recitation(view, events)
+        # F8 — GATED mid-turn arg truncation (assist-tier context-window
+        # reclaim). When assist is ON, replace the long `content` argument
+        # in any past assistant message whose `file_write` tool call was
+        # CONFIRMED successful with a short prefix + a path-aware marker.
+        # Lossless: the full content lives on disk (and in the snapshot) —
+        # `file_read <path>` recovers it. Render-time only: the persisted
+        # event log is unchanged. Assist OFF (the capable-model default)
+        # → no-op; the rendered messages are byte-identical to today.
+        # Runs AFTER the snapshot append so the snapshot (the
+        # authoritative current state) is never shrunk, and so any
+        # older assistant message in the history has the F8 transform
+        # applied to it on every step.
+        if self._assist:
+            view = view.model_copy(
+                update={
+                    "messages": self._f8_shrink_file_write_args(view.messages, events),
+                }
+            )
         if snapshot is not None:
             _LOG.info(
                 "A8 workspace snapshot injected: %d chars across the working set",
@@ -2627,6 +2747,83 @@ class AgentLoop:
             )
             view = view.model_copy(update={"messages": [*view.messages, snapshot]})
         return view
+
+    def _f8_shrink_file_write_args(
+        self, messages: list[LLMMessage], events: list[Event]
+    ) -> list[LLMMessage]:
+        """F8 — GATED render-time transform. For every assistant message
+        whose tool_call is a ``file_write`` that was CONFIRMED successful
+        (per :func:`_f8_confirmed_file_writes`), replace the long
+        ``content`` argument with a short prefix + a recoverable marker.
+
+        Render-time only: the persisted event log is unchanged. The
+        transform runs AFTER ``View.of`` (and the existing
+        ``_ARG_SNIP_CHARS`` shaper in events.py) so it OVERRIDES the
+        generic "<N chars elided — use file_read>" marker with a more
+        useful form: a real 200-char prefix + a path-aware hint. The
+        on-disk full content is the recovery surface (file_read /
+        workspace snapshot).
+
+        Lossless for the wire (the marker names the file's path, so
+        ``file_read <path>`` recovers the full content) and lossless
+        for the event log (the event's ``tool_call.arguments["content"]``
+        is never modified — only the rendered message the provider
+        sees is trimmed).
+
+        Assist OFF (the default) → caller does not invoke this method;
+        messages are byte-identical to today.
+
+        Returns a new list; the input ``messages`` is not mutated. Each
+        modified message is a new LLMMessage (LLMMessage is frozen, so
+        ``model_copy`` is required); each modified tool_call dict is a
+        new dict.
+        """
+        confirmed = _f8_confirmed_file_writes(events)
+        if not confirmed:
+            return messages
+        out: list[LLMMessage] = []
+        for msg in messages:
+            if msg.role != "assistant" or not msg.tool_calls:
+                out.append(msg)
+                continue
+            new_tcs: list[dict] = []
+            mutated = False
+            for tc in msg.tool_calls:
+                if not isinstance(tc, dict):
+                    new_tcs.append(tc)
+                    continue
+                cid = tc.get("id")
+                if (
+                    tc.get("name") == "file_write"
+                    and isinstance(cid, str)
+                    and cid in confirmed
+                ):
+                    path, content = confirmed[cid]
+                    # Only shrink when the ORIGINAL content is long
+                    # enough that a prefix is meaningful. Short writes
+                    # (≤ _F8_PREFIX_CHARS) pass through unchanged —
+                    # the snip shaper in events.py did not elide them
+                    # either, and the F8 prefix would be the full
+                    # content + marker (no reclaim, no value).
+                    if len(content) > _F8_PREFIX_CHARS:
+                        args = tc.get("arguments")
+                        if isinstance(args, dict):
+                            new_args = dict(args)
+                            new_args["content"] = (
+                                content[:_F8_PREFIX_CHARS]
+                                + _F8_TRUNCATION_MARKER_TEMPLATE.format(path=path)
+                            )
+                            new_tc = dict(tc)
+                            new_tc["arguments"] = new_args
+                            new_tcs.append(new_tc)
+                            mutated = True
+                            continue
+                new_tcs.append(tc)
+            if mutated:
+                out.append(msg.model_copy(update={"tool_calls": new_tcs}))
+            else:
+                out.append(msg)
+        return out
 
     async def _collect_pointer_manifest_paths(self, events: list[Event]) -> list[str]:
         """C16 — collect on-disk artifact paths the hard_reset tombstone will
