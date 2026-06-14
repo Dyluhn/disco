@@ -60,6 +60,8 @@ class Agent(Protocol):
         overflow_signal: OverflowSignal,
         on_stream: StreamHook | None = None,
         temperature: float | None = None,
+        assist: bool = False,
+        attempt: int = 1,
     ) -> AgentStep: ...
 
 

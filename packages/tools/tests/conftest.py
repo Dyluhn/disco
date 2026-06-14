@@ -91,7 +91,7 @@ class ScriptedAgent:
 
     async def step(
         self, view, tools, *, mode, overflow_signal, on_stream=None, temperature=None,
-        assist=False,
+        assist=False, attempt: int = 1,
     ) -> AgentStep:
         i = self.calls
         self.calls += 1
