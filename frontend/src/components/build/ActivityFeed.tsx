@@ -21,6 +21,7 @@ import {
   FileSpreadsheet,
   Loader2,
   MessageSquare,
+  MonitorPlay,
   Paperclip,
   User,
   X,
@@ -59,8 +60,11 @@ function ScreenshotThumbnail({
 
 /** A generated spreadsheet — a real download via the declared-artifact route
  * (encodeURI preserves any subdir slashes). Honest: only renders when there's a
- * conversation id to fetch against; the file's live formulas compute on open. */
-function SheetDownload({
+ * conversation id to fetch against; the file's live formulas compute on open.
+ *
+ * Exported (D12) so SheetBlock (AnswerDocument path) can reuse the EXACT same
+ * download affordance when a cid is threaded down — no fork, no divergence. */
+export function SheetDownload({
   sheet,
   conversationId,
 }: {
@@ -84,6 +88,49 @@ function SheetDownload({
         <span className="block truncate font-mono text-[0.7rem] text-text-faint">
           {sheet.filename}
           {n > 0 ? ` · ${n} sheet${n !== 1 ? "s" : ""}` : ""}
+        </span>
+      </span>
+      <Download className="size-3.5 shrink-0 text-text-faint" aria-hidden />
+    </a>
+  );
+}
+
+/** A generated slide deck — a real download via the declared-artifact route
+ * (encodeURI preserves any subdir slashes). Honest: only renders when there's a
+ * conversation id to fetch against; the file is whatever the slides backend
+ * emitted (HTML / PDF / PPTX), and the format is shown so the user knows what
+ * they'll get.
+ *
+ * Exported (D2) so SlidesBlock (AnswerDocument path) can reuse the EXACT same
+ * download affordance when a cid is threaded down — same pattern as
+ * SheetDownload: not a fork, no divergence. The declared-artifact route is
+ * `/conversations/{cid}/artifacts/{filename}` (app.py; allowlisted to emitted
+ * .html/.pdf/.pptx artifacts) — the same route the .xlsx download uses. */
+export function SlidesDownload({
+  slides,
+  conversationId,
+}: {
+  slides: NonNullable<ActivityItem["expandable"]>["slides"];
+  conversationId: string;
+}) {
+  if (!slides) return null;
+  const href = `${agentHttpBase()}/conversations/${conversationId}/artifacts/${encodeURI(slides.filename)}`;
+  const n = slides.slide_count ?? slides.slides?.length ?? 0;
+  const fmt = (slides.format || "html").toUpperCase();
+  return (
+    <a
+      href={href}
+      download
+      className="mt-hair flex items-center gap-inline rounded-card border border-hairline bg-surface-0 px-inline py-hair transition-colors hover:border-hairline-strong"
+    >
+      <MonitorPlay className="size-4 shrink-0 text-accent" aria-hidden />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-ui text-[0.82rem] text-text">
+          {slides.title || slides.filename}
+        </span>
+        <span className="block truncate font-mono text-[0.7rem] text-text-faint">
+          {slides.filename}
+          {n > 0 ? ` · ${fmt} · ${n} slide${n !== 1 ? "s" : ""}` : ` · ${fmt}`}
         </span>
       </span>
       <Download className="size-3.5 shrink-0 text-text-faint" aria-hidden />
@@ -290,6 +337,13 @@ export function ActivityFeed({
                   there's a cid to fetch the declared artifact against). */}
               {item.expandable?.sheet && conversationId && (
                 <SheetDownload sheet={item.expandable.sheet} conversationId={conversationId} />
+              )}
+              {/* D2: a generated slide deck → an honest download card (same pattern
+                  as SheetDownload, same declared-artifact route). Only when there's
+                  a cid to fetch the declared artifact against — otherwise the
+                  button stays absent (no false affordance). */}
+              {item.expandable?.slides && conversationId && (
+                <SlidesDownload slides={item.expandable.slides} conversationId={conversationId} />
               )}
               {/* Expandable raw command + output drill-down. */}
               {item.expandable && <ExpandableDetail item={item} />}

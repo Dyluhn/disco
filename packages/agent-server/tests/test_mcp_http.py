@@ -310,16 +310,23 @@ async def test_http_client_routes_through_proxy_and_denies_offlist_host():
 @pytest.mark.asyncio
 async def test_mcp_proxy_env_follows_build_egress_posture(monkeypatch):
     """`ConversationRuntime._mcp_proxy_env()` is governed by PMX_BUILD_EGRESS — the
-    SAME single source of truth as the sandbox spec. filtered → a real proxy env
-    block pointing at the egress proxy; open (default) → None (direct)."""
+    SAME single source of truth as the sandbox spec. filtered (the DEFAULT, per
+    BP-G10) → a real proxy env block pointing at the egress proxy; explicit open
+    → None (direct)."""
     from disco.agent_server.runtime import ConversationRuntime
     from disco.core import SqliteEventStore
     from disco.tools.sandbox._container import EGRESS_PROXY_PORT
 
     runtime = ConversationRuntime(SqliteEventStore(":memory:"))
 
+    # BP-G10 flipped the DEFAULT build egress to "filtered", so an unset
+    # PMX_BUILD_EGRESS now means filtered → a real proxy env (NOT direct).
     monkeypatch.delenv("PMX_BUILD_EGRESS", raising=False)
-    assert runtime._mcp_proxy_env() is None  # open posture → direct
+    assert runtime._mcp_proxy_env() is not None  # default is now filtered → proxied
+
+    # The direct (None) posture requires an EXPLICIT open.
+    monkeypatch.setenv("PMX_BUILD_EGRESS", "open")
+    assert runtime._mcp_proxy_env() is None  # explicit open posture → direct
 
     monkeypatch.setenv("PMX_BUILD_EGRESS", "filtered")
     monkeypatch.setenv("PMX_MCP_EGRESS_PROXY_HOST", "10.0.0.5")

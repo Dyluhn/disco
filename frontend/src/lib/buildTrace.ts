@@ -45,6 +45,16 @@ export interface ActivityItem {
     // rp-11: a generated spreadsheet artifact, downloadable via the declared-artifact
     // route (only present for a successful sheet_generate).
     sheet?: { filename: string; title?: string; sheet_names?: string[] };
+    // D2: a generated slide deck (Marp HTML / PDF / PPTX), downloadable via
+    // the declared-artifact route. Same shape as the AnswerBlock `slides`
+    // kind minus the `id` — the activity item already has one.
+    slides?: {
+      filename: string;
+      title?: string;
+      format?: "html" | "pdf" | "pptx";
+      slide_count?: number;
+      slides?: { title?: string; content?: string }[];
+    };
   };
   status: "done" | "running" | "pending" | "failed" | "pending_send";
   attention: boolean; // confidence gradient: risky/novel steps float up, routine recede
@@ -132,6 +142,13 @@ export function deriveActivity(
       error?: string;
       screenshotPath?: string;
       sheet?: { filename: string; title?: string; sheet_names?: string[] };
+      slides?: {
+        filename: string;
+        title?: string;
+        format?: "html" | "pdf" | "pptx";
+        slide_count?: number;
+        slides?: { title?: string; content?: string }[];
+      };
     }
   >();
   for (const e of events) {
@@ -151,10 +168,33 @@ export function deriveActivity(
                 : undefined,
             }
           : undefined;
+      // D2: slide-deck artifact. Backend's structured output:
+      //   {filename, base_name, format, slide_count, renderer}
+      // We only trust the keys we know about; format is one of html|pdf|pptx.
+      const rawFmt = typeof struct?.format === "string" ? struct.format.toLowerCase() : "";
+      const fmt: "html" | "pdf" | "pptx" | null =
+        rawFmt === "html" || rawFmt === "pdf" || rawFmt === "pptx" ? rawFmt : null;
+      const slides =
+        e.tool_result.tool_name === "slides_generate" &&
+        e.tool_result.success &&
+        typeof fn === "string" &&
+        fmt !== null
+          ? {
+              filename: fn,
+              title: typeof struct?.base_name === "string" ? struct.base_name : undefined,
+              format: fmt,
+              slide_count:
+                typeof struct?.slide_count === "number" ? struct.slide_count : undefined,
+              slides: Array.isArray(struct?.slides)
+                ? (struct!.slides as { title?: string; content?: string }[])
+                : undefined,
+            }
+          : undefined;
       observationByActionId.set(e.action_id, {
         output: (e.tool_result.content || "").slice(0, 2000),
         screenshotPath: typeof sp === "string" ? sp : undefined,
         sheet,
+        slides,
       });
     } else if (e.kind === "agent_error" && e.action_id) {
       observationByActionId.set(e.action_id, { error: e.error });
@@ -187,6 +227,7 @@ export function deriveActivity(
           error: obs?.error,
           screenshot_path: obs?.screenshotPath,
           sheet: obs?.sheet,
+          slides: obs?.slides,
         },
         status: st,
         attention: isPending || risk === "HIGH" || risk === "UNKNOWN" || st === "failed",

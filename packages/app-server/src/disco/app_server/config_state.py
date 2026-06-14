@@ -214,7 +214,13 @@ class McpConnectionDTO(BaseModel):
     status: str  # "connected" | "disconnected" | "error"
     transport: str | None = None  # "stdio" | "streamable_http"
     risk_tier: str | None = None
-    description_hash: str | None = None  # SHA-256 of approved tool descriptions
+    description_hash: str | None = None  # SHA-256 of approved tool descriptions (the OLD hash)
+    # E6 (#10): the AUTHORITATIVE new_hash the live agent-server pool just
+    # computed at startup when it detected drift against the stored approval.
+    # Surfaces on the ApprovalDiff so the user sees the REAL fingerprint of
+    # the changed tool set — not a stub of the stored hash. None when the
+    # server is in sync (no drift) or has never been approved (first connect).
+    new_description_hash: str | None = None
     approved_at: str | None = None  # ISO-8601
     enabled: bool | None = None
 
@@ -716,14 +722,48 @@ class ConfigState:
         except Exception:
             return {}
 
+    def _mcp_approval_pending(self) -> dict[str, dict]:
+        """E6 (#10): read the per-server DRIFT rows the agent-server wrote.
+
+        Each row is the AUTHORITATIVE new_hash the live agent-server pool
+        computed at startup when it detected a description_hash mismatch
+        against `mcp_approvals`. The app-server surfaces this on
+        `McpConnectionDTO.new_description_hash` so the ApprovalDiff renders
+        the REAL fingerprint of the changed tool set — not a stub of the
+        stored hash. The agent-server clears the row in the same transaction
+        as `create_mcp_approval` (the operator accepted the new tools), so
+        `new_description_hash` is `None` once a server is in sync.
+        """
+        if self._db_conn is None:
+            return {}
+        try:
+            from disco.tools.mcp.migrations import list_mcp_approval_pending
+
+            rows = list_mcp_approval_pending(self._db_conn)
+            return {r["server"]: r for r in rows}
+        except Exception:
+            return {}
+
     def mcp_connections(self) -> list[McpConnectionDTO]:
-        """Live pool projection: every configured server + its approval status."""
+        """Live pool projection: every configured server + its approval status.
+
+        E6 (#10): also projects `new_description_hash` from the
+        `mcp_approval_pending` drift table. When the live agent-server pool
+        just computed a fresh hash that differs from the stored approval,
+        `new_description_hash` carries that AUTHORITATIVE value and the
+        frontend ApprovalDiff uses it for the new-hash side of the diff
+        (and as the body of the re-approve POST). When the server is in
+        sync (no drift row), `new_description_hash` is `None` and the UI
+        does not show a diff banner.
+        """
         cfg = self._mcp_config()
         approvals = self._mcp_approvals()
+        pending = self._mcp_approval_pending()
         out: list[McpConnectionDTO] = []
         for name, srv in cfg.servers.items():
             url = srv.get("url", "") or srv.get("command", [""])[0] if srv.get("command") else srv.get("url", "")
             ap = approvals.get(name)
+            pd = pending.get(name)
             out.append(
                 McpConnectionDTO(
                     id=name,
@@ -733,6 +773,10 @@ class ConfigState:
                     transport=srv.get("transport"),
                     risk_tier=srv.get("risk_tier"),
                     description_hash=ap["description_hash"] if ap else None,
+                    # E6: pass the AUTHORITATIVE new_hash through verbatim —
+                    # NEVER recompute here, the backend is the source of
+                    # truth. None when the server is in sync.
+                    new_description_hash=pd["new_hash"] if pd else None,
                     approved_at=ap["approved_at"] if ap else None,
                     enabled=srv.get("enabled", True),
                 )

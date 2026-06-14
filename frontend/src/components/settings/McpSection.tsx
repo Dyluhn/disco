@@ -330,7 +330,7 @@ export function McpSection() {
                     />
                     {meta.label}
                   </span>
-                  {c.description_hash && (
+                  {c.description_hash && c.new_description_hash && (
                     <button
                       type="button"
                       onClick={() => setApprovingServer(c.id)}
@@ -361,15 +361,15 @@ export function McpSection() {
                   </button>
                 </div>
               </div>
-              {hashMismatch && c.description_hash && (
+              {hashMismatch && c.description_hash && c.new_description_hash && (
                 <div className="px-body pb-inline">
                   <ApprovalDiff
                     name={c.name}
                     oldHash={c.description_hash}
-                    newHash={c.description_hash}
+                    newHash={c.new_description_hash}
                     busy={approve.isPending}
                     onConfirm={() =>
-                      handleApprove(c.id, c.description_hash!)
+                      handleApprove(c.id, c.new_description_hash!)
                     }
                     onCancel={closeApproval}
                   />

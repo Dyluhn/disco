@@ -99,6 +99,45 @@ class EventStore(Protocol):
         """Live-only stream of transient frames (no history, no replay)."""
         ...
 
+    # ---- external Definition-of-Done (C1a: storage + accessor) ----------------
+    # The DoD spec is the structural fix for "the agent verifies its own work":
+    # a list of machine-checkable acceptance predicates (file_exists / command
+    # / http_ok) the agent itself never writes. It lives in a sibling table to
+    # `conversations` and `events` — the agent has no tool that mutates it.
+    # Set ONCE per conversation; subsequent set/replace calls raise
+    # `DoDSpecAlreadySet` and leave the original intact (write-once gate).
+    # The C1b evaluator will use `get_dod_spec` to gate `finish`; the C1c
+    # wire-up will capture the spec from the user request / `submit_plan`.
+
+    async def set_dod_spec(
+        self, conversation_id: str, spec: Any, *, set_by: str = "system"
+    ) -> Any:
+        """Persist the DoD spec for a conversation. WRITE-ONCE: a second call
+        with the same `conversation_id` raises `DoDSpecAlreadySet`. The agent
+        has no tool that reaches this method — see `core/dod.py` for the
+        immutability argument."""
+        ...
+
+    async def get_dod_spec(self, conversation_id: str) -> Any:
+        """Accessor. Returns the stored `DoDSpec` or `None` when no spec has
+        been captured yet. The accessor is a PURE READ — it does not copy or
+        wrap the spec, and the spec itself is frozen (in-process mutation is
+        a `ValidationError`)."""
+        ...
+
+    async def replace_dod_spec(
+        self, conversation_id: str, spec: Any, *, actor: str = "system"
+    ) -> Any:
+        """Named, always-raise hook for "weaken the spec" affordances. The
+        spec is write-once; this method exists so a future caller (a
+        server-side endpoint, a debug tool) can FAIL LOUDLY instead of
+        silently mutating. The current contract: raises
+        `DoDSpecAlreadySet` unconditionally if a spec exists. If no spec
+        exists, this is equivalent to `set_dod_spec` (kept for symmetry so
+        callers cannot route around the immutability gate by choosing the
+        "replace" verb)."""
+        ...
+
     async def conversation_exists(self, conversation_id: str) -> bool: ...
 
     async def list_conversations(

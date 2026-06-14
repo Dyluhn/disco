@@ -38,7 +38,7 @@ from ..models import Passage
 from ..ranking import Embedder
 from ..streaming import _verify_claims  # reuse — per-claim NLI verifier
 from ..vectorstore import VectorStore
-from .gather import SubQuestionResult
+from .gather import GatherLegContext, SubQuestionResult
 
 EmitFn = Callable[[str, dict[str, Any]], Awaitable[None]]
 
@@ -259,6 +259,7 @@ async def synthesize_section(
     section_id: str,
     top_k_for_section: int,
     emit: EmitFn,
+    leg_context: GatherLegContext,
 ) -> ReportSection:
     """Synthesize one section from the corpus + verify per-claim. Returns a
     ReportSection ready for the ReportEvent. Any failure mode degrades
@@ -287,14 +288,22 @@ async def synthesize_section(
     instruction = _SECTION_PROMPT.format(
         topic=sub_result.subq.title, passages=_format_passages(passages)
     )
+    # Per-leg isolation: the synthesis LLM call is also scoped to this leg's
+    # CallContext. The synthesis phase is serialized (one leg at a time per
+    # the engine's single-depth LLM queue), so concurrent contamination is
+    # impossible — but threading the per-leg context keeps the leg's cost
+    # tracking coherent and makes the leg's identity visible at the router
+    # for the entire gather→synth pipeline.
+    leg_messages: list[LLMMessage] = [LLMMessage(role="user", content=instruction)]
     try:
         resp = await router.complete(
             CompletionRequest(
                 profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
-                messages=[LLMMessage(role="user", content=instruction)],
+                messages=leg_messages,
                 temperature=0.0,
                 max_tokens=1400,
-            )
+            ),
+            context=leg_context.call_context,
         )
         markdown = resp.text.strip()
 
@@ -310,7 +319,10 @@ async def synthesize_section(
                     invalid_errors.append(str(e))
 
             if invalid_errors:
-                # One retry with error trace
+                # One retry with error trace. The retry's message list is also
+                # built FRESH (per-leg, not shared with another leg) and is
+                # scoped to this leg's CallContext. The retry sequence stays
+                # inside this leg — it never crosses a sibling's leg_context.
                 retry_msg = (
                     "Your previous output contained invalid chart JSON:\n"
                     f"{' ; '.join(invalid_errors)}\n\n"
@@ -329,7 +341,8 @@ async def synthesize_section(
                             ],
                             temperature=0.0,
                             max_tokens=1400,
-                        )
+                        ),
+                        context=leg_context.call_context,
                     )
                     markdown = resp.text.strip()
                 except Exception:  # noqa: BLE001

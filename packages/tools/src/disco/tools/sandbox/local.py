@@ -52,7 +52,18 @@ class LocalSandboxService(GvisorSandboxService):
     ) -> Any:
         """Same Docker create as the parent, but the workspace is a per-run NAMED VOLUME
         (not the daemon bind-mount). `host_workspace` is unused on this tier — the
-        volume is the portable choice across local Docker and rootless Podman."""
+        volume is the portable choice across local Docker and rootless Podman.
+
+        Egress posture (E8): mirrors the parent's three-way mode.
+        • sealed   → `network_mode="none"`, no ports.
+        • filtered → allowlisting PROXY sidecar on an internal no-NAT net; the
+                     allowlist is enforced by the proxy (not just a name). The
+                     parent `_setup_filtered_egress` is reused unchanged (the
+                     local tier drives the same docker-py client as gVisor).
+        • open     → `network_mode="bridge"` with the curated port set published.
+        Returns (container, egress_network, egress_sidecar) — the last two are
+        non-None ONLY for a filtered box; sealed/open get (None, None) and the
+        inherited ContainerInstance teardown is a no-op on those refs."""
         client = self._client()
         self._require_runtime(client)
         self._require_image(client)  # never-pull guard, before any run
@@ -61,12 +72,28 @@ class LocalSandboxService(GvisorSandboxService):
         mem_mb = spec.memory_mb or self._cfg.default_memory_mb
         cpu = spec.cpu or self._cfg.default_cpu
         labels = {"pmx.conversation_id": conversation_id} if conversation_id else {}
-
-        # FAIL-SAFE egress: the allowlisting proxy is wired for gVisor only so far, so
-        # on this lowest-isolation tier a filtered box (an allowlist we can't enforce
-        # per-host) is SEALED — deny-all, never the old silent full-bridge. Only an
-        # explicit NETWORK capability ("open") gets raw bridge.
-        open_net = egress_mode(spec) == "open"
+        mode = egress_mode(spec)
+        # Per-mode network config (the three-way egress posture; egress_mode docstring).
+        net_kwargs: dict[str, Any] = {}
+        environment: dict[str, str] = {}
+        egress_network = egress_sidecar = None
+        if mode == "filtered":
+            # Reuse the gVisor proxy setup unchanged — same docker-py client, same
+            # internal-network + sidecar pattern (the local tier just differs in its
+            # workspace being a named volume, not a host bind).
+            egress_network, egress_sidecar, environment, net_name = self._setup_filtered_egress(
+                client, spec, instance_id, conversation_id
+            )
+            net_kwargs = {"network": net_name}
+            ports: dict[str, str | None] | None = None  # inbound preview on internal net
+        elif mode == "open":
+            net_kwargs = {"network_mode": "bridge"}
+            ports = {f"{p}/tcp": None for p in sorted(PUBLISHED_PORTS)}
+        else:  # sealed
+            net_kwargs = {"network_mode": "none"}
+            ports = None
+        # Bind `ports` at function-frame (the conditional expression above might
+        # leave it unbound on an unrecognised mode — defense in depth).
         try:
             client.volumes.create(name=vol_name)  # auto-created; persists across the box
             container = client.containers.run(
@@ -74,23 +101,37 @@ class LocalSandboxService(GvisorSandboxService):
                 # keepalive
                 command=_keepalive_command(),
                 runtime=self._cfg.runtime,  # runc (a value, not a branch)
-                network_mode="bridge" if open_net else "none",
                 # Publish the curated port set (declared at create — Docker can't
-                # add mappings later), only when network is granted.
-                ports={f"{p}/tcp": None for p in sorted(PUBLISHED_PORTS)} if open_net else None,
+                # add mappings later). Only on `open`; the filtered and sealed
+                # paths have no inbound preview (an internal net, or no net at all).
+                ports=ports,
                 # The limit goes through the LOCAL socket/daemon → it actually bites.
                 mem_limit=f"{mem_mb}m",
                 nano_cpus=int(cpu * 1_000_000_000),
                 volumes={vol_name: {"bind": self._cfg.container_workspace, "mode": "rw"}},
-                environment={},  # NO host env leaks into the box
+                # NO host env beyond capability-granted values. For a filtered box
+                # that's the proxy routing vars (defense in depth atop the no-route
+                # network). Sealed / open pass an empty dict — no leaks.
+                environment=environment,
                 working_dir=self._cfg.container_workspace,
                 detach=True,
                 name=f"pmx-sbx-{instance_id}",
                 labels=labels,
+                **net_kwargs,
             )
         except SandboxUnavailableError:
             raise
         except Exception as exc:  # noqa: BLE001 — start failure, real cause preserved
+            # Don't leak the egress aux if the sandbox itself failed to start (E8).
+            if egress_sidecar is not None:
+                try:
+                    egress_sidecar.remove(force=True)
+                except Exception:  # noqa: BLE001 — best-effort
+                    pass
+            if egress_network is not None:
+                try:
+                    egress_network.remove()
+                except Exception:  # noqa: BLE001 — best-effort
+                    pass
             raise SandboxUnavailableError(f"container failed to start: {exc}") from exc
-        # No filtered-egress aux on this tier (sealed/open only) → no proxy/network.
-        return container, None, None
+        return container, egress_network, egress_sidecar

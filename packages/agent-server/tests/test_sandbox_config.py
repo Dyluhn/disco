@@ -253,7 +253,11 @@ def test_sandbox_settings_round_trip_on_disk(tmp_path):
 
 @pytest.mark.asyncio
 async def test_compose_build_loop_egress_modes():
-    # BP-09: env-flag dispatch for open/filtered Build sandboxes
+    # BP-09: env-flag dispatch for open/filtered Build sandboxes.
+    # BP-G10: the DEFAULT flipped from "open" to "filtered" (the E8 allowlisting
+    # proxy is now wired on every backend — gVisor, podman, local — so the safe
+    # default IS the allowlist). Open is now the EXPLICIT escape hatch, not the
+    # default, so the "open" case here sets PMX_BUILD_EGRESS=open explicitly.
     import os
     from unittest import mock
 
@@ -263,18 +267,26 @@ async def test_compose_build_loop_egress_modes():
     router = mock.MagicMock(spec=DefaultLLMRouter)
     agent = mock.MagicMock(spec=RouterAgent)
 
-    # 1. Default (open)
+    # 1. Default (filtered — BP-G10 default)
     with mock.patch.dict(os.environ, {}, clear=False):
         with mock.patch.object(rt, "_sandbox_service_now"):
             loop = rt._compose_build_loop("c1", router, agent)
             spec = loop.executor._sandbox.spec
+            assert Capability.NETWORK not in spec.permitted
+            assert spec.egress_allow == REGISTRY_EGRESS_ALLOW
+
+    # 2. Explicit open (escape hatch via PMX_BUILD_EGRESS=open)
+    with mock.patch.dict(os.environ, {"PMX_BUILD_EGRESS": "open"}):
+        with mock.patch.object(rt, "_sandbox_service_now"):
+            loop = rt._compose_build_loop("c2", router, agent)
+            spec = loop.executor._sandbox.spec
             assert Capability.NETWORK in spec.permitted
             assert not spec.egress_allow
 
-    # 2. Filtered
+    # 3. Filtered is unchanged when set explicitly (regression guard for BP-09).
     with mock.patch.dict(os.environ, {"PMX_BUILD_EGRESS": "filtered"}):
         with mock.patch.object(rt, "_sandbox_service_now"):
-            loop = rt._compose_build_loop("c2", router, agent)
+            loop = rt._compose_build_loop("c3", router, agent)
             spec = loop.executor._sandbox.spec
             assert Capability.NETWORK not in spec.permitted
             assert spec.egress_allow == REGISTRY_EGRESS_ALLOW

@@ -1064,11 +1064,12 @@ class ConversationRuntime:
 
         filtered → proxy_env(host, EGRESS_PROXY_PORT); a host outside the unioned
         allowlist is denied 403 by the proxy, so the client cannot bypass the
-        sidecar (workorder §2 "no path bypasses it"). open (default) → None
-        (direct), matching the open sandbox posture. host comes from
+        sidecar (workorder §2 "no path bypasses it"). BP-G10: filtered is now
+        the default (matches the new default sandbox posture). open (explicit
+        PMX_BUILD_EGRESS=open) → None (direct). host comes from
         PMX_MCP_EGRESS_PROXY_HOST (default loopback). See
         docs/workorders/RP-05b-orchestrator-proxy-decision.md."""
-        posture = os.environ.get("PMX_BUILD_EGRESS", "open").lower().strip()
+        posture = os.environ.get("PMX_BUILD_EGRESS", "filtered").lower().strip()
         if posture != "filtered":
             return None
         from disco.tools.sandbox._container import EGRESS_PROXY_PORT, proxy_env
@@ -1081,14 +1082,18 @@ class ConversationRuntime:
         *,
         mcp_egress_hosts: frozenset[str] | None = None,
     ) -> SandboxSpec:
-        """The egress-posture spec for a Build sandbox. Open by default; filtered
-        (registry-only) when PMX_BUILD_EGRESS=filtered. Used both by _compose_build_loop
-        and upload_session so pending sessions and build sessions share the same spec.
+        """The egress-posture spec for a Build sandbox. FILTERED by default
+        (BP-G10: build boxes get the allowlisting proxy now that E8 wired the
+        proxy on every backend — gVisor, podman, local). Open only when
+        PMX_BUILD_EGRESS=open is set explicitly (an escape hatch for debug
+        / dev when a real network is genuinely required). Used both by
+        _compose_build_loop and upload_session so pending sessions and build
+        sessions share the same spec.
 
         When mcp_egress_hosts is provided, they are UNIONed into the egress_allow set
         (SUPERSET, not replacement) — the pre-existing registry hosts AND the MCP
         hosts both survive (rung B egress-proxy routing)."""
-        egress = os.environ.get("PMX_BUILD_EGRESS", "open").lower().strip()
+        egress = os.environ.get("PMX_BUILD_EGRESS", "filtered").lower().strip()
         if egress == "filtered":
             base_allow = REGISTRY_EGRESS_ALLOW
             if mcp_egress_hosts:
@@ -1603,7 +1608,10 @@ class ConversationRuntime:
             return
 
         from disco.tools.mcp.approval import ApprovalRequired
-        from disco.tools.mcp.config import McpSettings as TypedMcpSettings
+        from disco.tools.mcp.config import (
+            McpServerConfig as TypedMcpServerConfig,
+            McpSettings as TypedMcpSettings,
+        )
         from disco.tools.mcp.migrations import list_mcp_approvals
 
         # Read existing approvals from the DB (D1: security gate production path)
@@ -1616,10 +1624,17 @@ class ConversationRuntime:
         except Exception:
             _LOG.warning("MCP pool: failed to read approvals from DB", exc_info=True)
 
-        # Split servers: stdio → pool, streamable_http → HTTP clients
+        # Split servers: stdio → pool, streamable_http → HTTP clients. The
+        # core RouterConfig.mcp.servers schema is `dict[str, dict]` (loose,
+        # for Settings writeback), so the value type isn't McpServerConfig
+        # out of the loader — upgrade each entry to the typed model so the
+        # transport/risk-tier fields are real attributes the pool/HTTP
+        # branch can branch on. The Pydantic coerce also surfaces any
+        # misconfiguration as a clear ValidationError at startup.
         http_servers: dict[str, McpServerConfig] = {}
         stdio_servers: dict[str, McpServerConfig] = {}
-        for name, srv in mcp_cfg.servers.items():
+        for name, srv_raw in mcp_cfg.servers.items():
+            srv = TypedMcpServerConfig.model_validate({"name": name, **srv_raw})
             if srv.transport == "streamable_http":
                 http_servers[name] = srv
             else:
@@ -1640,14 +1655,42 @@ class ConversationRuntime:
 
             # D1/D3: collect servers that need re-approval from the pool status
             if self._mcp_pool is not None:
+                # E6 (#10): the pool is the source of the AUTHORITATIVE new_hash
+                # (the SHA-256 of the canonicalized tool descriptions the live
+                # server just advertised). Persist it to the shared
+                # mcp_approval_pending table so the app-server — which serves
+                # GET /api/mcp to the frontend — can surface it on the
+                # ApprovalDiff. Without this row, the UI only sees the STORED
+                # (old) hash from mcp_approvals, which makes the diff useless
+                # (or worse, shows the same value for both old and new).
+                pending_db_conn = getattr(self._store, "_conn", None)
                 for name, info in self._mcp_pool.approval_pending().items():
+                    old_hash = info.get("old_hash", "")
+                    new_hash = info.get("new_hash", "")
                     self._mcp_approval_pending[name] = {
-                        "old_hash": info.get("old_hash", ""),
-                        "new_hash": info.get("new_hash", ""),
+                        "old_hash": old_hash,
+                        "new_hash": new_hash,
                     }
                     _LOG.warning(
-                        "MCP pool: server %r refused — re-approval required", name
+                        "MCP pool: server %r refused — re-approval required "
+                        "(old=%s… new=%s…)",
+                        name, old_hash[:12], new_hash[:12],
                     )
+                    if pending_db_conn is not None and old_hash and new_hash:
+                        try:
+                            from disco.tools.mcp.migrations import (
+                                set_mcp_approval_pending,
+                            )
+                            set_mcp_approval_pending(
+                                pending_db_conn, name, old_hash, new_hash,
+                            )
+                        except Exception:
+                            _LOG.warning(
+                                "MCP pool: failed to persist pending approval "
+                                "for %r (UI will fall back to stored hash only)",
+                                name,
+                                exc_info=True,
+                            )
 
         # Start HTTP servers (rung B)
         for name, srv in http_servers.items():
@@ -1667,6 +1710,26 @@ class ConversationRuntime:
                     "old_hash": exc.old_hash,
                     "new_hash": exc.new_hash,
                 }
+                # E6: same drift-persistence path as the stdio branch — write
+                # the AUTHORITATIVE new_hash the live HTTP server advertised to
+                # the shared mcp_approval_pending table so the app-server's
+                # GET /api/mcp can surface it on the ApprovalDiff.
+                http_db_conn = getattr(self._store, "_conn", None)
+                if http_db_conn is not None:
+                    try:
+                        from disco.tools.mcp.migrations import (
+                            set_mcp_approval_pending,
+                        )
+                        set_mcp_approval_pending(
+                            http_db_conn, name, exc.old_hash, exc.new_hash,
+                        )
+                    except Exception:
+                        _LOG.warning(
+                            "McpPool: failed to persist pending approval for "
+                            "HTTP server %r (UI will fall back to stored hash)",
+                            name,
+                            exc_info=True,
+                        )
                 # Clean up the client
                 client = self._mcp_http_clients.pop(name, None)
                 if client is not None:
@@ -2395,6 +2458,14 @@ class ConversationRuntime:
         # on any backward-incompatible change (removing a field, changing
         # the redaction label format, etc.) and document the change in
         # the order's report.
+        # D10: `cassette` is the single-source service-call projection (the
+        # same row format the harness `Cassette` class produces) derived from
+        # the SAME scrubbed events the viewer renders. The harness replay
+        # path reads `bundle["cassette"]` via `Cassette.from_rows(...)` —
+        # one projection, two readers, no divergent serializer.
+        from harness.projection import project_cassette_rows
+
+        cassette_rows = project_cassette_rows(scrubbed_events)
         bundle = {
             "bundle_version": 1,
             "conversation_id": conversation_id,
@@ -2411,6 +2482,7 @@ class ConversationRuntime:
                 "pending_plan_id": state.pending_plan_id,
             },
             "events": scrubbed_events,
+            "cassette": cassette_rows,
         }
         return {"ok": True, "bundle": bundle}
 

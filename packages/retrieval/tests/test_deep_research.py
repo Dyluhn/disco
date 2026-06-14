@@ -17,11 +17,13 @@ event-emission shape can be validated.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 from disco.core.llm import (
+    CallContext,
     CompletionRequest,
     CompletionResponse,
     LLMRouter,
@@ -37,6 +39,7 @@ from disco.retrieval.deep_research import (
 )
 from disco.retrieval.deep_research.decompose import SubQuestion
 from disco.retrieval.deep_research.gather import (
+    GatherLegContext,
     SubQuestionResult,
     gather_for_subquestion,
 )
@@ -180,6 +183,10 @@ class _ScriptedRouter(LLMRouter):
             for k, v in scripts.items():
                 self._scripts[k] = list(v)
         self.calls: list[tuple[str, str]] = []
+        # Parallel log of the CallContext each call was made with — used by
+        # the C14 isolation tests to assert each gather leg's LLM calls are
+        # scoped to that leg's per-leg CallContext, not the shared default.
+        self.call_contexts: list[str | None] = []
 
     async def complete(
         self, request: CompletionRequest, *, context: Any = None
@@ -191,6 +198,12 @@ class _ScriptedRouter(LLMRouter):
         # snapshot what the LAST user message was for assertions
         last_msg = request.messages[-1].content if request.messages else ""
         self.calls.append((role, last_msg))
+        ctx_id = (
+            context.conversation_id
+            if context is not None and getattr(context, "conversation_id", None)
+            else None
+        )
+        self.call_contexts.append(ctx_id)
         queue = self._scripts.get(role, [])
         if queue:
             text = queue.pop(0)
@@ -284,6 +297,10 @@ async def test_gather_iterates_multiple_rounds_until_sufficient() -> None:
         engine=engine, router=router, embedder=embedder,
         vector_store=vector_store, namespace="conv_test",
         bound=bound, emit=emit, remaining_source_budget=20,
+        leg_context=GatherLegContext(
+            subq_id="s_test", namespace="conv_test",
+            call_context=CallContext(conversation_id="conv_test/s_test"),
+        ),
     )
     assert result.rounds_run == 2  # multi-round, not single-pass
     assert result.issued_queries == ["What is X?", "latest 2024 numbers"]
@@ -291,6 +308,12 @@ async def test_gather_iterates_multiple_rounds_until_sufficient() -> None:
     # emit callback received search + observation + gap_reason events
     kinds = [k for k, _ in captured]
     assert "search" in kinds and "observation" in kinds and "gap_reason" in kinds
+    # C14: the router's gap_reasoner call was scoped to this leg's
+    # CallContext, not the shared default (which would have no
+    # conversation_id set).
+    assert any(
+        ctx == "conv_test/s_test" for ctx in router.call_contexts
+    ), f"expected per-leg conversation_id in call contexts, got {router.call_contexts}"
 
 
 async def test_gather_stops_at_round_cap_with_bounded_by_rounds() -> None:
@@ -322,6 +345,10 @@ async def test_gather_stops_at_round_cap_with_bounded_by_rounds() -> None:
         engine=engine, router=router, embedder=embedder,
         vector_store=vector_store, namespace="conv_test",
         bound=bound, emit=emit, remaining_source_budget=20,
+        leg_context=GatherLegContext(
+            subq_id="s_test", namespace="conv_test",
+            call_context=CallContext(conversation_id="conv_test/s_test"),
+        ),
     )
     assert result.rounds_run == 2
     assert result.bounded_by_rounds is True
@@ -572,6 +599,398 @@ def test_bounds_for_accepts_string_value() -> None:
     a = bounds_for("standard_deep")
     b = bounds_for(DepthTier.STANDARD_DEEP)
     assert a == b
+
+
+# ============================================================================
+# C14 — Per-leg isolated sub-context (concurrent gather legs)
+# ============================================================================
+#
+# The concurrent gather in `DeepResearchRun.run` dispatches one
+# `asyncio.create_task(gather_for_subquestion(...))` per pending sub-question.
+# Each leg must have its OWN message / view / cost state — sibling legs must
+# NOT see each other's intermediate messages, and one leg raising must NOT
+# corrupt the other's state. The merge of leg results happens ONLY at the
+# synthesis boundary (`synthesize_section` after the leg's gather task
+# returns), never inside the leg.
+#
+# These tests assert the isolation contract end-to-end through the engine
+# (Test 1) and at the leg level (Test 2).
+
+
+class _GapRecordingRouter(LLMRouter):
+    """Captures every (role, last_user_message, CallContext.conversation_id)
+    triple across the gap_reasoner / synthesis calls. Used by the C14 tests
+    to assert per-leg isolation: leg A's CallContext is NOT the same as
+    leg B's, and leg A's user-message list does not contain leg B's task.
+
+    Also supports a `fail_when_conv_id` hook so the error-isolation test can
+    make a specific leg's LLM call raise (simulating a leg-level failure
+    that the OTHER leg must survive)."""
+
+    def __init__(
+        self,
+        scripts: dict[str, list[str]] | None = None,
+        fail_when_conv_id: str | None = None,
+        fail_message: str = "simulated leg failure",
+    ) -> None:
+        self._scripts: dict[str, list[str]] = {
+            "query_rewriter": [],
+            "rag_answerer": [],
+        }
+        if scripts:
+            for k, v in scripts.items():
+                self._scripts[k] = list(v)
+        self.records: list[dict[str, Any]] = []
+        self._fail_when_conv_id = fail_when_conv_id
+        self._fail_message = fail_message
+        # mutable list of message-list-snapshots, one per call — proves
+        # the leg builds an INDEPENDENT list per call, never sharing a
+        # mutable reference with a sibling leg.
+        self.message_snapshots: list[list[Any]] = []
+
+    async def complete(
+        self, request: CompletionRequest, *, context: Any = None
+    ) -> CompletionResponse:
+        role = (
+            request.profile.role.value if hasattr(request.profile.role, "value")
+            else str(request.profile.role)
+        )
+        # snapshot the message list (NOT a shared reference) — the snapshot
+        # freezes the leg's view at call time so isolation is observable.
+        msg_snapshot = list(request.messages)
+        self.message_snapshots.append(msg_snapshot)
+        last_msg = msg_snapshot[-1].content if msg_snapshot else ""
+        ctx_id = (
+            context.conversation_id
+            if context is not None and getattr(context, "conversation_id", None)
+            else None
+        )
+        self.records.append(
+            {"role": role, "last_msg": last_msg, "conversation_id": ctx_id}
+        )
+        if ctx_id == self._fail_when_conv_id:
+            raise RuntimeError(self._fail_message)
+        queue = self._scripts.get(role, [])
+        if queue:
+            text = queue.pop(0)
+        elif role == "query_rewriter":
+            text = "SUFFICIENT\nnone"
+        else:
+            text = "(default)"
+        return CompletionResponse(
+            text=text,
+            tool_calls=[],
+            usage=TokenUsage(input_tokens=1, output_tokens=1),
+            finish_reason="stop",
+            model_used="fake",
+            request_id=request.request_id,
+            routing=None,
+        )
+
+    async def stream_complete(  # pragma: no cover - unused
+        self, request: CompletionRequest, *, context: Any = None
+    ) -> AsyncIterator[StreamChunk]:
+        async def gen() -> AsyncIterator[StreamChunk]:
+            yield StreamChunk(
+                done=True, final=await self.complete(request, context=context)
+            )
+        return gen()
+
+
+async def test_c14_concurrent_legs_have_isolated_contexts() -> None:
+    """C14 / Test 1 — each concurrent gather leg has its OWN sub-context.
+
+    Two sub-questions with distinctive titles run concurrently via
+    `DeepResearchRun.run`. After completion, we assert:
+
+      (a) Each leg's gap_reasoner LLM call was made with a per-leg
+          CallContext (unique conversation_id). No call was made with
+          the shared default (None conversation_id) — the per-leg
+          isolation reaches the router.
+
+      (b) Each leg's gap_reasoner message list is INDEPENDENT — it
+          contains the leg's own task (its sub-question title) and does
+          NOT contain the sibling's task. The message list is built
+          fresh per call (we snapshot it at call time).
+
+      (c) The leg's intermediate state (leg_context, namespace, subq_id)
+          is reflected in the CallContext for that leg's calls.
+
+      (d) The synthesis boundary (synthesize_section's rag_answerer
+          call) also uses the per-leg CallContext, not the shared one.
+
+      (e) Results still merge correctly into the expected
+          `ReportFromRun` shape (3 sections in plan order)."""
+    search = _FakeSearch()
+    extraction = _FakeExtraction()
+    reranker = _FakeReranker()
+    embedder = _FakeEmbedder()
+    vector_store = InMemoryVectorStore()
+    # Scripted: gap reasoner SUFFICIENT for all legs (1 round each), one
+    # synthesis body per section, one coherence summary. Distinctive
+    # subq titles let us assert which leg's task appears in which call.
+    router = _GapRecordingRouter({
+        "query_rewriter": ["SUFFICIENT\nnone"] * 3,
+        "rag_answerer": [
+            "Basics of ALPHA-QUESTION are clear [[p0]]. Source confirms [[p1]].",
+            "BETA-QUESTION today looks like this [[p3]]. Evidence shows [[p4]].",
+            "GAMMA-QUESTION trends toward Z [[p6]]. The field expects [[p7]].",
+            "This report surveys the ALPHA, BETA, and GAMMA space.",
+        ],
+    })
+    engine = DefaultRetrievalEngine(
+        search=search, extraction=extraction, reranker=reranker, embedder=embedder
+    )
+    run = DeepResearchRun(
+        query="the state of X",
+        router=router, retrieval_engine=engine,
+        embedder=None, vector_store=vector_store, nli=_FakeNLI(),
+        depth=DepthTier.STANDARD_DEEP, conversation_id="conv_c14",
+    )
+    plan_steps = [
+        "ALPHA-QUESTION: what is it?",
+        "BETA-QUESTION: how does it work?",
+        "GAMMA-QUESTION: where is it going?",
+    ]
+    _, emit = _collect_events()
+    result = await run.run(plan_steps, emit=emit)
+
+    # (e) merge shape is unchanged — 3 sections, one per subq, in plan order.
+    assert len(result.sections) == 3
+    assert [s.title for s in result.sections] == plan_steps
+    assert result.bounded_by is None
+
+    # ---- (a) per-leg CallContext at the router -----------------------------
+    # Every gap_reasoner call (query_rewriter) was scoped to a per-leg
+    # conversation_id matching that leg's subq_id. No call landed on the
+    # shared default (None).
+    gap_calls = [r for r in router.records if r["role"] == "query_rewriter"]
+    assert gap_calls, "expected gap_reasoner calls to be recorded"
+    expected_leg_ids = {
+        # sha256 of each title, first 8 hex chars, prefixed with "s".
+        # We don't hard-code the hashes; instead we derive them so the
+        # test stays robust to any change in the engine's hashing scheme.
+        f"s{hashlib.sha256(t.encode()).hexdigest()[:8]}" for t in plan_steps
+    }
+    seen_leg_ids = {r["conversation_id"] for r in gap_calls}
+    # Each conversation_id is of the form "conv_c14/<leg_id>".
+    assert seen_leg_ids, "expected non-None conversation_ids on gap calls"
+    for cid in seen_leg_ids:
+        assert cid is not None, "shared default CallContext was used (isolation broken)"
+        assert cid.startswith("conv_c14/s"), f"unexpected conv_id format: {cid}"
+    leg_ids = {cid.split("/", 1)[1] for cid in seen_leg_ids}
+    assert leg_ids == expected_leg_ids, (
+        f"leg ids {leg_ids} != expected {expected_leg_ids}"
+    )
+
+    # ---- (b) per-leg message list — sibling messages do NOT bleed in ------
+    # For each gap_reasoner call, the user message must contain that
+    # leg's subq title and must NOT contain any sibling's subq title.
+    for r in gap_calls:
+        msg = r["last_msg"]
+        # the leg's own title appears (the gap prompt includes it)
+        leg_id = r["conversation_id"].split("/", 1)[1]
+        # find the title this leg corresponds to
+        own_title = next(
+            t for t in plan_steps
+            if f"s{hashlib.sha256(t.encode()).hexdigest()[:8]}" == leg_id
+        )
+        assert own_title in msg, (
+            f"leg {leg_id} message did not contain its own title: {own_title!r} in {msg[:120]!r}"
+        )
+        # and NONE of the sibling titles appear
+        sibling_titles = [t for t in plan_steps if t != own_title]
+        for sibling in sibling_titles:
+            assert sibling not in msg, (
+                f"leg {leg_id} message BLEEDS sibling title {sibling!r}: {msg[:200]!r}"
+            )
+
+    # ---- (b') the message list per call is a fresh, independent list ------
+    # Every recorded message snapshot must be a distinct list object —
+    # i.e., the leg never hands the router a shared mutable list it could
+    # be mutated by a sibling.
+    assert len(router.message_snapshots) >= 1
+    first_snap = router.message_snapshots[0]
+    assert all(snap is not first_snap or i == 0 for i, snap in enumerate(router.message_snapshots)), (
+        "message snapshots are aliased — same list object reused across calls"
+    )
+
+    # ---- (d) synthesis also uses the per-leg CallContext ------------------
+    synth_calls = [r for r in router.records if r["role"] == "rag_answerer"]
+    # One synthesis call per leg + one coherence summary = 4 total.
+    assert len(synth_calls) == 4
+    section_synth = synth_calls[:3]
+    coherence_call = synth_calls[3]
+    # Each section's synthesis was scoped to its leg's conversation_id.
+    for r in section_synth:
+        assert r["conversation_id"] is not None
+        assert r["conversation_id"].startswith("conv_c14/s")
+    # The coherence call is the SHARED summary (post-merge step) — it's
+    # allowed to run with the default / None context, since it happens
+    # AFTER the merge and operates on the merged section list.
+    # We don't assert a specific cid on the coherence call; just that the
+    # 3 section synth calls are leg-scoped and the coherence call is
+    # distinct.
+    assert coherence_call is not None
+
+
+async def test_c14_one_leg_error_does_not_corrupt_other_leg() -> None:
+    """C14 / Test 2 — one leg raising an error does NOT corrupt the
+    sibling leg's state; the sibling leg still completes.
+
+    We drive two `gather_for_subquestion` tasks concurrently (the same
+    dispatch pattern `DeepResearchRun.run` uses, but without the engine's
+    cancel-all-on-failure short-circuit so the test isolates the LEG-level
+    isolation contract). The router is configured to RAISE on one
+    specific leg's CallContext — that simulates a leg-level failure.
+    The sibling leg must still complete with its full SubQuestionResult.
+
+    Asserted properties:
+      (a) The failing leg's task raises; the sibling leg's task returns
+          a normal SubQuestionResult with all its passages + queries.
+      (b) The sibling leg's `leg_context` is NOT modified by the
+          failing leg (frozen dataclass — verified by identity + a
+          'still-frozen' check after the run).
+      (c) The sibling leg's `seen_passage_ids` / `result.passages` /
+          `result.issued_queries` are all sourced from the SIBLING's
+          sub-question, not the failing leg's."""
+    import asyncio
+    import hashlib
+
+    # Distinctive subq titles so we can attribute passages to legs.
+    subq_a_title = "FAILING-LEG-QUESTION"
+    subq_b_title = "SURVIVING-LEG-QUESTION"
+    subq_a_hash = hashlib.sha256(subq_a_title.encode()).hexdigest()[:8]
+    subq_b_hash = hashlib.sha256(subq_b_title.encode()).hexdigest()[:8]
+
+    search = _FakeSearch()
+    extraction = _FakeExtraction()
+    reranker = _FakeReranker()
+    embedder = _FakeEmbedder()
+    vector_store = InMemoryVectorStore()
+    # The router raises ONLY when invoked with the failing leg's
+    # conversation_id; other legs complete normally. Note: _gap_reason
+    # catches router.complete() exceptions, so the failure has to
+    # surface from a non-caught path — we use a custom emit that raises
+    # for the failing leg (not caught in gather_for_subquestion).
+    leg_a_conv = f"conv_c14b/s{subq_a_hash}"
+    router = _GapRecordingRouter(
+        {
+            "query_rewriter": ["SUFFICIENT\nnone"] * 5,
+        },
+        fail_when_conv_id=leg_a_conv,
+        fail_message="simulated router failure for failing leg",
+    )
+    engine = DefaultRetrievalEngine(
+        search=search, extraction=extraction, reranker=reranker, embedder=embedder
+    )
+    bound = DepthBound(
+        max_sources=20, max_rounds_per_subq=2, max_wall_clock_s=60,
+        max_subquestions=6, discover_limit=8, extract_cap=4, rerank_top_k=4,
+    )
+
+    # Custom emit: raises for the FAILING leg's sub-question title. This
+    # surfaces as an uncaught exception in gather_for_subquestion (emit
+    # is awaited without a try/except around it), so the failing leg
+    # actually raises. The SURVIVING leg's emit never trips the guard.
+    events: list[tuple[str, dict]] = []
+
+    async def emit(kind: str, payload: dict) -> None:
+        events.append((kind, payload))
+        if payload.get("subquestion") == subq_a_title:
+            raise RuntimeError(
+                f"simulated emit failure for {subq_a_title}"
+            )
+
+    leg_a_context = GatherLegContext(
+        subq_id=f"s{subq_a_hash}",
+        namespace=f"conv_c14b/{subq_a_hash}",
+        call_context=CallContext(conversation_id=leg_a_conv),
+    )
+    leg_b_context = GatherLegContext(
+        subq_id=f"s{subq_b_hash}",
+        namespace=f"conv_c14b/{subq_b_hash}",
+        call_context=CallContext(conversation_id=f"conv_c14b/s{subq_b_hash}"),
+    )
+    # Snapshot the leg_context identities so we can verify they are
+    # not replaced (frozen dataclass — but the test still proves it).
+    leg_a_context_id = id(leg_a_context)
+    leg_b_context_id = id(leg_b_context)
+
+    async def run_leg_a() -> SubQuestionResult:
+        return await gather_for_subquestion(
+            SubQuestion(title=subq_a_title),
+            engine=engine, router=router, embedder=embedder,
+            vector_store=vector_store, namespace=leg_a_context.namespace,
+            bound=bound, emit=emit, remaining_source_budget=20,
+            leg_context=leg_a_context,
+        )
+
+    async def run_leg_b() -> SubQuestionResult:
+        return await gather_for_subquestion(
+            SubQuestion(title=subq_b_title),
+            engine=engine, router=router, embedder=embedder,
+            vector_store=vector_store, namespace=leg_b_context.namespace,
+            bound=bound, emit=emit, remaining_source_budget=20,
+            leg_context=leg_b_context,
+        )
+
+    # Use return_exceptions=True so the surviving leg's result is
+    # observable even when its sibling raises. This is the "sibling
+    # still completes" claim at the leg level.
+    outcomes = await asyncio.gather(
+        run_leg_a(), run_leg_b(), return_exceptions=True
+    )
+    leg_a_outcome, leg_b_outcome = outcomes
+
+    # ---- (a) failing leg raised; surviving leg completed normally --------
+    assert isinstance(leg_a_outcome, Exception), (
+        f"expected failing leg to raise, got {leg_a_outcome!r}"
+    )
+    assert isinstance(leg_b_outcome, SubQuestionResult), (
+        f"expected surviving leg to return a SubQuestionResult, got "
+        f"{leg_b_outcome!r}"
+    )
+    surviving: SubQuestionResult = leg_b_outcome
+    # Surviving leg had at least one search round and accumulated passages.
+    assert surviving.rounds_run >= 1
+    assert surviving.issued_queries[0] == subq_b_title
+    assert surviving.passages, "surviving leg should have gathered passages"
+    # None of the surviving leg's queries mention the failing leg's title.
+    for q in surviving.issued_queries:
+        assert subq_a_title not in q, (
+            f"surviving leg's query bleeds failing leg's title: {q!r}"
+        )
+
+    # ---- (b) the surviving leg's leg_context was not corrupted ------------
+    assert id(leg_b_context) == leg_b_context_id, (
+        "leg_context identity changed (frozen dataclass — should be immutable)"
+    )
+    # Frozen dataclass: still hashable, attributes unchanged.
+    assert leg_b_context.subq_id == f"s{subq_b_hash}"
+    assert leg_b_context.namespace == f"conv_c14b/{subq_b_hash}"
+    assert leg_b_context.call_context.conversation_id == (
+        f"conv_c14b/s{subq_b_hash}"
+    )
+
+    # ---- (c) the surviving leg's accumulated state is its OWN ------------
+    # The surviving leg's passages come from the SURVIVING sub-question,
+    # not the failing one. The fake search builds URLs from the query,
+    # so we can assert the URL provenance.
+    for h in surviving.all_hits:
+        assert subq_b_title in h.url, (
+            f"surviving leg's hit URL contains failing leg's title: {h.url!r}"
+        )
+    # The events captured show two independent legs' event streams; the
+    # surviving leg's events do not reference the failing leg's title.
+    surviving_events = [
+        (k, p) for k, p in events if p.get("subquestion") == subq_b_title
+    ]
+    assert surviving_events, "no events captured for the surviving leg"
+    for _, p in surviving_events:
+        assert subq_a_title not in str(p), (
+            f"surviving leg's event payload references failing leg: {p!r}"
+        )
 
 
 # unused imports placeholder to keep import-sort tooling clean

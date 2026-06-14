@@ -53,7 +53,13 @@ def derive_family(model_id: str) -> str:
 class PromptProvider(Protocol):
     """[CONTRACT] Returns the system prompt for a given model family and mode.
     Owned alongside the router. Prompt text lives in versioned template files;
-    this only resolves WHICH one."""
+    this only resolves WHICH one.
+
+    `assist` is the per-conversation weak-model gate (req.assist on the wire).
+    It defaults to False so every existing implementation and call site keeps
+    its current behavior byte-identical. A provider MAY switch to a tightened
+    variant when assist=True (e.g. small-model execution prompt); a provider
+    that does not implement assist behavior simply ignores the flag."""
 
     def system_prompt(
         self,
@@ -62,6 +68,7 @@ class PromptProvider(Protocol):
         mode: OperatingMode | None,
         role: ModelRole,
         capabilities: frozenset[Requirement] | None = None,
+        assist: bool = False,
     ) -> str: ...
 
 
@@ -92,7 +99,13 @@ class StaticPromptProvider:
         mode: OperatingMode | None,
         role: ModelRole,
         capabilities: frozenset[Requirement] | None = None,
+        assist: bool = False,
     ) -> str:
+        # Static templates are role/family keyed; the `assist` flag is a
+        # weak-model selection hint (see DriverPrompts) — this provider does
+        # not differentiate, so the flag is accepted and ignored, keeping
+        # the lookup byte-identical to pre-C21 behavior.
+        del capabilities, assist
         for key in (
             (model_family, mode, role),
             (model_family, mode, None),
@@ -279,6 +292,92 @@ _EXECUTION_DRIVER_PROMPT = (
 )
 
 
+# Small-model execution variant. [C21] Selected ONLY when the assist gate is
+# ON (req.assist=True) — capable models keep the original `_EXECUTION_DRIVER_PROMPT`
+# byte-identical. Tightened for small open models (Qwen3-4B, Gemma3-4B, Llama-3.2-3B,
+# etc.) that struggle with the capable-model prompt's prose: lead with sharp rules,
+# collapse duplicated guidance, replace hedges with directives. Honest about what
+# the loop actually supports — no new tool names, no new affordances. The
+# autonomous prefix and `flavor` swap apply on top of this just like the capable
+# variant, so the variant inherits the same surface wiring.
+_EXECUTION_DRIVER_PROMPT_SMALL = (
+    "You are an autonomous build agent executing an APPROVED plan. "
+    "Carry it out end to end using the available tools "
+    "(file_write, file_edit, shell, code_exec, etc.).\n\n"
+    "CORE RULES — follow these strictly:\n"
+    "  1. Call EXACTLY ONE tool per step. Do not narrate instead of acting. "
+    "A bare assistant message is almost always wrong — call a tool.\n"
+    "  2. The plan appears above as a numbered list. Mark each step "
+    "`plan_step(idx, 'active')` when you start it and `plan_step(idx, 'done')` "
+    "when you finish. Do NOT call `finish` until every step is marked done.\n"
+    "  3. End the run ONLY by calling `finish(summary)`. A plain message does "
+    "NOT end the run — `finish` is the only terminator.\n"
+    "  4. If a tool fails: (a) read the error, (b) fix the cause (missing "
+    "dependency, wrong path, syntax fault), (c) try a different approach — do "
+    "NOT silently repeat the same failing command. After several distinct "
+    "attempts, call `ask_user` to explain the blocker.\n"
+    "  5. Do NOT call `submit_plan` during execution.\n\n"
+    "TOOL QUICK REFERENCE:\n"
+    "  • Every tool call carries a `thought` — write a short plain-language "
+    "note saying what you are doing and why. The user reads these to follow along.\n"
+    "  • `notify_user(message)` — non-blocking note; the run keeps going. Use "
+    "to talk during a build and to reply mid-run.\n"
+    "  • `ask_user(question, options?)` — BLOCKING question; halts the run "
+    "until the user answers. Use only when you cannot proceed without them.\n"
+    "  • `remember(fact)` — record a durable fact you'll need LATER (chosen "
+    "library/version, build command, API shape, a constraint, a dead-end). "
+    "Pin it the moment you learn it.\n"
+    "  • `serve(title, path, kind?)` — hand off a finished deliverable. "
+    "kind='app' opens in the live preview (ensure your server is on port 8000); "
+    "kind='files' offers a download. Serve, verify, then finish.\n"
+    "  • `propose_plan_update(...)` — when a step reveals the plan itself is "
+    "wrong (approach doesn't work, a discovery invalidates the path). Reason "
+    "through ordinary problems yourself first.\n\n"
+    "FILES — author and edit with the file tools, never the shell:\n"
+    "  • `file_write` creates/overwrites a file. `file_append` adds to the end.\n"
+    "  • `file_edit` (old → new) for small changes to small files.\n"
+    "  • For LARGE files, do NOT try to reproduce a long `old` string. "
+    "`file_read` the region for line numbers, then `file_replace_lines(path, "
+    "start_line, end_line, new_text)` or `file_insert_lines(path, after_line, "
+    "text)`. This works regardless of file size.\n"
+    "  • NEVER use shell for file work: no `cat <<EOF`, no `>`/`>>`, no in-place "
+    "`sed`/`awk`/`tee`. Shell is for running things (installs, builds, tests, "
+    "git).\n"
+    "  • If a tool will produce more than a few dozen lines of output, redirect "
+    "to a file in /workspace and report the location — do not dump large "
+    "output into the transcript.\n\n"
+    "ENVIRONMENT — processes, ports, serving:\n"
+    "  • You own persistent shell SESSIONS. `shell_exec(session, command)` "
+    "runs a command in a named session; the process KEEPS RUNNING between "
+    "steps. `shell_view(session)` shows live output. "
+    "`shell_write_to_process(session, text)` sends stdin. "
+    "`shell_kill_process(session)` stops it. One foreground command per "
+    "session; use another session name for parallel work.\n"
+    "  • `code_exec` runs Python in a persistent IPython kernel — variables, "
+    "imports, sockets, and open files persist across calls.\n"
+    "  • Check reality with `server_status` — it lists sessions and WHO owns "
+    "each port (pid + command + session). Never guess whether a server is up.\n"
+    "  • Static sites: the workspace is auto-served on port 8000 by the "
+    "session named 'preview'. Write an index.html and it is live.\n"
+    "  • Dev servers (Vite/Next/etc.): port 8000 is the user-visible port. "
+    "First `shell_kill_process('preview')` to free it, then start yours in "
+    "its own session bound to 0.0.0.0:8000, e.g. `shell_exec('dev', 'npm run "
+    "dev -- --host 0.0.0.0 --port 8000')`. Confirm startup with "
+    "`shell_view('dev')` — startup errors live there, not in your head.\n"
+    "  • Port 8000 is what the user SEES. Extra services may use 3000, 5173, "
+    "8080, 5000, 4321 — reachable for your own testing. Anything else is "
+    "unreachable from outside the sandbox.\n"
+    "  • Installing dependencies works (npm/pnpm/pip/uv; network is granted). "
+    "Prefer pnpm and uv — they are pre-installed and fast. Watch installs in "
+    "your session with `shell_view`; do not assume they finished.\n"
+    "  • User uploads land under uploads/ in your workspace. Read them with "
+    "`file_read` before guessing at their contents.\n\n"
+    "WEB BUILDS — before declaring finished, load the page in the browser "
+    "tool (http://127.0.0.1:8000/) and read the console. A build you have not "
+    "seen render is not finished."
+)
+
+
 _AUTONOMOUS_PROMPT_PREFIX = (
     "AUTONOMOUS MODE — no human is available to answer questions or approve your "
     "plan. Do NOT try to ask the user anything (the ask tools are not available). "
@@ -308,6 +407,7 @@ class DriverPrompts:
         *,
         planning_prompt: str = _PLANNING_DRIVER_PROMPT,
         execution_prompt: str = _EXECUTION_DRIVER_PROMPT,
+        execution_prompt_small: str = _EXECUTION_DRIVER_PROMPT_SMALL,
         skills_block: str = "",
         flavor: str = "build",
         autonomous: bool = False,
@@ -316,14 +416,19 @@ class DriverPrompts:
         # Autonomous mode (issue A): reinforce the tool-level suppression of ask_user
         # with an explicit instruction to assume + proceed (OpenHands "never ask for
         # human help" + Cline "make reasonable assumptions, don't end with questions").
+        # The prefix applies to BOTH execution variants (capable + small-model) so
+        # the assist gate stays orthogonal to autonomous behavior.
         if autonomous:
             planning_prompt = _AUTONOMOUS_PROMPT_PREFIX + planning_prompt
             execution_prompt = _AUTONOMOUS_PROMPT_PREFIX + execution_prompt
+            execution_prompt_small = _AUTONOMOUS_PROMPT_PREFIX + execution_prompt_small
         # `flavor` reframes the driver's IDENTITY for the agent surface — a general
         # task agent rather than a software builder — while keeping every mechanic
         # (plan→approve→execute, the meta-tools, the finish/verify gates) byte-
         # identical. v1 is an identity-only swap; a deeper task-framed rewrite is
         # deferred (it needs eval passes). "build" leaves the prompts untouched.
+        # Applied to BOTH execution variants so the small-model prompt is also
+        # identity-consistent with the surface it is rendering.
         if flavor == "agent":
             planning_prompt = planning_prompt.replace(
                 "autonomous build agent", "autonomous task agent"
@@ -331,8 +436,15 @@ class DriverPrompts:
             execution_prompt = execution_prompt.replace(
                 "autonomous build agent", "autonomous task agent"
             )
+            execution_prompt_small = execution_prompt_small.replace(
+                "autonomous build agent", "autonomous task agent"
+            )
         self._planning = planning_prompt
         self._execution = execution_prompt
+        # [C21] Tightened execution prompt for small open models. Selected ONLY
+        # when the assist gate is ON (req.assist=True) at prompt-injection time.
+        # Capable-model (assist OFF) path keeps using self._execution verbatim.
+        self._execution_small = execution_prompt_small
         self._skills_block = skills_block.strip()
 
     def _with_skills(self, prompt: str, capabilities: frozenset[Requirement] | None = None) -> str:
@@ -358,11 +470,20 @@ class DriverPrompts:
         mode: OperatingMode | None,
         role: ModelRole,
         capabilities: frozenset[Requirement] | None = None,
+        assist: bool = False,
     ) -> str:
         if role == ModelRole.AGENT_DRIVER:
             if mode == OperatingMode.PLANNING:
                 return self._with_skills(self._planning, capabilities)
-            return self._with_skills(self._execution, capabilities)
+            # [C21] assist gate: ON → small-model variant (crisper tool-use rules
+            # for weak open models); OFF → original capable-model prompt, returned
+            # byte-identical (no skills block re-formatting, no flavor side-effects).
+            base = self._execution_small if assist else self._execution
+            return self._with_skills(base, capabilities)
         return self._base.system_prompt(
-            model_family=model_family, mode=mode, role=role, capabilities=capabilities
+            model_family=model_family,
+            mode=mode,
+            role=role,
+            capabilities=capabilities,
+            assist=assist,
         )

@@ -78,36 +78,9 @@ class GvisorSandboxInstance(ContainerInstance):
 
     Filtered-egress boxes also own an allowlisting proxy SIDECAR and an internal
     no-NAT network; both are torn down alongside the container so a run leaves no
-    orphaned infra."""
-
-    # Set by the backend for a "filtered" box; None otherwise.
-    _egress_sidecar: Any | None = None
-    _egress_network: Any | None = None
-
-    async def destroy(self) -> None:
-        # Tear down the main container first (shared logic), then the egress aux.
-        await super().destroy()
-        sidecar, network = self._egress_sidecar, self._egress_network
-        if sidecar is None and network is None:
-            return
-
-        def _teardown_egress() -> None:
-            if sidecar is not None:
-                try:
-                    sidecar.stop(timeout=2)
-                except Exception:  # noqa: BLE001 — best-effort
-                    pass
-                try:
-                    sidecar.remove(force=True)
-                except Exception:  # noqa: BLE001 — already gone is fine
-                    pass
-            if network is not None:
-                try:
-                    network.remove()
-                except Exception:  # noqa: BLE001 — already gone / still-attached is fine
-                    pass
-
-        await asyncio.to_thread(_teardown_egress)
+    orphaned infra. The aux teardown is inherited from ContainerInstance
+    (`_teardown_egress_aux`); the service sets `instance._egress_sidecar` /
+    `instance._egress_network` in create()."""
 
 
 class GvisorSandboxService:
@@ -353,6 +326,12 @@ class GvisorSandboxService:
             stop_timeout_s=self._cfg.stop_timeout_s,
             workspace_uid=self._cfg.workspace_uid,
             preview_host=self._cfg.preview_host or _preview_host(self._cfg.docker_socket),
+            # Wedge-guard timeout (Dispo #25). Snapshotted from the live config
+            # at create. Hot-apply: mutate `cfg.reload_timeout_s` BEFORE creating
+            # new instances and they pick up the new value; for live-instance
+            # updates, the service caller can also assign `inst._reload_timeout_s
+            # = new_value` directly.
+            reload_timeout_s=self._cfg.reload_timeout_s,
         )
         # Attach the filtered-egress aux so destroy() tears down the proxy + network.
         instance._egress_network = egress_network

@@ -21,11 +21,15 @@ from conftest import (
     with_seqs,
 )
 from disco.core import (
+    ActionEvent,
+    CondensationEvent,
     ConversationStatus,
+    MessageEvent,
     NoOpCondenser,
+    ObservationEvent,
     View,
 )
-from disco.core.view import microcompact
+from disco.core.view import microcompact, recover_span
 
 # ---- S3 Microcompact (GAP A) — drop no-op turns -----------------------------
 
@@ -196,3 +200,215 @@ def test_recitation_scopes_plan_steps_to_the_current_plan():
     assert msg is not None
     # the new plan is 1/3 done — NOT 3/3 (v1's marks excluded)
     assert "1/3 done" in msg.content
+
+
+# ---- C11 — Reversible-compaction tier (on-demand recovery) ------------------
+#
+# A tombstone is a MARKER on the append-only log, not a delete. The dropped
+# events stay addressable on disk; `recover_span` (and `View.recover_span`)
+# re-materializes them on demand. The default `View.messages` is NOT
+# affected — recovery is an explicit accessor, not an un-tombstone. Nothing
+# is re-injected into the live context (no bloat).
+
+
+def test_c11_recover_span_returns_original_dropped_events():
+    """The accessor returns the events a tombstone dropped from View.messages —
+    the originals in their original Event form (not the summary that replaced
+    them, not the rendered LLMMessage). The originals are NOT destroyed; the
+    tombstone is a marker on the log, not a delete."""
+    events = with_seqs(
+        [
+            user_msg("first"),  # seq 1 (kept)
+            agent_msg("early-1"),  # seq 2 (forgotten)
+            agent_msg("early-2"),  # seq 3 (forgotten)
+            agent_msg("recent"),  # seq 4 (kept)
+            tombstone(2, 3, "[earlier discussion]"),  # seq 5
+        ]
+    )
+    t = events[-1]
+    assert isinstance(t, CondensationEvent)
+    recovered = recover_span(events, t)
+    # Originals in seq order, raw Event objects.
+    assert [e.seq for e in recovered] == [2, 3]
+    assert [
+        e.message.content for e in recovered if isinstance(e, MessageEvent)
+    ] == ["early-1", "early-2"]
+    # The summary that replaced them is NOT returned (we recover the originals,
+    # not the substitute).
+    assert all(
+        e.message.content != "[earlier discussion]"
+        for e in recovered
+        if isinstance(e, MessageEvent)
+    )
+
+
+def test_c11_recover_does_not_change_default_view_messages():
+    """Calling recover_span does NOT mutate the event log and does NOT change
+    `View.messages`. The default condensed view still omits the tombstoned
+    span; the recovered events are returned to the caller, never re-injected."""
+    events = with_seqs(
+        [
+            user_msg("first"),  # seq 1
+            agent_msg("early-1"),  # seq 2 (forgotten)
+            agent_msg("early-2"),  # seq 3 (forgotten)
+            agent_msg("recent"),  # seq 4 (kept)
+            tombstone(2, 3, "[earlier discussion]"),  # seq 5
+        ]
+    )
+    # Snapshot the default View BEFORE recovery.
+    view_before = View.of(events)
+    contents_before = [m.content for m in view_before.messages]
+    # Default view: span is gone, summary sits in its place, recent message
+    # follows.
+    assert contents_before == ["first", "[earlier discussion]", "recent"]
+    assert view_before.forgotten_count == 2
+    assert 2 not in view_before.visible_seqs
+    assert 3 not in view_before.visible_seqs
+
+    # Invoke recovery — this is the explicit on-demand accessor.
+    t = events[-1]
+    assert isinstance(t, CondensationEvent)
+    recovered = recover_span(events, t)
+    # Recovery worked: we got the dropped originals back.
+    assert [e.seq for e in recovered] == [2, 3]
+    assert "early-1" in [e.message.content for e in recovered if isinstance(e, MessageEvent)]
+    assert "early-2" in [e.message.content for e in recovered if isinstance(e, MessageEvent)]
+
+    # The default View is UNCHANGED. Recovery did not un-tombstone, did not
+    # re-inject, did not mutate the log.
+    view_after = View.of(events)
+    assert [m.content for m in view_after.messages] == contents_before
+    assert view_after.forgotten_count == 2
+    assert "early-1" not in [m.content for m in view_after.messages]
+    assert "early-2" not in [m.content for m in view_after.messages]
+    # And the View's fingerprint is byte-identical — recovery has no side
+    # effects on what the LLM sees.
+    assert view_before.fingerprint() == view_after.fingerprint()
+
+
+def test_c11_recover_returns_empty_for_unmatched_range():
+    """A tombstone whose seq range matches no events in the log returns [].
+    Reversible doesn't mean indestructible — it means addressable. An empty
+    result is the honest answer when the range doesn't resolve."""
+    events = with_seqs([user_msg("u")])  # only seq 1
+    t = CondensationEvent(
+        forgotten_start_seq=99,
+        forgotten_end_seq=100,
+        summary="phantom span (was never persisted)",
+    )
+    assert recover_span(events, t) == []
+
+
+def test_c11_recover_handles_degenerate_range():
+    """start > end is a degenerate tombstone; the accessor must not raise —
+    it returns []. View.of already tolerates such ranges (a tombstone with
+    start > end forgets nothing), so the recovery mirrors that."""
+    t = CondensationEvent(forgotten_start_seq=10, forgotten_end_seq=5, summary="empty")
+    assert recover_span(with_seqs([user_msg(), agent_msg()]), t) == []
+
+
+def test_c11_recover_works_on_microcompact_tombstones():
+    """Microcompact (S3) emits its own CondensationEvent for no-op turns. The
+    original (action, observation) pair is STILL on the log — recovery returns
+    them. This is the dominant real-world case: a failed `pip install` that
+    was retried successfully, dropped as a microcompact tombstone. Recovery
+    lets a debugging surface see the original failure verbatim."""
+    a1 = action(tool="shell", args={"command": "pip install x"})
+    o1 = observation(
+        action_id=a1.id, tool="shell", success=False, content="network error\n" + "x" * 200
+    )
+    a2 = action(tool="shell", args={"command": "pip install x"})  # identical retry
+    o2 = observation(
+        action_id=a2.id, tool="shell", success=True, content="installed"
+    )
+    base = with_seqs([user_msg("go"), a1, o1, a2, o2])
+    tombs = microcompact(base)
+    assert len(tombs) == 1
+    t = tombs[0]
+    # The default view drops the failed turn.
+    view = View.of(base + tombs)
+    assert "network error" not in "\n".join(m.content for m in view.messages)
+    # Recovery returns the ORIGINAL failed turn — action + observation,
+    # contents intact (not snipped/masked, since we recover the Event, not
+    # the rendered LLMMessage).
+    recovered = recover_span(base, t)
+    assert len(recovered) == 2
+    a1_seq, o1_seq = base[1].seq, base[2].seq
+    assert [e.seq for e in recovered] == [a1_seq, o1_seq]
+    assert isinstance(recovered[0], ActionEvent)
+    assert recovered[0].tool_call.tool_name == "shell"
+    assert isinstance(recovered[1], ObservationEvent)
+    assert recovered[1].tool_result.success is False
+    assert recovered[1].tool_result.content == o1.tool_result.content  # full body, not masked
+    # And the default view is STILL condensed: recovery did not un-tombstone.
+    view2 = View.of(base + tombs)
+    assert view.fingerprint() == view2.fingerprint()
+
+
+def test_c11_recover_returns_nested_tombstones_as_typed_events():
+    """An inner tombstone (a CondensationEvent inside the recovered range) is
+    returned as a typed CondensationEvent — the log is the source of truth,
+    and a nested tombstone IS an event in the range. Re-running recover_span
+    on it re-walks the same log to resolve its own span. This is the
+    expected, correct behavior for a multi-stage condensation history."""
+    inner = tombstone(2, 3, "inner summary")
+    outer = tombstone(1, 5, "outer summary")
+    events = with_seqs(
+        [
+            user_msg("first"),  # 1
+            agent_msg("a"),  # 2
+            agent_msg("b"),  # 3
+            agent_msg("c"),  # 4
+            agent_msg("d"),  # 5
+            inner,  # 6
+            outer,  # 7
+        ]
+    )
+    # Recover the outer tombstone's range: events with seq in [1, 5] (5 of them)
+    # — the user msg, three agent msgs, and the agent msg at seq 5. The inner
+    # tombstone is at seq 6, OUTSIDE the outer's range, so it is NOT included.
+    out = recover_span(events, outer)
+    assert [e.seq for e in out] == [1, 2, 3, 4, 5]
+    # Now recover the inner tombstone's range: events with seq in [2, 3].
+    inn = recover_span(events, inner)
+    assert [e.seq for e in inn] == [2, 3]
+
+
+def test_c11_recover_is_pure_does_not_mutate_inputs():
+    """The accessor is a pure read: it does not append, delete, or modify the
+    event list or the tombstone. (Both are frozen Pydantic models so a
+    mutation would raise — but the function itself must not assign.)"""
+    a1 = action(tool="shell", args={"command": "echo"})
+    o1 = observation(action_id=a1.id, tool="shell", success=True, content="ok")
+    events = with_seqs([user_msg("u"), a1, o1, tombstone(2, 3, "drop")])
+    t = events[-1]
+    assert isinstance(t, CondensationEvent)
+    # Snapshot pre-call state.
+    pre_events_len = len(events)
+    pre_t_summary = t.summary
+    pre_t_seq = t.seq
+    recovered = recover_span(events, t)
+    # Post-call: nothing changed.
+    assert len(events) == pre_events_len
+    assert t.summary == pre_t_summary
+    assert t.seq == pre_t_seq
+    # Recovered is a fresh list of the same Event objects (not a re-render).
+    assert all(e in events for e in recovered)
+
+
+def test_c11_view_recover_span_classmethod_matches_module_function():
+    """`View.recover_span` is a paired accessor to `View.of`; it must return
+    the same thing the module-level `recover_span` returns. Both forms work
+    so callers can pick the surface that fits their code."""
+    events = with_seqs(
+        [
+            user_msg("u"),
+            agent_msg("a1"),
+            agent_msg("a2"),
+            agent_msg("kept"),
+            tombstone(2, 3, "S"),
+        ]
+    )
+    t = events[-1]
+    assert isinstance(t, CondensationEvent)
+    assert View.recover_span(events, t) == recover_span(events, t)

@@ -196,6 +196,29 @@ export interface ClarifyEvent extends EventBase {
   items: ClarifyQuestionItem[];
 }
 
+/** A schedule was created or deleted for this conversation (RP-08). The UI
+ *  surfaces a `created` notification in the activity panel + writes the new
+ *  row to the schedule list; `deleted` removes it. NOT rendered as a
+ *  conversation turn (it's a system lifecycle event). */
+export interface ScheduleEvent extends EventBase {
+  kind: "schedule";
+  action: "created" | "deleted";
+  schedule_id: string;
+  rrule: string; // cron expression
+  description: string;
+}
+
+/** A scheduled run fired and was appended to this conversation (RP-08). The
+ *  UI shows it as a small system badge in the chat timeline ("Scheduled run
+ *  fired at …") so the user can distinguish a run they triggered from one
+ *  the scheduler kicked. `coalesced` is True when the server was down across
+ *  N missed fires and this single run stands in for all of them. */
+export interface ScheduleRunEvent extends EventBase {
+  kind: "schedule_run";
+  schedule_id: string;
+  coalesced?: boolean; // default false on the wire
+}
+
 export type AgentEvent =
   | MessageEvent
   | ActionEvent
@@ -207,6 +230,8 @@ export type AgentEvent =
   | ReportEvent
   | AlternativesEvent
   | ClarifyEvent
+  | ScheduleEvent
+  | ScheduleRunEvent
   | DeliverableEvent
   | ErrorEvent;
 
@@ -233,12 +258,23 @@ export interface ConversationState {
 
 // ---- WS frames (event-state §7) ---------------------------------------------
 
+/** The payload of a `mcp_approval_required` frame (RP-05 D3). Emitted by the
+ *  server when an MCP server's tool description fingerprint has changed
+ *  since the user last approved it. The UI surfaces a re-approval card that
+ *  cites the old + new hash so the user can audit the change. */
+export interface McpApprovalPayload {
+  server: string;
+  description_hash: string;
+  old_description_hash: string;
+}
+
 export type WSServerFrame =
   | { type: "state"; state: ConversationState }
   | { type: "event"; event: AgentEvent }
   | { type: "file_stream"; file_stream: FileStreamFrame }
   | { type: "error"; error: { detail?: string } }
-  | { type: "pong" };
+  | { type: "pong" }
+  | { type: "mcp_approval_required"; mcp_approval: McpApprovalPayload };
 
 /** A watch-it-write delta: the driver is assembling a file body in a tool call.
  *  `delta` appends to the per-path buffer. NOT persisted — superseded by the

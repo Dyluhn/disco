@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 
 from disco.core import LLMMessage
 from disco.core.llm import (
+    CallContext,
     CapabilityProfile,
     CompletionRequest,
     LLMRouter,
@@ -43,6 +44,46 @@ from .depth import DepthBound
 # events to the conversation log as the gather progresses. The engine never
 # touches the store directly — the agent-server owns persistence.
 EmitFn = Callable[[str, dict[str, object]], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class GatherLegContext:
+    """The ISOLATED sub-context for ONE gather leg.
+
+    Every concurrent gather leg in `DeepResearchRun.run` gets its OWN
+    `GatherLegContext`. No sibling leg's intermediate message / view /
+    cost state bleeds in — the leg is a self-contained unit of work, and
+    its accumulated state is merged with the others ONLY at the synthesis
+    boundary (`synthesize_section` after the leg's gather task returns).
+
+    The contract is enforced in three places:
+
+      (a) The leg's `LLMMessage` list is built INDEPENDENTLY per call
+          inside `_gap_reason` — a fresh `[LLMMessage(...)]` per call,
+          never a shared mutable list, and seeded only with the system
+          framing + that leg's task. No sibling messages are appended.
+
+      (b) `call_context` (a per-leg `CallContext`) is passed to every
+          `router.complete()` call inside the leg, so the router's cost
+          tracker and per-conversation `model_override` are scoped to
+          this leg. A leg that exhausts its budget cannot trip the hard
+          cap out from under a sibling.
+
+      (c) The leg's intermediate state — `seen_passage_ids`, `seen_urls`,
+          `current_queries`, `result.passages`, `result.all_hits`,
+          `result.issued_queries` — lives in leg-locals inside
+          `gather_for_subquestion`. Nothing here is shared with siblings.
+
+    Concurrency is preserved: each leg's `asyncio.create_task` is
+    dispatched in the producer phase; the consumer phase `await`s them
+    in plan order, but the leg's INTERNAL rounds run concurrently with
+    other legs' rounds. The merge into the final report happens
+    exclusively in `DeepResearchRun.run`'s reduce step, never inside
+    the leg."""
+
+    subq_id: str
+    namespace: str
+    call_context: CallContext
 
 
 @dataclass
@@ -80,10 +121,18 @@ async def _gap_reason(
     router: LLMRouter,
     subq: SubQuestion,
     passages: list[Passage],
+    call_context: CallContext,
 ) -> tuple[bool, list[str], str]:
     """Returns (sufficient, follow_up_queries, rationale). One model call per
     round between rounds — cheap and pointed. Defaults are conservative: a
-    malformed response is treated as 'sufficient' so we don't spin."""
+    malformed response is treated as 'sufficient' so we don't spin.
+
+    Isolation note: the `messages=` list is built FRESH each call — a brand
+    new list seeded only with the system framing (injected by the router)
+    + this leg's task prompt. NO sibling leg's intermediate messages are
+    appended; there is no shared mutable message list across legs. The
+    per-leg `call_context` threads the leg's identity to the router so cost
+    tracking / model_override are scoped to this leg."""
     if not passages:
         # Nothing yet — there's no coverage to be sufficient with. Drive one more
         # round with the original sub-question.
@@ -96,13 +145,17 @@ async def _gap_reason(
     instruction = _GAP_PROMPT.format(
         subq=subq.title, n_passages=len(passages), summaries=summaries
     )
+    # Build the message list INDEPENDENTLY for this call (no shared mutable
+    # list). Seeded with this leg's task only — system framing is added by
+    # the router's `_inject_prompt`. No sibling leg's messages appear here.
+    leg_messages: list[LLMMessage] = [LLMMessage(role="user", content=instruction)]
     req = CompletionRequest(
         profile=CapabilityProfile(role=ModelRole.QUERY_REWRITER),
-        messages=[LLMMessage(role="user", content=instruction)],
+        messages=leg_messages,
         temperature=0.0,
     )
     try:
-        resp = await router.complete(req)
+        resp = await router.complete(req, context=call_context)
     except Exception:  # noqa: BLE001 — gap-reason failure is recoverable
         return True, [], "gap reasoner failed; stopping further rounds"
     lines = [ln.strip() for ln in resp.text.splitlines() if ln.strip()]
@@ -131,11 +184,21 @@ async def gather_for_subquestion(
     bound: DepthBound,
     emit: EmitFn,
     remaining_source_budget: int,
+    leg_context: GatherLegContext,
 ) -> SubQuestionResult:
     """Run the retrieve-reason-refine loop for one sub-question. Returns the
     accumulated result. Stops on: (a) gap-reasoner sufficient, (b) round cap,
     (c) source budget exhausted (run-level cap). Emits one event per round so
-    the UI's activity feed sees the rhythm of the process."""
+    the UI's activity feed sees the rhythm of the process.
+
+    `leg_context` is the ISOLATED sub-context for this leg. It carries this
+    leg's `CallContext` (used for the gap_reasoner LLM call) and is the only
+    way the router sees this leg's identity. ALL intermediate state for the
+    leg (`seen_passage_ids`, `seen_urls`, `current_queries`, `result.*`)
+    lives in this function's locals — nothing is shared with sibling legs.
+    The leg's `SubQuestionResult` is the only thing that escapes, and it
+    escapes to the synthesis boundary in `DeepResearchRun.run`, never into
+    a sibling leg."""
     result = SubQuestionResult(subq=subq)
     current_queries = [subq.title]
     seen_passage_ids: set[str] = set()
@@ -223,8 +286,11 @@ async def gather_for_subquestion(
         if round_idx + 1 >= bound.max_rounds_per_subq:
             result.bounded_by_rounds = True
             break
+        # Per-leg isolation: pass this leg's CallContext so the router tracks
+        # this leg's cost/model independently. _gap_reason builds its own
+        # message list internally (no shared mutable list).
         sufficient, follow_ups, rationale = await _gap_reason(
-            router, subq, result.passages
+            router, subq, result.passages, leg_context.call_context
         )
         await emit(
             "gap_reason",

@@ -127,13 +127,20 @@ class FakeCondenser:
         self._tombstone = tombstone
         self.should_calls = 0
         self.condense_calls = 0
+        # C16 — record the kwargs the loop actually passes (reason /
+        # artifact_paths) so tests can assert the wiring shape.
+        self.last_condense_kwargs: dict | None = None
 
     def should_condense(self, view, *, token_count):
         self.should_calls += 1
         return self._request
 
-    async def condense(self, events, view, *, summarizer):
+    async def condense(self, events, view, *, summarizer, reason="tokens", artifact_paths=None):
         self.condense_calls += 1
+        self.last_condense_kwargs = {
+            "reason": reason,
+            "artifact_paths": list(artifact_paths) if artifact_paths is not None else None,
+        }
         return self._tombstone
 
 
@@ -221,9 +228,17 @@ def build_loop(
     planning_tools: frozenset[str] = frozenset(),
     plan_tool: str = "submit_plan",
     execution_mode: OperatingMode = OperatingMode.LONG_HORIZON,
+    dod_evaluator_factory=None,
 ):
     """Construct an AgentLoop over fakes. `router` is unused by the loop itself
-    (the Agent wraps it) so a None sentinel is passed."""
+    (the Agent wraps it) so a None sentinel is passed.
+
+    `dod_evaluator_factory` (C1c) is forwarded to the loop's C1c DoD gate
+    seam; the default (None) means the loop builds a real DoDEvaluator over
+    the executor's sandbox workspace_root (FakeExecutor has no sandbox, so
+    the gate degrades to a no-op — see `_DoDWorkspaceUnavailable`). Tests
+    that want to drive the C1c gate inject a factory that returns a
+    hermetic DoDEvaluator (fake command_runner / http_probe)."""
     store = store or SqliteEventStore(":memory:")
     loop = AgentLoop(
         conversation_id,
@@ -242,6 +257,7 @@ def build_loop(
         planning_tools=planning_tools,
         plan_tool=plan_tool,
         execution_mode=execution_mode,
+        dod_evaluator_factory=dod_evaluator_factory,
     )
     return loop, store
 

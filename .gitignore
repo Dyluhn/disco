@@ -60,3 +60,7 @@ disco.db-*
 disco.db.*.json
 # local model-swap backup of the live config
 *.gemma-bak
+# orchestration scratch (review output, lane diffs, screenshot helper)
+.review/
+*.diff
+frontend/_shot.mjs

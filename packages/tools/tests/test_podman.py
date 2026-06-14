@@ -26,9 +26,31 @@ class FakeContainer:
         self.create_kwargs = create_kwargs
         self.fs = fs  # shared with the CLI runner (write here, read there)
         self.started = self.stopped = self.removed = False
+        self.attrs: dict = {}  # populated by reload() — E8 sidecar needs Networks
+        # a queue of fake (exit_code, stdout, stderr) for exec_run; consumed FIFO.
+        self.exec_results: list[tuple[int, bytes, bytes]] = []
+        self.exec_calls: list[list[str]] = []
+        # podman-py Container.name — the sidecar setup reads it to build the
+        # `podman --url … exec <name> …` CLI argv. The fake's `name` follows
+        # the create-kwarg convention (matches the real podman-py .name).
+        self.name = create_kwargs.get("name", "")
 
     def start(self):
         self.started = True
+
+    def reload(self):  # no-op: the fake leaves attrs alone (callers set NetworkSettings)
+        pass
+
+    def exec_run(self, cmd, demux=False, workdir=None, detach=False):
+        # The sidecar's one-shot setup (resolv.conf + proxy launch) goes through
+        # the CLI runner in the REAL podman backend (per E8 _sidecar_cli_run), so
+        # the fake's podman-py `exec_run` path is only exercised by hermetic
+        # tests that want to assert it. We accept the call and return a default
+        # success — tests that need a specific exit/stdout push into exec_results.
+        self.exec_calls.append(cmd)
+        if self.exec_results:
+            return self.exec_results.pop(0)
+        return (0, b"", b"")
 
     def put_archive(self, path, data):
         with tarfile.open(fileobj=io.BytesIO(data)) as tar:
@@ -65,20 +87,50 @@ class _Volumes:
         self.created.append(name)
 
 
+class FakePodmanNetwork:
+    """Mirrors podman-py Network: connect() joins a container, remove() tears it down."""
+
+    def __init__(self, name: str, **attrs) -> None:
+        self.name = name
+        self.attrs = attrs
+        self.connected: list = []
+        self.removed = False
+
+    def connect(self, container, aliases=None):
+        self.connected.append((container, aliases))
+
+    def remove(self):
+        self.removed = True
+
+
+class _FakeNetworks:
+    def __init__(self) -> None:
+        self.created: list[FakePodmanNetwork] = []
+
+    def create(self, name, **kwargs):
+        net = FakePodmanNetwork(name, **kwargs)
+        self.created.append(net)
+        return net
+
+
 class FakePodmanClient:
     def __init__(self, *, has_image: bool = True, fs: dict | None = None) -> None:
         self.images = _Images(has_image)
         self.volumes = _Volumes()
+        self.networks = _FakeNetworks()
         self.containers = self
         self.fs = fs if fs is not None else {}
         self.last: FakeContainer | None = None
+        self.created: list[FakeContainer] = []  # every container create()'d (sidecar + sandbox)
 
     def ping(self):
         return True
 
     def create(self, **kwargs):
-        self.last = FakeContainer(kwargs, self.fs)
-        return self.last
+        c = FakeContainer(kwargs, self.fs)
+        self.created.append(c)
+        self.last = c
+        return c
 
 
 class FakeCli:
@@ -153,15 +205,24 @@ async def test_sealed_default_open_when_granted():
     assert client.last.create_kwargs["network_mode"] == "bridge"
 
 
-async def test_allowlist_fails_safe_to_sealed_on_podman():
-    # The allowlisting proxy is gVisor-only so far. A filtered box (an allowlist we
-    # CANNOT enforce per-host here) must FAIL SAFE to deny-all — never the old
-    # silent full-bridge. Only an explicit NETWORK capability opens raw egress.
+async def test_filtered_podman_spec_uses_proxied_egress_not_sealed():
+    # E8 wiring: a filtered podman spec now gets a PROXIED network (allowlist
+    # sidecar on an internal net) — NOT the old fail-safe `network_mode="none"`
+    # seal that was gVisor-only. This is the regression guard for the local
+    # podman backend; the formal E8 acceptance test (`test_e8_*.py`) is the
+    # full new-test contract.
     svc, client, _ = _svc()
     await svc.create(
         SandboxSpec(egress_allow=frozenset({"api.example.com"})), owner_id="o", conversation_id="c"
     )
-    assert client.last.create_kwargs["network_mode"] == "none"  # deny-all, not bridge
+    # 1) NOT the old fail-safe seal.
+    assert "network_mode" not in client.last.create_kwargs
+    # 2) the sandbox IS on the internal no-NAT net (proxied route out).
+    networks = client.last.create_kwargs.get("networks") or {}
+    assert networks and next(iter(networks)).startswith("pmx-egr-")
+    # 3) the allowlist proxy env is present (defense in depth atop the no-route net).
+    env = client.last.create_kwargs["environment"]
+    assert env["HTTPS_PROXY"].startswith("http://") and "8888" in env["HTTPS_PROXY"]
 
 
 async def test_limits_and_no_env_leak_in_create(monkeypatch):

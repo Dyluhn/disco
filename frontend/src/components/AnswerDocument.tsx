@@ -6,13 +6,23 @@ interface Props {
   partial: Record<string, string>;
   streamingBlockId: string | null;
   answer: GroundedAnswer | null;
+  /** Conversation id (cid) — threaded down to SheetBlock so the in-block
+   *  download appears ONLY when the caller holds a real cid. ABSENT = no
+   *  download button (no false affordance). */
+  cid?: string | null;
 }
 
 /** The answer as a document (not a chat column): a sticky in-page ToC beside a
  * comfortable reading measure. Completed blocks render via BlockView; the
  * in-flight block renders its live token text in a rigid container so nothing
  * below shifts (append-only growth, never reflow of existing content). */
-export function AnswerDocument({ blocks, partial, streamingBlockId, answer }: Props) {
+export function AnswerDocument({
+  blocks,
+  partial,
+  streamingBlockId,
+  answer,
+  cid,
+}: Props) {
   const headings = blocks.filter((b) => b.kind === "heading");
   const streamingText =
     streamingBlockId && !blocks.some((b) => b.id === streamingBlockId)
@@ -24,7 +34,7 @@ export function AnswerDocument({ blocks, partial, streamingBlockId, answer }: Pr
       <article className="mx-auto flex w-full max-w-measure flex-col gap-section">
         {blocks.map((block) => (
           <div key={block.id} className="pmx-rise">
-            <BlockView block={block} answer={answer} />
+            <BlockView block={block} answer={answer} cid={cid} />
           </div>
         ))}
         {streamingText !== undefined && (

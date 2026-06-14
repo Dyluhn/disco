@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import pathlib
 import posixpath
 import subprocess
 import tarfile
@@ -39,7 +40,16 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-from ._container import TIMEOUT_EXIT_CODES, ContainerInstance, egress_mode
+from . import egress_proxy as _egress_proxy_mod
+from ._container import (
+    EGRESS_PROXY_PORT,
+    TIMEOUT_EXIT_CODES,
+    ContainerInstance,
+    egress_mode,
+    format_allow,
+    proxy_env,
+    proxy_run_argv,
+)
 from .base import ExecResult, SandboxError, SandboxInstance, SandboxSpec, SandboxUnavailableError
 from .config import SandboxConfig, default_podman_config
 
@@ -82,6 +92,7 @@ class PodmanSandboxInstance(ContainerInstance):
         container_name: str,
         cli_runner: CliRunner,
         workspace_uid: int = 1000,
+        reload_timeout_s: float = 0.5,
     ) -> None:
         super().__init__(
             id=id,
@@ -92,6 +103,7 @@ class PodmanSandboxInstance(ContainerInstance):
             container_workspace=container_workspace,
             stop_timeout_s=stop_timeout_s,
             workspace_uid=workspace_uid,
+            reload_timeout_s=reload_timeout_s,
         )
         self._cli_url = cli_url
         self._name = container_name
@@ -217,12 +229,110 @@ class PodmanSandboxService:
             self._client_cache = client
         return self._client_cache
 
+    def _sidecar_cli_run(
+        self, sidecar_name: str, argv: list[str], timeout: float
+    ) -> tuple[int, bytes, bytes]:
+        """[E8] One-shot CLI exec on the proxy SIDECAR. Reuses the same CLI runner
+        as the sandbox (`self._cli_runner`) so the sidecar goes through the proven
+        `podman --url ssh://…//socket exec` path — podman-py's native `exec_run`
+        is broken over the remote API (per the backend's transport-split note in
+        its module docstring), so the CLI is the only correct way to do one-shot
+        commands on a remote podman container. The sandbox instance has a
+        `self._exec` helper; the sidecar lives one container over, so we just
+        call the runner directly with the sidecar's name."""
+        return self._cli_runner(
+            ["podman", "--url", self._cli_url, "exec", sidecar_name, *argv], timeout
+        )
+
+    def _setup_filtered_egress(
+        self, client: Any, spec: SandboxSpec, instance_id: str, conversation_id: str = ""
+    ) -> Any:
+        """[E8 — live-verify on VM 202 pending] Stand up the allowlisting egress for
+        a "filtered" box and return (network, sidecar, env, net_name).
+
+        SPIRIT identical to `gvisor.py _setup_filtered_egress` — the OLD binary
+        (none|bridge) silently gave an allowlisted box full network, which is the
+        false guarantee E8 closes. Now an INTERNAL (no-NAT) network is the
+        substrate: the box's ONLY route out is the proxy, and the proxy refuses
+        any host the allowlist doesn't name. The HTTP(S)_PROXY env is belt-and-
+        suspenders; the no-route property is the real guarantee.
+
+        Three podman-specific notes (mirror gVisor's invariants #1/#2/#3 in
+        gvisor.py; the podman host may not enforce the same boot-time netstack
+        freeze as runsc, but we keep the create-on-bridge → connect-internal →
+        start ordering so both NICs exist before any sandbox traffic):
+
+        1. The proxy script is `put_archive`'d to the sidecar (no image rebuild;
+           base image's `python3` runs it; honors the never-pull rule).
+        2. `exec_run` on a podman-py remote container is broken (per the backend
+           docstring), so the one-shot setup (resolv.conf + proxy launch) goes
+           through the CLI runner, same as the sandbox's command path.
+        3. The sandbox's proxy env names the sidecar by its INTERNAL-NET IP (read
+           from the sidecar's attrs after `reload()`), with a name-fallback for
+           the fake/test path."""
+        net_name = f"pmx-egr-{instance_id}"
+        labels = {"pmx.conversation_id": conversation_id} if conversation_id else {}
+        # The network carries the same label as the containers so the orphan
+        # sweep can find it — its NAME is instance-keyed, not conversation-keyed.
+        network = client.networks.create(net_name, internal=True, labels=labels)
+        # (1) create on bridge → connect internal → start, so the sidecar's
+        # `bridge` NIC (the route to the internet, the proxy's upstream) AND its
+        # internal-net NIC BOTH exist before any sandbox traffic.
+        sidecar = client.containers.create(
+            image=self._cfg.image,
+            command=["sh", "-c", "exec sleep infinity"],
+            mem_limit="256m",
+            detach=True,
+            name=net_name,
+            labels=labels,
+        )
+        network.connect(sidecar)
+        sidecar.start()
+        # (2) replace the dead embedded resolver with public DNS over the (working) route.
+        self._sidecar_cli_run(
+            sidecar.name,
+            ["sh", "-c", 'printf "nameserver 1.1.1.1\\nnameserver 8.8.8.8\\n" > /etc/resolv.conf'],
+            15,
+        )
+        # Inject the proxy script (put_archive works over the podman remote, per
+        # the backend docstring). Launch it in the background via the CLI runner
+        # — podman-py's `exec_run` is broken, the CLI is the correct path.
+        script = pathlib.Path(_egress_proxy_mod.__file__).read_bytes()
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as tar:
+            info = tarfile.TarInfo(name="egress_proxy.py")
+            info.size = len(script)
+            info.mtime = int(time.time())
+            tar.addfile(info, io.BytesIO(script))
+        if not sidecar.put_archive("/", buf.getvalue()):
+            raise SandboxUnavailableError("failed to inject egress proxy script into sidecar")
+        allow = format_allow(spec.egress_allow)
+        argv = proxy_run_argv(allow, EGRESS_PROXY_PORT)
+        self._sidecar_cli_run(
+            sidecar.name,
+            ["sh", "-c", f"{' '.join(argv)} >/var/log/egress.log 2>&1 &"],
+            10,
+        )
+        # (3) read the sidecar's IP on the internal net; the sandbox proxies by IP.
+        try:
+            sidecar.reload()
+            nets = sidecar.attrs.get("NetworkSettings", {}).get("Networks", {}) or {}
+            proxy_ip = nets.get(net_name, {}).get("IPAddress", "")
+        except Exception:  # noqa: BLE001 — fake/test path or hung client
+            proxy_ip = ""
+        proxy_ip = proxy_ip or net_name  # fall back to the name (harmless for the fake/test path)
+        env = proxy_env(proxy_ip, EGRESS_PROXY_PORT)
+        return network, sidecar, env, net_name
+
     def _start_container(
         self, spec: SandboxSpec, instance_id: str, conversation_id: str = ""
-    ) -> tuple[Any, str]:
+    ) -> tuple[Any, str, Any, Any]:
         """The blocking Podman work for `create`, in a thread. Image-by-load (never
-        pull); limits via the socket; typed errors on failure. Returns (container,
-        name)."""
+        pull); limits via the socket; typed errors on failure. Returns
+        (container, name, egress_network, egress_sidecar) — the last two are
+        non-None ONLY for a "filtered" box (the allowlisting proxy aux), None for
+        sealed / open. The shared `ContainerInstance.destroy()` teardown walks
+        the aux refs and tears them down (E8 wiring)."""
         client = self._client()
 
         try:
@@ -240,31 +350,49 @@ class PodmanSandboxService:
         vol_name = f"{self._cfg.workspace_volume_prefix}-{instance_id}"
         name = f"pmx-sbx-{instance_id}"
 
+        # Per-mode network config — mirror gVisor's three-way posture. A filtered
+        # box (E8) gets a PROXIED network (allowlist sidecar on an internal no-NAT
+        # net), NEVER the old fail-safe seal. Only an explicit NETWORK capability
+        # ("open") gets raw bridge; default remains deny-all.
+        mode = egress_mode(spec)
+        labels = {"pmx.conversation_id": conversation_id} if conversation_id else {}
+        net_kwargs: dict[str, Any] = {}
+        environment: dict[str, str] = {}
+        egress_network = egress_sidecar = None
+        if mode == "filtered":
+            egress_network, egress_sidecar, environment, net_name = self._setup_filtered_egress(
+                client, spec, instance_id, conversation_id
+            )
+            # podman-py's `containers.create` attaches user-defined networks via
+            # `networks={name: per-net-config}`; the sandbox's ONLY interface
+            # will be the internal no-NAT net (the proxy is the only route out).
+            net_kwargs = {"networks": {net_name: {}}}
+        elif mode == "open":
+            net_kwargs = {"network_mode": "bridge"}  # explicit raw egress
+        else:  # sealed
+            net_kwargs = {"network_mode": "none"}
+
         try:
             client.volumes.create(name=vol_name)  # auto-created; persists past the container
-            labels = {"pmx.conversation_id": conversation_id} if conversation_id else {}
             container = client.containers.create(
                 image=self._cfg.image,
                 command=["sleep", "infinity"],  # keepalive
                 mem_limit=f"{mem_mb}m",
                 cpu_quota=int(cpu * _CPU_PERIOD),
                 cpu_period=_CPU_PERIOD,
-                # FAIL-SAFE egress (the allowlisting proxy is wired for gVisor only so
-                # far): only an explicit NETWORK capability ("open") gets raw bridge. A
-                # filtered box (non-empty egress_allow) that we CAN'T yet enforce per-host
-                # is SEALED — deny-all, never the old silent full-bridge false guarantee.
-                # See gvisor.py _setup_filtered_egress; wiring this here is a live-verify
-                # follow-up on the Podman host (VM 202).
-                network_mode="bridge" if egress_mode(spec) == "open" else "none",
+                **net_kwargs,
                 volumes={vol_name: {"bind": self._cfg.container_workspace, "mode": "rw"}},
-                environment={},  # NO host env leaks in
+                # NO host env leaks in. For a filtered box the proxy routing vars
+                # (defense in depth atop the no-route network) are passed — that's
+                # the ONLY exception.
+                environment=environment,
                 working_dir=self._cfg.container_workspace,
                 name=name,
                 labels=labels,
                 detach=True,
             )
             container.start()
-            return container, name
+            return container, name, egress_network, egress_sidecar
         except SandboxUnavailableError:
             raise
         except Exception as exc:  # noqa: BLE001 — start failure, real cause preserved
@@ -274,13 +402,25 @@ class PodmanSandboxService:
                 raise SandboxUnavailableError(
                     f"sandbox image {self._cfg.image!r} not found"
                 ) from exc
+            # Don't leak the egress aux if the sandbox itself failed to start
+            # (E8: the parent class's teardown walks these refs).
+            if egress_sidecar is not None:
+                try:
+                    egress_sidecar.remove(force=True)
+                except Exception:  # noqa: BLE001 — best-effort
+                    pass
+            if egress_network is not None:
+                try:
+                    egress_network.remove()
+                except Exception:  # noqa: BLE001 — best-effort
+                    pass
             raise SandboxUnavailableError(f"container failed to start: {exc}") from exc
 
     async def create(
         self, spec: SandboxSpec, *, owner_id: str, conversation_id: str
     ) -> SandboxInstance:
         instance_id = f"sbx_{uuid.uuid4().hex}"
-        container, name = await asyncio.to_thread(
+        container, name, egress_network, egress_sidecar = await asyncio.to_thread(
             self._start_container, spec, instance_id, conversation_id
         )
         instance = PodmanSandboxInstance(
@@ -295,7 +435,15 @@ class PodmanSandboxService:
             cli_url=self._cli_url,
             container_name=name,
             cli_runner=self._cli_runner,
+            # Wedge-guard timeout (Dispo #25, E5 wiring) — untouched in E8.
+            reload_timeout_s=self._cfg.reload_timeout_s,
         )
+        # E8: attach the filtered-egress aux so the inherited ContainerInstance
+        # teardown tears down the proxy sidecar + internal network. For sealed /
+        # open these are None (the defaults on the class), so the teardown is a
+        # no-op.
+        instance._egress_network = egress_network
+        instance._egress_sidecar = egress_sidecar
         self._instances[instance_id] = instance
         return instance
 

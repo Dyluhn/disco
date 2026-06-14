@@ -20,9 +20,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
-from ._container import PREVIEW_PORT
+from ._container import PREVIEW_PORT, USER_PORTS
 from .base import (
     ExecResult,
     SandboxError,
@@ -33,6 +34,28 @@ from .base import (
 )
 
 _LOG = logging.getLogger(__name__)
+
+
+@dataclass
+class TrackedService:
+    """BP-G9 — metadata for one USER_PORT service the session is responsible
+    for. A `TrackedService` is registered when the agent (or the static
+    auto-preview) starts a long-running server bound to a curated USER_PORT,
+    and is the source of truth for "what's exposed on this box right now".
+    The session can list every tracked service and its URL — so multi-service
+    builds (API + frontend, …) are first-class, not a special case of the
+    single 'preview' path.
+
+    `name` is the tmux session name (no namespace prefix); `port` is the
+    USER_PORT the service binds; `command` is the full command string
+    originally issued; `exec_dir` is the cwd it was launched in. The C3
+    rematerialize hook re-issues the same `command` on a fresh box, so a
+    multi-service build survives suspend/wake end-to-end (BP-G9 acceptance).
+    """
+    name: str
+    port: int
+    command: str
+    exec_dir: str | None
 
 
 class SandboxSession:
@@ -48,6 +71,7 @@ class SandboxSession:
         owner_id: str = "local",
         conversation_id: str = "conv",
         on_recreate: Callable[[], Awaitable[None]] | None = None,
+        kernel_idle_timeout_s: float | None = None,
     ) -> None:
         self._service = service
         self._spec = spec or SandboxSpec()
@@ -58,13 +82,37 @@ class SandboxSession:
         # retry lands on its files, not an empty dir (bp-13 §2: the conv_f3bdc842
         # "all files were lost" production incident).
         self._on_recreate = on_recreate
+        # C5 — MEMORY recovery cache. `_recreate` reads `.pmx/MEMORY.md` from
+        # the fresh box and stages (scope, snippet) pairs here; the agent loop
+        # drains them on its next step (via take_recovered_memory_facts) and
+        # re-emits each as a KnowledgeEvent, restoring the in-View channel to
+        # match the surviving on-disk mirror. The cache is consumed once
+        # (take_ clears it) so the recovery fires exactly once per recreate.
+        # None = no recovery attempted yet, OR a fresh box that had no
+        # `.pmx/MEMORY.md` (no prior remember to recover).
+        self._recovered_memory_facts: list[tuple[str, str]] | None = None
+        # BP-G9 — multi-service tracking. One entry per USER_PORT this session
+        # is responsible for: the static auto-preview (port 8000) is the
+        # default; any agent-launched `ensure_service(name, port, command)`
+        # adds another. Keyed by port so a UI/runtime can ask "is 3000
+        # already claimed by something on this box?" and "what's its URL?"
+        # in O(1). Survives `_recreate` — the C3 rematerialize hook re-issues
+        # each tracked service on the fresh instance. `_persistent_servers`
+        # (C3) is keyed by session name and is the IMPLICIT detection path
+        # for `shell_exec`-launched servers; this dict is the EXPLICIT
+        # registration path for `ensure_preview` / `ensure_service`. Both
+        # source the wake machinery's rematerialize step.
+        self._tracked_services: dict[int, TrackedService] = {}
+        # C15: idle-cull threshold for the persistent CodeAct kernel. None ->
+        # read DISCO_KERNEL_IDLE_TIMEOUT_S at first use; 0 disables culling.
+        self._kernel_idle_timeout_s = kernel_idle_timeout_s
         self.spec = self._spec
         self._instance: SandboxInstance | None = None
         self._closed = False
         self._generation = 0  # bumped on every (re)create — telemetry + tests
         self._lock = asyncio.Lock()
         self._preview_task: asyncio.Task[None] | None = None  # tracked so destroy() can cancel
-        
+
         from .shell_sessions import ShellSessionManager
         # Process backend shares the host tmux server across conversations, so
         # session names need a per-conversation namespace; container backends get
@@ -88,16 +136,32 @@ class SandboxSession:
     @property
     async def kernel(self) -> Any:
         """The persistent IPython kernel for this session. Lazily created on first
-        use; transport chosen by backend."""
+        use; transport chosen by backend. Wrapped in a `ManagedKernel` (C15) that
+        culls the inner kernel after `kernel_idle_timeout_s` of inactivity and
+        re-spawns on the next exec — so a quiet conversation doesn't hold a
+        dead kernel's RAM forever."""
         if self._kernel is None:
             inst = await self._ensure()
+            from .kernel import ManagedKernel, _default_idle_timeout_s
+            timeout = (
+                self._kernel_idle_timeout_s
+                if self._kernel_idle_timeout_s is not None
+                else _default_idle_timeout_s()
+            )
             if self._service.name == "process":
                 from .kernel import ProcessKernel
                 res = await inst.exec_shell("pwd", timeout_s=5)
-                self._kernel = ProcessKernel(res.stdout.strip())
+                ws = res.stdout.strip()
+                self._kernel = ManagedKernel(
+                    lambda: ProcessKernel(ws),
+                    idle_timeout_s=timeout,
+                )
             else:
                 from .kernel import GatewayKernel
-                self._kernel = GatewayKernel(inst, self.sessions)
+                self._kernel = ManagedKernel(
+                    lambda: GatewayKernel(inst, self.sessions),
+                    idle_timeout_s=timeout,
+                )
         return self._kernel
 
     async def _ensure(self) -> SandboxInstance:
@@ -133,7 +197,16 @@ class SandboxSession:
             )
             self._generation += 1
             self.sessions.reset_known_sessions()
-            self._kernel = None
+            # C15: tear down the old ManagedKernel so its inner kernel process
+            # doesn't outlive the dead sandbox (the kernel is a child of the
+            # container for gateway backends, but a local subprocess for
+            # process backends — we always try to shut down cleanly).
+            old_kernel, self._kernel = self._kernel, None
+            if old_kernel is not None:
+                try:
+                    await old_kernel.shutdown()
+                except Exception:  # noqa: BLE001 — best-effort; the box is already gone
+                    _LOG.debug("kernel shutdown on recreate failed", exc_info=True)
         # the old box took the 'preview' session down with it — bring it back up
         self._spawn_auto_preview()
         # Rehydrate the fresh (empty) workspace from the last snapshot, if the
@@ -148,6 +221,52 @@ class SandboxSession:
                 _LOG.warning(
                     "post-recreate rehydrate failed for %s", self.conversation_id, exc_info=True
                 )
+        # C5 — read-back: pull `.pmx/MEMORY.md` (the write-through mirror of
+        # the in-View KnowledgeEvent channel) off the fresh box and stage
+        # the facts for the agent loop to re-emit. The in-View channel is
+        # authoritative in-session; the file is the durable copy. A hard
+        # reset / box wipe erases the in-memory View but the file persists,
+        # so this read-back is the recovery path. Best-effort: a missing
+        # file (no prior remember) leaves the cache empty, and any I/O
+        # failure is logged but never raised.
+        try:
+            await self._recover_pmx_memory()
+        except Exception:  # noqa: BLE001 — recovery is a convenience, never wedge the box
+            _LOG.debug("pmx memory read-back failed", exc_info=True)
+        # C3: re-materialize the agent's own dev servers (vite / express /
+        # uvicorn / http.server on a non-default USER_PORT, …) on the fresh
+        # instance. Until this hook, only the static `python3 -m http.server`
+        # preview survived a recreate — a real app the agent launched simply
+        # vanished on suspend/wake. The shell-sessions manager records each
+        # port-binding command in `exec()` and replays them here, best-effort,
+        # skipping ports already bound (the no-duplication guarantee).
+        try:
+            logs = await self.sessions.rehydrate_persistent_servers()
+            for line in logs:
+                _LOG.info("post-recreate: %s", line)
+        except Exception:  # noqa: BLE001 — rehydrate is a convenience; never wedge the box
+            _LOG.warning(
+                "post-recreate server rehydrate failed for %s",
+                self.conversation_id,
+                exc_info=True,
+            )
+        # C3: re-materialize the agent's own dev servers (vite / express /
+        # uvicorn / http.server on a non-default USER_PORT, …) on the fresh
+        # instance. Until this hook, only the static `python3 -m http.server`
+        # preview survived a recreate — a real app the agent launched simply
+        # vanished on suspend/wake. The shell-sessions manager records each
+        # port-binding command in `exec()` and replays them here, best-effort,
+        # skipping ports already bound (the no-duplication guarantee).
+        try:
+            logs = await self.sessions.rehydrate_persistent_servers()
+            for line in logs:
+                _LOG.info("post-recreate: %s", line)
+        except Exception:  # noqa: BLE001 — rehydrate is a convenience; never wedge the box
+            _LOG.warning(
+                "post-recreate server rehydrate failed for %s",
+                self.conversation_id,
+                exc_info=True,
+            )
 
     def _spawn_auto_preview(self) -> None:
         """Fire-and-forget the static auto-serve (BP-02): every fresh box comes up with
@@ -178,6 +297,83 @@ class SandboxSession:
                 f"retry the action"
             ) from exc
 
+    # ---- C5: MEMORY write-through read-back ---------------------------------
+
+    # Path of the on-disk MEMORY mirror. Must match engine.py's _PMX_MEMORY_PATH
+    # exactly — these two are the only writers/readers of the file and the
+    # read-back's parse (## scope heading + list items) must match the
+    # write-through's format.
+    _PMX_MEMORY_PATH = ".pmx/MEMORY.md"
+
+    async def _recover_pmx_memory(self) -> None:
+        """C5 — read `.pmx/MEMORY.md` from the LIVE instance and stage its
+        facts in `self._recovered_memory_facts` for the agent loop to drain.
+        Called from `_recreate` AFTER the user's on_recreate hook has run and
+        the fresh box is up.
+
+        A missing file (no prior `remember` calls → no facts to recover) is
+        a normal, silent no-op: the cache stays None and the loop sees no
+        recovery. A present-but-malformed file is logged and ignored: a
+        bad mirror must not break the next step. A transient I/O error is
+        also best-effort (a dead box can't recover, but the loop will
+        surface the error via the next tool call anyway).
+        """
+        try:
+            data = await self.read_file(self._PMX_MEMORY_PATH)
+        except (FileNotFoundError, NotADirectoryError):
+            # No mirror on the new box — nothing to recover. Leave cache None
+            # (a fresh box / no prior remember) so the loop sees a clean state.
+            self._recovered_memory_facts = None
+            return
+        except Exception:  # noqa: BLE001 — read flakiness on a fresh box is best-effort
+            _LOG.debug("pmx memory read-back failed (no facts recovered)", exc_info=True)
+            self._recovered_memory_facts = None
+            return
+        if not data:
+            self._recovered_memory_facts = None
+            return
+        try:
+            text = data.decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001 — decode error
+            self._recovered_memory_facts = None
+            return
+        facts: list[tuple[str, str]] = []
+        current_scope = ""
+        for raw in text.splitlines():
+            line = raw.rstrip()
+            if line.startswith("## "):
+                current_scope = line[3:].strip()
+                continue
+            # Skip the leading comment / headings — they're prose, not facts.
+            if line.startswith("# "):
+                continue
+            # List item: `- <snippet>`. The write-through only ever produces
+            # `- ` list items under `## <scope>` headings, so this parser
+            # matches the writer exactly. (An empty line just advances.)
+            if line.startswith("- "):
+                snippet = line[2:].strip()
+                if snippet:
+                    facts.append((current_scope, snippet))
+        self._recovered_memory_facts = facts or None
+
+    def take_recovered_memory_facts(self) -> list[tuple[str, str]]:
+        """C5 — pop the staged recovery facts (set by `_recover_pmx_memory`).
+        The agent loop calls this on each step to drain the cache; it
+        returns an empty list and clears the cache if nothing is staged.
+        Consuming once-per-recreate is the contract: a second call on
+        the same session returns []. The list elements are `(scope, snippet)`
+        pairs ready to be re-emitted as KnowledgeEvents.
+        """
+        facts = self._recovered_memory_facts or []
+        self._recovered_memory_facts = None
+        return facts
+
+    def peek_recovered_memory_facts(self) -> list[tuple[str, str]]:
+        """C5 — read-only variant of `take_recovered_memory_facts` for tests
+        and diagnostics. Does NOT clear the cache — use `take_` to consume.
+        """
+        return list(self._recovered_memory_facts or [])
+
     async def exec_shell(self, cmd: str, *, timeout_s: int) -> ExecResult:
         return await self._resilient(lambda i: i.exec_shell(cmd, timeout_s=timeout_s))
 
@@ -199,7 +395,14 @@ class SandboxSession:
     async def ensure_preview(self, port: int = PREVIEW_PORT) -> bool:
         """Start (idempotently) the static preview as visible session 'preview'.
         Returns False without side effects if :port is already bound (someone — maybe
-        the agent's own dev server — owns it; that is fine and not ours to fight)."""
+        the agent's own dev server — owns it; that is fine and not ours to fight).
+
+        BP-G9 — the static preview is now ONE tracked service among potentially
+        many. The entry is registered in `self._tracked_services[port]` so the
+        C3 rematerialize hook re-issues it on a fresh box and a UI/runtime can
+        ask "what's exposed on this conversation right now?" (see
+        `tracked_services`). For multi-service builds use `ensure_service`
+        directly (BP-G9 acceptance: API on 3000 + frontend on 5173)."""
         from .port_owner import port_owner
 
         inst = await self._ensure()
@@ -209,13 +412,101 @@ class SandboxSession:
 
         res = await inst.exec_shell("pwd", timeout_s=5)
         workspace = res.stdout.strip()
-        
+        cmd = f"python3 -m http.server {port} -d {workspace}"
+
         await self.sessions.exec(
             "preview",
-            f"python3 -m http.server {port} -d {workspace}",
+            cmd,
             exec_dir=workspace
         )
+        # BP-G9: register the static preview as a tracked service so the wake
+        # machinery has a single source of truth for "what to rematerialize on
+        # a fresh box" — works alongside the C3 `_persistent_servers` dict that
+        # `shell_exec` populates implicitly.
+        self._tracked_services[port] = TrackedService(
+            name="preview", port=port, command=cmd, exec_dir=workspace,
+        )
         return True
+
+    # ---- BP-G9: multi-service tracking + exposure -------------------------
+
+    async def ensure_service(
+        self, name: str, port: int, command: str, *, exec_dir: str | None = None,
+    ) -> str | None:
+        """BP-G9 — start + track a USER_PORT-binding service.
+
+        Generalization of `ensure_preview`: the static auto-preview is one
+        such service; the agent can register arbitrarily many (an API on
+        3000, a Vite dev server on 5173, a worker admin UI on 8080, …).
+        Each gets its own tmux session, its own URL, and its own rematerialize
+        entry — so multi-service builds are first-class, not a special case
+        of the single 'preview' path.
+
+        Behavior:
+          - Refuses to track a port outside `USER_PORTS` (containment: a
+            non-curated port must NEVER become a tracked/exposed URL).
+          - If the port is ALREADY bound on this box (the agent's own dev
+            server, or another tracker's service), returns None — no fight
+            (same polite-backing-off rule as `ensure_preview`).
+          - Otherwise launches `command` as a tmux session named `name`
+            in `exec_dir` (default: the live workspace, same as
+            `ensure_preview`) and records the service in
+            `self._tracked_services[port]`. Returns the exposed URL on
+            success.
+
+        The C3 rehydrate path in `_recreate` re-issues every tracked
+        service on a fresh box (the recorded `command` survives the
+        tmux-level reset, just like C3's `_persistent_servers`).
+        """
+        from .port_owner import port_owner
+
+        if port not in USER_PORTS:
+            raise SandboxError(
+                f"port {port} is not in USER_PORTS; refusing to track as service"
+            )
+
+        inst = await self._ensure()
+        owner = await port_owner(inst, port)
+        if owner is not None and owner.pid is not None:
+            # Port already claimed by something on this box — record the
+            # intent (so the wake machinery can see "we wanted a service
+            # on this port") but DON'T fight the current owner. The
+            # rematerialize skip-check will short-circuit on recreate.
+            self._tracked_services[port] = TrackedService(
+                name=name, port=port, command=command, exec_dir=exec_dir,
+            )
+            return None
+
+        cwd = exec_dir
+        if cwd is None:
+            res = await inst.exec_shell("pwd", timeout_s=5)
+            cwd = res.stdout.strip()
+
+        await self.sessions.exec(name, command, exec_dir=cwd)
+        self._tracked_services[port] = TrackedService(
+            name=name, port=port, command=command, exec_dir=cwd,
+        )
+        return inst.expose_port(port)
+
+    def tracked_services(self) -> list[TrackedService]:
+        """BP-G9 — snapshot of every USER_PORT service this session is
+        currently tracking, in registration order. Read-only view for
+        the UI/runtime to see "what's exposed on this box right now".
+
+        Returned list is a fresh copy — callers may mutate it without
+        affecting session state. Each `TrackedService` has a `.port`,
+        `.name`, `.command`, `.exec_dir` attribute. To get the URL of
+        a tracked service, call `session.expose_port(svc.port)`.
+        """
+        return list(self._tracked_services.values())
+
+    def tracked_ports(self) -> list[int]:
+        """BP-G9 — convenience accessor: the sorted list of USER_PORTS
+        with a tracked service. O(1) membership check counterpart to
+        `tracked_services()`. Mirrors the `expose_port` gate's view of
+        the world (only curated USER_PORTS ever appear here).
+        """
+        return sorted(self._tracked_services.keys())
 
     async def destroy(self) -> None:
         """Close the session at task end: no further use, and the live box torn down.

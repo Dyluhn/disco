@@ -55,6 +55,36 @@ class Cassette:
             c._log.append(row)
         return c
 
+    @classmethod
+    def from_rows(cls, rows: list[dict[str, Any]] | None) -> Cassette:
+        """Build a Cassette from an in-memory list of `{seam, key, input, output}`
+        rows — the SAME shape `load()` reads off disk and `record()` produces.
+
+        This is the single-source loader for the unification with the share bundle
+        (D10): a share bundle's `cassette` field carries rows in exactly this
+        format, so `Cassette.from_rows(bundle["cassette"])` is the round-trip
+        adapter — the same code that powers `replay_runner.ReplayRouter` /
+        `ReplaySearchProvider` reads the share-bundle projection. No divergent
+        serializer.
+
+        Defensive: skips rows missing any of the four required fields, so a
+        hand-edited bundle (or an older version) degrades to a partial cassette
+        rather than a load error."""
+        c = cls()
+        if not rows:
+            return c
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            seam = row.get("seam")
+            key = row.get("key")
+            output = row.get("output")
+            if seam is None or key is None or "input" not in row:
+                continue
+            c._entries[(seam, key)] = output
+            c._log.append(row)
+        return c
+
     def save(self, path: str | Path) -> None:
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)

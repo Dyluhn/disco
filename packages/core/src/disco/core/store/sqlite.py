@@ -19,7 +19,7 @@ import json
 import sqlite3
 from collections import defaultdict
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from ..events import Event, EventAdapter, event_to_json_dict
@@ -121,6 +121,46 @@ CREATE TABLE IF NOT EXISTS mcp_approvals (
     approved_at     TEXT NOT NULL,  -- ISO-8601
     approved_by     TEXT NOT NULL   -- operator username
 );
+CREATE TABLE IF NOT EXISTS mcp_approval_pending (
+    -- E6 (#10): per-server DRIFT row, written by the agent-server when its
+    -- live pool detects a description_hash mismatch against mcp_approvals at
+    -- startup. Carries the AUTHORITATIVE new_hash the live server advertised
+    -- (NOT a recompute). The app-server reads this on GET /api/mcp to
+    -- surface the REAL new_hash on the ApprovalDiff. The agent-server clears
+    -- the row when the operator accepts the new tool descriptions via
+    -- POST /api/mcp/servers/{name}/approve (create_mcp_approval deletes it
+    -- in the same transaction). Without this table the UI sees only the
+    -- STORED (old) hash from mcp_approvals and the diff is useless (or
+    -- worse, shows the same value for both old and new).
+    server          TEXT PRIMARY KEY,
+    old_hash        TEXT NOT NULL,  -- the LAST APPROVED hash (mcp_approvals.description_hash)
+    new_hash        TEXT NOT NULL,  -- the AUTHORITATIVE live pool's hash
+    detected_at     TEXT NOT NULL   -- ISO-8601
+);
+CREATE TABLE IF NOT EXISTS dod_specs (
+    -- C1a: external Definition-of-Done spec, one row per conversation.
+    --
+    -- Sibling to `conversations` and `events`, OUTSIDE the agent-editable
+    -- event stream. The agent has no tool that mutates this table: the only
+    -- writer is the store's `set_dod_spec` (server-side, NOT exposed as a
+    -- tool) and that writer is WRITE-ONCE — a second call with the same
+    -- `conversation_id` raises `DoDSpecAlreadySet`. The `replace_dod_spec`
+    -- method is the named, always-raise hook for any future "weaken"
+    -- affordance to fail loudly rather than silently mutate.
+    --
+    -- The `spec` column carries the serialized DoDSpec (predicates + meta);
+    -- we keep the predicates as JSON text rather than relational rows so
+    -- the spec is a single atomic read/write — no half-written predicates,
+    -- no "spec exists but its predicates are gone" half-states.
+    --
+    -- `set_at` + `set_by` are audit fields, never consulted by the
+    -- evaluator. The PK is `conversation_id` (one spec per conversation).
+    conversation_id TEXT PRIMARY KEY,
+    spec            TEXT NOT NULL,  -- JSON-encoded DoDSpec
+    set_at          TEXT NOT NULL,  -- ISO-8601
+    set_by          TEXT NOT NULL,  -- "system" | "user" | "plan:<step-id>" — audit only
+    FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id)
+);
 """
 
 
@@ -199,6 +239,126 @@ class SqliteEventStore:
             (conversation_id, owner_id, space_id, title, datetime.now().isoformat(), surface, origin),
         )
         self._conn.commit()
+
+    # ---- DoD spec (C1a: storage + accessor + immutability) -------------------
+    # The DoD spec lives in a sibling table to `conversations` and `events`,
+    # OUTSIDE the agent-editable event stream. There is NO agent tool that
+    # calls these methods. `set_dod_spec` is WRITE-ONCE: a second call with
+    # the same conversation_id raises DoDSpecAlreadySet and leaves the
+    # original intact. `replace_dod_spec` is the named, always-raise hook for
+    # any future "weaken" affordance to fail loudly. See `core/dod.py` for
+    # the full immutability argument.
+
+    async def set_dod_spec(
+        self, conversation_id: str, spec: "DoDSpec", *, set_by: str = "system"
+    ) -> "DoDSpec":
+        """Persist the DoD spec for a conversation. WRITE-ONCE: a second call
+        raises `DoDSpecAlreadySet` and the original is preserved.
+
+        `set_by` is an audit label (never consulted by the evaluator). We use
+        a transaction (write-lock + sqlite txn) so a concurrent race between
+        two `set_dod_spec` calls cannot interleave a half-written spec —
+        the second caller sees the row and raises.
+
+        The spec is serialized as a single JSON blob: predicates + meta
+        round-trip atomically. Validation is the caller's job (build a
+        `DoDSpec` via the Pydantic model); we don't re-validate on write
+        beyond the JSON round-trip, because the spec is frozen upstream."""
+        from ..dod import DoDSpec, DoDSpecAlreadySet  # local import: dod.py is a leaf
+        if not isinstance(spec, DoDSpec):
+            # Don't accept free-form dicts here — the storage shape is the
+            # Pydantic model. Callers go through DoDSpec(predicates=...).
+            raise TypeError(
+                f"set_dod_spec expects a DoDSpec, got {type(spec).__name__}"
+            )
+        payload = spec.to_json_dict()
+        now = datetime.now(UTC).isoformat()
+        async with self._write_lock:
+            with self._conn:
+                # Idempotency check inside the txn: if a row already exists,
+                # raise without touching it. The PRIMARY KEY constraint would
+                # also catch a naive double-insert, but checking first lets us
+                # raise the precise exception (and not the sqlite IntegrityError).
+                existing = self._conn.execute(
+                    "SELECT 1 FROM dod_specs WHERE conversation_id = ?",
+                    (conversation_id,),
+                ).fetchone()
+                if existing is not None:
+                    raise DoDSpecAlreadySet(
+                        f"DoD spec for {conversation_id!r} is already set; "
+                        "the spec is write-once. Capture a new conversation "
+                        "if the acceptance criteria changed."
+                    )
+                # Make sure the parent conversation row exists — the FK
+                # constraint would otherwise reject the insert. (Auto-create
+                # mirrors `create_conversation`'s "idempotent register" pattern
+                # so a spec can be set at conversation creation time, before
+                # the first event is appended.)
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO conversations "
+                    "(conversation_id, owner_id, created_at) "
+                    "VALUES (?, ?, ?)",
+                    (conversation_id, DEFAULT_OWNER_ID, datetime.now().isoformat()),
+                )
+                self._conn.execute(
+                    "INSERT INTO dod_specs "
+                    "(conversation_id, spec, set_at, set_by) "
+                    "VALUES (?, ?, ?, ?)",
+                    (
+                        conversation_id,
+                        json.dumps(payload),
+                        now,
+                        set_by,
+                    ),
+                )
+        return spec
+
+    async def get_dod_spec(self, conversation_id: str) -> "DoDSpec | None":
+        """Accessor. Returns the stored `DoDSpec` or `None` when no spec has
+        been captured yet. A pure read; no copy, no wrapping, no mutation.
+
+        The returned spec is the live Pydantic model — frozen, so even an
+        in-process attempt to mutate the result is a `ValidationError`."""
+        from ..dod import DoDSpec
+        row = self._conn.execute(
+            "SELECT spec FROM dod_specs WHERE conversation_id = ?",
+            (conversation_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return DoDSpec.from_json_dict(json.loads(row["spec"]))
+
+    async def replace_dod_spec(
+        self, conversation_id: str, spec: "DoDSpec", *, actor: str = "system"
+    ) -> "DoDSpec":
+        """Named, always-raise hook for "weaken the spec" affordances. The
+        spec is write-once; this method exists so a future caller (a
+        server-side endpoint, a debug tool) fails LOUDLY instead of silently
+        mutating. The contract:
+
+          * If a spec exists → raise `DoDSpecAlreadySet` (original preserved).
+          * If no spec exists → equivalent to `set_dod_spec` (kept for
+            symmetry; without it a caller could pick the "replace" verb to
+            route around the write-once gate, which is exactly the kind of
+            footgun this method exists to prevent).
+
+        We do NOT take `actor` into the immutability decision: even a
+        well-meaning human operator cannot "weaken" via this method. The
+        user-facing relax path is to capture a new conversation (and the
+        user can see the original spec in the audit fields)."""
+        from ..dod import DoDSpec, DoDSpecAlreadySet
+        if not isinstance(spec, DoDSpec):
+            raise TypeError(
+                f"replace_dod_spec expects a DoDSpec, got {type(spec).__name__}"
+            )
+        existing = await self.get_dod_spec(conversation_id)
+        if existing is not None:
+            raise DoDSpecAlreadySet(
+                f"DoD spec for {conversation_id!r} is already set; replace "
+                "is a no-throw-no-mutate hook. Capture a new conversation "
+                "if the acceptance criteria changed."
+            )
+        return await self.set_dod_spec(conversation_id, spec, set_by=actor)
 
     # ---- writes --------------------------------------------------------------
 

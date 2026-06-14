@@ -1,12 +1,15 @@
 """ShellSessionManager - persistent named shell sessions backed by tmux."""
 
 import asyncio
+import logging
 import re
 import shlex
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from .base import SandboxInstance
+
+_LOG = logging.getLogger(__name__)
 
 _PREFIX = "pmx"
 _PS1_MARKER = "__PMX_PS1__"
@@ -17,6 +20,27 @@ _EXEC_RETURN_CHARS = 6_000
 _POLL_S = 0.5
 _EXEC_WAIT_S = 15.0
 _TMUX_TIMEOUT_S = 10
+
+
+@dataclass
+class PersistentServer:
+    """Metadata for one agent-launched dev server the session should try to
+    RE-MATERIALIZE on a sandbox recreate (C3). A PersistentServer is recorded
+    ONLY for shell sessions whose command argv contains a USER_PORT and is
+    still running (i.e. a long-running server, not a one-shot build). On
+    recreate, the recorded entries are re-issued best-effort so a real app
+    (vite, express, uvicorn, http.server on a non-default port, …) survives
+    suspend/wake — not just the static auto-preview.
+
+    The `name` is the tmux session name (no namespace prefix), `command` is the
+    full command string originally exec'd, `exec_dir` is where it was run, and
+    `port` is the USER_PORT it binds (the rehydrate skip-check uses this to
+    avoid duplicating a server that's already running on the fresh instance).
+    """
+    name: str
+    command: str
+    exec_dir: str | None
+    port: int
 
 
 class SessionBusy(Exception):
@@ -57,10 +81,55 @@ class ShellSessionManager:
         # new instance, and view() uses this to explain *why* instead of a generic
         # "not found".
         self._lost_sessions: set[str] = set()
+        # C3: persistent dev servers the agent launched — keys are tmux session
+        # names (no namespace prefix), values are the command/exec_dir/port
+        # needed to RE-MATERIALIZE them on the fresh instance after a recreate.
+        # Survives `reset_known_sessions()`: tmux sessions on the old box are
+        # gone, but the METADATA needed to restart them is what carries across.
+        self._persistent_servers: dict[str, PersistentServer] = {}
 
     def reset_known_sessions(self) -> None:
+        # Note: _persistent_servers is intentionally NOT cleared here. The
+        # whole point is to survive the recreate so a real app can be restarted
+        # on the fresh instance. `_known_sessions` and `_lost_sessions` track
+        # the tmux-level state, which genuinely is gone.
         self._lost_sessions |= self._known_sessions
         self._known_sessions.clear()
+
+    def _classify_persistent_server(self, command: str) -> int | None:
+        """Return the USER_PORT this command will bind, or None.
+
+        Signal: a still-running command whose argv references a port in
+        USER_PORTS. This is the cleanest available signal that the agent
+        launched a long-running dev server (the alternative — inferring server
+        intent from the binary name — is brittle across vite/next/uvicorn/…).
+
+        One-shots (`npm run build`, `python -m pytest`) never reach this code
+        path because their `exec()` returns `running=False`. `lsof -i :8000` or
+        `curl http://localhost:3000/...` aren't `running` either, so they
+        don't pollute the dict either.
+        """
+        # shlex.split raises on unbalanced quotes; fall back to a coarse split
+        # so we still record the (common) case `python3 -m http.server 8000`.
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            tokens = command.split()
+        for tok in tokens:
+            # exact numeric token, not a substring (e.g. "127.0.0.1:8000" must
+            # not match — its tokens are "127.0.0.1:8000", a single string)
+            if tok.isdigit():
+                port = int(tok)
+                if port in self._allowed_persistent_ports():
+                    return port
+        return None
+
+    def _allowed_persistent_ports(self) -> frozenset[int]:
+        # Local import to avoid a top-level cycle (port_owner pulls from
+        # base, which is fine; this is purely for the dependency direction
+        # remaining one-way: shell_sessions <- port_owner, not the reverse).
+        from ._container import USER_PORTS
+        return USER_PORTS
 
     def _full_name(self, name: str) -> str:
         if self.namespace:
@@ -199,7 +268,9 @@ class ShellSessionManager:
                 
             if delta_lines and _MARKER_RE.search(delta_lines[-1]):
                 cleaned, exit_code = self._strip_output(delta)
-                return ExecOutcome(running=False, exit_code=exit_code, output=cleaned[-_EXEC_RETURN_CHARS:])
+                outcome = ExecOutcome(running=False, exit_code=exit_code, output=cleaned[-_EXEC_RETURN_CHARS:])
+                self._record_persistent_if_match(name, command, exec_dir, outcome)
+                return outcome
 
         _, post_cap = await self._run_tmux_safe(f"capture-pane -t {shlex.quote(full)} -p -S -")
         post_cap = post_cap.rstrip("\r\n")
@@ -209,12 +280,112 @@ class ShellSessionManager:
             delta = post_cap
 
         cleaned_running, _ = self._strip_output(delta)
-        return ExecOutcome(
+        outcome = ExecOutcome(
             running=True,
             exit_code=None,
             output=cleaned_running[-_EXEC_RETURN_CHARS:],
             note="still running after 15s — use shell_view / shell_wait"
         )
+        self._record_persistent_if_match(name, command, exec_dir, outcome)
+        return outcome
+
+    def _record_persistent_if_match(
+        self, name: str, command: str, exec_dir: str | None, outcome: ExecOutcome
+    ) -> None:
+        """Update `_persistent_servers` based on a finished exec() outcome.
+
+        - If the command is STILL running and references a USER_PORT in argv,
+          record (or refresh) the entry — it's a dev server the agent launched
+          that we should restart on a recreate.
+        - Otherwise, drop any stale entry for that session: the agent finished
+          the server (`Ctrl-C` / `kill`), replaced it with a one-shot, or
+          replaced it with a server on a different port. Either way the OLD
+          entry no longer reflects reality and re-running it would be wrong.
+        """
+        if outcome.running:
+            port = self._classify_persistent_server(command)
+            if port is not None:
+                self._persistent_servers[name] = PersistentServer(
+                    name=name, command=command, exec_dir=exec_dir, port=port
+                )
+                return
+        # Not running, or not a port-binding command — forget any prior entry.
+        self._persistent_servers.pop(name, None)
+
+    def recorded_persistent_servers(self) -> list[PersistentServer]:
+        """Snapshot of the persistent-server registry (read-only view, for
+        diagnostics + tests). Order is insertion order — the rehydrate
+        re-issues in the same order the agent launched them."""
+        return list(self._persistent_servers.values())
+
+    async def rehydrate_persistent_servers(
+        self, port_check: Callable[[int], Awaitable[bool]] | None = None
+    ) -> list[str]:
+        """Re-issue each recorded persistent-server command on the CURRENT
+        instance. Called by `SandboxSession._recreate` after a fresh instance
+        is up so a real app (vite / express / uvicorn / http.server on a
+        non-default port) survives suspend/wake, not just the static
+        auto-preview.
+
+        `port_check(port)` -> True iff a USER_PORT is already bound on the
+        fresh instance. We SKIP those to avoid duplicating a server that's
+        already running (the no-duplication guarantee). Defaults to a /proc
+        probe via `port_owner`.
+
+        Best-effort: any single failure is logged and the rehydrate continues
+        with the next entry. The function NEVER raises — rehydrate is a
+        convenience, like the static auto-preview, and the box must not care.
+        Returns a list of human-readable log lines for diagnostics/tests.
+        """
+        from .port_owner import port_owner
+
+        if port_check is None:
+            async def _default_check(port: int) -> bool:
+                try:
+                    inst = await self._get_instance()
+                except Exception:  # noqa: BLE001 — instance gone; just attempt rehydrate
+                    return False
+                try:
+                    owner = await port_owner(inst, port)
+                except Exception:  # noqa: BLE001 — probe failed; treat as not bound
+                    return False
+                return owner is not None and owner.pid is not None
+
+            port_check = _default_check
+
+        logs: list[str] = []
+        # Snapshot the keys so the dict isn't mutated mid-iteration by the
+        # recording that happens inside the re-issued exec() call.
+        for name, srv in list(self._persistent_servers.items()):
+            try:
+                if await port_check(srv.port):
+                    logs.append(
+                        f"port {srv.port} already bound on the new instance — "
+                        f"skipping rehydrate of session '{name}' "
+                        f"(cmd: {srv.command})"
+                    )
+                    continue
+            except Exception as exc:  # noqa: BLE001 — port-check failure is non-fatal
+                logs.append(
+                    f"port-check for {srv.port} failed while rehydrating "
+                    f"'{name}': {exc!r} — attempting re-issue anyway"
+                )
+            try:
+                await self.exec(name, srv.command, srv.exec_dir)
+            except Exception as exc:  # noqa: BLE001 — best-effort; one bad rehydrate must not block the rest
+                logs.append(
+                    f"failed to re-materialize persistent server '{name}' "
+                    f"(cmd: {srv.command}): {exc!r}"
+                )
+                _LOG.warning(
+                    "rehydrate of persistent server %r failed: %r", name, exc
+                )
+                continue
+            logs.append(
+                f"re-materialized persistent server '{name}' on port {srv.port} "
+                f"(cmd: {srv.command})"
+            )
+        return logs
 
     async def view(self, name: str, tail_chars: int = _VIEW_TAIL_CHARS) -> SessionView:
         full = self._full_name(name)

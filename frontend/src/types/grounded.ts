@@ -74,6 +74,28 @@ export type AnswerBlock =
       filename: string;
       sheet_names: string[];
       formulas_evaluated: false;
+    }
+  | {
+      /** A generated slide deck (Marp-rendered HTML / PDF / PPTX). The viewer
+       *  shows in-block navigation through `slides` (the deck's slide titles
+       *  + content the model already had when it emitted the block — no extra
+       *  fetch needed for the inline nav); the .html/.pdf/.pptx itself is
+       *  delivered as a workspace artifact (ToolOutcome.artifacts →
+       *  DeliverableEvent) and downloaded through the app's deliverable /
+       *  workspace machinery, which holds the conversation id. Inline HTML
+       *  embedding of the rendered deck (an in-card iframe to the artifact
+       *  route) is deferred — see SheetBlock's parallel comment: the card
+       *  stays an honest preview + the (cid-gated) download. */
+      kind: "slides";
+      id: string;
+      title: string;
+      filename: string;
+      format: "html" | "pdf" | "pptx";
+      slide_count: number;
+      /** Per-slide preview, threaded for in-block navigation. Empty array is
+       *  valid (the viewer degrades to a "slide N of M" counter). */
+      slides: { title?: string; content?: string }[];
+      renderer: "marp" | "fallback";
     };
 
 export interface GroundedAnswer {

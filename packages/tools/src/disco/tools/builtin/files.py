@@ -22,9 +22,61 @@ _FS = frozenset({Capability.FILESYSTEM})
 # read returns intact, line-numbered lines + an explicit "read more with offset=…".
 _READ_CHAR_BUDGET = 7_000
 
+# F7 — pressure-aware head-only.
+#
+# LIMITATION: ToolContext exposes `assist` but not the condenser's token_count
+# pressure signal (that lives in engine.py / view.py and isn't threaded into the
+# tool call). So we gate on `assist=True` + a LARGE-FILE SIZE HEURISTIC: files
+# whose total content exceeds twice the read char budget are the ones that
+# today's paging has to split across multiple pages anyway — exactly the
+# payload size that gets most-corrupted by the snip pass and most-likely to
+# push the model into the next condenser tick. For those, we return only a
+# small HEAD slice and a prescriptive directive (grep, then file_read a
+# targeted line range) so the model stops dumping whole files into context
+# when it's already close to the limit. Assist-OFF behavior is unchanged.
+_PRESSURE_HEAD_BUDGET = 2_000  # head-only slice when the gate fires (well under the snip cap)
+_PRESSURE_FILE_THRESHOLD = _READ_CHAR_BUDGET * 2  # 14_000 — files that would otherwise span multiple pages
+# Prescriptive directive: "the file is big; don't read it whole, do this instead."
+# Static so a unit test can assert on it; worded so the weak-model tier picks
+# the cheap, deterministic path (grep → targeted read) over a full dump.
+_PRESSURE_DIRECTIVE = (
+    "file is large; the full page is suppressed. Do NOT re-read this file "
+    "whole — pick the symbol/class/section you need, then either:\n"
+    "  (a) run a grep/ripgrep tool to locate it (e.g. `rg -n 'Symbol' <path>`), "
+    "then file_read a targeted line range (`offset=<n>, limit=<m>`); or\n"
+    "  (b) file_read a small line range directly to scan structure.\n"
+    "Reading this file whole again will just be truncated the same way."
+)
+
 # A line-number prefix the model may have copied out of a numbered file_read
 # ("  123\t<code>"). file_edit strips it defensively so a paste-back still matches.
 _LINENO_PREFIX = re.compile(r"(?m)^\s*\d+\t")
+
+# Per-conversation read-before-write tracker for the assist gate (F3).
+# Structure: {conv_id: {"read": set[str], "written": set[str], "warned": set[str]}}
+#   read:    paths the agent has successfully file_read in this conversation
+#   written: paths the agent has successfully file_write'd in this conversation
+#   warned:  paths we refused a file_write on — the 2nd-attempt escape hatch
+#            (SmallCode read_tracker.js pattern: first untracked write to an
+#            existing file refused, a read lifts it, second write allowed).
+# Module-level so it's per-process; the per-conversation key keeps state
+# isolated between agents/sessions. The tracker is consulted only when
+# `ctx.assist` is True; the assist-OFF path is byte-identical to pre-F3.
+_read_state: dict[str, dict[str, set[str]]] = {}
+
+
+def reset_read_tracker() -> None:
+    """Clear all per-conversation read/write state. Tests only; not part of the
+    tool API."""
+    _read_state.clear()
+
+
+def _conv_state(conv_id: str) -> dict[str, set[str]]:
+    s = _read_state.get(conv_id)
+    if s is None:
+        s = {"read": set(), "written": set(), "warned": set()}
+        _read_state[conv_id] = s
+    return s
 
 
 def _number_lines(text: str, start: int = 1) -> str:
@@ -84,6 +136,11 @@ class FileReadTool:
     async def run(self, args: FileReadArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None  # sandbox tools always receive an instance
         data = await ctx.sandbox.read_file(args.path)
+        # Mark this path as "seen" so a subsequent file_write on it is allowed
+        # on the first try (the read-before-write guard's happy path). Only
+        # tracked under the assist gate — the capable-model path never looks.
+        if ctx.assist:
+            _conv_state(ctx.conversation_id)["read"].add(args.path)
         text = data.decode("utf-8", errors="replace")
         lines = text.splitlines()
         total = len(lines)
@@ -92,6 +149,44 @@ class FileReadTool:
             return ToolOutcome(
                 success=True,
                 content=f"[lines {start + 1}-{total} of {total} — offset past end of file]",
+            )
+        # F7 — pressure-aware head-only. Fires ONLY when:
+        #   - ctx.assist is on (the weak-model tier the gate exists to protect),
+        #   - the caller did NOT pass an explicit offset/limit (a targeted read
+        #     is already cheap; the gate would just break a working flow), and
+        #   - the file is large enough that today's paging would have to split
+        #     it across multiple pages (the size proxy for "this is going to
+        #     cost real context budget"). When all three hold, return a small
+        #     head slice + a directive telling the model to grep, then read a
+        #     line range — not the full page. The assist-OFF branch and the
+        #     no-pressure (small file / explicit range) branch are untouched:
+        #     they fall through to today's paging below.
+        if (
+            ctx.assist
+            and args.offset is None
+            and args.limit is None
+            and len(text) > _PRESSURE_FILE_THRESHOLD
+        ):
+            # Number a HEAD slice kept under the pressure head budget. Same
+            # width/numbering convention as the regular page so a follow-up
+            # file_read(offset=K+1, limit=N) is byte-consistent.
+            width = len(str(total)) or 1
+            head: list[str] = []
+            used = 0
+            for i, ln in enumerate(lines):
+                line = f"{i + 1:>{width}}\t{ln}"
+                if head and used + len(line) + 1 > _PRESSURE_HEAD_BUDGET:
+                    break
+                head.append(line)
+                used += len(line) + 1
+            head_to = len(head)
+            header = (
+                f"[lines 1-{head_to} of {total} (file: {len(text)} chars) — "
+                f"HEAD-ONLY under context pressure]\n"
+            )
+            return ToolOutcome(
+                success=True,
+                content=header + "\n".join(head) + "\n\n" + _PRESSURE_DIRECTIVE,
             )
         # A page that fits under the snip cap, line-numbered from the absolute start
         # so line numbers are correct. If `limit` is given, respect it but still cap
@@ -136,8 +231,42 @@ class FileWriteTool:
 
     async def run(self, args: FileWriteArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
+        # F3 — read-before-write guard, assist tier ONLY. Refuse the first write
+        # to an EXISTING file the agent has not read this conversation; the
+        # 2nd attempt is the model's explicit "yes, full-replace" and is allowed.
+        # Clobbering an unread existing file is the silent-data-loss path the
+        # weak-model tier keeps stepping into. A NEW (nonexistent) file is
+        # always allowed (creating from scratch has no prior bytes to lose).
+        # The whole branch is gated on `ctx.assist`; the capable-model path is
+        # byte-identical to pre-F3 (no tracker lookup, no extra read).
+        if ctx.assist:
+            state = _conv_state(ctx.conversation_id)
+            if (
+                args.path not in state["read"]
+                and args.path not in state["written"]
+                and args.path not in state["warned"]
+            ):
+                try:
+                    await ctx.sandbox.read_file(args.path)
+                    exists = True
+                except Exception:  # noqa: BLE001 — absent file is fine, that just means "new"
+                    exists = False
+                if exists:
+                    state["warned"].add(args.path)
+                    return ToolOutcome(
+                        success=False,
+                        content=(
+                            f"file_write refused: {args.path} already exists and you have not "
+                            f"read it in this conversation. file_read it first (to see what is "
+                            f"there) or issue a second attempt with file_write to force a full "
+                            f"replace."
+                        ),
+                        error="read_before_write",
+                    )
         raw = args.content.encode("utf-8")
         await ctx.sandbox.write_file(args.path, raw)
+        if ctx.assist:
+            _conv_state(ctx.conversation_id)["written"].add(args.path)
         return ToolOutcome(
             success=True, content=f"wrote {len(raw)} bytes to {args.path}", artifacts=[args.path]
         )

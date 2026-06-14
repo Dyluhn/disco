@@ -14,10 +14,18 @@ from pydantic import BaseModel, ConfigDict
 
 
 class SandboxConfig(BaseModel):
-    """[config] How and where a sandbox backend runs. Frozen; passed to the
-    backend at construction so nothing host-specific is hardcoded."""
+    """[config] How and where a sandbox backend runs. MUTABLE on purpose: the
+    Settings layer is the live control surface (Dispo #25 hot-apply). The service
+    holds a reference to this object (`self._cfg`) and re-reads fields on every
+    op, so `cfg.image = "pmx-sandbox:hot"` (or `cfg.reload_timeout_s = 0.05`) is
+    the whole hot-update API — no service restart, no container recreate. If you
+    want a true frozen snapshot, copy it (`SandboxConfig(**cfg.model_dump())`)."""
 
-    model_config = ConfigDict(frozen=True)
+    # No `frozen=True` here. Frozen would re-introduce the Dispo #25 bug: a
+    # settings change would require recreating the service (and any containers
+    # built from a captured snapshot) instead of just being picked up by the
+    # next op. Mutable-by-construction is the whole point.
+    model_config = ConfigDict()
 
     # which backend the settings layer selected (positions on one interface).
     backend: str = "gvisor"  # "process" | "gvisor" | "podman" | "local"
@@ -54,6 +62,15 @@ class SandboxConfig(BaseModel):
 
     # how long to wait for the container to stop on close, before force-remove.
     stop_timeout_s: int = 5
+
+    # Wedge-guard timeout for the docker/podman `reload()` client call (Dispo #25).
+    # A hung or failing client must NEVER block the event loop — this is the
+    # BOUND on `_safe_reload()`'s wait, after which a typed SandboxUnavailableError
+    # is raised (the caller catches, the loop continues). 0.5s is a healthy
+    # reload is sub-ms, so this is ~500x the real latency; tight enough that a
+    # stuck docker daemon can't wedge a session. Hot-applied: the next instance
+    # created by the service picks up any change to this field.
+    reload_timeout_s: float = 0.5
 
 
 def default_sandbox_config() -> SandboxConfig:

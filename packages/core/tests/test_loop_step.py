@@ -116,7 +116,18 @@ async def test_failures_do_not_trigger_automatic_reminders():
     caused instruction dilution and was opaque to both the model and the user.
     Recovery is now: visible errors + the model's own reasoning + the user's
     real-time steer/interrupt + the model's voluntary `ask_user` tool when IT
-    decides human input is needed."""
+    decides human input is needed.
+
+    C7 (build-surface-recovery-ux) — EXCEPTION for the existing stuck-escape
+    path: when the StuckDetector detects 3 identical action→error repeats it
+    fires the ONE-reframe escape (a status marker + a rotating C7 reminder +
+    a high temperature), exactly ONCE per user turn, BEFORE the run halts
+    STUCK. The C7 reminder lives INSIDE that escape branch — it does NOT
+    violate the c97c1b3 "no automatic nudge outside the existing
+    stuck-escape" invariant. So this test now distinguishes between
+    C7-bounded escape reminders (allowed) and any OTHER automatic
+    failure-recovery reminders (still forbidden).
+    """
     failing = ToolResult(call_id="c", tool_name="shell", success=False, content="", error="bad")
     agent = ScriptedAgent(
         [action_step(), action_step(), action_step(), action_step(), finish_step()]
@@ -124,14 +135,35 @@ async def test_failures_do_not_trigger_automatic_reminders():
     loop, store = build_loop(agent, executor=FakeExecutor(result=failing))
     await loop.send_message("go")
     await loop.run()
-    reminders = await _reminders(await store.get_events(CID))
-    # No escalating reminders are emitted by the harness — even after 4 failures.
-    # The trace shows the failures, the model reasons about them on the next
-    # turn (or the user interrupts). This is the proven pattern.
-    assert reminders == [], (
-        "the loop must NOT emit automatic failure-recovery reminders. "
-        "Failures are visible context for the model to reason about; the harness "
-        "is observability + substrate, not behavior change."
+    events = await store.get_events(CID)
+    all_reminders = await _reminders(events)
+    # Filter to reminders that are NOT the c97c1b3-bounded C7 escape
+    # reminder. Any other <system-reminder> from the harness is a
+    # regression of the no-automatic-nudge invariant.
+    non_escape_reminders = [
+        e for e in all_reminders
+        if "disco:escape-attempt=" not in (e.message.content or "")
+    ]
+    assert non_escape_reminders == [], (
+        "the loop must NOT emit automatic failure-recovery reminders "
+        "OUTSIDE the c97c1b3-bounded stuck-escape path. The C7 escape "
+        "reminder is the one allowed exception (it is emitted from inside "
+        "the existing stuck-escape branch with a rotating pool + a "
+        "per-attempt serialization nonce). Got non-escape reminders: "
+        f"{[e.message.content for e in non_escape_reminders]}"
+    )
+    # And the C7 escape path MUST have fired (3 identical failures is at the
+    # StuckDetector's `repeat_action_error` threshold). This is the
+    # positive half of the assertion: the escape reminder IS present
+    # (the old assertion was too strict; the new design explicitly adds it).
+    escape_reminders = [
+        e for e in all_reminders
+        if "disco:escape-attempt=" in (e.message.content or "")
+    ]
+    assert len(escape_reminders) >= 1, (
+        "expected the c97c1b3-bounded C7 escape reminder to fire after "
+        f"{len([e for e in events if isinstance(e, AgentErrorEvent)])} "
+        "consecutive failures, got 0"
     )
 
 

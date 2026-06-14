@@ -236,6 +236,19 @@ class AudioOverviewTool:
         # is the RAM gate — when off we fail soft rather than loading the model.
         tts = ConfigStore().load().tts
         if not tts.enabled:
+            # Wire (D5): the "Off" toggle is supposed to free the Kokoro model
+            # immediately, not wait for the agent-server's idle-TTL sweep
+            # (PMX_TTS_IDLE_TTL_S, default 30 min). The bundled engine is
+            # process-global in `disco.agent_server.tts_local`; `unload()` is a
+            # no-op when nothing is loaded, so it's safe to call here. Lazy-
+            # imported + suppressed so the tools package stays importable
+            # without the optional `tts` extra installed.
+            try:
+                from disco.agent_server import tts_local as _tts_local
+
+                await _tts_local.unload()
+            except ImportError:
+                pass  # tts extra not installed — nothing to unload
             return ToolOutcome(
                 success=False,
                 content=(

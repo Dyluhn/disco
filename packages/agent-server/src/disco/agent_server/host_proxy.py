@@ -14,6 +14,21 @@ _LOG = logging.getLogger(__name__)
 
 PREVIEW_HOST_RE = re.compile(r"^(?P<cid8>[0-9a-f]{8})-(?P<port>\d{2,5})\.localhost(?::\d+)?$")
 
+# C2 (first-hit wake race): the preview upstream is bound lazily by the
+# sandbox; the first proxy hit after wake can land BEFORE the dev server has
+# finished binding its port, which surfaces as a connect failure (ECONNREFUSED
+# or RST) rather than an HTTP response. To make the first hit wait for the
+# bind instead of 502/503ing, we retry the connect a bounded number of times
+# with a short exponential backoff. A real HTTP response — including any
+# error status — is NEVER retried (the upstream has spoken, we just forward).
+# Healthy upstreams add zero extra latency: the retry loop only sleeps on
+# RequestError, and the first attempt that succeeds returns immediately.
+_CONNECT_RETRY_ATTEMPTS = 5  # 1 initial + 4 retries
+_CONNECT_BACKOFF_BASE = 0.05  # 50ms
+_CONNECT_BACKOFF_FACTOR = 2.0
+_CONNECT_BACKOFF_CAP = 0.4  # 400ms
+# Total backoff across all failed attempts: 50+100+200+400 = 750ms (well under 2s).
+
 _client: httpx.AsyncClient | None = None
 
 def _get_client() -> httpx.AsyncClient:
@@ -89,6 +104,48 @@ class HostPreviewProxyMiddleware:
         elif scope["type"] == "websocket":
             await self._proxy_websocket(scope, receive, send, upstream)
 
+    async def _send_with_connect_retry(
+        self,
+        client: httpx.AsyncClient,
+        req: httpx.Request,
+        send: Send,
+    ) -> httpx.Response | None:
+        """Send `req`, retrying on connect/transport errors (httpx.RequestError).
+
+        A successful HTTP response — even one with a 5xx status — is returned
+        on the first attempt that produces one, so the proxy adds ZERO extra
+        latency to a healthy upstream and does NOT retry on a legitimate
+        upstream error. Only transport-level failures (connect refused, RST,
+        read timeout mid-handshake) trigger the bounded backoff loop.
+
+        Returns the response on success, or None after sending a final 502 to
+        the client when all attempts are exhausted.
+        """
+        last_err: Exception | None = None
+        for attempt in range(_CONNECT_RETRY_ATTEMPTS):
+            try:
+                return await client.send(req, stream=True)
+            except httpx.RequestError as e:
+                last_err = e
+                if attempt < _CONNECT_RETRY_ATTEMPTS - 1:
+                    wait = min(
+                        _CONNECT_BACKOFF_BASE * (_CONNECT_BACKOFF_FACTOR ** attempt),
+                        _CONNECT_BACKOFF_CAP,
+                    )
+                    await asyncio.sleep(wait)
+        _LOG.warning(
+            "upstream connect failed after %d attempts: %s",
+            _CONNECT_RETRY_ATTEMPTS,
+            last_err,
+        )
+        await send({
+            "type": "http.response.start",
+            "status": 502,
+            "headers": [(b"content-type", b"text/plain")],
+        })
+        await send({"type": "http.response.body", "body": b"preview upstream unreachable"})
+        return None
+
     async def _proxy_http(self, scope: Scope, receive: Receive, send: Send, upstream: str) -> None:
         client = _get_client()
         
@@ -124,17 +181,20 @@ class HostPreviewProxyMiddleware:
                 elif message["type"] == "http.disconnect":
                     break
 
-        req = client.build_request(method, url, headers=headers, content=body_iterator())
-        try:
-            res = await client.send(req, stream=True)
-        except httpx.RequestError as e:
-            _LOG.warning("upstream connect error: %s", e)
-            await send({
-                "type": "http.response.start",
-                "status": 502,
-                "headers": [(b"content-type", b"text/plain")],
-            })
-            await send({"type": "http.response.body", "body": b"preview upstream unreachable"})
+        # Buffer the request body in memory so we can rebuild the request on
+        # each retry attempt. The body iterator is a one-shot async generator
+        # over the ASGI receive channel; if the first connect attempt fails we
+        # cannot replay it. Buffering is bounded by request size; preview
+        # upstreams see small bodies (form posts, hmr pings, asset fetches).
+        body_chunks: list[bytes] = []
+        async for chunk in body_iterator():
+            body_chunks.append(chunk)
+        body = b"".join(body_chunks)
+
+        req = client.build_request(method, url, headers=headers, content=body)
+        res = await self._send_with_connect_retry(client, req, send)
+        if res is None:
+            # All connect attempts failed; 502 already sent.
             return
 
         res_headers = []

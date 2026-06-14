@@ -302,8 +302,15 @@ class DefaultLLMRouter:
             return req  # caller supplied its own system prompt; do not override
         family = entry.family or derive_family(entry.model_id)
         mode = req.profile.mode or default_mode_for_role(req.profile.role)
+        # [C21] Forward the assist gate to the prompt provider. Default-False on
+        # the wire (req.assist=False) keeps the capable-model prompt byte-
+        # identical; True selects the small-model variant in DriverPrompts.
         system = self._prompts.system_prompt(
-            model_family=family, mode=mode, role=req.profile.role, capabilities=entry.capabilities
+            model_family=family,
+            mode=mode,
+            role=req.profile.role,
+            capabilities=entry.capabilities,
+            assist=req.assist,
         )
         new_messages = [LLMMessage(role="system", content=system), *req.messages]
         return req.model_copy(update={"messages": new_messages})

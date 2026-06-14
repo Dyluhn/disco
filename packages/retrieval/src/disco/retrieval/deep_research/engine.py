@@ -22,7 +22,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from disco.core import ReportEvent, ReportSection
-from disco.core.llm import LLMRouter
+from disco.core.llm import CallContext, LLMRouter
 
 from ..engine import RetrievalEngine
 from ..models import Passage as RetrievalPassage
@@ -30,7 +30,7 @@ from ..ranking import Embedder
 from ..vectorstore import VectorStore
 from .decompose import SubQuestion
 from .depth import DepthBound, DepthTier, bounds_for
-from .gather import SubQuestionResult, gather_for_subquestion
+from .gather import GatherLegContext, SubQuestionResult, gather_for_subquestion
 from .synthesis import coherence_pass, synthesize_section
 
 # Same EmitFn shape across the submodule. The agent-server installs a callback
@@ -191,6 +191,30 @@ class DeepResearchRun:
             subq_namespace = f"{self._namespace}/{subq_hash}"
             subq_id = f"s{subq_hash}"
 
+            # Per-leg ISOLATED sub-context (C14). Each leg gets its OWN:
+            #   - subq_id     — leg's identifier (matches the synthesized section)
+            #   - namespace   — leg's vector-store namespace (already per-leg)
+            #   - call_context — per-leg CallContext for the router, with a
+            #                   unique conversation_id so cost tracking /
+            #                   model_override / hard-budget enforcement are
+            #                   scoped to THIS leg. No sibling leg can
+            #                   exhaust the budget out from under another.
+            # The leg's message list is built independently per LLM call
+            # (no shared mutable list); the leg's intermediate state lives
+            # in `gather_for_subquestion` locals. The only thing that
+            # escapes the leg is its `SubQuestionResult`, and it escapes
+            # ONLY to the synthesis boundary below — never into a sibling
+            # leg's context. See `GatherLegContext` docstring for the
+            # full contract.
+            leg_call_context = CallContext(
+                conversation_id=f"{self._namespace}/{subq_id}",
+            )
+            leg_context = GatherLegContext(
+                subq_id=subq_id,
+                namespace=subq_namespace,
+                call_context=leg_call_context,
+            )
+
             task = asyncio.create_task(
                 gather_for_subquestion(
                     subq,
@@ -202,21 +226,27 @@ class DeepResearchRun:
                     bound=self._bound,
                     emit=emit,
                     remaining_source_budget=subq_budget,
+                    leg_context=leg_context,
                 )
             )
-            gather_tasks.append((subq, task, subq_id, subq_namespace))
+            gather_tasks.append((subq, task, subq_id, subq_namespace, leg_context))
 
         # 3. Consume results serially (Consumer).
         # LLM work (synthesis) MUST stay a single-depth queue (one at a time).
-        for subq, task, subq_id, subq_namespace in gather_tasks:
+        # The MERGE point: the leg's `SubQuestionResult` (its independent
+        # output) is appended to `results` here, and the synthesized
+        # `ReportSection` is appended to `sections`. No other leg's state
+        # touches the leg's accumulated passages / hits / queries — those
+        # arrive here as immutable frozen-shape objects only.
+        for subq, task, subq_id, subq_namespace, leg_context in gather_tasks:
             if should_cancel is not None and should_cancel():
                 bounded_by = "stopped"
-                for _, t, _, _ in gather_tasks:
+                for _, t, _, _, _ in gather_tasks:
                     t.cancel()
                 break
             if (time.monotonic() - started) > self._bound.max_wall_clock_s:
                 bounded_by = bounded_by or "wall_clock"
-                for _, t, _, _ in gather_tasks:
+                for _, t, _, _, _ in gather_tasks:
                     t.cancel()
                 break
 
@@ -225,7 +255,7 @@ class DeepResearchRun:
             except asyncio.CancelledError:
                 break
             except Exception:
-                for _, t, _, _ in gather_tasks:
+                for _, t, _, _, _ in gather_tasks:
                     t.cancel()
                 raise
 
@@ -234,6 +264,8 @@ class DeepResearchRun:
                 bounded_by = "rounds"
 
             # Synthesize THIS section immediately so it survives a later Stop.
+            # Thread the leg's per-leg CallContext into the synthesis call so
+            # the leg's identity is preserved through gather→synth.
             await emit(
                 "phase",
                 {"phase": "synthesize", "section": len(sections) + 1},
@@ -249,11 +281,12 @@ class DeepResearchRun:
                     section_id=subq_id,
                     top_k_for_section=self._bound.rerank_top_k,
                     emit=emit,
+                    leg_context=leg_context,
                 )
             except Exception:
                 # A synthesis failure must not leak the still-running retrieval
                 # tasks into the long-lived server loop.
-                for _, t, _, _ in gather_tasks:
+                for _, t, _, _, _ in gather_tasks:
                     t.cancel()
                 raise
             sections.append(section)

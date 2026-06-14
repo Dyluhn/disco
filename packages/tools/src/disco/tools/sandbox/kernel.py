@@ -4,17 +4,42 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import re
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from queue import Empty
-from typing import Any
+from typing import Any, Callable
 
 from .base import SandboxError
 
 _LOG = logging.getLogger(__name__)
+
+# C15: idle-cull knob. Default 300s (5 min) — long enough that an agent thinking
+# between tool calls doesn't trigger churn, short enough to free a forgotten
+# kernel in a quiet conversation. Set to 0 to disable culling entirely.
+_DEFAULT_IDLE_TIMEOUT_S = 300.0
+_IDLE_TIMEOUT_ENV = "DISCO_KERNEL_IDLE_TIMEOUT_S"
+
+
+def _default_idle_timeout_s() -> float:
+    """Read `DISCO_KERNEL_IDLE_TIMEOUT_S`; missing/garbage -> 300.0; clamped to >=0.
+    Read at call-time so tests can monkeypatch the env var per-case without
+    process-level state."""
+    raw = os.environ.get(_IDLE_TIMEOUT_ENV)
+    if raw is None or raw.strip() == "":
+        return _DEFAULT_IDLE_TIMEOUT_S
+    try:
+        v = float(raw)
+    except ValueError:
+        _LOG.warning(
+            "%s=%r is not a float; using default %.0fs",
+            _IDLE_TIMEOUT_ENV, raw, _DEFAULT_IDLE_TIMEOUT_S,
+        )
+        return _DEFAULT_IDLE_TIMEOUT_S
+    return max(0.0, v)
 
 # ANSI escape sequence regex for stripping colors from tracebacks
 _ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
@@ -503,3 +528,127 @@ class GatewayKernel(KernelSession):
                 await self._ws.close()
             self._kernel_id = None
             self._ws = None
+
+
+class ManagedKernel(KernelSession):
+    """C15: a culling wrapper around any `KernelSession` transport.
+
+    The persistent CodeAct kernel is a long-lived subprocess (or container
+    kernel) that holds RAM, file handles, and a tmux session forever — even
+    when the agent goes quiet. `ManagedKernel` shuts the inner kernel down
+    after `idle_timeout_s` of inactivity (no `execute()` calls) and re-spawns
+    a fresh one on the next `execute()`. Active execs are never culled: the
+    cull check is one comparison at the START of `execute()` only, so the
+    hot path adds one monotonic-time read and one float subtract.
+
+    Design notes:
+      * `time_source` is injectable — tests pass a fake clock instead of
+        sleeping.
+      * `kernel_factory` is injectable — tests pass a fake `KernelSession`
+        to avoid spawning a real jupyter kernel.
+      * The threshold is read from `DISCO_KERNEL_IDLE_TIMEOUT_S` (env) by the
+        helper `_default_idle_timeout_s()`; 0 disables culling.
+      * State the agent still needs WITHIN the window is preserved (the
+        cull only fires when the gap since the LAST exec exceeds N).
+      * `execute()` updates `last_exec_end_at` in `finally:` so a failed
+        exec still counts as "recently used" — no spurious cull on the
+        next attempt.
+      * `shutdown()` is best-effort: a failing inner shutdown is logged
+        and we still spawn a fresh kernel on the next exec.
+    """
+
+    def __init__(
+        self,
+        kernel_factory: Callable[[], "KernelSession"],
+        *,
+        idle_timeout_s: float,
+        time_source: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._factory = kernel_factory
+        self._idle_timeout_s = float(idle_timeout_s)
+        self._time = time_source
+        self._inner: KernelSession | None = None
+        # Wall-time of the END of the last `execute()`. `None` means the
+        # inner kernel has never been used yet (or has been explicitly shut
+        # down). The cull check is `now - last_exec_end_at > threshold`.
+        self._last_exec_end_at: float | None = None
+        # Diagnostic counters — useful for tests and for ops dashboards.
+        self.cull_count: int = 0
+        self.spawn_count: int = 0
+        self.exec_count: int = 0
+
+    @property
+    def inner(self) -> "KernelSession | None":
+        """The currently-spawned inner kernel, or None. Exposed for tests +
+        observability. Do not use as a long-lived reference — it can be
+        replaced after an idle cull."""
+        return self._inner
+
+    async def _ensure_inner(self) -> KernelSession:
+        """Return a fresh, ready inner kernel. Spawns one if none exists OR
+        if the previous one has been idle past the threshold. Captures
+        `last_exec_end_at` AFTER `start()` returns, so a slow spawn
+        (e.g. jupyter's `wait_for_ready`) doesn't burn the kernel's first
+        useful life into the cull timer."""
+        if self._inner is None:
+            self._inner = self._factory()
+            await self._inner.start()
+            self.spawn_count += 1
+            _LOG.debug("kernel: spawned inner kernel (total spawns=%d)", self.spawn_count)
+            # Capture time AFTER start completes — a slow start must not let
+            # the cull timer eat into the kernel's first useful life.
+            self._last_exec_end_at = self._time()
+            return self._inner
+
+        if self._last_exec_end_at is not None:
+            idle_for = self._time() - self._last_exec_end_at
+            if idle_for > self._idle_timeout_s:
+                # Idle past threshold — cull the stale inner and spawn a
+                # fresh one. Never raise from here: a broken inner shouldn't
+                # block the agent from getting a working kernel.
+                try:
+                    await self._inner.shutdown()
+                except Exception:  # noqa: BLE001 — best-effort; old kernel is dying anyway
+                    _LOG.warning(
+                        "kernel: idle cull: shutdown of stale inner failed",
+                        exc_info=True,
+                    )
+                self.cull_count += 1
+                _LOG.info(
+                    "kernel: idle cull (idle_for=%.1fs > threshold=%.1fs); spawning fresh",
+                    idle_for, self._idle_timeout_s,
+                )
+                self._inner = self._factory()
+                await self._inner.start()
+                self.spawn_count += 1
+                self._last_exec_end_at = self._time()
+        return self._inner
+
+    async def execute(self, code: str, *, timeout_s: int) -> KernelResult:
+        inner = await self._ensure_inner()
+        try:
+            return await inner.execute(code, timeout_s=timeout_s)
+        finally:
+            # Update AFTER the exec returns (success or failure) — the
+            # inner is now "recently used" from the cull's perspective.
+            self._last_exec_end_at = self._time()
+            self.exec_count += 1
+
+    async def interrupt(self) -> None:
+        if self._inner is not None:
+            await self._inner.interrupt()
+
+    async def restart(self) -> None:
+        if self._inner is not None:
+            await self._inner.restart()
+            # A restart is semantically "the kernel is back and ready" —
+            # treat the freshly-restarted inner as recently-used.
+            self._last_exec_end_at = self._time()
+
+    async def shutdown(self) -> None:
+        if self._inner is not None:
+            try:
+                await self._inner.shutdown()
+            finally:
+                self._inner = None
+                self._last_exec_end_at = None

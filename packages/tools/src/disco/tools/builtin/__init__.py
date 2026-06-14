@@ -20,6 +20,7 @@ from .files import (
     FileReplaceLinesTool,
     FileWriteTool,
 )
+from .image_gen import ImageGenTool
 from .plan import PlanStepTool, SubmitPlanTool
 from .retrieval import ExtractTool, SearchTool
 from .server import ServerStatusTool
@@ -32,12 +33,15 @@ from .shell_sessions import (
     ShellWriteTool,
 )
 from .slides import SlidesTool
+from .subagent import DelegateExploreTool
 from .system import CodeExecTool, ShellTool
+from .think import ThinkTool
 
 __all__ = [
     "AudioOverviewTool",
     "BrowserTool",
     "CodeExecTool",
+    "DelegateExploreTool",  # C20: read-only Explore/Plan helper dispatch+join (intercepted by loop)
     "ExtractTool",
     "FileEditTool",
     "FileInsertLinesTool",
@@ -45,6 +49,7 @@ __all__ = [
     "FileReadTool",
     "FileReplaceLinesTool",
     "FileWriteTool",
+    "ImageGenTool",
     "PlanStepTool",
     "SearchTool",
     "ServerStatusTool",
@@ -57,6 +62,7 @@ __all__ = [
     "ShellWaitTool",
     "ShellWriteTool",
     "SubmitPlanTool",
+    "ThinkTool",
     "build_default_registry",
 ]
 
@@ -88,6 +94,9 @@ def build_default_registry() -> ToolRegistry:
         SheetsTool(),  # sheet_generate: write .xlsx with live formulas
         AudioOverviewTool(),  # audio_overview: two-voice TTS from finished report
         SlidesTool(),  # slides_generate: Marp-rendered slide decks (HTML/PDF/PPTX)
+        ThinkTool(),  # think: NO-OP reasoning scratchpad (avoids prose-into-action degeneration)
+        ImageGenTool(),  # image_generate: keyless/local image synthesis (PIL procedural; live diffusers deferred)
+        DelegateExploreTool(),  # C20: read-only Explore/Plan helper dispatch+join (intercepted by loop)
     ):
         registry.register(tool)
     return registry

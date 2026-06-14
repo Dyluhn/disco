@@ -34,13 +34,16 @@ _Exec = namedtuple("_Exec", ["exit_code", "output"])
 class FakeContainer:
     def __init__(self, run_kwargs: dict) -> None:
         self.run_kwargs = run_kwargs
-        self.stopped = self.removed = False
+        self.stopped = self.removed = self.started = False
         self.exec_calls: list[list[str]] = []
         self.exec_results: list[tuple[int, bytes, bytes]] = []
         self.fs: dict[str, bytes] = {}
+        self.attrs: dict = {}  # NetworkSettings populated on reload() if needed (E8)
 
-    def exec_run(self, cmd, demux=False, workdir=None):
+    def exec_run(self, cmd, demux=False, workdir=None, detach=False):
         self.exec_calls.append(cmd)
+        if detach:
+            return _Exec(0, (b"", b"") if demux else b"")
         if cmd[0] == "cat":
             path = cmd[-1]
             code, out, err = (0, self.fs[path], b"") if path in self.fs else (1, b"", b"no file")
@@ -62,6 +65,12 @@ class FakeContainer:
                 f = tar.extractfile(m)
                 self.fs[path.rstrip("/") + "/" + m.name] = f.read() if f else b""
         return True
+
+    def start(self):
+        self.started = True
+
+    def reload(self):  # docker-py refreshes .attrs; the fake leaves them empty
+        pass
 
     def stop(self, timeout=None):
         self.stopped = True
@@ -88,6 +97,36 @@ class _Volumes:
         self.created.append(name)
 
 
+class _FakeLocalNetwork:
+    """Mirrors docker-py Network on a local-socket client. `connect()` joins a
+    container, `remove()` tears the network down. The parent gVisor fake has the
+    same shape; mirrored here so the local-tier tests can drive the same E8
+    filtered-egress wiring (the local backend reuses the parent's
+    `_setup_filtered_egress`)."""
+
+    def __init__(self, name: str, **attrs) -> None:
+        self.name = name
+        self.attrs = attrs
+        self.connected: list = []
+        self.removed = False
+
+    def connect(self, container, aliases=None):
+        self.connected.append((container, aliases))
+
+    def remove(self):
+        self.removed = True
+
+
+class _FakeLocalNetworks:
+    def __init__(self) -> None:
+        self.created: list[_FakeLocalNetwork] = []
+
+    def create(self, name, **kwargs):
+        net = _FakeLocalNetwork(name, **kwargs)
+        self.created.append(net)
+        return net
+
+
 class FakeLocalClient:
     """A LOCAL docker-py-style client (no SSH) — Docker or a Podman Docker-compat socket."""
 
@@ -95,8 +134,10 @@ class FakeLocalClient:
         self._runtimes = {r: {} for r in runtimes}
         self.images = _Images(has_image)
         self.volumes = _Volumes()
+        self.networks = _FakeLocalNetworks()
         self.containers = self
         self.last: FakeContainer | None = None
+        self.runs: list[FakeContainer] = []  # every container started (sidecar + sandbox, E8)
 
     def ping(self):
         return True
@@ -105,8 +146,15 @@ class FakeLocalClient:
         return {"Runtimes": self._runtimes}
 
     def run(self, **kwargs):
-        self.last = FakeContainer(kwargs)
-        return self.last
+        c = FakeContainer(kwargs)
+        self.runs.append(c)
+        self.last = c
+        return c
+
+    def create(self, **kwargs):  # the egress sidecar (E8)
+        c = FakeContainer(kwargs)
+        self.runs.append(c)
+        return c  # NOT self.last: the sandbox (via run) stays the asserted-on container
 
 
 def _svc(client: FakeLocalClient) -> LocalSandboxService:

@@ -73,9 +73,11 @@ async def test_summarizer_is_wired_into_condensation():
     summ = FakeSummarizer()
 
     class SummarizingCondenser(FakeCondenser):
-        async def condense(self, events, view, *, summarizer):
+        async def condense(self, events, view, *, summarizer, reason="tokens", artifact_paths=None):
             await summarizer.summarize(view.messages)  # exercise the (async) summarizer
-            return await super().condense(events, view, summarizer=summarizer)
+            return await super().condense(
+                events, view, summarizer=summarizer, reason=reason, artifact_paths=artifact_paths
+            )
 
     cond = SummarizingCondenser(request=None, tombstone=_tombstone())
     agent = ScriptedAgent([LLMContextWindowExceeded("big"), finish_step()])

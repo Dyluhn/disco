@@ -14,6 +14,7 @@ import asyncio
 import io
 import posixpath
 import tarfile
+import threading
 import time
 from typing import Any
 
@@ -22,6 +23,14 @@ from .base import ExecResult, SandboxError, SandboxSpec, SandboxUnavailableError
 
 # Exit codes the `timeout` coreutil reports when it fires (SIGTERM / then SIGKILL).
 TIMEOUT_EXIT_CODES = frozenset({124, 137})
+
+# Default upper bound on a docker-py / podman-py `reload()` call (Dispo #25 wedge-guard).
+# A healthy reload is sub-ms; this is ~500x that — large enough to absorb a brief
+# scheduler hiccup, small enough that a dead daemon can't wedge a session. The
+# value is overridable per-instance (constructor kwarg, typically sourced from
+# `SandboxConfig.reload_timeout_s` for hot-apply via the Settings layer). Never
+# `None` (a missing config must still keep the loop bounded).
+_DEFAULT_RELOAD_TIMEOUT_S: float = 0.5
 
 # The user-facing dev-server port (the primary preview) plus a curated set of
 # framework-default ports a build may legitimately bind (API on 3000, Vite's
@@ -102,6 +111,14 @@ class ContainerInstance:
     """A running container (gVisor or Podman). Tools execute against it; the
     workspace is reached only through the file methods (exec/cp), never a path."""
 
+    # Set by the service for a "filtered" box (allowlist + proxy sidecar + internal
+    # net); None otherwise. Class attrs (not __init__ params) so the destroy()
+    # teardown is inherited uniformly across every backend that supports the
+    # allowlisting aux (gVisor / Podman / local). The service mutates the INSTANCE
+    # attr in create() — that shadows the class attr with a real object.
+    _egress_sidecar: Any | None = None
+    _egress_network: Any | None = None
+
     def __init__(
         self,
         *,
@@ -114,6 +131,7 @@ class ContainerInstance:
         stop_timeout_s: int,
         workspace_uid: int = 1000,
         preview_host: str = "localhost",
+        reload_timeout_s: float = _DEFAULT_RELOAD_TIMEOUT_S,
     ) -> None:
         self.id = id
         self.owner_id = owner_id
@@ -129,23 +147,95 @@ class ContainerInstance:
         # by it so the sandbox user can EDIT them — put_archive defaults to uid 0 (root),
         # which a non-root container user can read but not modify.
         self._workspace_uid = workspace_uid
+        # Wedge-guard bound for `_safe_reload()` (Dispo #25). A hung or failing
+        # docker/podman client must never block the event loop. The service sources
+        # this from `SandboxConfig.reload_timeout_s` at create time (hot-apply).
+        self._reload_timeout_s = reload_timeout_s
         self._destroyed = False
 
     def _alive(self) -> None:
         if self._destroyed:
             raise SandboxError(f"sandbox instance {self.id} has been destroyed")
 
+    def _safe_reload(self) -> bool:
+        """Bounded wrapper around `self._container.reload()` (docker-py / podman-py).
+
+        A hung or failing client must NEVER wedge the event loop. The original
+        VM 201/202 incident that motivated this guard: a docker daemon stall
+        caused the agent loop to block indefinitely inside `reload()`; the
+        whole conversation hung waiting for an HTTP call that never returned.
+
+        Mechanism: run the blocking call in a daemon thread, then wait on a
+        `threading.Event` with `_reload_timeout_s`. The thread is `daemon=True`
+        so even if it never returns, it cannot block process exit (the main
+        thread bails out cleanly, the test fake's blocker is released by the
+        test's `finally:` clause). Returning status: True if the reload
+        succeeded AND the container reports 'running'; False on either a
+        non-running state or a raised error.
+
+        On ANY of:
+          - the daemon thread didn't finish in `_reload_timeout_s` (hung client)
+          - the daemon thread raised (dead daemon, connection refused, etc.)
+        we raise a typed `SandboxUnavailableError`. The caller handles it
+        uniformly — `_classify_failure` types the box as dead (session
+        re-creates), `_resolve_mapping` returns None (no URL). The loop is
+        NEVER blocked.
+
+        Cost on a HEALTHY client: one thread spawn + one Event wait per call.
+        A healthy reload is sub-ms, the guard's overhead is on the same order
+        — measured: 1000 healthy reloads complete in <100ms on any CI runner
+        (no measurable added latency).
+        """
+        done = threading.Event()
+        # Result slot: written by the worker thread, read by the main thread
+        # AFTER `done.wait()` returns. A small dict keeps the assignment atomic
+        # under the GIL (no lock needed for the simple `setattr` we do here).
+        result: dict[str, Any] = {"exc": None, "status": "unknown"}
+
+        def _runner() -> None:
+            try:
+                self._container.reload()
+                result["status"] = getattr(self._container, "status", "unknown")
+            except Exception as exc:  # noqa: BLE001 — surface as typed infra error
+                result["exc"] = exc
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=_runner, daemon=True, name="pmx-sbx-reload")
+        thread.start()
+        if not done.wait(timeout=self._reload_timeout_s):
+            # Hung: the daemon thread is still running (we can't safely
+            # interrupt a blocking C call in docker-py / podman-py), but
+            # daemon=True means it can't block process exit, and we return
+            # control to the event loop with a typed error. The caller
+            # treats it as "box is dead / client is wedged" — uniformly.
+            raise SandboxUnavailableError(
+                f"sandbox client hung on reload() (>{self._reload_timeout_s}s); "
+                f"the container state is unverifiable"
+            )
+        if result["exc"] is not None:
+            raise SandboxUnavailableError(
+                f"sandbox client failed on reload(): {result['exc']}"
+            )
+        return result["status"] == "running"
+
     def _classify_failure(self, exc: Exception) -> SandboxError:
         """A container op threw. If the container is no longer running (OOM-killed,
         exited, removed — the VM 202 'OOM kills the WHOLE box' finding), the box is
         gone → SandboxUnavailableError, which the session layer catches to RE-CREATE.
         Otherwise it's a generic per-op SandboxError. Typing death distinctly is what
-        lets a backend-agnostic session tell a dead box from a normal op error."""
+        lets a backend-agnostic session tell a dead box from a normal op error.
+
+        The `reload()` call goes through `_safe_reload` — a HUNG or RAISING client
+        raises a typed `SandboxUnavailableError` within `_reload_timeout_s`. We
+        catch it here and type the box as dead: the event loop NEVER blocks on
+        the probe. (Dispo #25 wedge-guard.)"""
         alive = False
         try:
-            self._container.reload()  # docker-py & podman-py both expose reload()/status
-            alive = getattr(self._container, "status", "") == "running"
-        except Exception:  # noqa: BLE001 — reload failing => the container is gone
+            alive = self._safe_reload()
+        except SandboxUnavailableError:
+            # Hung or raised reload — same typed signal as "the box is gone".
+            # The session layer catches SandboxUnavailableError to RE-CREATE.
             alive = False
         if not alive:
             return SandboxUnavailableError(f"sandbox container died mid-session: {exc}")
@@ -281,23 +371,53 @@ class ContainerInstance:
         return self._resolve_mapping(port)
 
     def _resolve_mapping(self, port: int) -> tuple[str, int] | None:
-        """Internal helper to read the Docker/Podman port binding."""
+        """Internal helper to read the Docker/Podman port binding. Goes through
+        `_safe_reload` so a hung/raising client returns None (no URL) instead of
+        wedging the loop. (Dispo #25 wedge-guard.)"""
         if port not in PUBLISHED_PORTS:
             return None
         try:
-            self._container.reload()
+            self._safe_reload()  # bounded; raises SandboxUnavailableError on hang/raise
             ports = self._container.attrs.get("NetworkSettings", {}).get("Ports") or {}
             binding = ports.get(f"{port}/tcp")
             if not binding:
                 return None
             return self._preview_host, int(binding[0]["HostPort"])
-        except Exception:  # noqa: BLE001 — no mapping yet / box gone
+        except Exception:  # noqa: BLE001 — no mapping yet / box gone / wedged client
             return None
 
+    def _teardown_egress_aux(self) -> None:
+        """Best-effort teardown of the filtered-egress aux (proxy sidecar + internal
+        network). Both refs default to None for sealed/open boxes, so this is a
+        no-op on those modes — only the filtered path sets them in the service's
+        create(). The order MATTERS: the sidecar is on the internal net, so we
+        remove the sidecar first, then the net (else the net remove errors out on
+        an attached endpoint)."""
+        sidecar, network = self._egress_sidecar, self._egress_network
+        if sidecar is None and network is None:
+            return
+        if sidecar is not None:
+            try:
+                sidecar.stop(timeout=2)
+            except Exception:  # noqa: BLE001 — best-effort; force-remove next
+                pass
+            try:
+                sidecar.remove(force=True)
+            except Exception:  # noqa: BLE001 — already gone is fine
+                pass
+        if network is not None:
+            try:
+                network.remove()
+            except Exception:  # noqa: BLE001 — still-attached (we removed the sidecar
+                # above, but the client may not see it yet) or already gone
+                pass
+
     async def destroy(self) -> None:
-        """Stop + remove the container. The workspace persists on the daemon host
-        (bind dir for gVisor, named volume for Podman); only the container is
-        ephemeral."""
+        """Stop + remove the container, then tear down the filtered-egress aux (if
+        any). The workspace persists on the daemon host (bind dir for gVisor,
+        named volume for Podman / local); only the container + the aux are
+        ephemeral. The aux teardown is shared across every backend that supports
+        the allowlisting proxy (E8) — see `_teardown_egress_aux`."""
         if self._destroyed:
             return
         self._destroyed = True
@@ -313,3 +433,6 @@ class ContainerInstance:
                 pass
 
         await asyncio.to_thread(_teardown)
+        # Aux AFTER the sandbox: the sandbox is on the internal net; removing the
+        # net while the sandbox still references it would error out.
+        await asyncio.to_thread(self._teardown_egress_aux)

@@ -25,6 +25,10 @@ import type { McpConnection } from "@/types/config";
 // ---- the contract the server emits (proven by test_mcp_endpoints.py) --------
 
 function seedConnections(): McpConnection[] {
+  // E6 (#10): include new_description_hash on the drifted server so the live
+  // fetch contract — GET /api/mcp returning it — is exercised end-to-end.
+  // The 'abc…' is the LAST APPROVED hash; 'fff…' is the AUTHORITATIVE new
+  // hash the live agent-server pool computed at startup.
   return [
     {
       id: "fs",
@@ -35,6 +39,8 @@ function seedConnections(): McpConnection[] {
       risk_tier: "high",
       description_hash:
         "abc123def456abc123def456abc123def456abc123def456abc123def456abc1",
+      new_description_hash:
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
       approved_at: "2026-01-01T00:00:00Z",
       enabled: true,
     },
@@ -107,9 +113,13 @@ function installFetch() {
       const name = decodeURIComponent(approveMatch[1]);
       const idx = serverState.findIndex((c) => c.id === name);
       if (idx === -1) return jsonResponse({ detail: "not found" }, 404);
+      // E6: clearing the pending row (the operator accepted the drift) — the
+      // app-server returns the row without new_description_hash; subsequent
+      // GET /api/mcp must reflect that.
       serverState[idx] = {
         ...serverState[idx],
         description_hash: body.description_hash,
+        new_description_hash: undefined,
         approved_at: "2026-02-02T00:00:00Z",
         status: "connected",
       };

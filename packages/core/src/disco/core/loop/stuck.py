@@ -7,9 +7,19 @@ ids/timestamps never mask a semantic loop.
 Four patterns are implemented (BoD §12.5 patterns 1–4). Pattern 5 (the
 context-window-error loop) is known-hard and is NOT detected here; its cause is
 prevented by the hard-reset condensation (§8) and bounded by `max_iterations`.
+
+F6 (patch-spiral detector, gated on assist): tracks per-file edit failures +
+total attempts; when a file crosses the threshold and assist is ON, the richer
+`StuckResult` returned by `evaluate()` carries a `RewriteDirective` that names
+the spiraling file. The engine consumes the directive via the existing stuck
+path (the new fields are ignored when the engine has not been wired to them
+yet — see `is_stuck()` which is the byte-identical bool facade). Assist OFF
+→ the directive is always None, and the bool facade is unchanged.
 """
 
 from __future__ import annotations
+
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -23,6 +33,19 @@ from ..events import (
     ObservationEvent,
 )
 
+# F6 — tools whose ActionEvents count as "patch attempts" for the per-file
+# rewrite tracker. Mirrors `_WORKSPACE_MUTATING_TOOLS` in engine.py (kept
+# inline here so stuck.py stays self-contained — engine.py is held by another
+# worker and stuck.py must not import from it). A new mutating tool added in
+# one place must be added in the other.
+_F6_FILE_MUTATING_TOOLS = frozenset({
+    "file_write",
+    "file_edit",
+    "file_append",
+    "file_replace_lines",
+    "file_insert_lines",
+})
+
 
 class StuckThresholds(BaseModel):
     repeat_action_observation: int = 3  # identical action→obs cycles
@@ -30,6 +53,47 @@ class StuckThresholds(BaseModel):
     agent_monologue: int = 4  # consecutive agent msgs, no user
     alternating: int = 3  # A-B-A-B cycles
     scan_window: int = 20  # only inspect the last N events
+    # F6 — per-file patch-spiral rewrite threshold. A file that has accumulated
+    # at least `per_file_rewrite_failures` FAILED patch attempts AND at least
+    # `per_file_rewrite_min_attempts` total patch attempts is "spiraling":
+    # patch a few more lines at a time, watch it fail, repeat → a full rewrite
+    # of the file is more likely to land than another surgical patch. Defaults
+    # are 3 + 3 (three failed out of three attempts). 0 disables the tracker.
+    per_file_rewrite_failures: int = 3
+    per_file_rewrite_min_attempts: int = 3
+
+
+class RewriteDirective(BaseModel):
+    """F6 — the per-file rewrite signal surfaced by `StuckDetector.evaluate()`
+    when assist is ON and a file's failure streak crosses the threshold.
+
+    `kind` discriminates future directive shapes (today only "full_rewrite";
+    a "rollback_to_baseline" or "skip_file" shape may be added later behind
+    the same gate). `path` is the workspace-relative file to rewrite (taken
+    verbatim from the failing ActionEvent's `path` argument). `failures` and
+    `attempts` are the per-file counts at the moment the directive fired —
+    the engine can log them for the audit trail.
+    """
+
+    kind: Literal["full_rewrite"] = "full_rewrite"
+    path: str
+    failures: int
+    attempts: int
+
+
+class StuckResult(BaseModel):
+    """F6 — the richer return type of `StuckDetector.evaluate()`.
+
+    `is_stuck` is the bool the existing stuck patterns (1–4) would have
+    returned. `rewrite_directive` is None unless assist is ON AND a file
+    has crossed the per-file threshold. The engine consumes `is_stuck` via
+    `is_stuck()` (the bool facade) and can later be wired to read
+    `rewrite_directive` from `evaluate()` without a behavior change for
+    any existing caller. Assist OFF ⇒ `rewrite_directive` is always None.
+    """
+
+    is_stuck: bool
+    rewrite_directive: RewriteDirective | None = None
 
 
 def _after_last_user_message(events: list[Event]) -> list[Event]:
@@ -61,17 +125,137 @@ def _consecutive_pairs(
 class StuckDetector:
     """[CONTRACT] Pure stuck-pattern detection over the recent event window."""
 
-    def __init__(self, thresholds: StuckThresholds | None = None) -> None:
+    def __init__(
+        self,
+        thresholds: StuckThresholds | None = None,
+        *,
+        assist: bool = False,
+    ) -> None:
         self.t = thresholds or StuckThresholds()
+        # F6 — the assist gate. When False (default, today), the per-file
+        # rewrite tracker is inert: `evaluate()` returns the same stuck bool
+        # `is_stuck()` would have, with `rewrite_directive=None`. The engine
+        # can later pass `assist=self._assist` to start getting the richer
+        # signal. Adding the kwarg with a default is backwards-compatible —
+        # every existing `StuckDetector(...)` call site is unchanged.
+        self._assist = assist
 
     def is_stuck(self, recent: list[Event]) -> bool:
+        """Byte-identical facade to `evaluate(...).is_stuck`. The engine calls
+        this today; the per-file rewrite signal is exposed separately via
+        `evaluate()` so the engine can be wired to consume it without
+        changing the bool-return contract of this method."""
+        return self.evaluate(recent).is_stuck
+
+    def evaluate(self, recent: list[Event]) -> StuckResult:
+        """The richer stuck signal. Returns the same stuck bool the four
+        patterns have always returned, plus an optional F6 rewrite directive
+        when assist is ON and a per-file patch-spiral is detected.
+
+        Assist OFF ⇒ `rewrite_directive` is None and `is_stuck` matches the
+        pre-F6 detector exactly (the per-file tracker is a no-op when the
+        gate is closed).
+        """
         recent = _after_last_user_message(recent)
-        return (
+        stuck = (
             self._repeated_action_observation(recent)
             or self._repeated_action_error(recent)
             or self._agent_monologue(recent)
             or self._alternating(recent)
         )
+        rewrite_directive: RewriteDirective | None = None
+        if self._assist:
+            rewrite_directive = self._per_file_rewrite_directive(recent)
+        return StuckResult(is_stuck=stuck, rewrite_directive=rewrite_directive)
+
+    # -- F6 pattern 5: per-file patch-spiral → rewrite directive --------------
+    #
+    # A weak model can patch-spiral a single file: try a small edit, watch it
+    # fail, try a slightly different edit, watch it fail, … — none of those
+    # cycles is byte-identical (so patterns 1–4 don't fire), but the file is
+    # clearly stuck. Counting failures + total attempts PER FILE and crossing
+    # a threshold yields a "switch to a full rewrite of <file>" signal. The
+    # directive is a recommendation, not an automatic edit — the engine (or
+    # a future Rung consumer) decides how to act on it.
+
+    def _per_file_rewrite_directive(
+        self, events: list[Event]
+    ) -> RewriteDirective | None:
+        # Gate closed at the threshold level (e.g. 0 ⇒ disabled) and at the
+        # call site (assist ON). A 0 in either knob short-circuits the
+        # bookkeeping, so a misconfigured threshold can't silently do work.
+        if self.t.per_file_rewrite_failures <= 0:
+            return None
+        if self.t.per_file_rewrite_min_attempts <= 0:
+            return None
+
+        # Build a map action.id → (event, path) for every file-mutating
+        # action in the window. `id` is the BaseEvent correlation key the
+        # observation/error events use (ObservationEvent.action_id,
+        # AgentErrorEvent.action_id). We only count mutating tools — a
+        # `file_read` or `shell` call is not a patch attempt.
+        actions_by_id: dict[str, tuple[ActionEvent, str | None]] = {}
+        for e in events:
+            if not isinstance(e, ActionEvent):
+                continue
+            tc = e.tool_call
+            if tc is None or tc.tool_name not in _F6_FILE_MUTATING_TOOLS:
+                continue
+            path = tc.arguments.get("path")
+            actions_by_id[e.id] = (e, path if isinstance(path, str) and path else None)
+
+        if not actions_by_id:
+            return None
+
+        # Count per-path attempts and per-path failures. A failure is any
+        # paired (action_id match) AgentErrorEvent OR ObservationEvent whose
+        # ToolResult reports success=False. An attempt with no paired result
+        # event (still in flight) is neither a success nor a failure — it
+        # doesn't count against the file. A non-mutating tool's outcome
+        # obviously doesn't affect the file either.
+        attempts: dict[str, int] = {}
+        failures: dict[str, int] = {}
+        for e in events:
+            if isinstance(e, AgentErrorEvent):
+                if e.action_id is None or e.action_id not in actions_by_id:
+                    continue
+                _, path = actions_by_id[e.action_id]
+                if path is None:
+                    continue
+                attempts[path] = attempts.get(path, 0) + 1
+                failures[path] = failures.get(path, 0) + 1
+            elif isinstance(e, ObservationEvent):
+                ae = actions_by_id.get(e.action_id or "")
+                if ae is None:
+                    continue
+                _, path = ae
+                if path is None:
+                    continue
+                attempts[path] = attempts.get(path, 0) + 1
+                if not e.tool_result.success:
+                    failures[path] = failures.get(path, 0) + 1
+
+        # Pick the first file (in iteration order, which is event order) that
+        # crosses both thresholds. Multi-file spirals are possible but the
+        # directive surfaces ONE file at a time — the engine's existing
+        # one-action-per-iteration loop can re-evaluate next turn and surface
+        # the next file if the first rewrite also fails. Stable, testable
+        # order matters: iteration order of the recent window is the order
+        # the events were appended (the store's monotonic seq), which is
+        # also the order the engine reasons about.
+        for path, attempt_count in attempts.items():
+            fail_count = failures.get(path, 0)
+            if (
+                fail_count >= self.t.per_file_rewrite_failures
+                and attempt_count >= self.t.per_file_rewrite_min_attempts
+            ):
+                return RewriteDirective(
+                    kind="full_rewrite",
+                    path=path,
+                    failures=fail_count,
+                    attempts=attempt_count,
+                )
+        return None
 
     # -- pattern 1: identical action→observation cycles -----------------------
 

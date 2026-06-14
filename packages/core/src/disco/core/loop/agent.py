@@ -97,6 +97,15 @@ class RouterAgent:
         prefill = None
         if mode == OperatingMode.PLANNING and os.environ.get("PMX_PLAN_PREFILL") == "1":
             prefill = "I've analyzed the request and current workspace state. To advance, I will now"
+        # C13: Mirror the B9 prefill pattern for the EXECUTION phase
+        # (LONG_HORIZON mode in the engine: `execution_mode: OperatingMode =
+        # OperatingMode.LONG_HORIZON`). Biases the model toward a concrete
+        # next-action tool call rather than another "let me think..."
+        # prose turn. Gated by an independent flag so it can be A/B'd
+        # against the planning flag; default OFF keeps the gated-experiment
+        # contract — flag OFF is byte-identical to today (prefill stays None).
+        elif mode == OperatingMode.LONG_HORIZON and os.environ.get("PMX_EXEC_PREFILL") == "1":
+            prefill = "Given the current workspace state and the last tool result, my next action is to"
 
         req = CompletionRequest(
             profile=CapabilityProfile(

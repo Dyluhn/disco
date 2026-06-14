@@ -11,6 +11,13 @@ The View's behavior and tombstone semantics are [CONTRACT]. The *condensation
 strategy* (when/how much to summarize) is a swappable [INTERIOR] `Condenser`;
 Phase 0 ships only the no-op condenser (the real LLMSummarizingCondenser is a
 Phase 1 deliverable, BoD §22).
+
+Reversible-compaction tier (C11): the tombstone is a MARKER, not a delete —
+the dropped events stay on the append-only log. `recover_span(events,
+tombstone)` (and `View.recover_span`) re-materializes the originals on demand.
+The default `View.messages` is UNCHANGED by this tier: recovery is an explicit
+accessor, not an automatic un-tombstone. The recovered events are returned to
+the caller; nothing is re-injected into the live context.
 """
 
 from __future__ import annotations
@@ -24,6 +31,7 @@ from pydantic import BaseModel
 
 from .events import (
     ActionEvent,
+    AgentErrorEvent,
     CondensationEvent,
     DatasourceEvent,
     Event,
@@ -122,6 +130,44 @@ def _call_key(a: ActionEvent) -> str:
     return a.tool_call.tool_name + "\x00" + json.dumps(
         a.tool_call.arguments or {}, sort_keys=True, default=str
     )
+
+
+def recover_span(events: list[Event], tombstone: CondensationEvent) -> list[Event]:
+    """C11 — Reversible-compaction tier: re-materialize the ORIGINAL events a
+    tombstone dropped from `View.messages`.
+
+    Background: a `CondensationEvent` does NOT delete the events it covers — it is
+    a MARKER on the append-only log (BoD Principle 3, event-state-contract §3)
+    that records a seq range + a summary. `View.of` uses the range to FILTER
+    events out of what the LLM sees; the bytes themselves stay on disk. This
+    function is the mirror of that filter: it walks the log and returns the
+    events whose seq falls in `[tombstone.forgotten_start_seq,
+    tombstone.forgotten_end_seq]` (inclusive), in their original form and
+    insertion order. The summary that replaced them in the View is NOT
+    returned — this returns the dropped originals, not their substitute.
+
+    On-demand + EXPLICIT only. The function does not mutate the event log, the
+    View, the tombstone, or any other state. The default `View.messages` is
+    unaffected. Recovery is an ACCESSOR for callers that need the originals
+    (e.g. a debug/audit surface, a "what did the model forget?" explainer, a
+    re-derivation tool that wants to re-evaluate a span against fresh context).
+    The recovered events are returned to the caller; nothing is re-injected
+    into the live context (no bloat, no accidental un-tombstone).
+
+    Edge cases:
+      - Degenerate range (start > end) → `[]`.
+      - No events in `events` match the range (e.g. a tombstone whose range
+        predates the log, or whose events were never persisted) → `[]`.
+      - A tombstone inside the range (an OVERLAPPING or NESTED tombstone) is
+        itself returned as a `CondensationEvent`; the log is the source of
+        truth, and re-running the function on the inner tombstone re-walks
+        the same log to resolve its span. The original events are NEVER
+        destroyed, so they remain retrievable regardless of how many later
+        tombstones also "forget" the same seq."""
+    start, end = tombstone.forgotten_start_seq, tombstone.forgotten_end_seq
+    if start > end:
+        return []
+    return [e for e in events if e.seq is not None and start <= e.seq <= end]
 
 
 def _latest_plan(events: list[Event]) -> PlanEvent | None:
@@ -228,6 +274,14 @@ class View(BaseModel):
 
     [CONTRACT] View.of(events) is pure: same events -> same messages, every
     time. Computing it has no side effects and never appends.
+
+    The C11 reversible-compaction tier adds a RECOVERY ACCESSOR:
+    `View.recover_span(events, tombstone)` (and the module-level
+    `recover_span`) returns the original events a tombstone dropped, on
+    explicit demand. The default `View.messages` is NOT affected by recovery —
+    it still omits the tombstoned span. Recovery is for callers that need the
+    originals (audit, debug, re-derivation); the live LLM context is never
+    re-injected with the recovered bytes.
     """
 
     messages: list[LLMMessage]
@@ -400,6 +454,19 @@ class View(BaseModel):
             for m in self.messages
         ]
 
+    @classmethod
+    def recover_span(cls, events: list[Event], tombstone: CondensationEvent) -> list[Event]:
+        """C11 — Reverse of condensation for a single tombstone. Returns the
+        events the tombstone dropped from `View.of(events).messages`, in their
+        original form and insertion order. PURE: no mutation of the log, the
+        View, or any other state. The default `View.messages` is unaffected.
+
+        Thin wrapper over the module-level `recover_span`; provided for
+        discoverability and to sit alongside `View.of` as a paired
+        "materialize the condensed view" / "recover a dropped span" surface.
+        See `recover_span` for the full contract."""
+        return recover_span(events, tombstone)
+
 
 # ---- Condenser / Summarizer seams (§5.2) ------------------------------------
 
@@ -417,6 +484,83 @@ class Summarizer(Protocol):
     async def summarize(self, messages: list[LLMMessage]) -> str: ...
 
 
+def _build_pointer_manifest(
+    span: list[Event], artifact_paths: list[str]
+) -> str:
+    """C16 — pointer-only summary used by the hard_reset path. Categorize the
+    paths the engine collected so the model sees what kind of artifact each
+    pointer is (deliverable / spill / memory) without having to guess. Pure:
+    no model call, deterministic per input list. The summarizer is unused on
+    this path — the dropped span is too large to re-ingest verbatim anyway, and
+    a lossy prose recap would be worse than pointing to the bytes on disk.
+
+    `span` is the LIVE span (events about to be forgotten) — used only to put
+    a concrete seq range in the header so the model can refer to the drop
+    ('the drop covering seq 7–42'). The manifest's RECOVERABILITY comes from
+    `artifact_paths`: the engine has already verified every one of them
+    resolves on disk before passing them in, so the manifest is honest."""
+    start_seq = span[0].seq
+    end_seq = span[-1].seq
+    n = len(span)
+    # Categorize — these prefixes are the public surface area the engine +
+    # tools layer already use (see engine.py:1787 + the .pmx/ directory).
+    deliverables: list[str] = []
+    spills: list[str] = []
+    memory: list[str] = []
+    other: list[str] = []
+    for p in artifact_paths:
+        bn = os.path.basename(p)
+        if bn.startswith(".disco-spill-"):
+            spills.append(p)
+        elif p.endswith(".pmx/MEMORY.md") or bn == "MEMORY.md":
+            memory.append(p)
+        else:
+            # Heuristic: anything the agent mutated via the mutating-tool set
+            # (file_write / file_edit / file_append / ...) — the engine passes
+            # those as deliverables. A path that does not match any bucket
+            # falls into `other` so the model still sees it (we never want to
+            # silently drop a pointer the engine went to the trouble of
+            # collecting).
+            deliverables.append(p)
+    # Render — order: deliverables first (the user's real work), then spill
+    # logs (overflow context the model might re-grep), then memory (standing
+    # facts), then anything uncategorized. Stable, de-duped (input is
+    # already de-duped by the engine).
+    lines: list[str] = []
+    lines.append(
+        f"[Hard reset — pointer-only flush; span seq {start_seq}–{end_seq} "
+        f"({n} events) DROPPED from the live view.]"
+    )
+    lines.append(
+        "The dropped content is NOT summarized here. It is fully recoverable "
+        "from on-disk artifacts in your workspace. Use file_read (or grep) to "
+        "retrieve the original content when you need it — the pointer list "
+        "below IS the manifest, and the bytes are on disk RIGHT NOW. Do NOT "
+        "trust your prose memory of the dropped span."
+    )
+    if deliverables:
+        lines.append("")
+        lines.append("Deliverables (files the agent wrote this run):")
+        for p in deliverables:
+            lines.append(f"  • {p}")
+    if spills:
+        lines.append("")
+        lines.append("Spill logs (shell-output overflow; head/tail preserved):")
+        for p in spills:
+            lines.append(f"  • {p}")
+    if memory:
+        lines.append("")
+        lines.append("Standing memory (recorded this run):")
+        for p in memory:
+            lines.append(f"  • {p}")
+    if other:
+        lines.append("")
+        lines.append("Other on-disk artifacts (uncategorized):")
+        for p in other:
+            lines.append(f"  • {p}")
+    return "\n".join(lines)
+
+
 class Condenser(Protocol):
     """Decides whether/how to condense. The loop calls should_condense() (sync,
     pure over the View) then awaits condense() (async); the strategy is
@@ -425,14 +569,33 @@ class Condenser(Protocol):
 
     Async rationale (event-state-contract v1.2 §5.2): condense() must be async
     because the only correct summarizer makes an async router call, invoked from
-    the loop's running asyncio loop. should_condense stays sync (pure)."""
+    the loop's running asyncio loop. should_condense stays sync (pure).
+
+    `reason` (C16) tells the condenser WHICH call site invoked it:
+      - "tokens"      → soft/maintain-bound path (the default; what
+                        should_condense → condense produces). UNCHANGED: a
+                        prose summary from the summarizer.
+      - "hard_reset"  → the loop's context-overflow escape hatch. The dropped
+                        span is too large to re-summarize usefully, so the
+                        tombstone is a pointer manifest of on-disk artifacts
+                        the model can re-read selectively (NOT a prose recap).
+                        Caller supplies `artifact_paths` (verified to exist
+                        on disk); without them the condenser makes no
+                        progress and returns None (same as an empty prose
+                        summary on the soft path)."""
 
     def should_condense(
         self, view: View, *, token_count: int | None
     ) -> CondensationRequest | None: ...
 
     async def condense(
-        self, events: list[Event], view: View, *, summarizer: Summarizer
+        self,
+        events: list[Event],
+        view: View,
+        *,
+        summarizer: Summarizer,
+        reason: str = "tokens",
+        artifact_paths: list[str] | None = None,
     ) -> CondensationEvent | None: ...
 
 
@@ -447,7 +610,13 @@ class NoOpCondenser:
         return None
 
     async def condense(
-        self, events: list[Event], view: View, *, summarizer: Summarizer
+        self,
+        events: list[Event],
+        view: View,
+        *,
+        summarizer: Summarizer,
+        reason: str = "tokens",
+        artifact_paths: list[str] | None = None,
     ) -> CondensationEvent | None:
         return None
 
@@ -483,17 +652,37 @@ class LLMSummarizingCondenser:
         budget_tokens: int = 24_000,
         hard_budget_tokens: int = 32_000,
     ) -> None:
-        # Derive trigger thresholds from the ROUTED model's context window (soft=65%,
-        # hard=80%) BUT CAP them at a fixed WORKING BUDGET (H1). Cost scales with input
-        # tokens PER CALL — a huge window (e.g. DeepSeek 1M → 65% = 681k) is capacity,
-        # NOT a license to re-send 60k+ every action. So `soft = min(0.65×window,
-        # budget)`: a big-window model still condenses at ~24k, keeping the driver's
-        # context rich-but-bounded (recent + plan + pins + a running summary), not the
-        # full growing transcript. Explicit max_tokens/hard_max_tokens still override
-        # (tests). The budget is the binding constraint on any model ≥ ~37k window.
+        # C9 — honor the LIVE context window, not a fixed ~24k cap.
+        #
+        # Derive trigger thresholds from the ROUTED model's context window
+        # (soft=65%, hard=80%). When `window × frac` already fits UNDER the working
+        # budget, use it unchanged (small-window path: 16k→10.4k, 32k→20.8k, etc.).
+        # When the window-fraction EXCEEDS the budget, grow above the budget UP TO a
+        # sane ceiling (4× working budget = 96k soft / 128k hard by default) — a
+        # 128k-window model now condenses at 83k (its 65% point), a 200k model caps
+        # at 96k, a 1M model still caps at 96k. Cost scales with input tokens PER
+        # CALL so we still cap growth — but the cap is no longer so tight that a
+        # big-window model never gets to use its room. The budget is the FLOOR
+        # (anything below it stays at the window-fraction) and the ceiling is the
+        # CEILING (a 1M model can't bloat to 681k and re-send 60k+ every action).
+        #
+        # Unknown window → the working budget IS the bound (unchanged). Explicit
+        # max_tokens / hard_max_tokens still override (tests). The small-window
+        # branch is byte-identical to the previous formula for any model whose
+        # window × frac ≤ budget (preserves H1 contract for that range).
+        soft_ceiling = budget_tokens * 4  # 96_000 by default — well above 24k, well below 1M
+        hard_ceiling = hard_budget_tokens * 4  # 128_000 by default
         if context_window is not None:
-            derived_soft = min(int(context_window * soft_frac), budget_tokens)
-            derived_hard = min(int(context_window * hard_frac), hard_budget_tokens)
+            window_soft = int(context_window * soft_frac)
+            window_hard = int(context_window * hard_frac)
+            if window_soft <= budget_tokens:
+                derived_soft = window_soft  # small-window path: unchanged from before
+            else:
+                derived_soft = min(window_soft, soft_ceiling)  # grow above budget, bounded
+            if window_hard <= hard_budget_tokens:
+                derived_hard = window_hard
+            else:
+                derived_hard = min(window_hard, hard_ceiling)
         else:
             # No window known → the working budget IS the bound.
             derived_soft, derived_hard = budget_tokens, hard_budget_tokens
@@ -515,7 +704,13 @@ class LLMSummarizingCondenser:
         return None
 
     async def condense(
-        self, events: list[Event], view: View, *, summarizer: Summarizer
+        self,
+        events: list[Event],
+        view: View,
+        *,
+        summarizer: Summarizer,
+        reason: str = "tokens",
+        artifact_paths: list[str] | None = None,
     ) -> CondensationEvent | None:
         forgotten = [
             (e.forgotten_start_seq, e.forgotten_end_seq)
@@ -532,17 +727,79 @@ class LLMSummarizingCondenser:
             for e in events
             if isinstance(e, LLMConvertible) and e.seq is not None and not is_forgotten(e.seq)
         ]
-        # Need an anchoring head + a recent tail AND at least `min_forget` in between —
-        # else there's nothing worth forgetting yet (the minimum-progress guard).
-        if len(live) < self._keep_head + self._keep_recent + self._min_forget:
+
+        # C10 — `keep_recent` counts TOOL-TURNS, not raw events.
+        #
+        # A "turn" is a maximal contiguous group of events that all belong to one
+        # tool call: an ActionEvent paired with its observation/agent_error (the
+        # normal 2-event case), a free-standing observation/agent_error whose
+        # action is not in `live` (action was already forgotten — single-event
+        # turn), or another LLMConvertible event (user/agent message, knowledge,
+        # plan, … — also single-event turn). Slicing the keep boundary at a turn
+        # start means the boundary NEVER falls between an action and its
+        # observation: retaining `keep_recent=k` keeps k COMPLETE turns, never
+        # half a turn. (`keep_head` semantics are unchanged — head is still
+        # exactly `keep_head` events from the start of `live`.)
+        last_action: ActionEvent | None = None
+        turn_starts: list[int] = [0]
+        for i in range(1, len(live)):
+            e = live[i]
+            if isinstance(e, ActionEvent):
+                turn_starts.append(i)
+                last_action = e
+            elif isinstance(e, (ObservationEvent, AgentErrorEvent)):
+                if last_action is not None and e.action_id == last_action.id:
+                    continue  # observation/agent_error pairs with the current turn's action
+                turn_starts.append(i)  # orphan — its action isn't in `live`
+                last_action = None
+            else:
+                # MessageEvent / KnowledgeEvent / PlanEvent / … — standalone turn
+                turn_starts.append(i)
+                last_action = None
+
+        # Need a non-empty head, at least K complete turns in the recent tail, and
+        # at least `min_forget` events in the middle — else there's nothing worth
+        # forgetting yet (the minimum-progress guard).
+        n_turns = len(turn_starts)
+        if len(live) < self._keep_head + self._min_forget:
             return None
-        span = live[self._keep_head : len(live) - self._keep_recent]
+        if n_turns <= self._keep_recent:
+            return None  # the K tail turns would consume every turn — no middle
+        # The recent tail starts at the K-th-from-last turn. The middle is
+        # everything between the head and that turn, sliced at a turn boundary.
+        tail_start = turn_starts[n_turns - self._keep_recent]
+        if tail_start <= self._keep_head:
+            return None  # the head reaches (or overlaps) the tail — no middle
+        span = live[self._keep_head : tail_start]
         if len(span) < self._min_forget:
             return None
 
         start_seq, end_seq = span[0].seq, span[-1].seq
         if start_seq is None or end_seq is None:  # filtered above; assertion for the type
             return None
+
+        # C16 — `hard_reset` is a POINTER-ONLY flush, not a prose recap.
+        #
+        # The soft path (reason="tokens", the default) is byte-unchanged: it
+        # calls the summarizer and produces a prose summary. The hard_reset
+        # path is the loop's context-overflow escape hatch — the span is
+        # already too big to re-ingest verbatim, so a lossy prose recap is
+        # WORSE than pointing the model at the bytes on disk. The engine has
+        # already verified every path in `artifact_paths` exists before
+        # passing them in, so the manifest is honest (every pointer resolves).
+        # Without artifacts there's nothing to point to → no progress → None
+        # (same shape as an empty prose summary on the soft path).
+        if reason == "hard_reset":
+            if not artifact_paths:
+                return None  # no recoverable artifacts — the soft path's empty-summary behavior
+            return CondensationEvent(
+                forgotten_start_seq=start_seq,
+                forgotten_end_seq=end_seq,
+                summary=_build_pointer_manifest(span, list(artifact_paths)),
+                summary_role="user",
+                reason="hard_reset",
+            )
+
         # GAP D: don't feed the pinned plan into the summarizer — it stays
         # rendered verbatim (View.of exempts it), so summarizing it is waste.
         pinned = _pinned_seqs(events)

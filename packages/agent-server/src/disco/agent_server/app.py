@@ -22,6 +22,7 @@ import httpx
 from disco.core import (
     DEFAULT_OWNER_ID,
     ConversationStatus,
+    DatasourceEvent,
     DeliverableEvent,
     EventSource,
     LLMMessage,
@@ -462,6 +463,27 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
                     source=EventSource.ENVIRONMENT,
                     message=LLMMessage(role="user", content=announcement),
                 ),
+            )
+            # D6: emit exactly ONE DatasourceEvent at the attach site so the
+            # View pins the contract (condensation-immune, see events.py:509).
+            # An uploaded file IS a durable data source — the verbatim contract
+            # (path + size) must survive arbitrarily long builds instead of
+            # dissolving into a lossy summary.
+            if len(saved) == 1:
+                ds_name = f"uploads/{saved[0]['name']}"
+                ds_docs = (
+                    f"path=uploads/{saved[0]['name']} "
+                    f"size={saved[0]['bytes']:,} bytes"
+                )
+            else:
+                ds_name = f"uploads/{len(saved)}_files"
+                ds_docs = "\n".join(
+                    f"- uploads/{s['name']}  ({s['bytes']:,} bytes)"
+                    for s in saved
+                )
+            await store.append(
+                conversation_id,
+                DatasourceEvent(name=ds_name, docs=ds_docs),
             )
 
         if not saved and rejected:

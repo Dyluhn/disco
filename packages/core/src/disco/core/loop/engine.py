@@ -56,10 +56,18 @@ from ..llm import (
 )
 from ..state import ConversationState
 from ..store.base import EventStore
-from ..view import Condenser, Summarizer, View, microcompact
+from ..view import Condenser, Summarizer, View, _latest_plan, microcompact
 from .boundaries import Agent, ConfirmationPolicy, SecurityAnalyzer, StopHook, ToolExecutor
 from .stream_extract import extract_partial_string_field
 from .stuck import StuckDetector, StuckThresholds
+from ..dod_evaluator import DoDEvaluator, DoDVerdict
+from ..dod import (
+    DoDPredicate,
+    FileExistsPredicate,
+    CommandExitPredicate,
+    HTTPOkPredicate,
+    predicate_from_obj,
+)
 
 _LOG = logging.getLogger("disco.loop")
 
@@ -153,6 +161,15 @@ _PROPOSE_PLAN_UPDATE_REPEAT_CAP = 3
 # auto-stripped (bounded by _finish_verify_strips so it can't be gamed as a free finish).
 _FINISH_VERIFY_CAP = 3
 
+# C1c DoD-gate refusal cap. The external Definition-of-Done gate refuses `finish`
+# while the spec is unmet, but — exactly like the verify cap above — it MUST be
+# bounded: an agent that cannot satisfy the external DoD would otherwise be
+# trapped in an unbounded refuse-and-continue loop, accumulating events without
+# end (this is the OOM the uncapped first cut caused). After N consecutive
+# refusals the gate RELEASES (finish lands) with a LOUD warning; the prior
+# refusal events remain the visible audit trail.
+_DOD_REFUSAL_CAP = 3
+
 # A8 (file-state survival): single-file tools whose `path` arg names a file the
 # agent has touched — the working set re-read from disk each turn by
 # _workspace_snapshot_message. file_list is excluded (its path is a directory).
@@ -213,6 +230,21 @@ _DEFAULT_VETO_FEEDBACK = (
     "</system-reminder>"
 )
 
+# C6 — recitation cadence (Manus telemetry: re-emitting the plan/objective
+# tail-recap on every iteration wastes ~1/3 of actions with no behavior
+# change). Borrow the cadence math from smolagents' `planning_interval` ONLY:
+# fire on a fixed interval, e.g. `(step_number - 1) % interval == 0`. We do
+# NOT borrow smolagents' re-planning/steering behavior — Disco has a STRICT
+# no-automatic-nudge invariant (commit c97c1b3) and the recap is a passive
+# PASSIVE re-render of the SAME plan/checklist, never new instructions/goals.
+# The content (built in view.py:_recitation_message) is unchanged — only the
+# FREQUENCY of emission changes here.
+_RECITATION_CADENCE_DEFAULT = 5
+# The view.py tag for the tail recitation. We look at the last rendered
+# message to decide whether to keep it — if it starts with this sentinel it
+# IS the recap, otherwise there is no plan to recite yet (no recap to gate).
+_RECITATION_SENTINEL = "<current-objective>"
+
 
 def _describe_llm_error(e: LLMError) -> str:
     """Render a model/provider error for the user WITHOUT flattening its reason.
@@ -268,10 +300,57 @@ _PLAN_NUDGE = (
 # A hard temperature jitter for the single stuck-escape retry step. When the loop
 # detects a repeating action→error/obs rut it gives the model ONE retry at this
 # temperature (vs. the driver's small anti-fewshot default) to break the
-# self-imitation chain, BEFORE declaring STUCK. No reminder is injected — the
-# escape is pure sampling variance over the already-visible failure context (the
-# harness-doesn't-nudge rule).
+# self-imitation chain, BEFORE declaring STUCK. Pairs with a rotating reminder
+# pool (C7) so consecutive escape attempts differ in bytes as well as in
+# sampling temperature — otherwise a model that has internalized the previous
+# reminder would echo it back verbatim and the escape wouldn't break the
+# self-imitation chain (the test on test_loop_stuck.py locks this in).
 _STUCK_ESCAPE_TEMP = 0.9
+
+# C7 — escape-reminder pool + serialization seed. A small fixed pool of
+# `<system-reminder>` phrasings selected by attempt count (modulo the pool
+# length) so consecutive escape attempts are NOT byte-identical. The
+# pool size is intentionally small (3 entries) — enough that the model sees
+# a different angle each time, but small enough to keep the system prompt
+# footprint predictable. A per-attempt nonce is embedded as a hidden
+# comment-style suffix so the reminder is identifiable in tests (the model
+# ignores HTML comments) AND differs in bytes between attempts. Deterministic
+# under a fixed attempt count: index = attempt_count % len(_STUCK_ESCAPE_REMINDER_POOL),
+# nonce = attempt_count. The escape path is the ONLY consumer of this pool
+# (c97c1b3 — no automatic nudge outside the existing stuck-escape).
+_STUCK_ESCAPE_REMINDER_POOL: tuple[str, ...] = (
+    "<system-reminder>\n"
+    "You've been repeating the same action. STOP and take a different "
+    "approach — a different tool, a different argument shape, or a "
+    "different sub-task entirely. Do not retry what just failed.\n"
+    "<!-- disco:escape-attempt=0 -->\n"
+    "</system-reminder>",
+    "<system-reminder>\n"
+    "The previous retry didn't work either. Pivot: re-read the most recent "
+    "error, identify the SPECIFIC thing that went wrong, and change exactly "
+    "that. Do not echo the same tool call with the same arguments.\n"
+    "<!-- disco:escape-attempt=1 -->\n"
+    "</system-reminder>",
+    "<system-reminder>\n"
+    "Self-imitation detected: the last few steps look like copies of one "
+    "another. Break the pattern. Try a tool you haven't used in this turn, "
+    "or attack a different angle of the problem. If nothing else works, "
+    "declare the blocker and call `finish` honestly.\n"
+    "<!-- disco:escape-attempt=2 -->\n"
+    "</system-reminder>",
+)
+
+
+def _stuck_escape_reminder(attempt_count: int) -> str:
+    """Return the escape reminder for the given attempt count.
+
+    Selection: `_STUCK_ESCAPE_REMINDER_POOL[attempt_count % len(POOL)]`.
+    Deterministic under a fixed attempt_count (testable). The pool rotates
+    so consecutive attempts are NOT byte-identical, breaking the
+    self-imitation chain that a single fixed reminder would invite.
+    """
+    idx = attempt_count % len(_STUCK_ESCAPE_REMINDER_POOL)
+    return _STUCK_ESCAPE_REMINDER_POOL[idx]
 
 # Symmetric to _PLAN_NUDGE on the execution side: a hard gate that refuses FINISHED
 # until the agent has done productive work since the most recent plan approval.
@@ -807,6 +886,95 @@ def _serve_tool_singleton():
     return _SERVE_TOOL_SPEC
 
 
+# C20 — `delegate_explore`: a read-only Explore/Plan helper the build/agent
+# loop can dispatch+join. A bounded subagent fan-out: the driver calls it,
+# the loop dispatches a constrained helper task (read-only tools only —
+# file_read / file_list / search / extract), the helper's response is folded
+# back as a normal ObservationEvent, and the result is visible to the driver
+# on its next turn. The fan-out is BOUNDED by a per-run-segment count cap
+# (mirrors the other loop caps — finish_verify / dod_refusal / propose_plan
+# repeat / bookkeeping streak). The cap is the single source of truth
+# (`_FANOUT_MAX_PER_RUN`); the engine enforces it; the builtin tool stub
+# stays cap-agnostic so a regression on the cap is testable on the engine
+# side without faking through the tool. NO RECURSION: the helper does not
+# itself call `delegate_explore` (its tools are restricted to the read-only
+# set, and the engine's interceptor would still apply the cap on a nested
+# call). The cap is reset on every `run()` entry (per-segment, like
+# `_finish_verify_refusals`) so a resume/steer gets a fresh budget.
+_FANOUT_MAX_PER_RUN = 3
+# The helper's input is the driver's `question` + `context` joined into one
+# prompt. Bound the size of each so a driver cannot grow the helper's input
+# unboundedly within a single segment — the result is folded back into the
+# View, which the condenser manages; keeping the helper's prompt bounded
+# keeps the post-fold View growth bounded. Symmetric to the search/extract
+# length budget (`packages/tools/.../retrieval.py:_EXTRACT_CHAR_BUDGET`).
+_FANOUT_INPUT_MAX_CHARS = 4_000
+# The reserved option id for the fan-out cap-refusal path: we don't synthesize
+# a decision gate (no human in the loop), we emit a system-reminder and
+# fall-through to the next step. The cap is enforced by simple refusal +
+# feedback, the same shape the (c.3) bookkeeping-stuck nudge uses.
+_DELEGATE_EXPLORE_DESCRIPTION = (
+    "Dispatch a bounded, read-only Explore/Plan helper task and fold its "
+    "result back as an observation on your next turn. Use this when you "
+    "need a focused second look at the workspace BEFORE you commit to an "
+    "action — e.g. 'which files would the new helper need to import "
+    "from?', 'is the function I want to call already defined somewhere in "
+    "the codebase?', 'what does the existing test for X look like?'. The "
+    "helper sees ONLY: (a) your `question`, (b) the optional `context` you "
+    "pass, (c) the read-only tools file_read / file_list / search / "
+    "extract. It cannot mutate workspace state, cannot run shell, cannot "
+    "write files, and cannot ask back questions. The result is folded "
+    "back as a normal tool observation. The dispatch is BOUNDED: a "
+    "per-run-segment cap limits how many times you can call this in a "
+    "single run (exceeding it is refused with feedback). Use it "
+    "sparingly — for ONE focused question at a time, not a full plan."
+)
+_DELEGATE_EXPLORE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "question": {
+            "type": "string",
+            "description": (
+                "One focused question the helper should answer. Keep it "
+                "small and well-scoped — the helper has a tight prompt "
+                "and cannot ask back."
+            ),
+        },
+        "context": {
+            "type": "string",
+            "description": (
+                "Optional markdown: what the helper needs to know — file "
+                "paths to look at, constraints from the user, the shape "
+                "of the answer you want. The driver fills this in based "
+                "on what it already knows; the helper does not see the "
+                "rest of the conversation."
+            ),
+        },
+    },
+    "required": ["question"],
+}
+
+
+def _delegate_explore_tool_spec():
+    from ..llm.types import ToolSpec
+
+    return ToolSpec(
+        name="delegate_explore",
+        description=_DELEGATE_EXPLORE_DESCRIPTION,
+        parameters_schema=_DELEGATE_EXPLORE_SCHEMA,
+    )
+
+
+_DELEGATE_EXPLORE_TOOL_SPEC = None
+
+
+def _delegate_explore_tool_singleton():
+    global _DELEGATE_EXPLORE_TOOL_SPEC
+    if _DELEGATE_EXPLORE_TOOL_SPEC is None:
+        _DELEGATE_EXPLORE_TOOL_SPEC = _delegate_explore_tool_spec()
+    return _DELEGATE_EXPLORE_TOOL_SPEC
+
+
 def _last_productive_seq(events: list[Event]) -> int:
     """Seq of the last state-changing action (not in _NON_PRODUCTIVE_TOOLS).
     If no productive action found, returns 0."""
@@ -910,6 +1078,19 @@ def _latest_browser_error(events: list[Event]) -> str | None:
     return None
 
 
+class _DoDWorkspaceUnavailable(Exception):
+    """The C1c gate cannot resolve a workspace_root (no sandbox, no
+    `workspace_path` attribute on the executor). Raised by
+    `_build_dod_evaluator` and caught by `_finish_dod_gate_passed` to
+    degrade the gate to a no-op (logged, never raised past the gate).
+
+    Distinct from a predicate failure: the spec is set but the engine
+    has no evidence surface to grade against. Refusing the finish in
+    that state would be a silent fail — the agent would loop forever
+    on a gate that cannot run. Logging + skipping is the honest
+    behavior; the audit trail sees the log line."""
+
+
 class AgentLoop:
     """[CONTRACT] The orchestrator. See module docstring + §2 state machine."""
 
@@ -935,6 +1116,16 @@ class AgentLoop:
         execution_mode: OperatingMode = OperatingMode.LONG_HORIZON,
         autonomous: bool = False,
         assist: bool = False,
+        # C6 — cadence for the plan/objective tail-recap (default: every 5
+        # model turns). Set to 1 to recover the old "recite every step"
+        # behavior; 0 / negative are clamped to 1. The smolagents math is
+        # `(step_number - 1) % interval == 0` (1-indexed: step 1, 1+N,
+        # 1+2N, …). 0-indexed: 0, N, 2N, … — equivalent boundary set.
+        recitation_cadence: int = _RECITATION_CADENCE_DEFAULT,
+        # C1c — DoD evaluator factory (test seam; see _finish_dod_gate_passed).
+        # The default (None) builds a DoDEvaluator over the executor's sandbox
+        # workspace_root; tests inject a fake-seamed evaluator.
+        dod_evaluator_factory: Callable[[], DoDEvaluator] | None = None,
     ) -> None:
         # Autonomous mode (issue A): no human is available to answer questions or
         # approve plans (headless / unattended runs). Default False = today's
@@ -974,6 +1165,13 @@ class AgentLoop:
                                             # at module-level so tests can pin it.
         self._finish_verify_refusals = 0  # consecutive finish-verify failures (cap-3 release)
         self._finish_verify_strips = 0  # malformed verifies auto-stripped (anti-gaming cap)
+        # C20 — `delegate_explore` count, per run segment. Reset in run() so a
+        # resume/steer gets a fresh budget (mirror `_finish_verify_refusals`).
+        # The cap is module-level so tests can pin it. The cap bounds the
+        # fan-out — a model cannot recurse (the helper is read-only and the
+        # call site is always the loop's intercept path).
+        self._fanout_count = 0
+        self._fanout_max = _FANOUT_MAX_PER_RUN
         # Actionless-step breaker cap (DEFECT-4)
         self._ACTIONLESS_BREAK_CAP: int = 3
         # Steps consumed with NOTHING persisted to the log (empty-args serve,
@@ -998,12 +1196,44 @@ class AgentLoop:
         self._stop_hooks = list(stop_hooks or [])
         self._stuck = StuckDetector(stuck_thresholds)
         self._veto_feedback = veto_feedback
+        # C1c — DoD evaluator gate (wires the C1b fresh-context judge into the
+        # finish branch). The factory returns a fully-configured evaluator; the
+        # default builds one over the executor's sandbox workspace_root. Tests
+        # inject a fake-seamed evaluator via the same hook. None means "use the
+        # default factory" (the evaluator is still wired when a DoD spec exists).
+        # When no DoD spec exists for the conversation, the gate is a no-op
+        # (legacy byte-identical path) — see _finish_dod_gate_passed.
+        self._dod_evaluator_factory: Callable[[], DoDEvaluator] | None = dod_evaluator_factory
+        # Consecutive DoD-refusal streak (telemetry; the gate has no cap — the
+        # loop's max_iterations + the user's kill switch are the ultimate exit,
+        # same as the browser-verify and execution-nudge gates).
+        self._dod_refusals = 0
         self._lock = asyncio.Lock()
         # Watch-it-write sink (optional). The runtime wires this to the store's
         # ephemeral broadcast; when set, the driver's streamed tool-call arg
         # fragments are decoded into growing file-content frames and published
         # live (display-only, never persisted). None → no streaming (tests, CLI).
         self.stream_sink: Callable[[dict], None] | None = None
+        # C6 — recitation cadence state. Per-run counters / fingerprints
+        # used to decide whether the view.py tail-recap is appended on this
+        # iteration. Reset in run() at the start of every run segment so a
+        # resume/steer starts a fresh cadence. The signature is a stable
+        # hash of (plan + per-step checklist) — DRIFT fires when the plan
+        # is replaced OR the agent marks a step done/active.
+        self._recitation_cadence = max(1, int(recitation_cadence))
+        self._recitation_step_count = 0
+        self._recitation_last_signature: str | None = None
+        # C18 — per-(plan_revision, step_index) advisory done-condition
+        # predicates, populated in `_plan_from_args` from the optional
+        # `done_condition` field on each `PlanStepInput`. The map is keyed
+        # by (plan_revision, 1-based step index) so a re-plan (new
+        # revision) cleanly supersedes the prior predicate set without a
+        # stale match. Lookup happens in
+        # `_maybe_emit_plan_step_done_condition_note` whenever a
+        # `plan_step(idx, 'done')` ActionEvent is observed. Empty by
+        # default — steps without a predicate behave exactly as today
+        # (back-compat). Cleared on `approve_plan` reset (fresh segment).
+        self._plan_step_predicates: dict[tuple[int, int], DoDPredicate] = {}
 
     # ---- emission + small helpers -------------------------------------------
 
@@ -1175,9 +1405,28 @@ class AgentLoop:
             # Ask-gate, same as in execution. clarify is the MULTI-QUESTION variant
             # for when several specifics are missing. Without this the planner is forced
             # to guess and bury the unknown in the plan instead of just asking.
+            #
+            # C20 — `delegate_explore` is intentionally ABSENT from the planning
+            # tool set. It is an EXECUTION-only tool: the call DISPATCHES a
+            # subagent (an action that yields an observation, not a pure
+            # read). The planner gathers context with the read-only tools it
+            # already has (file_read, file_list, search, extract) and proposes
+            # a plan; the fan-out helper is available to the driver in
+            # execution mode only. Belt-and-suspenders: the tool def is also
+            # `read_only=False`, so even a misconfigured readonly backstop
+            # would exclude it from the planning branch.
             if self._autonomous:
-                return planner_tools  # no ask gates headless; the prompt says assume+proceed
-            return planner_tools + [_ask_user_tool_singleton(), _clarify_tool_singleton()]
+                # Autonomous/headless: WITHHOLD the ask gates — there is no human
+                # to answer, so the autonomous planner proceeds with the
+                # documented "assume + proceed" default instead of stalling on an
+                # ask. (Mirrors the execution-branch withholding at the
+                # `if not self._autonomous` gate below; required by
+                # test_autonomous_withholds_ask_gates_in_planning.)
+                return planner_tools
+            return planner_tools + [
+                _ask_user_tool_singleton(),
+                _clarify_tool_singleton(),
+            ]
         if self._planning_tools:
             tools = [t for t in tools if getattr(t, "name", None) not in self._planning_tools]
         # Append the virtual ask_user + clarify + propose_plan_update tools in execution
@@ -1197,6 +1446,16 @@ class AgentLoop:
                 _notify_user_tool_singleton(),
                 _remember_tool_singleton(),
                 _serve_tool_singleton(),
+                # C20 — read-only Explore/Plan helper dispatch+join. Available
+                # in execution mode ONLY (the PLANNING branch of
+                # _tools_for_step intentionally does NOT append it — see the
+                # PLANNING branch for the rationale; `delegate_explore` is an
+                # EXECUTION-only tool because the call dispatches a subagent
+                # and is therefore an ACTION, not a pure read). Cap is
+                # enforced at the call site, not in the schema (a model that
+                # calls it past the cap is refused with a system-reminder,
+                # the same shape the (c.3) bookkeeping-stuck nudge uses).
+                _delegate_explore_tool_singleton(),
             ]
         return list(tools) + virtuals
 
@@ -1204,8 +1463,20 @@ class AgentLoop:
         """Build a PlanEvent from a `submit_plan` tool call. Defensive against the
         model's shape drift (steps as dicts or bare strings); revision counts prior
         plans so a re-plan is visibly the next iteration. `context` carries any
-        markdown rationale / exploration findings the planner included."""
+        markdown rationale / exploration findings the planner included.
+
+        C18 — also harvest each step's optional `done_condition` (an advisory
+        DoDPredicate) into `self._plan_step_predicates` keyed by
+        (revision, 1-based index). The predicate is later evaluated when the
+        agent emits `plan_step(idx, 'done')`. Malformed predicates (wrong
+        `kind`, missing fields, non-dict) are silently dropped — the step
+        degrades to "no predicate" exactly like a step that omitted the
+        field in the first place. C18 is advisory, not a gate, so a bad
+        predicate never blocks the plan from being approved."""
         steps: list[PlanStep] = []
+        # Re-seed per-plan-revision (a re-plan supersedes the prior map; we
+        # don't keep stale predicates from an obsolete revision).
+        revision = 1 + sum(1 for e in events if isinstance(e, PlanEvent))
         for s in arguments.get("steps") or []:
             if isinstance(s, dict):
                 title = str(s.get("title") or s.get("step") or s.get("name") or "").strip()
@@ -1218,7 +1489,31 @@ class AgentLoop:
             steps = [PlanStep(title="(the planner returned no concrete steps)")]
         summary = str(arguments.get("summary") or "").strip() or "Proposed plan"
         context = str(arguments.get("context") or arguments.get("rationale") or "").strip()
-        revision = 1 + sum(1 for e in events if isinstance(e, PlanEvent))
+        # C18 — harvest the predicates (revision-scoped). We walk the raw
+        # args (not the rebuilt `steps`) so we can preserve the 1-based
+        # step index even when the title/format was leniently coerced.
+        raw_steps = arguments.get("steps") or []
+        for one_based, raw in enumerate(raw_steps, start=1):
+            if not isinstance(raw, dict):
+                continue
+            cond = raw.get("done_condition")
+            if not isinstance(cond, dict):
+                # Optional field, absent by default — back-compat: steps
+                # without a predicate behave exactly as today.
+                continue
+            try:
+                predicate = predicate_from_obj(cond)
+            except Exception:  # noqa: BLE001 — malformed predicate is advisory-only
+                # A bad shape is logged once at WARNING (not ERROR — a
+                # broken advisory note is not a run failure) and the
+                # step silently drops the predicate.
+                _LOG.warning(
+                    "C18: malformed done_condition on plan step %d (revision %d); "
+                    "ignoring (advisory only): %r",
+                    one_based, revision, cond,
+                )
+                continue
+            self._plan_step_predicates[(revision, one_based)] = predicate
         return PlanEvent(summary=summary, steps=steps, revision=revision, context=context)
 
     def _alternatives_from_args(
@@ -1385,6 +1680,23 @@ class AgentLoop:
             if isinstance(e, MessageEvent) and e.source == EventSource.USER:
                 return None
         return None
+
+    @staticmethod
+    def _stuck_escape_attempt_count(events: list[Event]) -> int:
+        """C7 — total number of `stuck_escape` markers emitted so far in this
+        conversation. Used to select the rotating reminder text (the model's
+        view of the previous escape's reminder, if byte-identical, would
+        invite self-imitation). Counts ALL markers (not just since-last-user
+        message) so the rotation is global within a run: a model that has
+        seen reminder index 0 in a prior turn will see a different index on
+        the next escape, even after a user message resets the loop state.
+        Returns 0 when no escape has happened yet (the first escape gets
+        index 0, the second gets index 1, ...)."""
+        n = 0
+        for e in events:
+            if isinstance(e, StatusEvent) and e.detail == "stuck_escape":
+                n += 1
+        return n
 
     @staticmethod
     def _consecutive_noops(events: list[Event]) -> int:
@@ -1791,6 +2103,16 @@ class AgentLoop:
             # E4 (T8) — skip T10's overflow-log paths up-front
             if os.path.basename(path).startswith(spill_basename_prefix):
                 continue
+            # C5 — skip the `.pmx/` write-through mirror. It is the on-disk
+            # durable copy of the in-View KnowledgeEvent channel (see
+            # _write_pmx_memory_fact in this file). The View is the
+            # authoritative in-session source; the file is just a recovery
+            # aid for hard filesystem resets. Surfacing it in the working-
+            # set snapshot would (a) be a divergent second store from the
+            # model's POV and (b) double-count the same fact (once in the
+            # View, once in the mirror). Exclude it like `.disco-spill-*`.
+            if ".pmx" in path.split("/"):
+                continue
             try:
                 raw = await asyncio.wait_for(
                     sbx.read_file(path), timeout=_WS_READ_TIMEOUT_S
@@ -1886,6 +2208,113 @@ class AgentLoop:
         notice = ("\n\n" + "\n".join(notice_parts)) if notice_parts else ""
         return LLMMessage(role="user", content=preamble + "\n\n".join(blocks) + notice)
 
+    # ---- C6: recitation cadence + drift gate ---------------------------------
+
+    def _recitation_signature(self, events: list[Event]) -> str | None:
+        """C6 — stable signature of (latest plan + plan_step checklist), the
+        inputs the view.py tail-recap renders. None iff there is no plan to
+        recite (a re-plan or a pre-plan run has no signature).
+
+        Mirrors view.py:_recitation_message's accounting exactly: only
+        plan_step marks AFTER the current PlanEvent's seq count, and the
+        state set is split into done vs active (the recap's "✓" / "→" /
+        "□" markers). Any change in plan.summary, plan.steps, or the
+        done/active set flips the signature → DRIFT fires the next
+        materialization (once).
+
+        Returned as a string (not bytes) so the comparison in
+        `_should_emit_recitation` is cheap and order-insensitive (sorted
+        tuples). Hashing is unnecessary — the content is short and we
+        never re-hash for any other purpose.
+        """
+        plan = _latest_plan(events)
+        if plan is None or not plan.steps:
+            return None
+        plan_seq = plan.seq or 0
+        done: list[int] = []
+        active: list[int] = []
+        for e in events:
+            if not isinstance(e, ActionEvent) or e.tool_call is None:
+                continue
+            if e.tool_call.tool_name != "plan_step":
+                continue
+            if (e.seq or 0) < plan_seq:
+                continue  # mark belongs to a superseded plan
+            try:
+                idx = int(e.tool_call.arguments.get("index"))  # type: ignore[arg-type]
+                state = str(e.tool_call.arguments.get("state"))
+            except (TypeError, ValueError):
+                continue
+            if state == "done":
+                done.append(idx)
+            elif state == "active":
+                active.append(idx)
+        steps_t = tuple((s.title, s.detail) for s in plan.steps)
+        return (
+            f"plan:{plan.id}:{plan.revision}:{plan.summary}|"
+            f"steps:{steps_t}|"
+            f"done:{sorted(done)}|active:{sorted(active)}"
+        )
+
+    def _should_emit_recitation(self, events: list[Event]) -> bool:
+        """C6 — return True iff the view.py tail-recap should be appended on
+        THIS step. Pure predicate (no mutation, no logging); the side
+        effects (signature update, step counter increment) live in
+        `_materialize_view` so a test can call this in isolation.
+
+        Fires when ANY of:
+        - The plan is new or has changed since the last recap (DRIFT). The
+          first eligible step ALWAYS drifts (signature is None).
+        - The current step is a cadence boundary. The step counter is
+          1-indexed by the time we get here (incremented in
+          `_materialize_view`); the smolagents math is
+          `(step_number - 1) % interval == 0` → fires on steps 1, 1+N,
+          1+2N, … (the first step is always a boundary, regardless of
+          cadence value).
+        Returns False when no plan exists yet (view.py already returns
+        None for the recap; nothing to gate) or when neither signal
+        fires (drop the message — the model still sees the underlying
+        PlanEvent + plan_step ActionEvents in the prior messages).
+        """
+        sig = self._recitation_signature(events)
+        if sig is None:
+            return False
+        on_cadence = ((self._recitation_step_count - 1) % self._recitation_cadence) == 0
+        drift = sig != self._recitation_last_signature
+        return on_cadence or drift
+
+    def _gate_recitation(self, view: View, events: list[Event]) -> View:
+        """C6 — drop the tail-recap message unless this step is a cadence
+        boundary or the plan/checklist has drifted. The recap CONTENT is
+        unchanged (the underlying PlanEvent + plan_step actions remain
+        visible earlier in the messages list, so the model never loses
+        the goal — just the redundant every-step re-render). No new
+        steering text is added; this is a passive recap cadence, not a
+        steer (no-automatic-nudge invariant c97c1b3).
+        """
+        # C6: count the step (0-indexed) — one increment per materialize
+        # call, regardless of whether a re-projection happened inside
+        # (e.g. after a condensation). That keeps the cadence tied to
+        # MODEL TURNS, not View re-materializations.
+        self._recitation_step_count += 1
+        if not (
+            view.messages and view.messages[-1].content.startswith(_RECITATION_SENTINEL)
+        ):
+            # No tail recap in the rendered View (no plan yet) — nothing
+            # to gate. Don't touch the signature: the next step with a
+            # plan will drift on signature != None.
+            return view
+        if self._should_emit_recitation(events):
+            # The View already has a tail-recap; the gate fired (cadence
+            # boundary or drift). Record the signature so the NEXT step
+            # can detect drift.
+            self._recitation_last_signature = self._recitation_signature(events)
+            return view
+        # Gate fires: drop the tail-recap. The model still has the
+        # PlanEvent + plan_step events in the prior messages list, so
+        # the plan info is not lost — just not redundantly re-rendered.
+        return view.model_copy(update={"messages": view.messages[:-1]})
+
     async def _materialize_view(self, events: list[Event]) -> View:
         # S3 Microcompact (GAP A): a cheap, no-model pass FIRST — tombstone no-op
         # turns (a failed call an identical later call superseded) so the lossy
@@ -1920,6 +2349,13 @@ class AgentLoop:
         # Append the snapshot AFTER any condensation (so it is never rebuilt away by
         # a re-projection) and outside View.of (so the render-time snip/mask never
         # touch it). Disco's equivalent of Aider's always-fresh chat_files chunk.
+        # C6 — gate the tail-recap on cadence + drift BEFORE the snapshot
+        # append so the gate inspects a message list whose LAST element
+        # is the recap (or the final condensation-rebuilt tail), not the
+        # snapshot. The gate never touches the snapshot; the snapshot
+        # is appended AFTER the gate regardless of the gate's verdict
+        # (it's authoritative on-disk content the model needs).
+        view = self._gate_recitation(view, events)
         if snapshot is not None:
             _LOG.info(
                 "A8 workspace snapshot injected: %d chars across the working set",
@@ -1928,16 +2364,184 @@ class AgentLoop:
             view = view.model_copy(update={"messages": [*view.messages, snapshot]})
         return view
 
+    async def _collect_pointer_manifest_paths(self, events: list[Event]) -> list[str]:
+        """C16 — collect on-disk artifact paths the hard_reset tombstone will
+        POINT to (NOT summarize). Three sources, all checked for existence on
+        disk so the manifest stays honest (every pointer resolves):
+
+          1. Written deliverables — paths the agent mutated this run (A8's
+             mutating-tool set: file_write / file_edit / file_append /
+             file_replace_lines / file_insert_lines). Most-recent-first.
+          2. Spill logs — `.disco-spill-<uuid>.log` files in the workspace
+             (T10's overflow channel; engine.py:1787 already filters them
+             from the snapshot because the model has no business re-reading
+             them in bulk — but a hard_reset is exactly the time the model
+             DOES need to be able to re-read them selectively, so we POINT
+             at them instead of summarizing).
+          3. `.pmx/MEMORY.md` — standing memory the agent recorded this run
+             (C5's MEMORY channel). The view-channel copy is lost on a
+             hard filesystem reset; the on-disk copy survives.
+
+        Returns a de-duplicated list, most-recent-first. Paths that don't
+        resolve (the sandbox is gone, the file was wiped) are DROPPED — the
+        manifest is required to be honest, and a pointer to a missing file
+        is worse than no pointer."""
+        candidates: list[str] = []
+        seen: set[str] = set()
+
+        def _add(p: str | None) -> None:
+            if not p or p in seen:
+                return
+            seen.add(p)
+            candidates.append(p)
+
+        # 1. Working-set mutating paths (the agent's deliverable surface).
+        mutated, _read = _workspace_paths_from_events(events)
+        for p in mutated:
+            _add(p)
+
+        sbx = getattr(self.executor, "sandbox", None)
+        if sbx is None:
+            return candidates
+
+        # 2. Spill logs in the workspace.
+        try:
+            workspace = getattr(sbx, "workspace_path", None) or ""
+            if workspace:
+                names = await sbx.list_dir(workspace)
+            else:
+                # Some backends don't expose workspace_path; fall back to
+                # the root. We do not hard-fail on a missing attribute —
+                # the manifest degrades gracefully (no spill pointers).
+                names = await sbx.list_dir("")  # type: ignore[arg-type]
+        except Exception:  # noqa: BLE001 — list_dir can raise on a dead backend
+            names = []
+        for name in names:
+            if not isinstance(name, str):
+                continue
+            bn = os.path.basename(name)
+            if bn.startswith(".disco-spill-"):
+                _add(name)
+
+        # 3. `.pmx/MEMORY.md` if present.
+        memory_path = ".pmx/MEMORY.md"
+        try:
+            await sbx.read_file(memory_path)
+            _add(memory_path)
+        except (FileNotFoundError, NotADirectoryError):
+            pass
+        except Exception:  # noqa: BLE001 — a dead sandbox just skips the pointer
+            pass
+
+        return candidates
+
     async def _hard_reset(self, events: list[Event]) -> bool:
-        """Forget-and-summarize after a context-window error (§8). Returns True
-        if a tombstone was appended (progress made)."""
+        """Forget-and-recover after a context-window error (§8). Returns True
+        if a tombstone was appended (progress made).
+
+        C16 — this is a POINTER-ONLY flush (NOT a prose recap). The tombstone's
+        summary is a manifest of on-disk artifact paths the model can re-read
+        selectively — never a freeform prose summary. The dropped span is
+        already too large to re-summarize usefully (it overflowed the
+        context window), and a lossy prose recap is worse than pointing at
+        the bytes on disk. The soft-condense path (should_condense → condense
+        on a token-bound trigger) is byte-unchanged — it still produces a
+        prose summary via the summarizer. Only the hard_reset call site
+        changes (it now passes reason="hard_reset" + the collected paths)."""
+        artifact_paths = await self._collect_pointer_manifest_paths(events)
         tombstone = await self.condenser.condense(
-            events, View.of(events), summarizer=self.summarizer
+            events,
+            View.of(events),
+            summarizer=self.summarizer,
+            reason="hard_reset",
+            artifact_paths=artifact_paths,
         )
         if tombstone is not None:
             await self._emit(tombstone)
             return True
         return False
+
+    # ---- C5: MEMORY write-through + rehydrate-recovery ---------------------
+
+    # Path of the on-disk mirror that survives a hard filesystem reset. The
+    # directory is the harness's own — never written by the agent's tools
+    # directly — so a hostile model can't tamper with the View's source of
+    # truth by overwriting it.
+    _PMX_MEMORY_PATH = ".pmx/MEMORY.md"
+
+    async def _write_pmx_memory_fact(self, scope: str, fact: str) -> None:
+        """C5 — write-through: append one (scope, fact) pair to `.pmx/MEMORY.md`
+        in the live sandbox. The file is a MIRROR of the in-View KnowledgeEvent
+        channel (which is the authoritative in-session source); the file exists
+        only so a hard reset / box wipe can re-read it on the fresh instance.
+
+        Best-effort: a missing sandbox is a no-op (sandbox-less executors in
+        tests). The on-disk format is a simple Markdown list grouped by scope
+        (`## <scope>` heading + `- <fact>` items), which is human-readable and
+        easy to parse on rehydrate. NO deduplication here — the in-View
+        `remember` handler already dedupes (see _remember_tool_singleton's
+        `seen` set in this file), so the file only ever sees novel facts.
+        """
+        sbx = getattr(self.executor, "sandbox", None)
+        if sbx is None:
+            return
+        path = self._PMX_MEMORY_PATH
+        # Read existing content (if any). A missing file means a fresh mirror.
+        try:
+            existing = (await sbx.read_file(path)).decode("utf-8", errors="replace")
+        except (FileNotFoundError, NotADirectoryError):
+            existing = ""
+        except Exception:  # noqa: BLE001 — read flakiness: start clean
+            existing = ""
+        lines: list[str] = existing.splitlines() if existing.strip() else [
+            "# Standing memory",
+            "",
+            "Durable facts the agent learned this run (C5: write-through mirror of the in-View KnowledgeEvent channel).",
+            "",
+        ]
+        if scope:
+            header = f"## {scope}"
+            if header not in lines:
+                lines.append("")
+                lines.append(header)
+                lines.append("")
+            # Insert the fact as a list item directly under the scope header.
+            idx = lines.index(header)
+            lines.insert(idx + 1, f"- {fact}")
+        else:
+            lines.append("")
+            lines.append(f"- {fact}")
+        # Trailing newline keeps the file POSIX-clean.
+        await sbx.write_file(path, ("\n".join(lines) + "\n").encode("utf-8"))
+
+    async def _drain_recovered_memory_facts(self) -> int:
+        """C5 — pull recovered facts from the session (set by SandboxSession
+        when its post-recreate read-back finds `.pmx/MEMORY.md` on the fresh
+        box) and re-emit them as KnowledgeEvents. The View channel is the
+        authoritative in-session source, so re-emitting brings the in-memory
+        knowledge state back in sync with the surviving on-disk mirror.
+
+        Returns the number of facts re-emitted (0 if the session had no
+        recovery data — a fresh box that was never written to, or a
+        sandbox-less / fake executor in tests).
+        """
+        sbx = getattr(self.executor, "sandbox", None)
+        take = getattr(sbx, "take_recovered_memory_facts", None) if sbx is not None else None
+        if take is None:
+            return 0
+        try:
+            facts = take() or []
+        except Exception:  # noqa: BLE001 — recovery is best-effort
+            return 0
+        count = 0
+        for scope, snippet in facts:
+            if not snippet:
+                continue
+            await self._emit(
+                KnowledgeEvent(source=EventSource.AGENT, scope=scope, snippet=snippet)
+            )
+            count += 1
+        return count
 
     # ---- execute-and-observe (§4.1) -----------------------------------------
 
@@ -1974,6 +2578,13 @@ class AgentLoop:
             return
         if result.success:
             await self._emit(ObservationEvent(tool_result=result, action_id=action.id))
+            # C18 — advisory done-condition probe. If this was a
+            # `plan_step(idx, 'done')` for a step that had a `done_condition`
+            # attached, evaluate the predicate and emit a visible
+            # pass/fail note. ADVISORY ONLY: a failure never blocks, never
+            # nudges, never duplicates the C1c finish gate. Steps without
+            # a predicate are an immediate no-op (back-compat).
+            await self._maybe_emit_plan_step_done_condition_note(action)
         else:
             await self._emit(
                 AgentErrorEvent(
@@ -2010,6 +2621,340 @@ class AgentLoop:
                     ),
                 ),
             )
+        )
+
+    # ---- C20: subagent fan-out (delegate_explore) -------------------------
+
+    async def _run_fanout(
+        self, args: dict, events: list[Event], *, call_id: str = ""
+    ) -> "ToolResult":
+        """C20 — dispatch the read-only Explore/Plan helper task and return the
+        joined result as a `ToolResult` (the caller — the `delegate_explore`
+        intercept path — folds it back as a paired `ObservationEvent`).
+
+        The default implementation is a THIN, DETERMINISTIC STUB: it
+        serializes the helper's question + context into a short structured
+        report and returns it. This is a TEST SEAM — tests override
+        `_run_fanout` on the loop instance to control the response. In a
+        production wiring, the stub is replaced by a real LLM round-trip
+        that offers the helper ONLY the read-only tools
+        (file_read / file_list / search / extract) and folds the response
+        back the same way. The shape of the return (a `ToolResult`) does
+        not change between stub and production; the loop's
+        observe-and-continue path is the same either way.
+
+        Why a stub default (vs. a real LLM call here):
+          * bounded test — no model required, no flakiness, no
+            per-call latency, no cost (a real round-trip would burn
+            tokens on every fan-out);
+          * the BOUNDED cap + the dispatch+join shape are the load-
+            bearing pieces for the C20 acceptance; the helper's
+            INTERNAL logic is a separate concern;
+          * the production hook is a one-method override; the test
+            seam and the production hook are the same surface.
+
+        Returns a `ToolResult(success=True, content=..., structured=...)`
+        on a clean dispatch. The `call_id` echoes the loop's call_id so
+        the resulting ObservationEvent stays properly paired with the
+        proposed ActionEvent the loop just emitted (KV-cache stability,
+        same discipline as the remember/serve intercept paths)."""
+
+        # Import ToolResult locally to avoid a circular-import risk at
+        # module-load time (the engine module is imported widely; keeping
+        # the symbol scoped to the function is the conservative choice).
+        from disco.core import ToolResult as _ToolResult
+
+        # Length-bound the question + context (the engine truncates
+        # BEFORE dispatching the seam, so a model that overrides
+        # _run_fanout also sees a bounded input — the bound is a
+        # property of the fan-out, not of this stub). Defensive: the
+        # engine's interception path also length-bounds, so by the
+        # time we get here the fields are already short; the defensive
+        # bound here is a belt-and-suspenders for a direct override
+        # that bypasses the engine's path (a unit test, a regression
+        # case).
+        question = str(args.get("question") or "").strip()
+        context = str(args.get("context") or "").strip()
+        # Defensive bound (the engine's path already length-bounds; this
+        # is a belt-and-suspenders for a direct override).
+        _trunc_marker = "\u2026[truncated]"
+        if len(question) > _FANOUT_INPUT_MAX_CHARS:
+            question = question[: _FANOUT_INPUT_MAX_CHARS - len(_trunc_marker)] + _trunc_marker
+        if len(context) > _FANOUT_INPUT_MAX_CHARS:
+            context = context[: _FANOUT_INPUT_MAX_CHARS - len(_trunc_marker)] + _trunc_marker
+        # The stub's report: a structured, model-readable summary. In a
+        # production wiring this is the helper's actual response; here
+        # it is a deterministic echo so tests can assert on the shape
+        # (and so a caller that does not override the seam still gets
+        # a clean, honest "helper ran" report).
+        return _ToolResult(
+            call_id=call_id,  # echoes the proposed call's call_id (KV-cache pairing)
+            tool_name="delegate_explore",
+            success=True,
+            content=(
+                f"[C20 fan-out #{self._fanout_count}/{self._fanout_max}] "
+                f"helper dispatched: question=\"{question[:80]}{'…' if len(question) > 80 else ''}\""
+                + (f" context={len(context)} chars" if context else "")
+                + ". (Default stub — override `_run_fanout` for a real subagent.)"
+            ),
+            structured={
+                "fanout_index": self._fanout_count,
+                "fanout_max": self._fanout_max,
+                "question_chars": len(question),
+                "context_chars": len(context),
+                "stub": True,
+            },
+        )
+
+    # ---- C18: advisory plan-step done-condition ----------------------------
+
+    async def _maybe_emit_plan_step_done_condition_note(self, action: ActionEvent) -> None:
+        """If `action` is a `plan_step(idx, 'done')` whose plan step has a
+        stored `done_condition` predicate, evaluate it inline and emit a
+        visible pass/fail note in the trace. ADVISORY ONLY:
+
+          * never blocks the run;
+          * never nudges the agent (no <system-reminder>, no auto-continue,
+            no speak-back to the model);
+          * never duplicates the C1c finish gate (the C18 check uses a
+            lightweight inline evaluator; the C1c gate uses the heavy
+            fresh-context DoDEvaluator and gates `finish` itself).
+
+        Steps WITHOUT a predicate are a strict no-op (back-compat): no
+        lookup, no note, no event. The check fires only on `state="done"`,
+        never on `state="active"` (an active mark is the agent saying
+        "I am starting" — there is no work to check yet)."""
+        tc = action.tool_call
+        if tc is None or tc.tool_name != "plan_step":
+            return
+        args = tc.arguments or {}
+        state = str(args.get("state") or "")
+        if state != "done":
+            return
+        # Find the latest plan + the step's (revision, index). The current
+        # plan is whichever PlanEvent has the highest revision; a re-plan
+        # supersedes, so we must use the LATEST (not just any) — the
+        # `_plan_step_predicates` map is revision-scoped for exactly this
+        # reason (a stale (revision, idx) must not match a fresh plan).
+        try:
+            idx = int(args.get("index"))
+        except (TypeError, ValueError):
+            return
+        events = await self._events()
+        latest_plan: PlanEvent | None = None
+        for e in events:
+            if isinstance(e, PlanEvent):
+                if latest_plan is None or e.revision >= latest_plan.revision:
+                    latest_plan = e
+        if latest_plan is None:
+            return  # no plan in scope — the plan_step is unanchored
+        # 1-based step index. Out-of-range = nothing to look up.
+        if idx < 1 or idx > len(latest_plan.steps):
+            return
+        predicate = self._plan_step_predicates.get((latest_plan.revision, idx))
+        if predicate is None:
+            # Back-compat: a step with no predicate is the explicit design
+            # target (most steps). No note, no extra event. Today was
+            # silent here and stays silent.
+            return
+        passed, reason = await self._evaluate_plan_step_predicate(predicate)
+        # The note is a <system-reminder>-less MessageEvent from
+        # ENVIRONMENT with source=ADVISORY semantics: it is visible in
+        # the trace for the human and the LLM sees it on its next turn
+        # as a normal message (NOT a system-reminder, so it does NOT
+        # nudge — the model is free to ignore or act on it as it sees
+        # fit). The "advisory" framing in the prefix is what makes the
+        # no-nudge contract explicit in the trace.
+        verdict_word = "met" if passed else "NOT met"
+        body = (
+            f"[advisory, C18] done-condition for plan step {idx} "
+            f"(\"{latest_plan.steps[idx - 1].title}\"): {verdict_word}. "
+            f"{reason}"
+        )
+        await self._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(role="user", content=body),
+                meta={"advisory": "plan_step_done_condition", "passed": passed},
+            )
+        )
+
+    async def _evaluate_plan_step_predicate(
+        self, predicate: DoDPredicate
+    ) -> tuple[bool, str]:
+        """Lightweight inline evaluation of a single DoDPredicate for the
+        C18 advisory note. The three kinds reuse the
+        `disco.core.dod.DoDPredicate` discriminated union:
+
+          * `file_exists(path)`: resolved against the executor's sandbox
+            workspace root (so the predicate talks about agent-visible
+            files, not harness-private paths), with a path-escape check
+            mirroring the C1b evaluator's discipline (a `path` that
+            resolves outside the workspace is a hard FAIL — the
+            predicate is not silently passed by an out-of-scope match).
+          * `command(cmd, expect_exit)`: a tight-timeout subprocess run
+            against the workspace root. Deny-list failures and timeouts
+            count as a non-pass with the reason surfaced.
+          * `http_ok(url, expect_status)`: a short-timeout GET against
+            the URL; a non-matching status is a non-pass.
+
+        Returns `(passed, reason)`. The reason is a one-line human-
+        readable summary the C18 note emits in the trace; on failure it
+        names WHY the predicate did not pass (file missing, command
+        exited N, http status 5xx, etc.) so the user can see the truth
+        of the check, not just a boolean.
+
+        Distinct from the C1c gate's `DoDEvaluator`: this is a single-
+        predicate inline check that runs in the same context as the rest
+        of the loop, not a fresh-context judge. The C1c gate is the
+        authoritative DoD check at finish time; C18 is the
+        per-step advisory trail."""
+        if isinstance(predicate, FileExistsPredicate):
+            return self._check_file_exists_for_plan_step(predicate)
+        if isinstance(predicate, CommandExitPredicate):
+            return await self._check_command_for_plan_step(predicate)
+        if isinstance(predicate, HTTPOkPredicate):
+            return await self._check_http_for_plan_step(predicate)
+        # Defensive: the union is closed (three kinds) and
+        # `predicate_from_obj` rejects unknown kinds at submit_plan
+        # time. A future kind would land here as a fail-loud non-pass
+        # rather than a silent pass.
+        return (False, f"unsupported predicate kind: {type(predicate).__name__}")
+
+    def _check_file_exists_for_plan_step(
+        self, predicate: FileExistsPredicate
+    ) -> tuple[bool, str]:
+        """Resolve `predicate.path` against the executor's sandbox workspace
+        root (when available) and check existence. The path-escape check
+        mirrors the C1b evaluator's discipline: a `file_exists` whose
+        resolved path lies outside the workspace is a hard FAIL — the
+        predicate is not silently passed by a coincidental match on an
+        out-of-scope file."""
+        from pathlib import Path
+        sbx = getattr(self.executor, "sandbox", None)
+        workspace = getattr(sbx, "workspace_path", None) if sbx is not None else None
+        path_str = predicate.path
+        if workspace:
+            try:
+                root = Path(workspace).resolve()
+                candidate = (root / path_str).resolve()
+                root_str = str(root)
+                candidate_str = str(candidate)
+                # On Windows the resolved strings may differ in case;
+                # `Path.resolve()` is case-aware but the prefix check is
+                # not, so do a normalized comparison. The agent runs
+                # inside a Linux sandbox, so the suffix match is the
+                # load-bearing case in practice.
+                if not (
+                    candidate_str == root_str
+                    or candidate_str.startswith(root_str.rstrip("/") + "/")
+                ):
+                    return (
+                        False,
+                        f"file_exists: path escapes workspace ({path_str})",
+                    )
+                if candidate.exists():
+                    return (True, f"file_exists({path_str}): found at {candidate}")
+                return (False, f"file_exists({path_str}): missing (resolved {candidate})")
+            except (OSError, ValueError) as exc:
+                return (False, f"file_exists({path_str}): resolve error ({exc})")
+        # No workspace_root: check the literal path. This is the
+        # sandbox-less / fake-executor path used in tests; the result
+        # is just as honest (the predicate names a literal path, we
+        # check the literal path).
+        p = Path(path_str)
+        if p.exists():
+            return (True, f"file_exists({path_str}): found")
+        return (False, f"file_exists({path_str}): missing")
+
+    async def _check_command_for_plan_step(
+        self, predicate: CommandExitPredicate
+    ) -> tuple[bool, str]:
+        """Run `predicate.cmd` in a fresh subprocess against the workspace
+        root and compare to `predicate.expect_exit` (default 0). Tight
+        timeout to keep the loop responsive. Failures (deny, timeout,
+        wrong exit) are surfaced with the reason in the note."""
+        from pathlib import Path
+        import asyncio
+        import subprocess
+        sbx = getattr(self.executor, "sandbox", None)
+        workspace = getattr(sbx, "workspace_path", None) if sbx is not None else None
+        cwd = str(Path(workspace).resolve()) if workspace else None
+        # 5s is plenty for a per-step done-condition probe — the C1c
+        # gate uses the same default. C18 is advisory so we DON'T hang
+        # the loop on a stuck command.
+        timeout = 5.0
+
+        def _run() -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                predicate.cmd,
+                shell=True,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+                env={"PATH": os.environ.get("PATH", "")},
+            )
+
+        started = asyncio.get_event_loop().time()
+        try:
+            completed = await asyncio.to_thread(_run)
+        except subprocess.TimeoutExpired:
+            return (False, f"command({predicate.cmd!r}): timeout after {timeout}s")
+        except Exception as exc:  # noqa: BLE001 — defensive
+            return (
+                False,
+                f"command({predicate.cmd!r}): executor error "
+                f"({type(exc).__name__}: {exc})",
+            )
+        duration = asyncio.get_event_loop().time() - started
+        if completed.returncode == predicate.expect_exit:
+            return (
+                True,
+                f"command({predicate.cmd!r}): exited {completed.returncode} "
+                f"as expected (in {duration:.2f}s)",
+            )
+        return (
+            False,
+            f"command({predicate.cmd!r}): exited {completed.returncode}, "
+            f"expected {predicate.expect_exit}",
+        )
+
+    async def _check_http_for_plan_step(
+        self, predicate: HTTPOkPredicate
+    ) -> tuple[bool, str]:
+        """GET `predicate.url` and compare to `predicate.expect_status`
+        (default 200). Tight timeout; failures surface the reason. Does
+        NOT enforce the C1b egress allow-list — this is a per-step
+        advisory check the agent opted into by attaching the predicate;
+        the C1c gate (fresh-context, with egress discipline) is the
+        authoritative check."""
+        import asyncio
+        try:
+            import httpx
+        except ImportError:
+            # httpx is in disco-core's deps (we saw it in pyproject.toml),
+            # but be defensive in case the test env differs.
+            try:
+                import urllib.request
+                with urllib.request.urlopen(predicate.url, timeout=2.0) as resp:
+                    status = int(resp.status)
+            except Exception as exc:  # noqa: BLE001 — defensive
+                return (False, f"http_ok({predicate.url}): error ({exc})")
+        else:
+            try:
+                async with httpx.AsyncClient(timeout=2.0) as client:
+                    resp = await client.get(predicate.url)
+                    status = int(resp.status_code)
+            except Exception as exc:  # noqa: BLE001 — defensive
+                return (False, f"http_ok({predicate.url}): error ({exc})")
+        if status == predicate.expect_status:
+            return (True, f"http_ok({predicate.url}): status {status} as expected")
+        return (
+            False,
+            f"http_ok({predicate.url}): status {status}, "
+            f"expected {predicate.expect_status}",
         )
 
     async def _finish_verify_passed(self, command: str) -> bool:
@@ -2115,6 +3060,163 @@ class AgentLoop:
             )
         return passed, malformed
 
+    # ---- C1c: external DoD evaluator gate on `finish` ----------------------
+    # Wires the C1b fresh-context judge into the finish branch. Mirrors the
+    # verify-on-finish gate's discipline: refuse-and-continue, never silent,
+    # and BYTE-IDENTICAL to today's behavior when no DoD spec is set. See
+    # `core/dod.py` for the immutability argument — the spec is write-once
+    # and lives outside the agent's tool surface, so the predicates are not
+    # the agent's own (they were captured at task start / plan approval).
+    #
+    # OSS prior-art: OpenHands' `_check_iterative_refinement` emits a followup
+    # prompt when an external critic fails instead of finishing; this gate
+    # does the same — emit a visible reminder, increment the refusal counter,
+    # `continue` so the run keeps going. No cap: the loop's max_iterations
+    # + the user's kill switch are the ultimate exits (the spec is
+    # structural, not a forcing function with a release valve — a model that
+    # genuinely cannot satisfy the predicates should be unblocked by the
+    # user, not by a quiet auto-release).
+
+    async def _finish_dod_gate_passed(self) -> bool:
+        """C1c DoD gate. Returns True iff the finish should be allowed.
+
+        Algorithm (in order):
+          1. Read the DoD spec from the store. None → no spec → True
+             (LEGACY BYTE-IDENTICAL PATH — no events emitted, no state
+             changed, control flow identical to pre-C1c).
+          2. Build a DoDEvaluator. Factory-injected if the loop was
+             constructed with one; otherwise build a default over the
+             executor's sandbox workspace_root (or skip the gate if the
+             sandbox doesn't expose a path — defensive, never a crash).
+          3. Run the verdict against the spec.
+          4. Verdict passed → True (the finish lands).
+          5. Verdict failed → emit a MessageEvent carrying the SPECIFIC
+             unmet predicates (visible to the agent AND the audit), bump
+             the refusal streak, return False so the caller `continue`s.
+
+        Visible: the refusal is a `<system-reminder>` MessageEvent with the
+        spec fingerprint, the number of unmet predicates, and a per-
+        predicate line naming kind + reason. Never silent: a refused finish
+        ALWAYS leaves a trace event. Same shape as verify-on-finish's
+        refusal, distinct content (the predicates are external, not the
+        agent's own command)."""
+        spec = await self.store.get_dod_spec(self.conversation_id)
+        if spec is None:
+            # LEGACY: no DoD spec for this conversation → the gate is a
+            # no-op. Today's finish path is reproduced EXACTLY — no events,
+            # no state change, no log query beyond a single SELECT. The
+            # read is observable as a side-effect-free DB query; it does
+            # NOT change the events, status transitions, or final state.
+            return True
+        # Spec exists → run the evaluator. The factory seam is the test
+        # injection point (fakes for command_runner / http_probe); the
+        # default builds a real DoDEvaluator over the executor's workspace.
+        try:
+            evaluator = await self._build_dod_evaluator()
+        except _DoDWorkspaceUnavailable:
+            # No workspace to grade against. This is a misconfiguration
+            # (the spec was set but the sandbox doesn't expose a path),
+            # not a predicate failure. We log and skip the gate rather
+            # than refusing forever — refusing without a reason would
+            # also be a silent failure mode. The audit trail will see the
+            # log line; the agent sees no gate, so the run can finish.
+            _LOG.warning(
+                "DoD spec set for %s but no workspace_root available; "
+                "skipping C1c gate (refusing without evidence would be a "
+                "silent fail).",
+                self.conversation_id,
+            )
+            return True
+        verdict = await evaluator.evaluate(spec, conversation_id=self.conversation_id)
+        if verdict.passed:
+            self._dod_refusals = 0  # clean pass → reset the streak (mirror verify)
+            return True
+        # Cap the refusal streak (mirror _FINISH_VERIFY_CAP): after N consecutive
+        # DoD refusals, RELEASE the gate so an agent that cannot satisfy the
+        # external DoD is not trapped in an unbounded refuse-and-continue loop
+        # (that loop accumulates events without end — the OOM the uncapped first
+        # cut caused). The release is logged LOUDLY; the prior refusal events
+        # remain the visible audit trail of the unmet predicates.
+        if self._dod_refusals >= _DOD_REFUSAL_CAP:
+            _LOG.warning(
+                "DoD for %s still unmet after %d refusals (cap %d) — releasing the "
+                "finish gate to avoid an unbounded refuse loop.",
+                self.conversation_id,
+                self._dod_refusals,
+                _DOD_REFUSAL_CAP,
+            )
+            return True
+        # Refuse + keep working. The agent sees the SPECIFIC unmet
+        # predicates (named by `kind` + the frozen-predicate `repr`); the
+        # audit sees the spec fingerprint + the per-predicate results.
+        self._dod_refusals += 1  # bounded by _DOD_REFUSAL_CAP (see above)
+        unmet_lines: list[str] = []
+        for result in verdict.results:
+            if result.passed:
+                continue
+            # The frozen predicate's repr names kind + fields. Pair with
+            # the verdict's reason (the human explanation).
+            unmet_lines.append(f"  - {result.predicate!r}\n      reason: {result.reason}")
+        unmet_block = "\n".join(unmet_lines) if unmet_lines else "  - (no per-predicate results)"
+        await self._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(
+                    role="user",
+                    content=(
+                        "<system-reminder>\n"
+                        "You called finish, but the external Definition-of-Done "
+                        f"evaluator found {len(verdict.unmet)} unmet acceptance "
+                        f"predicate(s) (spec fingerprint {verdict.spec_fingerprint}):\n\n"
+                        f"{unmet_block}\n\n"
+                        "The task is NOT complete. These predicates were captured at "
+                        "task start and live outside the agent's tool surface — you "
+                        "cannot edit them, you can only satisfy them. Fix what they "
+                        "surface (the predicates name the gap), then finish again.\n"
+                        "</system-reminder>"
+                    ),
+                ),
+            )
+        )
+        return False
+
+    async def _build_dod_evaluator(self) -> DoDEvaluator:
+        """Construct the DoDEvaluator. Two paths:
+
+          * `_dod_evaluator_factory` is set (test seam): call it, ignore args.
+          * Otherwise: derive the workspace_root from the executor's sandbox
+            (the in-cluster `workspace_path`); if absent, raise
+            `_DoDWorkspaceUnavailable` and the gate degrades to "skip".
+
+        The factory is the dependency-injection point — tests close over
+        a tmp_path + fake command_runner / http_probe and return a fully
+        configured `DoDEvaluator`. Production callers leave the factory
+        None and the engine does the workspace resolution here.
+        """
+        if self._dod_evaluator_factory is not None:
+            # The factory is an async-callable in the common case (tests
+            # want to close over a `tmp_path` + fakes without performing
+            # any I/O at construction time), but a sync callable is also
+            # accepted — production callers may want to keep the
+            # construction cheap. Awaiting a non-awaitable raises
+            # TypeError, which the gate's `_DoDWorkspaceUnavailable`-
+            # style `try/except` doesn't catch; the explicit
+            # `inspect.iscoroutine` check keeps both shapes working.
+            import inspect
+
+            result = self._dod_evaluator_factory()
+            if inspect.iscoroutine(result):
+                result = await result
+            return result
+        sbx = getattr(self.executor, "sandbox", None)
+        workspace = getattr(sbx, "workspace_path", None) if sbx is not None else None
+        if not workspace:
+            raise _DoDWorkspaceUnavailable(
+                f"no sandbox.workspace_path on executor {type(self.executor).__name__}"
+            )
+        from pathlib import Path
+        return DoDEvaluator(Path(workspace))
+
     async def _stop_allowed(self, state: ConversationState, events: list[Event]) -> bool:
         for hook in self._stop_hooks:
             if not await hook.allow_stop(state, events):
@@ -2131,6 +3233,30 @@ class AgentLoop:
         self._invisible_steps = 0
         self._finish_verify_refusals = 0  # fresh segment → fresh verify-cap streak
         self._finish_verify_strips = 0
+        # C1c — fresh segment → fresh DoD-refusal streak (telemetry; the gate
+        # has no cap, but a resume/steer should not carry a streak across).
+        self._dod_refusals = 0
+        # C20 — fresh segment → fresh fan-out budget. The cap is per-run-
+        # segment so a resume/steer gets a fresh budget (a steered user
+        # message is a clean slate; the prior segment's helper round-trips
+        # are already visible in the log).
+        self._fanout_count = 0
+        # C6 — fresh segment → fresh recitation cadence. The step counter
+        # restarts at 0 (so the first step after resume is on a cadence
+        # boundary and re-emits the recap — the model may have lost
+        # context across the pause and the goal needs to be visible).
+        # The signature is reset to None so a plan that arrived mid-pause
+        # OR a checklist mark the model made pre-pause is detected as
+        # drift on the first post-resume step (it differs from None).
+        self._recitation_step_count = 0
+        self._recitation_last_signature = None
+        # C18 — NOTE: `_plan_step_predicates` is intentionally NOT reset
+        # here. The map is per-(plan_revision, step_index) and is
+        # populated by `_plan_from_args` at submit_plan / re-plan time;
+        # a re-plan overwrites by revision so stale entries can't match.
+        # Clearing on every run() entry would wipe the predicates
+        # between planning and the first post-approve execution call,
+        # silently disabling the advisory check.
         state = await self.get_state()
         if state.execution_status in _TERMINAL_FOR_NOW and state.execution_status != (
             ConversationStatus.IDLE
@@ -2206,6 +3332,16 @@ class AgentLoop:
                     )
                     return await self.get_state()
 
+                # C5 — drain any recovered MEMORY facts the session has staged
+                # from a post-recreate read of `.pmx/MEMORY.md` (SandboxSession
+                # sets these on a mid-session box death / hard reset). The
+                # in-View channel is the authoritative in-session source; this
+                # is the moment the recovered facts are re-emitted as
+                # KnowledgeEvents, restoring the View to match the surviving
+                # on-disk mirror. Runs once per recreate (the session drains
+                # itself on `take_recovered_memory_facts`).
+                await self._drain_recovered_memory_facts()
+
                 # (c) stuck detection BEFORE more work (§6). ESCAPE-then-halt: a
                 # repeating action→error loop first gets ONE reframe attempt (a strong
                 # "stop repeating, try a different approach" reminder + a temperature
@@ -2219,12 +3355,31 @@ class AgentLoop:
                 )
                 if self._stuck.is_stuck(self._recent(events)):
                     if escape_seq is None:
-                        # First time: do NOT inject a reminder (the harness-doesn't-nudge
-                        # rule — reminders dilute instructions; failures are already
-                        # visible context). Instead drop a `stuck_escape` MARKER (a status
-                        # event, not a reminder) and let the model retry the NEXT step at a
-                        # high temperature — jittering hard to break the self-imitation
-                        # chain — before we ever declare STUCK.
+                        # First time in this user turn: drop a `stuck_escape` MARKER
+                        # (a status event) AND inject a C7 escape reminder (from the
+                        # rotating pool, with a per-attempt serialization nonce) so
+                        # the model's next step sees fresh anti-imitation text —
+                        # the harness-doesn't-nudge rule (c97c1b3) is preserved by
+                        # keeping the reminder INSIDE this escape branch (no
+                        # reminder outside the existing stuck-escape path). The
+                        # attempt count is the count of escape markers emitted
+                        # BEFORE this one (so attempt 0 → pool[0], attempt 1 →
+                        # pool[1], etc., rotating modulo len(pool) on later
+                        # escapes within the same conversation). The next step's
+                        # temperature is bumped (escape_temp below) — the reminder
+                        # is the in-context half, the temperature is the
+                        # sampling-variance half, and together they break the
+                        # self-imitation chain the way neither could alone.
+                        attempt = self._stuck_escape_attempt_count(events)
+                        await self._emit(
+                            MessageEvent(
+                                source=EventSource.ENVIRONMENT,
+                                message=LLMMessage(
+                                    role="user",
+                                    content=_stuck_escape_reminder(attempt),
+                                ),
+                            )
+                        )
                         await self._emit(
                             StatusEvent(status=ConversationStatus.RUNNING, detail="stuck_escape")
                         )
@@ -2506,6 +3661,13 @@ class AgentLoop:
                                 "remember",
                                 "serve",
                                 self._plan_tool,
+                                # C20 — `delegate_explore`: read-only
+                                # Explore/Plan helper. Listed in the
+                                # known-names set so the Rung 7 requery
+                                # doesn't bounce a valid fan-out call.
+                                # The cap is enforced at the call site,
+                                # NOT via schema suppression.
+                                "delegate_explore",
                             }
                             # Include mode-scoped virtuals (planning tools) so
                             # we don't requery for valid exploration turns.
@@ -2742,6 +3904,25 @@ class AgentLoop:
                             await self._emit(
                                 KnowledgeEvent(source=EventSource.AGENT, scope=scope, snippet=fact)
                             )
+                            # C5 — write-through mirror: persist the fact to
+                            # `<workspace>/.pmx/MEMORY.md` so the standing
+                            # memory survives a hard filesystem reset (a
+                            # box wipe / fresh backend). The in-View
+                            # KnowledgeEvent channel remains the
+                            # authoritative in-session source — `.pmx/`
+                            # is a write-through mirror, not a divergent
+                            # second store. Best-effort: a sandbox write
+                            # failure is logged but never blocks the
+                            # in-View emission (the agent still has the
+                            # fact in-context for THIS run).
+                            try:
+                                await self._write_pmx_memory_fact(scope, fact)
+                            except Exception:  # noqa: BLE001 — mirror is best-effort
+                                import logging as _logging
+                                _logging.getLogger(__name__).warning(
+                                    "pmx MEMORY write-through failed (in-View fact survives)",
+                                    exc_info=True,
+                                )
                     else:
                         # Blank fact persists NOTHING — count it or it's an
                         # unbounded silent token burn.
@@ -2822,6 +4003,123 @@ class AgentLoop:
                                     deployment_url=url,
                                 )
                             )
+                    events = await self._events()
+                    noops = self._consecutive_noops(events) + self._invisible_steps
+                    if await self._actionless_valve(events, noops):
+                        return await self.get_state()
+                    continue  # non-blocking — keep working
+                # C20 — `delegate_explore`: a bounded, read-only Explore/Plan
+                # helper the loop dispatches+joins. The driver calls it; the
+                # loop:
+                #   1. enforces the per-run-segment cap (_FANOUT_MAX_PER_RUN;
+                #      past the cap → refuse with a system-reminder, no
+                #      dispatch, no observation);
+                #   2. emits the ActionEvent (so the audit trail sees the
+                #      proposed call);
+                #   3. dispatches the subagent (default: a thin deterministic
+                #      stub — the test seam; production wires a real LLM
+                #      round-trip with read-only tools only — see
+                #      `_run_fanout` for the override hook);
+                #   4. folds the subagent's response back as a paired
+                #      ObservationEvent (success=True on a clean dispatch,
+                #      success=False with error="cap_exceeded" on refusal)
+                #      so the driver sees the result on its next turn.
+                # The helper is READ-ONLY: a subagent cannot mutate
+                # workspace state, cannot run shell, cannot write files
+                # (enforced upstream by the tools the helper is offered —
+                # file_read/file_list/search/extract; the engine also
+                # cannot recurse through `delegate_explore` because the
+                # cap applies to nested calls too). NON-BLOCKING: the
+                # driver keeps working right after — the same shape as
+                # notify_user/remember/serve (the actionless valve still
+                # applies if a fan-out produces no real work).
+                if (
+                    step.tool_call is not None
+                    and step.tool_call.tool_name == "delegate_explore"
+                ):
+                    if self._fanout_count >= self._fanout_max:
+                        # Cap exceeded — refuse with feedback. The cap is
+                        # per-run-segment, so a fresh `run()` resets it.
+                        # We do NOT raise / halt / STUCK (this is a soft
+                        # "no more fan-outs this segment" gate, not a
+                        # stuck-detector); we emit a system-reminder +
+                        # ActionEvent + AgentErrorEvent (paired by
+                        # call_id) so the driver sees the refusal on its
+                        # next turn and falls back to direct tools. The
+                        # refusal is invisible to the actionless valve
+                        # (an error-paired action doesn't extend the
+                        # noop streak).
+                        action = ActionEvent(
+                            thought=step.thought,
+                            tool_call=step.tool_call,
+                            self_assessed_risk=step.self_assessed_risk,
+                            llm_response_id=step.llm_response_id,
+                        )
+                        await self._emit(action)
+                        await self._emit(
+                            AgentErrorEvent(
+                                error=(
+                                    "<system-reminder>\n"
+                                    f"delegate_explore refused: the per-run-segment "
+                                    f"cap ({self._fanout_max}) has been reached "
+                                    f"(used {self._fanout_count}/{self._fanout_max} "
+                                    f"this segment). Fall back to direct read-only "
+                                    f"tools (file_read, file_list, search, extract) "
+                                    f"for the rest of this run segment; a fresh run "
+                                    f"segment resets the budget.\n"
+                                    "</system-reminder>"
+                                ),
+                                action_id=action.id,
+                                tool_call_id=(
+                                    action.tool_call.call_id if action.tool_call else None
+                                ),
+                            )
+                        )
+                        continue  # non-blocking — let the model adapt
+                    # Under the cap → record the proposed action, dispatch
+                    # the helper, and fold the result back. The dispatch
+                    # is `await`ed so the ActionEvent and ObservationEvent
+                    # land in the same turn (the driver sees both on its
+                    # next step).
+                    self._fanout_count += 1
+                    action = ActionEvent(
+                        thought=step.thought,
+                        tool_call=step.tool_call,
+                        self_assessed_risk=step.self_assessed_risk,
+                        llm_response_id=step.llm_response_id,
+                    )
+                    await self._emit(action)
+                    # Length-bound the helper's input BEFORE dispatching —
+                    # the bound is a property of the fan-out (regardless
+                    # of what `_run_fanout` does — a test seam, a real
+                    # LLM round-trip, a future override). Without this
+                    # bound a driver could grow the helper's prompt
+                    # unboundedly within a single segment; the result
+                    # is folded back into the View, which the condenser
+                    # would later have to manage.
+                    _fanout_args = dict(action.tool_call.arguments or {})
+                    _trunc_marker = "\u2026[truncated]"
+                    for _k in ("question", "context"):
+                        _v = str(_fanout_args.get(_k) or "")
+                        if len(_v) > _FANOUT_INPUT_MAX_CHARS:
+                            _fanout_args[_k] = (
+                                _v[: _FANOUT_INPUT_MAX_CHARS - len(_trunc_marker)]
+                                + _trunc_marker
+                            )
+                    result = await self._run_fanout(
+                        _fanout_args,
+                        events,
+                        call_id=(
+                            action.tool_call.call_id if action.tool_call else ""
+                        ),
+                    )
+                    await self._emit(
+                        ObservationEvent(tool_result=result, action_id=action.id)
+                    )
+                    # Fan-out is non-blocking — the driver keeps working
+                    # right after. The actionless valve still applies if
+                    # the helper returned empty (a degenerate fan-out is
+                    # still a no-op step, like remember/serve).
                     events = await self._events()
                     noops = self._consecutive_noops(events) + self._invisible_steps
                     if await self._actionless_valve(events, noops):
@@ -2938,6 +4236,23 @@ class AgentLoop:
                             )
                             self._finish_verify_refusals = 0
                             # fall through to finish
+                    # C1c — external DoD evaluator gate. Runs AFTER the
+                    # agent's own verify check (which grades the agent's
+                    # own command) but BEFORE the step is committed to a
+                    # FINISHED status. The spec is captured at task start
+                    # and lives outside the agent's tool surface, so the
+                    # predicates are NOT the agent's own — they're a
+                    # structural, write-once acceptance bar (see
+                    # `core/dod.py`). When the spec exists and the verdict
+                    # fails, the finish is REFUSED and the run CONTINUES —
+                    # the same refuse-and-continue discipline verify-on-
+                    # finish uses. When no spec is set for the
+                    # conversation, the gate is a no-op (legacy path is
+                    # byte-identical). See `_finish_dod_gate_passed` for
+                    # the full algorithm + the byte-identical-no-spec
+                    # proof.
+                    if not await self._finish_dod_gate_passed():
+                        continue  # DoD unmet — keep working (status NOT finished)
                     summary = str(step.tool_call.arguments.get("summary") or "").strip()
                     step = step.model_copy(
                         update={

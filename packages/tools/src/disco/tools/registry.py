@@ -83,9 +83,18 @@ AGENT_TOOLS = frozenset(
         # plan-mode meta tools: propose a plan (planning) + report capstones (execution).
         "submit_plan",
         "plan_step",
+        "think",  # NO-OP reasoning scratchpad — let a small model "say" things without side effects
         "sheet_generate",
         "slides_generate",
         "audio_overview",
+        "image_generate",
+        # C20 — `delegate_explore`: EXECUTION-only. It is NOT a pure read — the
+        # call DISPATCHES a subagent (an action that yields an observation), so
+        # it does NOT belong in the PLANNING surface. The engine appends it via
+        # its virtual-singleton path in execution mode (and never in the
+        # planning branch), so the planner never sees it; the capability
+        # backstop also excludes it (`read_only=False` on the tool def).
+        "delegate_explore",
     }
 )
 
