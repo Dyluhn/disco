@@ -270,7 +270,7 @@ class DefaultLLMRouter:
                 )
                 raise NoEligibleModel(
                     f"Request contains images but model '{key}' does not support VISION. "
-                    f"Check PMX_DRIVER_VISION env and driver-local config."
+                    f"Check DISCO_DRIVER_VISION env and driver-local config."
                 )
 
         return entry, path, "config", []

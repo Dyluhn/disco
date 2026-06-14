@@ -29,6 +29,7 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel
 
+from .env import disco_env
 from .events import (
     ActionEvent,
     AgentErrorEvent,
@@ -321,7 +322,7 @@ class View(BaseModel):
         # BP-00: when the driver has VISION, only the LATEST browser screenshot
         # renders as an image; older ones render as text only to save context.
         # Computed on the post-condensation sequence.
-        driver_has_vision = os.environ.get("PMX_DRIVER_VISION") == "1"
+        driver_has_vision = disco_env("DRIVER_VISION") == "1"
         latest_screenshot_seq = None
         if driver_has_vision:
             for e in reversed(events):

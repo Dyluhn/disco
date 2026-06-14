@@ -16,12 +16,14 @@ after the closing fence.
 from __future__ import annotations
 
 import os
+
+from .env import disco_env
 import re
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-_ENV_DIR = "PMX_SKILLS_DIR"
+_ENV_DIR = "DISCO_SKILLS_DIR"
 _DEFAULT_DIR = "skills"
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?(.*)$", re.DOTALL)
@@ -104,7 +106,7 @@ class SkillStore:
     MAX_BODY_BYTES = 64 * 1024
 
     def __init__(self, path: str | os.PathLike[str] | None = None) -> None:
-        self._dir = Path(path or os.environ.get(_ENV_DIR, _DEFAULT_DIR))
+        self._dir = Path(path or disco_env("SKILLS_DIR", _DEFAULT_DIR))
 
     @property
     def directory(self) -> Path:

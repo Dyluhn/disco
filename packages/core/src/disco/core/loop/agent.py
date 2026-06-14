@@ -44,6 +44,7 @@ from ..llm import (
     OverflowSignal,
     Requirement,
 )
+from ..env import disco_env
 from ..obs import log_span
 from ..view import View
 from .boundaries import AgentStep, StreamHook
@@ -96,7 +97,7 @@ class RouterAgent:
         # the model to start its thought with an honest acknowledgment of
         # the task, reducing the "lazy prose" failure. Gated by flag.
         prefill = None
-        if mode == OperatingMode.PLANNING and os.environ.get("PMX_PLAN_PREFILL") == "1":
+        if mode == OperatingMode.PLANNING and disco_env("PLAN_PREFILL") == "1":
             prefill = "I've analyzed the request and current workspace state. To advance, I will now"
         # C13: Mirror the B9 prefill pattern for the EXECUTION phase
         # (LONG_HORIZON mode in the engine: `execution_mode: OperatingMode =
@@ -105,7 +106,7 @@ class RouterAgent:
         # prose turn. Gated by an independent flag so it can be A/B'd
         # against the planning flag; default OFF keeps the gated-experiment
         # contract — flag OFF is byte-identical to today (prefill stays None).
-        elif mode == OperatingMode.LONG_HORIZON and os.environ.get("PMX_EXEC_PREFILL") == "1":
+        elif mode == OperatingMode.LONG_HORIZON and disco_env("EXEC_PREFILL") == "1":
             prefill = "Given the current workspace state and the last tool result, my next action is to"
 
         req = CompletionRequest(

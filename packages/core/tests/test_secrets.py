@@ -61,7 +61,7 @@ def test_cannot_store_without_app_secret(tmp_path):
         store.set_openrouter_key("sk-or-v1-key")
         raise AssertionError("expected RuntimeError")
     except RuntimeError as exc:
-        assert "PMX_SECRET_KEY" in str(exc)
+        assert "DISCO_SECRET_KEY" in str(exc)
 
 
 def test_clear_removes_the_key(tmp_path):

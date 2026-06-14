@@ -35,6 +35,9 @@ def build_providers(
             *(e.capabilities for e in config.models.values() if e.provider == entry.provider)
         )
         api_key = environ.get(entry.api_key_env) if entry.api_key_env else None
+        if api_key is None and entry.api_key_env and entry.api_key_env.startswith("DISCO_"):
+            # back-compat: honor a legacy PMX_<X> key var when DISCO_<X> is unset
+            api_key = environ.get("PMX_" + entry.api_key_env[len("DISCO_") :])
         providers[entry.provider] = OpenAIProvider(
             entry.base_url,
             name=entry.provider,

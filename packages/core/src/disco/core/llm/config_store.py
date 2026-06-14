@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import os
+
+from ..env import disco_env
 from collections.abc import Callable
 from pathlib import Path
 
@@ -34,7 +36,7 @@ from .config import (
 )
 from .types import ModelRole
 
-_ENV_PATH = "PMX_CONFIG"
+_ENV_PATH = "DISCO_CONFIG"
 _DEFAULT_PATH = "disco-config.json"
 
 
@@ -47,7 +49,7 @@ class ConfigStore:
         *,
         base_factory: Callable[[], RouterConfig] = default_config,
     ) -> None:
-        self._path = Path(path or os.environ.get(_ENV_PATH, _DEFAULT_PATH))
+        self._path = Path(path or disco_env("CONFIG", _DEFAULT_PATH))
         self._base_factory = base_factory
 
     @property

@@ -25,6 +25,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from ..env import disco_env
 from .types import ModelRole, Requirement
 
 
@@ -241,7 +242,7 @@ def default_config() -> RouterConfig:
     _GEMMA = "http://192.168.1.81:8087/v1"
     # [BP-00] Vision gate: the driver is vision-capable ONLY if enabled via env.
     driver_caps = {Requirement.TOOL_CALLING, Requirement.JSON_MODE, Requirement.LONG_CONTEXT}
-    if os.environ.get("PMX_DRIVER_VISION") == "1":
+    if disco_env("DRIVER_VISION") == "1":
         driver_caps.add(Requirement.VISION)
 
     models = {
@@ -273,7 +274,7 @@ def default_config() -> RouterConfig:
             model_id="gemma-4-e2b-mtp",
             provider="gemma",
             base_url=_GEMMA,
-            api_key_env="PMX_GEMMA_API_KEY",
+            api_key_env="DISCO_GEMMA_API_KEY",
             context_window=32_768,
             capabilities=frozenset({Requirement.JSON_MODE}),
             family="gemma",
@@ -282,7 +283,7 @@ def default_config() -> RouterConfig:
             model_id="gemma-4-e2b-mtp",
             provider="gemma",
             base_url=_GEMMA,
-            api_key_env="PMX_GEMMA_API_KEY",
+            api_key_env="DISCO_GEMMA_API_KEY",
             context_window=32_768,
             family="gemma",
         ),
@@ -299,7 +300,7 @@ def default_config() -> RouterConfig:
             model_id="anthropic/claude-3.5-sonnet",
             provider="openrouter",
             base_url="https://openrouter.ai/api/v1",
-            api_key_env="PMX_OPENROUTER_API_KEY",
+            api_key_env="DISCO_OPENROUTER_API_KEY",
             context_window=200_000,
             capabilities=frozenset(
                 {
@@ -322,7 +323,7 @@ def default_config() -> RouterConfig:
             model_id="google/gemini-3-flash-preview",
             provider="openrouter",
             base_url="https://openrouter.ai/api/v1",
-            api_key_env="PMX_OPENROUTER_API_KEY",
+            api_key_env="DISCO_OPENROUTER_API_KEY",
             context_window=1_048_576,
             capabilities=frozenset(
                 {
@@ -365,7 +366,7 @@ def apply_runtime_capabilities(config: RouterConfig) -> RouterConfig:
     entry = config.models.get("driver-local")
     if entry is None:
         return config
-    vision_on = os.environ.get("PMX_DRIVER_VISION") == "1"
+    vision_on = disco_env("DRIVER_VISION") == "1"
     if vision_on == (Requirement.VISION in entry.capabilities):
         return config
     caps = set(entry.capabilities)

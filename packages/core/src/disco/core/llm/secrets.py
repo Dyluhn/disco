@@ -22,8 +22,10 @@ from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 
-_ENV_SECRET = "PMX_SECRET_KEY"
-_ENV_PATH = "PMX_SECRETS"
+_ENV_SECRET = "DISCO_SECRET_KEY"
+_ENV_SECRET_LEGACY = "PMX_SECRET_KEY"  # honored so ciphertext encrypted under the old key still decrypts
+_ENV_PATH = "DISCO_SECRETS"
+_ENV_PATH_LEGACY = "PMX_SECRETS"
 # Legacy default: the encrypted secrets lived in the CWD, i.e. the repo root when a
 # server is launched from the checkout. That put credential ciphertext inside the
 # project tree — undesirable defense-in-depth-wise (anything granted read of the
@@ -51,7 +53,8 @@ def _default_secrets_path() -> Path:
 # OpenRouter models use this as their `api_key_env`. The agent-server overlays the
 # DECRYPTED OpenRouter key into the provider env under this name at build time, so
 # the existing api_key_env mechanism carries the secret without it touching disk.
-OPENROUTER_API_KEY_ENV = "PMX_OPENROUTER_API_KEY"
+OPENROUTER_API_KEY_ENV = "DISCO_OPENROUTER_API_KEY"
+OPENROUTER_API_KEY_ENV_LEGACY = "PMX_OPENROUTER_API_KEY"
 
 
 def _fernet_from(secret: str) -> Fernet:
@@ -71,7 +74,12 @@ class SecretBox:
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> SecretBox:
         e = os.environ if env is None else env
-        return cls(e.get(_ENV_SECRET))
+        # DISCO_SECRET_KEY preferred; fall back to the legacy PMX_SECRET_KEY so
+        # ciphertext encrypted under the old key still decrypts.
+        secret = e.get(_ENV_SECRET)
+        if secret is None:
+            secret = e.get(_ENV_SECRET_LEGACY)
+        return cls(secret)
 
     @property
     def available(self) -> bool:
@@ -103,6 +111,8 @@ class SecretStore:
         box: SecretBox | None = None,
     ) -> None:
         env_path = os.environ.get(_ENV_PATH)
+        if env_path is None:
+            env_path = os.environ.get(_ENV_PATH_LEGACY)
         if path:
             self._path = Path(path)
         else:
