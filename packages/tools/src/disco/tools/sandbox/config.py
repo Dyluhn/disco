@@ -72,6 +72,18 @@ class SandboxConfig(BaseModel):
     # created by the service picks up any change to this field.
     reload_timeout_s: float = 0.5
 
+    # Socket/HTTP timeout (s) handed to the docker-py client at construction
+    # (Dispo #25, completing the wedge guard). The create path — `ping()`,
+    # `info()`, `containers.run()` — runs inside `asyncio.to_thread`, so it never
+    # blocks the loop directly; BUT `to_thread` cannot cancel its worker, and
+    # docker-py defaults to a 60s socket timeout, so a hung daemon would leak a
+    # pool thread for a full minute per call (enough leaks exhaust the executor).
+    # Bounding the client itself makes those calls fail fast, the worker return,
+    # and the typed SandboxUnavailableError surface. `reload()` keeps its tighter
+    # async 0.5s guard above; this covers everything else. Hot-applied: a new
+    # client (next service instance) picks up a change to this field.
+    client_timeout_s: int = 30
+
 
 def default_sandbox_config() -> SandboxConfig:
     """The starting config, wired to the VM 201 host contract (gVisor/Docker)."""

@@ -301,3 +301,44 @@ def test_sandbox_config_is_mutable_for_settings():
     assert cfg.runtime == "runc"
     assert cfg.docker_socket == "unix:///tmp/foo.sock"
     assert cfg.reload_timeout_s == 0.1
+
+
+# --- Group C: client-construction timeout (Dispo #25, wedge-guard completion) ---
+
+
+def test_docker_client_constructed_with_bounded_timeout(monkeypatch):
+    """`_client()` must hand the configured socket timeout to docker-py, so a hung
+    daemon's `ping`/`info`/`run` fail fast (the to_thread worker returns) instead of
+    leaking for docker-py's 60s default. Patches the real `docker.DockerClient`."""
+    import docker
+
+    captured: dict = {}
+
+    class _FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def ping(self):
+            return True
+
+    monkeypatch.setattr(docker, "DockerClient", _FakeClient)
+    cfg = SandboxConfig(client_timeout_s=7, docker_socket="unix:///var/run/docker.sock")
+    svc = GvisorSandboxService(cfg)
+    svc._client()
+    assert captured.get("timeout") == 7, f"timeout not passed: {captured}"
+    assert captured.get("base_url") == cfg.docker_socket
+
+
+def test_default_client_timeout_is_bounded_well_under_docker_default():
+    """The default must be a real, bounded value strictly under docker-py's 60s
+    default — otherwise the guard adds nothing."""
+    cfg = SandboxConfig()
+    assert 0 < cfg.client_timeout_s < 60
+
+
+def test_client_timeout_is_hot_applicable():
+    """The field is mutable on the live config (no frozen model) so a Settings
+    change is picked up by the next client construction."""
+    cfg = SandboxConfig()
+    cfg.client_timeout_s = 12  # must not raise (mutable-by-construction, Dispo #25)
+    assert cfg.client_timeout_s == 12

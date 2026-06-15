@@ -114,7 +114,13 @@ class GvisorSandboxService:
                 import docker
 
                 base_url = self._cfg.docker_socket
-                kwargs: dict[str, Any] = {"base_url": base_url}
+                # Bound the socket timeout (Dispo #25): a hung daemon must fail
+                # fast so its `to_thread` worker returns instead of leaking for
+                # docker-py's 60s default. `reload()` keeps its tighter 0.5s guard.
+                kwargs: dict[str, Any] = {
+                    "base_url": base_url,
+                    "timeout": self._cfg.client_timeout_s,
+                }
                 if base_url.startswith("ssh://"):
                     # Docker-over-SSH: use the SYSTEM ssh client so the host's auth
                     # (e.g. keyless Tailscale SSH) applies, not docker-py's paramiko.
