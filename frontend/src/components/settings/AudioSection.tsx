@@ -2,24 +2,29 @@
  * Settings → Audio overview (RP-09). Controls the two-voice TTS that turns a
  * finished research report into a short podcast-style MP3.
  *
- * Three honest, wired options — each sets the (enabled, remote) pair:
- *  - Off: the feature is disabled AND the agent-server unloads the Kokoro model
- *    to free RAM. The audio_overview tool fails soft with a "disabled" message.
+ * The universal THREE-tier provider pattern (same as Search / Extraction), each a
+ * single honest, wired choice that persists to the app-server (the agent-server
+ * honors it on the NEXT overview — no restart):
+ *  - Off: disabled AND the agent-server unloads the Kokoro model to free RAM. The
+ *    audio_overview tool fails soft with a "disabled" message.
  *  - Bundled (in-process): Kokoro ONNX/CPU, lazy-loaded on first use (~0.5 GB).
- *    Self-contained — no TTS server. The default.
- *  - Remote (Speaches): an external Speaches /v1/audio/speech endpoint.
+ *    Self-contained — no TTS server. The keyless default.
+ *  - Self-hosted (Speaches): an OpenAI-compatible /v1/audio/speech endpoint you run
+ *    (Speaches / Kokoro-FastAPI), keyless. Set its base URL.
+ *  - Paid API (OpenAI-compatible): a vendor like OpenAI tts-1. Set the base URL, the
+ *    secret/env-var NAME holding the key (never the key itself), and the model id.
  *
- * Voices (Host A / Host B) are editable when the feature is on; an empty field
- * falls back to the ratified af_heart / af_bella. The toggle persists to the
- * app-server and the agent-server honors it on the next overview (no restart).
+ * Voices (Host A / Host B) are editable when on; empty falls back to af_heart /
+ * af_bella (the Kokoro defaults — set vendor voices, e.g. "alloy", for a paid API).
  */
 
 import { useEffect, useState } from "react";
-import { Check, Cpu, Loader2, Server, VolumeX } from "lucide-react";
+import { Check, Cloud, Cpu, Loader2, Server, VolumeX } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useTtsConfig, useUpdateTtsConfig } from "@/hooks/useModels";
 
-type Mode = "off" | "bundled" | "remote";
+type Provider = "bundled" | "speaches" | "openai";
+type Mode = "off" | Provider;
 
 const OPTIONS: { mode: Mode; Icon: typeof Cpu; label: string; help: string }[] = [
   {
@@ -32,19 +37,24 @@ const OPTIONS: { mode: Mode; Icon: typeof Cpu; label: string; help: string }[] =
     mode: "bundled",
     Icon: Cpu,
     label: "Bundled (in-process)",
-    help: "Kokoro ONNX/CPU, self-contained — no TTS server. Lazy-loaded, so enabled-but-unused costs nothing; loads ~0.5 GB on first use.",
+    help: "Kokoro ONNX/CPU, self-contained — no TTS server, no key. Lazy-loaded, so enabled-but-unused costs nothing; loads ~0.5 GB on first use. The default.",
   },
   {
-    mode: "remote",
+    mode: "speaches",
     Icon: Server,
-    label: "Remote (Speaches)",
-    help: "An external Speaches /v1/audio/speech endpoint. Offloads the model from this host; leave the URL blank to use the server's default.",
+    label: "Self-hosted endpoint",
+    help: "An OpenAI-compatible /v1/audio/speech endpoint you run (Speaches / Kokoro-FastAPI). Keyless. Offloads the model from this host; leave the URL blank to use the server default.",
+  },
+  {
+    mode: "openai",
+    Icon: Cloud,
+    label: "Paid API (OpenAI-compatible)",
+    help: "A vendor like OpenAI tts-1. Set the base URL, the secret/env-var name holding your key (never the key here), and the model id. Use vendor voice names (e.g. alloy).",
   },
 ];
 
-function modeOf(enabled: boolean, remote: boolean): Mode {
-  if (!enabled) return "off";
-  return remote ? "remote" : "bundled";
+function modeOf(enabled: boolean, provider: Provider): Mode {
+  return enabled ? provider : "off";
 }
 
 export function AudioSection() {
@@ -52,26 +62,37 @@ export function AudioSection() {
   const save = useUpdateTtsConfig();
 
   // Local draft of the editable fields (controlled inputs), synced from config.
-  const [url, setUrl] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [apiKeyEnv, setApiKeyEnv] = useState("");
+  const [model, setModel] = useState("");
   const [voiceA, setVoiceA] = useState("");
   const [voiceB, setVoiceB] = useState("");
   useEffect(() => {
     if (data) {
-      setUrl(data.speaches_url ?? "");
+      setBaseUrl(data.base_url ?? "");
+      setApiKeyEnv(data.api_key_env ?? "");
+      setModel(data.model ?? "");
       setVoiceA(data.voice_a ?? "");
       setVoiceB(data.voice_b ?? "");
     }
   }, [data]);
 
-  const active: Mode | null = data ? modeOf(data.enabled, data.remote) : null;
+  const active: Mode | null = data ? modeOf(data.enabled, data.provider) : null;
 
-  // Switching mode preserves the current voice/url draft so the user doesn't lose edits.
+  // The provider chosen when a mode is selected (off keeps the prior provider so
+  // re-enabling lands back where it was; bundled/speaches/openai set it).
+  const providerFor = (mode: Mode): Provider =>
+    mode === "off" ? (data?.provider ?? "bundled") : mode;
+
+  // Switching mode preserves the current field drafts so the user doesn't lose edits.
   const selectMode = (mode: Mode) => {
     if (!data || mode === active) return;
     save.mutate({
       enabled: mode !== "off",
-      remote: mode === "remote",
-      speaches_url: url,
+      provider: providerFor(mode),
+      base_url: baseUrl,
+      api_key_env: apiKeyEnv,
+      model,
       voice_a: voiceA,
       voice_b: voiceB,
     });
@@ -79,7 +100,9 @@ export function AudioSection() {
 
   const fieldsDirty =
     !!data &&
-    (url !== (data.speaches_url ?? "") ||
+    (baseUrl !== (data.base_url ?? "") ||
+      apiKeyEnv !== (data.api_key_env ?? "") ||
+      model !== (data.model ?? "") ||
       voiceA !== (data.voice_a ?? "") ||
       voiceB !== (data.voice_b ?? ""));
 
@@ -87,12 +110,20 @@ export function AudioSection() {
     if (!data) return;
     save.mutate({
       enabled: data.enabled,
-      remote: data.remote,
-      speaches_url: url,
+      provider: data.provider,
+      base_url: baseUrl,
+      api_key_env: apiKeyEnv,
+      model,
       voice_a: voiceA,
       voice_b: voiceB,
     });
   };
+
+  const showUrl = data?.provider === "speaches" || data?.provider === "openai";
+  const showPaid = data?.provider === "openai";
+
+  const fieldClass =
+    "rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60";
 
   return (
     <section className="flex flex-col gap-section border-t border-hairline pt-section">
@@ -147,13 +178,13 @@ export function AudioSection() {
             );
           })}
 
-          {/* Contextual fields — voices (any on-mode) + endpoint (remote only). */}
+          {/* Contextual fields — voices (any on-mode) + endpoint (self-host/paid) + key+model (paid). */}
           {data.enabled && (
             <div className="mt-hair flex flex-col gap-inline rounded-card border border-hairline bg-surface-1/40 px-body py-inline">
-              {data.remote && (
+              {showUrl && (
                 <label className="flex flex-col gap-hair">
                   <span className="flex items-baseline gap-hair font-ui text-[0.8rem] text-text">
-                    Speaches endpoint
+                    Endpoint base URL
                     <span className="font-ui text-[0.72rem] text-text-faint">
                       · OpenAI-shape /v1/audio/speech
                     </span>
@@ -162,12 +193,43 @@ export function AudioSection() {
                     type="url"
                     inputMode="url"
                     spellCheck={false}
-                    value={url}
-                    onChange={(e) => setUrl(e.target.value)}
-                    placeholder="http://host:port  (empty = server default)"
-                    className="rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60"
+                    value={baseUrl}
+                    onChange={(e) => setBaseUrl(e.target.value)}
+                    placeholder={
+                      showPaid
+                        ? "https://api.openai.com  (empty = OpenAI default)"
+                        : "http://host:port  (empty = server default)"
+                    }
+                    className={fieldClass}
                   />
                 </label>
+              )}
+              {showPaid && (
+                <div className="grid grid-cols-2 gap-inline">
+                  <label className="flex flex-col gap-hair">
+                    <span className="flex items-baseline gap-hair font-ui text-[0.8rem] text-text">
+                      API key env var
+                      <span className="font-ui text-[0.72rem] text-text-faint">· name, not the key</span>
+                    </span>
+                    <input
+                      spellCheck={false}
+                      value={apiKeyEnv}
+                      onChange={(e) => setApiKeyEnv(e.target.value)}
+                      placeholder="OPENAI_API_KEY"
+                      className={fieldClass}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-hair">
+                    <span className="font-ui text-[0.8rem] text-text">Model</span>
+                    <input
+                      spellCheck={false}
+                      value={model}
+                      onChange={(e) => setModel(e.target.value)}
+                      placeholder="tts-1"
+                      className={fieldClass}
+                    />
+                  </label>
+                </div>
               )}
               <div className="grid grid-cols-2 gap-inline">
                 <label className="flex flex-col gap-hair">
@@ -177,7 +239,7 @@ export function AudioSection() {
                     value={voiceA}
                     onChange={(e) => setVoiceA(e.target.value)}
                     placeholder="af_heart"
-                    className="rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60"
+                    className={fieldClass}
                   />
                 </label>
                 <label className="flex flex-col gap-hair">
@@ -187,7 +249,7 @@ export function AudioSection() {
                     value={voiceB}
                     onChange={(e) => setVoiceB(e.target.value)}
                     placeholder="af_bella"
-                    className="rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60"
+                    className={fieldClass}
                   />
                 </label>
               </div>

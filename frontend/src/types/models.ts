@@ -111,14 +111,17 @@ export interface EncodersConfig {
 }
 
 /** Audio-overview TTS (RP-09) — the wire mirror of the app-server's TtsConfigDTO.
- * `enabled=false` turns the feature off AND frees the model's RAM. `remote=false`
- * (default) = bundled in-process Kokoro (ONNX/CPU, weights download on first use);
- * `remote=true` = an external Speaches /v1/audio/speech endpoint (`speaches_url`;
- * empty → the server's env default). Voices are the ratified af_heart/af_bella. */
+ * The universal three-tier provider pattern: `provider` = "bundled" (in-process
+ * Kokoro, keyless default) | "speaches" (self-hosted OpenAI-compatible
+ * /v1/audio/speech via `base_url`, keyless) | "openai" (paid OpenAI-compatible via
+ * `base_url` + `api_key_env` naming the secret + `model`). `enabled=false` turns the
+ * feature off AND frees the model's RAM. Voices default to af_heart/af_bella. */
 export interface TtsConfig {
   enabled: boolean;
-  remote: boolean;
-  speaches_url?: string;
+  provider: "bundled" | "speaches" | "openai";
+  base_url?: string;
+  api_key_env?: string;
+  model?: string;
   voice_a?: string;
   voice_b?: string;
 }

@@ -115,12 +115,15 @@ class EncodersConfigDTO(BaseModel):
 
 
 class TtsConfigDTO(BaseModel):
-    """Audio-overview TTS (RP-09). `enabled=False` turns the feature off AND lets the
-    agent-server unload the Kokoro model to free RAM. `remote=False` (default) =
-    BUNDLED in-process Kokoro (ONNX/CPU, weights download on first use; lazy-loaded so
-    enabled-but-unused costs nothing). `remote=True` = an external Speaches
-    `/v1/audio/speech` endpoint (`speaches_url`; empty → SPEACHES_URL env default). The
-    wire mirror of core's TtsSettings — the agent-server honors it on the next overview.
+    """Audio-overview TTS (RP-09) — the universal THREE-tier provider DTO (same shape
+    as search/extraction). `enabled=False` turns the feature off AND lets the
+    agent-server unload the Kokoro model. `provider`:
+      - `bundled` (default) — in-process Kokoro (ONNX/CPU, keyless).
+      - `speaches` — a self-hosted OpenAI-compatible `/v1/audio/speech` endpoint
+        (`base_url`; empty → SPEACHES_URL env default), keyless.
+      - `openai` — a paid OpenAI-compatible vendor (`base_url` + `api_key_env` naming
+        the secret/env var, never the key; `model` e.g. "tts-1").
+    Wire mirror of core's TtsSettings — the agent-server honors it on the next overview.
     NOT an LLM-router role assignment.
 
     No `loaded` indicator: the Kokoro model is resident in the AGENT-server process,
@@ -128,8 +131,10 @@ class TtsConfigDTO(BaseModel):
     and mislead. The UI shows a static "loads ~0.5 GB on first use" note instead."""
 
     enabled: bool = True
-    remote: bool = False
-    speaches_url: str = ""
+    provider: Literal["bundled", "speaches", "openai"] = "bundled"
+    base_url: str = ""
+    api_key_env: str = ""
+    model: str = ""
     voice_a: str = "af_heart"
     voice_b: str = "af_bella"
 
@@ -388,8 +393,10 @@ def _tts_from(config: RouterConfig) -> TtsConfigDTO:
     t = config.tts
     return TtsConfigDTO(
         enabled=t.enabled,
-        remote=t.remote,
-        speaches_url=t.speaches_url,
+        provider=t.provider,
+        base_url=t.base_url,
+        api_key_env=t.api_key_env,
+        model=t.model,
         voice_a=t.voice_a,
         voice_b=t.voice_b,
     )
@@ -596,8 +603,10 @@ class ConfigState:
         self._store.save_tts(
             TtsSettings(
                 enabled=dto.enabled,
-                remote=dto.remote,
-                speaches_url=dto.speaches_url.strip(),
+                provider=dto.provider,
+                base_url=dto.base_url.strip(),
+                api_key_env=dto.api_key_env.strip(),
+                model=dto.model.strip(),
                 voice_a=dto.voice_a.strip() or "af_heart",
                 voice_b=dto.voice_b.strip() or "af_bella",
             )

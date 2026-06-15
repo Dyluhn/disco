@@ -117,16 +117,25 @@ class EncodersSettings(BaseModel):
 
 
 class TtsSettings(BaseModel):
-    """[settings] Audio-overview TTS (RP-09). `enabled=False` turns the feature off
-    AND lets the agent-server unload the model to free RAM. `remote=False` (default)
-    = BUNDLED in-process Kokoro (ONNX/CPU, weights download on first use — same
-    doctrine as EncodersSettings; lazy-loaded, so enabled-but-unused costs no RAM).
-    `remote=True` = an external Speaches `/v1/audio/speech` endpoint (`speaches_url`;
-    empty → the SPEACHES_URL env default). Voices are the ratified af_heart/af_bella."""
+    """[settings] Audio-overview TTS (RP-09) — the universal THREE-tier provider
+    pattern (same shape as Search/Extraction):
+      (a) BUNDLED `bundled` — in-process Kokoro (ONNX/CPU, keyless, weights download
+          on first use; lazy-loaded so enabled-but-unused costs no RAM). The
+          FIRST-RUN DEFAULT — overviews work the moment a fresh install runs.
+      (b) self-host `speaches` — an OpenAI-compatible `/v1/audio/speech` endpoint you
+          run (Speaches / Kokoro-FastAPI / openedai-speech) via `base_url`, keyless.
+      (c) paid `openai` — an OpenAI-compatible vendor (`base_url` + `api_key_env`
+          naming the secret/env var, never the key itself), e.g. OpenAI `tts-1`.
+    `speaches` and `openai` share ONE HTTP client (`/v1/audio/speech`); they differ
+    only by the base_url default and whether an Authorization key is sent.
+    `enabled=False` turns the feature off AND lets the agent-server unload the model.
+    Voices are the ratified af_heart/af_bella (Kokoro ids; override per provider)."""
 
     enabled: bool = True
-    remote: bool = False
-    speaches_url: str = ""  # empty → SPEACHES_URL env default (remote tier only)
+    provider: Literal["bundled", "speaches", "openai"] = "bundled"
+    base_url: str = ""  # speaches/openai endpoint; empty → provider default (SPEACHES_URL / OpenAI)
+    api_key_env: str = ""  # secret/env-var NAME for the paid (openai) key — never the key
+    model: str = ""  # remote model id (e.g. "tts-1"); empty → provider default
     voice_a: str = "af_heart"
     voice_b: str = "af_bella"
 

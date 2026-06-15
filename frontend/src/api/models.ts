@@ -168,8 +168,10 @@ export async function updateEncodersConfig(cfg: EncodersConfig): Promise<Encoder
 
 let fixtureTts: TtsConfig = {
   enabled: true,
-  remote: false,
-  speaches_url: "",
+  provider: "bundled",
+  base_url: "",
+  api_key_env: "",
+  model: "",
   voice_a: "af_heart",
   voice_b: "af_bella",
 };

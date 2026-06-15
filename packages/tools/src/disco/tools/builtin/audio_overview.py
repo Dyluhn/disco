@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import wave
 from typing import Any
@@ -157,21 +158,35 @@ async def _synthesize_local(text: str, voice: str) -> Any:
     return await synthesize(text, voice)
 
 
-async def _synthesize_remote(text: str, voice: str, speaches_url: str) -> Any:
-    """Remote Speaches tier. Request WAV (so we mix in PCM like the local path) and
-    decode it to float32 mono. Returns a numpy float32 array.
+async def _synthesize_remote(
+    text: str,
+    voice: str,
+    base_url: str,
+    *,
+    api_key: str = "",
+    model: str = "",
+) -> Any:
+    """Remote OpenAI-compatible `/v1/audio/speech` tier — serves BOTH the self-host
+    `speaches` provider (keyless) and the paid `openai` provider (Bearer key + a
+    `model`). Request WAV (so we mix in PCM like the local path) and decode to float32
+    mono. Returns a numpy float32 array.
 
     The whole overview is mixed at TTS_SAMPLE_RATE (24 kHz) mono, so we REQUIRE the
     remote stream to match — a mismatched rate/channel count would otherwise be mixed
-    as-is and play back pitch-shifted/garbled. Speaches-Kokoro emits 24 kHz mono; we
-    assert it rather than trust the docstring (mirrors the local path's sr guard)."""
+    as-is and play back pitch-shifted/garbled. Speaches-Kokoro and OpenAI `tts-1`
+    both emit 24 kHz mono; we assert it rather than trust the docstring."""
     import numpy as np
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
-        resp = await client.post(
-            f"{speaches_url}/v1/audio/speech",
-            json={"input": text, "voice": voice, "response_format": "wav"},
-        )
+    payload: dict[str, Any] = {"input": text, "voice": voice, "response_format": "wav"}
+    if model:  # OpenAI requires a model id; Speaches ignores/defaults it
+        payload["model"] = model
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    # Accept a base_url with OR without a trailing /v1 (users paste either): append
+    # the right suffix so https://api.openai.com and http://speaches:8000/v1 both work.
+    root = base_url.rstrip("/")
+    url = f"{root}/audio/speech" if root.endswith("/v1") else f"{root}/v1/audio/speech"
+    async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+        resp = await client.post(url, json=payload, headers=headers)
         resp.raise_for_status()
         with wave.open(io.BytesIO(resp.content), "rb") as w:
             frames = w.readframes(w.getnframes())
@@ -180,14 +195,14 @@ async def _synthesize_remote(text: str, voice: str, speaches_url: str) -> Any:
             channels = w.getnchannels()
     if channels != 1 or rate != TTS_SAMPLE_RATE:
         raise RuntimeError(
-            f"Speaches returned {rate} Hz / {channels}ch; the mixer needs "
-            f"{TTS_SAMPLE_RATE} Hz mono. Configure Speaches to emit 24 kHz mono."
+            f"TTS endpoint returned {rate} Hz / {channels}ch; the mixer needs "
+            f"{TTS_SAMPLE_RATE} Hz mono. Configure the endpoint to emit 24 kHz mono."
         )
     if width == 2:
         return np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
     if width == 4:
         return np.frombuffer(frames, dtype="<f4").astype(np.float32)
-    raise RuntimeError(f"unsupported WAV sample width {width} from Speaches")
+    raise RuntimeError(f"unsupported WAV sample width {width} from the TTS endpoint")
 
 
 # ---- tool implementation ----------------------------------------------------
@@ -253,13 +268,27 @@ class AudioOverviewTool:
                 success=False,
                 content=(
                     "Audio overview is disabled in Settings → Audio. Enable it "
-                    "(bundled in-process or remote Speaches) to generate overviews."
+                    "(bundled in-process, self-host, or paid endpoint) to generate "
+                    "overviews."
                 ),
                 error="tts disabled",
             )
         voice_a = tts.voice_a
         voice_b = tts.voice_b
-        speaches_url = (tts.speaches_url or SPEACHES_URL).rstrip("/") if tts.remote else ""
+        # Three-tier provider resolution. `speaches` (self-host) and `openai` (paid)
+        # share the OpenAI-compatible HTTP client; they differ only by the base_url
+        # default and whether a Bearer key + model are sent. `bundled` uses none of
+        # these (in-process Kokoro). The key is resolved from the ENV-VAR NAME the
+        # user set in Settings (never the raw key) — same convention as search/
+        # extraction/model providers.
+        _OPENAI_DEFAULT_BASE = "https://api.openai.com"
+        remote_base = remote_key = remote_model = ""
+        if tts.provider == "speaches":
+            remote_base = (tts.base_url or SPEACHES_URL).rstrip("/")
+        elif tts.provider == "openai":
+            remote_base = (tts.base_url or _OPENAI_DEFAULT_BASE).rstrip("/")
+            remote_key = os.environ.get(tts.api_key_env, "") if tts.api_key_env else ""
+            remote_model = tts.model or "tts-1"
 
         # --- Step 1: Generate turn-script via LLM ---------------------------
         payload = _build_llm_payload(report_text)
@@ -320,24 +349,33 @@ class AudioOverviewTool:
         # Both backends return float32 mono PCM @ 24 kHz so the overview is mixed
         # in PCM and encoded to MP3 exactly once (Step 4).
         assert turns is not None  # validated above
-        backend = "remote Speaches" if tts.remote else "bundled Kokoro"
+        _BACKEND_LABEL = {
+            "bundled": "bundled Kokoro",
+            "speaches": "self-host Speaches",
+            "openai": "paid OpenAI-compatible",
+        }
+        backend = _BACKEND_LABEL.get(tts.provider, tts.provider)
+        is_remote = tts.provider != "bundled"
         pcm_turns: list[Any] = []
         for i, turn in enumerate(turns):
             voice = voice_a if turn.speaker == "A" else voice_b
             try:
-                if tts.remote:
-                    pcm = await _synthesize_remote(turn.text, voice, speaches_url)
+                if is_remote:
+                    pcm = await _synthesize_remote(
+                        turn.text, voice, remote_base,
+                        api_key=remote_key, model=remote_model,
+                    )
                 else:
                     pcm = await _synthesize_local(turn.text, voice)
             except httpx.ConnectError:
                 return ToolOutcome(
                     success=False,
                     content=(
-                        f"Remote Speaches is unreachable at {speaches_url}. "
+                        f"The TTS endpoint is unreachable at {remote_base}. "
                         f"Turn {i + 1}/{len(turns)} could not be synthesised. "
-                        f"Switch Settings → Audio to bundled, or start Speaches."
+                        f"Switch Settings → Audio to bundled, or start/fix the endpoint."
                     ),
-                    error=f"Speaches offline: {speaches_url}",
+                    error=f"tts endpoint offline: {remote_base}",
                 )
             except Exception as e:
                 return ToolOutcome(
@@ -403,7 +441,7 @@ class AudioOverviewTool:
                 "mp3_bytes": len(mixed_mp3),
                 "voice_a": voice_a,
                 "voice_b": voice_b,
-                "backend": "remote" if tts.remote else "bundled",
+                "backend": tts.provider,
                 "silence_ms": SILENCE_MS_DEFAULT,
             },
         )

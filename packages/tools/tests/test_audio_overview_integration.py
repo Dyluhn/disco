@@ -168,7 +168,7 @@ async def _mock_synth_local(text: str, voice: str):
     return (0.2 * np.sin(2 * np.pi * 180.0 * t)).astype(np.float32)
 
 
-async def _mock_synth_remote_offline(text: str, voice: str, speaches_url: str):
+async def _mock_synth_remote_offline(text, voice, base_url, *, api_key="", model=""):
     raise httpx.ConnectError("Connection refused")
 
 
@@ -193,7 +193,7 @@ async def test_full_happy_path():
         ctx = _ctx(sb)
 
         with (
-            _patch_tts(TtsSettings(enabled=True, remote=False)),
+            _patch_tts(TtsSettings(enabled=True, provider="bundled")),
             mock.patch(
                 "disco.tools.builtin.audio_overview._call_llm",
                 side_effect=_mock_llm_happy,
@@ -251,7 +251,7 @@ async def test_malformed_then_retry():
             return llm_mock(payload, llm_url)
 
         with (
-            _patch_tts(TtsSettings(enabled=True, remote=False)),
+            _patch_tts(TtsSettings(enabled=True, provider="bundled")),
             mock.patch(
                 "disco.tools.builtin.audio_overview._call_llm",
                 side_effect=tracking_llm,
@@ -321,7 +321,7 @@ async def test_remote_backend_offline():
 
         with (
             _patch_tts(
-                TtsSettings(enabled=True, remote=True, speaches_url="http://localhost:8000")
+                TtsSettings(enabled=True, provider="speaches", base_url="http://localhost:8000")
             ),
             mock.patch(
                 "disco.tools.builtin.audio_overview._call_llm",
@@ -352,7 +352,7 @@ async def test_sandbox_jailed_write():
         ctx = _ctx(sb)
 
         with (
-            _patch_tts(TtsSettings(enabled=True, remote=False)),
+            _patch_tts(TtsSettings(enabled=True, provider="bundled")),
             mock.patch(
                 "disco.tools.builtin.audio_overview._call_llm",
                 side_effect=_mock_llm_happy,
@@ -386,7 +386,7 @@ async def test_transcript_matches_script():
         ctx = _ctx(sb)
 
         with (
-            _patch_tts(TtsSettings(enabled=True, remote=False)),
+            _patch_tts(TtsSettings(enabled=True, provider="bundled")),
             mock.patch(
                 "disco.tools.builtin.audio_overview._call_llm",
                 side_effect=_mock_llm_happy,
@@ -418,7 +418,7 @@ async def test_llm_failure_returned_cleanly():
         ctx = _ctx(sb)
 
         with (
-            _patch_tts(TtsSettings(enabled=True, remote=False)),
+            _patch_tts(TtsSettings(enabled=True, provider="bundled")),
             mock.patch(
                 "disco.tools.builtin.audio_overview._call_llm",
                 side_effect=_mock_llm_fail,
@@ -442,7 +442,7 @@ async def test_artifact_list_includes_both_files():
         ctx = _ctx(sb)
 
         with (
-            _patch_tts(TtsSettings(enabled=True, remote=False)),
+            _patch_tts(TtsSettings(enabled=True, provider="bundled")),
             mock.patch(
                 "disco.tools.builtin.audio_overview._call_llm",
                 side_effect=_mock_llm_happy,

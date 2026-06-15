@@ -120,7 +120,7 @@ async def test_mode_bundled_uses_local_kokoro():
         remote = mock.AsyncMock(side_effect=AssertionError("remote must not run in bundled mode"))
 
         with (
-            _patch_tts(TtsSettings(enabled=True, remote=False)),
+            _patch_tts(TtsSettings(enabled=True, provider="bundled")),
             mock.patch("disco.tools.builtin.audio_overview._call_llm", side_effect=_llm_ok),
             mock.patch("disco.tools.builtin.audio_overview._synthesize_local", local),
             mock.patch("disco.tools.builtin.audio_overview._synthesize_remote", remote),
@@ -138,20 +138,21 @@ async def test_mode_bundled_uses_local_kokoro():
         _assert_mp3((workspace / "bundled.mp3").read_bytes())
 
 
-async def test_mode_remote_uses_speaches():
-    """`enabled=True, remote=True` → tool calls `_synthesize_remote` (Speaches), does
-    NOT call `_synthesize_local`, and uses the user-configured speaches_url."""
+async def test_mode_speaches_uses_remote_endpoint():
+    """`enabled=True, provider="speaches"` → tool calls `_synthesize_remote`
+    (self-host OpenAI-compatible), NOT `_synthesize_local`, threading base_url and
+    NO api key (keyless self-host tier)."""
     with tempfile.TemporaryDirectory() as td:
         workspace = Path(td)
         sb = _jailed_sandbox(workspace)
         tool = AudioOverviewTool()
         ctx = _ctx(sb)
 
-        async def remote_ok(text: str, voice: str, speaches_url: str):
-            # Speaches returns WAV-shaped float32; mirror the local path's length.
-            assert speaches_url == "http://speaches.local:9999", (
-                f"Speaches URL not threaded through; got {speaches_url!r}"
+        async def remote_ok(text, voice, base_url, *, api_key="", model=""):
+            assert base_url == "http://speaches.local:9999", (
+                f"base_url not threaded through; got {base_url!r}"
             )
+            assert api_key == "", "self-host (speaches) must send NO key"
             n = max(240, len(text) * 200)
             return (0.1 * np.ones(n, dtype=np.float32))
 
@@ -162,8 +163,8 @@ async def test_mode_remote_uses_speaches():
             _patch_tts(
                 TtsSettings(
                     enabled=True,
-                    remote=True,
-                    speaches_url="http://speaches.local:9999",
+                    provider="speaches",
+                    base_url="http://speaches.local:9999",
                 )
             ),
             mock.patch("disco.tools.builtin.audio_overview._call_llm", side_effect=_llm_ok),
@@ -175,10 +176,49 @@ async def test_mode_remote_uses_speaches():
             )
 
         assert outcome.success, outcome.content
-        assert outcome.structured["backend"] == "remote"
+        assert outcome.structured["backend"] == "speaches"
         assert remote.await_count == 2
         local.assert_not_awaited()
         assert (workspace / "remote.mp3").exists()
+
+
+async def test_mode_openai_sends_key_and_model():
+    """`enabled=True, provider="openai"` → tool calls `_synthesize_remote` with the
+    resolved Bearer key (from the api_key_env name) AND the model id (the paid tier)."""
+    with tempfile.TemporaryDirectory() as td:
+        workspace = Path(td)
+        sb = _jailed_sandbox(workspace)
+        tool = AudioOverviewTool()
+        ctx = _ctx(sb)
+
+        async def remote_ok(text, voice, base_url, *, api_key="", model=""):
+            assert base_url == "https://api.openai.com"
+            assert api_key == "sk-test-123", f"paid key not resolved; got {api_key!r}"
+            assert model == "tts-1", f"model not threaded; got {model!r}"
+            n = max(240, len(text) * 200)
+            return (0.1 * np.ones(n, dtype=np.float32))
+
+        remote = mock.AsyncMock(side_effect=remote_ok)
+        with (
+            _patch_tts(
+                TtsSettings(
+                    enabled=True,
+                    provider="openai",
+                    base_url="https://api.openai.com",
+                    api_key_env="OPENAI_TTS_KEY",
+                    model="tts-1",
+                )
+            ),
+            mock.patch.dict("os.environ", {"OPENAI_TTS_KEY": "sk-test-123"}),
+            mock.patch("disco.tools.builtin.audio_overview._call_llm", side_effect=_llm_ok),
+            mock.patch("disco.tools.builtin.audio_overview._synthesize_remote", remote),
+        ):
+            outcome = await tool.run(
+                AudioOverviewArgs(report_text="x", filename="paid"), ctx
+            )
+        assert outcome.success, outcome.content
+        assert outcome.structured["backend"] == "openai"
+        assert remote.await_count == 2
 
 
 async def test_mode_off_fails_soft_and_unloads_model():
@@ -268,22 +308,19 @@ async def test_mode_off_unload_is_safe_when_nothing_loaded():
 
 
 async def test_three_modes_round_trip_through_configstore():
-    """Pure-data assertion: every (enabled, remote) pair in the spec maps to the
-    mode the UI declares. This is the contract the AudioSection's `modeOf`
-    helper and the tool's Step 0 both honor; if either drifts, this test fails."""
+    """Pure-data assertion: every (enabled, provider) pair maps to the mode the UI
+    declares. This is the contract the AudioSection's `modeOf` helper and the tool's
+    Step 0 both honor; if either drifts, this test fails."""
     cases = [
-        (TtsSettings(enabled=False, remote=False), "off"),
-        (TtsSettings(enabled=True, remote=False), "bundled"),
-        (TtsSettings(enabled=True, remote=True), "remote"),
+        (TtsSettings(enabled=False, provider="bundled"), "off"),
+        (TtsSettings(enabled=True, provider="bundled"), "bundled"),
+        (TtsSettings(enabled=True, provider="speaches"), "speaches"),
+        (TtsSettings(enabled=True, provider="openai"), "openai"),
     ]
     for tts, expected_mode in cases:
-        # UI-side derivation
-        if not tts.enabled:
-            assert expected_mode == "off"
-        elif tts.remote:
-            assert expected_mode == "remote"
-        else:
-            assert expected_mode == "bundled"
+        # UI-side derivation (mirrors AudioSection modeOf: off if disabled, else provider)
+        ui_mode = "off" if not tts.enabled else tts.provider
+        assert ui_mode == expected_mode
 
-        # Tool-side backend selection
-        assert ("remote" if tts.remote else "bundled") in {"bundled", "remote"}
+        # Tool-side backend label is the provider verbatim (bundled vs the remote tiers)
+        assert tts.provider in {"bundled", "speaches", "openai"}

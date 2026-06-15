@@ -134,29 +134,42 @@ def test_tts_config_round_trips(client):
     # Default: feature on, bundled in-process, ratified voices.
     d = client.get("/api/tts/config").json()
     assert d["enabled"] is True
-    assert d["remote"] is False
+    assert d["provider"] == "bundled"
     assert d["voice_a"] == "af_heart"
     assert d["voice_b"] == "af_bella"
-    # Disable (the RAM gate) + flip to remote with an endpoint — persisted.
+    # Self-host tier: provider=speaches + base_url — persisted.
     put = client.put(
         "/api/tts/config",
         json={
-            "enabled": False,
-            "remote": True,
-            "speaches_url": "http://localhost:8000",
+            "enabled": True,
+            "provider": "speaches",
+            "base_url": "http://localhost:8000",
             "voice_a": "af_heart",
             "voice_b": "af_bella",
         },
     ).json()
-    assert put["enabled"] is False
-    assert put["remote"] is True
-    assert put["speaches_url"] == "http://localhost:8000"
+    assert put["provider"] == "speaches"
+    assert put["base_url"] == "http://localhost:8000"
+    # Paid tier: provider=openai + api_key_env (NAME, not the key) + model — persisted.
+    paid = client.put(
+        "/api/tts/config",
+        json={
+            "enabled": True,
+            "provider": "openai",
+            "base_url": "https://api.openai.com",
+            "api_key_env": "OPENAI_API_KEY",
+            "model": "tts-1",
+        },
+    ).json()
+    assert paid["provider"] == "openai"
+    assert paid["api_key_env"] == "OPENAI_API_KEY"
+    assert paid["model"] == "tts-1"
     got = client.get("/api/tts/config").json()
-    assert got["enabled"] is False and got["remote"] is True
+    assert got["provider"] == "openai" and got["model"] == "tts-1"
     # An empty voice falls back to the ratified default rather than persisting "".
     back = client.put(
         "/api/tts/config",
-        json={"enabled": True, "remote": False, "voice_a": "", "voice_b": ""},
+        json={"enabled": True, "provider": "bundled", "voice_a": "", "voice_b": ""},
     ).json()
     assert back["voice_a"] == "af_heart"
     assert back["voice_b"] == "af_bella"
