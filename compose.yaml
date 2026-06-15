@@ -128,31 +128,13 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # The bundled local model — the keyless out-of-box default. Disable by deleting
-  # `bundled-llm` from COMPOSE_PROFILES in .env and pointing DISCO_DRIVER_BASE_URL at
-  # your own endpoint. CPU by default; a 4B Q4 is a working demo, not the 24-32B the
-  # reliability wedge was proven on (see docs/self-host.md#models).
-  llm:
-    profiles: ["bundled-llm"]
-    image: ghcr.io/ggml-org/llama.cpp:server
-    command: >
-      -hf ${DISCO_LLM_HF:-${PMX_LLM_HF:-unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_K_M}}
-      --jinja -c ${DISCO_LLM_CTX:-${PMX_LLM_CTX:-8192}} -ctk ${DISCO_LLM_CTK:-${PMX_LLM_CTK:-q8_0}} -ctv ${DISCO_LLM_CTV:-${PMX_LLM_CTV:-q8_0}}
-      --host 0.0.0.0 --port 8080
-    volumes:
-      # Mount the WHOLE cache dir: llama.cpp's `-hf` downloads land in
-      # /root/.cache/huggingface, not .../llama.cpp — mounting the subdir left the
-      # GGUF in the container layer and re-downloaded it on every recreate.
-      - disco-models:/root/.cache
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8080/health')"]
-      interval: 15s
-      timeout: 5s
-      retries: 20
-      start_period: 600s # first run downloads the GGUF
-    restart: unless-stopped
-    # No host port — the agent-server reaches it in-network as http://llm:8080/v1.
+  # NO bundled driver model. A keyless CPU 4B is a demo, not a real driver — the
+  # reliability wedge needs a 24-32B-class model. So you WIRE IN the driver: set
+  # DISCO_DRIVER_BASE_URL (+ DISCO_DRIVER_MODEL / api key) in .env to either a
+  # self-hosted endpoint (Ollama, llama.cpp, vLLM, LM Studio — local or on your
+  # LAN) or a paid API (OpenAI-compatible). The bundled/self-host/paid tiers for
+  # the ENCODERS, SEARCH, EXTRACTION, and TTS still ship keyless. See
+  # docs/self-host.md#models.
 
 volumes:
   disco-data: # db + config + secrets + skills + projects + tts/encoder caches
-  disco-models: # GGUF downloads survive recreation

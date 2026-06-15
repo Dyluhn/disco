@@ -18,10 +18,10 @@ docker compose up -d --build  # podman compose works too (see below)
 open http://localhost:8088
 ```
 
-`docker compose ps` shows five things: `sandbox-image` (a build-only step that exits
-0), `app-server`, `agent-server`, `frontend`, and — with the bundled model profile on
-— `llm`. The first `up` builds the images and (with `bundled-llm`) downloads a small
-model, so it takes a while; subsequent starts are fast.
+`docker compose ps` shows four things: `sandbox-image` (a build-only step that exits
+0), `app-server`, `agent-server`, and `frontend`. The first `up` builds the images, so
+it takes a while; subsequent starts are fast. The driver model runs OUTSIDE compose —
+you point `DISCO_DRIVER_BASE_URL` at your own endpoint (see Models below).
 
 ## What runs
 
@@ -30,8 +30,7 @@ model, so it takes a while; subsequent starts are fast.
 | `frontend` | `8088` | the web UI (nginx-served SPA; reads its backend URLs at runtime) |
 | `app-server` | `8800` | settings + library gateway |
 | `agent-server` | `8000` | the per-conversation runtime (WebSocket + REST) |
-| `llm` | (internal) | bundled llama.cpp model — the keyless default; in-network only |
-| `sandbox-image` | — | build-only: deposits `pmx-sandbox:base` into your container daemon |
+| `sandbox-image` | — | build-only: deposits `disco-sandbox:base` into your container daemon |
 
 All state lives in one named volume (`pmx-data`): the SQLite DB, the model config,
 the encrypted secrets, your skills, your Build project workspaces, and the
@@ -40,20 +39,21 @@ encoder/TTS caches. Downloaded models live in `pmx-models`.
 ## Models
 
 The strategic point of Disco is **reliability on local / open-weight models**.
-Three configurations, switched in `.env`:
+There is **no bundled driver model** — a keyless CPU 4B is a demo, not a real driver,
+and the reliability work was proven on 24–32B-class models. You wire in the driver
+(two supported tiers, set in `.env` and editable in **Settings → Models**):
 
-1. **Bundled (default).** `COMPOSE_PROFILES=bundled-llm` runs a llama.cpp server with
-   a small model (Qwen3-4B Q4, ~2.6 GB). It proves the whole loop keyless on a CPU-only
-   host. **Honest caveat:** a 4B is a *working demo* — the reliability work was proven
-   on 24–32B-class models. For real use, bring your own bigger endpoint.
-2. **Bring your own endpoint.** Delete `bundled-llm` from `COMPOSE_PROFILES`, set
-   `PMX_DRIVER_BASE_URL=http://host.docker.internal:11434/v1` (or your llama.cpp
-   `/v1`). Any OpenAI-compatible endpoint that does tool-calling works. GPU serving
-   (Vulkan/ROCm/CUDA) stays *native on your host* — pointing the container at it is far
-   simpler than passing a GPU into compose.
-3. **OpenRouter (keyed fallback).** Leave the bundled model off, then paste an
-   OpenRouter key in **Settings → Models → OpenRouter** (it's encrypted at rest, never
-   in `.env`) and assign the roles.
+1. **Self-hosted (recommended, keyless).** Set
+   `DISCO_DRIVER_BASE_URL=http://host.docker.internal:11434/v1` (Ollama) or your
+   llama.cpp / vLLM / LM Studio `/v1`. Any OpenAI-compatible endpoint that does
+   tool-calling works. GPU serving (Vulkan/ROCm/CUDA) stays *native on your host* —
+   pointing the container at it is far simpler than passing a GPU into compose.
+2. **Paid API.** Point `DISCO_DRIVER_BASE_URL` at any OpenAI-compatible vendor and
+   set the API key's env-var name in **Settings → Models** (encrypted at rest, never in
+   `.env`). OpenRouter slots work the same way once you paste a key in Settings.
+
+Everything else still ships keyless/bundled with self-host + paid upgrade tiers:
+the ONNX encoders, web search, extraction, and TTS.
 
 The first-run seed (`scripts/seed_config.py`) writes the model catalogue from
 `PMX_DRIVER_*` **only if no config exists yet** — after that the Settings UI owns it.
@@ -161,12 +161,13 @@ subdomain previews are a localhost convenience.
 
 ## Footprint
 
-Rough steady-state: the server image is ~1.3–1.8 GB, the sandbox image ~2.5–3 GB,
-nginx ~60 MB. RAM: ~1 GB for the servers + ~1–2 GB once the encoders load on the first
-grounded answer + ~4 GB for the bundled 4B model at default 8K ctx + q8_0 KV quant.
-An 8 GB machine fits `bundled-llm` at these defaults; raise `PMX_LLM_CTX` to 16K/32K
-or set `PMX_LLM_CTK=f16` for full-precision KV if you have ≥16 GB.
-Disk ~7–8 GB after first run.
+Rough steady-state for the Disco containers (the driver model runs separately on
+your own endpoint): the server image is ~1.3–1.8 GB, the sandbox image ~2.5–3 GB,
+nginx ~60 MB. RAM: ~1 GB for the servers + ~0.15 GB (`lite` encoder tier) to ~4 GB
+(`full` tier) once the encoders load on the first grounded answer. A Deep Research
+run is bounded by the RAM-aware gather-concurrency cap and the encoders run with the
+ONNX CPU arena off, so RSS recedes after a run instead of accumulating. Disk ~7–8 GB
+after first run (plus whatever your model endpoint needs).
 
 ## Persisting / backing up
 

@@ -35,10 +35,16 @@ def main() -> None:
         print(f"[seed] config already at {store.path} — leaving it (Settings UI owns it)")
         return
 
-    base_url = os.environ.get("PMX_DRIVER_BASE_URL", "http://llm:8080/v1")
-    model_id = os.environ.get("PMX_DRIVER_MODEL_ID", "local-model")
-    ctx = int(os.environ.get("PMX_DRIVER_CTX", "8192"))
-    projects_root = os.environ.get("PMX_PROJECTS_ROOT", "/data/projects")
+    # DISCO_* preferred, legacy PMX_* honored. No bundled driver anymore — the
+    # default points at a self-hosted OpenAI-compatible endpoint (Ollama) the
+    # deployer is expected to override in .env / Settings.
+    def _env(name: str, default: str) -> str:
+        return os.environ.get(f"DISCO_{name}") or os.environ.get(f"PMX_{name}", default)
+
+    base_url = _env("DRIVER_BASE_URL", "http://host.docker.internal:11434/v1")
+    model_id = _env("DRIVER_MODEL_ID", "local-model")
+    ctx = int(_env("DRIVER_CTX", "32768"))
+    projects_root = _env("PROJECTS_ROOT", "/data/projects")
 
     driver = ModelEntry(
         model_id=model_id, provider=_DRIVER_KEY, context_window=ctx, base_url=base_url

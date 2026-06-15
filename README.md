@@ -94,23 +94,24 @@ workspace member shares the `disco.*` namespace.
 
 ## Quickstart (self-host)
 
-A clean Linux box (or WSL2) with a container runtime. **The bundled model needs
-~8 GB RAM** — the LLM (~4 GB at the default 8K ctx + q8_0 KV quant) and the search
-encoders (~4 GB, loaded on a grounded answer) fit on an 8 GB box. Raising
-`PMX_LLM_CTX` to 16K/32K or disabling KV quant (`PMX_LLM_CTK=f16`) needs ≥16 GB;
-or bring your own endpoint for a larger model.
+A clean Linux box (or WSL2) with a container runtime. Disco's servers + the ONNX
+search encoders are light (the encoders are ~0.15 GB on the `lite` tier, ~4 GB on
+`full`). You **wire in the driver model** yourself — there's no bundled one (a
+keyless CPU 4B is a demo, not a real driver). Point `DISCO_DRIVER_BASE_URL` at a
+self-hosted endpoint (Ollama / llama.cpp / vLLM / LM Studio) or a paid
+OpenAI-compatible API.
 
 ```bash
-cp .env.example .env            # then skim it — at least the model + security notes
+cp .env.example .env            # then skim it — set DISCO_DRIVER_BASE_URL + security notes
 docker compose up -d --build    # podman compose works too
 open http://localhost:8088
 # confirm your model can actually drive the loop:
 docker compose exec agent-server python -m disco.agent_server.verify
 ```
 
-Keyless out of the box (DuckDuckGo search + local extraction + bundled ONNX encoders +
-a small bundled llama.cpp model) — a grounded answer needs no API key. For real agent
-work, point it at a 24–32B-class endpoint (see
+Keyless for everything except the driver (DuckDuckGo search + local extraction +
+bundled ONNX encoders + in-process TTS) — a grounded answer needs no API key beyond
+your model endpoint. For real agent work, point it at a 24–32B-class endpoint (see
 [`docs/provider-matrix.md`](./docs/provider-matrix.md)). **No auth in v1** — defaults
 bind `127.0.0.1`; read [`SECURITY.md`](./SECURITY.md) before exposing it. The full story
 is in [`docs/self-host.md`](./docs/self-host.md).
