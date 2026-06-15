@@ -48,6 +48,12 @@ ENV CHROME_PATH=/usr/local/bin/marp-chromium \
 RUN apt-get update && apt-get install -y --no-install-recommends pandoc \
     && rm -rf /var/lib/apt/lists/*
 
+
+# Pre-install the common Python dev tools build agents reach for (pytest, ruff)
+# so a build session does not burn iterations rediscovering
+# `pip install --break-system-packages`. (placed late = cheap layer, keeps the
+# expensive playwright/chromium layer cached.)
+RUN pip3 install --break-system-packages pytest ruff
 # Non-root user available (gVisor is the isolation boundary; app may pick --user)
 RUN useradd -m -u 1000 -s /bin/bash agent && mkdir -p /workspace && chown agent:agent /workspace
 WORKDIR /workspace
