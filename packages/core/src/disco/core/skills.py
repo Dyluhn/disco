@@ -16,12 +16,12 @@ after the closing fence.
 from __future__ import annotations
 
 import os
-
-from .env import disco_env
 import re
 from pathlib import Path
 
 from pydantic import BaseModel, Field
+
+from .env import disco_env
 
 _ENV_DIR = "DISCO_SKILLS_DIR"
 _DEFAULT_DIR = "skills"

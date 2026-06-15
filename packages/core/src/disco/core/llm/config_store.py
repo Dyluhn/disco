@@ -17,11 +17,10 @@ from __future__ import annotations
 
 import json
 import os
-
-from ..env import disco_env
 from collections.abc import Callable
 from pathlib import Path
 
+from ..env import disco_env
 from .config import (
     EncodersSettings,
     ExtractionSettings,

@@ -20,7 +20,6 @@ ids or OpenRouter strings, which are [VERIFY] and filled in at wiring time.
 
 from __future__ import annotations
 
-import os
 from typing import Literal
 
 from pydantic import BaseModel, Field

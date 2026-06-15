@@ -24,9 +24,9 @@ import asyncio
 import logging
 import math
 import os
+from typing import Any
 
 from disco.core.env import disco_env
-from typing import Any
 
 from .models import Passage
 from .nli import Entailment

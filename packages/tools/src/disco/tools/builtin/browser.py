@@ -28,13 +28,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-
-from disco.core.env import disco_env
 from html.parser import HTMLParser
 from typing import Any, Literal
 
 from disco.core import SecurityRisk
+from disco.core.env import disco_env
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome

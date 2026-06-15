@@ -30,9 +30,9 @@ signal (BoD §17.2).
 
 from __future__ import annotations
 
-import os
 import uuid
 
+from ..env import disco_env
 from ..events import ToolCall
 from ..llm import (
     CallContext,
@@ -44,7 +44,6 @@ from ..llm import (
     OverflowSignal,
     Requirement,
 )
-from ..env import disco_env
 from ..obs import log_span
 from ..view import View
 from .boundaries import AgentStep, StreamHook

@@ -7,11 +7,8 @@ Env:
 
 from __future__ import annotations
 
-import os
-
-from disco.core.env import disco_env
-
 import uvicorn
+from disco.core.env import disco_env
 from disco.core.store.sqlite import SqliteEventStore
 
 from .app import create_app

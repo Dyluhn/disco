@@ -20,8 +20,6 @@ import hashlib
 import json
 import logging
 import os
-
-from disco.core.env import disco_env
 import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -52,6 +50,7 @@ from disco.core import (
     ToolResult,
     render_skills_for_prompt,
 )
+from disco.core.env import disco_env
 from disco.core.llm import (
     ConfigStore,
     DefaultLLMRouter,
@@ -1612,6 +1611,8 @@ class ConversationRuntime:
         from disco.tools.mcp.approval import ApprovalRequired
         from disco.tools.mcp.config import (
             McpServerConfig as TypedMcpServerConfig,
+        )
+        from disco.tools.mcp.config import (
             McpSettings as TypedMcpSettings,
         )
         from disco.tools.mcp.migrations import list_mcp_approvals

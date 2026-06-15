@@ -17,13 +17,12 @@ import asyncio
 import hashlib
 import logging
 import os
-
-from disco.core.env import disco_env
 import time
 import urllib.request
 from pathlib import Path
 
 import numpy as np
+from disco.core.env import disco_env
 
 _LOG = logging.getLogger(__name__)
 
