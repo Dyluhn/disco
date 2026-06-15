@@ -347,3 +347,84 @@ async def test_c10_agent_error_obs_pairs_like_a_turn_observation():
     # The kept tail contains the action AND its agent_error.
     assert a3_seq > tomb.forgotten_end_seq
     assert e3_seq > tomb.forgotten_end_seq
+
+
+# ---- HS-02: update-in-place fires on a REAL re-condensation (F1 review flag) ----
+
+
+class _RecordingSummarizer:
+    """Records the messages each call received so the test can assert what the
+    summarizer SAW on the second (re-)condensation. Returns an anchored,
+    GOAL:-templated summary so View.of re-materializes a detectable prior summary."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.seen: list[list[LLMMessage]] = []
+
+    async def summarize(self, messages: list[LLMMessage]) -> str:
+        self.calls += 1
+        self.seen.append(list(messages))
+        return (
+            "GOAL: finish the task.\nCONSTRAINTS: none.\nPROGRESS: did some work.\n"
+            "DECISIONS: chose X.\nNEXT: continue.\nFILES: none."
+        )
+
+
+async def _append_pairs(store, n: int, body: str) -> None:
+    for i in range(n):
+        tc = ToolCall(tool_name="shell", arguments={"command": f"echo {i}"})
+        a = await store.append(CID, ActionEvent(thought=f"more {i}: {body}", tool_call=tc))
+        await store.append(
+            CID,
+            ObservationEvent(
+                tool_result=ToolResult(call_id=a.id, tool_name="shell", success=True, content=body),
+                action_id=a.id,
+            ),
+        )
+
+
+async def test_update_in_place_fires_on_real_re_condensation():
+    """End-to-end (the F1 review-flag ask): condense once → its GOAL:-anchored
+    summary is re-materialized into view.messages by View.of at the forgotten
+    span's position → a SECOND condensation hands that prior summary to the
+    summarizer, which therefore selects UPDATE-in-place (not CREATE-fresh).
+    This is what the 'full view.messages, not the span slice' design buys."""
+    from disco.core.llm.summarizer import (
+        _SUMMARIZE_UPDATE_INSTRUCTION,
+        _has_prior_anchored_summary,
+        _select_summarize_instruction,
+    )
+
+    store = SqliteEventStore(":memory:")
+    events = await _seed(store, n_pairs=6, body="detail " * 20)
+    condenser = LLMSummarizingCondenser(keep_head=1, keep_recent=2, min_forget=2)
+    summarizer = _RecordingSummarizer()
+
+    # --- first condensation: there is NO prior summary → CREATE-fresh arm ---
+    tomb1 = await condenser.condense(events, View.of(events), summarizer=summarizer)
+    assert isinstance(tomb1, CondensationEvent)
+    assert summarizer.calls == 1
+    assert not _has_prior_anchored_summary(summarizer.seen[0]), (
+        "first condensation should NOT see a prior anchored summary"
+    )
+    await store.append(CID, tomb1)
+
+    # The prior summary is now live in view.messages (View.of materializes it).
+    mid_view = View.of(await store.get_events(CID))
+    assert any("GOAL: finish the task." in m.content for m in mid_view.messages)
+
+    # --- new work accrues, then a SECOND condensation re-runs ---
+    await _append_pairs(store, n=6, body="detail " * 20)
+    events2 = await store.get_events(CID)
+    tomb2 = await condenser.condense(events2, View.of(events2), summarizer=summarizer)
+    assert isinstance(tomb2, CondensationEvent)
+    assert summarizer.calls == 2
+
+    # The crux: on the REAL re-condensation the summarizer received the prior
+    # anchored summary, so the production directive selector picks UPDATE.
+    assert _has_prior_anchored_summary(summarizer.seen[1]), (
+        "re-condensation must hand the prior GOAL: summary to the summarizer"
+    )
+    assert (
+        _select_summarize_instruction(summarizer.seen[1]) is _SUMMARIZE_UPDATE_INSTRUCTION
+    ), "re-condensation must select UPDATE-in-place, not CREATE-fresh"
