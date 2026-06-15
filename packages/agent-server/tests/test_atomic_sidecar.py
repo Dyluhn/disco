@@ -15,7 +15,6 @@ import os
 from unittest.mock import MagicMock
 
 import pytest
-
 from disco.agent_server.runtime import ConversationRuntime
 
 

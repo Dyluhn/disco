@@ -9,8 +9,9 @@ import uvicorn
 import websockets
 from disco.agent_server.host_proxy import HostPreviewProxyMiddleware
 from starlette.applications import Starlette
+from starlette.endpoints import WebSocketEndpoint
 from starlette.responses import PlainTextResponse
-from starlette.routing import Route
+from starlette.routing import Route, WebSocketRoute
 
 
 class EchoHTTPRequestHandler(BaseHTTPRequestHandler):
@@ -32,7 +33,9 @@ class EchoHTTPRequestHandler(BaseHTTPRequestHandler):
         self.send_response(201)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps({"path": self.path, "method": "POST", "body": body.decode()}).encode())
+        self.wfile.write(
+            json.dumps({"path": self.path, "method": "POST", "body": body.decode()}).encode()
+        )
 
 @pytest.fixture(scope="module")
 def upstream_http():
@@ -66,7 +69,9 @@ def mock_app(upstream_http):
 @pytest.mark.asyncio
 async def test_get_passthrough(mock_app):
     transport = httpx.ASGITransport(app=mock_app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://aaaaaaaa-8000.localhost") as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://aaaaaaaa-8000.localhost"
+    ) as client:
         # standard GET, path /src/main.jsx, query string
         resp = await client.get("/src/main.jsx?foo=bar")
         assert resp.status_code == 200
@@ -78,7 +83,9 @@ async def test_get_passthrough(mock_app):
 @pytest.mark.asyncio
 async def test_post_passthrough(mock_app):
     transport = httpx.ASGITransport(app=mock_app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://aaaaaaaa-8000.localhost") as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://aaaaaaaa-8000.localhost"
+    ) as client:
         resp = await client.post("/api/submit", content=b"mybody")
         assert resp.status_code == 201
         data = resp.json()
@@ -89,7 +96,11 @@ async def test_post_passthrough(mock_app):
 @pytest.mark.asyncio
 async def test_redirect_untouched(mock_app):
     transport = httpx.ASGITransport(app=mock_app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://aaaaaaaa-8000.localhost", follow_redirects=False) as client:
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://aaaaaaaa-8000.localhost",
+        follow_redirects=False,
+    ) as client:
         resp = await client.get("/redirect")
         assert resp.status_code == 301
         assert resp.headers["location"] == "/new-location"
@@ -97,7 +108,9 @@ async def test_redirect_untouched(mock_app):
 @pytest.mark.asyncio
 async def test_unknown_port(mock_app):
     transport = httpx.ASGITransport(app=mock_app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://aaaaaaaa-9999.localhost") as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://aaaaaaaa-9999.localhost"
+    ) as client:
         resp = await client.get("/")
         assert resp.status_code == 404
         assert b"unknown port" in resp.content
@@ -105,7 +118,9 @@ async def test_unknown_port(mock_app):
 @pytest.mark.asyncio
 async def test_internal_port_forbidden(mock_app):
     transport = httpx.ASGITransport(app=mock_app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://aaaaaaaa-8899.localhost") as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://aaaaaaaa-8899.localhost"
+    ) as client:
         resp = await client.get("/")
         assert resp.status_code == 404
         assert b"unknown port" in resp.content
@@ -113,7 +128,9 @@ async def test_internal_port_forbidden(mock_app):
 @pytest.mark.asyncio
 async def test_unknown_cid8_resolver_none(mock_app):
     transport = httpx.ASGITransport(app=mock_app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://cccccccc-8000.localhost") as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://cccccccc-8000.localhost"
+    ) as client:
         resp = await client.get("/")
         assert resp.status_code == 503
         assert b"preview not available" in resp.content
@@ -121,7 +138,9 @@ async def test_unknown_cid8_resolver_none(mock_app):
 @pytest.mark.asyncio
 async def test_upstream_down(mock_app):
     transport = httpx.ASGITransport(app=mock_app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://bbbbbbbb-8000.localhost") as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://bbbbbbbb-8000.localhost"
+    ) as client:
         resp = await client.get("/")
         assert resp.status_code == 502
         assert b"preview upstream unreachable" in resp.content
@@ -135,9 +154,6 @@ async def test_host_header_not_matching(mock_app):
         assert resp.text == "real app route works"
 
 # --- WebSocket Test ---
-
-from starlette.endpoints import WebSocketEndpoint
-from starlette.routing import WebSocketRoute
 
 
 class EchoWSEndpoint(WebSocketEndpoint):
@@ -210,7 +226,9 @@ async def test_websocket_proxy(proxy_app_server, real_ws_server):
         assert resp == "hello text"
 
     # Test proxy
-    async with websockets.connect(f"ws://aaaaaaaa-8000.localhost:{port}/ws", subprotocols=["vite-hmr"]) as ws:
+    async with websockets.connect(
+        f"ws://aaaaaaaa-8000.localhost:{port}/ws", subprotocols=["vite-hmr"]
+    ) as ws:
         assert ws.subprotocol == "vite-hmr"
         
         await ws.send("hello text")

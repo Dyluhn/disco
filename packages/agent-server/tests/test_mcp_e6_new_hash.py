@@ -40,7 +40,6 @@ from disco.tools.mcp.migrations import (
     set_mcp_approval_pending,
 )
 
-
 # ---- shared fixtures --------------------------------------------------------
 
 

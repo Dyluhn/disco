@@ -32,6 +32,7 @@ from disco.core import (
     WSServerFrame,
 )
 from disco.core.store.sqlite import SqliteEventStore
+from disco.retrieval.local_encoders import EncoderUnavailable
 from disco.tools.projects import (
     StorageStatus,
     aiter_zip_workspace,
@@ -51,8 +52,6 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ValidationError
-
-from disco.retrieval.local_encoders import EncoderUnavailable
 
 from .host_proxy import HostPreviewProxyMiddleware
 from .runtime import ConversationRuntime

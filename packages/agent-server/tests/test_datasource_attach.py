@@ -18,7 +18,6 @@ from __future__ import annotations
 import io
 import uuid
 
-import pytest
 from disco.agent_server import create_app
 from disco.core import (
     CondensationEvent,
@@ -30,7 +29,6 @@ from disco.core import (
     View,
 )
 from fastapi.testclient import TestClient
-
 
 # ── minimal sandbox stub (mirrors test_upload.py) ───────────────────────────
 
@@ -98,7 +96,7 @@ def _make_client() -> tuple[TestClient, str, SqliteEventStore, _FakeSession]:
     return client, cid, store, sess
 
 
-def _upload(client: TestClient, cid: str, files: list[tuple[str, bytes, str]]) -> "object":
+def _upload(client: TestClient, cid: str, files: list[tuple[str, bytes, str]]) -> object:
     parts = [
         ("files", (fname, io.BytesIO(data), "application/octet-stream"))
         for _, data, fname in files

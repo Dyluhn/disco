@@ -9,7 +9,6 @@ add zero extra latency to a healthy upstream.
 
 These tests live in a separate file so the C2 evidence is self-contained.
 """
-import asyncio
 import json
 import socket
 import threading

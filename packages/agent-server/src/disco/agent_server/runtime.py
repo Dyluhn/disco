@@ -3093,7 +3093,11 @@ class ConversationRuntime:
     def resolve_cid_prefix(self, cid8: str) -> str | None:
         """Full conversation id whose uuid part starts with cid8 — live executors only
         (a preview without a live sandbox is a 503 anyway). Ambiguous (>1) → None."""
-        matches = [cid for cid in self._executors.keys() if cid.removeprefix("conv_").startswith(cid8)]
+        matches = [
+            cid
+            for cid in self._executors.keys()
+            if cid.removeprefix("conv_").startswith(cid8)
+        ]
         if len(matches) == 1:
             return matches[0]
         return None
@@ -3582,7 +3586,11 @@ class ConversationRuntime:
             # If the sandbox is dead, they are "lost-and-recoverable" until the 
             # next action triggers recreation + re-materialization.
             listing = "\n  ".join(f"uploads/{n}" for n in upload_names[:30])
-            status = "intact" if conversation_id in self._executors else "held server-side and will be restored"
+            status = (
+                "intact"
+                if conversation_id in self._executors
+                else "held server-side and will be restored"
+            )
             parts.append(f"- Uploaded files ({status}):\n  {listing}")
 
         # Session list (degrades gracefully — sessions_snapshot never raises).

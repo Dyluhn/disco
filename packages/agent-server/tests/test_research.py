@@ -240,7 +240,10 @@ def test_autonomous_deep_research_auto_approves_plan(tmp_path, monkeypatch):
     asyncio.run(
         store.append(
             cid,
-            MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="What is X?")),
+            MessageEvent(
+                source=EventSource.USER,
+                message=LLMMessage(role="user", content="What is X?"),
+            ),
         )
     )
     rt.set_surface(cid, "deep_research")
@@ -260,7 +263,10 @@ def test_autonomous_deep_research_auto_approves_plan(tmp_path, monkeypatch):
     asyncio.run(
         store2.append(
             cid2,
-            MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="What is Y?")),
+            MessageEvent(
+                source=EventSource.USER,
+                message=LLMMessage(role="user", content="What is Y?"),
+            ),
         )
     )
     rt2.set_surface(cid2, "deep_research")  # autonomous NOT set

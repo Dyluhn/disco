@@ -9,7 +9,13 @@ from __future__ import annotations
 import pytest
 from disco.app_server import create_app
 from disco.app_server.config_state import ConfigState, normalize_openrouter
-from disco.core import SkillStore, SqliteEventStore
+from disco.core import (
+    ConversationStatus,
+    EventSource,
+    SkillStore,
+    SqliteEventStore,
+    StatusEvent,
+)
 from disco.core.llm import ConfigStore, SecretBox, SecretStore
 from fastapi.testclient import TestClient
 
@@ -392,9 +398,6 @@ def test_delete_is_owner_scoped(client, store):
     resp = client.delete("/api/conversations/c1", params={"owner_id": "me"})
     assert resp.json()["deleted"] is True
     assert client.get("/api/conversations", params={"owner_id": "me"}).json() == []
-
-
-from disco.core import ConversationStatus, EventSource, StatusEvent
 
 
 async def test_conversations_include_status(client, store):

@@ -770,7 +770,11 @@ class ConfigState:
         pending = self._mcp_approval_pending()
         out: list[McpConnectionDTO] = []
         for name, srv in cfg.servers.items():
-            url = srv.get("url", "") or srv.get("command", [""])[0] if srv.get("command") else srv.get("url", "")
+            url = (
+                srv.get("url", "") or srv.get("command", [""])[0]
+                if srv.get("command")
+                else srv.get("url", "")
+            )
             ap = approvals.get(name)
             pd = pending.get(name)
             out.append(

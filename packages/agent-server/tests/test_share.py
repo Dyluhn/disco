@@ -165,14 +165,8 @@ def test_bundle_scrubs_secrets_in_events(client_with_runtime: TestClient) -> Non
     """A real captured-secret-bearing event MUST come out scrubbed in the
     bundle. The scrubber walks the event payload; the share_export
     invokes it on every event before serialization."""
-    cid = _create(client_with_runtime)
+    _create(client_with_runtime)
     # Append an ActionEvent whose `thought` carries a secret.
-    store = client_with_runtime.app.state  # not used; we go through the store directly
-    rt = client_with_runtime.app  # used to access the in-process runtime
-    runtime = None
-    for r_obj in (rt,):
-        for v in vars(r_obj).values():
-            pass
     # Easier path: build a parallel store + runtime, seed events, export.
     from disco.agent_server import ConversationRuntime as CR
 
@@ -193,7 +187,10 @@ def test_bundle_scrubs_secrets_in_events(client_with_runtime: TestClient) -> Non
                     tool_call=ToolCall(
                         tool_name="shell",
                         arguments={
-                            "command": "echo 'Authorization: Bearer ghp_abc123def456ghi789jkl012mno345pqr678'",
+                            "command": (
+                                "echo 'Authorization: Bearer "
+                                "ghp_abc123def456ghi789jkl012mno345pqr678'"
+                            ),
                         },
                     ),
                 ),
@@ -278,7 +275,7 @@ def test_list_share_links_returns_active_only(client_with_runtime: TestClient) -
     client_with_runtime.delete(f"/api/share/{t1}").json()
     # List returns the active one only.
     listing = client_with_runtime.get("/api/share").json()
-    tokens = [l["token"] for l in listing["links"]]
+    tokens = [link["token"] for link in listing["links"]]
     assert t1 not in tokens
     assert t2 in tokens
 

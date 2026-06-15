@@ -17,19 +17,15 @@ from disco.agent_server import ConversationRuntime, create_app
 from disco.core import SqliteEventStore
 from disco.core.llm import (
     CompletionResponse,
-    ConfigStore,
     DefaultLLMRouter,
     ModelEntry,
     RouterConfig,
-    SecretBox,
-    SecretStore,
     StreamChunk,
     TokenUsage,
 )
 from disco.retrieval.local_encoders import EncoderUnavailable
 from disco.retrieval.models import ExtractedDoc, Passage, SearchHit
 from fastapi.testclient import TestClient
-
 
 # ── shared fakes ────────────────────────────────────────────────────────────────
 

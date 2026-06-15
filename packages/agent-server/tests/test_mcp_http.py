@@ -443,7 +443,10 @@ async def test_http_client_init_failure_surfaces_error():
     ):
         client = McpHttpClient(server=config, call_timeout_s=2.0, init_timeout_s=1.0)
 
-        with pytest.raises(Exception):
+        # noqa: B017 — the mock harness surfaces the failure as a generic
+        # Exception (not a narrow type); this asserts only that connect()
+        # propagates *some* error so the runtime can record status="error".
+        with pytest.raises(Exception):  # noqa: B017
             await client.connect()
 
         # After failure, session is cleaned up

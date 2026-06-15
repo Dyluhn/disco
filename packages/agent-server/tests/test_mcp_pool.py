@@ -156,7 +156,10 @@ async def test_pool_approval_mismatch_marks_server():
         # Approval pending info is available
         pending = pool.approval_pending()
         assert "bad_srv" in pending
-        assert pending["bad_srv"]["old_hash"] == "0000000000000000000000000000000000000000000000000000000000000000"
+        assert (
+            pending["bad_srv"]["old_hash"]
+            == "0000000000000000000000000000000000000000000000000000000000000000"
+        )
         assert len(pending["bad_srv"]["new_hash"]) == 64
     finally:
         await pool.aclose()
@@ -219,7 +222,9 @@ async def test_pool_approval_from_real_db_table():
     approvals: dict[str, str] = {}
     for row in list_mcp_approvals(conn):
         approvals[row["server"]] = row["description_hash"]
-    assert approvals == {"fake_srv": "0000000000000000000000000000000000000000000000000000000000000000"}
+    assert approvals == {
+        "fake_srv": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
 
     # Start pool with approvals from the DB — same path as _start_mcp_pool
     srv = _fake_stdio_server_config()
@@ -231,7 +236,10 @@ async def test_pool_approval_from_real_db_table():
         assert status["fake_srv"] == "approval_required"
         pending = pool.approval_pending()
         assert "fake_srv" in pending
-        assert pending["fake_srv"]["old_hash"] == "0000000000000000000000000000000000000000000000000000000000000000"
+        assert (
+            pending["fake_srv"]["old_hash"]
+            == "0000000000000000000000000000000000000000000000000000000000000000"
+        )
     finally:
         await pool.aclose()
 

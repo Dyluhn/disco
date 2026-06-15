@@ -16,7 +16,6 @@ import threading
 import time
 
 import pytest
-
 from disco.agent_server import runtime as rt
 
 

@@ -75,7 +75,10 @@ def _make_sample_report() -> ReportEvent:
             ReportSection(
                 id="s0",
                 title="African Swallow",
-                markdown="The African swallow cruises at **11 m/s** with 5-7 flaps per second.\n\nSee [[p0]] for primary data.",
+                markdown=(
+                    "The African swallow cruises at **11 m/s** with 5-7 flaps per second."
+                    "\n\nSee [[p0]] for primary data."
+                ),
                 cited_passage_ids=["p0"],
                 confidence="high",
                 disputed_notes=[],
@@ -83,7 +86,10 @@ def _make_sample_report() -> ReportEvent:
             ReportSection(
                 id="s1",
                 title="European Swallow",
-                markdown="The European swallow is smaller and slower: **8 m/s**.\n\nMeasurements vary by season [[p1]].",
+                markdown=(
+                    "The European swallow is smaller and slower: **8 m/s**."
+                    "\n\nMeasurements vary by season [[p1]]."
+                ),
                 cited_passage_ids=["p1"],
                 confidence="mixed",
                 disputed_notes=["seasonal variation unaccounted in some studies"],
@@ -103,7 +109,8 @@ def _make_sample_report() -> ReportEvent:
 # The exact markdown output the original TypeScript serializer produces for
 # the sample report above. This IS the captured sample — cut from a browser
 # console after running `exportReportAsMarkdown(report)` with the same data.
-CAPTURED_MARKDOWN = """\
+CAPTURED_MARKDOWN = (
+    """\
 # Deep Research: What is the airspeed velocity of an unladen swallow?
 
 ## Executive Summary
@@ -126,7 +133,10 @@ Measurements vary by season [[p1]].
 
 ---
 
-_This run was bounded by **sources**. Some planned sub-questions were not covered. Consider running the EXHAUSTIVE tier or assigning a faster driver model for deeper coverage._
+"""
+    "_This run was bounded by **sources**. Some planned sub-questions were not covered. "
+    "Consider running the EXHAUSTIVE tier or assigning a faster driver model for deeper coverage._"
+    """
 
 ---
 
@@ -134,6 +144,7 @@ Passages cited (2):
 
 - [p0] Avian Speed Database — https://birds.example.com/p0
 - [p1] European Ornithology Journal — https://birds.example.com/p1"""
+)
 
 
 # ---- Markdown byte-parity (acceptance #2) -----------------------------------
@@ -328,7 +339,9 @@ def test_endpoint_md_export_with_report(
 def test_serialize_pdf_imports_and_returns_bytes_if_present() -> None:
     """If weasyprint is installed, serialize_pdf returns non-empty PDF bytes."""
     # Try importing weasyprint — if absent, skip cleanly.
-    weasyprint = pytest.importorskip("weasyprint", reason="WeasyPrint not installed (image rebuild needed)")
+    pytest.importorskip(
+        "weasyprint", reason="WeasyPrint not installed (image rebuild needed)"
+    )
     report = _make_sample_report()
     result = serialize_pdf(report)
     assert isinstance(result, bytes)

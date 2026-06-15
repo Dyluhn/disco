@@ -175,10 +175,16 @@ def test_url_credentials_are_scrubbed(url: str) -> None:
 
 JSON_CRED_CASES = [
     ('{"api_key": "sk_live_4eC39HqLyjWDarjtT1zdp7dc"}', "sk_live_4eC39HqLyjWDarjtT1zdp7dc"),
-    ('{"openai_api_key": "sk-proj-abcdef1234567890abcdef1234567890"}', "sk-proj-abcdef1234567890abcdef1234567890"),
+    (
+        '{"openai_api_key": "sk-proj-abcdef1234567890abcdef1234567890"}',
+        "sk-proj-abcdef1234567890abcdef1234567890",
+    ),
     ('{"password": "p@ssw0rd!"}', "p@ssw0rd!"),
     ('{"credentials": "AKIAIOSFODNN7EXAMPLE"}', "AKIAIOSFODNN7EXAMPLE"),
-    ('{"token": "ghp_abc123def456ghi789jkl012mno345pqr678"}', "ghp_abc123def456ghi789jkl012mno345pqr678"),
+    (
+        '{"token": "ghp_abc123def456ghi789jkl012mno345pqr678"}',
+        "ghp_abc123def456ghi789jkl012mno345pqr678",
+    ),
 ]
 
 
@@ -276,7 +282,10 @@ def test_event_payload_scrubs_recursively() -> None:
         "tool_call": {
             "tool_name": "shell",
             "arguments": {
-                "command": "curl -H 'Authorization: Bearer ghp_abc123def456ghi789jkl012mno345pqr678' https://api.example.com",
+                "command": (
+                    "curl -H 'Authorization: Bearer ghp_abc123def456ghi789jkl012mno345pqr678'"
+                    " https://api.example.com"
+                ),
             },
         },
     }

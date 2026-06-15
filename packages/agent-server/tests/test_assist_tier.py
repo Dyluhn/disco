@@ -1,11 +1,11 @@
-import pytest
 import os
 from unittest.mock import MagicMock, patch
+
 from disco.agent_server.runtime import ConversationRuntime
+from disco.core.llm.types import CapabilityProfile, CompletionRequest, ModelRole
 from disco.core.loop.engine import AgentLoop
-from disco.core.llm.types import CompletionRequest
-from disco.core.llm.types import CapabilityProfile, ModelRole
 from disco.tools.anatomy import ToolContext
+
 
 def test_completion_request_assist_field():
     profile = CapabilityProfile(role=ModelRole.AGENT_DRIVER)
@@ -14,7 +14,17 @@ def test_completion_request_assist_field():
 
 def test_tool_context_assist_field():
     sandbox = MagicMock()
-    ctx = ToolContext(sandbox=sandbox, message_index=1, call_id="c1", request_id="r1", workspace_path="", timeout_s=10, capabilities=[], owner_id="", conversation_id="")
+    ctx = ToolContext(
+        sandbox=sandbox,
+        message_index=1,
+        call_id="c1",
+        request_id="r1",
+        workspace_path="",
+        timeout_s=10,
+        capabilities=[],
+        owner_id="",
+        conversation_id="",
+    )
     assert ctx.assist is False
 
 def test_agent_loop_assist_field():
@@ -78,9 +88,9 @@ def test_create_body_sets_assist_and_state_extras(tmp_path):
     /state response must surface extras.assist when is_assist — the two stated
     MUST-DOs the adversarial gate flagged as untested. Driven through the real
     ASGI app (create_app + TestClient), not the runtime in isolation."""
-    from fastapi.testclient import TestClient
     from disco.agent_server.app import create_app
     from disco.core import SqliteEventStore
+    from fastapi.testclient import TestClient
 
     with patch.dict("os.environ", {"PMX_DB": str(tmp_path / "disco.db")}):
         store = SqliteEventStore(":memory:")
@@ -90,7 +100,9 @@ def test_create_body_sets_assist_and_state_extras(tmp_path):
         client = TestClient(app)
 
         # create-body assist=True → set_assist wired → is_assist True
-        cid = client.post("/conversations", json={"surface": "build", "assist": True}).json()["conversation_id"]
+        cid = client.post(
+            "/conversations", json={"surface": "build", "assist": True}
+        ).json()["conversation_id"]
         assert rt.is_assist(cid) is True
         # /state surfaces extras.assist
         st = client.get(f"/conversations/{cid}/state").json()
