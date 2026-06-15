@@ -3428,15 +3428,16 @@ class AgentLoop:
             if bn.startswith(".disco-spill-"):
                 _add(name)
 
-        # 3. `.pmx/MEMORY.md` if present.
-        memory_path = ".pmx/MEMORY.md"
-        try:
-            await sbx.read_file(memory_path)
-            _add(memory_path)
-        except (FileNotFoundError, NotADirectoryError):
-            pass
-        except Exception:  # noqa: BLE001 — a dead sandbox just skips the pointer
-            pass
+        # 3. the standing-memory mirror if present (.disco/, or legacy .pmx/).
+        for memory_path in (".disco/MEMORY.md", ".pmx/MEMORY.md"):
+            try:
+                await sbx.read_file(memory_path)
+                _add(memory_path)
+                break
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            except Exception:  # noqa: BLE001 — a dead sandbox just skips the pointer
+                break
 
         return candidates
 
@@ -3472,10 +3473,14 @@ class AgentLoop:
     # directory is the harness's own — never written by the agent's tools
     # directly — so a hostile model can't tamper with the View's source of
     # truth by overwriting it.
-    _PMX_MEMORY_PATH = ".pmx/MEMORY.md"
+    _MEMORY_PATH = ".disco/MEMORY.md"  # write target (renamed from legacy .pmx/)
+    # A pre-rename workspace (resumed mid-upgrade) may still carry the old path;
+    # the read-back + the write's read-existing fall back to it so the standing
+    # memory migrates forward instead of being lost.
+    _LEGACY_MEMORY_PATH = ".pmx/MEMORY.md"
 
     async def _write_pmx_memory_fact(self, scope: str, fact: str) -> None:
-        """C5 — write-through: append one (scope, fact) pair to `.pmx/MEMORY.md`
+        """C5 — write-through: append one (scope, fact) pair to `.disco/MEMORY.md`
         in the live sandbox. The file is a MIRROR of the in-View KnowledgeEvent
         channel (which is the authoritative in-session source); the file exists
         only so a hard reset / box wipe can re-read it on the fresh instance.
@@ -3490,12 +3495,19 @@ class AgentLoop:
         sbx = getattr(self.executor, "sandbox", None)
         if sbx is None:
             return
-        path = self._PMX_MEMORY_PATH
-        # Read existing content (if any). A missing file means a fresh mirror.
+        path = self._MEMORY_PATH
+        # Read existing content (if any). A missing file means a fresh mirror — but
+        # first fall back to the legacy .pmx/ path so a pre-rename workspace's facts
+        # migrate forward into the new file on the next write.
         try:
             existing = (await sbx.read_file(path)).decode("utf-8", errors="replace")
         except (FileNotFoundError, NotADirectoryError):
-            existing = ""
+            try:
+                existing = (
+                    await sbx.read_file(self._LEGACY_MEMORY_PATH)
+                ).decode("utf-8", errors="replace")
+            except Exception:  # noqa: BLE001 — no legacy mirror either: fresh start
+                existing = ""
         except Exception:  # noqa: BLE001 — read flakiness: start clean
             existing = ""
         lines: list[str] = existing.splitlines() if existing.strip() else [

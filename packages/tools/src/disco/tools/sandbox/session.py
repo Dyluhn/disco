@@ -299,17 +299,19 @@ class SandboxSession:
 
     # ---- C5: MEMORY write-through read-back ---------------------------------
 
-    # Path of the on-disk MEMORY mirror. Must match engine.py's _PMX_MEMORY_PATH
+    # Path of the on-disk MEMORY mirror. Must match engine.py's _MEMORY_PATH
     # exactly — these two are the only writers/readers of the file and the
     # read-back's parse (## scope heading + list items) must match the
-    # write-through's format.
-    _PMX_MEMORY_PATH = ".pmx/MEMORY.md"
+    # write-through's format. `_LEGACY_MEMORY_PATH` (the pre-rename `.pmx/` path)
+    # is read as a fallback so a resumed pre-upgrade workspace isn't lost.
+    _MEMORY_PATH = ".disco/MEMORY.md"
+    _LEGACY_MEMORY_PATH = ".pmx/MEMORY.md"
 
     async def _recover_pmx_memory(self) -> None:
-        """C5 — read `.pmx/MEMORY.md` from the LIVE instance and stage its
-        facts in `self._recovered_memory_facts` for the agent loop to drain.
-        Called from `_recreate` AFTER the user's on_recreate hook has run and
-        the fresh box is up.
+        """C5 — read `.disco/MEMORY.md` (legacy `.pmx/` as a fallback) from the LIVE
+        instance and stage its facts in `self._recovered_memory_facts` for the agent
+        loop to drain. Called from `_recreate` AFTER the user's on_recreate hook has
+        run and the fresh box is up.
 
         A missing file (no prior `remember` calls → no facts to recover) is
         a normal, silent no-op: the cache stays None and the loop sees no
@@ -318,15 +320,20 @@ class SandboxSession:
         also best-effort (a dead box can't recover, but the loop will
         surface the error via the next tool call anyway).
         """
-        try:
-            data = await self.read_file(self._PMX_MEMORY_PATH)
-        except (FileNotFoundError, NotADirectoryError):
-            # No mirror on the new box — nothing to recover. Leave cache None
-            # (a fresh box / no prior remember) so the loop sees a clean state.
-            self._recovered_memory_facts = None
-            return
-        except Exception:  # noqa: BLE001 — read flakiness on a fresh box is best-effort
-            _LOG.debug("pmx memory read-back failed (no facts recovered)", exc_info=True)
+        data = None
+        for mem_path in (self._MEMORY_PATH, self._LEGACY_MEMORY_PATH):
+            try:
+                data = await self.read_file(mem_path)
+                break
+            except (FileNotFoundError, NotADirectoryError):
+                continue  # try the legacy path, then give up
+            except Exception:  # noqa: BLE001 — read flakiness on a fresh box is best-effort
+                _LOG.debug("disco memory read-back failed (no facts recovered)", exc_info=True)
+                self._recovered_memory_facts = None
+                return
+        if data is None:
+            # No mirror (new or legacy) on the new box — nothing to recover. Leave
+            # cache None (a fresh box / no prior remember) so the loop sees clean state.
             self._recovered_memory_facts = None
             return
         if not data:

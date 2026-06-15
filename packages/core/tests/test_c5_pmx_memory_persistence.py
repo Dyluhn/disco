@@ -2,7 +2,7 @@
 survives a hard filesystem reset.
 
 Contract:
-  - Each `remember` call writes through to `.pmx/MEMORY.md` (the in-View
+  - Each `remember` call writes through to `.disco/MEMORY.md` (the in-View
     KnowledgeEvent is the authoritative in-session source; the file is a
     durable mirror).
   - On a fresh / rehydrated box (the SandboxSession `_on_recreate` flow),
@@ -14,7 +14,7 @@ Contract:
     the model should see in its context.
 
 Acceptance (mirrors the task spec):
-  1. A `remember` action writes `.pmx/MEMORY.md` with the expected content.
+  1. A `remember` action writes `.disco/MEMORY.md` with the expected content.
   2. After a simulated hard reset (fresh box + the recreate read-back hook),
      the memory is RECOVERED from the file.
   3. `.pmx/` paths are excluded from the working-set snapshot.
@@ -143,7 +143,7 @@ class _FakeSandboxService:
 
 
 # ---------------------------------------------------------------------------
-# Test 1: a `remember` call writes through to `<workspace>/.pmx/MEMORY.md`
+# Test 1: a `remember` call writes through to `<workspace>/.disco/MEMORY.md`
 # ---------------------------------------------------------------------------
 
 
@@ -179,7 +179,7 @@ class _WriteThroughSandboxExecutor:
 async def test_c5_remember_writes_through_to_pmx_memory_md():
     """A `remember` action in the engine's main loop:
       (a) emits a KnowledgeEvent into the event log (in-View source of truth)
-      (b) writes the fact to `.pmx/MEMORY.md` via the sandbox (durable mirror)
+      (b) writes the fact to `.disco/MEMORY.md` via the sandbox (durable mirror)
 
     Both halves must happen for a single `remember` call. The View emission
     is byte-unchanged from the prior behavior (the existing test_dedup_remember
@@ -213,8 +213,8 @@ async def test_c5_remember_writes_through_to_pmx_memory_md():
     assert {k.scope for k in knowledges} == {"build", "db"}
 
     # (b) Write-through happened — the file is on disk with both facts.
-    assert ".pmx/MEMORY.md" in sbx.files
-    body = sbx.files[".pmx/MEMORY.md"].decode("utf-8")
+    assert ".disco/MEMORY.md" in sbx.files
+    body = sbx.files[".disco/MEMORY.md"].decode("utf-8")
     # The header marks this as the standing-memory mirror.
     assert "# Standing memory" in body
     # Each fact is a list item, grouped under its scope heading.
@@ -224,7 +224,7 @@ async def test_c5_remember_writes_through_to_pmx_memory_md():
     assert "- use Postgres 15" in body
     # The write-through wrote exactly this file (no spillover into other
     # workspace paths).
-    pmx_writes = [p for p, _ in sbx.write_calls if p == ".pmx/MEMORY.md"]
+    pmx_writes = [p for p, _ in sbx.write_calls if p == ".disco/MEMORY.md"]
     assert len(pmx_writes) >= 1
 
 
@@ -260,7 +260,7 @@ async def test_c5_remember_dedup_keeps_mirror_in_sync():
     assert {k.snippet for k in knowledges} == {"alpha"}
 
     # On-disk mirror: each unique pair appears exactly once.
-    body = sbx.files[".pmx/MEMORY.md"].decode("utf-8")
+    body = sbx.files[".disco/MEMORY.md"].decode("utf-8")
     # Count of `- alpha` list items == 2 (one per unique scope).
     alpha_count = sum(1 for line in body.splitlines() if line.strip() == "- alpha")
     assert alpha_count == 2, f"mirror should hold each unique fact once; body:\n{body}"
@@ -286,7 +286,7 @@ async def test_c5_remember_without_scope_appends_to_root_list():
     await loop.send_message("go")
     await loop.run()
 
-    body = sbx.files[".pmx/MEMORY.md"].decode("utf-8")
+    body = sbx.files[".disco/MEMORY.md"].decode("utf-8")
     assert "- no-scope fact" in body
 
 
@@ -597,7 +597,7 @@ async def test_c5_workspace_snapshot_excludes_pmx_nested_and_root():
 @pytest.mark.asyncio
 async def test_c5_end_to_end_remember_survives_simulated_hard_reset():
     """The full C5 happy path:
-      1. Engine's `remember` action writes the fact to `.pmx/MEMORY.md`.
+      1. Engine's `remember` action writes the fact to `.disco/MEMORY.md`.
       2. The session's `_on_recreate`-driven read-back (test simulates
          this by calling `_recreate` with a fresh instance that has the
          file) stages the facts for the loop.
@@ -611,7 +611,7 @@ async def test_c5_end_to_end_remember_survives_simulated_hard_reset():
     """
 
     # Phase A: write-through. The engine runs one `remember`, which
-    # should land the fact in `.pmx/MEMORY.md`.
+    # should land the fact in `.disco/MEMORY.md`.
     sbx = _FakeSandboxInstance()
     executor = _WriteThroughSandboxExecutor(sbx)
     agent = ScriptedAgent(
@@ -624,7 +624,7 @@ async def test_c5_end_to_end_remember_survives_simulated_hard_reset():
     loop, store = build_loop(agent, executor=executor, conversation_id=CID)
     await loop.send_message("go")
     await loop.run()
-    body = sbx.files[".pmx/MEMORY.md"].decode("utf-8")
+    body = sbx.files[".disco/MEMORY.md"].decode("utf-8")
     assert "- use pytest -q" in body
 
     # Phase B: simulated hard reset. A new SandboxSession is built that
