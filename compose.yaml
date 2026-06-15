@@ -63,6 +63,17 @@ services:
       DISCO_TTS_DIR: /data/cache/tts
       DISCO_PROJECTS_ROOT: /data/projects
       FASTEMBED_CACHE_PATH: /data/cache/fastembed
+      # --- memory hygiene (OOM floor fix) ---------------------------------
+      # Deep Research's bursty concurrent gather + in-process ONNX encoders
+      # fragment the heap; the glibc allocator then strands freed pages mid-heap
+      # (RSS floor never recedes). LD_PRELOAD jemalloc (shipped in the image) —
+      # its background_thread purges dirty pages to the OS even under
+      # fragmentation. MALLOC_CONF tunes that decay; MALLOC_ARENA_MAX is the
+      # glibc fallback if the preload is ever absent (harmless under jemalloc).
+      # Peak is bounded separately by the RAM-aware gather concurrency cap.
+      LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libjemalloc.so.2
+      MALLOC_CONF: "background_thread:true,dirty_decay_ms:5000,muzzy_decay_ms:5000"
+      MALLOC_ARENA_MAX: "2"
       # Where the agent-server reaches sandbox-published preview ports (host-gateway).
       DISCO_PREVIEW_HOST: "${DISCO_PREVIEW_HOST:-${PMX_PREVIEW_HOST:-host.docker.internal}}"
       # NOTE: DISCO_SANDBOX is intentionally UNSET — the backend stays Settings-driven

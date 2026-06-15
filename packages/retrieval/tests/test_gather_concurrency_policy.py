@@ -17,17 +17,17 @@ def test_remote_encoders_still_capped_but_with_lighter_per_leg(monkeypatch) -> N
     """Remote (paid/self-host) tier is STILL capped — OOM protection applies
     everywhere — but the lighter per-leg estimate (0.4 GB vs 1.5) means the same
     RAM yields a HIGHER K than the in-process tier would."""
-    monkeypatch.setattr(conc, "_mem_available_gb", lambda: 6.0)
+    monkeypatch.setattr(conc, "_mem_available_gb", lambda: 10.0)
     k_remote = gather_concurrency_for(
         in_process_encoders=False, n_subquestions=12, env={}
-    )  # (6-2)//0.4 == 9.0 (float floor; 0.4 not exactly representable)
+    )  # (10-4)//0.5 = 12 → clamped to n=12
     k_inproc = gather_concurrency_for(
         in_process_encoders=True, n_subquestions=12, env={}
-    )  # (6-2)//1.5 = 2
+    )  # (10-4)//1.5 = 4
     assert k_remote is not None and k_inproc is not None
     assert k_remote > k_inproc
-    assert k_remote == 9
-    assert k_inproc == 2
+    assert k_remote == 12
+    assert k_inproc == 4
 
 
 def test_single_subquestion_is_never_capped() -> None:
@@ -41,13 +41,14 @@ def test_single_subquestion_is_never_capped() -> None:
 
 def test_bundled_tier_caps_when_ram_constrained(monkeypatch) -> None:
     """Bundled in-process encoders on a small box → a real, clamped cap < n."""
-    monkeypatch.setattr(conc, "_mem_available_gb", lambda: 6.0)  # (6-2)//1.5 = 2
+    monkeypatch.setattr(conc, "_mem_available_gb", lambda: 7.0)  # (7-4)//1.5 = 2
     k = gather_concurrency_for(in_process_encoders=True, n_subquestions=12, env={})
     assert k == 2
 
 
 def test_bundled_tier_cap_never_below_one(monkeypatch) -> None:
-    monkeypatch.setattr(conc, "_mem_available_gb", lambda: 2.5)  # (2.5-2)//1.5 = 0 → clamp 1
+    # (2.5-4) is negative (reserve exceeds avail) → clamps up to the K_MIN floor.
+    monkeypatch.setattr(conc, "_mem_available_gb", lambda: 2.5)
     k = gather_concurrency_for(in_process_encoders=True, n_subquestions=12, env={})
     assert k == 1
 

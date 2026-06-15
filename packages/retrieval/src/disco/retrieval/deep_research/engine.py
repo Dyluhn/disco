@@ -172,14 +172,37 @@ class DeepResearchRun:
         carried_passages: list[RetrievalPassage] = list(resume_passages or [])
         carried_hits: list[Any] = list(resume_all_hits or [])
         pending = [SubQuestion(title=t) for t in plan_steps if t not in done_titles]
+        # Graceful low-RAM transparency (#26): the gather concurrency was derived
+        # from available RAM. Surface it — and whether it's actually *constraining*
+        # parallelism (cap < legs) — so a memory-reduced run is VISIBLE, never a
+        # silent degradation. `concurrency=None` means unbounded (big box / remote).
+        memory_bounded = (
+            self._gather_concurrency is not None
+            and self._gather_concurrency < len(pending)
+        )
         await emit(
             "phase",
             {
                 "phase": "gather",
                 "subquestions": len(pending),
                 "resumed_sections": len(sections),
+                "concurrency": self._gather_concurrency,
+                "memory_bounded": memory_bounded,
             },
         )
+        if memory_bounded:
+            await emit(
+                "observation",
+                {
+                    "subquestion": None,
+                    "ok": True,
+                    "detail": (
+                        f"running {self._gather_concurrency} of {len(pending)} "
+                        f"research legs at a time to stay within the available "
+                        f"memory budget (reduced parallelism, not reduced coverage)"
+                    ),
+                },
+            )
 
         # ---- per-sub-question: gather → synthesize (a durable checkpoint) ----
         # The source budget governs the NEW gathering this invocation does; carried

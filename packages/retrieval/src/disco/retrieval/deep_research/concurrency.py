@@ -33,10 +33,15 @@ from ..local_encoders import _mem_available_gb
 # in this process (embed/rerank run off-box) → a much smaller envelope. Both are
 # deliberately conservative so the derived K errs toward safety.
 _PER_LEG_GB_IN_PROCESS = 1.5
-_PER_LEG_GB_REMOTE = 0.4
-# RAM we refuse to consume: shared ONNX models (bundled), the router/LLM client,
-# the run vector store, and OS headroom must all fit in what's left.
-_RESERVE_GB = 2.0
+_PER_LEG_GB_REMOTE = 0.5
+# RAM we refuse to consume, reserved for everything that is NOT a gather leg's
+# transient working set. Crucially this must cover the bundled ONNX encoders
+# (bge-m3 embed + cross-encoder rerank + NLI, ~3 GB) which load LAZILY on first
+# use — i.e. AFTER K is derived — so their future footprint has to be pre-reserved
+# here or K comes out too high (the live exhaustive run derived K=9 with a 2 GB
+# reserve and drove a co-tenanted box to ~1 GB free). Plus the router/LLM client,
+# the run vector store, and OS headroom. 4 GB ≈ encoders (3) + the rest (1).
+_RESERVE_GB = 4.0
 # Clamp the DERIVED value: never < 1 (a run must make progress); the high ceiling
 # is only a sanity backstop against a pathological meminfo read — normal runs are
 # bounded by the sub-question count, not this number.

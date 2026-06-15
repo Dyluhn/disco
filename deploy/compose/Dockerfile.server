@@ -47,12 +47,18 @@ FROM python:3.12-slim-bookworm
 # base font; tmux backs the agent shell-session tool. libgomp1 is required by
 # the onnxruntime that fastembed (retrieval encoders) and kokoro-onnx (TTS)
 # load lazily at runtime — without it the encoders/TTS fail at first use.
+# libjemalloc2: a DECAYING allocator the agent-server LD_PRELOADs (see compose).
+# Deep Research's bursty concurrent gather + in-process ONNX encoders fragment the
+# glibc heap, so freed transient pages get stranded mid-heap and malloc_trim can't
+# return them (the RSS floor never recedes). jemalloc's background_thread purges
+# dirty pages to the OS even under fragmentation — the real fix for that floor.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpango-1.0-0 \
         libpangoft2-1.0-0 \
         libgdk-pixbuf-2.0-0 \
         libcairo2 \
         libgomp1 \
+        libjemalloc2 \
         fontconfig \
         fonts-dejavu-core \
         tmux \

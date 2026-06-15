@@ -1067,5 +1067,67 @@ async def test_gather_concurrency_none_runs_all_legs_concurrently() -> None:
     assert peak == 4, f"expected all 4 legs concurrent without a cap, saw {peak}"
 
 
+async def test_memory_bounded_gather_is_surfaced_not_silent() -> None:
+    """#26 graceful low-RAM transparency: when the cap actually constrains the run
+    (cap < legs), the gather phase event carries concurrency + memory_bounded=True
+    AND an honest observation explains the reduced parallelism — never silent."""
+    search = _FakeSearch()
+    engine = DefaultRetrievalEngine(
+        search=search, extraction=_FakeExtraction(),
+        reranker=_FakeReranker(), embedder=_FakeEmbedder(),
+    )
+    router = _ScriptedRouter({
+        "query_rewriter": ["SUFFICIENT\nnone"] * 4,
+        "rag_answerer": ["A [[p0]].", "B [[p3]].", "C [[p6]].", "D [[p9]].", "Summary."],
+    })
+    run = DeepResearchRun(
+        query="q", router=router, retrieval_engine=engine,
+        embedder=None, vector_store=InMemoryVectorStore(), nli=_FakeNLI(),
+        depth=DepthTier.STANDARD_DEEP, conversation_id="conv_mb",
+        gather_concurrency=2,
+    )
+    captured, emit = _collect_events()
+    await run.run(["q1", "q2", "q3", "q4"], emit=emit)
+
+    gather_phase = next(
+        p for k, p in captured if k == "phase" and p.get("phase") == "gather"
+    )
+    assert gather_phase["concurrency"] == 2
+    assert gather_phase["memory_bounded"] is True
+    # the honest, human-readable backpressure observation fired
+    notes = [p.get("detail", "") for k, p in captured if k == "observation"]
+    assert any("at a time" in n and "memory" in n for n in notes), notes
+
+
+async def test_unbounded_gather_reports_not_memory_bounded() -> None:
+    """The converse: an unbounded run (big box / remote encoders) reports
+    memory_bounded=False and emits NO backpressure note — so the signal is
+    meaningful, not always-on noise."""
+    search = _FakeSearch()
+    engine = DefaultRetrievalEngine(
+        search=search, extraction=_FakeExtraction(),
+        reranker=_FakeReranker(), embedder=_FakeEmbedder(),
+    )
+    router = _ScriptedRouter({
+        "query_rewriter": ["SUFFICIENT\nnone"] * 2,
+        "rag_answerer": ["A [[p0]].", "B [[p3]].", "Summary."],
+    })
+    run = DeepResearchRun(
+        query="q", router=router, retrieval_engine=engine,
+        embedder=None, vector_store=InMemoryVectorStore(), nli=_FakeNLI(),
+        depth=DepthTier.STANDARD_DEEP, conversation_id="conv_unb",
+        gather_concurrency=None,
+    )
+    captured, emit = _collect_events()
+    await run.run(["q1", "q2"], emit=emit)
+    gather_phase = next(
+        p for k, p in captured if k == "phase" and p.get("phase") == "gather"
+    )
+    assert gather_phase["concurrency"] is None
+    assert gather_phase["memory_bounded"] is False
+    notes = [p.get("detail", "") for k, p in captured if k == "observation"]
+    assert not any("at a time" in n for n in notes)
+
+
 # unused imports placeholder to keep import-sort tooling clean
 _ = pytest, RetrievalRequest, RetrievalResult
