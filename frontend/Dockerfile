@@ -28,7 +28,7 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # Runtime env injection: nginx:alpine runs /docker-entrypoint.d/*.sh before
 # starting nginx. This writes /env.js from container env on every start.
-COPY docker-entrypoint.d/40-pmx-env.sh /docker-entrypoint.d/40-pmx-env.sh
-RUN chmod +x /docker-entrypoint.d/40-pmx-env.sh
+COPY docker-entrypoint.d/40-disco-env.sh /docker-entrypoint.d/40-disco-env.sh
+RUN chmod +x /docker-entrypoint.d/40-disco-env.sh
 
 EXPOSE 80

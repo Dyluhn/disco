@@ -23,7 +23,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-import os
 from typing import Any
 
 from disco.core.env import disco_env
@@ -86,9 +85,7 @@ def _require_ram(model_name: str) -> None:
 # per-call override in tests, set the env before importing; lazy loaders
 # re-read the env at call time below so the tier-aware defaults still work.)
 EMBED_MODEL = disco_env("EMBED_MODEL", "intfloat/multilingual-e5-large")
-RERANK_MODEL = os.environ.get(
-    "PMX_RERANK_MODEL", "jinaai/jina-reranker-v2-base-multilingual"
-)
+RERANK_MODEL = disco_env("RERANK_MODEL", "jinaai/jina-reranker-v2-base-multilingual")
 
 # "lite" tier: small ONNX models for keyless / ≤8 GB boxes (~0.15 GB total).
 # Both confirmed in fastembed's list_supported_models() on 2026-06-13.
@@ -97,10 +94,10 @@ RERANK_MODEL = os.environ.get(
 EMBED_MODEL_LITE = "BAAI/bge-small-en-v1.5"
 RERANK_MODEL_LITE = "Xenova/ms-marco-MiniLM-L-6-v2"
 
-# PMX_ENCODER_TIER: "lite" | "full" (default: "full")
+# DISCO_ENCODER_TIER: "lite" | "full" (default: "full")
 # Defaults to "full" to preserve existing behaviour for any deployment that was
-# already running the large models.  Set PMX_ENCODER_TIER=lite explicitly for a
-# keyless / ≤8 GB box.  An explicit PMX_EMBED_MODEL or PMX_RERANK_MODEL always
+# already running the large models.  Set DISCO_ENCODER_TIER=lite explicitly for a
+# keyless / ≤8 GB box.  An explicit DISCO_EMBED_MODEL or DISCO_RERANK_MODEL always
 # wins over the tier default (B1a precedence preserved).
 _TIER_LITE = "lite"
 _TIER_FULL = "full"

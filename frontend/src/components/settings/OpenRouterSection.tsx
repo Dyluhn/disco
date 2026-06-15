@@ -34,13 +34,13 @@ function KeyManager() {
   // Can't store at all: no app secret to encrypt with.
   if (!status.can_store && !status.configured) {
     return (
-      <NotWired detail="Encrypted key storage needs an app secret: set PMX_SECRET_KEY on the servers, then you can save an OpenRouter key here (it's encrypted at rest, never plaintext on disk)." />
+      <NotWired detail="Encrypted key storage needs an app secret: set DISCO_SECRET_KEY on the servers, then you can save an OpenRouter key here (it's encrypted at rest, never plaintext on disk)." />
     );
   }
   // Stored but can't be decrypted (app secret missing/wrong since it was saved).
   if (status.locked) {
     return (
-      <NotWired detail="An OpenRouter key is stored but can't be decrypted — PMX_SECRET_KEY is missing or different from when it was saved. Restore that app secret, or clear and re-enter the key." />
+      <NotWired detail="An OpenRouter key is stored but can't be decrypted — DISCO_SECRET_KEY is missing or different from when it was saved. Restore that app secret, or clear and re-enter the key." />
     );
   }
   if (status.configured) {
@@ -74,7 +74,7 @@ function KeyManager() {
           type="password"
           className={field}
           value={value}
-          placeholder="sk-or-v1-…  (encrypted at rest with PMX_SECRET_KEY)"
+          placeholder="sk-or-v1-…  (encrypted at rest with DISCO_SECRET_KEY)"
           onChange={(e) => setValue(e.target.value)}
           aria-label="OpenRouter API key"
         />

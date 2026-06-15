@@ -9,12 +9,15 @@
  */
 
 /** Runtime config injected by the self-host nginx (a `/env.js` that sets
- * `window.__PMX_ENV` from the deployer's environment), so ONE built image works at
+ * `window.__DISCO_ENV` from the deployer's environment), so ONE built image works at
  * any host/port without rebaking. Build-time `VITE_*` still wins in dev; in
- * vitest/jsdom there's no `__PMX_ENV`, so this is `{}` and fixture mode is preserved. */
-const RT: { API_BASE?: string; AGENT_BASE?: string; OWNER_ID?: string } =
-  (globalThis as { __PMX_ENV?: { API_BASE?: string; AGENT_BASE?: string; OWNER_ID?: string } })
-    .__PMX_ENV ?? {};
+ * vitest/jsdom there's no global, so this is `{}` and fixture mode is preserved.
+ * Legacy `__PMX_ENV` is honored as a fallback (the rename compat path). */
+type RtEnv = { API_BASE?: string; AGENT_BASE?: string; OWNER_ID?: string };
+const RT: RtEnv =
+  (globalThis as { __DISCO_ENV?: RtEnv; __PMX_ENV?: RtEnv }).__DISCO_ENV ??
+  (globalThis as { __DISCO_ENV?: RtEnv; __PMX_ENV?: RtEnv }).__PMX_ENV ??
+  {};
 
 const BASE = ((RT.API_BASE ?? import.meta.env.VITE_API_BASE) ?? "").replace(/\/+$/, "");
 
