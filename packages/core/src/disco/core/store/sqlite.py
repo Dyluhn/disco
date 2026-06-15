@@ -21,11 +21,15 @@ from collections import defaultdict
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..events import Event, EventAdapter, event_to_json_dict
 from ..migration import migrate_event
 from ..state import ConversationState
 from .base import ConversationSummary, EventFilter, Page
+
+if TYPE_CHECKING:  # annotations only; runtime uses a local import (dod.py is a leaf)
+    from ..dod import DoDSpec
 
 # v1 single-user: every conversation carries an owner_id from day one (§6.1).
 # It is a constant until the auth module is enabled (BoD §4.1).
