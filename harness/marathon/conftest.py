@@ -21,7 +21,6 @@ import time
 
 import httpx
 import pytest
-
 from common import API, RECORD_DIR, ROOT, SHOT_DIR, UI
 
 

@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import json
 
-from hypothesis import given
-from hypothesis import strategies as st
 from disco.core.loop.stream_extract import extract_partial_string_field
 from disco.retrieval.bundled_providers import _MarkdownExtractor, chunk_passages
+from hypothesis import given
+from hypothesis import strategies as st
 
 # ---- extract_partial_string_field — the streaming partial-JSON parser --------
 

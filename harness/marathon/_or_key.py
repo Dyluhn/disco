@@ -8,6 +8,7 @@ or echo the key anywhere else.
 """
 import json
 
+
 def _find(o):
     if isinstance(o, dict):
         k = o.get("key")

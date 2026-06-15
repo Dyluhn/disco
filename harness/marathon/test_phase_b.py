@@ -18,7 +18,6 @@ import subprocess
 import time
 
 import httpx
-
 from common import (
     API,
     RECORD_DIR,
@@ -41,7 +40,10 @@ from drive import (
     wait_ports_live,
 )
 
-_INSTALL = re.compile(r"npm (install|create|i |ci)|pnpm (install|add|create)|pip install|uv (pip|add|sync)", re.I)
+_INSTALL = re.compile(
+    r"npm (install|create|i |ci)|pnpm (install|add|create)|pip install|uv (pip|add|sync)",
+    re.I,
+)
 
 # The exact command the pane runs — tee -a so Phase C's token series spans
 # both server lives in one log.

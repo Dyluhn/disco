@@ -34,7 +34,7 @@ def main() -> None:
     assert sensors, "no hwmon temperature inputs found"
     rows: list[dict] = []
     while len(rows) < TARGET_ROWS:
-        now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="milliseconds")
+        now = dt.datetime.now(dt.UTC).isoformat(timespec="milliseconds")
         for sid, path in sensors:
             if len(rows) >= TARGET_ROWS:
                 break

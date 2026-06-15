@@ -12,8 +12,6 @@ import json
 import re
 import time
 
-import pytest
-
 from common import (
     RECORD_DIR,
     SHOT_DIR,
@@ -42,7 +40,10 @@ FAULT_PORTS = (3000, 8000)  # kill whichever the agent brings up first
 
 # A recovery action either names the killed port or re-runs a server-shaped
 # command (the later console-clean :8000 verification proves it WORKED).
-_SERVER_CMD = r"vite|npm run dev|npm start|http\.server|uvicorn|flask|node .*(server|api)|python3? .*(server|api|app)"
+_SERVER_CMD = (
+    r"vite|npm run dev|npm start|http\.server|uvicorn|flask|"
+    r"node .*(server|api)|python3? .*(server|api|app)"
+)
 
 # The platform's preview static server owns :8000 from container start —
 # attempt-5 lesson: killing IT is not a fault the agent ever has to notice.
@@ -235,7 +236,7 @@ def test_phase_a(firefox):
     witness["assertions"] = "ALL PASS"
     save_state(phase_a=witness)
     (RECORD_DIR / "phase-a-witness.json").write_text(json.dumps(witness, indent=2))
-    print(f"[phase-a] PASS — witness saved")
+    print("[phase-a] PASS — witness saved")
 
 
 def _sessions(cid: str) -> list[dict]:

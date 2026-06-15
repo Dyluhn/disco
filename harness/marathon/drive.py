@@ -92,7 +92,9 @@ def answer_gates(page, cid: str, *, shot_path=None) -> str | None:
     return None
 
 
-def wait_finished_ui(page, cid: str, *, deadline_s: float, shot_prefix: str) -> tuple[str, list[dict]]:
+def wait_finished_ui(
+    page, cid: str, *, deadline_s: float, shot_prefix: str
+) -> tuple[str, list[dict]]:
     """Wait for FINISHED/ERROR while acting as the user on every gate.
     Returns (status, [{kind, ts}, …]) — interventions go in the witness."""
     handled: list[dict] = []
@@ -164,7 +166,8 @@ def wait_ports_live(page, cid: str, *, deadline_s: float = 1200) -> None:
     the run is alive."""
     deadline = time.monotonic() + deadline_s
     while time.monotonic() < deadline:
-        ok_api = api_get(f"/conversations/{cid}/port/3000/api/readings", timeout=20).status_code == 200
+        _readings = api_get(f"/conversations/{cid}/port/3000/api/readings", timeout=20)
+        ok_api = _readings.status_code == 200
         ok_ui = api_get(f"/conversations/{cid}/port/8000/", timeout=20).status_code == 200
         if ok_api and ok_ui:
             return

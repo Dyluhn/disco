@@ -76,7 +76,7 @@ def full_events(cid: str) -> list[dict]:
     out: list[dict] = []
     after: int | None = None
     while True:
-        q = f"?limit=100" + (f"&after_seq={after}" if after is not None else "")
+        q = "?limit=100" + (f"&after_seq={after}" if after is not None else "")
         page = api_get(f"/conversations/{cid}/events{q}").json()
         events = page.get("events", [])
         out.extend(events)
