@@ -2273,6 +2273,21 @@ class ConversationRuntime:
             embedder=deps.get("embedder"),
             rewriter=RouterQueryRewriter(router),
         )
+        # RAM-aware peak-memory guard (OOM fix): bound how many gather legs run
+        # their fetch/extract/embed/rerank body at once. Applies on EVERY tier —
+        # not OOMing is correctness, not a free-tier perk. K is derived from
+        # available RAM, so a big box runs every leg (effectively unbounded) and a
+        # small box is protected. The encoder mode only TUNES the per-leg RAM
+        # estimate (in-process FastEmbed legs are heavier than remote-encoder
+        # ones); it does NOT gate the cap on/off.
+        from disco.retrieval.deep_research.concurrency import gather_concurrency_for
+
+        in_process_encoders = not self._config_store.load().encoders.remote
+        gather_cap = gather_concurrency_for(
+            in_process_encoders=in_process_encoders,
+            n_subquestions=len(plan_steps),
+            env=os.environ,
+        )
         run = DeepResearchRun(
             query=query,
             router=router,
@@ -2282,6 +2297,7 @@ class ConversationRuntime:
             nli=deps["nli"],
             depth=tier,
             conversation_id=conversation_id,
+            gather_concurrency=gather_cap,
         )
 
         # Emit callback: every engine event becomes an Action/Observation pair

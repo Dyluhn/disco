@@ -103,6 +103,7 @@ class DeepResearchRun:
         nli: Any,
         depth: DepthTier | str = DepthTier.STANDARD_DEEP,
         conversation_id: str = "deep_research",
+        gather_concurrency: int | None = None,
     ) -> None:
         self._query = query
         self._router = router
@@ -113,6 +114,19 @@ class DeepResearchRun:
         self._bound: DepthBound = bounds_for(depth)
         self._depth = depth if isinstance(depth, str) else depth.value
         self._namespace = conversation_id
+        # RAM-aware peak-memory guard (OOM fix) — applies on EVERY tier, because
+        # not OOMing is a correctness guarantee, not a free-tier compensation.
+        # Each concurrent gather leg holds its own fetch buffers + extracted
+        # markdown + per-leg passages (+ embed/rerank batches on the bundled
+        # in-process tier), so an exhaustive run's 12 simultaneous legs multiply
+        # peak RSS ~12× and can OOM. Bounding legs to K-at-a-time caps that to
+        # ~K× while keeping most of the latency win. The runtime derives K from
+        # available RAM (a big box → K high enough to run every leg; a small box
+        # → protected) and passes it on every tier. `None` (the default, used by
+        # hermetic tests) = UNBOUNDED.
+        self._gather_concurrency = (
+            gather_concurrency if (gather_concurrency or 0) > 0 else None
+        )
 
     @property
     def bound(self) -> DepthBound:
@@ -182,6 +196,26 @@ class DeepResearchRun:
 
         # 2. Start all GATHER tasks concurrently (Producer).
         # Retrieval work (search, fetch, extract, embed, rerank) runs concurrently.
+        #
+        # BUNDLED-tier peak-memory guard: when `self._gather_concurrency` is set
+        # (in-process-encoder tier only), a Semaphore caps how many legs run the
+        # heavy body AT ONCE. All tasks are still created up-front so the
+        # consumer below can drain them in order; the ones past the cap simply
+        # block on `sem.acquire()` until a slot frees — bounding peak working
+        # set to ~K legs instead of all `n_pending`. `None` ⇒ no semaphore ⇒
+        # fully concurrent (paid / self-host / remote-encoder tier — unchanged).
+        leg_sem = (
+            asyncio.Semaphore(self._gather_concurrency)
+            if self._gather_concurrency is not None
+            else None
+        )
+
+        async def _gather_leg(_subq: SubQuestion, **kw: Any) -> SubQuestionResult:
+            if leg_sem is not None:
+                async with leg_sem:
+                    return await gather_for_subquestion(_subq, **kw)
+            return await gather_for_subquestion(_subq, **kw)
+
         gather_tasks = []
         for i, subq in enumerate(pending):
             subq_budget = budget_per + (1 if i < extra_budget else 0)
@@ -216,7 +250,7 @@ class DeepResearchRun:
             )
 
             task = asyncio.create_task(
-                gather_for_subquestion(
+                _gather_leg(
                     subq,
                     engine=self._engine,
                     router=self._router,

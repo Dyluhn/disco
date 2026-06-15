@@ -993,5 +993,79 @@ async def test_c14_one_leg_error_does_not_corrupt_other_leg() -> None:
         )
 
 
+class _ConcurrencyTrackingSearch(_FakeSearch):
+    """A search fake that records the PEAK number of gather legs in its body
+    simultaneously. Each call holds (await sleep) long enough for sibling legs
+    to enter, so the observed peak reflects how many legs the engine let run at
+    once — i.e. whether the gather-concurrency semaphore is enforced."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.in_flight = 0
+        self.peak = 0
+
+    async def search(self, query: str, **kw: Any) -> Any:
+        import asyncio
+
+        self.in_flight += 1
+        self.peak = max(self.peak, self.in_flight)
+        try:
+            # Hold so concurrent legs overlap (without this, instant fakes could
+            # complete near-serially and hide the true concurrency).
+            await asyncio.sleep(0.02)
+            return await super().search(query, **kw)
+        finally:
+            self.in_flight -= 1
+
+
+async def _run_with_cap(cap: int | None) -> int:
+    """Run a 4-sub-question DR with the given gather_concurrency cap; return the
+    peak number of legs observed in-flight."""
+    search = _ConcurrencyTrackingSearch()
+    engine = DefaultRetrievalEngine(
+        search=search,
+        extraction=_FakeExtraction(),
+        reranker=_FakeReranker(),
+        embedder=_FakeEmbedder(),
+    )
+    router = _ScriptedRouter({
+        "query_rewriter": ["SUFFICIENT\nnone"] * 4,  # 1 round per leg
+        "rag_answerer": [
+            "Body one [[p0]].",
+            "Body two [[p3]].",
+            "Body three [[p6]].",
+            "Body four [[p9]].",
+            "Coherence summary across all four.",
+        ],
+    })
+    run = DeepResearchRun(
+        query="cap test",
+        router=router, retrieval_engine=engine,
+        embedder=None, vector_store=InMemoryVectorStore(), nli=_FakeNLI(),
+        depth=DepthTier.STANDARD_DEEP, conversation_id="conv_cap",
+        gather_concurrency=cap,
+    )
+    plan_steps = ["Q one", "Q two", "Q three", "Q four"]
+    _, emit = _collect_events()
+    result = await run.run(plan_steps, emit=emit)
+    assert len(result.sections) == 4  # the cap must not change the OUTPUT
+    return search.peak
+
+
+async def test_gather_concurrency_cap_bounds_in_flight_legs() -> None:
+    """The semaphore bounds how many gather legs run their (memory-heavy) body at
+    once. With cap=2 over 4 sub-questions, never more than 2 legs are in-flight."""
+    peak = await _run_with_cap(2)
+    assert peak <= 2, f"cap=2 was violated: {peak} legs ran concurrently"
+    assert peak == 2, f"expected the cap to be saturated (2), saw {peak}"
+
+
+async def test_gather_concurrency_none_runs_all_legs_concurrently() -> None:
+    """Control: with NO cap, all 4 legs run at once — proving the cap above is
+    what bounds concurrency, not some accidental serialization in the engine."""
+    peak = await _run_with_cap(None)
+    assert peak == 4, f"expected all 4 legs concurrent without a cap, saw {peak}"
+
+
 # unused imports placeholder to keep import-sort tooling clean
 _ = pytest, RetrievalRequest, RetrievalResult
