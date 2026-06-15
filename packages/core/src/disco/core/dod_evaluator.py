@@ -89,7 +89,6 @@ import asyncio
 import hashlib
 import json
 import os
-import shutil
 import subprocess
 import urllib.error
 import urllib.request
@@ -339,8 +338,16 @@ async def _default_command_runner(
         duration = datetime.now(UTC).timestamp() - started
         return CommandResult(
             exit_code=None,
-            stdout=(exc.stdout or b"").decode("utf-8", errors="replace") if isinstance(exc.stdout, (bytes, bytearray)) else (exc.stdout or ""),
-            stderr=(exc.stderr or b"").decode("utf-8", errors="replace") if isinstance(exc.stderr, (bytes, bytearray)) else (exc.stderr or ""),
+            stdout=(
+                (exc.stdout or b"").decode("utf-8", errors="replace")
+                if isinstance(exc.stdout, (bytes, bytearray))
+                else (exc.stdout or "")
+            ),
+            stderr=(
+                (exc.stderr or b"").decode("utf-8", errors="replace")
+                if isinstance(exc.stderr, (bytes, bytearray))
+                else (exc.stderr or "")
+            ),
             error_message=f"timeout after {timeout_seconds}s",
             duration_seconds=duration,
         )
@@ -908,7 +915,6 @@ class LLMSubjectiveJudge:
         self._profile = profile
 
     async def judge(self, req: SubjectiveJudgeRequest) -> SubjectiveVerdict:
-        from .llm.types import CapabilityProfile, LLMMessage  # local import: avoid cycle
 
         # Fresh-context prompt: just the predicate + the spec + the
         # workspace path. NEVER the agent's transcript, the view, or the

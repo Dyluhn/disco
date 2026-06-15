@@ -102,7 +102,10 @@ def _plan(
 ) -> PlanEvent:
     return PlanEvent(
         summary=summary,
-        steps=[PlanStep(**s) if isinstance(s, dict) else s for s in (steps or [{"title": "a"}, {"title": "b"}])],
+        steps=[
+            PlanStep(**s) if isinstance(s, dict) else s
+            for s in (steps or [{"title": "a"}, {"title": "b"}])
+        ],
         revision=revision,
         context=context,
     )
@@ -306,8 +309,8 @@ async def test_hs03_post_resume_resets_on_new_run_segment():
     self_attr = "self._hs03_reground_post_resume_emitted"
     last_attr = "self._hs03_reground_last_action_count"
     # Mirror the run() reset (the comments call this out explicitly).
-    setattr(loop, "_hs03_reground_post_resume_emitted", False)
-    setattr(loop, "_hs03_reground_last_action_count", -1)
+    loop._hs03_reground_post_resume_emitted = False
+    loop._hs03_reground_last_action_count = -1
     # Now a fresh segment with count==0 must fire (one-shot reset).
     plan = _plan()
     events = _seed_events(plan)
@@ -601,7 +604,7 @@ async def test_hs03_emitted_content_is_recap_not_steer():
     events) and also assert the wrapper's persisted message
     (whichever path the test lands on, the text is the same).
     """
-    loop = _make_loop(assist=True, cadence=3)
+    _loop = _make_loop(assist=True, cadence=3)
     plan = _plan(
         summary="ship the page",
         steps=[{"title": "scaffold"}, {"title": "style"}],
@@ -692,7 +695,7 @@ async def test_hs03_recap_omits_constraints_when_plan_context_is_empty():
     `context` is empty. We assert CONSTRAINTS is absent and the
     recap still ends with the closing sentinel.
     """
-    loop = _make_loop(assist=True, cadence=3)
+    _loop = _make_loop(assist=True, cadence=3)
     plan = _plan(summary="ship", context="")  # no rationale
     events = _seed_events(plan)
     recap = _hs03_reground_message(events)

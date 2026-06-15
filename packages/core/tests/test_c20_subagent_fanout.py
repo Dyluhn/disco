@@ -46,17 +46,11 @@ Tests use only fakes (no real model, no real container) — same pattern as
 from __future__ import annotations
 
 import pytest
-
 from disco.core import (
     ActionEvent,
     AgentErrorEvent,
     ConversationStatus,
-    EventSource,
-    LLMMessage,
-    MessageEvent,
     ObservationEvent,
-    StatusEvent,
-    ToolCall,
     ToolResult,
 )
 from disco.core.loop.engine import (
@@ -80,7 +74,6 @@ def _make_tool_result(*, call_id, success, content, structured=None, error=None)
     returns the ToolResult synchronously. We wrap the construction here so
     the seam stays readable, then `await` it in the engine. The ToolResult
     itself is identical either way (sync construction)."""
-    from disco.core import ToolResult
 
     return ToolResult(
         call_id=call_id,

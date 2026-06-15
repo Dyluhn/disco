@@ -23,7 +23,8 @@ from pathlib import Path
 from cryptography.fernet import Fernet, InvalidToken
 
 _ENV_SECRET = "DISCO_SECRET_KEY"
-_ENV_SECRET_LEGACY = "PMX_SECRET_KEY"  # honored so ciphertext encrypted under the old key still decrypts
+# honored so ciphertext encrypted under the old key still decrypts
+_ENV_SECRET_LEGACY = "PMX_SECRET_KEY"
 _ENV_PATH = "DISCO_SECRETS"
 _ENV_PATH_LEGACY = "PMX_SECRETS"
 # Legacy default: the encrypted secrets lived in the CWD, i.e. the repo root when a

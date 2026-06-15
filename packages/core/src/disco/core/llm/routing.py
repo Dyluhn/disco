@@ -293,7 +293,12 @@ class DefaultLLMRouter:
             return None
         if Requirement.VISION not in (target.capabilities or []):
             return None
-        return target, "overflow", f"vision escalation: {key} lacks VISION → {target_key}", ["vision_escalation"]
+        return (
+            target,
+            "overflow",
+            f"vision escalation: {key} lacks VISION → {target_key}",
+            ["vision_escalation"],
+        )
 
     # -- prompt injection (RT3, §8) -------------------------------------------
 

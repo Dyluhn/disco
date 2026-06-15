@@ -87,7 +87,9 @@ async def test_tool_calls_sanitization_both_ways():
     assert serialized["tool_calls"][0]["function"]["name"] == "shell" # Sanitized!
 
     # 2. Incoming: Model returns sanitized name, should map back to original
-    raw_response_calls = [{"id": "c2", "type": "function", "function": {"name": "shell", "arguments": "{}"}}]
+    raw_response_calls = [
+        {"id": "c2", "type": "function", "function": {"name": "shell", "arguments": "{}"}}
+    ]
     parsed_calls = provider._tool_calls(raw_response_calls, tools=tools)
 
     assert len(parsed_calls) == 1

@@ -35,15 +35,12 @@ Tests use only fakes (no real model, no real container) — same pattern as
 from __future__ import annotations
 
 import pytest
-
 from disco.core import (
     ActionEvent,
     ConversationStatus,
     EventSource,
-    LLMMessage,
     MessageEvent,
     ObservationEvent,
-    PlanEvent,
     StatusEvent,
     ToolCall,
     ToolResult,

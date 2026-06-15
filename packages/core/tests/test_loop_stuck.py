@@ -116,7 +116,8 @@ async def test_loop_tries_a_temp_escape_before_going_stuck():
 
     escape_reminders = [e for e in events if _is_escape_reminder(e)]
     assert len(escape_reminders) >= 1, (
-        f"expected at least one C7 escape reminder in the run, got 0; events={[type(e).__name__ for e in events]}"
+        f"expected at least one C7 escape reminder in the run, got 0; "
+        f"events={[type(e).__name__ for e in events]}"
     )
     # The first escape reminder must be attempt=0 (the count starts at 0
     # before the first marker is emitted).
@@ -169,7 +170,7 @@ async def test_c7_escape_reminders_rotate_deterministically_by_attempt_count():
     give us pool[0], pool[1], pool[2] — enough to prove rotation without
     the pool wrapping.
     """
-    from disco.core.loop import StuckDetector, StuckThresholds
+    from disco.core.loop import StuckThresholds
 
     # Each user turn: 3 actions to trigger stuck, then 1 retry action that
     # fails (so the run halts STUCK). 4 actions per turn. Three turns = 12
@@ -333,7 +334,7 @@ def test_c7_pool_selector_is_deterministic_and_injective_across_attempts():
     count, (b) differ in bytes between consecutive attempt indices, and
     (c) cycle with period = len(POOL). This locks in the rotation
     contract without driving the full loop."""
-    from disco.core.loop.engine import _stuck_escape_reminder, _STUCK_ESCAPE_REMINDER_POOL
+    from disco.core.loop.engine import _STUCK_ESCAPE_REMINDER_POOL, _stuck_escape_reminder
 
     n = len(_STUCK_ESCAPE_REMINDER_POOL)
     # (a) determinism: same attempt → same reminder.
@@ -416,10 +417,10 @@ async def test_bookkeeping_halt_caps_genuine_spam_on_tiny_plan():
     spam (only 1 step exists to mark), so the bookkeeping cap MUST halt the
     run with `bookkeeping_only`. The cap is a guard against a model that just
     shuffles the plan tracker forever; it must still fire on this case."""
-    from disco.core import ConversationStatus, EventSource, LLMMessage, MessageEvent, PlanEvent
+    from disco.core import ConversationStatus
+    from disco.core import SqliteEventStore as Store
     from disco.core.events import StatusEvent as CoreStatusEvent
     from disco.core.llm import OperatingMode
-    from disco.core import SqliteEventStore as Store
 
     store = Store(":memory:")
     await _seed_approved_plan(store, n_steps=1)()
@@ -458,9 +459,9 @@ async def test_bookkeeping_halt_does_not_trip_legit_burst_on_long_plan():
     plan-tracker being kept honest. The bookkeeping cap MUST NOT halt on this
     case; the run should reach FINISHED once the agent declares done."""
     from disco.core import ConversationStatus
+    from disco.core import SqliteEventStore as Store
     from disco.core.events import StatusEvent as CoreStatusEvent
     from disco.core.llm import OperatingMode
-    from disco.core import SqliteEventStore as Store
 
     store = Store(":memory:")
     await _seed_approved_plan(store, n_steps=8)()
@@ -541,12 +542,15 @@ def _successful_patch(path: str, n: int):
 def test_f6_per_file_rewrite_directive_fires_on_spiral_assist_on():
     """F6 — assist ON, one file spirals past the threshold ⇒ the rewrite
     directive names that file, with the failure/attempt counts it fired on."""
-    d = StuckDetector(StuckThresholds(per_file_rewrite_failures=3, per_file_rewrite_min_attempts=3), assist=True)
+    d = StuckDetector(
+        StuckThresholds(per_file_rewrite_failures=3, per_file_rewrite_min_attempts=3), assist=True
+    )
     events = _failed_patch("a/foo.py", 3)
     result = d.evaluate(events)
     assert result.is_stuck is False  # patterns 1–4 don't fire (each attempt is distinct)
     assert result.rewrite_directive is not None, (
-        f"expected a RewriteDirective for the spiraling file, got None; events={[type(e).__name__ for e in events]}"
+        f"expected a RewriteDirective for the spiraling file, got None; "
+        f"events={[type(e).__name__ for e in events]}"
     )
     rd = result.rewrite_directive
     assert rd.kind == "full_rewrite"
@@ -709,7 +713,9 @@ def test_f6_per_file_rewrite_directive_failed_observation_also_counts_assist_on(
     out = []
     for i in range(3):
         a = action(
-            thought="write " + str(i), tool="file_write", args={"path": "a/x.py", "content": "v" + str(i)}
+            thought="write " + str(i),
+            tool="file_write",
+            args={"path": "a/x.py", "content": "v" + str(i)},
         )
         out.append(a)
         out.append(observation(action_id=a.id, content="ERROR: write refused", success=False))

@@ -189,7 +189,7 @@ class DoDSpec(BaseModel):
         return self.model_dump(mode="json")
 
     @classmethod
-    def from_json_dict(cls, obj: dict[str, Any]) -> "DoDSpec":
+    def from_json_dict(cls, obj: dict[str, Any]) -> DoDSpec:
         """Validate a plain dict against the spec. Rejects unknown fields and
         invalid predicate shapes."""
         return cls.model_validate(obj)

@@ -31,14 +31,11 @@ from disco.core import (
 )
 from disco.core.llm import LLMContextWindowExceeded
 from loop_fakes import (
-    FakeExecutor,
-    FakeSummarizer,
     ScriptedAgent,
     action_step,
     build_loop,
     finish_step,
 )
-
 
 # ---- 1. The unit-level seam: LLMSummarizingCondenser.condense() -------------
 
@@ -144,7 +141,7 @@ async def test_c16_hard_reset_manifest_paths_resolve_to_real_files(tmp_path):
     memory_dir.mkdir(parents=True, exist_ok=True)
     memory = memory_dir / "MEMORY.md"
     memory.write_text("# standing memory\nfact: build is `make`\n")
-    artifact_paths = [str(deliverable), str(spill), str(memory)]
+    _artifact_paths = [str(deliverable), str(spill), str(memory)]
     # The engine's _collect method also lists deliverables from the event log;
     # the engine's view treats paths as workspace-relative, so verify the
     # manifest names the SAME paths the engine passed in (relative form).
@@ -350,7 +347,10 @@ async def test_c16_engine_hard_reset_emits_pointer_manifest_tombstone(tmp_path):
     # 9 events) so the middle is 3 turns = 6 events, which clears min_forget=2.
     await store.append(
         CID,
-        MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="do a long task")),
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="do a long task"),
+        ),
     )
     for i in range(4):
         tc = ToolCall(tool_name="shell", arguments={"command": f"echo {i}"})
@@ -361,7 +361,9 @@ async def test_c16_engine_hard_reset_emits_pointer_manifest_tombstone(tmp_path):
         await store.append(
             CID,
             ObservationEvent(
-                tool_result=ToolResult(call_id=a.id, tool_name="shell", success=True, content=f"out{i}"),
+                tool_result=ToolResult(
+                    call_id=a.id, tool_name="shell", success=True, content=f"out{i}"
+                ),
                 action_id=a.id,
             ),
         )
@@ -371,7 +373,9 @@ async def test_c16_engine_hard_reset_emits_pointer_manifest_tombstone(tmp_path):
         CID,
         ActionEvent(
             thought="wrote app",
-            tool_call=ToolCall(tool_name="file_write", arguments={"path": "src/app.py", "content": "..."}),
+            tool_call=ToolCall(
+                tool_name="file_write", arguments={"path": "src/app.py", "content": "..."}
+            ),
         ),
     )
     await loop.send_message("a long task")
@@ -461,7 +465,9 @@ async def test_c16_engine_hard_reset_collects_only_existing_paths(tmp_path):
         await store.append(
             CID,
             ObservationEvent(
-                tool_result=ToolResult(call_id=a.id, tool_name="shell", success=True, content=f"out{i}"),
+                tool_result=ToolResult(
+                    call_id=a.id, tool_name="shell", success=True, content=f"out{i}"
+                ),
                 action_id=a.id,
             ),
         )
@@ -470,14 +476,18 @@ async def test_c16_engine_hard_reset_collects_only_existing_paths(tmp_path):
         CID,
         ActionEvent(
             thought="wrote keep",
-            tool_call=ToolCall(tool_name="file_write", arguments={"path": "keep.py", "content": "..."}),
+            tool_call=ToolCall(
+                tool_name="file_write", arguments={"path": "keep.py", "content": "..."}
+            ),
         ),
     )
     await store.append(
         CID,
         ActionEvent(
             thought="wrote gone",
-            tool_call=ToolCall(tool_name="file_write", arguments={"path": "gone.py", "content": "..."}),
+            tool_call=ToolCall(
+                tool_name="file_write", arguments={"path": "gone.py", "content": "..."}
+            ),
         ),
     )
     await loop.send_message("task")

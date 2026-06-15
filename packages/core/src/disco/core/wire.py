@@ -21,7 +21,9 @@ class WSServerFrame(BaseModel):
     """[CONTRACT] One server→client frame. Discriminated by `type`."""
 
     model_config = ConfigDict(frozen=True)
-    type: Literal["event", "token", "file_stream", "state", "error", "pong", "mcp_approval_required"]
+    type: Literal[
+        "event", "token", "file_stream", "state", "error", "pong", "mcp_approval_required"
+    ]
     # type == "event": a newly-appended Event (full object, §2). PRIMARY signal.
     event: Event | None = None
     # type == "token": an incremental token for typewriter rendering. Tokens are

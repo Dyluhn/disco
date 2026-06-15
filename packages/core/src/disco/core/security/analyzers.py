@@ -182,7 +182,9 @@ class RuleBasedAnalyzer:
         inferred = _L
         why = f"tool '{tool_name}'"
 
-        if any(k in name for k in ("read", "search", "fetch", "list", "view", "get", "status", "wait")):
+        if any(
+            k in name for k in ("read", "search", "fetch", "list", "view", "get", "status", "wait")
+        ):
             inferred, why = _L, f"read-only tool '{tool_name}'"
         if any(k in name for k in ("write", "create", "edit", "save", "append", "kill")):
             inferred, why = _M, f"state-changing tool '{tool_name}'"

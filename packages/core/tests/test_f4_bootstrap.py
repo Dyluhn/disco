@@ -49,15 +49,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from disco.core import (
-    ActionEvent,
     ConversationStatus,
     EventSource,
-    LLMMessage,
     MessageEvent,
-    ToolCall,
 )
 from disco.core.loop.engine import (
     _F4_MAX_SCRIPTS_PER_MANIFEST,
@@ -576,7 +571,9 @@ def test_detect_project_bootstrap_truncates_at_max_chars(tmp_path):
     # Here we use ONLY keys in `_F4_PKG_SCRIPT_KEYS` to exercise the
     # truncation path; for that we need a list, so we exercise the
     # `Makefile` truncation path instead, where target count is unbounded.
-    many_targets = "\n".join(f"target{i}:\n\techo {i}\n" for i in range(_F4_MAX_SCRIPTS_PER_MANIFEST * 3))
+    many_targets = "\n".join(
+        f"target{i}:\n\techo {i}\n" for i in range(_F4_MAX_SCRIPTS_PER_MANIFEST * 3)
+    )
     _write_workspace(tmp_path, makefile=many_targets)
     out = _detect_project_bootstrap(str(tmp_path))
     assert out is not None

@@ -23,25 +23,23 @@ LLMMessage.content string.
 from __future__ import annotations
 
 import asyncio
-from typing import Iterable
+from collections.abc import Iterable
 
 from disco.core import (
     ActionEvent,
     LLMMessage,
-    MessageEvent,
     ToolCall,
 )
 from disco.core.loop import AgentLoop
 from loop_fakes import (
     FakeAnalyzer,
-    NoOpCondenser,
     FakeSummarizer,
     NeverConfirm,
+    NoOpCondenser,
     ScriptedAgent,
     build_loop,
     finish_step,
 )
-
 
 # ---- a fake SandboxInstance that returns / raises per-path ------------------
 

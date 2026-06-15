@@ -28,13 +28,10 @@ the LLM seam (no live LLM).
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 from pathlib import Path
-from typing import Any
 
 import pytest
-
 from disco.core import (
     DoDEvaluator,
     DoDSpec,
@@ -56,7 +53,6 @@ from disco.core.dod_evaluator import (
     resolve_under_workspace,
     tail,
 )
-
 
 # ---- fakes for the dependency-injected seams ------------------------------
 
@@ -343,7 +339,7 @@ async def test_evaluator_does_not_touch_event_store(tmp_path: Path) -> None:
     the evaluator is read-only with respect to the agent's state by
     construction (signature check, not just docstring)."""
     sig = inspect.signature(DoDEvaluator.evaluate)
-    for name, param in sig.parameters.items():
+    for name, _param in sig.parameters.items():
         assert "store" not in name.lower(), (
             f"evaluator.evaluate takes a {name!r} parameter; it must not "
             "touch the conversation's EventStore"
@@ -436,7 +432,7 @@ async def test_fake_judge_is_invoked_with_fresh_context(tmp_path: Path) -> None:
             CommandExitPredicate(cmd="true"),
         ]
     )
-    ev = DoDEvaluator(
+    _ev = DoDEvaluator(
         tmp_path,
         command_runner=_passing_command_runner,
         http_probe=_passing_http_probe,

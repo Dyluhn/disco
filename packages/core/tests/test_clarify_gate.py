@@ -174,8 +174,11 @@ async def test_answer_resumes_planning():
     events = await store.get_events(CID)
     # Verify the user's answer is in the log
     user_msgs = [
-        e for e in events
-        if e.kind == "message" and e.source == "user" and "#FF5733" in (e.message.content if hasattr(e, "message") else "")
+        e
+        for e in events
+        if e.kind == "message"
+        and e.source == "user"
+        and "#FF5733" in (e.message.content if hasattr(e, "message") else "")
     ]
     assert len(user_msgs) > 0
 
@@ -231,12 +234,17 @@ def test_reconstruct_clarify_then_ask_does_not_shadow():
     # 1) A clarify gate (engine stamps the status detail with the clarify id).
     c1 = ClarifyEvent(
         question="A few specifics first.",
-        items=[ClarifyQuestionItem(id="color", question="Brand color?", type="short_text", options=[])],
+        items=[
+            ClarifyQuestionItem(id="color", question="Brand color?", type="short_text", options=[])
+        ],
     )
     s1 = StatusEvent(status=ConversationStatus.AWAITING_USER_QUESTION, detail=c1.id)
     # 2) The user answers (resumes), then planning produces a later free-form ask.
     ans = MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="blue"))
-    m2 = MessageEvent(source=EventSource.AGENT, message=LLMMessage(role="assistant", content="One more thing?"))
+    m2 = MessageEvent(
+        source=EventSource.AGENT,
+        message=LLMMessage(role="assistant", content="One more thing?"),
+    )
     # 3) A free-form ask_user gate: detail is the agent MESSAGE id, NOT a clarify id.
     s2 = StatusEvent(status=ConversationStatus.AWAITING_USER_QUESTION, detail=m2.id)
 

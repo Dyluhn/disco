@@ -42,14 +42,13 @@ from collections.abc import Iterable
 
 import pytest
 from disco.core import ToolResult
-from disco.core.llm import ToolSpec
 from disco.core.events import (
     ActionEvent,
     AgentErrorEvent,
     ObservationEvent,
 )
+from disco.core.llm import ToolSpec
 from loop_fakes import ScriptedAgent, action_step, build_loop, finish_step
-
 
 CID = "conv"
 

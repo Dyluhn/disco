@@ -45,14 +45,12 @@ from __future__ import annotations
 import json
 
 import httpx
-import pytest
-
 from disco.core.events import LLMMessage
 from disco.core.llm.openai_provider import (
-    OpenAIProvider,
     _F5_THINK_BUDGET_CHARS,
     _F5_THINK_BUDGET_HEAD,
     _F5_THINK_BUDGET_TAIL,
+    OpenAIProvider,
     _truncate_think_block,
 )
 from disco.core.llm.types import (
@@ -61,13 +59,14 @@ from disco.core.llm.types import (
     ModelRole,
 )
 
-
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 
 
-def _req(messages: list[LLMMessage] | None = None, *, assist: bool = False, attempt: int = 1) -> CompletionRequest:
+def _req(
+    messages: list[LLMMessage] | None = None, *, assist: bool = False, attempt: int = 1
+) -> CompletionRequest:
     """Build a request with optional over-long think content. The default
     messages are a single user turn — tests that want a long `<think>` block
     in the PRIOR assistant turn pass an explicit `messages` list."""

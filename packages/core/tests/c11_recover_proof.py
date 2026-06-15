@@ -1,10 +1,13 @@
 """C11 evidence script #1 — recover.txt output."""
+from conftest import action, agent_msg, observation, tombstone, user_msg, with_seqs
 from disco.core import (
-    ActionEvent, CondensationEvent, MessageEvent, ObservationEvent,
-    ToolCall, ToolResult, View,
+    ActionEvent,
+    CondensationEvent,
+    MessageEvent,
+    ObservationEvent,
+    View,
 )
 from disco.core.view import microcompact, recover_span
-from conftest import action, agent_msg, observation, tombstone, user_msg, with_seqs
 
 
 def show(label, evs):
@@ -48,9 +51,14 @@ def main():
     show("recovered", recovered)
     msg_contents = [e.message.content for e in recovered if isinstance(e, MessageEvent)]
     print(f"    recovered content matches originals: {msg_contents == ['early-1', 'early-2']}")
+    not_summary = all(
+        e.message.content != "[earlier discussion]"
+        for e in recovered
+        if isinstance(e, MessageEvent)
+    )
     print(
         f"    recovered is NOT the summary: "
-        f"{all(e.message.content != '[earlier discussion]' for e in recovered if isinstance(e, MessageEvent))}"
+        f"{not_summary}"
     )
     print(f"    recovered IS the original Event objects: {all(e in events for e in recovered)}")
 
@@ -76,9 +84,13 @@ def main():
         f"(length={len(failed_obs.tool_result.content)}, full body): "
         f"{failed_obs.tool_result.content == o1.tool_result.content}"
     )
+    no_microcompact_marker = not any(
+        "[microcompacted" in (e.summary if isinstance(e, CondensationEvent) else "")
+        for e in rec_micro
+    )
     print(
         f"    recovered is NOT the summary: "
-        f"{not any('[microcompacted' in (e.summary if isinstance(e, CondensationEvent) else '') for e in rec_micro)}"
+        f"{no_microcompact_marker}"
     )
     print(f"    recovered IS the original Event objects: {all(e in base for e in rec_micro)}")
 

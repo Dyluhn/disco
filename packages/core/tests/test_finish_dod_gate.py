@@ -15,7 +15,7 @@ import pytest
 from disco.core import MessageEvent
 from disco.core.dod import DoDSpec, FileExistsPredicate
 from disco.core.dod_evaluator import DoDPredicateResult, DoDVerdict
-from disco.core.llm import DefaultLLMRouter, ProposedToolCall
+from disco.core.llm import DefaultLLMRouter
 from disco.core.loop import RouterAgent
 from disco.core.loop.engine import _DOD_REFUSAL_CAP
 from llm_fakes import simple_config

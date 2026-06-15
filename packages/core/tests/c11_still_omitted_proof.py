@@ -1,10 +1,10 @@
 """C11 evidence script #2 — still-omitted.txt output."""
+from conftest import action, agent_msg, observation, tombstone, user_msg, with_seqs
 from disco.core import (
-    ActionEvent, CondensationEvent, MessageEvent, ObservationEvent,
-    ToolCall, ToolResult, View,
+    CondensationEvent,
+    View,
 )
 from disco.core.view import microcompact, recover_span
-from conftest import action, agent_msg, observation, tombstone, user_msg, with_seqs
 
 
 def main():
@@ -46,8 +46,8 @@ def main():
     print()
     print("=== Recovery is ON-DEMAND: caller must invoke the accessor ===")
     print(f"    recovered = recover_span(events, tombstone)  # {len(recovered)} events")
-    print(f"    # `recovered` is a separate list the caller can use however")
-    print(f"    # they like. The View never sees it.")
+    print("    # `recovered` is a separate list the caller can use however")
+    print("    # they like. The View never sees it.")
 
     print()
     print("=== Live context is NOT bloated ===")
@@ -55,7 +55,7 @@ def main():
         f"    The View's message count is {len(view1.messages)} "
         f"(user, summary, recent). The recovered {len(recovered)} events are"
     )
-    print(f"    NOT counted toward the View's messages.")
+    print("    NOT counted toward the View's messages.")
 
     print()
     print("=== Microcompact case: failed turn still dropped, originals recoverable ===")

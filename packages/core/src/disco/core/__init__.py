@@ -6,7 +6,6 @@ add the agent loop, the real condenser, the LLM router, and security here.
 
 from __future__ import annotations
 
-from .equality import event_content_eq
 from .dod import (
     DoDPredicate,
     DoDSpec,
@@ -28,6 +27,7 @@ from .dod_evaluator import (
     resolve_under_workspace,
     spec_fingerprint,
 )
+from .equality import event_content_eq
 from .events import (
     SCHEMA_VERSION,
     ActionEvent,

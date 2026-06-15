@@ -24,7 +24,6 @@ constant — that's the gate."""
 
 from __future__ import annotations
 
-import pytest
 from disco.core import LLMMessage
 from disco.core.llm import (
     CapabilityProfile,
@@ -39,7 +38,6 @@ from disco.core.llm.prompts import (
     _EXECUTION_DRIVER_PROMPT_SMALL,
 )
 from llm_fakes import FakeModelProvider, simple_config
-
 
 # --------------------------------------------------------------------------
 # (1) The two constants exist, are non-empty, and are NOT the same string.
@@ -143,7 +141,16 @@ def test_assist_off_byte_identical_under_autonomous_prefix():
     assert off.startswith("AUTONOMOUS MODE")
     # Strip the prefix and compare the tail — proves we did not mutate the
     # capable-model prose as a side effect of the assist gate.
-    assert off[len("AUTONOMOUS MODE — no human is available to answer questions or approve your plan. Do NOT try to ask the user anything (the ask tools are not available). When a detail is missing or ambiguous, choose the most reasonable default, state the assumption with `notify_user`, and proceed. Do not end your turns with questions. You must drive the task to `finish` yourself; if something is genuinely impossible, call `finish` and explain what is blocked in the summary.\n\n"):] == _EXECUTION_DRIVER_PROMPT
+    autonomous_prefix = (
+        "AUTONOMOUS MODE — no human is available to answer questions or approve "
+        "your plan. Do NOT try to ask the user anything (the ask tools are not "
+        "available). When a detail is missing or ambiguous, choose the most "
+        "reasonable default, state the assumption with `notify_user`, and proceed. "
+        "Do not end your turns with questions. You must drive the task to `finish` "
+        "yourself; if something is genuinely impossible, call `finish` and explain "
+        "what is blocked in the summary.\n\n"
+    )
+    assert off[len(autonomous_prefix):] == _EXECUTION_DRIVER_PROMPT
 
 
 def test_assist_off_byte_identical_under_skills_block():

@@ -29,6 +29,14 @@ if TYPE_CHECKING:
     from ..llm import StreamChunk
     from .boundaries import StreamHook
 
+from ..dod import (
+    CommandExitPredicate,
+    DoDPredicate,
+    FileExistsPredicate,
+    HTTPOkPredicate,
+    predicate_from_obj,
+)
+from ..dod_evaluator import DoDEvaluator
 from ..events import (
     ActionEvent,
     AgentErrorEvent,
@@ -64,14 +72,6 @@ from ..view import Condenser, Summarizer, View, _latest_plan, microcompact
 from .boundaries import Agent, ConfirmationPolicy, SecurityAnalyzer, StopHook, ToolExecutor
 from .stream_extract import extract_partial_string_field
 from .stuck import StuckDetector, StuckThresholds
-from ..dod_evaluator import DoDEvaluator, DoDVerdict
-from ..dod import (
-    DoDPredicate,
-    FileExistsPredicate,
-    CommandExitPredicate,
-    HTTPOkPredicate,
-    predicate_from_obj,
-)
 
 _LOG = logging.getLogger("disco.loop")
 
@@ -354,7 +354,8 @@ def _detect_project_bootstrap(workspace_path: str | os.PathLike[str]) -> str | N
         sections.append("package.json scripts:\n" + "\n".join(pkg[: _F4_MAX_SCRIPTS_PER_MANIFEST]))
     pyp = _detect_pyproject_toml(root)
     if pyp:
-        sections.append("pyproject.toml scripts:\n" + "\n".join(pyp[: _F4_MAX_SCRIPTS_PER_MANIFEST]))
+        scripts_text = "\n".join(pyp[: _F4_MAX_SCRIPTS_PER_MANIFEST])
+        sections.append("pyproject.toml scripts:\n" + scripts_text)
     mk = _detect_makefile(root)
     if mk:
         sections.append("Makefile targets:\n" + "\n".join(mk[: _F4_MAX_SCRIPTS_PER_MANIFEST]))
@@ -1215,7 +1216,10 @@ _CLARIFY_PARAMETERS_SCHEMA = {
                     "type": {
                         "type": "string",
                         "enum": ["short_text", "long_text", "choice"],
-                        "description": "Input kind: short_text (one word), long_text (sentence), choice (pick from options).",
+                        "description": (
+                            "Input kind: short_text (one word), long_text (sentence), "
+                            "choice (pick from options)."
+                        ),
                     },
                     "options": {
                         "type": "array",
@@ -2912,7 +2916,7 @@ class AgentLoop:
                 raw = await asyncio.wait_for(
                     sbx.read_file(path), timeout=_WS_READ_TIMEOUT_S
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # A hung read implies a wedged/dead sandbox. STOP — don't hold the
                 # conversation lock for timeout×N files (that would block pause/steer/
                 # cancel). Degrade to the snapshot collected so far. The sandbox isn't
@@ -3497,7 +3501,8 @@ class AgentLoop:
         lines: list[str] = existing.splitlines() if existing.strip() else [
             "# Standing memory",
             "",
-            "Durable facts the agent learned this run (C5: write-through mirror of the in-View KnowledgeEvent channel).",
+            "Durable facts the agent learned this run (C5: write-through mirror "
+            "of the in-View KnowledgeEvent channel).",
             "",
         ]
         if scope:
@@ -3683,7 +3688,7 @@ class AgentLoop:
 
     async def _run_fanout(
         self, args: dict, events: list[Event], *, call_id: str = ""
-    ) -> "ToolResult":
+    ) -> ToolResult:
         """C20 — dispatch the read-only Explore/Plan helper task and return the
         joined result as a `ToolResult` (the caller — the `delegate_explore`
         intercept path — folds it back as a paired `ObservationEvent`).
@@ -3749,7 +3754,8 @@ class AgentLoop:
             success=True,
             content=(
                 f"[C20 fan-out #{self._fanout_count}/{self._fanout_max}] "
-                f"helper dispatched: question=\"{question[:80]}{'…' if len(question) > 80 else ''}\""
+                f"helper dispatched: "
+                f"question=\"{question[:80]}{'…' if len(question) > 80 else ''}\""
                 + (f" context={len(context)} chars" if context else "")
                 + ". (Default stub — override `_run_fanout` for a real subagent.)"
             ),
@@ -3930,9 +3936,9 @@ class AgentLoop:
         root and compare to `predicate.expect_exit` (default 0). Tight
         timeout to keep the loop responsive. Failures (deny, timeout,
         wrong exit) are surfaced with the reason in the note."""
-        from pathlib import Path
         import asyncio
         import subprocess
+        from pathlib import Path
         sbx = getattr(self.executor, "sandbox", None)
         workspace = getattr(sbx, "workspace_path", None) if sbx is not None else None
         cwd = str(Path(workspace).resolve()) if workspace else None
@@ -3986,7 +3992,6 @@ class AgentLoop:
         advisory check the agent opted into by attaching the predicate;
         the C1c gate (fresh-context, with egress discipline) is the
         authoritative check."""
-        import asyncio
         try:
             import httpx
         except ImportError:
@@ -4619,7 +4624,8 @@ class AgentLoop:
                                     role="user",
                                     content=(
                                         f"⚠ Autonomous run forfeited after {fails} consecutive "
-                                        "failures (recovery attempted, still failing). Recent errors:\n"
+                                        "failures (recovery attempted, still failing). "
+                                        "Recent errors:\n"
                                         + "\n".join(f"  • {err[:200]}" for err in recent_errors[:4])
                                     ),
                                 ),
@@ -5327,8 +5333,10 @@ class AgentLoop:
                                             "<system-reminder>\n"
                                             f"Your verify command `{verify_cmd}` is not runnable "
                                             "(syntax error / command-not-found) — that is a broken "
-                                            "CHECK, not a failed task, so it is being ignored and the "
-                                            "run is finishing. Next time pass a valid shell command "
+                                            "CHECK, not a failed task, so it is "
+                                            "being ignored and the "
+                                            "run is finishing. Next time pass a "
+                                            "valid shell command "
                                             "if you want real verification.\n"
                                             "</system-reminder>"
                                         ),
@@ -5346,10 +5354,13 @@ class AgentLoop:
                                         role="user",
                                         content=(
                                             "<system-reminder>\n"
-                                            f"You called finish, but the verify command `{verify_cmd}` "
+                                            f"You called finish, but the verify "
+                                            f"command `{verify_cmd}` "
                                             "did not pass (see the result above). The task is NOT "
-                                            "complete. Fix what it surfaced, then finish again — or "
-                                            "finish without a verify command if the check itself is "
+                                            "complete. Fix what it surfaced, then "
+                                            "finish again — or "
+                                            "finish without a verify command if "
+                                            "the check itself is "
                                             "wrong.\n"
                                             "</system-reminder>"
                                         ),
@@ -5375,9 +5386,12 @@ class AgentLoop:
                                         content=(
                                             "<system-reminder>\n"
                                             f"The verify command `{verify_cmd}` has failed "
-                                            f"{self._finish_verify_refusals} times. Finishing anyway "
-                                            "so the run does not loop forever — but the deliverable "
-                                            "may be incomplete. Note this clearly in your summary.\n"
+                                            f"{self._finish_verify_refusals} times. "
+                                            "Finishing anyway "
+                                            "so the run does not loop forever — "
+                                            "but the deliverable "
+                                            "may be incomplete. Note this clearly "
+                                            "in your summary.\n"
                                             "</system-reminder>"
                                         ),
                                     ),
@@ -5392,7 +5406,8 @@ class AgentLoop:
                                         role="user",
                                         content=(
                                             "⚠ Finished despite the verification check failing "
-                                            f"{self._finish_verify_refusals}× — the deliverable may "
+                                            f"{self._finish_verify_refusals}× — "
+                                            "the deliverable may "
                                             "be incomplete; review it."
                                         ),
                                     ),
@@ -5993,7 +6008,9 @@ class AgentLoop:
                             source=EventSource.AGENT,
                             message=LLMMessage(
                                 role="assistant",
-                                content=question or "The agent needs clarification before planning.",
+                                content=(
+                                    question or "The agent needs clarification before planning."
+                                ),
                             ),
                         )
                         await self._emit(q_event)

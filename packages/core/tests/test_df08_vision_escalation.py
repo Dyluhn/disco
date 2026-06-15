@@ -34,7 +34,9 @@ def _img_req(role=ModelRole.AGENT_DRIVER) -> CompletionRequest:
     """A request carrying one image — the trigger for the vision guard."""
     return CompletionRequest(
         profile=CapabilityProfile(role=role),
-        messages=[LLMMessage(role="user", content="describe this", images=["data:image/png;base64,abc"])],
+        messages=[
+            LLMMessage(role="user", content="describe this", images=["data:image/png;base64,abc"])
+        ],
     )
 
 
@@ -94,7 +96,9 @@ async def test_vision_escalation_routes_to_escalation_model():
     cfg = _cfg_with_escalation("vision-model")
     providers = {
         "ollama": FakeModelProvider("ollama", text="local"),
-        "openrouter": FakeModelProvider("openrouter", text="escalated-vision-response", cost_usd=0.01),
+        "openrouter": FakeModelProvider(
+            "openrouter", text="escalated-vision-response", cost_usd=0.01
+        ),
     }
     from disco.core.llm.routing import DefaultLLMRouter, InMemoryRoutingSink
     sink = InMemoryRoutingSink()
@@ -139,14 +143,17 @@ async def test_escalation_model_receives_provider_and_model_id_correctly():
     path — the provider sees the correct model_id."""
     openrouter_provider = FakeModelProvider("openrouter", text="escalated", cost_usd=0.01)
     cfg = _cfg_with_escalation("vision-model")
-    providers = {"ollama": FakeModelProvider("ollama", text="local"), "openrouter": openrouter_provider}
+    providers = {
+        "ollama": FakeModelProvider("ollama", text="local"),
+        "openrouter": openrouter_provider,
+    }
     from disco.core.llm.routing import DefaultLLMRouter, InMemoryRoutingSink
     router = DefaultLLMRouter(cfg, providers, sink=InMemoryRoutingSink())
 
     await router.complete(_img_req())
     # The escalated request should have been sent to the openrouter provider
     assert openrouter_provider.calls == 1
-    seen = openrouter_provider.seen_requests[0]
+    _seen = openrouter_provider.seen_requests[0]
     # The provider should have received the model_id from the escalation entry
     # (FakeModelProvider doesn't inspect model parameter, but the call pattern is correct)
 
@@ -231,7 +238,11 @@ def test_multiple_images_all_serialized():
     m = LLMMessage(
         role="user",
         content="compare these",
-        images=["data:image/png;base64,img1", "data:image/png;base64,img2", "data:image/png;base64,img3"],
+        images=[
+            "data:image/png;base64,img1",
+            "data:image/png;base64,img2",
+            "data:image/png;base64,img3",
+        ],
     )
     wire = provider._message(m)
 
@@ -253,7 +264,9 @@ def test_image_serialization_in_payload_for_openrouter_model():
 
     req = CompletionRequest(
         profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER),
-        messages=[LLMMessage(role="user", content="look", images=["data:image/png;base64,test123"])],
+        messages=[
+            LLMMessage(role="user", content="look", images=["data:image/png;base64,test123"])
+        ],
         max_tokens=50,
         temperature=0.0,
     )

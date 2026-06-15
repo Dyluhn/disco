@@ -41,7 +41,6 @@ from disco.core.llm import (
 from disco.core.loop.agent import RouterAgent
 from disco.core.view import View
 
-
 # --------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------
@@ -100,7 +99,9 @@ async def _step_and_get_last_prefill(agent, view, mode, env_patch: dict | None =
     router.stream_complete = capturing_stream
 
     ctx_mgr = (
-        patch.dict(os.environ, env_patch) if env_patch is not None else patch.dict(os.environ, {}, clear=False)
+        patch.dict(os.environ, env_patch)
+        if env_patch is not None
+        else patch.dict(os.environ, {}, clear=False)
     )
     with ctx_mgr:
         await agent.step(

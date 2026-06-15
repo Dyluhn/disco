@@ -1,6 +1,5 @@
-import pytest
-from disco.core.llm.types import ProposedToolCall
 from disco.core.llm.toolcall_recovery import recover_tool_calls
+
 
 def test_recover_hermes_format():
     content = '<tool_call>{"name": "foo", "arguments": {"x": 1}}</tool_call>'
@@ -88,7 +87,8 @@ def test_both_content_and_reasoning():
     reasoning = '<tool_call>{"name": "foo", "arguments": {"x": 1}}</tool_call>'
     content = '{"name": "bar", "arguments": {"y": 2}}'
     calls = recover_tool_calls(content, reasoning)
-    # Should probably extract both or deduplicate? The prompt says "Scan BOTH content and reasoning_content."
+    # Should probably extract both or deduplicate? The prompt says
+    # "Scan BOTH content and reasoning_content."
     # We will just extract all.
     assert len(calls) >= 1
     tool_names = [c.tool_name for c in calls]

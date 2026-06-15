@@ -240,7 +240,15 @@ class SqliteEventStore:
             "INSERT OR IGNORE INTO conversations "
             "(conversation_id, owner_id, space_id, title, created_at, surface, origin) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (conversation_id, owner_id, space_id, title, datetime.now().isoformat(), surface, origin),
+            (
+                conversation_id,
+                owner_id,
+                space_id,
+                title,
+                datetime.now().isoformat(),
+                surface,
+                origin,
+            ),
         )
         self._conn.commit()
 
@@ -254,8 +262,8 @@ class SqliteEventStore:
     # the full immutability argument.
 
     async def set_dod_spec(
-        self, conversation_id: str, spec: "DoDSpec", *, set_by: str = "system"
-    ) -> "DoDSpec":
+        self, conversation_id: str, spec: DoDSpec, *, set_by: str = "system"
+    ) -> DoDSpec:
         """Persist the DoD spec for a conversation. WRITE-ONCE: a second call
         raises `DoDSpecAlreadySet` and the original is preserved.
 
@@ -317,7 +325,7 @@ class SqliteEventStore:
                 )
         return spec
 
-    async def get_dod_spec(self, conversation_id: str) -> "DoDSpec | None":
+    async def get_dod_spec(self, conversation_id: str) -> DoDSpec | None:
         """Accessor. Returns the stored `DoDSpec` or `None` when no spec has
         been captured yet. A pure read; no copy, no wrapping, no mutation.
 
@@ -333,8 +341,8 @@ class SqliteEventStore:
         return DoDSpec.from_json_dict(json.loads(row["spec"]))
 
     async def replace_dod_spec(
-        self, conversation_id: str, spec: "DoDSpec", *, actor: str = "system"
-    ) -> "DoDSpec":
+        self, conversation_id: str, spec: DoDSpec, *, actor: str = "system"
+    ) -> DoDSpec:
         """Named, always-raise hook for "weaken the spec" affordances. The
         spec is write-once; this method exists so a future caller (a
         server-side endpoint, a debug tool) fails LOUDLY instead of silently

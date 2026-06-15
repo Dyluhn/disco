@@ -28,8 +28,10 @@ This module incorporates design adaptations harvested from SmallCode
 
 import json
 import re
-from typing import Optional, Any
+from typing import Any
+
 from disco.core.llm.types import ProposedToolCall
+
 
 def _fix_trailing_comma(text: str) -> str:
     text = re.sub(r',\s*\}', '}', text)
@@ -47,17 +49,32 @@ def _parse_tool_json(data: Any) -> list[ProposedToolCall]:
         return []
     
     # {"name": "foo", "arguments": {"x": 1}}
-    if "name" in data and "arguments" in data and isinstance(data["name"], str) and isinstance(data["arguments"], dict):
+    if (
+        "name" in data
+        and "arguments" in data
+        and isinstance(data["name"], str)
+        and isinstance(data["arguments"], dict)
+    ):
         return [ProposedToolCall(tool_name=data["name"], arguments=data["arguments"])]
     
     # {"function": {"name": "foo", "arguments": {"x": 1}}}
     if "function" in data and isinstance(data["function"], dict):
         f = data["function"]
-        if "name" in f and "arguments" in f and isinstance(f["name"], str) and isinstance(f["arguments"], dict):
+        if (
+            "name" in f
+            and "arguments" in f
+            and isinstance(f["name"], str)
+            and isinstance(f["arguments"], dict)
+        ):
             return [ProposedToolCall(tool_name=f["name"], arguments=f["arguments"])]
             
     # {"tool": "foo", "args": {"x": 1}}
-    if "tool" in data and "args" in data and isinstance(data["tool"], str) and isinstance(data["args"], dict):
+    if (
+        "tool" in data
+        and "args" in data
+        and isinstance(data["tool"], str)
+        and isinstance(data["args"], dict)
+    ):
         return [ProposedToolCall(tool_name=data["tool"], arguments=data["args"])]
         
     return []
@@ -85,7 +102,9 @@ def _extract_json_strings(text: str) -> list[str]:
         
     return []
 
-def recover_tool_calls(content: Optional[str], reasoning_content: Optional[str]) -> list[ProposedToolCall]:
+def recover_tool_calls(
+    content: str | None, reasoning_content: str | None
+) -> list[ProposedToolCall]:
     calls = []
     
     for text in [reasoning_content, content]:

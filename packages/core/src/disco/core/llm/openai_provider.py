@@ -488,7 +488,9 @@ class OpenAIProvider:
         return coerced
 
     @classmethod
-    def _tool_calls(cls, raw: list | None, tools: list[ToolSpec] | None = None) -> list[ProposedToolCall]:
+    def _tool_calls(
+        cls, raw: list | None, tools: list[ToolSpec] | None = None
+    ) -> list[ProposedToolCall]:
         out: list[ProposedToolCall] = []
         spec_map = {t.name: t for t in (tools or [])}
         # Also map by sanitized name for reverse lookup

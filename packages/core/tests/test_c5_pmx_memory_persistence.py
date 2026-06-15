@@ -26,15 +26,10 @@ as `test_c16_hard_reset_pointer_flush.py` and `test_rematerialize_servers.py`.
 from __future__ import annotations
 
 import pytest
-
 from disco.core import (
     ActionEvent,
     EventSource,
     KnowledgeEvent,
-    LLMMessage,
-    MessageEvent,
-    ObservationEvent,
-    SqliteEventStore,
     ToolCall,
     ToolResult,
 )
@@ -46,7 +41,6 @@ from loop_fakes import (
     build_loop,
     finish_step,
 )
-
 
 CID = "conv-c5"
 
@@ -263,7 +257,7 @@ async def test_c5_remember_dedup_keeps_mirror_in_sync():
     # In-View: 2 unique (scope, fact) pairs.
     knowledges = [e for e in await store.get_events(CID) if isinstance(e, KnowledgeEvent)]
     assert len(knowledges) == 2
-    assert {k.snippet for k in knowledges} == {"alpha", "alpha"}
+    assert {k.snippet for k in knowledges} == {"alpha"}
 
     # On-disk mirror: each unique pair appears exactly once.
     body = sbx.files[".pmx/MEMORY.md"].decode("utf-8")
@@ -323,7 +317,6 @@ async def test_c5_session_recreate_reads_back_pmx_memory_md():
       - The cache is consumable exactly once (take_ drains, second take
         returns []).
     """
-    from disco.tools.sandbox.base import SandboxInstance, SandboxSpec
     from disco.tools.sandbox.session import SandboxSession
 
     # The "fresh" instance has the durable mirror already on disk
@@ -429,8 +422,8 @@ async def test_c5_engine_drains_recovered_facts_and_re_emits_as_knowledge_events
     # Pre-seed the on-disk mirror (the test simulates "we just came back
     # from a recreate; the file is on disk, the in-memory View is gone").
     sbx.files[".pmx/MEMORY.md"] = (
-        "# Standing memory\n\n## build\n- make is the build\n"
-    ).encode("utf-8")
+        b"# Standing memory\n\n## build\n- make is the build\n"
+    )
 
     # Wire a session-like object that returns the recovery facts.
     class _FakeSessionForRecovery:
@@ -521,7 +514,7 @@ async def test_c5_workspace_snapshot_excludes_pmx_directory():
     # Seed a `file_write` event so `_workspace_paths_from_events` picks
     # `app.py` up as a working-set file. The snapshot is built FROM the
     # event list, so we pass it in directly (no need to run the loop).
-    from disco.core import ToolCall, ActionEvent
+    from disco.core import ToolCall
     events = [
         ActionEvent(
             thought="wrote app",
@@ -567,7 +560,7 @@ async def test_c5_workspace_snapshot_excludes_pmx_nested_and_root():
     # mirror. The snapshot is built from the event list — no need to run
     # the loop. The snapshot method walks `events` and reads live bytes
     # for each path it finds; the fake sandbox serves those bytes.
-    from disco.core import ToolCall, ActionEvent
+    from disco.core import ToolCall
     events = [
         ActionEvent(
             thought="wrote app",
@@ -616,7 +609,6 @@ async def test_c5_end_to_end_remember_survives_simulated_hard_reset():
     The test wires both halves (write-through AND read-back) through a
     single SandboxSession and asserts the file is the durable carrier.
     """
-    from disco.tools.sandbox.base import SandboxSpec
 
     # Phase A: write-through. The engine runs one `remember`, which
     # should land the fact in `.pmx/MEMORY.md`.

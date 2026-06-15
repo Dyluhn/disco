@@ -26,7 +26,9 @@ async def test_status_write_through(store):
     await store.append(cid, ev)
     
     # Check if column is updated
-    row = store._conn.execute("SELECT status FROM conversations WHERE conversation_id = ?", (cid,)).fetchone()
+    row = store._conn.execute(
+        "SELECT status FROM conversations WHERE conversation_id = ?", (cid,)
+    ).fetchone()
     assert row["status"] == "RUNNING"
 
 async def test_non_status_event_column_untouched(store):
@@ -39,7 +41,9 @@ async def test_non_status_event_column_untouched(store):
     await store.append(cid, ev)
     
     # Check if column is still NULL
-    row = store._conn.execute("SELECT status FROM conversations WHERE conversation_id = ?", (cid,)).fetchone()
+    row = store._conn.execute(
+        "SELECT status FROM conversations WHERE conversation_id = ?", (cid,)
+    ).fetchone()
     assert row["status"] is None
 
 async def test_read_repair_on_list(store):
@@ -47,13 +51,18 @@ async def test_read_repair_on_list(store):
     owner = "local"
     # 1. Manually insert a row with NULL status
     store.create_conversation(cid, owner_id=owner)
-    # 2. Append a StatusEvent (it will update the column, so we manually NULL it out to simulate old data)
-    await store.append(cid, StatusEvent(source=EventSource.SYSTEM, status=ConversationStatus.FINISHED))
+    # 2. Append a StatusEvent (it will update the column, so we manually NULL it
+    #    out to simulate old data)
+    await store.append(
+        cid, StatusEvent(source=EventSource.SYSTEM, status=ConversationStatus.FINISHED)
+    )
     store._conn.execute("UPDATE conversations SET status = NULL WHERE conversation_id = ?", (cid,))
     store._conn.commit()
     
     # Verify it's NULL
-    row = store._conn.execute("SELECT status FROM conversations WHERE conversation_id = ?", (cid,)).fetchone()
+    row = store._conn.execute(
+        "SELECT status FROM conversations WHERE conversation_id = ?", (cid,)
+    ).fetchone()
     assert row["status"] is None
     
     # 3. Call list_conversation_summaries
@@ -62,14 +71,18 @@ async def test_read_repair_on_list(store):
     assert summaries[0].status == "FINISHED"
     
     # 4. Verify it was backfilled in the DB
-    row = store._conn.execute("SELECT status FROM conversations WHERE conversation_id = ?", (cid,)).fetchone()
+    row = store._conn.execute(
+        "SELECT status FROM conversations WHERE conversation_id = ?", (cid,)
+    ).fetchone()
     assert row["status"] == "FINISHED"
 
 async def test_repair_writes_once(store):
     cid = "conv_1"
     owner = "local"
     store.create_conversation(cid, owner_id=owner)
-    await store.append(cid, StatusEvent(source=EventSource.SYSTEM, status=ConversationStatus.FINISHED))
+    await store.append(
+        cid, StatusEvent(source=EventSource.SYSTEM, status=ConversationStatus.FINISHED)
+    )
     store._conn.execute("UPDATE conversations SET status = NULL WHERE conversation_id = ?", (cid,))
     store._conn.commit()
     
@@ -110,7 +123,9 @@ async def test_schema_migration_adds_column(tmp_path):
     
     # 3. Verify column exists by performing a list (which triggers read-repair)
     # First, we need an event to repair FROM.
-    await store.append("legacy_1", StatusEvent(source=EventSource.SYSTEM, status=ConversationStatus.RUNNING))
+    await store.append(
+        "legacy_1", StatusEvent(source=EventSource.SYSTEM, status=ConversationStatus.RUNNING)
+    )
     
     # Now list. If migration failed, this will throw OperationalError: no such column: status
     summaries = await store.list_conversation_summaries(owner_id="local")
@@ -118,10 +133,14 @@ async def test_schema_migration_adds_column(tmp_path):
     assert summaries[0].status == "RUNNING"
     
     # 4. Verify write-through works on the migrated table
-    await store.append("legacy_1", StatusEvent(source=EventSource.SYSTEM, status=ConversationStatus.FINISHED))
+    await store.append(
+        "legacy_1", StatusEvent(source=EventSource.SYSTEM, status=ConversationStatus.FINISHED)
+    )
     
     # Check DB directly
-    row = store._conn.execute("SELECT status FROM conversations WHERE conversation_id = ?", ("legacy_1",)).fetchone()
+    row = store._conn.execute(
+        "SELECT status FROM conversations WHERE conversation_id = ?", ("legacy_1",)
+    ).fetchone()
     assert row["status"] == "FINISHED"
     
     store.close()

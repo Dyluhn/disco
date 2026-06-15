@@ -38,9 +38,13 @@ def test_large_old_observation_is_masked():
     view = View.of(events)
     
     content = view.messages[1].content
-    # [masked output: {tool_name} #{seq} — {n_chars:,} chars, sha256:{hash12}. Re-run the tool (or file_read the same path) to see it again.]
+    # [masked output: {tool_name} #{seq} — {n_chars:,} chars, sha256:{hash12}.
+    # Re-run the tool (or file_read the same path) to see it again.]
     digest = hashlib.sha256(large_content.encode()).hexdigest()[:12]
-    expected_pattern = rf"^\[masked output: test_tool #2 — 1,000 chars, sha256:{digest}\. Re-run the tool \(or file_read the same path\) to see it again\.\]$"
+    expected_pattern = (
+        rf"^\[masked output: test_tool #2 — 1,000 chars, sha256:{digest}\. "
+        rf"Re-run the tool \(or file_read the same path\) to see it again\.\]$"
+    )
     assert re.match(expected_pattern, content)
 
 def test_agent_error_never_masked():
@@ -56,7 +60,9 @@ def test_pinned_events_never_masked():
     large_content = "K" * 1000
     kevt = KnowledgeEvent(snippet=large_content)
     devt = DatasourceEvent(name="d", docs=large_content)
-    events = with_seqs([user_msg(), kevt, devt] + [observation(content="recent") for _ in range(10)])
+    events = with_seqs(
+        [user_msg(), kevt, devt] + [observation(content="recent") for _ in range(10)]
+    )
     view = View.of(events)
     assert large_content in view.messages[1].content
     assert large_content in view.messages[2].content

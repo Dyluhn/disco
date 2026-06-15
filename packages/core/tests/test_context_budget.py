@@ -14,7 +14,6 @@ from __future__ import annotations
 from disco.core.events import ActionEvent, ToolCall
 from disco.core.view import LLMSummarizingCondenser, View
 
-
 # ---- C9: live context window, with a sane ceiling ---------------------------
 
 

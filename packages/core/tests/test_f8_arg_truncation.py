@@ -39,18 +39,15 @@ input messages list is never mutated."""
 
 from __future__ import annotations
 
-import asyncio
-
+from conftest import user_msg, with_seqs
 from disco.core import (
     ActionEvent,
     AgentErrorEvent,
     LLMMessage,
-    MessageEvent,
     ObservationEvent,
     SqliteEventStore,
     ToolCall,
     ToolResult,
-    View,
 )
 from disco.core.llm import OperatingMode
 from disco.core.loop.engine import (
@@ -58,7 +55,6 @@ from disco.core.loop.engine import (
     _F8_TRUNCATION_MARKER_TEMPLATE,
     _f8_confirmed_file_writes,
 )
-from conftest import user_msg, with_seqs
 from loop_fakes import (
     FakeAnalyzer,
     FakeExecutor,
@@ -94,7 +90,7 @@ class _NoOpCondenser:
         return None
 
 
-def _make_loop(*, assist: bool, store: SqliteEventStore) -> "AgentLoop":  # noqa: F821
+def _make_loop(*, assist: bool, store: SqliteEventStore) -> AgentLoop:  # noqa: F821
     """Build an AgentLoop with a real in-memory store and a no-op
     ScriptedAgent. The tests never call `agent.step()` — they drive
     `_materialize_view` directly to inspect the rendered messages."""
@@ -344,7 +340,7 @@ async def test_persisted_event_still_has_full_content_after_f8_render():
     intact)."""
     store = SqliteEventStore(":memory:")
     write = _write_event()
-    persisted_action = await store.append(CID, user_msg("write it"))
+    await store.append(CID, user_msg("write it"))
     await store.append(CID, write)
     await store.append(CID, _success_observation())
 
@@ -377,7 +373,6 @@ async def test_view_recover_span_returns_full_content_after_f8_render():
     a tombstone dropped, never the F8-shrunk view. F8 doesn't touch
     the event log, so recovery is unaffected — the model can always
     get the original bytes back via a tombstone-aware recovery path."""
-    from disco.core.view import View
 
     store = SqliteEventStore(":memory:")
     write = _write_event()
@@ -549,7 +544,6 @@ async def test_input_messages_list_not_mutated_by_f8_transform():
     LLMMessage objects, or the caller's tool_call dicts. The View is
     shared across many call sites; a render-time transform that
     mutated it would corrupt every consumer."""
-    from disco.core.loop.engine import AgentLoop
 
     events = with_seqs(
         [user_msg("write it"), _write_event(), _success_observation()]
@@ -559,7 +553,7 @@ async def test_input_messages_list_not_mutated_by_f8_transform():
     # Snapshot the LLMMessage identities and tool_call dict identities
     # BEFORE the F8 transform. Re-run and verify the original view
     # is unmodified.
-    pre_ids = [(id(m), [id(tc) for tc in (m.tool_calls or [])]) for m in view.messages]
+    _pre_ids = [(id(m), [id(tc) for tc in (m.tool_calls or [])]) for m in view.messages]
     pre_contents = {
         id(m): {
             id(tc): tc["arguments"]["content"]
@@ -577,9 +571,9 @@ async def test_input_messages_list_not_mutated_by_f8_transform():
     # The output is a NEW list.
     assert out_messages is not in_messages
     # The modified message is a NEW LLMMessage (frozen model_copy).
-    for m_in, m_out in zip(in_messages, out_messages):
+    for m_in, m_out in zip(in_messages, out_messages, strict=False):
         if m_in.role == "assistant" and m_in.tool_calls:
-            for tc_in, tc_out in zip(m_in.tool_calls, m_out.tool_calls):
+            for tc_in, tc_out in zip(m_in.tool_calls, m_out.tool_calls, strict=False):
                 if isinstance(tc_in, dict) and tc_in.get("id") == "call_fw_1":
                     # The dict was rebuilt (not the same object).
                     assert id(tc_in) != id(tc_out)

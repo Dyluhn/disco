@@ -55,14 +55,10 @@ synthetic observation are all observable without a full run() loop.
 
 from __future__ import annotations
 
-import asyncio
-
+from conftest import user_msg, with_seqs
 from disco.core import (
     ActionEvent,
-    AgentErrorEvent,
     Event,
-    LLMMessage,
-    MessageEvent,
     ObservationEvent,
     SqliteEventStore,
     ToolCall,
@@ -78,7 +74,6 @@ from disco.core.loop.engine import (
     _f9_has_successful_observation,
     _f9_path_was_mutated_after,
 )
-from conftest import user_msg, with_seqs
 from loop_fakes import (
     FakeAnalyzer,
     FakeExecutor,
@@ -127,7 +122,7 @@ class _ReadonlyExecutor(FakeExecutor):
         return self._readonly
 
 
-def _make_loop(*, assist: bool, executor=None) -> "AgentLoop":  # noqa: F821
+def _make_loop(*, assist: bool, executor=None) -> AgentLoop:  # noqa: F821
     """Build an AgentLoop over a real in-memory store. Tests drive
     `_execute_and_observe` directly; the agent is never stepped."""
     from disco.core.loop.engine import AgentLoop
@@ -242,7 +237,7 @@ def _shell_success_observation(action: ActionEvent) -> ObservationEvent:
     )
 
 
-async def _drive_execute(loop: "AgentLoop", action: ActionEvent) -> list[Event]:  # noqa: F821
+async def _drive_execute(loop: AgentLoop, action: ActionEvent) -> list[Event]:  # noqa: F821
     """Drive ``_execute_and_observe`` end-to-end: append the action to the
     loop's store (mimicking the run loop's ``_emit(action)``), call
     ``_execute_and_observe`` (which performs the F9 check + emit any

@@ -6,9 +6,11 @@ Two call sites in OpenAIProvider:
   * `stream_complete` (the LIVE path Disco streams; ~line 519)
 
 Behavior contract (T3):
-  - structured empty + Hermes text + req.assist=True  -> recovered ProposedToolCall, finish_reason="tool_calls"
+  - structured empty + Hermes text + req.assist=True  -> recovered
+    ProposedToolCall, finish_reason="tool_calls"
   - req.assist=False (capable-model default)           -> byte-identical to today (no recovery)
-  - structured tool_calls present                       -> recover_tool_calls NOT called (structured wins)
+  - structured tool_calls present                       -> recover_tool_calls
+    NOT called (structured wins)
 """
 
 from __future__ import annotations
@@ -16,8 +18,6 @@ from __future__ import annotations
 import json
 
 import httpx
-import pytest
-
 from disco.core.events import LLMMessage
 from disco.core.llm.openai_provider import OpenAIProvider
 from disco.core.llm.types import (
@@ -25,7 +25,6 @@ from disco.core.llm.types import (
     CompletionRequest,
     ModelRole,
 )
-
 
 HERMES_CONTENT = '<tool_call>{"name": "foo", "arguments": {"x": 1}}</tool_call>'
 

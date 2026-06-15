@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import pytest
 from disco.core import (
-    DEFAULT_OWNER_ID,
     DoDSpec,
     DoDSpecAlreadySet,
     SqliteEventStore,
@@ -38,6 +37,7 @@ from disco.core.dod import (
 )
 from disco.core.store.base import EventStore
 from disco.tools import agent_scope, build_default_registry
+from pydantic import ValidationError
 
 CID = "conv_dod_test"
 
@@ -216,7 +216,7 @@ def test_predicate_kinds_are_minimal_and_real() -> None:
     fourth "agent_self_asserts_done" kind would re-introduce the very failure
     mode C1a exists to fix.
     """
-    from disco.core.dod import FileExistsPredicate, CommandExitPredicate, HTTPOkPredicate
+    from disco.core.dod import CommandExitPredicate, FileExistsPredicate, HTTPOkPredicate
     real_kinds = {FileExistsPredicate, CommandExitPredicate, HTTPOkPredicate}
     # Round-trip each kind
     for kind_cls in real_kinds:
@@ -239,7 +239,7 @@ def test_unknown_predicate_kind_is_rejected() -> None:
     must be rejected at validation time, not silently passed through to the
     store. This is the predicate-level analogue of the immutability-via-agent
     gate: a malformed spec cannot sneak past the type system."""
-    with pytest.raises(Exception):  # Pydantic ValidationError
+    with pytest.raises(ValidationError):
         predicate_from_obj({"kind": "agent_says_done", "whatever": 1})
 
 
@@ -249,9 +249,9 @@ def test_predicates_and_spec_are_frozen() -> None:
     argument: even a buggy caller holding a reference cannot mutate the
     returned accessor value."""
     spec = _spec()
-    with pytest.raises(Exception):  # Pydantic ValidationError
+    with pytest.raises(ValidationError):
         spec.predicates[0].path = "evil"  # type: ignore[misc]
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         spec.predicates = []  # type: ignore[misc]
 
 
