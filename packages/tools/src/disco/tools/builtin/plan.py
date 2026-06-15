@@ -24,9 +24,8 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
-
 from disco.core.dod import DoDPredicate
+from pydantic import BaseModel, Field
 
 from ..anatomy import SecurityRisk, ToolContext, ToolDef, ToolOutcome
 

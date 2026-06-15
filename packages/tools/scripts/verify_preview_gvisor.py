@@ -69,7 +69,11 @@ async def main() -> None:
         owner = await port_owner(inst, 8000)
         ok("port 8000 has an owner", owner is not None and owner.pid is not None)
         assert owner is not None
-        ok("owner cmdline is http.server", "http.server" in (owner.cmdline or ""), owner.cmdline or "")
+        ok(
+            "owner cmdline is http.server",
+            "http.server" in (owner.cmdline or ""),
+            owner.cmdline or "",
+        )
         ok("owner session is 'preview'", owner.session == "pmx-preview", repr(owner.session))
 
         # (d) the workspace is genuinely served
@@ -89,7 +93,10 @@ async def main() -> None:
         ok("ensure_preview revives", revived is True)
         await asyncio.sleep(1.5)
         owner2 = await port_owner(inst, 8000)
-        ok("revived owner is 'preview' again", owner2 is not None and owner2.session == "pmx-preview")
+        ok(
+            "revived owner is 'preview' again",
+            owner2 is not None and owner2.session == "pmx-preview",
+        )
 
         print("ALL PASS (gvisor preview-as-session)")
     finally:

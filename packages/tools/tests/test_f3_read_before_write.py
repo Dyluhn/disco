@@ -19,7 +19,6 @@ is exercised end-to-end.
 from __future__ import annotations
 
 import pytest
-
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin.files import (
     FileReadArgs,
@@ -30,7 +29,6 @@ from disco.tools.builtin.files import (
 )
 from disco.tools.executor import DefaultToolExecutor
 from disco.tools.registry import ToolRegistry, ToolScope
-
 
 # --- fakes ------------------------------------------------------------------
 
@@ -257,7 +255,9 @@ async def test_executor_assist_on_refuses_via_default_tool_executor():
     )
     from disco.core import ToolCall
 
-    result = await ex.execute(ToolCall(tool_name="file_write", arguments={"path": "x.py", "content": "new\n"}))
+    result = await ex.execute(
+        ToolCall(tool_name="file_write", arguments={"path": "x.py", "content": "new\n"})
+    )
     assert result.success is False
     assert "x.py" in result.content
     assert "read" in result.content.lower()
@@ -281,7 +281,9 @@ async def test_executor_assist_off_writes_through_byte_identically():
     )
     from disco.core import ToolCall
 
-    result = await ex.execute(ToolCall(tool_name="file_write", arguments={"path": "x.py", "content": "new\n"}))
+    result = await ex.execute(
+        ToolCall(tool_name="file_write", arguments={"path": "x.py", "content": "new\n"})
+    )
     assert result.success is True
     assert result.error is None
     assert sbx._fs["x.py"] == b"new\n"

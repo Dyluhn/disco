@@ -37,12 +37,10 @@ from disco.tools.sandbox.base import (
     ExecResult,
     SandboxError,
     SandboxInstance,
-    SandboxService,
     SandboxSpec,
 )
 from disco.tools.sandbox.session import SandboxSession, TrackedService
 from disco.tools.sandbox.shell_sessions import ExecOutcome
-
 
 # ---------------------------------------------------------------------------
 # Test fakes — in-memory, no tmux, no real /proc

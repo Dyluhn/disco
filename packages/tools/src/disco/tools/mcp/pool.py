@@ -27,7 +27,9 @@ from .stdio import McpStdioClient
 
 _LOG = logging.getLogger(__name__)
 
-_UNTRUSTED_DESC_WRAPPER = '<untrusted_tool_description name="{name}">{desc}</untrusted_tool_description>'
+_UNTRUSTED_DESC_WRAPPER = (
+    '<untrusted_tool_description name="{name}">{desc}</untrusted_tool_description>'
+)
 
 
 class McpPool:

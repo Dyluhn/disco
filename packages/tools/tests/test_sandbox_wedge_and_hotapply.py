@@ -32,11 +32,10 @@ from disco.tools.sandbox import (
     SandboxUnavailableError,
 )
 from disco.tools.sandbox._container import (
+    _DEFAULT_RELOAD_TIMEOUT_S,
     PUBLISHED_PORTS,
     ContainerInstance,
-    _DEFAULT_RELOAD_TIMEOUT_S,
 )
-
 
 # --- Group A: wedge-guard (the docker/podman client call safety) ---
 

@@ -13,13 +13,10 @@ import os
 import re
 import uuid
 
-import pytest
 from conftest import FakeSandboxInstance
-
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin.system import ShellTool
 from disco.tools.sandbox.base import ExecResult
-
 
 # ---- fakes -----------------------------------------------------------------
 
@@ -59,8 +56,11 @@ def _args(cmd="big"):
 def _spill_keys(sbx):
     """Return the in-memory keys for any .disco-spill-*.log file written
     during this test, robust to the workspace_path prefix (so "." -> "./." ."""
-    import os
-    return [p for p in sbx._fs if os.path.basename(p).startswith(".disco-spill-") and p.endswith(".log")]
+    return [
+        p
+        for p in sbx._fs
+        if os.path.basename(p).startswith(".disco-spill-") and p.endswith(".log")
+    ]
 
 
 
@@ -109,7 +109,10 @@ async def test_spill_huge_stdout_when_assist_on():
     assert "HEADBLOCK-START" in res.content
     assert "TAILBLOCK-END" in res.content
     # And the middle was DROPPED (no fabricated bytes between them)
-    assert "HEADBLOCK-START" + "A" * 80 + "X" * 60_000 + "B" * 80 + "TAILBLOCK-END" not in res.content
+    assert (
+        "HEADBLOCK-START" + "A" * 80 + "X" * 60_000 + "B" * 80 + "TAILBLOCK-END"
+        not in res.content
+    )
 
     # Structured payload records the spill path so callers can find it
     assert res.structured is not None
@@ -133,7 +136,10 @@ async def test_no_spill_below_threshold():
 
 
 async def test_no_spill_when_assist_off():
-    """Case 3: ctx.assist=False + >50KB -> behavior unchanged. Capable-model path is byte-identical."""
+    """Case 3: ctx.assist=False + >50KB -> behavior unchanged.
+
+    Capable-model path is byte-identical.
+    """
     sbx = BigStdoutInstance(PAYLOAD_ANCHORED)
     ctx = _ctx(sbx, assist=False)
     res = await ShellTool().run(_args(), ctx)
@@ -154,7 +160,7 @@ async def test_spill_filename_is_uuid_hex_under_workspace():
     """Spill filename matches .disco-spill-<32-hex>.log, written under the workspace."""
     sbx = BigStdoutInstance(PAYLOAD_60K)
     ctx = _ctx(sbx, assist=True)
-    res = await ShellTool().run(_args(), ctx)
+    await ShellTool().run(_args(), ctx)
 
     spill_paths = _spill_keys(sbx)
     assert len(spill_paths) == 1

@@ -14,16 +14,12 @@ These tests use:
 
 from __future__ import annotations
 
-import os
-
 import pytest
-
 from disco.tools.sandbox.kernel import (
     KernelResult,
     ManagedKernel,
     _default_idle_timeout_s,
 )
-
 
 # ---------------------------------------------------------------------------
 # Test doubles

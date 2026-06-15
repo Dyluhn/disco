@@ -58,15 +58,43 @@ initiatives: AI-powered analytics platform (Q1 launch), APAC expansion (H2),
 and a new vertical SaaS offering for healthcare (pilot in Q2)."""
 
 VALID_TURN_SCRIPT = [
-    {"speaker": "A", "text": "Welcome to this analysis of Q4 performance. Revenue hit $4.2 billion, up fifteen percent year-over-year."},
+    {
+        "speaker": "A",
+        "text": "Welcome to this analysis of Q4 performance. Revenue hit $4.2 billion, "
+        "up fifteen percent year-over-year.",
+    },
     {"speaker": "B", "text": "That's impressive growth. What drove it?"},
-    {"speaker": "A", "text": "Cloud services led with twenty-two percent growth, followed by enterprise subscriptions at eighteen percent."},
-    {"speaker": "B", "text": "And the margin story is compelling too — two hundred basis points of expansion to twenty-eight percent."},
-    {"speaker": "A", "text": "Exactly. But there are headwinds. Currency in EMEA shaved three percent off, and cloud infra costs rose eight percent year-over-year."},
+    {
+        "speaker": "A",
+        "text": "Cloud services led with twenty-two percent growth, "
+        "followed by enterprise subscriptions at eighteen percent.",
+    },
+    {
+        "speaker": "B",
+        "text": "And the margin story is compelling too — "
+        "two hundred basis points of expansion to twenty-eight percent.",
+    },
+    {
+        "speaker": "A",
+        "text": "Exactly. But there are headwinds. Currency in EMEA shaved three percent off, "
+        "and cloud infra costs rose eight percent year-over-year.",
+    },
     {"speaker": "B", "text": "What about the competitive landscape?"},
-    {"speaker": "A", "text": "Two new entrants in the SMB segment are applying pressure, but the outlook remains strong."},
-    {"speaker": "B", "text": "They raised guidance for FY2026 to between $17.5 and $18 billion, a twelve to fifteen percent increase."},
-    {"speaker": "A", "text": "Three strategic bets: an AI analytics platform launching in Q1, APAC expansion in the second half, and a healthcare SaaS pilot in Q2."},
+    {
+        "speaker": "A",
+        "text": "Two new entrants in the SMB segment are applying pressure, "
+        "but the outlook remains strong.",
+    },
+    {
+        "speaker": "B",
+        "text": "They raised guidance for FY2026 to between $17.5 and $18 billion, "
+        "a twelve to fifteen percent increase.",
+    },
+    {
+        "speaker": "A",
+        "text": "Three strategic bets: an AI analytics platform launching in Q1, "
+        "APAC expansion in the second half, and a healthcare SaaS pilot in Q2.",
+    },
     {"speaker": "B", "text": "That's a packed roadmap. Thanks for walking us through it."},
 ]
 

@@ -26,17 +26,17 @@ import hashlib
 import io
 
 import pytest
-from PIL import Image
 from disco.tools.anatomy import ToolContext
 from disco.tools.builtin import ImageGenTool, build_default_registry
 from disco.tools.builtin.image_gen import (
-    ImageGenArgs,
     _PNG_MAGIC,
+    ImageGenArgs,
     _PILProceduralBackend,
     _prompt_seed,
 )
 from disco.tools.registry import agent_scope, research_scope
 from disco.tools.secrets import CapabilityBroker
+from PIL import Image
 
 # ---- fakes ------------------------------------------------------------------
 

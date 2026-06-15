@@ -29,20 +29,18 @@ sandbox) plus the byte-identical assertion for assist-OFF.
 from __future__ import annotations
 
 import pytest
-
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin.files import (
-    FileReadArgs,
-    FileReadTool,
-    FileWriteArgs,
-    FileWriteTool,
     _PRESSURE_DIRECTIVE,
     _PRESSURE_FILE_THRESHOLD,
     _PRESSURE_HEAD_BUDGET,
     _READ_CHAR_BUDGET,
+    FileReadArgs,
+    FileReadTool,
+    FileWriteArgs,
+    FileWriteTool,
     reset_read_tracker,
 )
-
 
 # --- fakes ------------------------------------------------------------------
 

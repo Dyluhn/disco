@@ -8,10 +8,11 @@ import os
 import re
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from queue import Empty
-from typing import Any, Callable
+from typing import Any
 
 from .base import SandboxError
 
@@ -570,7 +571,7 @@ class ManagedKernel(KernelSession):
 
     def __init__(
         self,
-        kernel_factory: Callable[[], "KernelSession"],
+        kernel_factory: Callable[[], KernelSession],
         *,
         idle_timeout_s: float,
         time_source: Callable[[], float] = time.monotonic,
@@ -589,7 +590,7 @@ class ManagedKernel(KernelSession):
         self.exec_count: int = 0
 
     @property
-    def inner(self) -> "KernelSession | None":
+    def inner(self) -> KernelSession | None:
         """The currently-spawned inner kernel, or None. Exposed for tests +
         observability. Do not use as a long-lived reference — it can be
         replaced after an idle cull."""

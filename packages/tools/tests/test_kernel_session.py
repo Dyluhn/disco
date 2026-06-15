@@ -221,7 +221,8 @@ plt.show()
 
 @pytest.mark.asyncio
 async def test_kernel_output_discipline():
-    """B2 discipline: big-output -> file + head + marker; small output -> unchanged; traceback -> full."""
+    """B2 discipline: big-output -> file + head + marker; small output ->
+    unchanged; traceback -> full."""
     workspace = "/tmp/test_kernel_discipline"
     os.makedirs(workspace, exist_ok=True)
     pk = ProcessKernel(workspace)
@@ -242,8 +243,16 @@ async def test_kernel_output_discipline():
     # Case 1: Big stdout
     big_stdout = "A" * 3000
     kc.get_iopub_msg.side_effect = [
-        {"header": {"msg_type": "stream"}, "content": {"name": "stdout", "text": big_stdout}, "parent_header": {"msg_id": "msg_id"}},
-        {"header": {"msg_type": "status"}, "content": {"execution_state": "idle"}, "parent_header": {"msg_id": "msg_id"}}
+        {
+            "header": {"msg_type": "stream"},
+            "content": {"name": "stdout", "text": big_stdout},
+            "parent_header": {"msg_id": "msg_id"},
+        },
+        {
+            "header": {"msg_type": "status"},
+            "content": {"execution_state": "idle"},
+            "parent_header": {"msg_id": "msg_id"},
+        },
     ]
     res = await pk.execute("print('big')", timeout_s=1)
     assert len(res.stdout) < 3000
@@ -260,8 +269,16 @@ async def test_kernel_output_discipline():
     # Case 2: Small output
     small_stdout = "hello"
     kc.get_iopub_msg.side_effect = [
-        {"header": {"msg_type": "stream"}, "content": {"name": "stdout", "text": small_stdout}, "parent_header": {"msg_id": "msg_id"}},
-        {"header": {"msg_type": "status"}, "content": {"execution_state": "idle"}, "parent_header": {"msg_id": "msg_id"}}
+        {
+            "header": {"msg_type": "stream"},
+            "content": {"name": "stdout", "text": small_stdout},
+            "parent_header": {"msg_id": "msg_id"},
+        },
+        {
+            "header": {"msg_type": "status"},
+            "content": {"execution_state": "idle"},
+            "parent_header": {"msg_id": "msg_id"},
+        },
     ]
     res = await pk.execute("print('small')", timeout_s=1)
     assert res.stdout == small_stdout
@@ -269,8 +286,16 @@ async def test_kernel_output_discipline():
     # Case 3: Traceback (never truncated)
     big_traceback = "E" * 3000
     kc.get_iopub_msg.side_effect = [
-        {"header": {"msg_type": "error"}, "content": {"traceback": [big_traceback]}, "parent_header": {"msg_id": "msg_id"}},
-        {"header": {"msg_type": "status"}, "content": {"execution_state": "idle"}, "parent_header": {"msg_id": "msg_id"}}
+        {
+            "header": {"msg_type": "error"},
+            "content": {"traceback": [big_traceback]},
+            "parent_header": {"msg_id": "msg_id"},
+        },
+        {
+            "header": {"msg_type": "status"},
+            "content": {"execution_state": "idle"},
+            "parent_header": {"msg_id": "msg_id"},
+        },
     ]
     res = await pk.execute("raise Error()", timeout_s=1)
     assert res.error_traceback == big_traceback

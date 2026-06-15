@@ -36,7 +36,9 @@ async def main() -> None:
     print(f"config: socket={cfg.docker_socket} runtime={cfg.runtime} image={cfg.image}")
     svc = GvisorSandboxService(cfg)
 
-    inst = await svc.create(SandboxSpec(memory_mb=512), owner_id="local", conversation_id="bp01-verify")
+    inst = await svc.create(
+        SandboxSpec(memory_mb=512), owner_id="local", conversation_id="bp01-verify"
+    )
     try:
         async def get_inst():
             return inst
@@ -64,7 +66,11 @@ async def main() -> None:
             "python3 -c \"import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8123').status)\"",
             timeout_s=30,
         )
-        ok("in-container fetch 200", curl.stdout.strip() == "200", curl.stdout.strip() or curl.stderr.strip())
+        ok(
+            "in-container fetch 200",
+            curl.stdout.strip() == "200",
+            curl.stdout.strip() or curl.stderr.strip(),
+        )
         kill = await mgr.kill_foreground("srv")
         ok("kill foreground", ("idle" in kill) or ("killed" in kill), kill[:80])
 

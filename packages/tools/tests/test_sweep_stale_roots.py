@@ -16,7 +16,6 @@ import time
 from pathlib import Path
 
 import pytest
-
 from disco.tools.sandbox.process import ProcessSandboxService
 
 
@@ -100,7 +99,7 @@ async def test_sweep_stale_roots_skips_symlinks():
         old_time = time.time() - 2 * 86400
         os.utime(link, (old_time, old_time), follow_symlinks=False)
 
-        removed = await svc.sweep_stale_roots(max_age_s=86400)
+        await svc.sweep_stale_roots(max_age_s=86400)
 
         # The symlink must not be removed (symlink guard), the target may or may not
         # be swept (it IS a real dir matching prefix), but the symlink itself survives.

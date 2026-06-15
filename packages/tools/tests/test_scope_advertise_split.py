@@ -51,7 +51,9 @@ def _make_executor(
 
 def test_advertised_subset_restricts_visible_tools():
     """Scope with allowed={a,b,c}, advertised={a} → available_tools returns only a."""
-    ex = _make_executor(["a", "b", "c"], allowed=frozenset({"a", "b", "c"}), advertised=frozenset({"a"}))
+    ex = _make_executor(
+        ["a", "b", "c"], allowed=frozenset({"a", "b", "c"}), advertised=frozenset({"a"})
+    )
     names = [t.name for t in ex.available_tools()]
     assert names == ["a"]
 
@@ -81,7 +83,9 @@ def test_advertised_must_be_subset_of_allowed_in_practice():
 @pytest.mark.asyncio
 async def test_allowed_not_advertised_tool_is_callable():
     """Tool b is allowed but not advertised → execute() succeeds."""
-    ex = _make_executor(["a", "b", "c"], allowed=frozenset({"a", "b", "c"}), advertised=frozenset({"a"}))
+    ex = _make_executor(
+        ["a", "b", "c"], allowed=frozenset({"a", "b", "c"}), advertised=frozenset({"a"})
+    )
     result = await ex.execute(call("b"))
     assert result.success, result.error
     assert "ran:b" in result.content
@@ -97,7 +101,10 @@ async def test_not_allowed_tool_yields_unknown_tool():
     )
     result = await ex.execute(call("d"))
     assert not result.success
-    assert "unknown" in (result.error or "").lower() or "out-of-scope" in (result.error or "").lower()
+    assert (
+        "unknown" in (result.error or "").lower()
+        or "out-of-scope" in (result.error or "").lower()
+    )
 
 
 @pytest.mark.asyncio

@@ -46,9 +46,8 @@ helper is available to the driver in execution mode only.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
-
 from disco.core import SecurityRisk
+from pydantic import BaseModel, Field
 
 from ..anatomy import ToolContext, ToolDef, ToolOutcome
 

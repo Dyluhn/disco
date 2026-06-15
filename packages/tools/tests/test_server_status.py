@@ -69,7 +69,10 @@ async def test_server_status_formatting(tmp_path):
     assert out.success
     assert "SERVER STATUS" in out.content
     assert "- preview: running — last: Serving at 8000" in out.content
-    assert "- 8000: OWNED by pid 1234 (python3 -m http.server 8000) [session: preview]" in out.content
+    assert (
+        "- 8000: OWNED by pid 1234 (python3 -m http.server 8000) [session: preview]"
+        in out.content
+    )
     assert "- 3000: OWNED by pid 5678 (node server.js) [session: api]" in out.content
     assert "- 5173: FREE" in out.content
 
@@ -77,7 +80,9 @@ async def test_server_status_formatting(tmp_path):
 async def test_server_status_free(tmp_path):
     sb = MockSandbox(str(tmp_path))
     # Return all ports as free
-    sb._run_probe_logic = lambda cmd: json.dumps([{"port": int(p), "pid": None} for p in cmd.split() if p.isdigit()])
+    sb._run_probe_logic = lambda cmd: json.dumps(
+        [{"port": int(p), "pid": None} for p in cmd.split() if p.isdigit()]
+    )
 
     out = await ServerStatusTool().run(ServerStatusArgs(), _ctx(sb))
     assert out.success

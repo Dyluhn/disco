@@ -13,7 +13,10 @@ class ServerStatusArgs(BaseModel):
 class ServerStatusTool:
     definition = ToolDef(
         name="server_status",
-        description="Show running background sessions and who owns each exposed port (8000 user-visible; 3000/5173/8080/5000/4321 also reachable).",
+        description=(
+            "Show running background sessions and who owns each exposed port "
+            "(8000 user-visible; 3000/5173/8080/5000/4321 also reachable)."
+        ),
         args_model=ServerStatusArgs,
         needs=frozenset({Capability.SHELL}),
         base_risk=SecurityRisk.LOW,
@@ -63,7 +66,10 @@ class ServerStatusTool:
                             break
                     
                 sess_part = f" [session: {sess_name}]" if sess_name else " [session: null]"
-                out_lines.append(f"  - {p}: OWNED by pid {owner.pid} ({owner.cmdline or ''}){sess_part}")
+                out_lines.append(
+                    f"  - {p}: OWNED by pid {owner.pid} "
+                    f"({owner.cmdline or ''}){sess_part}"
+                )
             else:
                 out_lines.append(f"  - {p}: FREE")
                 

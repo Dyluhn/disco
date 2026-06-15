@@ -1,7 +1,9 @@
 import asyncio
+import urllib.request
 
 import pytest
 from disco.tools.sandbox.base import ExecResult
+from disco.tools.sandbox.process import ProcessSandboxService
 from disco.tools.sandbox.shell_sessions import SessionBusy, ShellSessionManager
 
 
@@ -20,7 +22,8 @@ class FakeInstance:
             self.capture_pane_calls += 1
             if "capture-pane" in self.canned_outputs:
                 if isinstance(self.canned_outputs["capture-pane"], list):
-                    val = self.canned_outputs["capture-pane"].pop(0) if self.canned_outputs["capture-pane"] else self.canned_outputs["capture-pane_default"]
+                    cp = self.canned_outputs["capture-pane"]
+                    val = cp.pop(0) if cp else self.canned_outputs["capture-pane_default"]
                     return ExecResult(exit_code=val[0], stdout=val[1], stderr="", timed_out=False)
                 
         for k, v in self.canned_outputs.items():
@@ -30,13 +33,20 @@ class FakeInstance:
                     return ExecResult(exit_code=val[0], stdout=val[1], stderr="", timed_out=False)
                 else:
                     exit_code, stdout = v
-                    return ExecResult(exit_code=exit_code, stdout=stdout, stderr="", timed_out=False)
+                    return ExecResult(
+                        exit_code=exit_code, stdout=stdout, stderr="", timed_out=False
+                    )
                 
         if "capture-pane" in cmd and "capture-pane" in self.canned_outputs:
              val = self.canned_outputs["capture-pane"]
              return ExecResult(exit_code=val[0], stdout=val[1], stderr="", timed_out=False)
         
-        return ExecResult(exit_code=self.default_exit_code, stdout=self.default_output[1], stderr="", timed_out=False)
+        return ExecResult(
+            exit_code=self.default_exit_code,
+            stdout=self.default_output[1],
+            stderr="",
+            timed_out=False,
+        )
 
 @pytest.mark.asyncio
 async def test_marker_parse_exit_0():
@@ -60,7 +70,7 @@ async def test_marker_parse_exit_0():
     assert not view.running
     
     out = await manager.exec("main", "echo hi", None)
-    assert out.running == False
+    assert not out.running
     assert out.exit_code == 0
     assert out.output == "echo hi\nhi"
 
@@ -78,7 +88,7 @@ async def test_marker_parse_exit_7():
     ]
     
     out = await manager.exec("main", "exit 7", None)
-    assert out.running == False
+    assert not out.running
     assert out.exit_code == 7
     assert out.output == "exit 7"
 
@@ -91,10 +101,17 @@ async def test_busy_detection():
     inst.canned_outputs["capture-pane"] = (0, "sleep 10\n")
     
     view = await manager.view("main")
-    assert view.running == True
+    assert view.running
     
     # test SessionBusy verbatim message
-    with pytest.raises(SessionBusy, match="Previous command not finished in session 'main'. Wait for it \\(shell_wait\\), interact with it \\(shell_write_to_process\\), kill it \\(shell_kill_process\\), or use a different session name."):
+    with pytest.raises(
+        SessionBusy,
+        match=(
+            "Previous command not finished in session 'main'. Wait for it "
+            "\\(shell_wait\\), interact with it \\(shell_write_to_process\\), "
+            "kill it \\(shell_kill_process\\), or use a different session name."
+        ),
+    ):
         await manager.exec("main", "ls", None)
 
 @pytest.mark.asyncio
@@ -140,16 +157,10 @@ async def test_session_lost_after_recreate():
     assert "Session not found or error" in view2.output
 
 
-import urllib.request
-
-from disco.tools.sandbox.process import ProcessSandboxService
-
-
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_integration_scenarios():
     service = ProcessSandboxService()
-    spec = None # unused in ProcessSandboxService create
     inst = await service.create(spec=None, owner_id="test", conversation_id="conv-int")
     
     try:
@@ -158,15 +169,15 @@ async def test_integration_scenarios():
         
         # a) state persists
         out1 = await manager.exec("main", "x=42; echo started", None)
-        assert out1.running == False
+        assert not out1.running
         
         out2 = await manager.exec("main", "echo $x", None)
-        assert out2.running == False
+        assert not out2.running
         assert out2.output.strip() == "42"
         
         # b) start server, curl, kill
         out_srv = await manager.exec("srv", "python3 -m http.server 8123", None)
-        assert out_srv.running == True
+        assert out_srv.running
         
         # give it a second to start
         await asyncio.sleep(1)
@@ -185,18 +196,18 @@ async def test_integration_scenarios():
         
         # c) busy session
         out_read = await manager.exec("main", "read -p 'name? ' n && echo hi-$n", None)
-        assert out_read.running == True
+        assert out_read.running
         
         await manager.write("main", "dylan", press_enter=True)
         
         # Wait for it to finish
         view_read = await manager.wait("main", 5)
-        assert view_read.running == False
+        assert not view_read.running
         assert "hi-dylan" in view_read.output
         
         # d) SessionBusy
         out_busy = await manager.exec("main2", "sleep 20", None)
-        assert out_busy.running == True
+        assert out_busy.running
         
         with pytest.raises(SessionBusy):
             await manager.exec("main2", "echo nope", None)

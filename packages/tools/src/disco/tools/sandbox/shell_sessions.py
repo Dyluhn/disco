@@ -272,7 +272,9 @@ class ShellSessionManager:
                 
             if delta_lines and _MARKER_RE.search(delta_lines[-1]):
                 cleaned, exit_code = self._strip_output(delta)
-                outcome = ExecOutcome(running=False, exit_code=exit_code, output=cleaned[-_EXEC_RETURN_CHARS:])
+                outcome = ExecOutcome(
+                    running=False, exit_code=exit_code, output=cleaned[-_EXEC_RETURN_CHARS:]
+                )
                 self._record_persistent_if_match(name, command, exec_dir, outcome)
                 return outcome
 

@@ -35,7 +35,8 @@ _READ_CHAR_BUDGET = 7_000
 # targeted line range) so the model stops dumping whole files into context
 # when it's already close to the limit. Assist-OFF behavior is unchanged.
 _PRESSURE_HEAD_BUDGET = 2_000  # head-only slice when the gate fires (well under the snip cap)
-_PRESSURE_FILE_THRESHOLD = _READ_CHAR_BUDGET * 2  # 14_000 — files that would otherwise span multiple pages
+# 14_000 — files that would otherwise span multiple pages
+_PRESSURE_FILE_THRESHOLD = _READ_CHAR_BUDGET * 2
 # Prescriptive directive: "the file is big; don't read it whole, do this instead."
 # Static so a unit test can assert on it; worded so the weak-model tier picks
 # the cheap, deterministic path (grep → targeted read) over a full dump.

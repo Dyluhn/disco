@@ -16,8 +16,6 @@ Tests use fakes only — no real tmux, no real containers, no real /proc probes.
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 from disco.tools.sandbox.base import (
     ExecResult,
@@ -28,10 +26,8 @@ from disco.tools.sandbox.base import (
     SandboxUnavailableError,
 )
 from disco.tools.sandbox.shell_sessions import (
-    PersistentServer,
     ShellSessionManager,
 )
-
 
 # ---------------------------------------------------------------------------
 # Test fakes — no real tmux, no real containers
@@ -450,7 +446,6 @@ async def test_session_recreate_triggers_rehydrate(monkeypatch):
     initial.die()
 
     # Trigger the recreate by routing one resilient op through the session.
-    from disco.tools.sandbox.base import SandboxUnavailableError
     try:
         await session._resilient(lambda i: i.exec_shell("true", timeout_s=5))
     except SandboxError:

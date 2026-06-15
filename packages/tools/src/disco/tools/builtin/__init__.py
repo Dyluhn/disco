@@ -95,8 +95,10 @@ def build_default_registry() -> ToolRegistry:
         AudioOverviewTool(),  # audio_overview: two-voice TTS from finished report
         SlidesTool(),  # slides_generate: Marp-rendered slide decks (HTML/PDF/PPTX)
         ThinkTool(),  # think: NO-OP reasoning scratchpad (avoids prose-into-action degeneration)
-        ImageGenTool(),  # image_generate: keyless/local image synthesis (PIL procedural; live diffusers deferred)
-        DelegateExploreTool(),  # C20: read-only Explore/Plan helper dispatch+join (intercepted by loop)
+        # image_generate: keyless/local image synthesis (PIL procedural; live diffusers deferred)
+        ImageGenTool(),
+        # C20: read-only Explore/Plan helper dispatch+join (intercepted by loop)
+        DelegateExploreTool(),
     ):
         registry.register(tool)
     return registry

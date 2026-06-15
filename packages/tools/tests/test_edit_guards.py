@@ -9,7 +9,6 @@ content-loss seen live on gpt-oss-120b:
 from __future__ import annotations
 
 import pytest
-
 from disco.tools.builtin.files import (
     FileEditArgs,
     FileEditTool,

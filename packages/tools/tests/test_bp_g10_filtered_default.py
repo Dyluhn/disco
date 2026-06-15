@@ -14,8 +14,10 @@ Acceptance:
   • The npm/pip/git registry hosts are covered by the default allowlist
 
 References:
-  - packages/agent-server/src/disco/agent_server/runtime.py  `_build_sandbox_spec` (BP-G10 default flip)
-  - packages/agent-server/src/disco/agent_server/runtime.py  `_mcp_proxy_env`       (matching default flip)
+  - packages/agent-server/src/disco/agent_server/runtime.py
+    `_build_sandbox_spec` (BP-G10 default flip)
+  - packages/agent-server/src/disco/agent_server/runtime.py
+    `_mcp_proxy_env` (matching default flip)
   - packages/tools/src/disco/tools/sandbox/base.py:79  REGISTRY_EGRESS_ALLOW
   - packages/tools/src/disco/tools/sandbox/gvisor.py   `_setup_filtered_egress` (UNCHANGED)
   - packages/tools/src/disco/tools/sandbox/podman.py   `_setup_filtered_egress` (E8 wired)
@@ -39,7 +41,6 @@ from disco.tools.sandbox import (
 # surface the GvisorSandboxService drives, and importing them keeps the BP-G10
 # surface minimal (one regression hub for the egress posture).
 from test_gvisor import FakeDockerClient
-
 
 # ---------------------------------------------------------------------------
 # 1. The default flip — the core acceptance

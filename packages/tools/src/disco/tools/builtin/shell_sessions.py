@@ -23,7 +23,10 @@ class ShellExecArgs(BaseModel):
 class ShellExecTool:
     definition = ToolDef(
         name="shell_exec",
-        description="Execute a shell command in a persistent session. One foreground process per session. Fails if busy.",
+        description=(
+            "Execute a shell command in a persistent session. One foreground "
+            "process per session. Fails if busy."
+        ),
         args_model=ShellExecArgs,
         needs=frozenset({Capability.SHELL}),
         runs_in="sandbox",
@@ -35,7 +38,9 @@ class ShellExecTool:
         if not ctx.sessions:
             return _fail("Session manager not available.")
         try:
-            outcome = await ctx.sessions.exec(args.session, args.command, args.exec_dir if args.exec_dir else None)
+            outcome = await ctx.sessions.exec(
+                args.session, args.command, args.exec_dir if args.exec_dir else None
+            )
             if outcome.running:
                 header = f"session '{args.session}' — still running"
             else:
@@ -58,7 +63,10 @@ class ShellViewArgs(BaseModel):
 class ShellViewTool:
     definition = ToolDef(
         name="shell_view",
-        description="View the recent output and status of a persistent shell session. Can view anytime.",
+        description=(
+            "View the recent output and status of a persistent shell session. "
+            "Can view anytime."
+        ),
         args_model=ShellViewArgs,
         needs=frozenset({Capability.SHELL}),
         runs_in="sandbox",
@@ -137,7 +145,10 @@ class ShellKillArgs(BaseModel):
 class ShellKillTool:
     definition = ToolDef(
         name="shell_kill_process",
-        description="Kill the foreground process in a session using C-c, or recreate it if stuck. This is sanctioned.",
+        description=(
+            "Kill the foreground process in a session using C-c, or recreate it "
+            "if stuck. This is sanctioned."
+        ),
         args_model=ShellKillArgs,
         needs=frozenset({Capability.SHELL}),
         runs_in="sandbox",

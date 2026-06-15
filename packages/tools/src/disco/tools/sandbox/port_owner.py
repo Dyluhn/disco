@@ -21,7 +21,9 @@ import sys
 
 def get_tmux_panes():
     try:
-        out = subprocess.check_output(['tmux', 'list-panes', '-a', '-F', '#{pane_pid} #{session_name}']).decode('utf-8')
+        out = subprocess.check_output(
+            ['tmux', 'list-panes', '-a', '-F', '#{pane_pid} #{session_name}']
+        ).decode('utf-8')
         res = {}
         for line in out.splitlines():
             parts = line.strip().split()
@@ -107,7 +109,9 @@ def main():
             except Exception:
                 break
 
-        results.append({"port": target_port, "pid": found_pid, "cmdline": cmdline, "session": session})
+        results.append(
+            {"port": target_port, "pid": found_pid, "cmdline": cmdline, "session": session}
+        )
 
     print(json.dumps(results))
 

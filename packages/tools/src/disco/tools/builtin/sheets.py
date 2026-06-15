@@ -240,7 +240,7 @@ class SheetsTool:
 
         # 1. Validate all formulas before writing anything.
         errors: list[str] = []
-        for si, sheet_spec in enumerate(args.sheets):
+        for _si, sheet_spec in enumerate(args.sheets):
             for ri, row in enumerate(sheet_spec.rows):
                 for ci, cell_val in enumerate(row):
                     if isinstance(cell_val, str) and cell_val.startswith("="):

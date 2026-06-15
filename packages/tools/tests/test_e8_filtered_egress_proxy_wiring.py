@@ -16,9 +16,6 @@ References:
 
 from __future__ import annotations
 
-from collections import namedtuple
-
-import pytest
 from disco.tools.anatomy import Capability
 from disco.tools.sandbox import (
     GvisorSandboxService,
@@ -29,14 +26,12 @@ from disco.tools.sandbox import (
     default_local_config,
     default_podman_config,
 )
-from docker.errors import ImageNotFound
+from test_gvisor import FakeDockerClient
+from test_local import FakeLocalClient
 
 # Reuse the fakes from the existing test modules — they're hermetic and well
 # isolated, and importing them keeps the E8 surface minimal.
 from test_podman import FakeCli, FakePodmanClient
-from test_local import FakeLocalClient
-from test_gvisor import FakeDockerClient, FakeNetwork
-
 
 # ---------------------------------------------------------------------------
 # Test 1 — a FILTERED podman spec → the resolved network is PROXIED, NOT "none".
@@ -137,7 +132,9 @@ async def test_filtered_podman_spec_never_relaxes_to_open_bridge():
 # ---------------------------------------------------------------------------
 
 
-def _gvisor_svc(tmp_path, *, with_image: bool = True) -> tuple[GvisorSandboxService, FakeDockerClient]:
+def _gvisor_svc(
+    tmp_path, *, with_image: bool = True
+) -> tuple[GvisorSandboxService, FakeDockerClient]:
     cfg = SandboxConfig(workspace_root=str(tmp_path))
     client = FakeDockerClient(has_image=with_image)
     return GvisorSandboxService(cfg, client=client), client

@@ -200,15 +200,17 @@ class ProcessSandboxService:
         return removed
 
     async def sweep_stale_roots(self, max_age_s: float = 86400) -> int:
-        """Remove orphaned /tmp/disco-sbx-* (and legacy pmx-sbx-*) root dirs left by prior process runs.
+        """Remove orphaned /tmp/disco-sbx-* (and legacy pmx-sbx-*) root dirs left by
+        prior process runs.
 
         Scans the parent of _root (typically /tmp) for directories whose name
-        starts with ``disco-sbx-`` or legacy ``pmx-sbx-`` and whose mtime is older than *max_age_s*
-        seconds (default 1 day).  The live ``_root`` is always excluded.
+        starts with ``disco-sbx-`` or legacy ``pmx-sbx-`` and whose mtime is older
+        than *max_age_s* seconds (default 1 day).  The live ``_root`` is always
+        excluded.
 
         Safety properties:
-        - Only touches entries whose name starts with ``disco-sbx-`` or legacy ``pmx-sbx-``; all other
-          siblings are unconditionally skipped.
+        - Only touches entries whose name starts with ``disco-sbx-`` or legacy
+          ``pmx-sbx-``; all other siblings are unconditionally skipped.
         - Never follows or removes symlinks (uses ``lstat`` + ``is_symlink``
           guard before ``rmtree``).
         - Best-effort: per-entry errors are swallowed so a busy/unremovable dir

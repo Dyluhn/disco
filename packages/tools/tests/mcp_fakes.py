@@ -59,7 +59,13 @@ class FakeStdioServer:
             try:
                 msg = json.loads(line_str)
             except json.JSONDecodeError:
-                err = json.dumps({"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}, "id": None})
+                err = json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "error": {"code": -32700, "message": "Parse error"},
+                        "id": None,
+                    }
+                )
                 writer.write((err + "\n").encode())
                 await writer.drain()
                 continue

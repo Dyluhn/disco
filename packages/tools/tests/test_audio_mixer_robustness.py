@@ -29,8 +29,6 @@ import importlib.util
 from pathlib import Path
 
 import numpy as np
-import pytest
-
 
 # Load _audio_mixer directly so the test stays self-contained even if the
 # parent `disco.tools.builtin` package fails to import for unrelated reasons

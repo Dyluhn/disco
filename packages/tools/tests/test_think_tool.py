@@ -13,7 +13,6 @@ Acceptance:
 
 from __future__ import annotations
 
-import pytest
 from conftest import FakeSandboxInstance, call
 from disco.tools import (
     DefaultToolExecutor,
@@ -23,7 +22,6 @@ from disco.tools import (
 from disco.tools.builtin import ThinkTool
 from disco.tools.builtin.think import ThinkArgs
 from disco.tools.secrets import CapabilityBroker
-
 
 # ---- Test 1: ack ToolOutcome + no side effect -------------------------------
 
