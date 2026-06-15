@@ -2,7 +2,7 @@
 constants in the code (tool-sandbox-contract §5.1 leaves these to the builder).
 
 Initial values are the VM 201 host contract (`/opt/sandbox/CONTRACT.md`): the
-local Docker socket, the `runsc` (gVisor) runtime, the `pmx-sandbox:base` image,
+local Docker socket, the `runsc` (gVisor) runtime, the `disco-sandbox:base` image,
 and the `/opt/sandbox/workspaces` workspace root. Same pydantic-defaults shape as
 the LLM `RouterConfig` / `default_config()`, so the settings layer that selects the
 backend (gvisor / process / remote) reuses one config pattern, not a parallel one.
@@ -17,7 +17,7 @@ class SandboxConfig(BaseModel):
     """[config] How and where a sandbox backend runs. MUTABLE on purpose: the
     Settings layer is the live control surface (Dispo #25 hot-apply). The service
     holds a reference to this object (`self._cfg`) and re-reads fields on every
-    op, so `cfg.image = "pmx-sandbox:hot"` (or `cfg.reload_timeout_s = 0.05`) is
+    op, so `cfg.image = "disco-sandbox:hot"` (or `cfg.reload_timeout_s = 0.05`) is
     the whole hot-update API — no service restart, no container recreate. If you
     want a true frozen snapshot, copy it (`SandboxConfig(**cfg.model_dump())`)."""
 
@@ -33,7 +33,7 @@ class SandboxConfig(BaseModel):
     # --- gVisor / Docker host (VM 201 contract) ---
     docker_socket: str = "unix:///var/run/docker.sock"  # local socket, no TCP/TLS
     runtime: str = "runsc"  # gVisor (runsc) / Podman (crun, server-side); a value, not a branch
-    image: str = "pmx-sandbox:base"
+    image: str = "disco-sandbox:base"
     workspace_root: str = "/opt/sandbox/workspaces"  # host dir bind-mounted to /workspace (gVisor)
     container_workspace: str = "/workspace"
     # the host a published preview port is reachable at. Empty → derived (localhost for a
@@ -54,7 +54,7 @@ class SandboxConfig(BaseModel):
     # Podman has no auto-created bind source + rootless can't write under root-owned
     # paths, so the workspace is a per-run NAMED VOLUME (auto-created, socket-mediated,
     # persists across the container). This prefix names it.
-    workspace_volume_prefix: str = "pmx-ws"
+    workspace_volume_prefix: str = "disco-ws"
 
     # default resource bounds applied on create (a SandboxSpec may tighten them).
     default_cpu: float = 1.0

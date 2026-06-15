@@ -48,12 +48,12 @@ async def test_marker_parse_exit_0():
     inst.canned_outputs["has-session"] = (0, "")
     
     # Fake view (busy -> not busy)
-    inst.canned_outputs["capture-pane_default"] = (0, "__PMX_PS1__0__$ ")
+    inst.canned_outputs["capture-pane_default"] = (0, "__DISCO_PS1__0__$ ")
     inst.canned_outputs["capture-pane"] = [
-        (0, "__PMX_PS1__0__$ "), # view
-        (0, "__PMX_PS1__0__$ "), # view in is_busy
-        (0, "__PMX_PS1__0__$ "), # pre_cap
-        (0, "__PMX_PS1__0__$ \necho hi\nhi\n__PMX_PS1__0__$ ") # post_cap
+        (0, "__DISCO_PS1__0__$ "), # view
+        (0, "__DISCO_PS1__0__$ "), # view in is_busy
+        (0, "__DISCO_PS1__0__$ "), # pre_cap
+        (0, "__DISCO_PS1__0__$ \necho hi\nhi\n__DISCO_PS1__0__$ ") # post_cap
     ]
     
     view = await manager.view("main")
@@ -70,11 +70,11 @@ async def test_marker_parse_exit_7():
     async def get_inst(): return inst
     manager = ShellSessionManager(get_inst)
     inst.canned_outputs["has-session"] = (0, "")
-    inst.canned_outputs["capture-pane_default"] = (0, "__PMX_PS1__0__$ ")
+    inst.canned_outputs["capture-pane_default"] = (0, "__DISCO_PS1__0__$ ")
     inst.canned_outputs["capture-pane"] = [
-        (0, "__PMX_PS1__0__$ "), # view in is_busy
-        (0, "__PMX_PS1__0__$ "), # pre_cap
-        (0, "__PMX_PS1__0__$ \nexit 7\n__PMX_PS1__7__$ ") # post_cap
+        (0, "__DISCO_PS1__0__$ "), # view in is_busy
+        (0, "__DISCO_PS1__0__$ "), # pre_cap
+        (0, "__DISCO_PS1__0__$ \nexit 7\n__DISCO_PS1__7__$ ") # post_cap
     ]
     
     out = await manager.exec("main", "exit 7", None)
@@ -122,7 +122,7 @@ async def test_session_lost_after_recreate():
 
     # Session 'main' becomes known (idle prompt visible).
     inst.canned_outputs["has-session"] = (1, "")
-    inst.canned_outputs["capture-pane"] = (0, "__PMX_PS1__0__$ ")
+    inst.canned_outputs["capture-pane"] = (0, "__DISCO_PS1__0__$ ")
     await manager.ensure("main")
     assert "main" in manager._known_sessions
 

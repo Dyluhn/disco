@@ -42,14 +42,25 @@ class ServerStatusTool:
         
         ports = sorted(USER_PORTS)
         owners = await port_owners(ctx.sandbox, ports)
-        prefix = f"pmx-{ctx.sandbox.sessions.namespace}" if ctx.sandbox.sessions.namespace else "pmx-"
-        
+        # Strip the manager's session prefix for display. Dual-read both the
+        # current `disco-` and legacy `pmx-` prefixes (sourced from the manager,
+        # not a literal) so a renamed session still shows its short name.
+        from disco.tools.sandbox.shell_sessions import _LEGACY_PREFIX, _PREFIX
+
+        ns = ctx.sandbox.sessions.namespace
+        prefixes = tuple(
+            f"{p}-{ns}" if ns else f"{p}-" for p in (_PREFIX, _LEGACY_PREFIX)
+        )
+
         for p in ports:
             owner = owners.get(p)
             if owner is not None and owner.pid is not None:
                 sess_name = owner.session
-                if sess_name and sess_name.startswith(prefix):
-                    sess_name = sess_name[len(prefix):]
+                if sess_name:
+                    for pref in prefixes:
+                        if sess_name.startswith(pref):
+                            sess_name = sess_name[len(pref):]
+                            break
                     
                 sess_part = f" [session: {sess_name}]" if sess_name else " [session: null]"
                 out_lines.append(f"  - {p}: OWNED by pid {owner.pid} ({owner.cmdline or ''}){sess_part}")

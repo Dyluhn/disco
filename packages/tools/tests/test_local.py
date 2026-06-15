@@ -171,7 +171,7 @@ async def test_create_exec_close_named_volume_on_local_socket():
     # workspace is a per-run NAMED VOLUME bound to /workspace (not a host bind path)
     (vol,) = client.volumes.created
     assert kw["volumes"][vol] == {"bind": "/workspace", "mode": "rw"}
-    assert vol.startswith("pmx-ws-")
+    assert vol.startswith("disco-ws-")
     # session: multiple execs into the SAME container, timeout-wrapped
     r1 = await inst.exec_shell("echo hi", timeout_s=10)
     await inst.exec_shell("echo bye", timeout_s=10)

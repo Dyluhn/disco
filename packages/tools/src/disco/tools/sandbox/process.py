@@ -129,8 +129,10 @@ class ProcessSandboxInstance:
         # Container backends need nothing (container death kills the tmux server), 
         # but the process backend shares the host tmux server, so we must clean up explicitly.
         ns = f"{self.conversation_id[:8]}-"
-        prefix = f"pmx-{ns}"
-        
+        # Dual-read: kill sessions under the current `disco-{ns}` AND legacy
+        # `pmx-{ns}` prefix so a rename leaves no orphaned tmux session.
+        prefixes = (f"disco-{ns}", f"pmx-{ns}")
+
         proc = await asyncio.create_subprocess_shell(
             "tmux list-sessions -F '#{session_name}'",
             stdout=asyncio.subprocess.PIPE,
@@ -139,7 +141,7 @@ class ProcessSandboxInstance:
         out, _ = await proc.communicate()
         if proc.returncode == 0:
             for line in out.decode("utf-8").splitlines():
-                if line.startswith(prefix):
+                if line.startswith(prefixes):
                     await asyncio.create_subprocess_shell(
                         f"tmux kill-session -t {shlex.quote(line)}"
                     )

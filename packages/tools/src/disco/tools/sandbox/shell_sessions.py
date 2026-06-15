@@ -11,10 +11,14 @@ from .base import SandboxInstance
 
 _LOG = logging.getLogger(__name__)
 
-_PREFIX = "pmx"
-_PS1_MARKER = "__PMX_PS1__"
+_PREFIX = "disco"  # WRITE side: new tmux sessions are disco-*
+_LEGACY_PREFIX = "pmx"  # READ side: still swept on teardown (no orphans across rename)
+_PS1_MARKER = "__DISCO_PS1__"
 _PS1 = f"{_PS1_MARKER}$?__$ "
-_MARKER_RE = re.compile(r"__PMX_PS1__(\d+)__\$\s*$")
+# Derive the parse regex from the marker constant so the WRITE (PS1) and READ
+# (parse) sides can never drift — the exact bug a literal `__PMX_PS1__` here
+# re-introduced after the marker was renamed.
+_MARKER_RE = re.compile(re.escape(_PS1_MARKER) + r"(\d+)__\$\s*$")
 _VIEW_TAIL_CHARS = 10_000
 _EXEC_RETURN_CHARS = 6_000
 _POLL_S = 0.5
@@ -455,11 +459,16 @@ class ShellSessionManager:
         sessions = []
         for line in out.splitlines():
             line = line.strip()
-            prefix_match = f"{_PREFIX}-"
-            if self.namespace:
-                prefix_match = f"{_PREFIX}-{self.namespace}"
-
-            if line.startswith(prefix_match):
+            # Dual-read: list sessions under the current `disco-` AND legacy `pmx-`
+            # prefix so a rename never strands a session. Strip whichever matched.
+            suffix = f"-{self.namespace}" if self.namespace else "-"
+            prefix_match = None
+            for p in (_PREFIX, _LEGACY_PREFIX):
+                cand = f"{p}{suffix}"
+                if line.startswith(cand):
+                    prefix_match = cand
+                    break
+            if prefix_match is not None:
                 name = line[len(prefix_match):]
                 view = await self.view(name, tail_chars=1000)
                 last_lines = "\n".join(view.output.split("\n")[-3:])

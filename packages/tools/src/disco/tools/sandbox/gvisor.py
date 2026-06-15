@@ -34,6 +34,14 @@ from ._container import (
 from .base import SandboxInstance, SandboxSpec, SandboxUnavailableError
 from .config import SandboxConfig, default_sandbox_config
 from .isolation import IsolationProfile, isolation_for
+from .naming import (
+    EGR_NET_PREFIX,
+    LABEL_CONV,
+    LABEL_CONV_KEYS,
+    SBX_NAME_PREFIX,
+    SBX_NAME_PREFIXES,
+    conv_id_from_labels,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -197,8 +205,8 @@ class GvisorSandboxService:
            can't use the embedded DNS, so it can't resolve the sidecar's name. We
            read the sidecar's internal-net IP and hand the sandbox HTTP(S)_PROXY by
            IP."""
-        net_name = f"pmx-egr-{instance_id}"
-        labels = {"pmx.conversation_id": conversation_id} if conversation_id else {}
+        net_name = f"{EGR_NET_PREFIX}{instance_id}"
+        labels = {LABEL_CONV: conversation_id} if conversation_id else {}
         # The network carries the same label as the containers so the orphan
         # sweep can find it — its NAME is instance-keyed, not conversation-keyed.
         network = client.networks.create(net_name, driver="bridge", internal=True, labels=labels)
@@ -263,7 +271,7 @@ class GvisorSandboxService:
         net_kwargs: dict[str, Any] = {}
         environment: dict[str, str] = {}
         egress_network = egress_sidecar = None
-        labels = {"pmx.conversation_id": conversation_id} if conversation_id else {}
+        labels = {LABEL_CONV: conversation_id} if conversation_id else {}
         if mode == "filtered":
             egress_network, egress_sidecar, environment, net_name = self._setup_filtered_egress(
                 client, spec, instance_id, conversation_id
@@ -289,7 +297,7 @@ class GvisorSandboxService:
                 environment=environment,
                 working_dir=self._cfg.container_workspace,
                 detach=True,
-                name=f"pmx-sbx-{instance_id}",
+                name=f"{SBX_NAME_PREFIX}{instance_id}",
                 labels=labels,
                 **net_kwargs,
             )
@@ -361,10 +369,21 @@ class GvisorSandboxService:
         def _list() -> list[str]:
             try:
                 client = self._client()
-                containers = client.containers.list(filters={"name": "pmx-sbx-"})
+                # Dual-read: sweep BOTH the current `disco-sbx-` and legacy
+                # `pmx-sbx-` name prefixes so a rename never strands a container
+                # started under the old scheme. Dedup by container id (a name
+                # filter is a substring match, so the two queries can't overlap
+                # here, but the dedup keeps this robust to filter semantics).
+                seen_ids: set[str] = set()
+                containers = []
+                for prefix in SBX_NAME_PREFIXES:
+                    for c in client.containers.list(filters={"name": prefix}):
+                        if c.id not in seen_ids:
+                            seen_ids.add(c.id)
+                            containers.append(c)
                 result = []
                 for c in containers:
-                    cid = (c.labels or {}).get("pmx.conversation_id")
+                    cid = conv_id_from_labels(c.labels)
                     if cid:
                         result.append(cid)
                         continue
@@ -384,30 +403,44 @@ class GvisorSandboxService:
         def _destroy() -> None:
             try:
                 client = self._client()
-                for c in client.containers.list(
-                    all=True,
-                    filters={"label": f"pmx.conversation_id={conversation_id}"},
-                ):
-                    try:
-                        c.stop(timeout=2)
-                    except Exception:  # noqa: BLE001 — already stopped is fine
-                        pass
-                    try:
-                        c.remove(force=True)
-                    except Exception:  # noqa: BLE001 — already gone is fine
-                        pass
+                # Dual-read: match BOTH the current `disco.conversation_id` and
+                # legacy `pmx.conversation_id` label keys (union, dedup by id) so
+                # a container/network started under the old label scheme is still
+                # torn down after the rename.
+                seen_ids: set[str] = set()
+                for key in LABEL_CONV_KEYS:
+                    for c in client.containers.list(
+                        all=True,
+                        filters={"label": f"{key}={conversation_id}"},
+                    ):
+                        if c.id in seen_ids:
+                            continue
+                        seen_ids.add(c.id)
+                        try:
+                            c.stop(timeout=2)
+                        except Exception:  # noqa: BLE001 — already stopped is fine
+                            pass
+                        try:
+                            c.remove(force=True)
+                        except Exception:  # noqa: BLE001 — already gone is fine
+                            pass
                 # Clean up the egress internal network(s) by LABEL — networks are
-                # named pmx-egr-{instance_id}, which has NO relation to the
+                # named disco-egr-{instance_id}, which has NO relation to the
                 # conversation_id, so a name match can never work. Labels are set
-                # at create time (same pmx.conversation_id as the containers);
+                # at create time (same conversation label as the containers);
                 # containers were removed above, so the network is detachable.
-                for net in client.networks.list(
-                    filters={"label": f"pmx.conversation_id={conversation_id}"}
-                ):
-                    try:
-                        net.remove()
-                    except Exception:  # noqa: BLE001 — in-use or gone
-                        pass
+                seen_nets: set[str] = set()
+                for key in LABEL_CONV_KEYS:
+                    for net in client.networks.list(
+                        filters={"label": f"{key}={conversation_id}"}
+                    ):
+                        if net.id in seen_nets:
+                            continue
+                        seen_nets.add(net.id)
+                        try:
+                            net.remove()
+                        except Exception:  # noqa: BLE001 — in-use or gone
+                            pass
             except Exception:  # noqa: BLE001 — docker unreachable: best-effort
                 pass
         await asyncio.to_thread(_destroy)

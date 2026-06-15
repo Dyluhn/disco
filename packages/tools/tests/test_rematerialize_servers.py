@@ -170,9 +170,9 @@ def _setup_running_capture(inst: _FakeInstance) -> None:
     inst.canned_outputs["has-session"] = (0, "")
     inst.canned_outputs["capture-pane"] = [
         # is_busy view (during exec) — idle prompt, session is ready
-        (0, "__PMX_PS1__0__$ "),
+        (0, "__DISCO_PS1__0__$ "),
         # pre_cap — idle prompt, used as the delta baseline
-        (0, "__PMX_PS1__0__$ "),
+        (0, "__DISCO_PS1__0__$ "),
         # first poll post_cap — command has emitted output, no marker yet
         (0, "starting server...\n"),
     ]
@@ -184,9 +184,9 @@ def _setup_finished_capture(inst: _FakeInstance, output_body: str = "ok") -> Non
     (command has FINISHED)."""
     inst.canned_outputs["has-session"] = (0, "")
     inst.canned_outputs["capture-pane"] = [
-        (0, "__PMX_PS1__0__$ "),  # is_busy
-        (0, "__PMX_PS1__0__$ "),  # pre_cap
-        (0, f"__PMX_PS1__0__$ \n{output_body}\n__PMX_PS1__0__$ "),  # finished
+        (0, "__DISCO_PS1__0__$ "),  # is_busy
+        (0, "__DISCO_PS1__0__$ "),  # pre_cap
+        (0, f"__DISCO_PS1__0__$ \n{output_body}\n__DISCO_PS1__0__$ "),  # finished
     ]
 
 

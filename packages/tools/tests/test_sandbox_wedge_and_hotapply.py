@@ -207,7 +207,7 @@ async def test_hot_apply_settings_picked_up_without_recreate(tmp_path):
     NEXT `create()` WITHOUT a service restart and WITHOUT recreating the
     first container (Dispo #25). The service holds a reference to the
     config (`self._cfg`); it does NOT snapshot fields at __init__, so
-    `cfg.image = "pmx-sandbox:hot"` is the whole hot-update API.
+    `cfg.image = "disco-sandbox:hot"` is the whole hot-update API.
 
     We pick `image` for the assertion (over `default_memory_mb`) because
     `image` is read directly off the config in `_start_container`, while
@@ -220,25 +220,25 @@ async def test_hot_apply_settings_picked_up_without_recreate(tmp_path):
 
     client = FakeDockerClient()
     cfg = SandboxConfig(workspace_root=str(tmp_path))
-    assert cfg.image == "pmx-sandbox:base"  # the starting value
+    assert cfg.image == "disco-sandbox:base"  # the starting value
     svc = GvisorSandboxService(cfg, client=client)
 
     # 1) First container: default image (the unchanged config value).
     inst1 = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c1")
-    assert client.runs[0].run_kwargs["image"] == "pmx-sandbox:base"
+    assert client.runs[0].run_kwargs["image"] == "disco-sandbox:base"
     inst1_id = inst1.id
 
     # 2) Hot-apply: mutate the LIVE config. NO service restart, NO recreate
     # of the first container. The runtime / image / workspace_root /
     # docker_socket / podman_url / workspace_volume_prefix fields all
     # hot-apply the same way.
-    cfg.image = "pmx-sandbox:hot"
+    cfg.image = "disco-sandbox:hot"
     cfg.runtime = "runc"  # swap the runtime too — proves it's not just `image`
     cfg.workspace_root = "/tmp/other-workspaces"
 
     # 3) Second container: now uses the hot-applied image + runtime.
     inst2 = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c2")
-    assert client.runs[1].run_kwargs["image"] == "pmx-sandbox:hot"
+    assert client.runs[1].run_kwargs["image"] == "disco-sandbox:hot"
     assert client.runs[1].run_kwargs["runtime"] == "runc"
 
     # 4) The first container was NOT recreated (it's still in the service's

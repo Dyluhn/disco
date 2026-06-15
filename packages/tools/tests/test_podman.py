@@ -182,7 +182,7 @@ async def test_create_exec_close_over_the_socket():
     # exec goes through the CLI native remote (podman --url … exec)
     r = await inst.exec_shell("echo hi", timeout_s=10)
     assert r.stdout == "ok\n" and r.timed_out is False
-    assert cli.calls[-1][:5] == ["podman", "--url", svc._cli_url, "exec", f"pmx-sbx-{inst.id}"]
+    assert cli.calls[-1][:5] == ["podman", "--url", svc._cli_url, "exec", f"disco-sbx-{inst.id}"]
     assert "timeout" in cli.calls[-1]  # in-container timeout wrap
     await inst.destroy()
     assert client.last.stopped and client.last.removed
@@ -219,7 +219,7 @@ async def test_filtered_podman_spec_uses_proxied_egress_not_sealed():
     assert "network_mode" not in client.last.create_kwargs
     # 2) the sandbox IS on the internal no-NAT net (proxied route out).
     networks = client.last.create_kwargs.get("networks") or {}
-    assert networks and next(iter(networks)).startswith("pmx-egr-")
+    assert networks and next(iter(networks)).startswith("disco-egr-")
     # 3) the allowlist proxy env is present (defense in depth atop the no-route net).
     env = client.last.create_kwargs["environment"]
     assert env["HTTPS_PROXY"].startswith("http://") and "8888" in env["HTTPS_PROXY"]

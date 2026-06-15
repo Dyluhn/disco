@@ -30,14 +30,14 @@ class MockSandbox:
                     "port": 8000,
                     "pid": 1234,
                     "cmdline": "python3 -m http.server 8000",
-                    "session": "pmx-preview"
+                    "session": "disco-preview"
                 })
             elif port == 3000:
                 results.append({
                     "port": 3000,
                     "pid": 5678,
                     "cmdline": "node server.js",
-                    "session": "pmx-api"
+                    "session": "disco-api"
                 })
             else:
                 results.append({"port": port, "pid": None})

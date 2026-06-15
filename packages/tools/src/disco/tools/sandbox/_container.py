@@ -201,7 +201,7 @@ class ContainerInstance:
             finally:
                 done.set()
 
-        thread = threading.Thread(target=_runner, daemon=True, name="pmx-sbx-reload")
+        thread = threading.Thread(target=_runner, daemon=True, name="disco-sbx-reload")
         thread.start()
         if not done.wait(timeout=self._reload_timeout_s):
             # Hung: the daemon thread is still running (we can't safely

@@ -25,6 +25,7 @@ from ._container import PUBLISHED_PORTS, ContainerInstance, egress_mode
 from .base import SandboxSpec, SandboxUnavailableError
 from .config import SandboxConfig, default_local_config
 from .gvisor import GvisorSandboxService, _keepalive_command
+from .naming import LABEL_CONV, SBX_NAME_PREFIX
 
 
 class LocalSandboxInstance(ContainerInstance):
@@ -71,7 +72,7 @@ class LocalSandboxService(GvisorSandboxService):
         vol_name = f"{self._cfg.workspace_volume_prefix}-{instance_id}"
         mem_mb = spec.memory_mb or self._cfg.default_memory_mb
         cpu = spec.cpu or self._cfg.default_cpu
-        labels = {"pmx.conversation_id": conversation_id} if conversation_id else {}
+        labels = {LABEL_CONV: conversation_id} if conversation_id else {}
         mode = egress_mode(spec)
         # Per-mode network config (the three-way egress posture; egress_mode docstring).
         net_kwargs: dict[str, Any] = {}
@@ -115,7 +116,7 @@ class LocalSandboxService(GvisorSandboxService):
                 environment=environment,
                 working_dir=self._cfg.container_workspace,
                 detach=True,
-                name=f"pmx-sbx-{instance_id}",
+                name=f"{SBX_NAME_PREFIX}{instance_id}",
                 labels=labels,
                 **net_kwargs,
             )

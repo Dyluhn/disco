@@ -52,6 +52,14 @@ from ._container import (
 )
 from .base import ExecResult, SandboxError, SandboxInstance, SandboxSpec, SandboxUnavailableError
 from .config import SandboxConfig, default_podman_config
+from .naming import (
+    EGR_NET_PREFIX,
+    LABEL_CONV,
+    LABEL_CONV_KEYS,
+    SBX_NAME_PREFIX,
+    SBX_NAME_PREFIXES,
+    conv_id_from_labels,
+)
 
 # `podman exec` stderr markers that mean the CONTAINER is gone (not the inner command
 # failing) — used to type a mid-session death as SandboxUnavailableError.
@@ -270,8 +278,8 @@ class PodmanSandboxService:
         3. The sandbox's proxy env names the sidecar by its INTERNAL-NET IP (read
            from the sidecar's attrs after `reload()`), with a name-fallback for
            the fake/test path."""
-        net_name = f"pmx-egr-{instance_id}"
-        labels = {"pmx.conversation_id": conversation_id} if conversation_id else {}
+        net_name = f"{EGR_NET_PREFIX}{instance_id}"
+        labels = {LABEL_CONV: conversation_id} if conversation_id else {}
         # The network carries the same label as the containers so the orphan
         # sweep can find it — its NAME is instance-keyed, not conversation-keyed.
         network = client.networks.create(net_name, internal=True, labels=labels)
@@ -348,14 +356,14 @@ class PodmanSandboxService:
         mem_mb = spec.memory_mb or self._cfg.default_memory_mb
         cpu = spec.cpu or self._cfg.default_cpu
         vol_name = f"{self._cfg.workspace_volume_prefix}-{instance_id}"
-        name = f"pmx-sbx-{instance_id}"
+        name = f"{SBX_NAME_PREFIX}{instance_id}"
 
         # Per-mode network config — mirror gVisor's three-way posture. A filtered
         # box (E8) gets a PROXIED network (allowlist sidecar on an internal no-NAT
         # net), NEVER the old fail-safe seal. Only an explicit NETWORK capability
         # ("open") gets raw bridge; default remains deny-all.
         mode = egress_mode(spec)
-        labels = {"pmx.conversation_id": conversation_id} if conversation_id else {}
+        labels = {LABEL_CONV: conversation_id} if conversation_id else {}
         net_kwargs: dict[str, Any] = {}
         environment: dict[str, str] = {}
         egress_network = egress_sidecar = None
@@ -460,11 +468,18 @@ class PodmanSandboxService:
         def _list() -> list[str]:
             try:
                 client = self._client()
-                containers = client.containers.list(filters={"name": "pmx-sbx-"})
+                # Dual-read: sweep BOTH the current `disco-sbx-` and legacy
+                # `pmx-sbx-` name prefixes so a rename never strands a container.
+                seen_ids: set[str] = set()
+                containers = []
+                for prefix in SBX_NAME_PREFIXES:
+                    for c in client.containers.list(filters={"name": prefix}):
+                        if c.id not in seen_ids:
+                            seen_ids.add(c.id)
+                            containers.append(c)
                 result = []
                 for c in containers:
-                    labels = getattr(c, "labels", None) or {}
-                    cid = labels.get("pmx.conversation_id")
+                    cid = conv_id_from_labels(getattr(c, "labels", None))
                     if cid:
                         result.append(cid)
                         continue
@@ -479,22 +494,29 @@ class PodmanSandboxService:
         return await asyncio.to_thread(_list)
 
     async def destroy_by_conversation(self, conversation_id: str) -> None:
-        """Destroy all pmx-sbx-* containers labelled with this conversation_id."""
+        """Destroy all disco-sbx-*/pmx-sbx-* containers labelled with this conversation_id."""
         def _destroy() -> None:
             try:
                 client = self._client()
-                for c in client.containers.list(
-                    all=True,
-                    filters={"label": f"pmx.conversation_id={conversation_id}"},
-                ):
-                    try:
-                        c.stop(timeout=2)
-                    except Exception:  # noqa: BLE001
-                        pass
-                    try:
-                        c.remove(force=True)
-                    except Exception:  # noqa: BLE001
-                        pass
+                # Dual-read: match BOTH the current and legacy conversation label
+                # keys (union, dedup) so an old-scheme container is still removed.
+                seen_ids: set[str] = set()
+                for key in LABEL_CONV_KEYS:
+                    for c in client.containers.list(
+                        all=True,
+                        filters={"label": f"{key}={conversation_id}"},
+                    ):
+                        if c.id in seen_ids:
+                            continue
+                        seen_ids.add(c.id)
+                        try:
+                            c.stop(timeout=2)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        try:
+                            c.remove(force=True)
+                        except Exception:  # noqa: BLE001
+                            pass
             except Exception:  # noqa: BLE001 — best-effort
                 pass
         await asyncio.to_thread(_destroy)

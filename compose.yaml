@@ -17,7 +17,7 @@ services:
     build:
       context: .
       dockerfile: deploy/sandbox/Dockerfile
-    image: pmx-sandbox:base
+    image: disco-sandbox:base
     entrypoint: ["true"]
     restart: "no"
 
@@ -25,7 +25,7 @@ services:
     build:
       context: .
       dockerfile: deploy/compose/Dockerfile.server
-    image: pmx-server
+    image: disco-server
     command: ["python", "-m", "disco.app_server"]
     entrypoint: ["/entrypoint.sh"]
     env_file: .env
@@ -37,7 +37,7 @@ services:
       DISCO_SECRETS: /data/secrets.json
       DISCO_SKILLS_DIR: /data/skills
     volumes:
-      - pmx-data:/data
+      - disco-data:/data
     ports:
       - "${DISCO_BIND:-${PMX_BIND:-127.0.0.1}}:${DISCO_APP_PORT:-${PMX_APP_PORT:-8800}}:8800"
     healthcheck:
@@ -49,7 +49,7 @@ services:
     restart: unless-stopped
 
   agent-server:
-    image: pmx-server # same image as app-server, different command
+    image: disco-server # same image as app-server, different command
     command: ["python", "-m", "disco.agent_server"]
     entrypoint: ["/entrypoint.sh"]
     env_file: .env
@@ -79,7 +79,7 @@ services:
       # NOTE: DISCO_SANDBOX is intentionally UNSET — the backend stays Settings-driven
       # (defaults to `local`, which uses the mounted socket below).
     volumes:
-      - pmx-data:/data
+      - disco-data:/data
       # The host container socket → the agent-server spawns sibling sandbox
       # containers through it. SECURITY: this is root-equivalent on the host;
       # prefer a rootless Podman socket (see .env.example + docs/self-host.md).
@@ -105,7 +105,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    image: pmx-frontend
+    image: disco-frontend
     environment:
       # Blank explicit URLs → env.js falls back to the browser's own hostname +
       # these ports, so localhost AND LAN access work with zero config.
@@ -143,7 +143,7 @@ services:
       # Mount the WHOLE cache dir: llama.cpp's `-hf` downloads land in
       # /root/.cache/huggingface, not .../llama.cpp — mounting the subdir left the
       # GGUF in the container layer and re-downloaded it on every recreate.
-      - pmx-models:/root/.cache
+      - disco-models:/root/.cache
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8080/health')"]
       interval: 15s
@@ -154,5 +154,5 @@ services:
     # No host port — the agent-server reaches it in-network as http://llm:8080/v1.
 
 volumes:
-  pmx-data: # db + config + secrets + skills + projects + tts/encoder caches
-  pmx-models: # GGUF downloads survive recreation
+  disco-data: # db + config + secrets + skills + projects + tts/encoder caches
+  disco-models: # GGUF downloads survive recreation

@@ -37,8 +37,8 @@ def test_format_allow_is_sorted_and_clean():
 
 
 def test_proxy_env_routes_through_sidecar_and_skips_loopback():
-    env = proxy_env("pmx-egr-123")
-    url = f"http://pmx-egr-123:{EGRESS_PROXY_PORT}"
+    env = proxy_env("disco-egr-123")
+    url = f"http://disco-egr-123:{EGRESS_PROXY_PORT}"
     assert env["HTTP_PROXY"] == url and env["https_proxy"] == url
     assert "localhost" in env["NO_PROXY"] and "127.0.0.1" in env["no_proxy"]
 

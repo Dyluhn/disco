@@ -173,7 +173,7 @@ async def test_create_exec_close_session_model(tmp_path):
     kw = client.last.run_kwargs
     assert kw["command"] == ["sleep", "infinity"]
     assert kw["runtime"] == "runsc"
-    assert kw["image"] == "pmx-sandbox:base"
+    assert kw["image"] == "disco-sandbox:base"
     # multiple execs into the SAME container (session, not one-shot)
     r1 = await inst.exec_shell("echo hi", timeout_s=10)
     await inst.exec_shell("echo bye", timeout_s=10)
@@ -204,8 +204,8 @@ async def test_sealed_by_default_filtered_on_allowlist_open_on_capability(tmp_pa
     )
     sandbox_kw = client.last.run_kwargs
     assert "network_mode" not in sandbox_kw  # NOT full bridge!
-    assert sandbox_kw["network"].startswith("pmx-egr-")  # the internal no-NAT net
-    assert sandbox_kw["environment"]["HTTPS_PROXY"].startswith("http://pmx-egr-")
+    assert sandbox_kw["network"].startswith("disco-egr-")  # the internal no-NAT net
+    assert sandbox_kw["environment"]["HTTPS_PROXY"].startswith("http://disco-egr-")
     # 3) raw NETWORK capability, no allowlist → OPEN (deliberate raw egress).
     await svc.create(
         SandboxSpec(permitted=frozenset({Capability.NETWORK})), owner_id="o", conversation_id="c"

@@ -72,7 +72,7 @@ async def test_filtered_podman_spec_yields_proxied_network_not_none():
     assert len(client.networks.created) == 1
     net = client.networks.created[0]
     assert net.attrs.get("internal") is True, "filtered must use an internal (no-NAT) net"
-    assert net.name.startswith("pmx-egr-")
+    assert net.name.startswith("disco-egr-")
 
     # (b) A proxy SIDECAR was create-then-connect-then-started (the runsc-equivalent
     # ordering for podman). Two containers total: sidecar + sandbox.

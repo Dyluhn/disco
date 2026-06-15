@@ -122,7 +122,7 @@ async def test_destroy_cancels_inflight_preview_task():
 @pytest.mark.asyncio
 async def test_preview_session_lifecycle_process_backend():
     session = SandboxSession(ProcessSandboxService(), conversation_id="conv-bp02")
-    ns = "pmx-conv-bp0-"  # conversation_id[:8] + '-' under the manager's 'pmx-' prefix
+    ns = "disco-conv-bp0-"  # conversation_id[:8] + '-' under the manager's 'disco-' prefix
     try:
         inst = await session._ensure()
 
