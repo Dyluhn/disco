@@ -133,6 +133,25 @@ _embedding_model: Any | None = None
 _cross_encoder: Any | None = None
 
 
+def _arena_session_kwargs() -> dict[str, bool]:
+    """ONNX Runtime session options for the encoders (fastembed 0.8 exposes
+    `enable_cpu_mem_arena`).
+
+    The CPU memory ARENA is DISABLED by default. It is the Deep Research RSS-floor
+    culprit: the arena grows to the concurrent-inference peak (K gather legs each
+    running bge-m3 + the cross-encoder) and NEVER shrinks, so a long-lived
+    agent-server stays pinned at ~14 GB after an exhaustive run even though the
+    memory is idle (live-confirmed: jemalloc could not reclaim it — it is held by
+    the arena, not freed). With the arena off, each inference allocates and frees
+    its working set, which the allocator then returns to the OS, so RSS recedes
+    after a run. The cost is a small per-inference allocation overhead, a sound
+    trade for a long-lived server (and essential on the 8 GB bundled tier, where a
+    single quick DR otherwise retains ~7 GB). `DISCO_ENCODER_CPU_ARENA=on`
+    re-enables the arena (marginally faster, much higher retained RSS)."""
+    val = (disco_env("ENCODER_CPU_ARENA") or "off").strip().lower()
+    return {"enable_cpu_mem_arena": val in ("on", "true", "1", "yes")}
+
+
 def _embedding() -> Any:
     global _embedding_model
     if _embedding_model is None:
@@ -142,7 +161,7 @@ def _embedding() -> Any:
         model_name = disco_env("EMBED_MODEL") or _tier_embed_default()
         # RAM guard: raises EncoderUnavailable instead of letting an OOM kill the process.
         _require_ram(model_name)
-        _embedding_model = TextEmbedding(model_name=model_name)
+        _embedding_model = TextEmbedding(model_name=model_name, **_arena_session_kwargs())
     return _embedding_model
 
 
@@ -155,7 +174,7 @@ def _reranker() -> Any:
         model_name = disco_env("RERANK_MODEL") or _tier_rerank_default()
         # RAM guard: raises EncoderUnavailable instead of letting an OOM kill the process.
         _require_ram(model_name)
-        _cross_encoder = TextCrossEncoder(model_name=model_name)
+        _cross_encoder = TextCrossEncoder(model_name=model_name, **_arena_session_kwargs())
     return _cross_encoder
 
 

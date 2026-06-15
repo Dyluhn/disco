@@ -11,10 +11,8 @@ Coverage:
 
 from __future__ import annotations
 
-import pytest
-
 import disco.retrieval.local_encoders as le
-
+import pytest
 
 # ── fake constructors ─────────────────────────────────────────────────────────
 
@@ -22,14 +20,14 @@ import disco.retrieval.local_encoders as le
 class _FakeEmbedder:
     """Drop-in for fastembed.TextEmbedding — records model_name, no download."""
 
-    def __init__(self, *, model_name: str) -> None:
+    def __init__(self, *, model_name: str, **kwargs) -> None:
         self.model_name = model_name
 
 
 class _FakeEncoder:
     """Drop-in for fastembed.rerank.cross_encoder.TextCrossEncoder — same."""
 
-    def __init__(self, *, model_name: str) -> None:
+    def __init__(self, *, model_name: str, **kwargs) -> None:
         self.model_name = model_name
 
 
@@ -109,3 +107,28 @@ def test_rerank_singleton_cached(monkeypatch):
     b = le._reranker()
 
     assert a is b
+
+
+# --- onnxruntime CPU arena policy (the DR RSS-floor fix) ---------------------
+
+
+def test_encoder_cpu_arena_disabled_by_default(monkeypatch):
+    """The CPU memory arena is OFF by default — it is the DR RSS-floor culprit
+    (grows to the concurrent-inference peak, never shrinks). Live-confirmed: arena
+    off cut a quick DR's peak 7.0→3.8 GB and let the floor recede 7.0→2.9 GB."""
+    monkeypatch.delenv("DISCO_ENCODER_CPU_ARENA", raising=False)
+    monkeypatch.delenv("PMX_ENCODER_CPU_ARENA", raising=False)
+    from disco.retrieval.local_encoders import _arena_session_kwargs
+
+    assert _arena_session_kwargs() == {"enable_cpu_mem_arena": False}
+
+
+def test_encoder_cpu_arena_can_be_reenabled(monkeypatch):
+    from disco.retrieval.local_encoders import _arena_session_kwargs
+
+    for val in ("on", "true", "1", "yes"):
+        monkeypatch.setenv("DISCO_ENCODER_CPU_ARENA", val)
+        assert _arena_session_kwargs() == {"enable_cpu_mem_arena": True}
+    for val in ("off", "false", "0", "no"):
+        monkeypatch.setenv("DISCO_ENCODER_CPU_ARENA", val)
+        assert _arena_session_kwargs() == {"enable_cpu_mem_arena": False}
