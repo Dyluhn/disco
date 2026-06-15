@@ -414,6 +414,40 @@ class _NoToolExecutor:
         )
 
 
+def _release_process_memory() -> None:
+    """Hand freed heap pages back to the OS after a memory-heavy run.
+
+    Python frees objects, but glibc's allocator keeps the arenas instead of
+    `munmap`-ing them — so after a bursty Deep Research run (concurrent legs
+    fetching full pages + stacking ONNX batches) the process RSS stays pinned at
+    the peak high-water mark forever, leaving a long-lived agent-server bloated
+    and the next heavy op with less headroom. `gc.collect()` drops any lingering
+    cycle-held buffers; `malloc_trim(0)` then returns the now-free arena pages.
+
+    This is the retention half of the OOM root cause — its companion is the
+    gather-leg concurrency cap that bounds the PEAK in the first place. Best
+    effort: a non-glibc libc (musl / macOS) simply has no `malloc_trim`, and the
+    gc pass still ran. Set `DISCO_DR_MALLOC_TRIM=0` to disable.
+    """
+    import gc
+
+    gc.collect()
+    if (os.environ.get("DISCO_DR_MALLOC_TRIM") or "1").strip().lower() in (
+        "0", "off", "false", "none",
+    ):
+        return
+    try:
+        import ctypes
+        import ctypes.util
+
+        libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
+        trim = getattr(libc, "malloc_trim", None)
+        if trim is not None:
+            trim(0)
+    except (OSError, AttributeError, ValueError):  # non-glibc / unavailable
+        pass
+
+
 class ConversationRuntime:
     """Builds a router from the CURRENT persisted config per request, plus one
     AgentLoop per conversation. `kick(cid)` schedules the loop in the background.
@@ -2411,6 +2445,11 @@ class ConversationRuntime:
             return
         finally:
             self._cancel_flags.pop(conversation_id, None)
+            # Return the run's transient working set (fetch buffers + ONNX batch
+            # temporaries, already freed by the time run.run() returned) back to
+            # the OS, so a long-lived server doesn't accumulate a permanent RSS
+            # floor from bursty DR runs. The retention half of the OOM fix.
+            _release_process_memory()
 
         # Emit the partial-or-final ReportEvent. If the user pressed Stop, the run
         # halted at a checkpoint (bounded_by="stopped") with the partial report
