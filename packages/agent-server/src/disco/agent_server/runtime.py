@@ -2199,6 +2199,20 @@ class ConversationRuntime:
             ),
         )
         await self._store.append(conversation_id, plan)
+        if self._effective_autonomous(conversation_id):
+            # Headless/autonomous DR: no human to approve the plan. Auto-approve
+            # inline (emit the same RUNNING/plan_approved StatusEvent approve_plan
+            # would) and run the engine directly — otherwise the run stalls forever
+            # at AWAITING_PLAN_APPROVAL. Mirrors the Build loop's autonomous
+            # plan auto-approve (engine.py).
+            await self._store.append(
+                conversation_id,
+                StatusEvent(
+                    status=ConversationStatus.RUNNING, detail="plan_approved"
+                ),
+            )
+            await self._execute_deep_research(conversation_id, plan)
+            return
         await self._store.append(
             conversation_id,
             StatusEvent(
