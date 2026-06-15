@@ -145,3 +145,24 @@ def test_save_overrides_succeeds_on_happy_path(tmp_path, monkeypatch):
     with open(rt._override_path) as f:
         data = json.load(f)
     assert data == {"conv-X": "anthropic/claude-3-haiku"}
+
+
+def test_effective_autonomous_gated_by_surface(tmp_path, monkeypatch):
+    """Autonomous auto-approve applies to surfaces WITH a plan gate — build,
+    agent, AND deep_research — but NOT plain research (no plan gate).
+    Regression: deep_research was excluded, so a headless/autonomous DR run
+    stalled forever at AWAITING_PLAN_APPROVAL."""
+    rt = _new_runtime(tmp_path, monkeypatch)
+    cases = [
+        ("c-build", "build", True),
+        ("c-agent", "agent", True),
+        ("c-dr", "deep_research", True),  # the fix
+        ("c-research", "research", False),
+    ]
+    for conv, surface, expected in cases:
+        rt.set_autonomous(conv, True)
+        rt.set_surface(conv, surface)
+        assert rt._effective_autonomous(conv) is expected, f"{surface}: {expected}"
+    # autonomous never set → False even on an eligible surface
+    rt.set_surface("c-unset", "deep_research")
+    assert rt._effective_autonomous("c-unset") is False

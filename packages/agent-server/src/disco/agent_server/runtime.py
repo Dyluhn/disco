@@ -615,6 +615,12 @@ class ConversationRuntime:
     # they differ only in frontend framing + entry. Branch on this set, never on the
     # bare string, so a new build-like surface can't silently miss a call site.
     _BUILD_LIKE_SURFACES: frozenset[str] = frozenset({"build", "agent"})
+    # Surfaces that have a PLAN GATE the autonomous flag should auto-approve.
+    # deep_research is NOT build-like (no build tools/sandbox) but its
+    # plan→iterate→report flow DOES halt at AWAITING_PLAN_APPROVAL — so a
+    # headless/autonomous DR run must auto-approve here too, or it stalls
+    # forever. (research has no plan gate, so it stays excluded.)
+    _AUTONOMOUS_SURFACES: frozenset[str] = frozenset({"build", "agent", "deep_research"})
 
     def set_surface(self, conversation_id: str, surface: str) -> None:
         """Select a conversation's surface before it runs. Build composes tools +
@@ -827,15 +833,15 @@ class ConversationRuntime:
 
     def _effective_autonomous(self, conversation_id: str) -> bool:
         """The SINGLE source of truth for "is this conversation actually running
-        headless". Autonomous is a BUILD/AGENT concept (it governs the plan-gate and
-        the ask/clarify tools — neither of which Research surfaces have), so the
-        stored flag only takes effect on a build-like surface. Gating in ONE place
+        headless". Autonomous governs the plan-gate auto-approve + ask/clarify
+        suppression, so it only takes effect on surfaces that HAVE a plan gate:
+        build, agent, AND deep_research (plan→iterate→report). Gating in ONE place
         keeps the prompt prefix (router), the loop's tool-suppression/auto-approve,
-        AND the UI badge from disagreeing — a Research convo created with
-        autonomous=True is uniformly treated as interactive everywhere."""
+        AND the UI badge from disagreeing. The plain `research` surface has no plan
+        gate, so an autonomous=True flag there is uniformly treated as interactive."""
         return (
             self._autonomous.get(conversation_id, False)
-            and self._surface_of(conversation_id) in self._BUILD_LIKE_SURFACES
+            and self._surface_of(conversation_id) in self._AUTONOMOUS_SURFACES
         )
 
     def is_autonomous(self, conversation_id: str) -> bool:
