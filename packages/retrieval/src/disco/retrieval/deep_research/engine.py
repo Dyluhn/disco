@@ -295,7 +295,7 @@ class DeepResearchRun:
         # `ReportSection` is appended to `sections`. No other leg's state
         # touches the leg's accumulated passages / hits / queries — those
         # arrive here as immutable frozen-shape objects only.
-        for subq, task, subq_id, subq_namespace, leg_context in gather_tasks:
+        for _subq, task, subq_id, subq_namespace, leg_context in gather_tasks:
             if should_cancel is not None and should_cancel():
                 bounded_by = "stopped"
                 for _, t, _, _, _ in gather_tasks:

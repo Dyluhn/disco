@@ -246,7 +246,8 @@ class FastEmbedNLIVerifier:
                 raw = list(_reranker().rerank(hypothesis, [premise]))[0]
                 self._cache[key] = _sigmoid(float(raw))
             except EncoderUnavailable:
-                raise  # RAM guard: propagate so the caller gets an honest error, not a wrong neutral
+                # RAM guard: propagate so the caller gets an honest error, not a wrong neutral
+                raise
             except Exception:  # noqa: BLE001 — failure → neutral, never crash
                 self._cache[key] = 0.0
         return self._cache[key]

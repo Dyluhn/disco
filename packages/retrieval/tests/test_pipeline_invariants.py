@@ -27,7 +27,16 @@ async def test_pipeline_invariants():
         gather_calls.append((subq.title, "end", end))
         return SubQuestionResult(
             subq=subq,
-            passages=[Passage(id=f"p_{subq.title}", text="text", source_url="http://example.com", source_title="Source", score=0.9, metadata={})],
+            passages=[
+                Passage(
+                    id=f"p_{subq.title}",
+                    text="text",
+                    source_url="http://example.com",
+                    source_title="Source",
+                    score=0.9,
+                    metadata={},
+                )
+            ],
             all_hits=[],
             rounds_run=1,
             issued_queries=[subq.title],
@@ -71,28 +80,48 @@ async def test_pipeline_invariants():
     async def emit(kind, payload):
         captured_events.append((kind, payload))
 
-    with patch("disco.retrieval.deep_research.engine.gather_for_subquestion", side_effect=mock_gather), \
-         patch("disco.retrieval.deep_research.engine.synthesize_section", side_effect=mock_synth), \
-         patch("disco.retrieval.deep_research.engine.coherence_pass", return_value="summary"):
+    with (
+        patch(
+            "disco.retrieval.deep_research.engine.gather_for_subquestion",
+            side_effect=mock_gather,
+        ),
+        patch(
+            "disco.retrieval.deep_research.engine.synthesize_section",
+            side_effect=mock_synth,
+        ),
+        patch(
+            "disco.retrieval.deep_research.engine.coherence_pass",
+            return_value="summary",
+        ),
+    ):
         
         report = await run.run(plan_steps, emit=emit)
 
     # 1. Assert Concurrency (Pipeline)
     # All gathers should start nearly at the same time, before Q1 synthesis finishes.
     gather_starts = {title: t for title, event, t in gather_calls if event == "start"}
-    q1_synth_start = next(t for title, event, t in synth_calls if title == "Q1" and event == "start")
+    q1_synth_start = next(
+        t for title, event, t in synth_calls if title == "Q1" and event == "start"
+    )
     
-    # Check that all gathers started before the first synthesis (since they are tasks started upfront)
+    # Check that all gathers started before the first synthesis
+    # (since they are tasks started upfront)
     for title in ["Q1", "Q2", "Q3"]:
-        assert gather_starts[title] < q1_synth_start, f"Gather for {title} should have started before Q1 synthesis"
+        assert gather_starts[title] < q1_synth_start, (
+            f"Gather for {title} should have started before Q1 synthesis"
+        )
 
     # 2. Assert Serial Synthesis
     # Synthesis calls should NOT overlap.
     for i in range(len(plan_steps) - 1):
         q_curr = plan_steps[i]
         q_next = plan_steps[i+1]
-        curr_end = next(t for title, event, t in synth_calls if title == q_curr and event == "end")
-        next_start = next(t for title, event, t in synth_calls if title == q_next and event == "start")
+        curr_end = next(
+            t for title, event, t in synth_calls if title == q_curr and event == "end"
+        )
+        next_start = next(
+            t for title, event, t in synth_calls if title == q_next and event == "start"
+        )
         assert next_start >= curr_end, f"Synthesis for {q_next} started before {q_curr} finished"
 
     # 3. Assert section_id is derived from hash
@@ -141,14 +170,19 @@ async def test_budget_partitioning():
         depth="standard_deep" # max_sources=20
     )
 
-    plan_steps = ["Q1", "Q2", "Q3"] # 40 // 3 = 13, with 1 leftover → Q1 gets 14, Q2 gets 13, Q3 gets 13
+    # 40 // 3 = 13, with 1 leftover → Q1 gets 14, Q2 gets 13, Q3 gets 13
+    plan_steps = ["Q1", "Q2", "Q3"]
     
     async def emit(kind, payload): pass
 
-    with patch("disco.retrieval.deep_research.engine.gather_for_subquestion", side_effect=mock_gather), \
-         patch("disco.retrieval.deep_research.engine.synthesize_section"), \
-         patch("disco.retrieval.deep_research.engine.coherence_pass"):
-        
+    with (
+        patch(
+            "disco.retrieval.deep_research.engine.gather_for_subquestion",
+            side_effect=mock_gather,
+        ),
+        patch("disco.retrieval.deep_research.engine.synthesize_section"),
+        patch("disco.retrieval.deep_research.engine.coherence_pass"),
+    ):
         await run.run(plan_steps, emit=emit)
 
     assert partitioned_budgets["Q1"] == 14
@@ -163,22 +197,46 @@ async def test_resume_semantics_with_pipeline():
     
     async def mock_gather(subq, **kwargs):
         gather_calls.append(subq.title)
-        return SubQuestionResult(subq=subq, passages=[], all_hits=[], rounds_run=1, issued_queries=[], bounded_by_rounds=False)
+        return SubQuestionResult(
+            subq=subq,
+            passages=[],
+            all_hits=[],
+            rounds_run=1,
+            issued_queries=[],
+            bounded_by_rounds=False,
+        )
 
     # Mock dependencies
-    run = DeepResearchRun(query="q", router=AsyncMock(), retrieval_engine=AsyncMock(), embedder=AsyncMock(), vector_store=AsyncMock(), nli=AsyncMock())
+    run = DeepResearchRun(
+        query="q",
+        router=AsyncMock(),
+        retrieval_engine=AsyncMock(),
+        embedder=AsyncMock(),
+        vector_store=AsyncMock(),
+        nli=AsyncMock(),
+    )
 
     plan_steps = ["Q1", "Q2", "Q3"]
     resume_sections = [
-        ReportSection(id="s_old", title="Q1", markdown="b", cited_passage_ids=[], unsupported_count=0)
+        ReportSection(
+            id="s_old",
+            title="Q1",
+            markdown="b",
+            cited_passage_ids=[],
+            unsupported_count=0,
+        )
     ]
     
     async def emit(kind, payload): pass
 
-    with patch("disco.retrieval.deep_research.engine.gather_for_subquestion", side_effect=mock_gather), \
-         patch("disco.retrieval.deep_research.engine.synthesize_section"), \
-         patch("disco.retrieval.deep_research.engine.coherence_pass"):
-        
+    with (
+        patch(
+            "disco.retrieval.deep_research.engine.gather_for_subquestion",
+            side_effect=mock_gather,
+        ),
+        patch("disco.retrieval.deep_research.engine.synthesize_section"),
+        patch("disco.retrieval.deep_research.engine.coherence_pass"),
+    ):
         await run.run(plan_steps, emit=emit, resume_sections=resume_sections)
 
     # Should only gather Q2 and Q3

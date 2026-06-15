@@ -20,7 +20,11 @@ def test_bar_chart_block():
 
 def test_chart_with_citations_inside():
     # Citations inside the JSON string (though unusual, _to_blocks should find them)
-    text = "```chart\n{\"chart_type\": \"line\", \"data\": [{\"label\": \"A [[src1]]\", \"value\": 10}]}\n```"
+    text = (
+        "```chart\n"
+        '{"chart_type": "line", "data": [{"label": "A [[src1]]", "value": 10}]}'
+        "\n```"
+    )
     blocks = _to_blocks(text)
     assert len(blocks) == 1
     assert blocks[0]["kind"] == "chart"

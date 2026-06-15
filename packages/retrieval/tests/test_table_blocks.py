@@ -2,7 +2,10 @@ from disco.retrieval.streaming import _to_blocks
 
 
 def test_single_table():
-    text = "| Header 1 | Header 2 |\n| --- | --- |\n| Row 1 Col 1 | Row 1 Col 2 |\n| Row 2 Col 1 | Row 2 Col 2 |"
+    text = (
+        "| Header 1 | Header 2 |\n| --- | --- |\n"
+        "| Row 1 Col 1 | Row 1 Col 2 |\n| Row 2 Col 1 | Row 2 Col 2 |"
+    )
     blocks = _to_blocks(text)
     assert len(blocks) == 1
     assert blocks[0]["kind"] == "table"

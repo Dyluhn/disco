@@ -12,11 +12,9 @@ No /proc/meminfo is actually read; _mem_available_gb() is monkeypatched.
 
 from __future__ import annotations
 
-import pytest
-
 import disco.retrieval.local_encoders as le
+import pytest
 from disco.retrieval.local_encoders import EncoderUnavailable
-
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 

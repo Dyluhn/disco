@@ -97,10 +97,19 @@ def _validate_charts(markdown: str) -> str:
                     data = p.get("data", [])
                     if p.get("chart_type") == "scatter":
                         cols = ["Group", p.get("x_label", "X"), p.get("y_label", "Y")]
-                        rows = [[str(d.get("group", "")), str(d.get("x", "")), str(d.get("y", ""))] for d in data]
+                        rows = [
+                            [str(d.get("group", "")), str(d.get("x", "")), str(d.get("y", ""))]
+                            for d in data
+                        ]
                     else:
                         cols = [p.get("x_label", "Label"), p.get("y_label", "Value")]
-                        rows = [[str(d.get("label", d.get("x", ""))), str(d.get("value", d.get("y", "")))] for d in data]
+                        rows = [
+                            [
+                                str(d.get("label", d.get("x", ""))),
+                                str(d.get("value", d.get("y", ""))),
+                            ]
+                            for d in data
+                        ]
                     
                     if not rows:
                         continue

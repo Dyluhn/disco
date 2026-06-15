@@ -464,7 +464,9 @@ def build_live_retrieval(
             search_provider, search_base_url or url("DISCO_SEARXNG_URL"), search_api_key
         ),
         "extraction": _make_extraction(
-            extraction_provider, extraction_base_url or url("DISCO_CRAWL4AI_URL"), extraction_api_key
+            extraction_provider,
+            extraction_base_url or url("DISCO_CRAWL4AI_URL"),
+            extraction_api_key,
         ),
     }
     if use_remote:

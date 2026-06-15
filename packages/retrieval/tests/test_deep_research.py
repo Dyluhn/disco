@@ -811,9 +811,10 @@ async def test_c14_concurrent_legs_have_isolated_contexts() -> None:
     # be mutated by a sibling.
     assert len(router.message_snapshots) >= 1
     first_snap = router.message_snapshots[0]
-    assert all(snap is not first_snap or i == 0 for i, snap in enumerate(router.message_snapshots)), (
-        "message snapshots are aliased — same list object reused across calls"
-    )
+    assert all(
+        snap is not first_snap or i == 0
+        for i, snap in enumerate(router.message_snapshots)
+    ), "message snapshots are aliased — same list object reused across calls"
 
     # ---- (d) synthesis also uses the per-leg CallContext ------------------
     synth_calls = [r for r in router.records if r["role"] == "rag_answerer"]
@@ -912,9 +913,8 @@ async def test_c14_one_leg_error_does_not_corrupt_other_leg() -> None:
         namespace=f"conv_c14b/{subq_b_hash}",
         call_context=CallContext(conversation_id=f"conv_c14b/s{subq_b_hash}"),
     )
-    # Snapshot the leg_context identities so we can verify they are
-    # not replaced (frozen dataclass — but the test still proves it).
-    leg_a_context_id = id(leg_a_context)
+    # Snapshot the surviving leg's leg_context identity so we can verify it
+    # is not replaced (frozen dataclass — but the test still proves it).
     leg_b_context_id = id(leg_b_context)
 
     async def run_leg_a() -> SubQuestionResult:

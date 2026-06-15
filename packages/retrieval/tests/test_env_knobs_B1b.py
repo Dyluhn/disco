@@ -17,10 +17,8 @@ Coverage:
 
 from __future__ import annotations
 
-import pytest
-
 import disco.retrieval.local_encoders as le
-
+import pytest
 
 # ── fake constructors ─────────────────────────────────────────────────────────
 
