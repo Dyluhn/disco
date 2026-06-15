@@ -74,7 +74,7 @@ def _require_ram(model_name: str) -> None:
         raise EncoderUnavailable(
             f"encoder load aborted: {available:.1f} GB RAM available, "
             f"need ~{headroom:.0f} GB for {model_name!r}. "
-            f"Lower PMX_ENCODER_TIER to 'lite' or free RAM before retrying."
+            f"Lower DISCO_ENCODER_TIER to 'lite' or free RAM before retrying."
         )
 
 
