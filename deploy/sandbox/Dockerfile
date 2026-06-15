@@ -49,6 +49,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends pandoc \
     && rm -rf /var/lib/apt/lists/*
 
 
+# Build toolchain + common CLIs build agents reach for. `build-essential` gives
+# gcc/g++/make/libc-dev — without it `make`-based builds exit 127 and C-extension
+# pip installs (any dependency with no prebuilt wheel) fail to compile, both of
+# which make a build agent flail (same class as the missing python alias / pytest).
+# unzip + sqlite3 are frequent (archive extraction, ad-hoc DB inspection). Late
+# layer = cheap, keeps the expensive playwright/chromium layer cached.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential unzip sqlite3 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Pre-install the common Python dev tools build agents reach for (pytest, ruff)
 # so a build session does not burn iterations rediscovering
 # `pip install --break-system-packages`. (placed late = cheap layer, keeps the
