@@ -153,7 +153,7 @@ class ProcessSandboxService:
     name = "process"
 
     def __init__(self, root: str | None = None) -> None:
-        self._root = Path(root or tempfile.mkdtemp(prefix="pmx-sbx-")).resolve()
+        self._root = Path(root or tempfile.mkdtemp(prefix="disco-sbx-")).resolve()
         self._instances: dict[str, ProcessSandboxInstance] = {}
 
     async def create(
@@ -198,14 +198,14 @@ class ProcessSandboxService:
         return removed
 
     async def sweep_stale_roots(self, max_age_s: float = 86400) -> int:
-        """Remove orphaned /tmp/pmx-sbx-* root dirs left by prior process runs.
+        """Remove orphaned /tmp/disco-sbx-* (and legacy pmx-sbx-*) root dirs left by prior process runs.
 
         Scans the parent of _root (typically /tmp) for directories whose name
-        starts with ``pmx-sbx-`` and whose mtime is older than *max_age_s*
+        starts with ``disco-sbx-`` or legacy ``pmx-sbx-`` and whose mtime is older than *max_age_s*
         seconds (default 1 day).  The live ``_root`` is always excluded.
 
         Safety properties:
-        - Only touches entries whose name starts with ``pmx-sbx-``; all other
+        - Only touches entries whose name starts with ``disco-sbx-`` or legacy ``pmx-sbx-``; all other
           siblings are unconditionally skipped.
         - Never follows or removes symlinks (uses ``lstat`` + ``is_symlink``
           guard before ``rmtree``).
@@ -217,10 +217,12 @@ class ProcessSandboxService:
         removed = 0
         now = time.time()
         parent = self._root.parent  # typically /tmp
-        prefix = "pmx-sbx-"
+        # B5 dual-prefix: clean BOTH the new disco-sbx-* roots AND the legacy
+        # pmx-sbx-* roots left by pre-rename runs (str.startswith takes a tuple).
+        prefixes = ("disco-sbx-", "pmx-sbx-")
         try:
             for sibling in parent.iterdir():
-                if not sibling.name.startswith(prefix):
+                if not sibling.name.startswith(prefixes):
                     continue  # prefix guard — never touch unrelated dirs
                 if sibling == self._root:
                     continue  # never delete the live root
