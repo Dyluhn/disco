@@ -328,19 +328,30 @@ class GatewayKernel(KernelSession):
         )
         await self._sessions.exec("__kernel", cmd, None)
         
-        # Poll /api until ready (up to 30s)
+        # Poll /api until ready. The gateway start is CPU-bound; on a saturated
+        # box (local-LLM inference + the build agent competing for cores) it can
+        # take well over 30s, so an autonomous build would forfeit on a
+        # slow-but-fine start. Budget generously + env-tunable
+        # (DISCO_KERNEL_GATEWAY_START_S, default 120s; PMX_ legacy honored).
+        budget_s = int(
+            os.environ.get("DISCO_KERNEL_GATEWAY_START_S")
+            or os.environ.get("PMX_KERNEL_GATEWAY_START_S")
+            or "120"
+        )
         async with httpx.AsyncClient() as client:
-            for _ in range(30):
+            for _ in range(max(1, budget_s)):
                 try:
-                    # Re-resolve mapping as it might have changed on restart? 
-                    # Usually it's stable once published.
                     res = await client.get(f"{self._url}/api", timeout=1.0)
                     if res.status_code == 200:
                         return self._url
+                    await asyncio.sleep(1.0)  # up but not 200 yet — wait, don't tight-loop
                 except Exception:
-                    await asyncio.sleep(1.0)
-        
-        raise SandboxError("jupyter kernel gateway failed to start")
+                    await asyncio.sleep(1.0)  # not up yet (connection refused) — wait
+
+        raise SandboxError(
+            f"jupyter kernel gateway failed to start within {budget_s}s "
+            f"(set DISCO_KERNEL_GATEWAY_START_S higher if the box is heavily loaded)"
+        )
 
     async def start(self) -> None:
         url = await self._ensure_gateway()
