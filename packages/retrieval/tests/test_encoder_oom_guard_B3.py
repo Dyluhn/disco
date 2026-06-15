@@ -24,14 +24,14 @@ from disco.retrieval.local_encoders import EncoderUnavailable
 class _FakeEmbedder:
     """Drop-in for fastembed.TextEmbedding — records model_name, no download."""
 
-    def __init__(self, *, model_name: str) -> None:
+    def __init__(self, *, model_name: str, **kwargs) -> None:
         self.model_name = model_name
 
 
 class _FakeEncoder:
     """Drop-in for fastembed TextCrossEncoder — records model_name, no download."""
 
-    def __init__(self, *, model_name: str) -> None:
+    def __init__(self, *, model_name: str, **kwargs) -> None:
         self.model_name = model_name
 
 
