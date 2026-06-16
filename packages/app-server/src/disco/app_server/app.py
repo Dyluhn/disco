@@ -19,27 +19,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .config.dtos import (
-    DataSourcesConfigDTO,
-    EncodersConfigDTO,
     McpConnectionDTO,
     McpServerApproveDTO,
     McpServerConfigDTO,
     OpenRouterKeyBody,
     OpenRouterKeyStatus,
     OpenRouterModelDTO,
-    ProjectStorageConfigDTO,
-    SandboxConfigDTO,
     SkillCreate,
     SkillDTO,
     SkillPatch,
-    TtsConfigDTO,
 )
 from .config.mappers import normalize_openrouter
-from .config_state import (
-    ConfigState,
-    ConfigValidationError,
-)
-from .routes import make_health_router, make_models_router
+from .config_state import ConfigState
+from .routes import make_config_router, make_health_router, make_models_router
 
 _OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 
@@ -79,59 +71,7 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
 
     app.include_router(make_health_router())
     app.include_router(make_models_router(state))
-
-    # ---- config matrices (sandbox / encoders / tts / data-sources / storage) -
-
-    @app.get("/api/sandbox/config")
-    async def get_sandbox_config() -> SandboxConfigDTO:
-        return state.sandbox_config()
-
-    @app.put("/api/sandbox/config")
-    async def put_sandbox_config(dto: SandboxConfigDTO) -> SandboxConfigDTO:
-        return state.update_sandbox_config(dto)
-
-    @app.get("/api/encoders/config")
-    async def get_encoders_config() -> EncodersConfigDTO:
-        return state.encoders_config()
-
-    @app.put("/api/encoders/config")
-    async def put_encoders_config(dto: EncodersConfigDTO) -> EncodersConfigDTO:
-        return state.update_encoders_config(dto)
-
-    @app.get("/api/tts/config")
-    async def get_tts_config() -> TtsConfigDTO:
-        return state.tts_config()
-
-    @app.put("/api/tts/config")
-    async def put_tts_config(dto: TtsConfigDTO) -> TtsConfigDTO:
-        return state.update_tts_config(dto)
-
-    @app.get("/api/data-sources/config")
-    async def get_data_sources_config() -> DataSourcesConfigDTO:
-        return state.data_sources_config()
-
-    @app.put("/api/data-sources/config")
-    async def put_data_sources_config(dto: DataSourcesConfigDTO) -> DataSourcesConfigDTO:
-        return state.update_data_sources_config(dto)
-
-    @app.get("/api/projects/storage/config")
-    async def get_projects_config() -> ProjectStorageConfigDTO:
-        return state.projects_config()
-
-    @app.put("/api/projects/storage/config")
-    async def put_projects_config(
-        dto: ProjectStorageConfigDTO,
-    ) -> ProjectStorageConfigDTO:
-        """Persist the Build-project storage path. A non-empty path is validated
-        server-side; a bad path returns 400 with a typed `reason` so the UI shows
-        a specific error ("not_found" / "not_a_directory" / "not_writable")."""
-        try:
-            return state.update_projects_config(dto)
-        except ConfigValidationError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail={"reason": exc.reason, "message": exc.detail or exc.reason},
-            ) from exc
+    app.include_router(make_config_router(state))
 
     # ---- OpenRouter: live catalogue proxy + encrypted key -------------------
 
