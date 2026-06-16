@@ -177,7 +177,10 @@ async def test_pool_approval_match_does_not_raise():
         {"name": "add", "description": "Add two numbers together"},
         {"name": "read_file", "description": "Read a file from the server temp dir"},
         {"name": "list_files", "description": "List files in the temp dir"},
-        {"name": "get_env", "description": "Report this subprocess's view of an env var (SEC-1 leak probe)"},
+        {
+            "name": "get_env",
+            "description": "Report this subprocess's view of an env var (SEC-1 leak probe)",
+        },
     ]
     expected_hash = compute_description_hash(raw_tool_descs)
 
@@ -250,7 +253,10 @@ async def test_pool_approval_from_real_db_table():
         {"name": "add", "description": "Add two numbers together"},
         {"name": "read_file", "description": "Read a file from the server temp dir"},
         {"name": "list_files", "description": "List files in the temp dir"},
-        {"name": "get_env", "description": "Report this subprocess's view of an env var (SEC-1 leak probe)"},
+        {
+            "name": "get_env",
+            "description": "Report this subprocess's view of an env var (SEC-1 leak probe)",
+        },
     ]
     correct_hash = compute_description_hash(raw_tool_descs)
     create_mcp_approval(conn, "fake_srv", correct_hash)
