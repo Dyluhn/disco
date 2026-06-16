@@ -25,6 +25,7 @@ import json
 import os
 import re
 import wave
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -43,6 +44,20 @@ TTS_SAMPLE_RATE = 24000
 class Turn(BaseModel):
     speaker: str = Field(pattern=r"^(A|B)$")
     text: str = Field(min_length=1)
+
+
+@dataclass
+class _ResolvedTts:
+    """Resolved TTS settings for one overview run (the output of Step 0)."""
+
+    provider: str
+    backend: str
+    voice_a: str
+    voice_b: str
+    is_remote: bool
+    remote_base: str
+    remote_key: str
+    remote_model: str
 
 
 _TURN_SCRIPT_PROMPT = """You are a podcast scriptwriter. Given a research report, write a short 
@@ -234,6 +249,66 @@ class AudioOverviewTool:
         read_only=False,
     )
 
+    async def _resolve_tts_settings(
+        self, tts: Any, speaches_url: str
+    ) -> tuple[_ResolvedTts | None, ToolOutcome | None]:
+        """Step 0: resolve the toggle / backend / voices from ConfigStore TTS
+        settings. Returns (resolved, None) when enabled, or (None, fail_soft) when
+        disabled — the disabled path unloads the bundled model first (RAM gate)."""
+        if not tts.enabled:
+            # Wire (D5): the "Off" toggle is supposed to free the Kokoro model
+            # immediately, not wait for the agent-server's idle-TTL sweep
+            # (PMX_TTS_IDLE_TTL_S, default 30 min). The bundled engine is
+            # process-global in `disco.agent_server.tts_local`; `unload()` is a
+            # no-op when nothing is loaded, so it's safe to call here. Lazy-
+            # imported + suppressed so the tools package stays importable
+            # without the optional `tts` extra installed.
+            try:
+                from disco.agent_server import tts_local as _tts_local
+
+                await _tts_local.unload()
+            except ImportError:
+                pass  # tts extra not installed — nothing to unload
+            return None, ToolOutcome(
+                success=False,
+                content=(
+                    "Audio overview is disabled in Settings → Audio. Enable it "
+                    "(bundled in-process, self-host, or paid endpoint) to generate "
+                    "overviews."
+                ),
+                error="tts disabled",
+            )
+        # Three-tier provider resolution. `speaches` (self-host) and `openai` (paid)
+        # share the OpenAI-compatible HTTP client; they differ only by the base_url
+        # default and whether a Bearer key + model are sent. `bundled` uses none of
+        # these (in-process Kokoro). The key is resolved from the ENV-VAR NAME the
+        # user set in Settings (never the raw key) — same convention as search/
+        # extraction/model providers.
+        _OPENAI_DEFAULT_BASE = "https://api.openai.com"
+        remote_base = remote_key = remote_model = ""
+        if tts.provider == "speaches":
+            remote_base = (tts.base_url or speaches_url).rstrip("/")
+        elif tts.provider == "openai":
+            remote_base = (tts.base_url or _OPENAI_DEFAULT_BASE).rstrip("/")
+            remote_key = os.environ.get(tts.api_key_env, "") if tts.api_key_env else ""
+            remote_model = tts.model or "tts-1"
+        _BACKEND_LABEL = {
+            "bundled": "bundled Kokoro",
+            "speaches": "self-host Speaches",
+            "openai": "paid OpenAI-compatible",
+        }
+        resolved = _ResolvedTts(
+            provider=tts.provider,
+            backend=_BACKEND_LABEL.get(tts.provider, tts.provider),
+            voice_a=tts.voice_a,
+            voice_b=tts.voice_b,
+            is_remote=tts.provider != "bundled",
+            remote_base=remote_base,
+            remote_key=remote_key,
+            remote_model=remote_model,
+        )
+        return resolved, None
+
     async def _generate_turn_script(
         self, report_text: str, llm_url: str
     ) -> tuple[list[Turn] | None, ToolOutcome | None]:
@@ -311,45 +386,17 @@ class AudioOverviewTool:
         # per request, so a Settings change drives the NEXT overview. `enabled`
         # is the RAM gate — when off we fail soft rather than loading the model.
         tts = ConfigStore().load().tts
-        if not tts.enabled:
-            # Wire (D5): the "Off" toggle is supposed to free the Kokoro model
-            # immediately, not wait for the agent-server's idle-TTL sweep
-            # (PMX_TTS_IDLE_TTL_S, default 30 min). The bundled engine is
-            # process-global in `disco.agent_server.tts_local`; `unload()` is a
-            # no-op when nothing is loaded, so it's safe to call here. Lazy-
-            # imported + suppressed so the tools package stays importable
-            # without the optional `tts` extra installed.
-            try:
-                from disco.agent_server import tts_local as _tts_local
-
-                await _tts_local.unload()
-            except ImportError:
-                pass  # tts extra not installed — nothing to unload
-            return ToolOutcome(
-                success=False,
-                content=(
-                    "Audio overview is disabled in Settings → Audio. Enable it "
-                    "(bundled in-process, self-host, or paid endpoint) to generate "
-                    "overviews."
-                ),
-                error="tts disabled",
-            )
-        voice_a = tts.voice_a
-        voice_b = tts.voice_b
-        # Three-tier provider resolution. `speaches` (self-host) and `openai` (paid)
-        # share the OpenAI-compatible HTTP client; they differ only by the base_url
-        # default and whether a Bearer key + model are sent. `bundled` uses none of
-        # these (in-process Kokoro). The key is resolved from the ENV-VAR NAME the
-        # user set in Settings (never the raw key) — same convention as search/
-        # extraction/model providers.
-        _OPENAI_DEFAULT_BASE = "https://api.openai.com"
-        remote_base = remote_key = remote_model = ""
-        if tts.provider == "speaches":
-            remote_base = (tts.base_url or SPEACHES_URL).rstrip("/")
-        elif tts.provider == "openai":
-            remote_base = (tts.base_url or _OPENAI_DEFAULT_BASE).rstrip("/")
-            remote_key = os.environ.get(tts.api_key_env, "") if tts.api_key_env else ""
-            remote_model = tts.model or "tts-1"
+        tts_cfg, disabled_outcome = await self._resolve_tts_settings(tts, SPEACHES_URL)
+        if disabled_outcome is not None:
+            return disabled_outcome
+        assert tts_cfg is not None  # enabled path resolves a config
+        voice_a = tts_cfg.voice_a
+        voice_b = tts_cfg.voice_b
+        backend = tts_cfg.backend
+        is_remote = tts_cfg.is_remote
+        remote_base = tts_cfg.remote_base
+        remote_key = tts_cfg.remote_key
+        remote_model = tts_cfg.remote_model
 
         # --- Steps 1 & 2: Generate turn-script via LLM (+ one retry) ---------
         turns, gen_failure = await self._generate_turn_script(report_text, LLM_URL)
@@ -361,13 +408,6 @@ class AudioOverviewTool:
         # Both backends return float32 mono PCM @ 24 kHz so the overview is mixed
         # in PCM and encoded to MP3 exactly once (Step 4).
         assert turns is not None  # validated above
-        _BACKEND_LABEL = {
-            "bundled": "bundled Kokoro",
-            "speaches": "self-host Speaches",
-            "openai": "paid OpenAI-compatible",
-        }
-        backend = _BACKEND_LABEL.get(tts.provider, tts.provider)
-        is_remote = tts.provider != "bundled"
         pcm_turns: list[Any] = []
         for i, turn in enumerate(turns):
             voice = voice_a if turn.speaker == "A" else voice_b
