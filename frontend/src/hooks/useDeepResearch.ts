@@ -24,6 +24,7 @@ import {
   type ReportExportFmt,
 } from "@/api/deepResearch";
 import { killConversation } from "@/api/agent";
+import type { MessageEvent } from "@/types/agent";
 import {
   useDeepResearchStream,
   type DeepResearchSession,
@@ -39,6 +40,18 @@ export function useDeepResearch(resumeCid?: string | null) {
   const [leaderId, setLeaderId] = useState<string | null>(null);
   const [depthTier, setDepthTier] = useState<Tier>("standard_deep");
   const stream = useDeepResearchStream(session);
+
+  // Recover the real query from replayed events (resume path).
+  // Priority: report.query (arrives with the finished report, most reliable) >
+  // first user MessageEvent (available from the very first replay frame, so the
+  // loading window is brief). The "(resumed)" sentinel in session.query is purely
+  // internal — it MUST NOT reach the UI.
+  const recoveredQuery: string | null =
+    stream.report?.query ??
+    stream.events
+      .filter((e): e is MessageEvent => e.kind === "message")
+      .find((e) => e.message.role === "user")?.message.content ??
+    null;
 
   // Resume path: a /deep/:cid route hands us a cid → open it READ-ONLY (kick is
   // absent, so the stream subscribes + replays but never sends the query).
@@ -79,13 +92,17 @@ export function useDeepResearch(resumeCid?: string | null) {
   // Resume = continue a stopped/incomplete run (explicit; never on open). It's
   // surfaced via `...stream` below — no need to re-export it here.
 
-  // Retry = a fresh run of the same query (a NEW conversation).
+  // Retry = a fresh run of the same query (a NEW conversation). Use the recovered
+  // query first (handles the resume path where session.query is the sentinel).
   const retry = useCallback(() => {
-    if (session?.query && session.query !== "(resumed)") {
+    const q =
+      recoveredQuery ??
+      (session?.query && session.query !== "(resumed)" ? session.query : null);
+    if (q) {
       setSession(null);
-      submit(session.query);
+      submit(q);
     }
-  }, [session, submit]);
+  }, [recoveredQuery, session, submit]);
 
   const reset = useCallback(() => setSession(null), []);
 
@@ -109,10 +126,22 @@ export function useDeepResearch(resumeCid?: string | null) {
   // Legacy export (single-button MD download) — kept for backward compat.
   const exportReport = exportMd;
 
+  // The effective query for display: real query once recovered, a neutral loading
+  // string while mid-replay, or null when no session exists.
+  const effectiveQuery =
+    session === null
+      ? null
+      : recoveredQuery ??
+        (session.query !== "(resumed)" ? session.query : "Resuming research…");
+
   return {
     started: session !== null,
     cid: session?.cid ?? null,
-    query: session?.query ?? null,
+    query: effectiveQuery,
+    /** True once the real query text is available (not the loading placeholder). */
+    queryResolved:
+      recoveredQuery !== null ||
+      (session !== null && session.query !== "(resumed)"),
     resumed: Boolean(resumeCid),
     submitting: create.isPending,
     leaderId,

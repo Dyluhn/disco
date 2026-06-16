@@ -110,6 +110,11 @@ export function DeepResearchSurface({ resumeCid, onScopeChange }: Props) {
         <header className="flex flex-wrap items-baseline justify-between gap-inline border-b border-hairline pb-section">
           <h1 className="font-display text-[1.9rem] font-medium leading-tight tracking-tight text-text">
             {r.query}
+            {r.resumed && r.queryResolved && (
+              <span className="ml-2 align-middle font-ui text-[0.75rem] font-normal text-text-faint">
+                (resumed)
+              </span>
+            )}
           </h1>
           <div className="flex items-center gap-inline">
             {/* While running: Stop (pause, keeps partial) + Kill (end, final). */}
