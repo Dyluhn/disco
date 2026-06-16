@@ -66,7 +66,14 @@ from ..state import ConversationState
 from ..store.base import EventStore
 from ..view import Condenser, Summarizer, View, _latest_plan, microcompact
 from .bootstrap import _detect_project_bootstrap
-from .boundaries import Agent, ConfirmationPolicy, SecurityAnalyzer, StopHook, ToolExecutor
+from .boundaries import (
+    Agent,
+    AgentStep,
+    ConfirmationPolicy,
+    SecurityAnalyzer,
+    StopHook,
+    ToolExecutor,
+)
 from .control import Disp
 from .dedup import (
     _F8_PREFIX_CHARS,
@@ -3560,6 +3567,191 @@ class AgentLoop:
                 _hint = f"{_hint} did you mean '{_suggestion}'?"
         return _hint
 
+    async def _drive_step(self, view: View, events: list[Event]) -> tuple[AgentStep | None, Disp]:
+        # (e) ask the agent for ONE action (principle 1). The visible tool
+        # set is mode-scoped: while PLANNING the agent sees ONLY the plan
+        # tool (so it can't act before approval); while executing it sees
+        # everything except the plan tool.
+        # Escape temperature: jitter HARD to break a self-imitation chain —
+        # the single step right after a stuck reframe (StuckDetector's escape).
+        # escape_seq/acted_since_escape are pure functions of `events`
+        # (the stuck gate recomputes its own copy); recompute here for the
+        # temperature decision (folds into `_drive_step` on extraction).
+        escape_seq = self._stuck_escape_seq(events)
+        acted_since_escape = escape_seq is not None and any(
+            isinstance(e, ActionEvent) and e.seq is not None and e.seq > escape_seq
+            for e in events
+        )
+        in_escape = escape_seq is not None and not acted_since_escape
+        escape_temp = _STUCK_ESCAPE_TEMP if in_escape else None
+        # Withhold the meta/handoff virtuals until this session's first
+        # real action (see _tools_for_step docstring — Phase-B re-run #4).
+        fresh_session = (
+            self.mode != OperatingMode.PLANNING
+            and self._actions_since_last_resume(events) == 0
+        )
+        try:
+            attempts = 0
+            requery_count = 0
+            transient_messages: list[LLMMessage] = []
+            while True:
+                try:
+                    # Apply transient messages (requery-outside-log, Rung 6)
+                    # to the View if we're in a retry loop.
+                    current_view = view
+                    if transient_messages:
+                        current_view = view.model_copy(update={
+                            "messages": view.messages + transient_messages
+                        })
+
+                    step = await self.agent.step(
+                        current_view,
+                        self._tools_for_step(suppress_meta_tools=fresh_session),
+                        mode=self.mode,
+                        overflow_signal=self._overflow_signal(events),
+                        on_stream=self._build_stream_hook(),
+                        temperature=escape_temp,
+                        assist=self._assist,
+                        # F5: thread the repair-attempt counter (1 = first
+                        # try; incremented on transient-retry / requery).
+                        # The OpenAI provider reads `req.attempt >= 2` to
+                        # force `enable_thinking=False`. assist-OFF is
+                        # untouched (the provider's gate ignores the field
+                        # when req.assist is False).
+                        attempt=attempts + 1,
+                    )
+
+                    # Rung 7: Invalid-tool reroute (weak-model FC kit).
+                    # Valid JSON but unknown tool name -> if we haven't
+                    # hit the requery bound, inject a hint and retry
+                    # without persisting the failure to the store.
+                    # The requery applies ONLY to names absent from the
+                    # FULL tool registry (truly unknown), never to
+                    # known-but-currently-withheld tools.
+                    all_known_names = self._known_tool_names_for_requery()
+
+                    if step.tool_call and step.tool_call.tool_name not in all_known_names:
+                        # A tool whose NAME alone trips the confirm policy's
+                        # security gate (publish/deploy/release — it leaves the
+                        # blast radius) must NOT be bounced back to the model by
+                        # the unknown-tool requery: an unregistered publish-class
+                        # name is a real publish intent that has to reach the
+                        # human confirm gate, not a hallucination to retry.
+                        # Without this the requery swallowed `deploy_site` before
+                        # BlastRadiusConfirm's publish guard could pause for
+                        # confirmation — then the plan read "done" with nothing
+                        # executed and the execution-finish gate spun forever
+                        # (the confirm/reject livelock root cause).
+                        _gbn = getattr(self.policy, "gates_by_name", None)
+                        _name_gated = callable(_gbn) and _gbn(
+                            step.tool_call.tool_name
+                        )
+                        if not _name_gated and requery_count < 2:
+                            requery_count += 1
+                            _LOG.info(
+                                f"Unknown tool {step.tool_call.tool_name}, requerying..."
+                            )
+                            offered_tools = self._tools_for_step(
+                                suppress_meta_tools=fresh_session
+                            )
+                            offered_names = {t.name for t in offered_tools}
+                            # Mirror the assistant's turn so the next call's
+                            # messages list stays balanced for pairing.
+                            transient_messages.append(
+                                LLMMessage(
+                                    role="assistant",
+                                    content=step.thought,
+                                    tool_calls=[
+                                        {
+                                            "id": step.tool_call.call_id,
+                                            "name": step.tool_call.tool_name,
+                                            "arguments": step.tool_call.arguments,
+                                        }
+                                    ],
+                                )
+                            )
+                            # F2 / T9 (assist-gated): when self._assist is on, append
+                            # a "did you mean <name>?" suggestion computed by
+                            # Levenshtein distance over the offered tool names.
+                            # The existing Rung-7 hint and requery bound (cap=2)
+                            # are reused — no new reroute path, no new cap.
+                            # Assist OFF (capable-model default) leaves the hint
+                            # byte-identical to today.
+                            _hint = self._unknown_tool_requery_hint(
+                                step.tool_call.tool_name, offered_names
+                            )
+                            transient_messages.append(
+                                LLMMessage(
+                                    role="user",
+                                    content=_hint,
+                                )
+                            )
+                            continue
+
+                    break  # Step is valid or requeries exhausted
+                except LLMContextWindowExceeded:
+                    raise  # handled by view-materialization hard-reset (§8)
+                except LLMTransientError:
+                    if attempts < len(_DRIVER_RETRY_BACKOFFS_S):
+                        await _sleep(_DRIVER_RETRY_BACKOFFS_S[attempts])
+                        attempts += 1
+                        continue
+                    else:
+                        await self._emit(
+                            MessageEvent(
+                                source=EventSource.ENVIRONMENT,
+                                message=LLMMessage(
+                                    role="user",
+                                    content=(
+                                        "model driver unavailable — conversation"
+                                        " paused, resume when the model is back"
+                                    ),
+                                ),
+                            )
+                        )
+                        await self._emit(
+                            StatusEvent(
+                                status=ConversationStatus.PAUSED,
+                                detail="driver-unavailable",
+                            )
+                        )
+                        return None, Disp.HALT
+                except LLMError as e:
+                    # DEFECT-6: Provider 4xx "rejected request" must not be
+                    # terminal; enter requery path with a hint.
+                    if requery_count < 2:
+                        requery_count += 1
+                        _LOG.warning(f"Provider rejected request: {e}, requerying...")
+                        transient_messages.append(LLMMessage(
+                            role="user",
+                            content=(
+                                f"The provider rejected the previous request: {e}. "
+                                "Please adjust your response (check tool names, "
+                                "JSON structure, or parameters) and try again."
+                            )
+                        ))
+                        continue
+                    raise
+        except LLMContextWindowExceeded:
+            if await self._hard_reset(await self._events()):
+                return None, Disp.CONTINUE
+            await self._emit(
+                ErrorEvent(code="context_window", detail="hard reset made no progress")
+            )
+            return None, Disp.HALT
+        except LLMError as e:
+            # REACTIVE error surfacing: the driver model's call failed (the
+            # provider rejected the input, refused, auth/transient exhausted,
+            # or the assignment was bad). Do NOT swallow it or flatten it into
+            # a generic failure — surface the provider's real content to the
+            # UI via ErrorEvent.detail (the agent server streams every event
+            # to the client). This is conversation-fatal: the brain itself
+            # failed, so there is no observation to feed back. The typed
+            # classification (the exception class) is preserved in the detail.
+            await self._emit(ErrorEvent(code="model_error", detail=_describe_llm_error(e)))
+            return None, Disp.HALT
+        return step, Disp.FALLTHROUGH
+
     async def run(self) -> ConversationState:
         """Drive until a terminal-for-now status. Idempotent to call again after
         a pause/confirmation. [CONTRACT] returns the resulting ConversationState."""
@@ -3749,187 +3941,10 @@ class AgentLoop:
                 # (d) build the model-facing View, condensing if triggered (§8)
                 view = await self._materialize_view(events)
 
-                # (e) ask the agent for ONE action (principle 1). The visible tool
-                # set is mode-scoped: while PLANNING the agent sees ONLY the plan
-                # tool (so it can't act before approval); while executing it sees
-                # everything except the plan tool.
-                # Escape temperature: jitter HARD to break a self-imitation chain —
-                # the single step right after a stuck reframe (StuckDetector's escape).
-                # escape_seq/acted_since_escape are pure functions of `events`
-                # (the stuck gate recomputes its own copy); recompute here for the
-                # temperature decision (folds into `_drive_step` on extraction).
-                escape_seq = self._stuck_escape_seq(events)
-                acted_since_escape = escape_seq is not None and any(
-                    isinstance(e, ActionEvent) and e.seq is not None and e.seq > escape_seq
-                    for e in events
-                )
-                in_escape = escape_seq is not None and not acted_since_escape
-                escape_temp = _STUCK_ESCAPE_TEMP if in_escape else None
-                # Withhold the meta/handoff virtuals until this session's first
-                # real action (see _tools_for_step docstring — Phase-B re-run #4).
-                fresh_session = (
-                    self.mode != OperatingMode.PLANNING
-                    and self._actions_since_last_resume(events) == 0
-                )
-                try:
-                    attempts = 0
-                    requery_count = 0
-                    transient_messages: list[LLMMessage] = []
-                    while True:
-                        try:
-                            # Apply transient messages (requery-outside-log, Rung 6)
-                            # to the View if we're in a retry loop.
-                            current_view = view
-                            if transient_messages:
-                                current_view = view.model_copy(update={
-                                    "messages": view.messages + transient_messages
-                                })
-
-                            step = await self.agent.step(
-                                current_view,
-                                self._tools_for_step(suppress_meta_tools=fresh_session),
-                                mode=self.mode,
-                                overflow_signal=self._overflow_signal(events),
-                                on_stream=self._build_stream_hook(),
-                                temperature=escape_temp,
-                                assist=self._assist,
-                                # F5: thread the repair-attempt counter (1 = first
-                                # try; incremented on transient-retry / requery).
-                                # The OpenAI provider reads `req.attempt >= 2` to
-                                # force `enable_thinking=False`. assist-OFF is
-                                # untouched (the provider's gate ignores the field
-                                # when req.assist is False).
-                                attempt=attempts + 1,
-                            )
-
-                            # Rung 7: Invalid-tool reroute (weak-model FC kit).
-                            # Valid JSON but unknown tool name -> if we haven't
-                            # hit the requery bound, inject a hint and retry
-                            # without persisting the failure to the store.
-                            # The requery applies ONLY to names absent from the
-                            # FULL tool registry (truly unknown), never to
-                            # known-but-currently-withheld tools.
-                            all_known_names = self._known_tool_names_for_requery()
-
-                            if step.tool_call and step.tool_call.tool_name not in all_known_names:
-                                # A tool whose NAME alone trips the confirm policy's
-                                # security gate (publish/deploy/release — it leaves the
-                                # blast radius) must NOT be bounced back to the model by
-                                # the unknown-tool requery: an unregistered publish-class
-                                # name is a real publish intent that has to reach the
-                                # human confirm gate, not a hallucination to retry.
-                                # Without this the requery swallowed `deploy_site` before
-                                # BlastRadiusConfirm's publish guard could pause for
-                                # confirmation — then the plan read "done" with nothing
-                                # executed and the execution-finish gate spun forever
-                                # (the confirm/reject livelock root cause).
-                                _gbn = getattr(self.policy, "gates_by_name", None)
-                                _name_gated = callable(_gbn) and _gbn(
-                                    step.tool_call.tool_name
-                                )
-                                if not _name_gated and requery_count < 2:
-                                    requery_count += 1
-                                    _LOG.info(
-                                        f"Unknown tool {step.tool_call.tool_name}, requerying..."
-                                    )
-                                    offered_tools = self._tools_for_step(
-                                        suppress_meta_tools=fresh_session
-                                    )
-                                    offered_names = {t.name for t in offered_tools}
-                                    # Mirror the assistant's turn so the next call's
-                                    # messages list stays balanced for pairing.
-                                    transient_messages.append(
-                                        LLMMessage(
-                                            role="assistant",
-                                            content=step.thought,
-                                            tool_calls=[
-                                                {
-                                                    "id": step.tool_call.call_id,
-                                                    "name": step.tool_call.tool_name,
-                                                    "arguments": step.tool_call.arguments,
-                                                }
-                                            ],
-                                        )
-                                    )
-                                    # F2 / T9 (assist-gated): when self._assist is on, append
-                                    # a "did you mean <name>?" suggestion computed by
-                                    # Levenshtein distance over the offered tool names.
-                                    # The existing Rung-7 hint and requery bound (cap=2)
-                                    # are reused — no new reroute path, no new cap.
-                                    # Assist OFF (capable-model default) leaves the hint
-                                    # byte-identical to today.
-                                    _hint = self._unknown_tool_requery_hint(
-                                        step.tool_call.tool_name, offered_names
-                                    )
-                                    transient_messages.append(
-                                        LLMMessage(
-                                            role="user",
-                                            content=_hint,
-                                        )
-                                    )
-                                    continue
-
-                            break  # Step is valid or requeries exhausted
-                        except LLMContextWindowExceeded:
-                            raise  # handled by view-materialization hard-reset (§8)
-                        except LLMTransientError:
-                            if attempts < len(_DRIVER_RETRY_BACKOFFS_S):
-                                await _sleep(_DRIVER_RETRY_BACKOFFS_S[attempts])
-                                attempts += 1
-                                continue
-                            else:
-                                await self._emit(
-                                    MessageEvent(
-                                        source=EventSource.ENVIRONMENT,
-                                        message=LLMMessage(
-                                            role="user",
-                                            content=(
-                                                "model driver unavailable — conversation"
-                                                " paused, resume when the model is back"
-                                            ),
-                                        ),
-                                    )
-                                )
-                                await self._emit(
-                                    StatusEvent(
-                                        status=ConversationStatus.PAUSED,
-                                        detail="driver-unavailable",
-                                    )
-                                )
-                                return await self.get_state()
-                        except LLMError as e:
-                            # DEFECT-6: Provider 4xx "rejected request" must not be
-                            # terminal; enter requery path with a hint.
-                            if requery_count < 2:
-                                requery_count += 1
-                                _LOG.warning(f"Provider rejected request: {e}, requerying...")
-                                transient_messages.append(LLMMessage(
-                                    role="user",
-                                    content=(
-                                        f"The provider rejected the previous request: {e}. "
-                                        "Please adjust your response (check tool names, "
-                                        "JSON structure, or parameters) and try again."
-                                    )
-                                ))
-                                continue
-                            raise
-                except LLMContextWindowExceeded:
-                    if await self._hard_reset(await self._events()):
-                        continue  # retry the step on the condensed view
-                    await self._emit(
-                        ErrorEvent(code="context_window", detail="hard reset made no progress")
-                    )
-                    return await self.get_state()
-                except LLMError as e:
-                    # REACTIVE error surfacing: the driver model's call failed (the
-                    # provider rejected the input, refused, auth/transient exhausted,
-                    # or the assignment was bad). Do NOT swallow it or flatten it into
-                    # a generic failure — surface the provider's real content to the
-                    # UI via ErrorEvent.detail (the agent server streams every event
-                    # to the client). This is conversation-fatal: the brain itself
-                    # failed, so there is no observation to feed back. The typed
-                    # classification (the exception class) is preserved in the detail.
-                    await self._emit(ErrorEvent(code="model_error", detail=_describe_llm_error(e)))
+                step, disp = await self._drive_step(view, events)
+                if disp is Disp.CONTINUE:
+                    continue
+                if disp is Disp.HALT:
                     return await self.get_state()
 
                 # (e.4) TURN-TAKING NORMALIZATION (GAP B fix). Completion is now
