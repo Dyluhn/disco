@@ -3195,6 +3195,60 @@ class AgentLoop:
             return Disp.HALT
         return Disp.CONTINUE
 
+    async def _gate_f4_bootstrap(self, events: list[Event]) -> list[Event]:
+        # F4 — gated bootstrap observation. On the first model turn
+        # of a session (no real actions yet, in execution mode) and
+        # with assist=ON, emit a one-shot <system-reminder> listing
+        # the build/test/entry commands detected from workspace
+        # manifests (package.json, pyproject.toml, Makefile,
+        # Cargo.toml, go.mod). The observation is gated THREE ways:
+        #
+        #   * self._assist — capable-model default keeps the path
+        #     byte-identical to today (the function below is never
+        #     called);
+        #   * not self._bootstrap_emitted — fires EXACTLY once per
+        #     conversation; a resume/steer is a clean slate for the
+        #     agent's state but the model already saw the bootstrap
+        #     in turn 1, so re-emitting it would be a redundant
+        #     context cost;
+        #   * _actions_since_last_resume(events) == 0 — turn-1
+        #     detection. Same predicate `fresh_session` uses a few
+        #     lines down. If the model has already taken a real
+        #     action we are past turn 1 and the hint is no longer
+        #     load-bearing.
+        #
+        # We re-poll events after the emit so the (d) view
+        # materialization below includes the bootstrap on the
+        # very first step. The detector itself is a pure function
+        # over manifest files; it never raises, never blocks.
+        if (
+            self._assist
+            and not self._bootstrap_emitted
+            and self.mode != OperatingMode.PLANNING
+            and self._actions_since_last_resume(events) == 0
+        ):
+            _sbx = getattr(self.executor, "sandbox", None)
+            _workspace = (
+                getattr(_sbx, "workspace_path", None) if _sbx is not None else None
+            )
+            _bootstrap = (
+                _detect_project_bootstrap(_workspace) if _workspace else None
+            )
+            if _bootstrap:
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(role="user", content=_bootstrap),
+                    )
+                )
+                events = await self._events()  # include the bootstrap in (d)'s view
+            # Mark fired regardless of whether anything was detected
+            # (an empty workspace is a valid one-time fact too — the
+            # detector ran, there was nothing to surface, we don't
+            # re-run on later turns).
+            self._bootstrap_emitted = True
+        return events
+
     async def run(self) -> ConversationState:
         """Drive until a terminal-for-now status. Idempotent to call again after
         a pause/confirmation. [CONTRACT] returns the resulting ConversationState."""
@@ -3327,57 +3381,7 @@ class AgentLoop:
                 # itself on `take_recovered_memory_facts`).
                 await self._drain_recovered_memory_facts()
 
-                # F4 — gated bootstrap observation. On the first model turn
-                # of a session (no real actions yet, in execution mode) and
-                # with assist=ON, emit a one-shot <system-reminder> listing
-                # the build/test/entry commands detected from workspace
-                # manifests (package.json, pyproject.toml, Makefile,
-                # Cargo.toml, go.mod). The observation is gated THREE ways:
-                #
-                #   * self._assist — capable-model default keeps the path
-                #     byte-identical to today (the function below is never
-                #     called);
-                #   * not self._bootstrap_emitted — fires EXACTLY once per
-                #     conversation; a resume/steer is a clean slate for the
-                #     agent's state but the model already saw the bootstrap
-                #     in turn 1, so re-emitting it would be a redundant
-                #     context cost;
-                #   * _actions_since_last_resume(events) == 0 — turn-1
-                #     detection. Same predicate `fresh_session` uses a few
-                #     lines down. If the model has already taken a real
-                #     action we are past turn 1 and the hint is no longer
-                #     load-bearing.
-                #
-                # We re-poll events after the emit so the (d) view
-                # materialization below includes the bootstrap on the
-                # very first step. The detector itself is a pure function
-                # over manifest files; it never raises, never blocks.
-                if (
-                    self._assist
-                    and not self._bootstrap_emitted
-                    and self.mode != OperatingMode.PLANNING
-                    and self._actions_since_last_resume(events) == 0
-                ):
-                    _sbx = getattr(self.executor, "sandbox", None)
-                    _workspace = (
-                        getattr(_sbx, "workspace_path", None) if _sbx is not None else None
-                    )
-                    _bootstrap = (
-                        _detect_project_bootstrap(_workspace) if _workspace else None
-                    )
-                    if _bootstrap:
-                        await self._emit(
-                            MessageEvent(
-                                source=EventSource.ENVIRONMENT,
-                                message=LLMMessage(role="user", content=_bootstrap),
-                            )
-                        )
-                        events = await self._events()  # include the bootstrap in (d)'s view
-                    # Mark fired regardless of whether anything was detected
-                    # (an empty workspace is a valid one-time fact too — the
-                    # detector ran, there was nothing to surface, we don't
-                    # re-run on later turns).
-                    self._bootstrap_emitted = True
+                events = await self._gate_f4_bootstrap(events)
 
                 # HS-03 — scheduled facts re-grounding (assist-tier only).
                 # On the post-resume one-shot AND on a cadence boundary
