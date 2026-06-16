@@ -43,6 +43,7 @@ from .config_state import (
     ConfigState,
     ConfigValidationError,
 )
+from .routes import make_health_router
 
 _OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 
@@ -80,9 +81,7 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
         allow_headers=["*"],
     )
 
-    @app.get("/api/health")
-    async def health() -> dict:
-        return {"status": "ok", "service": "app-server"}
+    app.include_router(make_health_router())
 
     # ---- models + assignments (the absolute, manual model story) ------------
 
