@@ -244,3 +244,30 @@ def test_permission_error_emits_unreadable_note():
     assert "[unreadable: permission: secret.py]" in content
     assert "[file gone: secret.py]" not in content
     assert "[binary omitted: secret.py]" not in content
+
+
+# ---- 7. Preamble contains silent-context instruction + existing guidance -----
+
+
+def test_preamble_contains_silent_context_instruction_and_existing_guidance():
+    """The snapshot preamble must tell the model NOT to narrate or acknowledge
+    the block, and must still contain the #28 anti-clobber guidance (the
+    'authoritative' / 'trust THIS' / 'file_write' / 'AVOID line-number edits'
+    lines that the weak-model-reliability fix depends on)."""
+    sandbox = FakeSandboxInstance(files={"app.py": b"x = 1\n"})
+    content = _snapshot_text(sandbox, ["app.py"])
+    assert content is not None
+
+    # New: don't-narrate instruction must be present
+    assert "SILENT CONTEXT" in content, "preamble must include SILENT CONTEXT marker"
+    assert "do NOT" in content or "Do NOT" in content, (
+        "preamble must instruct the model not to narrate the snapshot"
+    )
+
+    # Existing #28 anti-clobber lines must remain intact
+    assert "authoritative" in content, "preamble must still say 'authoritative'"
+    assert "trust THIS" in content, "preamble must still say 'trust THIS over your memory'"
+    assert "file_write" in content, "preamble must still reference file_write"
+    assert "AVOID line-number edits" in content, (
+        "preamble must still contain the AVOID line-number edits warning"
+    )

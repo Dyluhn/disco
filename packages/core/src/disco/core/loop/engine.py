@@ -2879,7 +2879,11 @@ class AgentLoop:
             "expected and good. AVOID line-number edits (`file_replace_lines` / "
             "`file_insert_lines`) for these changes: line numbers shift as you edit "
             "and a wrong range silently deletes code — a whole-file `file_write` "
-            "based on the content below cannot miscount.\n\n"
+            "based on the content below cannot miscount.\n"
+            "**SILENT CONTEXT** — use this block without narrating it. Do NOT "
+            "acknowledge the snapshot in your reply (no 'I can see the files', "
+            "'the workspace shows…', 'good, the content is here', etc.). "
+            "Just continue the work.\n\n"
         )
         blocks: list[str] = []
         # E4 (T8) — per-file notes appended to the trailing omitted-notice.
