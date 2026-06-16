@@ -4237,6 +4237,254 @@ class AgentLoop:
             # Reset the nudge counter and fall through to the normal action path.
         return Disp.FALLTHROUGH
 
+    async def _gate_execution_nudge(self, step: AgentStep, events: list[Event]) -> Disp:
+        # PLAN-MODE EXECUTION GATE — a forcing function, NOT a prompt. If
+        # the loop is in execution mode (planning_tools configured) and the
+        # agent declares "done" without any productive action since plan
+        # approval, refuse the finish: append an IMPLICIT system-reminder
+        # and re-enter the loop. No cap — the reminder keeps firing as long
+        # as the agent tries to walk away without acting. The loop's own
+        # max_iterations + the user's kill switch are the ultimate exits.
+        if (
+            self._planning_tools  # plan-first lifecycle is configured
+            and self.mode != OperatingMode.PLANNING  # we're executing
+            and not self._productive_action_since_approval(events)
+        ):
+            self._execution_nudges += 1  # telemetry
+            # Surface the model's reasoning before nudging (don't
+            # discard it) — mirror the plan-nudge sibling.
+            if step.thought.strip():
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.AGENT,
+                        message=LLMMessage(
+                            role="assistant", content=step.thought
+                        ),
+                    )
+                )
+            else:
+                # An empty finish-step persists nothing, so it's
+                # invisible to every event-derived detector; the
+                # instance counter has to carry it (the (g) no-op
+                # path does the same).
+                self._invisible_steps += 1
+            await self._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(role="user", content=_EXECUTION_NUDGE),
+                )
+            )
+            # BACKSTOP (was missing — the confirm/reject livelock's
+            # second defect): route through the shared actionless
+            # valve. A nudge-only turn emits no ActionEvent, so
+            # `iteration`/max_iterations NEVER advances on it — the
+            # old "max_iterations is the ultimate exit" claim was
+            # false and a model that declared done without ever
+            # acting spun here forever. The valve now lands it
+            # cleanly (FINISHED/PAUSED:noop_limit) after
+            # `_max_consecutive_noops` actionless turns; a model that
+            # recovers and acts resets the streak (engine §h).
+            if await self._post_noop_valve() is Disp.HALT:
+                return Disp.HALT
+            return Disp.CONTINUE
+        return Disp.FALLTHROUGH
+
+    async def _gate_browser_verify(self, step: AgentStep, events: list[Event]) -> Disp:
+        # BROWSER-VERIFY GATE — §BP-05. If web deliverable holds, refuse finish
+        # until a clean browser observation (zero console errors) exists
+        # since the last state-changing edit.
+        if (
+            self._planning_tools
+            and self.mode != OperatingMode.PLANNING
+            and _is_web_deliverable(events)
+        ):
+            since_seq = _last_productive_seq(events)
+            ok, _ = _browser_verified(events, since_seq)
+            # Messaging reads the FULL history: a post-browse edit
+            # invalidates the verification but not what was seen.
+            first_error = _latest_browser_error(events)
+            if ok:
+                self._browser_verify_refusals = 0  # reset on clean pass
+            elif self._browser_verify_refusals < 3:
+                self._browser_verify_refusals += 1
+                if first_error:
+                    # Variant (2): quote the error
+                    nudge = (
+                        "Before finishing: verify your app the way a user would. "
+                        "Use the browser tool to navigate to http://127.0.0.1:8000/, "
+                        "read the CONSOLE output, and fix any errors you see. "
+                        f"The last load had errors: {first_error}"
+                    )
+                else:
+                    # Variant (1): verbatim from order
+                    nudge = (
+                        "Before finishing: verify your app the way a user would. "
+                        "Use the browser tool to navigate to http://127.0.0.1:8000/, "
+                        "read the CONSOLE output, and fix any errors you see. "
+                        "Finish only after a clean load."
+                    )
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(role="user", content=nudge),
+                    )
+                )
+                return Disp.CONTINUE
+            else:
+                # 3-refusal release valve (3): allow but warn visibly
+                warn_msg = (
+                    "⚠ finished WITHOUT a clean browser verification — "
+                    f"last console errors: {first_error or 'none seen'}"
+                )
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(role="user", content=warn_msg),
+                    )
+                )
+        return Disp.FALLTHROUGH
+
+    async def _finalize_finish(
+        self, step: AgentStep, state: ConversationState, events: list[Event]
+    ) -> Disp:
+        if await self._stop_allowed(state, events):
+            # Record the agent's final message (the answer) before
+            # finishing — the deliverable text belongs on the log, not
+            # discarded on the finish signal. (When the model just
+            # answers a question, this IS the response the UI renders.)
+            if step.thought.strip():
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.AGENT,
+                        message=LLMMessage(role="assistant", content=step.thought),
+                    )
+                )
+            # AUTO-CONTINUE GATE — when the agent declares finished
+            # but the plan still has incomplete steps, DO NOT land
+            # in STUCK and freeze. The user shouldn't have to poke
+            # the loop to keep going. Instead, inject a continuation
+            # prompt and re-run automatically, up to AUTO_CONTINUE_CAP
+            # times per user message. Only after the cap (typically
+            # 3) do we fall through to FINISHED with a "soft" detail
+            # so the user sees a clean ending rather than a freeze.
+            #
+            # The cap resets when the user sends a new message —
+            # each fresh prompt gets its own auto-continue budget.
+            incomplete, missing = self._plan_is_incomplete(events)
+            if incomplete:
+                attempts = self._auto_continue_attempts(events)
+                if attempts < self._auto_continue_cap:
+                    await self._emit(
+                        MessageEvent(
+                            source=EventSource.ENVIRONMENT,
+                            message=LLMMessage(
+                                role="user",
+                                content=(
+                                    "<system-reminder>\n"
+                                    "You declared the work finished, but plan "
+                                    f"steps {missing} are not yet marked done. "
+                                    "Keep working: either complete the remaining "
+                                    "steps and mark them via "
+                                    "plan_step(idx, 'done'), OR — if a step is "
+                                    "structurally wrong now — call "
+                                    "propose_plan_update to revise the plan. "
+                                    "Do not declare finished again until every "
+                                    "step is marked done. The user will see this "
+                                    "as the agent automatically continuing.\n"
+                                    "</system-reminder>"
+                                ),
+                            ),
+                        )
+                    )
+                    await self._emit(
+                        StatusEvent(
+                            status=ConversationStatus.RUNNING,
+                            detail=f"auto_continue:plan_incomplete:{attempts + 1}",
+                        )
+                    )
+                    return Disp.CONTINUE
+                # Cap hit. Land FINISHED with a "partial" detail
+                # rather than STUCK; the user sees a clean ending
+                # and can steer if more work is needed. STUCK is
+                # reserved for genuine confusion (stuck detector),
+                # not for "model couldn't quite finish the bookkeeping".
+                actions_since = self._actions_since_last_resume(events)
+                if actions_since == 0:
+                    await self._emit(
+                        MessageEvent(
+                            source=EventSource.ENVIRONMENT,
+                            message=LLMMessage(
+                                role="user",
+                                content=(
+                                    "<system-reminder>\n⚠ finishing was"
+                                    " blocked: plan steps remain undone and"
+                                    " no work happened in this run segment."
+                                    "\n</system-reminder>"
+                                ),
+                            )
+                        )
+                    )
+                    await self._emit(
+                        StatusEvent(
+                            status=ConversationStatus.PAUSED,
+                            detail="partial_plan",
+                        )
+                    )
+                else:
+                    await self._emit(
+                        MessageEvent(
+                            source=EventSource.ENVIRONMENT,
+                            message=LLMMessage(
+                                role="user",
+                                content=(
+                                    "<system-reminder>\n"
+                                    f"After {self._auto_continue_cap} auto-continues, "
+                                    f"plan steps {missing} are still not marked done. "
+                                    "Landing the run as FINISHED with partial-plan "
+                                    "detail — the user can review and steer if more "
+                                    "work is needed.\n"
+                                    "</system-reminder>"
+                                ),
+                            ),
+                        )
+                    )
+                    await self._emit(
+                        StatusEvent(
+                            status=ConversationStatus.FINISHED,
+                            detail="partial_plan",
+                        )
+                    )
+                return Disp.HALT
+            await self._emit(StatusEvent(status=ConversationStatus.FINISHED))
+            return Disp.HALT
+        await self._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(role="user", content=self._veto_feedback),
+            )
+        )
+        return Disp.CONTINUE
+
+    async def _handle_finish_path(
+        self, step: AgentStep, state: ConversationState, events: list[Event]
+    ) -> Disp:
+        disp = await self._gate_execution_nudge(step, events)
+        if disp is Disp.CONTINUE:
+            return Disp.CONTINUE
+        if disp is Disp.HALT:
+            return Disp.HALT
+
+        disp = await self._gate_browser_verify(step, events)
+        if disp is Disp.CONTINUE:
+            return Disp.CONTINUE
+
+        disp = await self._finalize_finish(step, state, events)
+        if disp is Disp.CONTINUE:
+            return Disp.CONTINUE
+        if disp is Disp.HALT:
+            return Disp.HALT
+        return Disp.FALLTHROUGH
+
     async def run(self) -> ConversationState:
         """Drive until a terminal-for-now status. Idempotent to call again after
         a pause/confirmation. [CONTRACT] returns the resulting ConversationState."""
@@ -4502,226 +4750,11 @@ class AgentLoop:
 
                 # (f) finish path — subject to stop-hook veto (§7.4)
                 if step.finished and step.tool_call is None:
-                    # PLAN-MODE EXECUTION GATE — a forcing function, NOT a prompt. If
-                    # the loop is in execution mode (planning_tools configured) and the
-                    # agent declares "done" without any productive action since plan
-                    # approval, refuse the finish: append an IMPLICIT system-reminder
-                    # and re-enter the loop. No cap — the reminder keeps firing as long
-                    # as the agent tries to walk away without acting. The loop's own
-                    # max_iterations + the user's kill switch are the ultimate exits.
-                    if (
-                        self._planning_tools  # plan-first lifecycle is configured
-                        and self.mode != OperatingMode.PLANNING  # we're executing
-                        and not self._productive_action_since_approval(events)
-                    ):
-                        self._execution_nudges += 1  # telemetry
-                        # Surface the model's reasoning before nudging (don't
-                        # discard it) — mirror the plan-nudge sibling.
-                        if step.thought.strip():
-                            await self._emit(
-                                MessageEvent(
-                                    source=EventSource.AGENT,
-                                    message=LLMMessage(
-                                        role="assistant", content=step.thought
-                                    ),
-                                )
-                            )
-                        else:
-                            # An empty finish-step persists nothing, so it's
-                            # invisible to every event-derived detector; the
-                            # instance counter has to carry it (the (g) no-op
-                            # path does the same).
-                            self._invisible_steps += 1
-                        await self._emit(
-                            MessageEvent(
-                                source=EventSource.ENVIRONMENT,
-                                message=LLMMessage(role="user", content=_EXECUTION_NUDGE),
-                            )
-                        )
-                        # BACKSTOP (was missing — the confirm/reject livelock's
-                        # second defect): route through the shared actionless
-                        # valve. A nudge-only turn emits no ActionEvent, so
-                        # `iteration`/max_iterations NEVER advances on it — the
-                        # old "max_iterations is the ultimate exit" claim was
-                        # false and a model that declared done without ever
-                        # acting spun here forever. The valve now lands it
-                        # cleanly (FINISHED/PAUSED:noop_limit) after
-                        # `_max_consecutive_noops` actionless turns; a model that
-                        # recovers and acts resets the streak (engine §h).
-                        if await self._post_noop_valve() is Disp.HALT:
-                            return await self.get_state()
+                    disp = await self._handle_finish_path(step, state, events)
+                    if disp is Disp.CONTINUE:
                         continue
-
-                    # BROWSER-VERIFY GATE — §BP-05. If web deliverable holds, refuse finish
-                    # until a clean browser observation (zero console errors) exists
-                    # since the last state-changing edit.
-                    if (
-                        self._planning_tools
-                        and self.mode != OperatingMode.PLANNING
-                        and _is_web_deliverable(events)
-                    ):
-                        since_seq = _last_productive_seq(events)
-                        ok, _ = _browser_verified(events, since_seq)
-                        # Messaging reads the FULL history: a post-browse edit
-                        # invalidates the verification but not what was seen.
-                        first_error = _latest_browser_error(events)
-                        if ok:
-                            self._browser_verify_refusals = 0  # reset on clean pass
-                        elif self._browser_verify_refusals < 3:
-                            self._browser_verify_refusals += 1
-                            if first_error:
-                                # Variant (2): quote the error
-                                nudge = (
-                                    "Before finishing: verify your app the way a user would. "
-                                    "Use the browser tool to navigate to http://127.0.0.1:8000/, "
-                                    "read the CONSOLE output, and fix any errors you see. "
-                                    f"The last load had errors: {first_error}"
-                                )
-                            else:
-                                # Variant (1): verbatim from order
-                                nudge = (
-                                    "Before finishing: verify your app the way a user would. "
-                                    "Use the browser tool to navigate to http://127.0.0.1:8000/, "
-                                    "read the CONSOLE output, and fix any errors you see. "
-                                    "Finish only after a clean load."
-                                )
-                            await self._emit(
-                                MessageEvent(
-                                    source=EventSource.ENVIRONMENT,
-                                    message=LLMMessage(role="user", content=nudge),
-                                )
-                            )
-                            continue
-                        else:
-                            # 3-refusal release valve (3): allow but warn visibly
-                            warn_msg = (
-                                "⚠ finished WITHOUT a clean browser verification — "
-                                f"last console errors: {first_error or 'none seen'}"
-                            )
-                            await self._emit(
-                                MessageEvent(
-                                    source=EventSource.ENVIRONMENT,
-                                    message=LLMMessage(role="user", content=warn_msg),
-                                )
-                            )
-
-                    if await self._stop_allowed(state, events):
-                        # Record the agent's final message (the answer) before
-                        # finishing — the deliverable text belongs on the log, not
-                        # discarded on the finish signal. (When the model just
-                        # answers a question, this IS the response the UI renders.)
-                        if step.thought.strip():
-                            await self._emit(
-                                MessageEvent(
-                                    source=EventSource.AGENT,
-                                    message=LLMMessage(role="assistant", content=step.thought),
-                                )
-                            )
-                        # AUTO-CONTINUE GATE — when the agent declares finished
-                        # but the plan still has incomplete steps, DO NOT land
-                        # in STUCK and freeze. The user shouldn't have to poke
-                        # the loop to keep going. Instead, inject a continuation
-                        # prompt and re-run automatically, up to AUTO_CONTINUE_CAP
-                        # times per user message. Only after the cap (typically
-                        # 3) do we fall through to FINISHED with a "soft" detail
-                        # so the user sees a clean ending rather than a freeze.
-                        #
-                        # The cap resets when the user sends a new message —
-                        # each fresh prompt gets its own auto-continue budget.
-                        incomplete, missing = self._plan_is_incomplete(events)
-                        if incomplete:
-                            attempts = self._auto_continue_attempts(events)
-                            if attempts < self._auto_continue_cap:
-                                await self._emit(
-                                    MessageEvent(
-                                        source=EventSource.ENVIRONMENT,
-                                        message=LLMMessage(
-                                            role="user",
-                                            content=(
-                                                "<system-reminder>\n"
-                                                "You declared the work finished, but plan "
-                                                f"steps {missing} are not yet marked done. "
-                                                "Keep working: either complete the remaining "
-                                                "steps and mark them via "
-                                                "plan_step(idx, 'done'), OR — if a step is "
-                                                "structurally wrong now — call "
-                                                "propose_plan_update to revise the plan. "
-                                                "Do not declare finished again until every "
-                                                "step is marked done. The user will see this "
-                                                "as the agent automatically continuing.\n"
-                                                "</system-reminder>"
-                                            ),
-                                        ),
-                                    )
-                                )
-                                await self._emit(
-                                    StatusEvent(
-                                        status=ConversationStatus.RUNNING,
-                                        detail=f"auto_continue:plan_incomplete:{attempts + 1}",
-                                    )
-                                )
-                                continue  # back to the loop's top — keep going
-                            # Cap hit. Land FINISHED with a "partial" detail
-                            # rather than STUCK; the user sees a clean ending
-                            # and can steer if more work is needed. STUCK is
-                            # reserved for genuine confusion (stuck detector),
-                            # not for "model couldn't quite finish the bookkeeping".
-                            actions_since = self._actions_since_last_resume(events)
-                            if actions_since == 0:
-                                await self._emit(
-                                    MessageEvent(
-                                        source=EventSource.ENVIRONMENT,
-                                        message=LLMMessage(
-                                            role="user",
-                                            content=(
-                                                "<system-reminder>\n⚠ finishing was"
-                                                " blocked: plan steps remain undone and"
-                                                " no work happened in this run segment."
-                                                "\n</system-reminder>"
-                                            ),
-                                        )
-                                    )
-                                )
-                                await self._emit(
-                                    StatusEvent(
-                                        status=ConversationStatus.PAUSED,
-                                        detail="partial_plan",
-                                    )
-                                )
-                            else:
-                                await self._emit(
-                                    MessageEvent(
-                                        source=EventSource.ENVIRONMENT,
-                                        message=LLMMessage(
-                                            role="user",
-                                            content=(
-                                                "<system-reminder>\n"
-                                                f"After {self._auto_continue_cap} auto-continues, "
-                                                f"plan steps {missing} are still not marked done. "
-                                                "Landing the run as FINISHED with partial-plan "
-                                                "detail — the user can review and steer if more "
-                                                "work is needed.\n"
-                                                "</system-reminder>"
-                                            ),
-                                        ),
-                                    )
-                                )
-                                await self._emit(
-                                    StatusEvent(
-                                        status=ConversationStatus.FINISHED,
-                                        detail="partial_plan",
-                                    )
-                                )
-                            return await self.get_state()
-                        await self._emit(StatusEvent(status=ConversationStatus.FINISHED))
+                    if disp is Disp.HALT:
                         return await self.get_state()
-                    await self._emit(
-                        MessageEvent(
-                            source=EventSource.ENVIRONMENT,
-                            message=LLMMessage(role="user", content=self._veto_feedback),
-                        )
-                    )
-                    continue
 
                 # (g) no-op step (thought only) — record and continue. GAP B
                 # backstop: a tool-less prose turn emits a MessageEvent (not an
