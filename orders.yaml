@@ -894,3 +894,29 @@ fix-e-settingskey: committed
   - frontend/src/components/settings/OpenRouterSection.tsx
   - frontend/src/api/models.ts
   - agent-projects/worker/fix-e-settingskey-report.md
+
+# --- backlog verification campaign (2026-06-16) — READ-ONLY audit ---
+verify-a: done
+  - agent-projects/worker/verify-a-report.md
+verify-b: done
+  - agent-projects/worker/verify-b-report.md
+verify-c1: done
+  - agent-projects/worker/verify-c1-report.md
+verify-c2: done
+  - agent-projects/worker/verify-c2-report.md
+verify-d: done
+  - agent-projects/worker/verify-d-report.md
+verify-e: done
+  - agent-projects/worker/verify-e-report.md
+verify-f: done
+  - agent-projects/worker/verify-f-report.md
+
+# --- god-file decomposition via MiniMax (2026-06-16), file-disjoint pure moves ---
+decomp-runtime-probe: in-flight
+  - packages/agent-server/src/disco/agent_server/runtime.py
+  - packages/agent-server/src/disco/agent_server/runtime_model_probe.py
+  - agent-projects/worker/decomp-runtime-probe-report.md
+decomp-dod-util: in-flight
+  - packages/core/src/disco/core/dod_evaluator.py
+  - packages/core/src/disco/core/dod_util.py
+  - agent-projects/worker/decomp-dod-util-report.md

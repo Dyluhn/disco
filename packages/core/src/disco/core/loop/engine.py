@@ -773,9 +773,6 @@ class AgentLoop:
     async def _write_pmx_memory_fact(self, scope: str, fact: str) -> None:
         await self._recit.write_pmx_memory_fact(scope, fact)
 
-    async def _drain_recovered_memory_facts(self) -> int:
-        return await self._recit.drain_recovered_memory_facts()
-
     # ---- execute-and-observe (§4.1) -----------------------------------------
 
     async def _execute_and_observe(self, action: ActionEvent) -> None:
@@ -814,16 +811,6 @@ class AgentLoop:
         """Delegates to Valve.post_noop_valve (self._valve). Called by FinishGate
         and the planning-mode gate."""
         return await self._valve.post_noop_valve()
-
-    async def _drive_step(self, view: View, events: list[Event]) -> tuple[AgentStep | None, Disp]:
-        """Delegates to Driver.drive_step (self._driver)."""
-        return await self._driver.drive_step(view, events)
-
-    async def _normalize_finish_step(
-        self, step: AgentStep, events: list[Event]
-    ) -> tuple[AgentStep, Disp]:
-        """Delegates to FinishGate.normalize_finish_step (the run() finish intercept)."""
-        return await self._finish.normalize_finish_step(step, events)
 
     async def _gate_planning_mode(self, step: AgentStep, events: list[Event]) -> Disp:
         # (e.5) PLAN GATE — in PLANNING mode the planner has THREE valid moves:
@@ -890,12 +877,6 @@ class AgentLoop:
             # tc is a planning-allowed read tool — productive exploration.
             # Reset the nudge counter and fall through to the normal action path.
         return Disp.FALLTHROUGH
-
-    async def _handle_finish_path(
-        self, step: AgentStep, state: ConversationState, events: list[Event]
-    ) -> Disp:
-        """Delegates to FinishGate.handle_finish_path (the run() finish path)."""
-        return await self._finish.handle_finish_path(step, state, events)
 
     async def _gate_hard_deny(self, action: ActionEvent) -> Disp:
         # (h.5) HARD DENY (Cluster 3) — catastrophic commands are refused
@@ -1104,7 +1085,7 @@ class AgentLoop:
                 # KnowledgeEvents, restoring the View to match the surviving
                 # on-disk mirror. Runs once per recreate (the session drains
                 # itself on `take_recovered_memory_facts`).
-                await self._drain_recovered_memory_facts()
+                await self._recit.drain_recovered_memory_facts()
 
                 events = await self._valve.gate_f4_bootstrap(events)
 
@@ -1135,7 +1116,7 @@ class AgentLoop:
                 # (d) build the model-facing View, condensing if triggered (§8)
                 view = await self._materialize_view(events)
 
-                step, disp = await self._drive_step(view, events)
+                step, disp = await self._driver.drive_step(view, events)
                 if disp is Disp.CONTINUE:
                     continue
                 if disp is Disp.HALT:
@@ -1171,7 +1152,7 @@ class AgentLoop:
                         return await self.get_state()
                     continue
                 if step.tool_call is not None and step.tool_call.tool_name == "finish":
-                    step, disp = await self._normalize_finish_step(step, events)
+                    step, disp = await self._finish.normalize_finish_step(step, events)
                     if disp is Disp.CONTINUE:
                         continue
 
@@ -1186,7 +1167,7 @@ class AgentLoop:
 
                 # (f) finish path — subject to stop-hook veto (§7.4)
                 if step.finished and step.tool_call is None:
-                    disp = await self._handle_finish_path(step, state, events)
+                    disp = await self._finish.handle_finish_path(step, state, events)
                     if disp is Disp.CONTINUE:
                         continue
                     if disp is Disp.HALT:
