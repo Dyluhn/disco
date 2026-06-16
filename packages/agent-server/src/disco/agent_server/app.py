@@ -611,42 +611,72 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
 
     # ---- Declared-artifact download (rp-11 residue) ---------------------------
 
-    # v1: spreadsheets only. The content-type is pinned to the extension (never
-    # sniffed) and served as an ATTACHMENT — we never parse or inline-render the
-    # bytes server-side, so an agent overwriting the declared file post-hoc can't
-    # turn this into a render/parse exploit.
+    # Content-type is pinned to the extension (never sniffed) and every type is
+    # served as an ATTACHMENT — we never parse or inline-render the bytes
+    # server-side, so an agent overwriting the declared file post-hoc can't turn
+    # this into a render/parse exploit.  Adding a new format here is safe as long
+    # as it stays an attachment (no inline rendering).
     _ARTIFACT_TYPES = {
         ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".pdf": "application/pdf",
+        ".html": "text/html; charset=utf-8",
+        ".md": "text/markdown; charset=utf-8",
+        ".mp3": "audio/mpeg",
+        ".wav": "audio/wav",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".csv": "text/csv; charset=utf-8",
     }
 
     async def _declared_artifacts(conversation_id: str) -> set[str]:
-        """The set of workspace-relative paths this conversation EMITTED as results —
-        a successful `sheet_generate` observation's filename, or a files-kind
-        DeliverableEvent path. The download jail: only emitted artifacts are
-        reachable, never arbitrary workspace paths (user code, secrets, uploads)."""
+        """The set of workspace-relative paths this conversation EMITTED as results.
+        The download jail: only emitted artifacts are reachable, never arbitrary
+        workspace paths (user code, secrets, uploads).
+
+        Sources collected per tool:
+          sheet_generate   — structured["filename"]
+          slides_generate  — structured["filename"]  (same key)
+          image_generate   — structured["path"]
+          audio_overview   — structured["mp3_path"] + structured["transcript_path"]
+          DeliverableEvent artifact_kind="files" — e.path
+        """
         out: set[str] = set()
         with contextlib.suppress(Exception):
             for e in await store.get_events(conversation_id):
                 if (
                     isinstance(e, ObservationEvent)
                     and e.tool_result.success
-                    and e.tool_result.tool_name == "sheet_generate"
                     and e.tool_result.structured
                 ):
-                    fn = e.tool_result.structured.get("filename")
-                    if isinstance(fn, str) and fn:
-                        out.add(posixpath.normpath(fn))
+                    tn = e.tool_result.tool_name
+                    s = e.tool_result.structured
+                    if tn in ("sheet_generate", "slides_generate"):
+                        fn = s.get("filename")
+                        if isinstance(fn, str) and fn:
+                            out.add(posixpath.normpath(fn))
+                    elif tn == "image_generate":
+                        p = s.get("path")
+                        if isinstance(p, str) and p:
+                            out.add(posixpath.normpath(p))
+                    elif tn == "audio_overview":
+                        for key in ("mp3_path", "transcript_path"):
+                            p = s.get(key)
+                            if isinstance(p, str) and p:
+                                out.add(posixpath.normpath(p))
                 elif isinstance(e, DeliverableEvent) and e.artifact_kind == "files":
                     out.add(posixpath.normpath(e.path))
         return out
 
     @app.get("/conversations/{conversation_id}/artifacts/{path:path}")
     async def artifact_file(conversation_id: str, path: str) -> Response:
-        """Download a generated artifact (v1: .xlsx) by its workspace-relative path.
+        """Download a generated artifact by its workspace-relative path.
         Jails: (1) the path must have been DECLARED as an artifact in the event log;
-        (2) extension allowlist; (3) traversal-normalized + host-path resolve-jail.
-        Reads the live sandbox first, falling back to the host ProjectStore snapshot
-        so a FINISHED run (no live session) still serves. 404 uniformly (no probe)."""
+        (2) extension allowlist (_ARTIFACT_TYPES); (3) traversal-normalized + host-path
+        resolve-jail.  Reads the live sandbox first, falling back to the host
+        ProjectStore snapshot so a FINISHED run (no live session) still serves.
+        404 uniformly on any rejection (no probe)."""
         norm = posixpath.normpath(path)
         if posixpath.isabs(norm) or norm.startswith(".."):
             raise HTTPException(status_code=404)
