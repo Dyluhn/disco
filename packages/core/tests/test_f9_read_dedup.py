@@ -65,7 +65,7 @@ from disco.core import (
     ToolResult,
 )
 from disco.core.llm import OperatingMode
-from disco.core.loop.engine import (
+from disco.core.loop.dedup import (
     _F9_ARG_SUMMARY_MAX_CHARS,
     _F9_POINTER_TEMPLATE,
     _F9_WINDOW_SIZE,

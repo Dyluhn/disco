@@ -50,7 +50,7 @@ from disco.core import (
     ToolResult,
 )
 from disco.core.llm import OperatingMode
-from disco.core.loop.engine import (
+from disco.core.loop.dedup import (
     _F8_PREFIX_CHARS,
     _F8_TRUNCATION_MARKER_TEMPLATE,
     _f8_confirmed_file_writes,
