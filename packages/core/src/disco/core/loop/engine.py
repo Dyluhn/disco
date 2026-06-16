@@ -3752,6 +3752,280 @@ class AgentLoop:
             return None, Disp.HALT
         return step, Disp.FALLTHROUGH
 
+    async def _handle_notify_user(self, step: AgentStep, events: list[Event]) -> Disp:
+        msg = str(step.tool_call.arguments.get("message") or "").strip() or step.thought
+        if msg.strip():
+            await self._emit(
+                MessageEvent(
+                    source=EventSource.AGENT,
+                    message=LLMMessage(role="assistant", content=msg),
+                )
+            )
+        else:
+            self._invisible_steps += 1
+        # Non-blocking, but NOT exempt from the actionless valve —
+        # a bare `continue` here let prose spam bypass every cap
+        # (Phase-B re-run, 2026-06-10).
+        if await self._post_noop_valve() is Disp.HALT:
+            return Disp.HALT
+        return Disp.CONTINUE
+
+    async def _handle_remember(self, step: AgentStep, events: list[Event]) -> Disp:
+        # Durable memory: emit a PINNED KnowledgeEvent so the fact
+        # survives condensation and is re-injected into context every
+        # step. Non-blocking — like notify_user, the agent keeps
+        # working right after. A blank fact is ignored (no-op).
+        #
+        # FRESH-SESSION BACKSTOP (Phase-B re-run #6, 2026-06-11):
+        # remember is withheld from the offered set until the
+        # session's first real action, but a weak model can
+        # hallucinate calls to unoffered tools — re-run #6's model
+        # remember-spammed duplicate CSV facts right after its
+        # first-move finish was refused. Unlike notify_user (which
+        # degrades into the bounded prose channel), an executed
+        # remember POLLUTES pinned knowledge and reads as success,
+        # so the model keeps picking it. Refuse with actionable
+        # feedback: pinned facts must come from THIS session's work.
+        if (
+            self.mode != OperatingMode.PLANNING
+            and self._actions_since_last_resume(events) == 0
+        ):
+            self._invisible_steps += 1
+            await self._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "remember refused: no real work has happened "
+                            "yet in this session. Facts worth pinning come "
+                            "from real observations — execute the next plan "
+                            "step with real tool calls first, then remember "
+                            "what you learned."
+                        ),
+                    ),
+                )
+            )
+            if await self._post_noop_valve() is Disp.HALT:
+                return Disp.HALT
+            return Disp.CONTINUE
+        fact = str(step.tool_call.arguments.get("fact") or "").strip()
+        if fact:
+            import hashlib
+            scope = str(step.tool_call.arguments.get("scope") or "").strip()
+            normalized = fact
+            fact_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+            seen = {
+                (e.scope, hashlib.sha256(e.snippet.strip().encode("utf-8")).hexdigest())
+                for e in events if isinstance(e, KnowledgeEvent)
+            }
+            if (scope, fact_hash) in seen:
+                action = ActionEvent(
+                    thought=step.thought,
+                    tool_call=step.tool_call,
+                    self_assessed_risk=step.self_assessed_risk,
+                    llm_response_id=step.llm_response_id,
+                )
+                res = ToolResult(
+                    call_id=step.tool_call.call_id,
+                    tool_name="remember",
+                    success=True,
+                    content="Already recorded — not stored again.",
+                )
+                await self._emit(action)
+                await self._emit(ObservationEvent(tool_result=res, action_id=action.id))
+            else:
+                await self._emit(
+                    KnowledgeEvent(source=EventSource.AGENT, scope=scope, snippet=fact)
+                )
+                # C5 — write-through mirror: persist the fact to
+                # `<workspace>/.pmx/MEMORY.md` so the standing
+                # memory survives a hard filesystem reset (a
+                # box wipe / fresh backend). The in-View
+                # KnowledgeEvent channel remains the
+                # authoritative in-session source — `.pmx/`
+                # is a write-through mirror, not a divergent
+                # second store. Best-effort: a sandbox write
+                # failure is logged but never blocks the
+                # in-View emission (the agent still has the
+                # fact in-context for THIS run).
+                try:
+                    await self._write_pmx_memory_fact(scope, fact)
+                except Exception:  # noqa: BLE001 — mirror is best-effort
+                    import logging as _logging
+                    _logging.getLogger(__name__).warning(
+                        "pmx MEMORY write-through failed (in-View fact survives)",
+                        exc_info=True,
+                    )
+        else:
+            # Blank fact persists NOTHING — count it or it's an
+            # unbounded silent token burn.
+            self._invisible_steps += 1
+        if await self._post_noop_valve() is Disp.HALT:
+            return Disp.HALT
+        return Disp.CONTINUE
+
+    async def _handle_serve(self, step: AgentStep, events: list[Event]) -> Disp:
+        # Finished-artifact HANDOFF: emit a DeliverableEvent the UI renders
+        # as Open-the-app / Download-the-files. Non-blocking — the agent
+        # serves, verifies, then finishes. A missing path/title or a
+        # re-serve of an already-handed-off artifact is ignored (no-op)
+        # rather than emitting a useless handoff — and every ignored
+        # form is COUNTED, because each is invisible in the event log
+        # and was the unbounded serve-spam vector (Phase-B, 2026-06-10).
+        #
+        # POST-RESUME SERVE GATE (Phase-B re-run #3, 2026-06-10): the
+        # model's FIRST post-resume turn was serve(path=".") on an empty
+        # restored workspace — a handoff with zero work behind it, which
+        # then seeded a prose/noop streak into the valve. A serve is only
+        # meaningful after at least one real action this session (since
+        # the last resume, or since start). Refuse with ACTIONABLE
+        # feedback (B4: the model must see why, or it just retries).
+        if self._actions_since_last_resume(events) == 0:
+            self._invisible_steps += 1
+            await self._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "serve refused: no real work has happened yet in "
+                            "this session — the sandbox is fresh and nothing "
+                            "is running. Execute the next plan step with real "
+                            "tool calls (write files, run commands, start your "
+                            "server), then serve the result."
+                        ),
+                    ),
+                )
+            )
+            if await self._post_noop_valve() is Disp.HALT:
+                return Disp.HALT
+            return Disp.CONTINUE
+        if not step.tool_call.arguments:
+            _LOG.debug("Skipping deliverable emission: empty payload from agent")
+            self._invisible_steps += 1
+        else:
+            title = str(step.tool_call.arguments.get("title") or "").strip()
+            path = str(step.tool_call.arguments.get("path") or "").strip()
+            kind = str(step.tool_call.arguments.get("kind") or "app").strip()
+            url = str(step.tool_call.arguments.get("url") or "").strip()
+            if kind not in ("app", "files"):
+                kind = "app"
+            if not (title and path):
+                self._invisible_steps += 1
+            elif any(
+                isinstance(e, DeliverableEvent)
+                and e.path == path
+                and e.artifact_kind == kind
+                for e in events
+            ):
+                # Same artifact already handed off — an identical
+                # card adds nothing for the user; re-emitting it is
+                # the few-shot spam prompt for the next one.
+                _LOG.debug("Skipping duplicate deliverable: %s (%s)", path, kind)
+                self._invisible_steps += 1
+            else:
+                await self._emit(
+                    DeliverableEvent(
+                        source=EventSource.AGENT,
+                        title=title,
+                        path=path,
+                        artifact_kind=kind,  # type: ignore[arg-type]
+                        deployment_url=url,
+                    )
+                )
+        if await self._post_noop_valve() is Disp.HALT:
+            return Disp.HALT
+        return Disp.CONTINUE
+
+    async def _handle_delegate_explore(self, step: AgentStep, events: list[Event]) -> Disp:
+        if self._fanout_count >= self._fanout_max:
+            # Cap exceeded — refuse with feedback. The cap is
+            # per-run-segment, so a fresh `run()` resets it.
+            # We do NOT raise / halt / STUCK (this is a soft
+            # "no more fan-outs this segment" gate, not a
+            # stuck-detector); we emit a system-reminder +
+            # ActionEvent + AgentErrorEvent (paired by
+            # call_id) so the driver sees the refusal on its
+            # next turn and falls back to direct tools. The
+            # refusal is invisible to the actionless valve
+            # (an error-paired action doesn't extend the
+            # noop streak).
+            action = ActionEvent(
+                thought=step.thought,
+                tool_call=step.tool_call,
+                self_assessed_risk=step.self_assessed_risk,
+                llm_response_id=step.llm_response_id,
+            )
+            await self._emit(action)
+            await self._emit(
+                AgentErrorEvent(
+                    error=(
+                        "<system-reminder>\n"
+                        f"delegate_explore refused: the per-run-segment "
+                        f"cap ({self._fanout_max}) has been reached "
+                        f"(used {self._fanout_count}/{self._fanout_max} "
+                        f"this segment). Fall back to direct read-only "
+                        f"tools (file_read, file_list, search, extract) "
+                        f"for the rest of this run segment; a fresh run "
+                        f"segment resets the budget.\n"
+                        "</system-reminder>"
+                    ),
+                    action_id=action.id,
+                    tool_call_id=(
+                        action.tool_call.call_id if action.tool_call else None
+                    ),
+                )
+            )
+            return Disp.CONTINUE
+        # Under the cap → record the proposed action, dispatch
+        # the helper, and fold the result back. The dispatch
+        # is `await`ed so the ActionEvent and ObservationEvent
+        # land in the same turn (the driver sees both on its
+        # next step).
+        self._fanout_count += 1
+        action = ActionEvent(
+            thought=step.thought,
+            tool_call=step.tool_call,
+            self_assessed_risk=step.self_assessed_risk,
+            llm_response_id=step.llm_response_id,
+        )
+        await self._emit(action)
+        # Length-bound the helper's input BEFORE dispatching —
+        # the bound is a property of the fan-out (regardless
+        # of what `_run_fanout` does — a test seam, a real
+        # LLM round-trip, a future override). Without this
+        # bound a driver could grow the helper's prompt
+        # unboundedly within a single segment; the result
+        # is folded back into the View, which the condenser
+        # would later have to manage.
+        _fanout_args = dict(action.tool_call.arguments or {})
+        _trunc_marker = "\u2026[truncated]"
+        for _k in ("question", "context"):
+            _v = str(_fanout_args.get(_k) or "")
+            if len(_v) > _FANOUT_INPUT_MAX_CHARS:
+                _fanout_args[_k] = (
+                    _v[: _FANOUT_INPUT_MAX_CHARS - len(_trunc_marker)]
+                    + _trunc_marker
+                )
+        result = await self._run_fanout(
+            _fanout_args,
+            events,
+            call_id=(
+                action.tool_call.call_id if action.tool_call else ""
+            ),
+        )
+        await self._emit(
+            ObservationEvent(tool_result=result, action_id=action.id)
+        )
+        # Fan-out is non-blocking — the driver keeps working
+        # right after. The actionless valve still applies if
+        # the helper returned empty (a degenerate fan-out is
+        # still a no-op step, like remember/serve).
+        if await self._post_noop_valve() is Disp.HALT:
+            return Disp.HALT
+        return Disp.CONTINUE
+
     async def run(self) -> ConversationState:
         """Drive until a terminal-for-now status. Idempotent to call again after
         a pause/confirmation. [CONTRACT] returns the resulting ConversationState."""
@@ -3958,188 +4232,17 @@ class AgentLoop:
                 #     finished, tool-less step so the existing finish-path gate
                 #     (stop-hook veto, plan-completeness, auto-continue) runs.
                 if step.tool_call is not None and step.tool_call.tool_name == "notify_user":
-                    msg = str(step.tool_call.arguments.get("message") or "").strip() or step.thought
-                    if msg.strip():
-                        await self._emit(
-                            MessageEvent(
-                                source=EventSource.AGENT,
-                                message=LLMMessage(role="assistant", content=msg),
-                            )
-                        )
-                    else:
-                        self._invisible_steps += 1
-                    # Non-blocking, but NOT exempt from the actionless valve —
-                    # a bare `continue` here let prose spam bypass every cap
-                    # (Phase-B re-run, 2026-06-10).
-                    if await self._post_noop_valve() is Disp.HALT:
+                    if await self._handle_notify_user(step, events) is Disp.HALT:
                         return await self.get_state()
-                    continue  # non-blocking — keep working
+                    continue
                 if step.tool_call is not None and step.tool_call.tool_name == "remember":
-                    # Durable memory: emit a PINNED KnowledgeEvent so the fact
-                    # survives condensation and is re-injected into context every
-                    # step. Non-blocking — like notify_user, the agent keeps
-                    # working right after. A blank fact is ignored (no-op).
-                    #
-                    # FRESH-SESSION BACKSTOP (Phase-B re-run #6, 2026-06-11):
-                    # remember is withheld from the offered set until the
-                    # session's first real action, but a weak model can
-                    # hallucinate calls to unoffered tools — re-run #6's model
-                    # remember-spammed duplicate CSV facts right after its
-                    # first-move finish was refused. Unlike notify_user (which
-                    # degrades into the bounded prose channel), an executed
-                    # remember POLLUTES pinned knowledge and reads as success,
-                    # so the model keeps picking it. Refuse with actionable
-                    # feedback: pinned facts must come from THIS session's work.
-                    if (
-                        self.mode != OperatingMode.PLANNING
-                        and self._actions_since_last_resume(events) == 0
-                    ):
-                        self._invisible_steps += 1
-                        await self._emit(
-                            MessageEvent(
-                                source=EventSource.ENVIRONMENT,
-                                message=LLMMessage(
-                                    role="user",
-                                    content=(
-                                        "remember refused: no real work has happened "
-                                        "yet in this session. Facts worth pinning come "
-                                        "from real observations — execute the next plan "
-                                        "step with real tool calls first, then remember "
-                                        "what you learned."
-                                    ),
-                                ),
-                            )
-                        )
-                        if await self._post_noop_valve() is Disp.HALT:
-                            return await self.get_state()
-                        continue  # non-blocking — let the model act on the feedback
-                    fact = str(step.tool_call.arguments.get("fact") or "").strip()
-                    if fact:
-                        import hashlib
-                        scope = str(step.tool_call.arguments.get("scope") or "").strip()
-                        normalized = fact
-                        fact_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-                        seen = {
-                            (e.scope, hashlib.sha256(e.snippet.strip().encode("utf-8")).hexdigest())
-                            for e in events if isinstance(e, KnowledgeEvent)
-                        }
-                        if (scope, fact_hash) in seen:
-                            action = ActionEvent(
-                                thought=step.thought,
-                                tool_call=step.tool_call,
-                                self_assessed_risk=step.self_assessed_risk,
-                                llm_response_id=step.llm_response_id,
-                            )
-                            res = ToolResult(
-                                call_id=step.tool_call.call_id,
-                                tool_name="remember",
-                                success=True,
-                                content="Already recorded — not stored again.",
-                            )
-                            await self._emit(action)
-                            await self._emit(ObservationEvent(tool_result=res, action_id=action.id))
-                        else:
-                            await self._emit(
-                                KnowledgeEvent(source=EventSource.AGENT, scope=scope, snippet=fact)
-                            )
-                            # C5 — write-through mirror: persist the fact to
-                            # `<workspace>/.pmx/MEMORY.md` so the standing
-                            # memory survives a hard filesystem reset (a
-                            # box wipe / fresh backend). The in-View
-                            # KnowledgeEvent channel remains the
-                            # authoritative in-session source — `.pmx/`
-                            # is a write-through mirror, not a divergent
-                            # second store. Best-effort: a sandbox write
-                            # failure is logged but never blocks the
-                            # in-View emission (the agent still has the
-                            # fact in-context for THIS run).
-                            try:
-                                await self._write_pmx_memory_fact(scope, fact)
-                            except Exception:  # noqa: BLE001 — mirror is best-effort
-                                import logging as _logging
-                                _logging.getLogger(__name__).warning(
-                                    "pmx MEMORY write-through failed (in-View fact survives)",
-                                    exc_info=True,
-                                )
-                    else:
-                        # Blank fact persists NOTHING — count it or it's an
-                        # unbounded silent token burn.
-                        self._invisible_steps += 1
-                    if await self._post_noop_valve() is Disp.HALT:
+                    if await self._handle_remember(step, events) is Disp.HALT:
                         return await self.get_state()
-                    continue  # non-blocking — keep working
+                    continue
                 if step.tool_call is not None and step.tool_call.tool_name == "serve":
-                    # Finished-artifact HANDOFF: emit a DeliverableEvent the UI renders
-                    # as Open-the-app / Download-the-files. Non-blocking — the agent
-                    # serves, verifies, then finishes. A missing path/title or a
-                    # re-serve of an already-handed-off artifact is ignored (no-op)
-                    # rather than emitting a useless handoff — and every ignored
-                    # form is COUNTED, because each is invisible in the event log
-                    # and was the unbounded serve-spam vector (Phase-B, 2026-06-10).
-                    #
-                    # POST-RESUME SERVE GATE (Phase-B re-run #3, 2026-06-10): the
-                    # model's FIRST post-resume turn was serve(path=".") on an empty
-                    # restored workspace — a handoff with zero work behind it, which
-                    # then seeded a prose/noop streak into the valve. A serve is only
-                    # meaningful after at least one real action this session (since
-                    # the last resume, or since start). Refuse with ACTIONABLE
-                    # feedback (B4: the model must see why, or it just retries).
-                    if self._actions_since_last_resume(events) == 0:
-                        self._invisible_steps += 1
-                        await self._emit(
-                            MessageEvent(
-                                source=EventSource.ENVIRONMENT,
-                                message=LLMMessage(
-                                    role="user",
-                                    content=(
-                                        "serve refused: no real work has happened yet in "
-                                        "this session — the sandbox is fresh and nothing "
-                                        "is running. Execute the next plan step with real "
-                                        "tool calls (write files, run commands, start your "
-                                        "server), then serve the result."
-                                    ),
-                                ),
-                            )
-                        )
-                        if await self._post_noop_valve() is Disp.HALT:
-                            return await self.get_state()
-                        continue  # non-blocking — let the model act on the feedback
-                    if not step.tool_call.arguments:
-                        _LOG.debug("Skipping deliverable emission: empty payload from agent")
-                        self._invisible_steps += 1
-                    else:
-                        title = str(step.tool_call.arguments.get("title") or "").strip()
-                        path = str(step.tool_call.arguments.get("path") or "").strip()
-                        kind = str(step.tool_call.arguments.get("kind") or "app").strip()
-                        url = str(step.tool_call.arguments.get("url") or "").strip()
-                        if kind not in ("app", "files"):
-                            kind = "app"
-                        if not (title and path):
-                            self._invisible_steps += 1
-                        elif any(
-                            isinstance(e, DeliverableEvent)
-                            and e.path == path
-                            and e.artifact_kind == kind
-                            for e in events
-                        ):
-                            # Same artifact already handed off — an identical
-                            # card adds nothing for the user; re-emitting it is
-                            # the few-shot spam prompt for the next one.
-                            _LOG.debug("Skipping duplicate deliverable: %s (%s)", path, kind)
-                            self._invisible_steps += 1
-                        else:
-                            await self._emit(
-                                DeliverableEvent(
-                                    source=EventSource.AGENT,
-                                    title=title,
-                                    path=path,
-                                    artifact_kind=kind,  # type: ignore[arg-type]
-                                    deployment_url=url,
-                                )
-                            )
-                    if await self._post_noop_valve() is Disp.HALT:
+                    if await self._handle_serve(step, events) is Disp.HALT:
                         return await self.get_state()
-                    continue  # non-blocking — keep working
+                    continue
                 # C20 — `delegate_explore`: a bounded, read-only Explore/Plan
                 # helper the loop dispatches+joins. The driver calls it; the
                 # loop:
@@ -4169,92 +4272,9 @@ class AgentLoop:
                     step.tool_call is not None
                     and step.tool_call.tool_name == "delegate_explore"
                 ):
-                    if self._fanout_count >= self._fanout_max:
-                        # Cap exceeded — refuse with feedback. The cap is
-                        # per-run-segment, so a fresh `run()` resets it.
-                        # We do NOT raise / halt / STUCK (this is a soft
-                        # "no more fan-outs this segment" gate, not a
-                        # stuck-detector); we emit a system-reminder +
-                        # ActionEvent + AgentErrorEvent (paired by
-                        # call_id) so the driver sees the refusal on its
-                        # next turn and falls back to direct tools. The
-                        # refusal is invisible to the actionless valve
-                        # (an error-paired action doesn't extend the
-                        # noop streak).
-                        action = ActionEvent(
-                            thought=step.thought,
-                            tool_call=step.tool_call,
-                            self_assessed_risk=step.self_assessed_risk,
-                            llm_response_id=step.llm_response_id,
-                        )
-                        await self._emit(action)
-                        await self._emit(
-                            AgentErrorEvent(
-                                error=(
-                                    "<system-reminder>\n"
-                                    f"delegate_explore refused: the per-run-segment "
-                                    f"cap ({self._fanout_max}) has been reached "
-                                    f"(used {self._fanout_count}/{self._fanout_max} "
-                                    f"this segment). Fall back to direct read-only "
-                                    f"tools (file_read, file_list, search, extract) "
-                                    f"for the rest of this run segment; a fresh run "
-                                    f"segment resets the budget.\n"
-                                    "</system-reminder>"
-                                ),
-                                action_id=action.id,
-                                tool_call_id=(
-                                    action.tool_call.call_id if action.tool_call else None
-                                ),
-                            )
-                        )
-                        continue  # non-blocking — let the model adapt
-                    # Under the cap → record the proposed action, dispatch
-                    # the helper, and fold the result back. The dispatch
-                    # is `await`ed so the ActionEvent and ObservationEvent
-                    # land in the same turn (the driver sees both on its
-                    # next step).
-                    self._fanout_count += 1
-                    action = ActionEvent(
-                        thought=step.thought,
-                        tool_call=step.tool_call,
-                        self_assessed_risk=step.self_assessed_risk,
-                        llm_response_id=step.llm_response_id,
-                    )
-                    await self._emit(action)
-                    # Length-bound the helper's input BEFORE dispatching —
-                    # the bound is a property of the fan-out (regardless
-                    # of what `_run_fanout` does — a test seam, a real
-                    # LLM round-trip, a future override). Without this
-                    # bound a driver could grow the helper's prompt
-                    # unboundedly within a single segment; the result
-                    # is folded back into the View, which the condenser
-                    # would later have to manage.
-                    _fanout_args = dict(action.tool_call.arguments or {})
-                    _trunc_marker = "\u2026[truncated]"
-                    for _k in ("question", "context"):
-                        _v = str(_fanout_args.get(_k) or "")
-                        if len(_v) > _FANOUT_INPUT_MAX_CHARS:
-                            _fanout_args[_k] = (
-                                _v[: _FANOUT_INPUT_MAX_CHARS - len(_trunc_marker)]
-                                + _trunc_marker
-                            )
-                    result = await self._run_fanout(
-                        _fanout_args,
-                        events,
-                        call_id=(
-                            action.tool_call.call_id if action.tool_call else ""
-                        ),
-                    )
-                    await self._emit(
-                        ObservationEvent(tool_result=result, action_id=action.id)
-                    )
-                    # Fan-out is non-blocking — the driver keeps working
-                    # right after. The actionless valve still applies if
-                    # the helper returned empty (a degenerate fan-out is
-                    # still a no-op step, like remember/serve).
-                    if await self._post_noop_valve() is Disp.HALT:
+                    if await self._handle_delegate_explore(step, events) is Disp.HALT:
                         return await self.get_state()
-                    continue  # non-blocking — keep working
+                    continue
                 if step.tool_call is not None and step.tool_call.tool_name == "finish":
                     # VERIFY-ON-FINISH (post-condition gate). If the agent attached
                     # a `verify` check to finish, RUN it first and refuse the finish
