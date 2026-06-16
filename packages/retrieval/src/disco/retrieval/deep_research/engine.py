@@ -458,9 +458,29 @@ class DeepResearchRun:
         await emit("phase", {"phase": "coherence"})
         summary = await coherence_pass(self._query, sections, router=self._router)
 
-        # ---- assemble: passages cited by some section (dedup) + all_hits ---
-        # Carried (resumed) passages first, then newly gathered, so a resumed run's
-        # citations resolve against the sources its earlier sections actually used.
+        return self._assemble_report(
+            sections=sections,
+            results=results,
+            carried_passages=carried_passages,
+            carried_hits=carried_hits,
+            summary=summary,
+            bounded_by=bounded_by,
+        )
+
+    def _assemble_report(
+        self,
+        *,
+        sections: list[ReportSection],
+        results: list[SubQuestionResult],
+        carried_passages: list[RetrievalPassage],
+        carried_hits: list[Any],
+        summary: str,
+        bounded_by: str | None,
+    ) -> ReportFromRun:
+        """Assemble the final report: collect the passages actually cited by some
+        section (deduped) and the deduped all_hits, then build the ReportFromRun.
+        Carried (resumed) passages/hits come first so a resumed run's citations
+        resolve against the sources its earlier sections actually used."""
         cited_ids: set[str] = set()
         for s in sections:
             cited_ids.update(s.cited_passage_ids)
