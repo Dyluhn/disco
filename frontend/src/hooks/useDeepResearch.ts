@@ -32,13 +32,24 @@ import {
 
 type Tier = "quick" | "standard_deep" | "exhaustive";
 
-export function useDeepResearch(resumeCid?: string | null) {
+export function useDeepResearch(
+  resumeCid?: string | null,
+  initialLeaderId?: string | null,
+) {
   // No localStorage auto-restore: a fresh surface starts EMPTY (compose). An
   // existing run is reached as a server resource via History (/deep/:cid), not a
   // client stash — so selecting the scope can never re-attach/trap you.
   const [session, setSession] = useState<DeepResearchSession | null>(null);
-  const [leaderId, setLeaderId] = useState<string | null>(null);
+  // fix-c #2: seed from the parent ResearchSurface's leader pick so a
+  // search → deep-research switch carries the model the user just chose
+  // (otherwise the leader pill reset to the default and the submit re-routed
+  // the run to a different model silently).
+  const [leaderId, setLeaderId] = useState<string | null>(initialLeaderId ?? null);
   const [depthTier, setDepthTier] = useState<Tier>("standard_deep");
+  // fix-c #4: PDF/DOCX export runs on the server (WeasyPrint / pandoc) and can
+  // take seconds — without a pending signal the button looked dead. MD stays
+  // synchronous (client-side blob) so it never sets this.
+  const [exportPending, setExportPending] = useState<ReportExportFmt | null>(null);
   const stream = useDeepResearchStream(session);
 
   // Recover the real query from replayed events (resume path).
@@ -77,6 +88,27 @@ export function useDeepResearch(resumeCid?: string | null) {
       );
     },
     [create, leaderId, depthTier],
+  );
+
+  // fix-c #5: the bounded-by "Run on exhaustive tier" button used to call
+  // setDepthTier("exhaustive") then submit() in the same tick — but submit is
+  // a useCallback closed over the OLD depthTier, so the POST raced the state
+  // update and re-ran at the same bounded tier. This callback takes the tier
+  // as a direct argument so it never closes over depthTier.
+  const runExhaustive = useCallback(
+    (query: string) => {
+      const q = query.trim();
+      if (!q) return;
+      setDepthTier("exhaustive");
+      create.mutate(
+        { query: q, leaderId, depthTier: "exhaustive" },
+        {
+          onSuccess: (cid) =>
+            setSession({ cid, query: q, depthTier: "exhaustive", kick: true }),
+        },
+      );
+    },
+    [create, leaderId],
   );
 
   // Stop = pause (cooperative; the engine halts at the next checkpoint and keeps
@@ -118,7 +150,16 @@ export function useDeepResearch(resumeCid?: string | null) {
         return;
       }
       // Server-side export for pdf/docx. The UI reports errors via toast/surface.
-      await exportReportApi(session.cid, fmt);
+      // fix-c #4: mark pending around the await so the top-bar button can show
+      // a spinner + disable itself (mirrors the ExportModal pattern in
+      // NeedMoreCard — those buttons would deadlock-looking because the
+      // server call takes seconds).
+      setExportPending(fmt);
+      try {
+        await exportReportApi(session.cid, fmt);
+      } finally {
+        setExportPending(null);
+      }
     },
     [session?.cid, exportMd],
   );
@@ -149,12 +190,17 @@ export function useDeepResearch(resumeCid?: string | null) {
     depthTier,
     setDepthTier,
     submit,
+    runExhaustive,
     stop,
     kill,
     retry,
     reset,
     exportReport,
     exportReportByFmt,
+    /** fix-c #4: which export (if any) is currently in-flight on the server.
+     *  null when idle. The surface uses this to disable + spin the matching
+     *  top-bar button. MD is excluded (synchronous). */
+    exportPending,
     ...stream,
     // A failed create was silent (empty state, no message). Expose it to the UI.
     submitError: create.error ?? null,

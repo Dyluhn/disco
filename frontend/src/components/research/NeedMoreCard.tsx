@@ -426,10 +426,9 @@ function AudioSection({ cid }: AudioSectionProps) {
           Try again
         </button>
       </div>
-      <p className="font-ui text-[0.72rem] text-text-faint/80" role="note">
-        The research surface has no audio endpoint yet (stub:{" "}
-        <span className="font-mono">{audio.reason}</span>).
-      </p>
+      {/* fix-c #7: the audio endpoint is real now — the previous "(stub: …)"
+          note was stale and dishonest. The typed reason above is the honest
+          signal; no second line needed. */}
     </div>
   );
 }

@@ -20,6 +20,11 @@ interface Props {
   think?: boolean;
   onThinkChange?: (next: boolean) => void;
   showControls?: boolean;
+  /** Optional content rendered inside the card, after the controls row (fix-c
+   *  #3). Lets callers put secondary controls (e.g. the depth-tier selector +
+   *  hint) INSIDE the card border with the submit button, instead of as a
+   *  sibling <div> floating below it. */
+  footer?: React.ReactNode;
 }
 
 /**
@@ -41,6 +46,7 @@ export function QueryInput({
   think = false,
   onThinkChange,
   showControls = true,
+  footer,
 }: Props) {
   const [value, setValue] = useState("");
   const canSend = !!value.trim() && !busy;
@@ -102,6 +108,12 @@ export function QueryInput({
           <ArrowUp className="size-4" aria-hidden />
         </button>
       </div>
+
+      {/* Caller-supplied footer slot (fix-c #3). Sits INSIDE the card, after
+          the controls row, so secondary selectors (e.g. depth tier) belong to
+          the same visual unit as the submit button — not a stray sibling
+          <div> below the card border. */}
+      {footer}
     </form>
   );
 }

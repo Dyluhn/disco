@@ -35,7 +35,10 @@ export function ResearchSurface() {
   // return MUST sit after all hook calls — moving it above the useCallback
   // breaks the rules of hooks and remounts the tree blank.
   if (scope === "deep_research") {
-    return <DeepResearchSurface onScopeChange={setScope} />;
+    // fix-c #2: forward the leader-pick from the standard scope — without it,
+    // switching search→deep-research silently dropped the user-selected model
+    // and the deep surface fell back to the default.
+    return <DeepResearchSurface onScopeChange={setScope} initialLeaderId={leaderId} />;
   }
 
   const clusterProps = {

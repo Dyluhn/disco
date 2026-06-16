@@ -75,7 +75,11 @@ describe("Deep Research surface — full lifecycle", () => {
     expect(
       within(gate).getByText(/Which solid-state battery products/i),
     ).toBeInTheDocument();
-    expect(within(gate).getByRole("button", { name: /approve & build/i })).toBeEnabled();
+    // fix-c #1: the research surface now passes approveLabel="Approve research
+    // plan" to PlanPanel — the build surface still uses the default
+    // "Approve & build". This test renders the RESEARCH surface so we assert
+    // the research-surface label.
+    expect(within(gate).getByRole("button", { name: /approve research plan/i })).toBeEnabled();
     expect(within(gate).getByRole("button", { name: /revise/i })).toBeEnabled();
   });
 
@@ -87,8 +91,8 @@ describe("Deep Research surface — full lifecycle", () => {
       "what is the current state of solid-state battery commercialization?",
     );
     await user.keyboard("{Enter}");
-    await waitFor(() => screen.getByRole("button", { name: /approve & build/i }), { timeout: 5000 });
-    await user.click(screen.getByRole("button", { name: /approve & build/i }));
+    await waitFor(() => screen.getByRole("button", { name: /approve research plan/i }), { timeout: 5000 });
+    await user.click(screen.getByRole("button", { name: /approve research plan/i }));
 
     // wait for the bounded notice to appear (it only renders after ReportEvent
     // arrives → confirms the report has been emitted + reduced into state).

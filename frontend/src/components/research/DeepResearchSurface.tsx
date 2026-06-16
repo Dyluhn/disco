@@ -25,7 +25,7 @@
  * subscription, the Build status state machine.
  */
 
-import { Ban, File, FileText, FileType, Play, RotateCcw, Settings as SettingsIcon, Square } from "lucide-react";
+import { Ban, File, FileText, FileType, Loader2, Play, RotateCcw, Settings as SettingsIcon, Square } from "lucide-react";
 import { Link } from "react-router-dom";
 import { PlanPanel } from "@/components/build/PlanPanel";
 import { useDeepResearch } from "@/hooks/useDeepResearch";
@@ -47,6 +47,10 @@ interface Props {
    *  picks "Standard" mid-surface, the parent re-renders with the standard
    *  scope and Deep Research unmounts cleanly. */
   onScopeChange?: (next: ScopeId) => void;
+  /** Leader-model override carried in from the parent ResearchSurface. Without
+   *  it, switching search → deep-research silently dropped the user-selected
+   *  model (fix-c #2). Defaults to null = "use Settings default". */
+  initialLeaderId?: string | null;
 }
 
 const CTRL_BTN =
@@ -58,8 +62,8 @@ const KILL_BTN =
 // not-allowed cursor), never a click that silently errors. NO FALSE AFFORDANCES.
 const PENDING_BTN =
   "flex items-center gap-hair rounded-control border border-hairline border-dashed px-inline py-hair font-ui text-[0.78rem] text-text-faint opacity-50 cursor-not-allowed";
-export function DeepResearchSurface({ resumeCid, onScopeChange }: Props) {
-  const r = useDeepResearch(resumeCid);
+export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId }: Props) {
+  const r = useDeepResearch(resumeCid, initialLeaderId);
   const started = r.started;
   // RP-07: PDF/DOCX run in the agent-server (weasyprint / pandoc). The buttons are
   // gated on the REAL server capability — never a clickable button that 500s. MD
@@ -83,13 +87,18 @@ export function DeepResearchSurface({ resumeCid, onScopeChange }: Props) {
               onScopeChange={onScopeChange ?? (() => {})}
               think={false}
               onThinkChange={() => {}}
+              footer={
+                // fix-c #3: depth selector + hint now sit INSIDE the input
+                // card (via QueryInput's `footer` slot), not as a sibling
+                // <div> floating below the card border.
+                <div className="flex items-center justify-between gap-inline">
+                  <DepthTierSelector value={r.depthTier as Tier} onChange={r.setDepthTier} />
+                  <p className="font-ui text-[0.74rem] text-text-faint">
+                    Deep runs take minutes. The leader pill picks the driver model.
+                  </p>
+                </div>
+              }
             />
-            <div className="flex items-center justify-between gap-inline">
-              <DepthTierSelector value={r.depthTier as Tier} onChange={r.setDepthTier} />
-              <p className="font-ui text-[0.74rem] text-text-faint">
-                Deep runs take minutes. The leader pill picks the driver model.
-              </p>
-            </div>
             {r.submitError && (
               <p role="alert" className="font-ui text-[0.8rem] text-unsupported">
                 {r.submitError instanceof Error
@@ -109,12 +118,12 @@ export function DeepResearchSurface({ resumeCid, onScopeChange }: Props) {
         {/* Header row: H1 + actions */}
         <header className="flex flex-wrap items-baseline justify-between gap-inline border-b border-hairline pb-section">
           <h1 className="font-display text-[1.9rem] font-medium leading-tight tracking-tight text-text">
+            {/* fix-c #6: the title is the REAL query, no "(resumed)" suffix.
+                On a resumed run the query is recovered from the replayed
+                ReportEvent / first user MessageEvent by the hook — the bare
+                "(resumed)" sentinel stays internal to useDeepResearch and
+                must NOT leak into the H1 (it isn't a real title). */}
             {r.query}
-            {r.resumed && r.queryResolved && (
-              <span className="ml-2 align-middle font-ui text-[0.75rem] font-normal text-text-faint">
-                (resumed)
-              </span>
-            )}
           </h1>
           <div className="flex items-center gap-inline">
             {/* While running: Stop (pause, keeps partial) + Kill (end, final). */}
@@ -164,8 +173,12 @@ export function DeepResearchSurface({ resumeCid, onScopeChange }: Props) {
                 <button
                   type="button"
                   onClick={() => r.exportReportByFmt("pdf")}
-                  disabled={!exportCaps.pdf}
-                  aria-disabled={!exportCaps.pdf}
+                  // fix-c #4: disable while in-flight so a second click can't
+                  // double-fire the server export; the icon swaps to a spinner
+                  // when this fmt is the active pending one. Mirrors the
+                  // ExportModal pattern in NeedMoreCard.
+                  disabled={!exportCaps.pdf || r.exportPending !== null}
+                  aria-disabled={!exportCaps.pdf || r.exportPending !== null}
                   className={exportCaps.pdf ? CTRL_BTN : PENDING_BTN}
                   title={
                     exportCaps.pdf
@@ -173,14 +186,18 @@ export function DeepResearchSurface({ resumeCid, onScopeChange }: Props) {
                       : "PDF export unavailable — the server has no WeasyPrint"
                   }
                 >
-                  <FileType className="size-3.5" aria-hidden />
+                  {r.exportPending === "pdf" ? (
+                    <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                  ) : (
+                    <FileType className="size-3.5" aria-hidden />
+                  )}
                   PDF
                 </button>
                 <button
                   type="button"
                   onClick={() => r.exportReportByFmt("docx")}
-                  disabled={!exportCaps.docx}
-                  aria-disabled={!exportCaps.docx}
+                  disabled={!exportCaps.docx || r.exportPending !== null}
+                  aria-disabled={!exportCaps.docx || r.exportPending !== null}
                   className={exportCaps.docx ? CTRL_BTN : PENDING_BTN}
                   title={
                     exportCaps.docx
@@ -188,7 +205,11 @@ export function DeepResearchSurface({ resumeCid, onScopeChange }: Props) {
                       : "DOCX export unavailable — the server has no pandoc"
                   }
                 >
-                  <File className="size-3.5" aria-hidden />
+                  {r.exportPending === "docx" ? (
+                    <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                  ) : (
+                    <File className="size-3.5" aria-hidden />
+                  )}
                   DOCX
                 </button>
                 {!(exportCaps.pdf && exportCaps.docx) && (
@@ -232,6 +253,10 @@ export function DeepResearchSurface({ resumeCid, onScopeChange }: Props) {
             progress={r.progress}
             onApprove={r.approvePlan}
             onRevise={r.requestPlan}
+            // fix-c #1: the shared PlanPanel defaults its approve button to
+            // "Approve & build" (build surface). On deep research the same
+            // gate means something different — override.
+            approveLabel="Approve research plan"
           />
         )}
 
@@ -255,10 +280,10 @@ export function DeepResearchSurface({ resumeCid, onScopeChange }: Props) {
               r.report.depth_tier === "exhaustive"
                 ? undefined
                 : () => {
-                    // Set the tier and resubmit. The current cid is left in
-                    // history; a fresh run goes deeper.
-                    r.setDepthTier("exhaustive");
-                    if (r.query) r.submit(r.query);
+                    // fix-c #5: use the dedicated callback — set-then-submit
+                    // closed over the OLD depthTier and re-ran at the same
+                    // bounded tier. runExhaustive takes the tier directly.
+                    if (r.query) r.runExhaustive(r.query);
                   }
             }
           />

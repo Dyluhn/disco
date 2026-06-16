@@ -121,7 +121,7 @@ describe("DeepResearchSurface — resume path", () => {
     expect(heading.textContent?.trim()).not.toBe("(resumed)");
   });
 
-  it("appends a '(resumed)' badge after the real title, not instead of it", async () => {
+  it("title is the clean real query on a resumed run (no '(resumed)' suffix)", async () => {
     renderResumeSurface();
 
     const heading = await waitFor(
@@ -133,9 +133,11 @@ describe("DeepResearchSurface — resume path", () => {
       { timeout: 3000 },
     );
 
-    // The heading should also carry the resumed marker
-    expect(heading).toHaveTextContent("(resumed)");
-    // But the REAL_QUERY must still be present alongside it
-    expect(heading).toHaveTextContent(REAL_QUERY);
+    // fix-c #6: the "(resumed)" sentinel was a hook internal — it must NOT
+    // leak into the H1 title. The title is just the real query text, full
+    // stop. The real-query recovery from the replayed ReportEvent is what
+    // proves the resume path is wired.
+    expect(heading.textContent?.trim()).toBe(REAL_QUERY);
+    expect(heading.textContent?.trim()).not.toMatch(/resumed/i);
   });
 });

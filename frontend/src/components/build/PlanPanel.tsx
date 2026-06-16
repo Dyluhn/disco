@@ -32,12 +32,18 @@ export function PlanPanel({
   progress,
   onApprove,
   onRevise,
+  approveLabel,
 }: {
   plan: PlanView;
   progress: Map<number, StepState>;
   /** Gate mode: present only while awaiting approval. Omit for the read-only tracker. */
   onApprove?: () => void;
   onRevise?: (text: string) => void;
+  /** Override the approve button label. Defaults to "Approve & build" — the
+   *  build surface keeps that; the research surface overrides to
+   *  "Approve research plan" (fix-c #1 — build & research gates share a panel
+   *  but mean different things; the button text must reflect which). */
+  approveLabel?: string;
 }) {
   const [revising, setRevising] = useState(false);
   const [text, setText] = useState("");
@@ -181,7 +187,7 @@ export function PlanPanel({
                 onClick={onApprove}
                 className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90"
               >
-                Approve &amp; build
+                {approveLabel ?? "Approve & build"}
               </button>
             </div>
           )}
