@@ -3190,6 +3190,20 @@ class AgentLoop:
 
     # ---- the run loop (§4) --------------------------------------------------
 
+    async def _refuse_fresh_session(self, step: AgentStep, msg: str) -> Disp:
+        """Shared fresh-session refusal: a virtual tool (remember / serve / ask /
+        propose_plan_update) was called before any real action this session.
+        Count the invisible step, surface actionable feedback, and route through
+        the actionless valve. Returns HALT if the valve trips, else CONTINUE."""
+        self._invisible_steps += 1
+        await self._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(role="user", content=msg),
+            )
+        )
+        return await self._post_noop_valve()
+
     async def _post_noop_valve(self) -> Disp:
         """Shared actionless-valve tail for the non-blocking virtual-tool arms
         (notify_user / remember / serve / delegate_explore / plan-nudge /
@@ -3790,25 +3804,14 @@ class AgentLoop:
             self.mode != OperatingMode.PLANNING
             and self._actions_since_last_resume(events) == 0
         ):
-            self._invisible_steps += 1
-            await self._emit(
-                MessageEvent(
-                    source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(
-                        role="user",
-                        content=(
-                            "remember refused: no real work has happened "
-                            "yet in this session. Facts worth pinning come "
-                            "from real observations — execute the next plan "
-                            "step with real tool calls first, then remember "
-                            "what you learned."
-                        ),
-                    ),
-                )
+            return await self._refuse_fresh_session(
+                step,
+                "remember refused: no real work has happened "
+                "yet in this session. Facts worth pinning come "
+                "from real observations — execute the next plan "
+                "step with real tool calls first, then remember "
+                "what you learned.",
             )
-            if await self._post_noop_valve() is Disp.HALT:
-                return Disp.HALT
-            return Disp.CONTINUE
         fact = str(step.tool_call.arguments.get("fact") or "").strip()
         if fact:
             import hashlib
@@ -3882,25 +3885,14 @@ class AgentLoop:
         # the last resume, or since start). Refuse with ACTIONABLE
         # feedback (B4: the model must see why, or it just retries).
         if self._actions_since_last_resume(events) == 0:
-            self._invisible_steps += 1
-            await self._emit(
-                MessageEvent(
-                    source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(
-                        role="user",
-                        content=(
-                            "serve refused: no real work has happened yet in "
-                            "this session — the sandbox is fresh and nothing "
-                            "is running. Execute the next plan step with real "
-                            "tool calls (write files, run commands, start your "
-                            "server), then serve the result."
-                        ),
-                    ),
-                )
+            return await self._refuse_fresh_session(
+                step,
+                "serve refused: no real work has happened yet in "
+                "this session — the sandbox is fresh and nothing "
+                "is running. Execute the next plan step with real "
+                "tool calls (write files, run commands, start your "
+                "server), then serve the result.",
             )
-            if await self._post_noop_valve() is Disp.HALT:
-                return Disp.HALT
-            return Disp.CONTINUE
         if not step.tool_call.arguments:
             _LOG.debug("Skipping deliverable emission: empty payload from agent")
             self._invisible_steps += 1
