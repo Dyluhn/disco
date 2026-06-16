@@ -4754,6 +4754,83 @@ class AgentLoop:
         )
         return Disp.HALT
 
+    async def _gate_hard_deny(self, action: ActionEvent) -> Disp:
+        # (h.5) HARD DENY (Cluster 3) — catastrophic commands are refused
+        # outright, BEFORE the confirm gate. No approval, policy, or LLM
+        # can run them. The agent sees the refusal as an error and adapts.
+        deny_reason = self._hard_deny_reason(action)
+        if deny_reason is not None:
+            await self._emit(action)  # record the proposed action for audit
+            await self._emit(
+                AgentErrorEvent(
+                    error=(
+                        "<system-reminder>\n"
+                        f"REFUSED: that command is hard-denied ({deny_reason}). It "
+                        "will never be executed regardless of approval. Choose a "
+                        "different, safe approach.\n"
+                        "</system-reminder>"
+                    ),
+                    action_id=action.id,
+                    tool_call_id=action.tool_call.call_id if action.tool_call else None,
+                )
+            )
+            return Disp.CONTINUE
+        return Disp.FALLTHROUGH
+
+    async def _gate_risk_confirm(self, action: ActionEvent) -> tuple[Disp, ActionEvent]:
+        # (i) RISK GATE — assess, then maybe require confirmation (§5).
+        # Audit (security §7): when the analyzer exposes the detailed
+        # assessment, stamp it into the action's meta so the security
+        # posture (final risk, rationale, contributing analyzers, the
+        # self-assessment) is reconstructable from the log. Analyzers that
+        # implement only assess() are unaffected.
+        detailed = getattr(self.analyzer, "assess_detailed", None)
+        if callable(detailed):
+            assessment = detailed(action)
+            risk = assessment.risk
+            audited_meta = {
+                **action.meta,
+                "risk_assessment": assessment.model_dump(mode="json"),
+            }
+            action = action.model_copy(update={"meta": audited_meta})
+        else:
+            risk = self.analyzer.assess(action)
+
+        # DC-03: obtain WHERE the tool executes (duck-typed; absent → "unknown").
+        _scope_fn = getattr(self.executor, "tool_scope", None)
+        _tool_scope = "unknown"
+        if callable(_scope_fn):
+            try:
+                _tool_scope = _scope_fn(action.tool_call.tool_name)
+            except Exception:
+                _tool_scope = "unknown"
+
+        # Use should_confirm_action if the policy supports it; fall back to
+        # should_confirm(risk) for policies that predate DC-03.
+        _sca = getattr(self.policy, "should_confirm_action", None)
+        if callable(_sca):
+            _gates = _sca(risk, scope=_tool_scope, tool_name=action.tool_call.tool_name)
+        else:
+            _gates = self.policy.should_confirm(risk)
+
+        # Journal: stamp auto_approved when scope-based exemption overrides
+        # what the base risk gate would have decided.
+        if not _gates and self.policy.should_confirm(risk):
+            action = action.model_copy(
+                update={"meta": {**action.meta, "auto_approved": "sandboxed"}}
+            )
+
+        if _gates:
+            await self._emit(action)  # record the PROPOSED action
+            await self._emit(
+                StatusEvent(
+                    status=ConversationStatus.WAITING_FOR_CONFIRMATION,
+                    detail=action.id,
+                )
+            )
+            return Disp.HALT, action
+        return Disp.FALLTHROUGH, action
+
     async def run(self) -> ConversationState:
         """Drive until a terminal-for-now status. Idempotent to call again after
         a pause/confirmation. [CONTRACT] returns the resulting ConversationState."""
@@ -5123,77 +5200,12 @@ class AgentLoop:
                     llm_response_id=step.llm_response_id,
                 )
 
-                # (h.5) HARD DENY (Cluster 3) — catastrophic commands are refused
-                # outright, BEFORE the confirm gate. No approval, policy, or LLM
-                # can run them. The agent sees the refusal as an error and adapts.
-                deny_reason = self._hard_deny_reason(action)
-                if deny_reason is not None:
-                    await self._emit(action)  # record the proposed action for audit
-                    await self._emit(
-                        AgentErrorEvent(
-                            error=(
-                                "<system-reminder>\n"
-                                f"REFUSED: that command is hard-denied ({deny_reason}). It "
-                                "will never be executed regardless of approval. Choose a "
-                                "different, safe approach.\n"
-                                "</system-reminder>"
-                            ),
-                            action_id=action.id,
-                            tool_call_id=action.tool_call.call_id if action.tool_call else None,
-                        )
-                    )
+                disp = await self._gate_hard_deny(action)
+                if disp is Disp.CONTINUE:
                     continue
 
-                # (i) RISK GATE — assess, then maybe require confirmation (§5).
-                # Audit (security §7): when the analyzer exposes the detailed
-                # assessment, stamp it into the action's meta so the security
-                # posture (final risk, rationale, contributing analyzers, the
-                # self-assessment) is reconstructable from the log. Analyzers that
-                # implement only assess() are unaffected.
-                detailed = getattr(self.analyzer, "assess_detailed", None)
-                if callable(detailed):
-                    assessment = detailed(action)
-                    risk = assessment.risk
-                    audited_meta = {
-                        **action.meta,
-                        "risk_assessment": assessment.model_dump(mode="json"),
-                    }
-                    action = action.model_copy(update={"meta": audited_meta})
-                else:
-                    risk = self.analyzer.assess(action)
-
-                # DC-03: obtain WHERE the tool executes (duck-typed; absent → "unknown").
-                _scope_fn = getattr(self.executor, "tool_scope", None)
-                _tool_scope = "unknown"
-                if callable(_scope_fn):
-                    try:
-                        _tool_scope = _scope_fn(action.tool_call.tool_name)
-                    except Exception:
-                        _tool_scope = "unknown"
-
-                # Use should_confirm_action if the policy supports it; fall back to
-                # should_confirm(risk) for policies that predate DC-03.
-                _sca = getattr(self.policy, "should_confirm_action", None)
-                if callable(_sca):
-                    _gates = _sca(risk, scope=_tool_scope, tool_name=action.tool_call.tool_name)
-                else:
-                    _gates = self.policy.should_confirm(risk)
-
-                # Journal: stamp auto_approved when scope-based exemption overrides
-                # what the base risk gate would have decided.
-                if not _gates and self.policy.should_confirm(risk):
-                    action = action.model_copy(
-                        update={"meta": {**action.meta, "auto_approved": "sandboxed"}}
-                    )
-
-                if _gates:
-                    await self._emit(action)  # record the PROPOSED action
-                    await self._emit(
-                        StatusEvent(
-                            status=ConversationStatus.WAITING_FOR_CONFIRMATION,
-                            detail=action.id,
-                        )
-                    )
+                disp, action = await self._gate_risk_confirm(action)
+                if disp is Disp.HALT:
                     return await self.get_state()
 
                 action_to_execute = action
