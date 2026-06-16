@@ -46,7 +46,7 @@ _TIERS: dict[DepthTier, DepthBound] = {
     DepthTier.QUICK: DepthBound(
         max_sources=10,
         max_rounds_per_subq=1,
-        max_wall_clock_s=90,
+        max_wall_clock_s=600,
         max_subquestions=3,
         discover_limit=8,
         extract_cap=4,

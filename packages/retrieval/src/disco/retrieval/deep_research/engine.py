@@ -303,9 +303,11 @@ class DeepResearchRun:
                 break
             if (time.monotonic() - started) > self._bound.max_wall_clock_s:
                 bounded_by = bounded_by or "wall_clock"
-                for _, t, _, _, _ in gather_tasks:
-                    t.cancel()
-                break
+                still_running = [t for _, t, _, _, _ in gather_tasks if not t.done()]
+                if still_running:
+                    for t in still_running:
+                        t.cancel()
+                    break
 
             try:
                 sub_result = await task

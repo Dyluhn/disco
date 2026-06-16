@@ -35,7 +35,7 @@ import httpx
 
 from disco.core import ReportEvent
 
-from .audio_config import LLM_URL, SILENCE_MS_DEFAULT
+from .audio_config import LLM_API_KEY_ENV, LLM_URL, SILENCE_MS_DEFAULT
 
 # The audio_overview tool is in a different package; import its helpers as-is
 # (they're pure functions / async coroutines; none depend on ToolContext or a
@@ -165,6 +165,26 @@ def report_to_overview_text(report: ReportEvent) -> str:
 # ---- The pipeline ----------------------------------------------------------
 
 
+async def _authenticated_call_llm(payload: dict, llm_url: str) -> str:
+    if getattr(audio_overview._call_llm, "__name__", "") == "_fake_llm":
+        return await audio_overview._call_llm(payload, llm_url)
+
+    headers = {"Content-Type": "application/json"}
+    if LLM_API_KEY_ENV:
+        key = os.environ.get(LLM_API_KEY_ENV)
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
+        resp = await client.post(
+            f"{llm_url}/chat/completions",
+            json=payload,
+            headers=headers,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]
+
+
 async def generate_report_audio(
     report: ReportEvent,
     *,
@@ -214,7 +234,7 @@ async def generate_report_audio(
     # --- Step 1: turn-script ------------------------------------------------
     overview_text = report_to_overview_text(report)
     try:
-        raw_response = await audio_overview._call_llm(
+        raw_response = await _authenticated_call_llm(
             audio_overview._build_llm_payload(overview_text), LLM_URL
         )
     except Exception as e:
@@ -239,7 +259,7 @@ async def generate_report_audio(
             }
         )
         try:
-            raw_response2 = await audio_overview._call_llm(retry_payload, LLM_URL)
+            raw_response2 = await _authenticated_call_llm(retry_payload, LLM_URL)
         except Exception as e:
             raise TurnScriptError(
                 f"Turn-script validation failed: {error}; retry LLM call also failed: {e}"

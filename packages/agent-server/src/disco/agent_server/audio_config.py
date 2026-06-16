@@ -32,11 +32,24 @@ SPEACHES_URL: str = os.environ.get("SPEACHES_URL", _SPEACHES_DEFAULT).rstrip("/"
 
 # ---- LLM endpoint (turn-script generation) ---------------------------------
 
-_LLM_DEFAULT_URL = os.environ.get("LLM_URL", "http://localhost:8080/v1")
-_LLM_DEFAULT_MODEL = os.environ.get("LLM_MODEL", "llama-3-8b")
+import json
 
-LLM_URL: str = _LLM_DEFAULT_URL.rstrip("/")
-LLM_MODEL: str = _LLM_DEFAULT_MODEL
+def _resolve_llm_config() -> tuple[str, str, str | None]:
+    try:
+        config_path = os.environ.get("DISCO_CONFIG") or os.environ.get("PMX_CONFIG") or "disco-config.json"
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        key = config.get("assignments", {}).get("rag_answerer") or config.get("default_model")
+        model_info = config["models"][key]
+        return model_info["base_url"], model_info["model_id"], model_info.get("api_key_env")
+    except Exception:
+        return "http://192.168.1.231:18080/v1", "llama-3-8b", None
+
+_cfg_url, _cfg_model, _cfg_key_env = _resolve_llm_config()
+
+LLM_URL: str = os.environ.get("LLM_URL", _cfg_url).rstrip("/")
+LLM_MODEL: str = os.environ.get("LLM_MODEL", _cfg_model)
+LLM_API_KEY_ENV: str | None = _cfg_key_env
 
 # ---- inter-turn silence range (ms) -----------------------------------------
 
