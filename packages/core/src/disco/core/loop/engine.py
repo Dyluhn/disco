@@ -4528,6 +4528,232 @@ class AgentLoop:
             )
         return Disp.FALLTHROUGH
 
+    async def _gate_autonomous_ask_stall(self, step: AgentStep, events: list[Event]) -> Disp:
+        if (
+            self._autonomous
+            and step.tool_call is not None
+            and step.tool_call.tool_name in ("ask_user", "clarify")
+        ):
+            asked = str(
+                step.tool_call.arguments.get("question") or ""
+            ).strip() or step.thought.strip()
+            stall_action = ActionEvent(
+                thought=step.thought,
+                tool_call=step.tool_call,
+                self_assessed_risk=step.self_assessed_risk,
+                llm_response_id=step.llm_response_id,
+            )
+            await self._emit(stall_action)
+            await self._emit(
+                AgentErrorEvent(
+                    error=(
+                        "<system-reminder>\n"
+                        "Autonomous mode is ON — there is no user available "
+                        f"to answer. `{step.tool_call.tool_name}` is "
+                        "unavailable in this mode. Make the best decision you "
+                        "can from the information you already have and continue "
+                        "working toward the goal."
+                        + (f"\nYour question was: {asked}" if asked else "")
+                        + "\n</system-reminder>"
+                    ),
+                    action_id=stall_action.id,
+                    tool_call_id=(
+                        stall_action.tool_call.call_id
+                        if stall_action.tool_call
+                        else None
+                    ),
+                )
+            )
+            return Disp.CONTINUE
+        return Disp.FALLTHROUGH
+
+    async def _handle_propose_plan_update(self, step: AgentStep, events: list[Event]) -> Disp:
+        new_plan = self._plan_from_args(step.tool_call.arguments, events)
+        await self._emit(new_plan)
+        if self._autonomous:
+            # No human to approve a mid-run plan revision → auto-approve
+            # inline, emitting exactly what approve_plan() would (mode flip
+            # + RUNNING/plan_approved), so the event log is identical whether
+            # a human or the harness approved. Without this, an autonomous
+            # run that follows the loop's OWN "call propose_plan_update to
+            # revise the plan" guidance (the auto-continue nudge below) would
+            # halt at AWAITING_PLAN_APPROVAL forever — a headless stall.
+            #
+            # C8 (T11): bound the propose_plan_update loop. A weak model
+            # in autonomous mode can hammer the same plan revision over
+            # and over, never realizing there's no human to approve it.
+            # Compare new_plan.steps to the immediately-prior plan's steps
+            # (ignore summary; an appended/added step counts as DIFFERENT
+            # because list lengths differ). Increment the consecutive-
+            # identical counter on a match, reset on a diff. At >= the
+            # cap, feed the existing bookkeeping-stuck valve (emit the
+            # same `bookkeeping_only` warning + STUCK status the (c.3)
+            # valve emits) — do NOT invent a new halt path. Only in
+            # autonomous mode; interactive path is byte-identical.
+            prior_plan: PlanEvent | None = None
+            for e in reversed(events):
+                if e is new_plan:
+                    continue  # skip the just-emitted new_plan
+                if isinstance(e, PlanEvent):
+                    prior_plan = e
+                    break
+            if (
+                prior_plan is not None
+                and [s.title for s in prior_plan.steps]
+                == [s.title for s in new_plan.steps]
+            ):
+                self._identical_plan_revisions += 1
+            else:
+                self._identical_plan_revisions = 0
+            if (
+                self._identical_plan_revisions
+                >= _PROPOSE_PLAN_UPDATE_REPEAT_CAP
+            ):
+                # Reuse the existing bookkeeping-stuck valve: same
+                # message + STUCK/detail pair (c.3) emits.
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                "⚠ Stopped: the agent kept updating the "
+                                "plan checklist without doing any real "
+                                "work. Re-run or steer it toward a "
+                                "concrete action."
+                            ),
+                        ),
+                    )
+                )
+                await self._emit(
+                    StatusEvent(
+                        status=ConversationStatus.STUCK,
+                        detail="bookkeeping_only",
+                    )
+                )
+                return Disp.HALT
+            self.mode = self._execution_mode
+            await self._emit(
+                StatusEvent(
+                    status=ConversationStatus.RUNNING, detail="plan_approved"
+                )
+            )
+            return Disp.CONTINUE
+        await self._emit(
+            StatusEvent(
+                status=ConversationStatus.AWAITING_PLAN_APPROVAL,
+                detail=new_plan.id,
+            )
+        )
+        return Disp.HALT
+
+    async def _handle_clarify(self, step: AgentStep, events: list[Event]) -> Disp:
+        # clarify → ClarifyEvent with typed questions. The planner
+        # calls this when SEVERAL specifics are missing and
+        # guessing would produce a bad plan. The loop emits a
+        # ClarifyEvent (carrying the structured question items)
+        # and halts at AWAITING_USER_QUESTION. The user answers
+        # each question; the answers are re-injected as a user
+        # message that resumes planning.
+        from ..events import ClarifyEvent as _ClarifyEvent
+        from ..events import ClarifyQuestionItem
+
+        question = str(
+            step.tool_call.arguments.get("question") or ""
+        ).strip() or step.thought.strip()
+        raw_items = step.tool_call.arguments.get("questions") or []
+        items: list[ClarifyQuestionItem] = []
+        for it in raw_items:
+            if not isinstance(it, dict):
+                continue
+            qid = str(it.get("id") or f"q{len(items) + 1}").strip()
+            qtext = str(it.get("question") or "").strip()
+            if not qtext:
+                continue
+            qtype = str(it.get("type") or "short_text").strip()
+            if qtype not in ("short_text", "long_text", "choice"):
+                qtype = "short_text"
+            qopts = it.get("options") or []
+            if isinstance(qopts, list):
+                qopts = [str(o) for o in qopts]
+            else:
+                qopts = []
+            items.append(
+                ClarifyQuestionItem(
+                    id=qid, question=qtext, type=qtype, options=qopts
+                )
+            )
+        if not items:
+            # No valid questions → fall back to free-form ask_user
+            q_event = MessageEvent(
+                source=EventSource.AGENT,
+                message=LLMMessage(
+                    role="assistant",
+                    content=(
+                        question or "The agent needs clarification before planning."
+                    ),
+                ),
+            )
+            await self._emit(q_event)
+            await self._emit(
+                StatusEvent(
+                    status=ConversationStatus.AWAITING_USER_QUESTION,
+                    detail=q_event.id,
+                )
+            )
+            return Disp.HALT
+        clarify_event = _ClarifyEvent(
+            question=question or "The agent needs clarification before planning.",
+            items=items,
+        )
+        await self._emit(clarify_event)
+        await self._emit(
+            StatusEvent(
+                status=ConversationStatus.AWAITING_USER_QUESTION,
+                detail=clarify_event.id,
+            )
+        )
+        return Disp.HALT
+
+    async def _handle_ask_user(self, step: AgentStep, events: list[Event]) -> Disp:
+        alt = self._alternatives_from_args(step.tool_call.arguments, events)
+        if alt is not None:
+            # ask_user WITH options → AlternativesEvent + gate
+            await self._emit(alt)
+            await self._emit(
+                StatusEvent(
+                    status=ConversationStatus.AWAITING_USER_DECISION,
+                    detail=alt.id,
+                )
+            )
+            return Disp.HALT
+        # ask_user WITHOUT options → free-form question. Emit it as
+        # an assistant message (from the tool's `question` arg or
+        # the step's thought, whichever has content) and halt at the
+        # two-way Ask-gate (AWAITING_USER_QUESTION) — the UI renders
+        # an AskPanel with a focused answer box, not muted prose. The
+        # status's detail carries the question message's id so the
+        # surface can resolve it. The user's reply (send_message /
+        # steer) IS the resume signal.
+        question = str(
+            step.tool_call.arguments.get("question") or ""
+        ).strip() or step.thought.strip()
+        question_id: str | None = None
+        if question:
+            q_event = MessageEvent(
+                source=EventSource.AGENT,
+                message=LLMMessage(role="assistant", content=question),
+            )
+            question_id = q_event.id
+            await self._emit(q_event)
+        await self._emit(
+            StatusEvent(
+                status=ConversationStatus.AWAITING_USER_QUESTION,
+                detail=question_id or "free_form_question",
+            )
+        )
+        return Disp.HALT
+
     async def run(self) -> ConversationState:
         """Drive until a terminal-for-now status. Idempotent to call again after
         a pause/confirmation. [CONTRACT] returns the resulting ConversationState."""
@@ -4865,232 +5091,27 @@ class AgentLoop:
                 # then feed back a system-reminder that there's no user and it must
                 # decide and continue. Gated on self._autonomous (default OFF) so the
                 # interactive path is byte-for-byte untouched.
-                if (
-                    self._autonomous
-                    and step.tool_call is not None
-                    and step.tool_call.tool_name in ("ask_user", "clarify")
-                ):
-                    asked = str(
-                        step.tool_call.arguments.get("question") or ""
-                    ).strip() or step.thought.strip()
-                    stall_action = ActionEvent(
-                        thought=step.thought,
-                        tool_call=step.tool_call,
-                        self_assessed_risk=step.self_assessed_risk,
-                        llm_response_id=step.llm_response_id,
-                    )
-                    await self._emit(stall_action)
-                    await self._emit(
-                        AgentErrorEvent(
-                            error=(
-                                "<system-reminder>\n"
-                                "Autonomous mode is ON — there is no user available "
-                                f"to answer. `{step.tool_call.tool_name}` is "
-                                "unavailable in this mode. Make the best decision you "
-                                "can from the information you already have and continue "
-                                "working toward the goal."
-                                + (f"\nYour question was: {asked}" if asked else "")
-                                + "\n</system-reminder>"
-                            ),
-                            action_id=stall_action.id,
-                            tool_call_id=(
-                                stall_action.tool_call.call_id
-                                if stall_action.tool_call
-                                else None
-                            ),
-                        )
-                    )
-                    continue  # non-blocking — let the model act on its own judgment
+                disp = await self._gate_autonomous_ask_stall(step, events)
+                if disp is Disp.CONTINUE:
+                    continue
 
                 if (
                     step.tool_call is not None
                     and step.tool_call.tool_name == "propose_plan_update"
                 ):
-                    new_plan = self._plan_from_args(step.tool_call.arguments, events)
-                    await self._emit(new_plan)
-                    if self._autonomous:
-                        # No human to approve a mid-run plan revision → auto-approve
-                        # inline, emitting exactly what approve_plan() would (mode flip
-                        # + RUNNING/plan_approved), so the event log is identical whether
-                        # a human or the harness approved. Without this, an autonomous
-                        # run that follows the loop's OWN "call propose_plan_update to
-                        # revise the plan" guidance (the auto-continue nudge below) would
-                        # halt at AWAITING_PLAN_APPROVAL forever — a headless stall.
-                        #
-                        # C8 (T11): bound the propose_plan_update loop. A weak model
-                        # in autonomous mode can hammer the same plan revision over
-                        # and over, never realizing there's no human to approve it.
-                        # Compare new_plan.steps to the immediately-prior plan's steps
-                        # (ignore summary; an appended/added step counts as DIFFERENT
-                        # because list lengths differ). Increment the consecutive-
-                        # identical counter on a match, reset on a diff. At >= the
-                        # cap, feed the existing bookkeeping-stuck valve (emit the
-                        # same `bookkeeping_only` warning + STUCK status the (c.3)
-                        # valve emits) — do NOT invent a new halt path. Only in
-                        # autonomous mode; interactive path is byte-identical.
-                        prior_plan: PlanEvent | None = None
-                        for e in reversed(events):
-                            if e is new_plan:
-                                continue  # skip the just-emitted new_plan
-                            if isinstance(e, PlanEvent):
-                                prior_plan = e
-                                break
-                        if (
-                            prior_plan is not None
-                            and [s.title for s in prior_plan.steps]
-                            == [s.title for s in new_plan.steps]
-                        ):
-                            self._identical_plan_revisions += 1
-                        else:
-                            self._identical_plan_revisions = 0
-                        if (
-                            self._identical_plan_revisions
-                            >= _PROPOSE_PLAN_UPDATE_REPEAT_CAP
-                        ):
-                            # Reuse the existing bookkeeping-stuck valve: same
-                            # message + STUCK/detail pair (c.3) emits.
-                            await self._emit(
-                                MessageEvent(
-                                    source=EventSource.ENVIRONMENT,
-                                    message=LLMMessage(
-                                        role="user",
-                                        content=(
-                                            "⚠ Stopped: the agent kept updating the "
-                                            "plan checklist without doing any real "
-                                            "work. Re-run or steer it toward a "
-                                            "concrete action."
-                                        ),
-                                    ),
-                                )
-                            )
-                            await self._emit(
-                                StatusEvent(
-                                    status=ConversationStatus.STUCK,
-                                    detail="bookkeeping_only",
-                                )
-                            )
-                            return await self.get_state()
-                        self.mode = self._execution_mode
-                        await self._emit(
-                            StatusEvent(
-                                status=ConversationStatus.RUNNING, detail="plan_approved"
-                            )
-                        )
+                    disp = await self._handle_propose_plan_update(step, events)
+                    if disp is Disp.CONTINUE:
                         continue
-                    await self._emit(
-                        StatusEvent(
-                            status=ConversationStatus.AWAITING_PLAN_APPROVAL,
-                            detail=new_plan.id,
-                        )
-                    )
-                    return await self.get_state()
+                    if disp is Disp.HALT:
+                        return await self.get_state()
 
                 if step.tool_call is not None and step.tool_call.tool_name == "clarify":
-                    # clarify → ClarifyEvent with typed questions. The planner
-                    # calls this when SEVERAL specifics are missing and
-                    # guessing would produce a bad plan. The loop emits a
-                    # ClarifyEvent (carrying the structured question items)
-                    # and halts at AWAITING_USER_QUESTION. The user answers
-                    # each question; the answers are re-injected as a user
-                    # message that resumes planning.
-                    from ..events import ClarifyEvent as _ClarifyEvent
-                    from ..events import ClarifyQuestionItem
-
-                    question = str(
-                        step.tool_call.arguments.get("question") or ""
-                    ).strip() or step.thought.strip()
-                    raw_items = step.tool_call.arguments.get("questions") or []
-                    items: list[ClarifyQuestionItem] = []
-                    for it in raw_items:
-                        if not isinstance(it, dict):
-                            continue
-                        qid = str(it.get("id") or f"q{len(items) + 1}").strip()
-                        qtext = str(it.get("question") or "").strip()
-                        if not qtext:
-                            continue
-                        qtype = str(it.get("type") or "short_text").strip()
-                        if qtype not in ("short_text", "long_text", "choice"):
-                            qtype = "short_text"
-                        qopts = it.get("options") or []
-                        if isinstance(qopts, list):
-                            qopts = [str(o) for o in qopts]
-                        else:
-                            qopts = []
-                        items.append(
-                            ClarifyQuestionItem(
-                                id=qid, question=qtext, type=qtype, options=qopts
-                            )
-                        )
-                    if not items:
-                        # No valid questions → fall back to free-form ask_user
-                        q_event = MessageEvent(
-                            source=EventSource.AGENT,
-                            message=LLMMessage(
-                                role="assistant",
-                                content=(
-                                    question or "The agent needs clarification before planning."
-                                ),
-                            ),
-                        )
-                        await self._emit(q_event)
-                        await self._emit(
-                            StatusEvent(
-                                status=ConversationStatus.AWAITING_USER_QUESTION,
-                                detail=q_event.id,
-                            )
-                        )
+                    if await self._handle_clarify(step, events) is Disp.HALT:
                         return await self.get_state()
-                    clarify_event = _ClarifyEvent(
-                        question=question or "The agent needs clarification before planning.",
-                        items=items,
-                    )
-                    await self._emit(clarify_event)
-                    await self._emit(
-                        StatusEvent(
-                            status=ConversationStatus.AWAITING_USER_QUESTION,
-                            detail=clarify_event.id,
-                        )
-                    )
-                    return await self.get_state()
 
                 if step.tool_call is not None and step.tool_call.tool_name == "ask_user":
-                    alt = self._alternatives_from_args(step.tool_call.arguments, events)
-                    if alt is not None:
-                        # ask_user WITH options → AlternativesEvent + gate
-                        await self._emit(alt)
-                        await self._emit(
-                            StatusEvent(
-                                status=ConversationStatus.AWAITING_USER_DECISION,
-                                detail=alt.id,
-                            )
-                        )
+                    if await self._handle_ask_user(step, events) is Disp.HALT:
                         return await self.get_state()
-                    # ask_user WITHOUT options → free-form question. Emit it as
-                    # an assistant message (from the tool's `question` arg or
-                    # the step's thought, whichever has content) and halt at the
-                    # two-way Ask-gate (AWAITING_USER_QUESTION) — the UI renders
-                    # an AskPanel with a focused answer box, not muted prose. The
-                    # status's detail carries the question message's id so the
-                    # surface can resolve it. The user's reply (send_message /
-                    # steer) IS the resume signal.
-                    question = str(
-                        step.tool_call.arguments.get("question") or ""
-                    ).strip() or step.thought.strip()
-                    question_id: str | None = None
-                    if question:
-                        q_event = MessageEvent(
-                            source=EventSource.AGENT,
-                            message=LLMMessage(role="assistant", content=question),
-                        )
-                        question_id = q_event.id
-                        await self._emit(q_event)
-                    await self._emit(
-                        StatusEvent(
-                            status=ConversationStatus.AWAITING_USER_QUESTION,
-                            detail=question_id or "free_form_question",
-                        )
-                    )
-                    return await self.get_state()
 
                 # (h) build the ActionEvent
                 # A real action is being taken — the invisible-step streak is over.
