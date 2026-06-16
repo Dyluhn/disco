@@ -198,51 +198,30 @@ class DeepResearchRun:
             )
         return bounded_by, pending, sections, carried_passages, carried_hits
 
-    async def run(
+    def _start_gather_tasks(
         self,
-        plan_steps: list[str],
+        pending: list[SubQuestion],
         *,
         emit: EmitFn,
-        should_cancel: Callable[[], bool] | None = None,
-        resume_sections: list[ReportSection] | None = None,
-        resume_passages: list[RetrievalPassage] | None = None,
-        resume_all_hits: list[Any] | None = None,
-    ) -> ReportFromRun:
-        """Execute the run. Returns the assembled report. `emit` is awaited
-        between phases so the agent-server can write events to the conversation
-        log; we never write to the store directly.
-
-        Each sub-question is gathered AND synthesized before moving to the next —
-        so a completed section is a durable checkpoint. `should_cancel` makes Stop
-        REAL: it is polled at each sub-question boundary; when it returns true the
-        run halts there and returns the partial report (every section completed so
-        far) with `bounded_by="stopped"`. Without it the run is uninterruptible.
-
-        Resume (checkpointed): pass `resume_sections` (+ their `resume_passages` /
-        `resume_all_hits`) from a prior stopped run's partial ReportEvent. Their
-        sub-questions are skipped — we only gather+synthesize the steps NOT already
-        done, then re-run the coherence pass over the full set. This is what makes
-        a resumed Deep Research run continue instead of redoing completed sections."""
-        started = time.monotonic()
-        (
-            bounded_by,
-            pending,
-            sections,
-            carried_passages,
-            carried_hits,
-        ) = await self._prepare_plan(
-            plan_steps,
-            resume_sections=resume_sections,
-            resume_passages=resume_passages,
-            resume_all_hits=resume_all_hits,
-            emit=emit,
-        )
-
-        # ---- per-sub-question: gather → synthesize (a durable checkpoint) ----
+    ) -> list[
+        tuple[
+            SubQuestion,
+            asyncio.Task[SubQuestionResult],
+            str,
+            str,
+            GatherLegContext,
+        ]
+    ]:
+        """RP-04 producer: partition the source budget across the pending
+        sub-questions and start every gather leg concurrently. When
+        `self._gather_concurrency` is set (bundled in-process-encoder tier) a
+        Semaphore caps how many legs run the heavy body at once — peak-memory
+        guard; `None` ⇒ fully concurrent. All tasks are created up-front so the
+        consumer can drain them in order. Returns the ordered task list, each
+        entry `(subq, task, subq_id, subq_namespace, leg_context)`."""
         # The source budget governs the NEW gathering this invocation does; carried
         # passages were already budgeted in the prior run, so resume gets a fresh
         # allowance to make progress on its remaining sub-questions.
-        results: list[SubQuestionResult] = []
         remaining = self._bound.max_sources
 
         # RP-04: Pipeline restructure.
@@ -273,7 +252,15 @@ class DeepResearchRun:
                     return await gather_for_subquestion(_subq, **kw)
             return await gather_for_subquestion(_subq, **kw)
 
-        gather_tasks = []
+        gather_tasks: list[
+            tuple[
+                SubQuestion,
+                asyncio.Task[SubQuestionResult],
+                str,
+                str,
+                GatherLegContext,
+            ]
+        ] = []
         for i, subq in enumerate(pending):
             subq_budget = budget_per + (1 if i < extra_budget else 0)
 
@@ -321,6 +308,51 @@ class DeepResearchRun:
                 )
             )
             gather_tasks.append((subq, task, subq_id, subq_namespace, leg_context))
+        return gather_tasks
+
+    async def run(
+        self,
+        plan_steps: list[str],
+        *,
+        emit: EmitFn,
+        should_cancel: Callable[[], bool] | None = None,
+        resume_sections: list[ReportSection] | None = None,
+        resume_passages: list[RetrievalPassage] | None = None,
+        resume_all_hits: list[Any] | None = None,
+    ) -> ReportFromRun:
+        """Execute the run. Returns the assembled report. `emit` is awaited
+        between phases so the agent-server can write events to the conversation
+        log; we never write to the store directly.
+
+        Each sub-question is gathered AND synthesized before moving to the next —
+        so a completed section is a durable checkpoint. `should_cancel` makes Stop
+        REAL: it is polled at each sub-question boundary; when it returns true the
+        run halts there and returns the partial report (every section completed so
+        far) with `bounded_by="stopped"`. Without it the run is uninterruptible.
+
+        Resume (checkpointed): pass `resume_sections` (+ their `resume_passages` /
+        `resume_all_hits`) from a prior stopped run's partial ReportEvent. Their
+        sub-questions are skipped — we only gather+synthesize the steps NOT already
+        done, then re-run the coherence pass over the full set. This is what makes
+        a resumed Deep Research run continue instead of redoing completed sections."""
+        started = time.monotonic()
+        (
+            bounded_by,
+            pending,
+            sections,
+            carried_passages,
+            carried_hits,
+        ) = await self._prepare_plan(
+            plan_steps,
+            resume_sections=resume_sections,
+            resume_passages=resume_passages,
+            resume_all_hits=resume_all_hits,
+            emit=emit,
+        )
+
+        # ---- per-sub-question: gather → synthesize (a durable checkpoint) ----
+        results: list[SubQuestionResult] = []
+        gather_tasks = self._start_gather_tasks(pending, emit=emit)
 
         # 3. Consume results serially (Consumer).
         # LLM work (synthesis) MUST stay a single-depth queue (one at a time).
