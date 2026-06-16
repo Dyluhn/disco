@@ -75,6 +75,12 @@ export function CommandPalette() {
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[2px]" />
         <Dialog.Content className="fixed left-1/2 top-[20%] z-50 w-full max-w-lg -translate-x-1/2 overflow-hidden rounded-control border border-hairline bg-surface-1 shadow-2xl pmx-rise focus:outline-none">
+          {/* Visually-hidden title/description: Radix Dialog requires a title for
+              screen-reader users (the input placeholder is not announced as a label). */}
+          <Dialog.Title className="sr-only">Command palette</Dialog.Title>
+          <Dialog.Description className="sr-only">
+            Search and run commands, or jump to a surface.
+          </Dialog.Description>
           <div className="flex items-center border-b border-hairline px-4 py-3">
             <Search className="mr-3 size-4 text-text-muted" />
             <input
