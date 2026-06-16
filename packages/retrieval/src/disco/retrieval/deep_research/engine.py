@@ -310,50 +310,30 @@ class DeepResearchRun:
             gather_tasks.append((subq, task, subq_id, subq_namespace, leg_context))
         return gather_tasks
 
-    async def run(
+    async def _drain_and_synthesize(
         self,
-        plan_steps: list[str],
+        gather_tasks: list[
+            tuple[
+                SubQuestion,
+                asyncio.Task[SubQuestionResult],
+                str,
+                str,
+                GatherLegContext,
+            ]
+        ],
         *,
+        sections: list[ReportSection],
+        started: float,
+        bounded_by: str | None,
+        should_cancel: Callable[[], bool] | None,
         emit: EmitFn,
-        should_cancel: Callable[[], bool] | None = None,
-        resume_sections: list[ReportSection] | None = None,
-        resume_passages: list[RetrievalPassage] | None = None,
-        resume_all_hits: list[Any] | None = None,
-    ) -> ReportFromRun:
-        """Execute the run. Returns the assembled report. `emit` is awaited
-        between phases so the agent-server can write events to the conversation
-        log; we never write to the store directly.
-
-        Each sub-question is gathered AND synthesized before moving to the next —
-        so a completed section is a durable checkpoint. `should_cancel` makes Stop
-        REAL: it is polled at each sub-question boundary; when it returns true the
-        run halts there and returns the partial report (every section completed so
-        far) with `bounded_by="stopped"`. Without it the run is uninterruptible.
-
-        Resume (checkpointed): pass `resume_sections` (+ their `resume_passages` /
-        `resume_all_hits`) from a prior stopped run's partial ReportEvent. Their
-        sub-questions are skipped — we only gather+synthesize the steps NOT already
-        done, then re-run the coherence pass over the full set. This is what makes
-        a resumed Deep Research run continue instead of redoing completed sections."""
-        started = time.monotonic()
-        (
-            bounded_by,
-            pending,
-            sections,
-            carried_passages,
-            carried_hits,
-        ) = await self._prepare_plan(
-            plan_steps,
-            resume_sections=resume_sections,
-            resume_passages=resume_passages,
-            resume_all_hits=resume_all_hits,
-            emit=emit,
-        )
-
-        # ---- per-sub-question: gather → synthesize (a durable checkpoint) ----
-        results: list[SubQuestionResult] = []
-        gather_tasks = self._start_gather_tasks(pending, emit=emit)
-
+    ) -> tuple[list[SubQuestionResult], str | None]:
+        """RP-04 consumer: drain the gather tasks in order, synthesizing each
+        section immediately (a durable checkpoint) before consuming the next.
+        Honors Stop (`should_cancel`) and the wall-clock bound at every
+        sub-question boundary, cancelling the still-running legs when either
+        trips. Appends completed sections to `sections` in place; returns
+        `(results, bounded_by)`."""
         # 3. Consume results serially (Consumer).
         # LLM work (synthesis) MUST stay a single-depth queue (one at a time).
         # The MERGE point: the leg's `SubQuestionResult` (its independent
@@ -361,6 +341,7 @@ class DeepResearchRun:
         # `ReportSection` is appended to `sections`. No other leg's state
         # touches the leg's accumulated passages / hits / queries — those
         # arrive here as immutable frozen-shape objects only.
+        results: list[SubQuestionResult] = []
         for _subq, task, subq_id, subq_namespace, leg_context in gather_tasks:
             if should_cancel is not None and should_cancel():
                 bounded_by = "stopped"
@@ -420,6 +401,58 @@ class DeepResearchRun:
                 "section_done",
                 {"section_id": section.id, "title": section.title, "done": len(sections)},
             )
+        return results, bounded_by
+
+    async def run(
+        self,
+        plan_steps: list[str],
+        *,
+        emit: EmitFn,
+        should_cancel: Callable[[], bool] | None = None,
+        resume_sections: list[ReportSection] | None = None,
+        resume_passages: list[RetrievalPassage] | None = None,
+        resume_all_hits: list[Any] | None = None,
+    ) -> ReportFromRun:
+        """Execute the run. Returns the assembled report. `emit` is awaited
+        between phases so the agent-server can write events to the conversation
+        log; we never write to the store directly.
+
+        Each sub-question is gathered AND synthesized before moving to the next —
+        so a completed section is a durable checkpoint. `should_cancel` makes Stop
+        REAL: it is polled at each sub-question boundary; when it returns true the
+        run halts there and returns the partial report (every section completed so
+        far) with `bounded_by="stopped"`. Without it the run is uninterruptible.
+
+        Resume (checkpointed): pass `resume_sections` (+ their `resume_passages` /
+        `resume_all_hits`) from a prior stopped run's partial ReportEvent. Their
+        sub-questions are skipped — we only gather+synthesize the steps NOT already
+        done, then re-run the coherence pass over the full set. This is what makes
+        a resumed Deep Research run continue instead of redoing completed sections."""
+        started = time.monotonic()
+        (
+            bounded_by,
+            pending,
+            sections,
+            carried_passages,
+            carried_hits,
+        ) = await self._prepare_plan(
+            plan_steps,
+            resume_sections=resume_sections,
+            resume_passages=resume_passages,
+            resume_all_hits=resume_all_hits,
+            emit=emit,
+        )
+
+        # ---- per-sub-question: gather → synthesize (a durable checkpoint) ----
+        gather_tasks = self._start_gather_tasks(pending, emit=emit)
+        results, bounded_by = await self._drain_and_synthesize(
+            gather_tasks,
+            sections=sections,
+            started=started,
+            bounded_by=bounded_by,
+            should_cancel=should_cancel,
+            emit=emit,
+        )
 
         # ---- reduce step: coherence pass produces the executive summary ----
         await emit("phase", {"phase": "coherence"})
