@@ -67,6 +67,7 @@ from ..store.base import EventStore
 from ..view import Condenser, Summarizer, View, _latest_plan, microcompact
 from .bootstrap import _detect_project_bootstrap
 from .boundaries import Agent, ConfirmationPolicy, SecurityAnalyzer, StopHook, ToolExecutor
+from .control import Disp
 from .dedup import (
     _F8_PREFIX_CHARS,
     _F8_TRUNCATION_MARKER_TEMPLATE,
@@ -3182,6 +3183,18 @@ class AgentLoop:
 
     # ---- the run loop (§4) --------------------------------------------------
 
+    async def _post_noop_valve(self) -> Disp:
+        """Shared actionless-valve tail for the non-blocking virtual-tool arms
+        (notify_user / remember / serve / delegate_explore / plan-nudge /
+        execution-nudge / no-op / ask-fresh-session). Re-polls the event log,
+        adds the invisible-step counter, and halts the run if the actionless
+        valve trips. Byte-identical to the 4-line tail it replaces."""
+        events = await self._events()
+        noops = self._consecutive_noops(events) + self._invisible_steps
+        if await self._actionless_valve(events, noops):
+            return Disp.HALT
+        return Disp.CONTINUE
+
     async def run(self) -> ConversationState:
         """Drive until a terminal-for-now status. Idempotent to call again after
         a pause/confirmation. [CONTRACT] returns the resulting ConversationState."""
@@ -3895,9 +3908,7 @@ class AgentLoop:
                     # Non-blocking, but NOT exempt from the actionless valve —
                     # a bare `continue` here let prose spam bypass every cap
                     # (Phase-B re-run, 2026-06-10).
-                    events = await self._events()
-                    noops = self._consecutive_noops(events) + self._invisible_steps
-                    if await self._actionless_valve(events, noops):
+                    if await self._post_noop_valve() is Disp.HALT:
                         return await self.get_state()
                     continue  # non-blocking — keep working
                 if step.tool_call is not None and step.tool_call.tool_name == "remember":
@@ -3936,9 +3947,7 @@ class AgentLoop:
                                 ),
                             )
                         )
-                        events = await self._events()
-                        noops = self._consecutive_noops(events) + self._invisible_steps
-                        if await self._actionless_valve(events, noops):
+                        if await self._post_noop_valve() is Disp.HALT:
                             return await self.get_state()
                         continue  # non-blocking — let the model act on the feedback
                     fact = str(step.tool_call.arguments.get("fact") or "").strip()
@@ -3993,9 +4002,7 @@ class AgentLoop:
                         # Blank fact persists NOTHING — count it or it's an
                         # unbounded silent token burn.
                         self._invisible_steps += 1
-                    events = await self._events()
-                    noops = self._consecutive_noops(events) + self._invisible_steps
-                    if await self._actionless_valve(events, noops):
+                    if await self._post_noop_valve() is Disp.HALT:
                         return await self.get_state()
                     continue  # non-blocking — keep working
                 if step.tool_call is not None and step.tool_call.tool_name == "serve":
@@ -4031,9 +4038,7 @@ class AgentLoop:
                                 ),
                             )
                         )
-                        events = await self._events()
-                        noops = self._consecutive_noops(events) + self._invisible_steps
-                        if await self._actionless_valve(events, noops):
+                        if await self._post_noop_valve() is Disp.HALT:
                             return await self.get_state()
                         continue  # non-blocking — let the model act on the feedback
                     if not step.tool_call.arguments:
@@ -4069,9 +4074,7 @@ class AgentLoop:
                                     deployment_url=url,
                                 )
                             )
-                    events = await self._events()
-                    noops = self._consecutive_noops(events) + self._invisible_steps
-                    if await self._actionless_valve(events, noops):
+                    if await self._post_noop_valve() is Disp.HALT:
                         return await self.get_state()
                     continue  # non-blocking — keep working
                 # C20 — `delegate_explore`: a bounded, read-only Explore/Plan
@@ -4186,9 +4189,7 @@ class AgentLoop:
                     # right after. The actionless valve still applies if
                     # the helper returned empty (a degenerate fan-out is
                     # still a no-op step, like remember/serve).
-                    events = await self._events()
-                    noops = self._consecutive_noops(events) + self._invisible_steps
-                    if await self._actionless_valve(events, noops):
+                    if await self._post_noop_valve() is Disp.HALT:
                         return await self.get_state()
                     continue  # non-blocking — keep working
                 if step.tool_call is not None and step.tool_call.tool_name == "finish":
@@ -4395,9 +4396,7 @@ class AgentLoop:
                                 message=LLMMessage(role="user", content=_PLAN_NUDGE),
                             )
                         )
-                        events = await self._events()
-                        noops = self._consecutive_noops(events) + self._invisible_steps
-                        if await self._actionless_valve(events, noops):
+                        if await self._post_noop_valve() is Disp.HALT:
                             return await self.get_state()
                         continue
                     # tc is a planning-allowed read tool — productive exploration.
@@ -4454,9 +4453,7 @@ class AgentLoop:
                         # cleanly (FINISHED/PAUSED:noop_limit) after
                         # `_max_consecutive_noops` actionless turns; a model that
                         # recovers and acts resets the streak (engine §h).
-                        events = await self._events()
-                        noops = self._consecutive_noops(events) + self._invisible_steps
-                        if await self._actionless_valve(events, noops):
+                        if await self._post_noop_valve() is Disp.HALT:
                             return await self.get_state()
                         continue
 
@@ -4649,9 +4646,7 @@ class AgentLoop:
                         # Nothing persisted — invisible to every event-derived
                         # detector, so the instance counter has to carry it.
                         self._invisible_steps += 1
-                    events = await self._events()
-                    noops = self._consecutive_noops(events) + self._invisible_steps
-                    if await self._actionless_valve(events, noops):
+                    if await self._post_noop_valve() is Disp.HALT:
                         return await self.get_state()
                     continue
 
@@ -4723,9 +4718,7 @@ class AgentLoop:
                             ),
                         )
                     )
-                    events = await self._events()
-                    noops = self._consecutive_noops(events) + self._invisible_steps
-                    if await self._actionless_valve(events, noops):
+                    if await self._post_noop_valve() is Disp.HALT:
                         return await self.get_state()
                     continue  # non-blocking — let the model act on the feedback
 
