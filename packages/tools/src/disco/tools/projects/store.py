@@ -19,6 +19,17 @@ failure matrix:
   - exists but isn't a directory                  → StorageStatus.NOT_A_DIRECTORY
   - exists but can't be written / probed          → StorageStatus.NOT_WRITABLE
   - all good                                      → StorageStatus.OK
+
+Zero-config self-healing (E4):
+`resolve_projects_root(configured)` converts a configured value to an effective
+path.  When `configured` is empty (fresh install / unset), it falls back to
+`default_projects_root()` and ensures that directory exists.  When `configured`
+is non-empty, it is returned verbatim so the user-set path keeps its current
+validate behavior (NOT_FOUND / NOT_WRITABLE surface correctly).
+
+`ProjectStore(root_str)` calls `resolve_projects_root` internally, so
+`ProjectStore("")` gives a ready-to-use store pointing at the auto-default path
+rather than raising / returning UNSET on a fresh machine.
 """
 
 from __future__ import annotations
@@ -37,6 +48,49 @@ from typing import Any
 # here so the agent-server doesn't depend on string literals scattered around.
 _MANIFEST = "manifest.json"
 _WORKSPACE = "workspace"
+
+
+def default_projects_root() -> str:
+    """Compute the platform-appropriate default projects_root for this machine.
+
+    Priority (first match wins):
+    1. ``DISCO_DATA_DIR`` (or legacy ``PMX_DATA_DIR``) env var → ``<DATA_DIR>/projects``
+       This is what the container entrypoint sets (default ``/data``).
+    2. ``XDG_DATA_HOME`` env var → ``<XDG_DATA_HOME>/disco/projects``
+    3. POSIX fallback → ``~/.local/share/disco/projects``
+
+    The directory is NOT created here; callers that want ensure-exists behaviour
+    should use :func:`resolve_projects_root` instead.
+    """
+    from disco.core.env import disco_env
+
+    data_dir = disco_env("DATA_DIR")
+    if data_dir:
+        return str(Path(data_dir) / "projects")
+    xdg = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return str(Path(xdg) / "disco" / "projects")
+
+
+def resolve_projects_root(configured: str) -> str:
+    """Return the effective projects_root path, ENSURING it exists.
+
+    Both an explicit ``configured`` path AND the zero-config default are created
+    with ``mkdir -p`` so a path that doesn't exist YET but is creatable (writable
+    parent) is ready to use — "works on a fresh machine", whether the user set a
+    path or not. A genuinely UNREACHABLE path (unplugged drive / permission) makes
+    mkdir fail; we swallow that here and let :func:`validate_root` surface
+    NOT_FOUND at the use site, so the UI can warn + offer the default rather than
+    silently relocating the user's data.
+
+    This is the single place that turns a configured-or-empty value into a real,
+    live directory; all other code calls this rather than branching themselves.
+    """
+    root = configured.strip() or default_projects_root()
+    try:
+        Path(root).expanduser().mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass  # unreachable path → validate_root reports NOT_FOUND at the use site
+    return root
 
 
 class StorageStatus(str, Enum):
@@ -121,12 +175,18 @@ class ProjectStore:
     root (the user has to be able to see + fix the configuration)."""
 
     def __init__(self, root_str: str) -> None:
-        self._root_str = root_str
-        self._root = Path(root_str).expanduser() if root_str.strip() else None
+        # _configured keeps the raw value for the settings DTO (so the UI can
+        # display what the user explicitly saved, not the auto-default path).
+        self._configured_str = root_str
+        # _root_str is the effective path used for all disk operations.  Empty
+        # root_str → resolve_projects_root auto-creates and returns the default.
+        self._root_str = resolve_projects_root(root_str)
+        self._root = Path(self._root_str).expanduser()
 
     @property
     def root(self) -> Path | None:
-        """The expanded absolute root path, or None if unset. Read-only."""
+        """The expanded absolute effective root path. Always set (never None)
+        after construction; the auto-default is created on first use."""
         return self._root
 
     def status(self) -> StorageStatus:

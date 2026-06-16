@@ -75,10 +75,12 @@ def test_sandbox_config_get_and_put_round_trip(client):
 
 
 def test_projects_storage_config_round_trip(client, tmp_path):
-    # default = unset; the UI sees a clear empty state, not a fake-default
+    # E4 zero-config: an unconfigured root is no longer "unset/broken" — it
+    # resolves to an auto-created default (XDG/data-dir), so status is "ok" while
+    # the configured value stays empty ("" = "use the auto default").
     cfg = client.get("/api/projects/storage/config").json()
     assert cfg["projects_root"] == ""
-    assert cfg["status"] == "unset"
+    assert cfg["status"] == "ok"
 
     # PUT a real directory → status=ok, persists
     put = client.put(
@@ -106,14 +108,16 @@ def test_projects_storage_config_rejects_bad_path_with_typed_reason(client):
 
 
 def test_projects_storage_config_unset_is_allowed(client):
-    # empty string is a valid "unset" — clearing the path is a legitimate user action
+    # E4 zero-config: clearing the path is legitimate AND self-healing — empty
+    # resolves to the auto-created default, so the save succeeds with status "ok"
+    # (not "unset"). The configured value stays "" to mean "use the auto default".
     res = client.put(
         "/api/projects/storage/config",
         json={"projects_root": "", "status": "unset"},
     )
     assert res.status_code == 200
     assert res.json()["projects_root"] == ""
-    assert res.json()["status"] == "unset"
+    assert res.json()["status"] == "ok"
 
 
 def test_assignments_default_and_per_role(client):

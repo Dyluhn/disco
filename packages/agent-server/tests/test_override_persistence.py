@@ -195,12 +195,15 @@ async def test_suspend_frees_idle_sandbox_but_not_a_running_one(tmp_path, monkey
 
 
 async def test_suspend_is_a_noop_without_durable_storage(tmp_path, monkeypatch):
-    """No projects_root → no durable snapshot, so tearing the sandbox down would LOSE
-    work. Auto-suspend must keep the sandbox in that config (resume has nothing to
-    restore from otherwise)."""
+    """No DURABLE storage → no snapshot, so tearing the sandbox down would LOSE work;
+    auto-suspend keeps the sandbox. E4: an UNCONFIGURED root no longer hits this path
+    (it auto-resolves to a writable default and DOES persist) — storage is "not durable"
+    only when an EXPLICIT root is unusable (here a non-existent path → status NOT_FOUND)."""
     from disco.core import ConversationStatus
 
-    rt, store = await _runtime_with_projects(tmp_path, monkeypatch, root="")  # not configured
+    rt, store = await _runtime_with_projects(
+        tmp_path, monkeypatch, root="/definitely/not/a/real/path"
+    )  # explicit + unavailable → no durable snapshot
     ex = _FakeExecutor()
     rt._executors["conv_x"] = ex
     await _set_status(store, "conv_x", ConversationStatus.FINISHED)

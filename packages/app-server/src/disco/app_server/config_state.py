@@ -429,13 +429,19 @@ def _sandbox_from(config: RouterConfig) -> SandboxConfigDTO:
 def _projects_from(config: RouterConfig) -> ProjectStorageConfigDTO:
     """Wire DTO for the Build-project storage path. The `status` derives from
     the live `validate_root` check so the UI sees the truth at GET time
-    (a path saved yesterday could be missing today if the user deleted it)."""
-    from disco.tools.projects import validate_root
+    (a path saved yesterday could be missing today if the user deleted it).
+
+    When `projects_root` is empty (fresh install / unset), the effective path
+    is computed and auto-created by :func:`resolve_projects_root`; the DTO then
+    carries that resolved path so the UI can show where data will live, and
+    `status` will be ``ok`` rather than ``unset``."""
+    from disco.tools.projects import resolve_projects_root, validate_root
 
     p = config.projects
+    effective = resolve_projects_root(p.projects_root)
     return ProjectStorageConfigDTO(
-        projects_root=p.projects_root,
-        status=validate_root(p.projects_root).value,
+        projects_root=p.projects_root,  # preserve what the user explicitly saved
+        status=validate_root(effective).value,
     )
 
 
@@ -652,11 +658,18 @@ class ConfigState:
         directory or this raises ConfigValidationError; the endpoint maps that
         to a 400 with a typed reason so the UI can show a specific error."""
         from disco.core.llm import ProjectStorageSettings
-        from disco.tools.projects import StorageStatus, validate_root
+        from disco.tools.projects import (
+            StorageStatus,
+            resolve_projects_root,
+            validate_root,
+        )
 
         raw = dto.projects_root.strip()
         if raw:
-            status = validate_root(raw)
+            # E4: a configured-but-missing path that's CREATABLE is mkdir -p'd and
+            # accepted ("works every time"); only a genuinely unreachable path
+            # (mkdir fails) stays NOT_FOUND and is rejected with a typed reason.
+            status = validate_root(resolve_projects_root(raw))
             if status != StorageStatus.OK:
                 raise ConfigValidationError(
                     reason=status.value,

@@ -24,6 +24,8 @@ from .store import (
     ProjectStore,
     StorageError,
     StorageStatus,
+    default_projects_root,
+    resolve_projects_root,
     validate_root,
 )
 
@@ -34,7 +36,9 @@ __all__ = [
     "StorageError",
     "StorageStatus",
     "aiter_zip_workspace",
+    "default_projects_root",
     "rehydrate_workspace",
+    "resolve_projects_root",
     "snapshot_workspace",
     "validate_root",
     "zip_workspace",

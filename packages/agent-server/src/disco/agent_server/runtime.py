@@ -2006,13 +2006,13 @@ class ConversationRuntime:
     async def _suspend(self, conversation_id: str) -> None:
         """Free an IDLE build's sandbox (its last UI closed): snapshot first, then
         tear down the container/port/memory/preview-server. Skips when there's no
-        live sandbox, when storage isn't configured (no durable snapshot → keep the
+        live sandbox, when storage isn't ready (no durable snapshot → keep the
         sandbox so nothing is lost), or when the loop is actively RUNNING (don't
         interrupt in-flight work — that run continues in the background). Resume (or
         the next message) re-creates the sandbox and rehydrates from the snapshot."""
         if conversation_id not in self._executors:
             return
-        if not self._config_store.load().projects.projects_root.strip():
+        if self._project_store_now().status() != StorageStatus.OK:
             return
         state = await self._store.get_state(conversation_id)
         if state.execution_status is ConversationStatus.RUNNING:
@@ -2464,10 +2464,12 @@ class ConversationRuntime:
             ),
         )
 
-    def project_store(self) -> ProjectStore | None:
+    def project_store(self) -> ProjectStore:
         """Public accessor for the live project store (used by the agent-server's
-        projects endpoints). Returns None if no path is configured; the caller
-        checks `.status()` for the full validation classification."""
+        projects endpoints). Always returns a ProjectStore — callers check
+        ``.status()`` for the full validation classification (ok / not_found /
+        not_writable etc.).  An empty ``projects_root`` resolves to the
+        auto-default path rather than returning None."""
         return self._project_store_now()
 
     # ---- share export (RP-06) ----------------------------------------------
@@ -2927,14 +2929,14 @@ class ConversationRuntime:
         `revoked_at IS NULL` clause)."""
         return self._store.revoke_share_token(token, owner_id=owner_id)
 
-    def _project_store_now(self) -> ProjectStore | None:
-        """Build a ProjectStore from the current settings — None if no path is
-        configured. Built per-call (cheap; matches the rest of the runtime's
-        "reload the config each request" discipline). The validity status is
-        checked at the use site so a bad-but-set path can be reported clearly."""
+    def _project_store_now(self) -> ProjectStore:
+        """Build a ProjectStore from the current settings. Built per-call (cheap;
+        matches the rest of the runtime's "reload the config each request"
+        discipline). An empty ``projects_root`` (fresh install) resolves to the
+        auto-default path via :func:`resolve_projects_root` inside
+        :class:`ProjectStore`; the validity status is always queryable via
+        ``store.status()`` at the use site."""
         root = self._config_store.load().projects.projects_root
-        if not root.strip():
-            return None
         return ProjectStore(root)
 
     async def _maybe_rehydrate(self, conversation_id: str) -> None:

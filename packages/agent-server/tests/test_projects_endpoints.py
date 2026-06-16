@@ -40,12 +40,15 @@ def _runtime(store: SqliteEventStore, *, root: str | None) -> ConversationRuntim
     return ConversationRuntime(store, config=cfg, config_store=cfg_store)
 
 
-def test_list_projects_returns_unset_when_path_not_configured(store):
+def test_list_projects_ok_with_auto_default_when_path_not_configured(store, tmp_path, monkeypatch):
+    # E4 zero-config: an unconfigured root auto-resolves to a writable default (here
+    # isolated to a tmp data dir), so the list is OK + empty — not "unset".
+    monkeypatch.setenv("DISCO_DATA_DIR", str(tmp_path))
     runtime = _runtime(store, root=None)
     client = TestClient(create_app(store, runtime=runtime))
     res = client.get("/api/projects").json()
     assert res["projects"] == []
-    assert res["status"] == "unset"
+    assert res["status"] == "ok"
 
 
 def test_list_projects_reports_not_found_for_missing_path(store):
