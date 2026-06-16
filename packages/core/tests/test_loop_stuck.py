@@ -334,7 +334,7 @@ def test_c7_pool_selector_is_deterministic_and_injective_across_attempts():
     count, (b) differ in bytes between consecutive attempt indices, and
     (c) cycle with period = len(POOL). This locks in the rotation
     contract without driving the full loop."""
-    from disco.core.loop.engine import _STUCK_ESCAPE_REMINDER_POOL, _stuck_escape_reminder
+    from disco.core.loop.messages import _STUCK_ESCAPE_REMINDER_POOL, _stuck_escape_reminder
 
     n = len(_STUCK_ESCAPE_REMINDER_POOL)
     # (a) determinism: same attempt → same reminder.

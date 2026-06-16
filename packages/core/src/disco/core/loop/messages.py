@@ -1,0 +1,255 @@
+"""Static reminder / message builders — pure helpers over the event log.
+
+Extracted from `engine.py` (god-file decomposition, Wave 1). All pure module-
+level functions — no loop or `self` state, no model calls, no emission:
+
+* `_describe_llm_error` — render a provider/model error WITHOUT flattening it.
+* `_workspace_paths_from_events` — the (mutated, read_only) working-set path
+  lists, most-recent first; the snapshot + HS-03 recap both build on it.
+* `_hs03_reground_message` — the HS-03 facts re-ground recap (an LLMMessage of
+  goal / progress / files / constraints), FACTS ONLY.
+* `_stuck_escape_reminder` — pick the rotating stuck-escape reminder for an
+  attempt count from a small fixed pool.
+
+The engine re-imports the four builders it calls; the cadence/temperature
+constants that GATE them (`_HS03_REGROUND_INTERVAL`, `_STUCK_ESCAPE_TEMP`) and
+the workspace-snapshot size caps (`_WS_*`) stay in engine.py — only the
+constants used EXCLUSIVELY by the moved builders moved with them.
+"""
+
+from __future__ import annotations
+
+from ..events import ActionEvent, Event, LLMMessage
+from ..llm import LLMError
+from ..view import _latest_plan
+from .dedup import _WORKSPACE_MUTATING_TOOLS, _WORKSPACE_READ_TOOLS
+
+
+def _describe_llm_error(e: LLMError) -> str:
+    """Render a model/provider error for the user WITHOUT flattening its reason.
+
+    Reactive error surfacing: when the assigned model rejects the input or the
+    provider fails, the user must see the ACTUAL provider message — not a generic
+    "model call failed". We keep the typed classification (the exception class the
+    adapter mapped to) AND the real reason (its message), plus provider/model
+    context when the typed error carries it."""
+    reason = str(e) or "(provider returned no message)"
+    loc = " / ".join(p for p in (getattr(e, "provider", ""), getattr(e, "model", "")) if p)
+    head = f"{type(e).__name__} [{loc}]" if loc else type(e).__name__
+    return f"{head}: {reason}"
+
+
+def _workspace_paths_from_events(events: list[Event]) -> tuple[list[str], list[str]]:
+    """Return (mutated, read_only) working-set paths, each de-duplicated and
+    MOST-RECENT FIRST. A path counted as mutated if it was EVER written/edited —
+    a write outranks a later read, so the deliverable files the agent is building
+    are never pushed out of the snapshot window by read-heavy exploration
+    (steelman finding #1). Mirrors Aider's "files in the chat" — bounded +
+    relevant. Reads the raw event list directly, so a file touched long ago (and
+    since forgotten/condensed from the View) still counts: it is still on disk."""
+    mutated: dict[str, None] = {}
+    read_only: dict[str, None] = {}
+    for e in events:
+        if not isinstance(e, ActionEvent) or e.tool_call is None:
+            continue  # defensive: a tool_call-less ActionEvent (finish mirror) has no path
+        name = e.tool_call.tool_name
+        p = e.tool_call.arguments.get("path")
+        if not isinstance(p, str) or not p:
+            continue
+        if name in _WORKSPACE_MUTATING_TOOLS:
+            read_only.pop(p, None)  # promote a previously read-only file to mutated
+            mutated.pop(p, None)
+            mutated[p] = None  # most-recent-wins
+        elif name in _WORKSPACE_READ_TOOLS:
+            if p in mutated:
+                mutated.pop(p, None)  # bump recency but keep it classified mutated
+                mutated[p] = None
+            else:
+                read_only.pop(p, None)
+                read_only[p] = None
+    return list(reversed(mutated.keys())), list(reversed(read_only.keys()))
+
+
+# The view.py tag for the re-ground recap. A message that starts with this
+# sentinel IS the re-ground; the predicate and the tests inspect this tag
+# to count emits and assert content shape. Kept short and distinct from
+# _RECITATION_SENTINEL so the two recaps are unambiguous in the View.
+_HS03_REGROUND_SENTINEL = "<reground-anchors>"
+# Hard cap on the per-section body length inside the recap, so a long plan
+# summary or many recently-touched files can't bloat the re-ground into a
+# second prompt. The whole recap stays well under ~1k chars.
+_HS03_REGROUND_SECTION_CHARS = 200
+_HS03_REGROUND_MAX_FILES = 4  # only the most recent few files in the recap
+def _hs03_reground_message(events: list[Event]) -> LLMMessage | None:
+    """HS-03 — build a short RECAP of the stable facts (goal, plan state,
+    recently-touched files, optional constraints from the plan's
+    exploration context). PURE function over the event log — no model
+    call, no emission. Returns None when there is no plan to recap (a
+    re-ground without a plan has nothing to anchor to; the calling
+    gate drops the emit).
+
+    The text is FACTS ONLY — the GOAL is stated as a present-tense
+    declarative ("Goal: ship the page"), the progress is a checklist
+    with checkmarks, the files are a list. There is NO "you should",
+    "next, do", "call X" — that would be a steer and would violate
+    the no-automatic-nudge invariant (commit c97c1b3). The HS-03
+    recap is a passive reminder of facts the model should already
+    know; it does not direct behavior.
+
+    The re-ground is built from three event-derived sources, in this
+    order — each is bounded so a runaway log doesn't bloat the
+    reminder into a second prompt:
+      1. Latest PlanEvent — goal summary, exploration `context` (the
+         planner's "findings + constraints" markdown; empty for plans
+         that skipped the rationale), per-step checkmarks (mirrors
+         _recitation_signature's done/active accounting).
+      2. _workspace_paths_from_events — top-N most-recently-touched
+         files (mutating tools first, then read-only), names only (no
+         body — the snapshot is the authoritative current state).
+      3. Concise fallback: when no plan exists, the recap is None and
+         the calling gate drops the emit. (A re-ground of "remember
+         the user said hello" would be cargo-cult; without a plan
+         there is no goal to anchor to.)
+
+    Length budget: each section is clamped to _HS03_REGROUND_SECTION_CHARS
+    (~200) so a long plan summary or many files can't push the recap past
+    a few hundred chars total. The sentinel-tagged wrapper adds < 50
+    chars. The full message stays under ~1k chars — a single, easily-
+    skipped block in the View, not a competing prompt.
+    """
+    plan = _latest_plan(events)
+    if plan is None or not plan.steps:
+        return None
+
+    def _clip(s: str, cap: int = _HS03_REGROUND_SECTION_CHARS) -> str:
+        s = (s or "").strip()
+        if len(s) > cap:
+            return s[: cap - 1] + "\u2026"
+        return s
+
+    # 1. GOAL: plan summary (the one-line "what this plan delivers").
+    goal = _clip(plan.summary or "(no summary)")
+
+    # 2. PROGRESS: per-step checklist. Mirrors _recitation_signature's
+    # accounting (only plan_step marks AFTER the current plan's seq),
+    # but with FACTS ONLY — "✓ 1. step title" — and no "next incomplete"
+    # line (the brief is explicit: this is a recap, not a steer). A
+    # strong model that can read a checklist doesn't need a pointer to
+    # the "next" step; the model itself decides.
+    plan_seq = plan.seq or 0
+    done: set[int] = set()
+    active: set[int] = set()
+    for e in events:
+        if not isinstance(e, ActionEvent) or e.tool_call is None:
+            continue
+        if e.tool_call.tool_name != "plan_step":
+            continue
+        if (e.seq or 0) < plan_seq:
+            continue  # mark belongs to a superseded plan
+        try:
+            idx = int(e.tool_call.arguments.get("index"))  # type: ignore[arg-type]
+            state = str(e.tool_call.arguments.get("state"))
+        except (TypeError, ValueError):
+            continue
+        if state == "done":
+            done.add(idx)
+        elif state == "active":
+            active.add(idx)
+    step_lines: list[str] = []
+    for i, step in enumerate(plan.steps, start=1):
+        if i in done:
+            mark = "✓"
+        elif i in active:
+            mark = "→"
+        else:
+            mark = "□"
+        step_lines.append(f"  {mark} {i}. {step.title}")
+    progress = _clip("\n".join(step_lines))
+
+    # 3. FILES: recently-touched paths, names only. Mutating paths first
+    # (the deliverable), then read-only (the exploration surface). Capped
+    # at _HS03_REGROUND_MAX_FILES so a 50-file sweep doesn't push the
+    # recap into a second prompt.
+    mutated, read_only = _workspace_paths_from_events(events)
+    file_paths: list[str] = list(mutated[:_HS03_REGROUND_MAX_FILES])
+    remaining = _HS03_REGROUND_MAX_FILES - len(file_paths)
+    if remaining > 0:
+        file_paths.extend(read_only[:remaining])
+    files_block = (
+        "\n".join(f"  - {p}" for p in file_paths) if file_paths else "  (none yet)"
+    )
+
+    # 4. CONSTRAINTS: the plan's `context` field, when present — the
+    # planner's exploration findings + trade-offs (Claude-Code-style
+    # rationale). Empty for plans that skipped the rationale, in which
+    # case the section is omitted entirely (no "(no constraints)" stub
+    # — silence is cheaper than noise). Clipped so a long rationale
+    # doesn't blow the budget.
+    constraints = ""
+    if plan.context:
+        constraints = _clip(plan.context)
+
+    # Assemble. Order: GOAL → CONSTRAINTS → PROGRESS → FILES. The order
+    # matches the HS-02 anchored template (which the brief cites) so a
+    # reader familiar with HS-02 sees the same shape. We omit
+    # DECISIONS / NEXT (no first-class field for decisions in the
+    # log, and NEXT would be a steer).
+    sections: list[str] = []
+    sections.append(f"GOAL: {goal}")
+    if constraints:
+        sections.append(f"CONSTRAINTS: {constraints}")
+    sections.append(f"PROGRESS ({len(done)}/{len(plan.steps)} done):\n{progress}")
+    sections.append(f"FILES:\n{files_block}")
+
+    body = (
+        f"{_HS03_REGROUND_SENTINEL}\n"
+        + "\n".join(sections)
+        + f"\n{_HS03_REGROUND_SENTINEL}"
+    )
+    return LLMMessage(role="user", content=body)
+
+
+# C7 — escape-reminder pool + serialization seed. A small fixed pool of
+# `<system-reminder>` phrasings selected by attempt count (modulo the pool
+# length) so consecutive escape attempts are NOT byte-identical. The
+# pool size is intentionally small (3 entries) — enough that the model sees
+# a different angle each time, but small enough to keep the system prompt
+# footprint predictable. A per-attempt nonce is embedded as a hidden
+# comment-style suffix so the reminder is identifiable in tests (the model
+# ignores HTML comments) AND differs in bytes between attempts. Deterministic
+# under a fixed attempt count: index = attempt_count % len(_STUCK_ESCAPE_REMINDER_POOL),
+# nonce = attempt_count. The escape path is the ONLY consumer of this pool
+# (c97c1b3 — no automatic nudge outside the existing stuck-escape).
+_STUCK_ESCAPE_REMINDER_POOL: tuple[str, ...] = (
+    "<system-reminder>\n"
+    "You've been repeating the same action. STOP and take a different "
+    "approach — a different tool, a different argument shape, or a "
+    "different sub-task entirely. Do not retry what just failed.\n"
+    "<!-- disco:escape-attempt=0 -->\n"
+    "</system-reminder>",
+    "<system-reminder>\n"
+    "The previous retry didn't work either. Pivot: re-read the most recent "
+    "error, identify the SPECIFIC thing that went wrong, and change exactly "
+    "that. Do not echo the same tool call with the same arguments.\n"
+    "<!-- disco:escape-attempt=1 -->\n"
+    "</system-reminder>",
+    "<system-reminder>\n"
+    "Self-imitation detected: the last few steps look like copies of one "
+    "another. Break the pattern. Try a tool you haven't used in this turn, "
+    "or attack a different angle of the problem. If nothing else works, "
+    "declare the blocker and call `finish` honestly.\n"
+    "<!-- disco:escape-attempt=2 -->\n"
+    "</system-reminder>",
+)
+
+
+def _stuck_escape_reminder(attempt_count: int) -> str:
+    """Return the escape reminder for the given attempt count.
+
+    Selection: `_STUCK_ESCAPE_REMINDER_POOL[attempt_count % len(POOL)]`.
+    Deterministic under a fixed attempt_count (testable). The pool rotates
+    so consecutive attempts are NOT byte-identical, breaking the
+    self-imitation chain that a single fixed reminder would invite.
+    """
+    idx = attempt_count % len(_STUCK_ESCAPE_REMINDER_POOL)
+    return _STUCK_ESCAPE_REMINDER_POOL[idx]

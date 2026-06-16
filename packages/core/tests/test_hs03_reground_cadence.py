@@ -53,7 +53,7 @@ from disco.core import (
 )
 from disco.core.llm import OperatingMode
 from disco.core.loop import AgentLoop, NeverConfirm
-from disco.core.loop.engine import (
+from disco.core.loop.messages import (
     _HS03_REGROUND_SENTINEL,
     _hs03_reground_message,
 )
