@@ -3931,6 +3931,31 @@ class AgentLoop:
         return Disp.CONTINUE
 
     async def _handle_delegate_explore(self, step: AgentStep, events: list[Event]) -> Disp:
+        # C20 — `delegate_explore`: a bounded, read-only Explore/Plan
+        # helper the loop dispatches+joins. The driver calls it; the
+        # loop:
+        #   1. enforces the per-run-segment cap (_FANOUT_MAX_PER_RUN;
+        #      past the cap → refuse with a system-reminder, no
+        #      dispatch, no observation);
+        #   2. emits the ActionEvent (so the audit trail sees the
+        #      proposed call);
+        #   3. dispatches the subagent (default: a thin deterministic
+        #      stub — the test seam; production wires a real LLM
+        #      round-trip with read-only tools only — see
+        #      `_run_fanout` for the override hook);
+        #   4. folds the subagent's response back as a paired
+        #      ObservationEvent (success=True on a clean dispatch,
+        #      success=False with error="cap_exceeded" on refusal)
+        #      so the driver sees the result on its next turn.
+        # The helper is READ-ONLY: a subagent cannot mutate
+        # workspace state, cannot run shell, cannot write files
+        # (enforced upstream by the tools the helper is offered —
+        # file_read/file_list/search/extract; the engine also
+        # cannot recurse through `delegate_explore` because the
+        # cap applies to nested calls too). NON-BLOCKING: the
+        # driver keeps working right after — the same shape as
+        # notify_user/remember/serve (the actionless valve still
+        # applies if a fan-out produces no real work).
         if self._fanout_count >= self._fanout_max:
             # Cap exceeded — refuse with feedback. The cap is
             # per-run-segment, so a fresh `run()` resets it.
@@ -4965,38 +4990,10 @@ class AgentLoop:
 
                 events = await self._gate_f4_bootstrap(events)
 
-                # HS-03 — scheduled facts re-grounding (assist-tier only).
-                # On the post-resume one-shot AND on a cadence boundary
-                # (every _HS03_REGROUND_INTERVAL actions since the last
-                # resume), emit a short recap of the stable facts (goal,
-                # plan state, recently-touched files, optional constraints
-                # from the planner's exploration context). Recap ONLY —
-                # no imperative/steer text (commit c97c1b3's
-                # no-automatic-nudge invariant). Three closures:
-                #   * self._assist — capable-model default keeps the
-                #     path closed end-to-end (the helper is never
-                #     called; the predicate short-circuits at the top
-                #     of `_should_emit_reground`);
-                #   * the per-boundary guards
-                #     (_hs03_reground_post_resume_emitted and
-                #     _hs03_reground_last_action_count) — fire EXACTLY
-                #     once per resume (the post-resume one-shot) and
-                #     at most once per cadence boundary (the
-                #     per-boundary action-count guard), so a model
-                #     that is between actions at the same boundary
-                #     doesn't see two consecutive recaps;
-                #   * the action count is
-                #     `_actions_since_last_resume(events)`, so the
-                #     cadence restarts on every resume/restart (a
-                #     long-lived conversation gets a fresh re-ground
-                #     budget at the start of every run segment).
-                # Re-poll events after the emit so the materialize step
-                # below sees the recap in this turn's View (F4's
-                # idiom). The gate runs BEFORE stuck-detection so a
-                # re-ground + a stuck-escape can both fire on the same
-                # turn (they don't conflict; the re-ground is a recap
-                # of facts, the stuck-escape is the C7 anti-imitation
-                # reminder — distinct purposes).
+                # HS-03 — scheduled facts re-grounding (assist-tier only), BEFORE
+                # stuck-detection so a re-ground + a stuck-escape can co-fire.
+                # Re-polls events so the materialized View sees the recap this turn.
+                # Full cadence/closure rationale: see _maybe_emit_reground.
                 events = await self._maybe_emit_reground(events)
 
                 disp = await self._gate_stuck(events)
@@ -5048,31 +5045,6 @@ class AgentLoop:
                     if await self._handle_serve(step, events) is Disp.HALT:
                         return await self.get_state()
                     continue
-                # C20 — `delegate_explore`: a bounded, read-only Explore/Plan
-                # helper the loop dispatches+joins. The driver calls it; the
-                # loop:
-                #   1. enforces the per-run-segment cap (_FANOUT_MAX_PER_RUN;
-                #      past the cap → refuse with a system-reminder, no
-                #      dispatch, no observation);
-                #   2. emits the ActionEvent (so the audit trail sees the
-                #      proposed call);
-                #   3. dispatches the subagent (default: a thin deterministic
-                #      stub — the test seam; production wires a real LLM
-                #      round-trip with read-only tools only — see
-                #      `_run_fanout` for the override hook);
-                #   4. folds the subagent's response back as a paired
-                #      ObservationEvent (success=True on a clean dispatch,
-                #      success=False with error="cap_exceeded" on refusal)
-                #      so the driver sees the result on its next turn.
-                # The helper is READ-ONLY: a subagent cannot mutate
-                # workspace state, cannot run shell, cannot write files
-                # (enforced upstream by the tools the helper is offered —
-                # file_read/file_list/search/extract; the engine also
-                # cannot recurse through `delegate_explore` because the
-                # cap applies to nested calls too). NON-BLOCKING: the
-                # driver keeps working right after — the same shape as
-                # notify_user/remember/serve (the actionless valve still
-                # applies if a fan-out produces no real work).
                 if (
                     step.tool_call is not None
                     and step.tool_call.tool_name == "delegate_explore"
@@ -5113,42 +5085,12 @@ class AgentLoop:
                         return await self.get_state()
                     continue
 
-                # (g.5) ASK-USER GATE — `ask_user` is a MODEL-CHOSEN escape
-                # hatch. When the agent itself decides it needs human input
-                # (after trying 2-3 distinct approaches that all failed, OR
-                # when the right path depends on a judgment call only the user
-                # can make), it can call ask_user(question, options=[...]).
-                #
-                # This is NEVER nudged by the harness — the model discovers the
-                # tool via its system prompt + tool list, and chooses to use it.
-                # That's the Claude Code lesson: tools are options the model
-                # discovers naturally, not fallbacks the harness funnels into.
-                # The loop intercepts the call (the tool is never "executed"
-                # against the sandbox), builds an AlternativesEvent, and halts
-                # at AWAITING_USER_DECISION until the user picks an option or
-                # types a steer message.
-                # PROPOSE-PLAN-UPDATE GATE — when the agent's existing plan is
-                # no longer right (a step failed, a discovery invalidates the
-                # path, the user steered toward a different goal), the agent can
-                # call `propose_plan_update` to emit a NEW plan revision and
-                # halt at AWAITING_PLAN_APPROVAL. The user accepts (Approve &
-                # build), refines (Revise…), or rejects. The new plan slots
-                # chronologically into the chat (PlanPanel renders the latest
-                # revision; prior ones stay in the event log for audit).
-                #
-                # This is what enables auto-recovery without the user having to
-                # poke the model after every failure — the model proposes a
-                # course correction; the user confirms or refines.
-                # FRESH-SESSION BACKSTOP (Phase-B re-run #5, 2026-06-10):
-                # ask_user / propose_plan_update are withheld from the offered
-                # set until the session's first real action (_tools_for_step),
-                # but a weak model can hallucinate calls to unoffered tools —
-                # re-run #5's model called ask_user with an EMPTY question arg
-                # as its first post-resume move, halting the run on its own
-                # narration. Refuse with the same actionable-feedback shape as
-                # the serve gate: attempt the step first, then ask/re-plan
-                # with evidence in hand. PLANNING is exempt (ask_user before
-                # committing a plan is the legitimate use).
+                # (g.5) Model-chosen escape hatches: ask_user / clarify (halt for
+                # human input), propose_plan_update (re-plan + re-approval). Each is
+                # intercepted by its handler below; the loop never nudges the model
+                # toward them. First, the fresh-session backstop: a hallucinated
+                # ask/clarify/propose before any real action this session is refused
+                # with actionable feedback (see _gate_ask_fresh_session).
                 disp = await self._gate_ask_fresh_session(step, events)
                 if disp is Disp.CONTINUE:
                     continue
