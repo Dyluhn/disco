@@ -4485,6 +4485,49 @@ class AgentLoop:
             return Disp.HALT
         return Disp.FALLTHROUGH
 
+    async def _handle_noop_step(self, step: AgentStep, events: list[Event]) -> Disp:
+        if step.thought.strip():
+            await self._emit(
+                MessageEvent(
+                    source=EventSource.AGENT,
+                    message=LLMMessage(role="assistant", content=step.thought),
+                )
+            )
+        else:
+            # Nothing persisted — invisible to every event-derived
+            # detector, so the instance counter has to carry it.
+            self._invisible_steps += 1
+        if await self._post_noop_valve() is Disp.HALT:
+            return Disp.HALT
+        return Disp.CONTINUE
+
+    async def _gate_ask_fresh_session(self, step: AgentStep, events: list[Event]) -> Disp:
+        if (
+            step.tool_call is not None
+            and step.tool_call.tool_name in ("ask_user", "clarify", "propose_plan_update")
+            and self.mode != OperatingMode.PLANNING
+            and self._actions_since_last_resume(events) == 0
+            # In autonomous mode, ask_user/clarify are owned by the headless-
+            # stall guard below (a clean "no user — decide yourself" nudge);
+            # don't pre-empt them here with the interactive "do work, then ask"
+            # message, which tells the model it can ask when it can't. (g.5)
+            # still governs propose_plan_update on a fresh session.
+            and not (
+                self._autonomous
+                and step.tool_call.tool_name in ("ask_user", "clarify")
+            )
+        ):
+            return await self._refuse_fresh_session(
+                step,
+                f"{step.tool_call.tool_name} refused: no real "
+                "work has happened yet in this session. Attempt "
+                "the next plan step with real tool calls first — "
+                "if it fails or something is genuinely unclear, "
+                "you can then ask or propose a plan change with "
+                "the evidence in hand.",
+            )
+        return Disp.FALLTHROUGH
+
     async def run(self) -> ConversationState:
         """Drive until a terminal-for-now status. Idempotent to call again after
         a pause/confirmation. [CONTRACT] returns the resulting ConversationState."""
@@ -4763,18 +4806,7 @@ class AgentLoop:
                 # would loop forever. Count consecutive no-ops since the last
                 # real action / user message; nudge, then hard-stop.
                 if step.tool_call is None:
-                    if step.thought.strip():
-                        await self._emit(
-                            MessageEvent(
-                                source=EventSource.AGENT,
-                                message=LLMMessage(role="assistant", content=step.thought),
-                            )
-                        )
-                    else:
-                        # Nothing persisted — invisible to every event-derived
-                        # detector, so the instance counter has to carry it.
-                        self._invisible_steps += 1
-                    if await self._post_noop_valve() is Disp.HALT:
+                    if await self._handle_noop_step(step, events) is Disp.HALT:
                         return await self.get_state()
                     continue
 
@@ -4814,41 +4846,11 @@ class AgentLoop:
                 # the serve gate: attempt the step first, then ask/re-plan
                 # with evidence in hand. PLANNING is exempt (ask_user before
                 # committing a plan is the legitimate use).
-                if (
-                    step.tool_call is not None
-                    and step.tool_call.tool_name in ("ask_user", "clarify", "propose_plan_update")
-                    and self.mode != OperatingMode.PLANNING
-                    and self._actions_since_last_resume(events) == 0
-                    # In autonomous mode, ask_user/clarify are owned by the headless-
-                    # stall guard below (a clean "no user — decide yourself" nudge);
-                    # don't pre-empt them here with the interactive "do work, then ask"
-                    # message, which tells the model it can ask when it can't. (g.5)
-                    # still governs propose_plan_update on a fresh session.
-                    and not (
-                        self._autonomous
-                        and step.tool_call.tool_name in ("ask_user", "clarify")
-                    )
-                ):
-                    self._invisible_steps += 1
-                    await self._emit(
-                        MessageEvent(
-                            source=EventSource.ENVIRONMENT,
-                            message=LLMMessage(
-                                role="user",
-                                content=(
-                                    f"{step.tool_call.tool_name} refused: no real "
-                                    "work has happened yet in this session. Attempt "
-                                    "the next plan step with real tool calls first — "
-                                    "if it fails or something is genuinely unclear, "
-                                    "you can then ask or propose a plan change with "
-                                    "the evidence in hand."
-                                ),
-                            ),
-                        )
-                    )
-                    if await self._post_noop_valve() is Disp.HALT:
-                        return await self.get_state()
-                    continue  # non-blocking — let the model act on the feedback
+                disp = await self._gate_ask_fresh_session(step, events)
+                if disp is Disp.CONTINUE:
+                    continue
+                if disp is Disp.HALT:
+                    return await self.get_state()
 
                 # AUTONOMOUS HEADLESS-STALL GUARD. _tools_for_step withholds
                 # ask_user/clarify from the schema in autonomous mode, but a weak
