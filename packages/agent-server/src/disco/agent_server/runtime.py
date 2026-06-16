@@ -52,6 +52,8 @@ from disco.core import (
 )
 from disco.core.env import disco_env
 from disco.core.llm import (
+    CapabilityProfile,
+    CompletionRequest,
     ConfigStore,
     DefaultLLMRouter,
     DriverPrompts,
@@ -2685,9 +2687,12 @@ class ConversationRuntime:
             router = self._router_now()
             try:
                 answer = await router.complete(
-                    prompt=follow_up_query,
-                    mode=OperatingMode.INTERACTIVE,
-                    role=ModelRole.RAG_ANSWERER,
+                    CompletionRequest(
+                        profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
+                        messages=[LLMMessage(role="user", content=follow_up_query)],
+                        temperature=0.0,
+                        max_tokens=1400,
+                    )
                 )
                 await self._store.append(
                     conversation_id,
@@ -2748,9 +2753,12 @@ class ConversationRuntime:
             router = self._router_now()
             try:
                 answer = await router.complete(
-                    prompt=prompt,
-                    mode=OperatingMode.INTERACTIVE,
-                    role=ModelRole.RAG_ANSWERER,
+                    CompletionRequest(
+                        profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
+                        messages=[LLMMessage(role="user", content=prompt)],
+                        temperature=0.0,
+                        max_tokens=1400,
+                    )
                 )
                 await self._store.append(
                     conversation_id,
