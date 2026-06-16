@@ -31,12 +31,58 @@ function KeyManager() {
 
   if (!status) return null;
 
-  // Can't store at all: no app secret to encrypt with.
-  if (!status.can_store && !status.configured) {
-    return (
-      <NotWired detail="Encrypted key storage needs an app secret: set DISCO_SECRET_KEY on the servers, then you can save an OpenRouter key here (it's encrypted at rest, never plaintext on disk)." />
-    );
-  }
+  // The four UI states for the key surface, in priority order:
+  //   1. stored-but-undelible (`locked`)         — stored, but DISCO_SECRET_KEY
+  //      has changed/lost since save; keep the loud NotWired chip so the user
+  //      knows nothing here will actually work.
+  //   2. stored-and-readable (`configured`)      — show "Key configured" + Clear.
+  //   3. storable-but-empty (`!configured && can_store`) — show the entry form
+  //      (the happy path; banner hidden because storage is fine).
+  //   4. un-storable-and-empty (`!configured && !can_store`) — server has no
+  //      DISCO_SECRET_KEY, so persistence is off the table. We STILL render the
+  //      entry form (so the surface reads as "enter your key here") and prepend
+  //      a plain, non-alarming inline banner explaining that the key won't
+  //      survive a restart. Submission against the live API will surface the
+  //      server-side error inline (honest affordance), which the form already
+  //      renders via `setKey.error` below. The old NotWired chip is gone from
+  //      this branch on purpose: replacing the field with a "Not functional
+  //      yet" tag made the screen look broken to users.
+  const entryForm = (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (value.trim()) setKey.mutate(value.trim(), { onSuccess: () => setValue("") });
+      }}
+      className="flex flex-col gap-hair"
+    >
+      <div className="flex gap-inline">
+        <input
+          type="password"
+          className={field}
+          value={value}
+          placeholder={
+            status.can_store
+              ? "sk-or-v1-…  (encrypted at rest with DISCO_SECRET_KEY)"
+              : "sk-or-v1-…  (session-only — DISCO_SECRET_KEY not set on the server)"
+          }
+          onChange={(e) => setValue(e.target.value)}
+          aria-label="OpenRouter API key"
+        />
+        <button
+          type="submit"
+          disabled={setKey.isPending || !value.trim()}
+          className="shrink-0 rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg disabled:opacity-60"
+        >
+          {setKey.isPending ? "Saving…" : "Save key"}
+        </button>
+      </div>
+      {setKey.error && (
+        <p role="alert" className="font-ui text-[0.78rem] text-unsupported">
+          {setKey.error instanceof ApiError ? setKey.error.message : "Couldn't save the key."}
+        </p>
+      )}
+    </form>
+  );
   // Stored but can't be decrypted (app secret missing/wrong since it was saved).
   if (status.locked) {
     return (
@@ -60,39 +106,30 @@ function KeyManager() {
       </div>
     );
   }
-  // Not configured yet, but storable.
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (value.trim()) setKey.mutate(value.trim(), { onSuccess: () => setValue("") });
-      }}
-      className="flex flex-col gap-hair"
-    >
-      <div className="flex gap-inline">
-        <input
-          type="password"
-          className={field}
-          value={value}
-          placeholder="sk-or-v1-…  (encrypted at rest with DISCO_SECRET_KEY)"
-          onChange={(e) => setValue(e.target.value)}
-          aria-label="OpenRouter API key"
-        />
-        <button
-          type="submit"
-          disabled={setKey.isPending || !value.trim()}
-          className="shrink-0 rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg disabled:opacity-60"
+  // Un-storable-and-empty: render the form WITH a plain explanatory banner
+  // (kept calm, not red — this is a setup hint, not a system failure). The
+  // input still renders so the user can read the surface as "enter your key
+  // here" instead of "broken chip."
+  if (!status.can_store) {
+    return (
+      <div className="flex flex-col gap-inline">
+        <div
+          role="note"
+          className="rounded-control border border-hairline bg-surface-1 px-body py-inline"
         >
-          {setKey.isPending ? "Saving…" : "Save key"}
-        </button>
+          <p className="font-ui text-[0.78rem] leading-snug text-text-muted">
+            The server doesn't have <code className="font-mono text-[0.76rem] text-text">DISCO_SECRET_KEY</code>{" "}
+            set, so an OpenRouter key entered here will not be encrypted-at-rest and won't survive a
+            restart. Ask the operator to set the app secret to enable persistent storage; until then
+            this entry is best-effort only.
+          </p>
+        </div>
+        {entryForm}
       </div>
-      {setKey.error && (
-        <p role="alert" className="font-ui text-[0.78rem] text-unsupported">
-          {setKey.error instanceof ApiError ? setKey.error.message : "Couldn't save the key."}
-        </p>
-      )}
-    </form>
-  );
+    );
+  }
+  // Not configured yet, but storable (the happy path).
+  return entryForm;
 }
 
 /** Browse the live OpenRouter catalogue and add a model to ours. */

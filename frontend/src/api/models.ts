@@ -258,7 +258,11 @@ export function openRouterUpsert(m: OpenRouterModel): ModelUpsert {
     id,
     model_id: m.id,
     base_url: "https://openrouter.ai/api/v1",
-    api_key_env: "PMX_OPENROUTER_API_KEY",
+    // The runtime injects the decrypted OpenRouter key under the canonical
+    // post-rename name DISCO_OPENROUTER_API_KEY (the legacy PMX_ name is NOT
+    // auto-resolved the other direction), so UI-added models must reference
+    // this env var to actually authenticate.
+    api_key_env: "DISCO_OPENROUTER_API_KEY",
     context_window: m.context_length,
     quantization: null,
     capabilities: [...m.capabilities],
