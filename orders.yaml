@@ -854,3 +854,15 @@ cs-01: committed
   - frontend/src/fixtures/answers.ts
   - frontend/e2e/contradiction-surfacing.spec.ts
   - test-record/cs-01/vitest.log
+
+# --- completeness scan (2026-06-16) -------------------------------------------
+scan-m1: done  # consolidated → docs/remaining-items-consolidated-2026-06-15.md
+  - agent-projects/worker/scan-m1-report.md
+scan-m2: done  # consolidated → docs/remaining-items-consolidated-2026-06-15.md
+  - agent-projects/worker/scan-m2-report.md
+scan-m3: done  # consolidated → docs/remaining-items-consolidated-2026-06-15.md
+  - agent-projects/worker/scan-m3-report.md
+scan-m4: done  # consolidated → docs/remaining-items-consolidated-2026-06-15.md
+  - agent-projects/worker/scan-m4-report.md
+scan-g1: done  # consolidated → docs/remaining-items-consolidated-2026-06-15.md
+  - agent-projects/worker/scan-g1-report.md
