@@ -370,6 +370,54 @@ class AudioOverviewTool:
 
         return turns, None
 
+    async def _synthesize_turns(
+        self, turns: list[Turn], cfg: _ResolvedTts
+    ) -> tuple[list[Any] | None, ToolOutcome | None]:
+        """Step 3: synthesise each turn to float32 mono PCM @ 24 kHz via the bundled
+        (in-process Kokoro) or remote (Speaches / OpenAI-compatible) backend. Returns
+        (pcm_turns, None) on success or (None, failure_outcome) on the first error."""
+        pcm_turns: list[Any] = []
+        for i, turn in enumerate(turns):
+            voice = cfg.voice_a if turn.speaker == "A" else cfg.voice_b
+            try:
+                if cfg.is_remote:
+                    pcm = await _synthesize_remote(
+                        turn.text, voice, cfg.remote_base,
+                        api_key=cfg.remote_key, model=cfg.remote_model,
+                    )
+                else:
+                    pcm = await _synthesize_local(turn.text, voice)
+            except httpx.ConnectError:
+                return None, ToolOutcome(
+                    success=False,
+                    content=(
+                        f"The TTS endpoint is unreachable at {cfg.remote_base}. "
+                        f"Turn {i + 1}/{len(turns)} could not be synthesised. "
+                        f"Switch Settings → Audio to bundled, or start/fix the endpoint."
+                    ),
+                    error=f"tts endpoint offline: {cfg.remote_base}",
+                )
+            except Exception as e:
+                return None, ToolOutcome(
+                    success=False,
+                    content=(
+                        f"TTS ({cfg.backend}) failed for turn {i + 1}/{len(turns)} "
+                        f"(speaker {turn.speaker}): {e}"
+                    ),
+                    error=str(e),
+                )
+            if pcm is None or getattr(pcm, "size", len(pcm) if pcm is not None else 0) == 0:
+                return None, ToolOutcome(
+                    success=False,
+                    content=(
+                        f"TTS ({cfg.backend}) returned empty audio for turn "
+                        f"{i + 1}/{len(turns)} (speaker {turn.speaker})"
+                    ),
+                    error="Empty audio from TTS",
+                )
+            pcm_turns.append(pcm)
+        return pcm_turns, None
+
     async def run(self, args: AudioOverviewArgs, ctx: ToolContext) -> ToolOutcome:
         from disco.agent_server.audio_config import (
             LLM_URL,
@@ -393,10 +441,6 @@ class AudioOverviewTool:
         voice_a = tts_cfg.voice_a
         voice_b = tts_cfg.voice_b
         backend = tts_cfg.backend
-        is_remote = tts_cfg.is_remote
-        remote_base = tts_cfg.remote_base
-        remote_key = tts_cfg.remote_key
-        remote_model = tts_cfg.remote_model
 
         # --- Steps 1 & 2: Generate turn-script via LLM (+ one retry) ---------
         turns, gen_failure = await self._generate_turn_script(report_text, LLM_URL)
@@ -404,50 +448,11 @@ class AudioOverviewTool:
             return gen_failure
 
         # --- Step 3: Synthesise each turn to PCM ----------------------------
-        # Bundled in-process Kokoro (default) or remote Speaches, per Settings.
-        # Both backends return float32 mono PCM @ 24 kHz so the overview is mixed
-        # in PCM and encoded to MP3 exactly once (Step 4).
         assert turns is not None  # validated above
-        pcm_turns: list[Any] = []
-        for i, turn in enumerate(turns):
-            voice = voice_a if turn.speaker == "A" else voice_b
-            try:
-                if is_remote:
-                    pcm = await _synthesize_remote(
-                        turn.text, voice, remote_base,
-                        api_key=remote_key, model=remote_model,
-                    )
-                else:
-                    pcm = await _synthesize_local(turn.text, voice)
-            except httpx.ConnectError:
-                return ToolOutcome(
-                    success=False,
-                    content=(
-                        f"The TTS endpoint is unreachable at {remote_base}. "
-                        f"Turn {i + 1}/{len(turns)} could not be synthesised. "
-                        f"Switch Settings → Audio to bundled, or start/fix the endpoint."
-                    ),
-                    error=f"tts endpoint offline: {remote_base}",
-                )
-            except Exception as e:
-                return ToolOutcome(
-                    success=False,
-                    content=(
-                        f"TTS ({backend}) failed for turn {i + 1}/{len(turns)} "
-                        f"(speaker {turn.speaker}): {e}"
-                    ),
-                    error=str(e),
-                )
-            if pcm is None or getattr(pcm, "size", len(pcm) if pcm is not None else 0) == 0:
-                return ToolOutcome(
-                    success=False,
-                    content=(
-                        f"TTS ({backend}) returned empty audio for turn "
-                        f"{i + 1}/{len(turns)} (speaker {turn.speaker})"
-                    ),
-                    error="Empty audio from TTS",
-                )
-            pcm_turns.append(pcm)
+        pcm_turns, synth_failure = await self._synthesize_turns(turns, tts_cfg)
+        if synth_failure is not None:
+            return synth_failure
+        assert pcm_turns is not None
 
         # --- Step 4: Mix in PCM, then encode the whole overview to MP3 once --
         mixed_pcm = mix_pcm(
