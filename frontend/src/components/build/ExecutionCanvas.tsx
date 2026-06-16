@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { deriveFiles, deriveSrcDoc, deriveTerminal } from "@/lib/buildTrace";
-import { previewHostUrl } from "@/api/client";
+import { agentHttpBase, previewHostUrl } from "@/api/client";
 import { restartPreview } from "@/api/agent";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
 import { useSessions } from "@/hooks/useSessions";
@@ -38,6 +38,14 @@ type TabId = "files" | "terminal" | "preview" | "cockpit";
  *  response (we only RENDER the rows the backend says are bound — no
  *  guessing). */
 const KNOWN_USER_PORTS: readonly number[] = [8000, 3000, 5173, 8080, 5000, 4321];
+
+/** E2 — detect a Vite/bundler entry HTML by the module-script src it references.
+ *  The srcdoc iframe can't load `/src/...` or `/@vite/...` (those are dev-server
+ *  virtual modules), so a bundler entry is UNRUNNABLE as a srcdoc preview. The
+ *  PreviewPane defaults to the live server in that case (when one is available). */
+function isBundlerEntryHtml(html: string): boolean {
+  return /<script[^>]*\bsrc=["'](?:\/src\/|\/@vite\/)/i.test(html);
+}
 
 /** The live watch-it-write pane: the file the driver is composing RIGHT NOW,
  *  content growing with a blinking cursor. Auto-scrolls to follow the tail so the
@@ -307,6 +315,17 @@ function PreviewPane({
     </button>
   );
   const proxySrc = cid ? `${previewHostUrl(cid, previewPort)}/?r=${reloadKey}` : null;
+  // E3 — Firefox-safe path-based route. The origin-true `{cid8}-{port}.localhost`
+  // URL above is the most correct (separate origin, dev-server assets resolve
+  // relative to the same host) but Firefox won't resolve `.localhost` subdomains
+  // out of the box. The agent-server ALSO serves a same-origin
+  // `/conversations/{cid}/preview-app/{path}` route that proxies the same content
+  // — works in every browser, no DNS setup. Expose it as an "Open in new tab"
+  // link so Firefox / Safari / non-magic-DNS users have an escape hatch. The
+  // subdomain iframe stays — Chrome users get the correct asset origins.
+  const openInNewTabUrl = cid
+    ? `${agentHttpBase()}/conversations/${encodeURIComponent(cid)}/preview-app/`
+    : null;
 
   // PRIORITY (the fix): default to the RENDERED view, because the backend's bare
   // `python -m http.server` shows a useless directory LISTING (file paths) when
@@ -314,7 +333,17 @@ function PreviewPane({
   // rendered view shows the real HTML instead. A live dev server (a real bundler
   // app, e.g. Vite) is one click away via the toggle / Open, and is used
   // automatically when there's no renderable file to show.
-  const [mode, setMode] = useState<"rendered" | "live">("rendered");
+  //
+  // E2 — exception for bundler entries: an index.html that references Vite
+  // /bundler module scripts (`<script type="module" src="/src/...">`,
+  // `/@vite/client`) is UNRUNNABLE as a srcdoc — the iframe can't resolve
+  // `/src/main.tsx` or the Vite virtual modules. When a live proxy is available
+  // for that case, default straight to the live server so the user sees the
+  // real running app, not a broken srcdoc. Static HTML still defaults to
+  // "rendered" (the srcdoc DOES render that). The user can always toggle.
+  const [mode, setMode] = useState<"rendered" | "live">(() =>
+    proxyAvailable && srcDoc != null && isBundlerEntryHtml(srcDoc) ? "live" : "rendered",
+  );
   const showLive = proxyAvailable && (mode === "live" || srcDoc == null);
 
   const selectedOwner =
@@ -374,7 +403,27 @@ function PreviewPane({
             >
               <ExternalLink className="size-3" aria-hidden /> Open
             </a>
+            {openInNewTabUrl && (
+              <a
+                href={openInNewTabUrl}
+                target="_blank"
+                rel="noreferrer"
+                title="Open via the agent-server path route (works in Firefox / Safari / non-magic-DNS setups)"
+                className="flex items-center gap-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text"
+              >
+                <ExternalLink className="size-3" aria-hidden /> Open in new tab
+              </a>
+            )}
           </div>
+        </div>
+        {/* E3 — honest cross-browser hint. The iframe above points at the
+            origin-true `{cid8}-{port}.localhost` subdomain, which Chrome
+            resolves but Firefox does not. Tell the user the truth (no
+            fake-affordance, no auto-redirect): Chrome works inline; Firefox
+            needs "Open in new tab" (or a network.dns.localDomains tweak). */}
+        <div className="shrink-0 border-b border-hairline bg-surface-1 px-body py-hair font-ui text-[0.7rem] text-text-faint">
+          Live preview opens best in Chrome; in Firefox use “Open in new tab” or set{" "}
+          <code className="font-mono text-text-muted">network.dns.localDomains</code>.
         </div>
         <iframe
           key={reloadKey}
