@@ -418,6 +418,23 @@ class AudioOverviewTool:
             pcm_turns.append(pcm)
         return pcm_turns, None
 
+    def _build_transcript(
+        self, turns: list[Turn], voice_a: str, voice_b: str
+    ) -> str:
+        """Step 5: render the turn-script to a Markdown transcript."""
+        transcript_lines: list[str] = [
+            "# Audio Overview Transcript",
+            "",
+            f"Voices: Host A = {voice_a}, Host B = {voice_b}",
+            f"Turns: {len(turns)}",
+            "",
+        ]
+        for turn in turns:
+            label = "Host A" if turn.speaker == "A" else "Host B"
+            transcript_lines.append(f"**{label}:** {turn.text}")
+            transcript_lines.append("")
+        return "\n".join(transcript_lines)
+
     async def run(self, args: AudioOverviewArgs, ctx: ToolContext) -> ToolOutcome:
         from disco.agent_server.audio_config import (
             LLM_URL,
@@ -461,18 +478,7 @@ class AudioOverviewTool:
         mixed_mp3 = encode_mp3(mixed_pcm, sample_rate=TTS_SAMPLE_RATE)
 
         # --- Step 5: Build transcript ---------------------------------------
-        transcript_lines: list[str] = [
-            "# Audio Overview Transcript",
-            "",
-            f"Voices: Host A = {voice_a}, Host B = {voice_b}",
-            f"Turns: {len(turns)}",
-            "",
-        ]
-        for turn in turns:
-            label = "Host A" if turn.speaker == "A" else "Host B"
-            transcript_lines.append(f"**{label}:** {turn.text}")
-            transcript_lines.append("")
-        transcript_text = "\n".join(transcript_lines)
+        transcript_text = self._build_transcript(turns, voice_a, voice_b)
 
         # --- Step 6: Write through sandbox (jailed) -------------------------
         mp3_path = f"{filename}.mp3"
