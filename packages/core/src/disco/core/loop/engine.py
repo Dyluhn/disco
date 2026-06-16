@@ -4018,6 +4018,159 @@ class AgentLoop:
             return Disp.HALT
         return Disp.CONTINUE
 
+    def _resolve_verify_command(self, args: dict) -> str:
+        verify_cmd = str(args.get("verify") or "").strip()
+        # E4: a `static` directive verifies a static page WITHOUT a server
+        # (files present + HTML parses) — the honest check for a page build.
+        if verify_cmd == _STATIC_VERIFY_PREFIX or verify_cmd.startswith(
+            _STATIC_VERIFY_PREFIX + ":"
+        ):
+            _, _, _path = verify_cmd.partition(":")
+            verify_cmd = _static_verify_command(_path)
+        # app / app:<url> — verify the RUNNING deliverable actually serves
+        # (HTTP 200 + non-trivial body), not just that a file exists.
+        elif verify_cmd == _APP_VERIFY_PREFIX or verify_cmd.startswith(
+            _APP_VERIFY_PREFIX + ":"
+        ):
+            _, _, _url = verify_cmd.partition(":")
+            verify_cmd = _app_verify_command(_url)
+        return verify_cmd
+
+    async def _normalize_finish_step(
+        self, step: AgentStep, events: list[Event]
+    ) -> tuple[AgentStep, Disp]:
+        # VERIFY-ON-FINISH (post-condition gate). If the agent attached
+        # a `verify` check to finish, RUN it first and refuse the finish
+        # if it doesn't pass — the "run the tests before you claim done"
+        # forcing function. The check is visible in the trace; on
+        # failure the agent sees exactly what broke and adapts, instead
+        # of declaring a broken build complete.
+        verify_cmd = self._resolve_verify_command(step.tool_call.arguments)
+        if verify_cmd:
+            passed, malformed = await self._finish_verify_passed(verify_cmd)
+            if passed:
+                self._finish_verify_refusals = 0  # reset streak on clean pass
+            elif malformed and self._finish_verify_strips < 3:
+                # Broken CHECK, not a failed task → auto-strip and finish.
+                self._finish_verify_strips += 1
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                "<system-reminder>\n"
+                                f"Your verify command `{verify_cmd}` is not runnable "
+                                "(syntax error / command-not-found) — that is a broken "
+                                "CHECK, not a failed task, so it is "
+                                "being ignored and the "
+                                "run is finishing. Next time pass a "
+                                "valid shell command "
+                                "if you want real verification.\n"
+                                "</system-reminder>"
+                            ),
+                        ),
+                    )
+                )
+                # fall through to finish
+            elif self._finish_verify_refusals < _FINISH_VERIFY_CAP:
+                # Real failure: refuse + keep working (the forcing function).
+                self._finish_verify_refusals += 1
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                "<system-reminder>\n"
+                                f"You called finish, but the verify "
+                                f"command `{verify_cmd}` "
+                                "did not pass (see the result above). The task is NOT "
+                                "complete. Fix what it surfaced, then "
+                                "finish again — or "
+                                "finish without a verify command if "
+                                "the check itself is "
+                                "wrong.\n"
+                                "</system-reminder>"
+                            ),
+                        ),
+                    )
+                )
+                return step, Disp.CONTINUE
+            else:
+                # Cap reached: LOUD release — don't grind forever on a gate the
+                # model can't satisfy (mirrors the browser-verify valve). The
+                # failure stays visible (status detail + reminder + summary).
+                await self._emit(
+                    StatusEvent(
+                        status=ConversationStatus.RUNNING,
+                        detail="finish_verify_release",
+                    )
+                )
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                "<system-reminder>\n"
+                                f"The verify command `{verify_cmd}` has failed "
+                                f"{self._finish_verify_refusals} times. "
+                                "Finishing anyway "
+                                "so the run does not loop forever — "
+                                "but the deliverable "
+                                "may be incomplete. Note this clearly "
+                                "in your summary.\n"
+                                "</system-reminder>"
+                            ),
+                        ),
+                    )
+                )
+                # ⚠ human-facing: surfaces in the UI as a warning chip so the
+                # user knows the run finished with a failing check.
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                "⚠ Finished despite the verification check failing "
+                                f"{self._finish_verify_refusals}× — "
+                                "the deliverable may "
+                                "be incomplete; review it."
+                            ),
+                        ),
+                    )
+                )
+                self._finish_verify_refusals = 0
+                # fall through to finish
+        # C1c — external DoD evaluator gate. Runs AFTER the
+        # agent's own verify check (which grades the agent's
+        # own command) but BEFORE the step is committed to a
+        # FINISHED status. The spec is captured at task start
+        # and lives outside the agent's tool surface, so the
+        # predicates are NOT the agent's own — they're a
+        # structural, write-once acceptance bar (see
+        # `core/dod.py`). When the spec exists and the verdict
+        # fails, the finish is REFUSED and the run CONTINUES —
+        # the same refuse-and-continue discipline verify-on-
+        # finish uses. When no spec is set for the
+        # conversation, the gate is a no-op (legacy path is
+        # byte-identical). See `_finish_dod_gate_passed` for
+        # the full algorithm + the byte-identical-no-spec
+        # proof.
+        if not await self._finish_dod_gate_passed():
+            return step, Disp.CONTINUE
+        summary = str(step.tool_call.arguments.get("summary") or "").strip()
+        step = step.model_copy(
+            update={
+                "finished": True,
+                "tool_call": None,
+                "thought": summary or step.thought,
+            }
+        )
+        return step, Disp.FALLTHROUGH
+
     async def run(self) -> ConversationState:
         """Drive until a terminal-for-now status. Idempotent to call again after
         a pause/confirmation. [CONTRACT] returns the resulting ConversationState."""
@@ -4268,150 +4421,9 @@ class AgentLoop:
                         return await self.get_state()
                     continue
                 if step.tool_call is not None and step.tool_call.tool_name == "finish":
-                    # VERIFY-ON-FINISH (post-condition gate). If the agent attached
-                    # a `verify` check to finish, RUN it first and refuse the finish
-                    # if it doesn't pass — the "run the tests before you claim done"
-                    # forcing function. The check is visible in the trace; on
-                    # failure the agent sees exactly what broke and adapts, instead
-                    # of declaring a broken build complete.
-                    verify_cmd = str(step.tool_call.arguments.get("verify") or "").strip()
-                    # E4: a `static` directive verifies a static page WITHOUT a server
-                    # (files present + HTML parses) — the honest check for a page build.
-                    if verify_cmd == _STATIC_VERIFY_PREFIX or verify_cmd.startswith(
-                        _STATIC_VERIFY_PREFIX + ":"
-                    ):
-                        _, _, _path = verify_cmd.partition(":")
-                        verify_cmd = _static_verify_command(_path)
-                    # app / app:<url> — verify the RUNNING deliverable actually serves
-                    # (HTTP 200 + non-trivial body), not just that a file exists.
-                    elif verify_cmd == _APP_VERIFY_PREFIX or verify_cmd.startswith(
-                        _APP_VERIFY_PREFIX + ":"
-                    ):
-                        _, _, _url = verify_cmd.partition(":")
-                        verify_cmd = _app_verify_command(_url)
-                    if verify_cmd:
-                        passed, malformed = await self._finish_verify_passed(verify_cmd)
-                        if passed:
-                            self._finish_verify_refusals = 0  # reset streak on clean pass
-                        elif malformed and self._finish_verify_strips < 3:
-                            # Broken CHECK, not a failed task → auto-strip and finish.
-                            self._finish_verify_strips += 1
-                            await self._emit(
-                                MessageEvent(
-                                    source=EventSource.ENVIRONMENT,
-                                    message=LLMMessage(
-                                        role="user",
-                                        content=(
-                                            "<system-reminder>\n"
-                                            f"Your verify command `{verify_cmd}` is not runnable "
-                                            "(syntax error / command-not-found) — that is a broken "
-                                            "CHECK, not a failed task, so it is "
-                                            "being ignored and the "
-                                            "run is finishing. Next time pass a "
-                                            "valid shell command "
-                                            "if you want real verification.\n"
-                                            "</system-reminder>"
-                                        ),
-                                    ),
-                                )
-                            )
-                            # fall through to finish
-                        elif self._finish_verify_refusals < _FINISH_VERIFY_CAP:
-                            # Real failure: refuse + keep working (the forcing function).
-                            self._finish_verify_refusals += 1
-                            await self._emit(
-                                MessageEvent(
-                                    source=EventSource.ENVIRONMENT,
-                                    message=LLMMessage(
-                                        role="user",
-                                        content=(
-                                            "<system-reminder>\n"
-                                            f"You called finish, but the verify "
-                                            f"command `{verify_cmd}` "
-                                            "did not pass (see the result above). The task is NOT "
-                                            "complete. Fix what it surfaced, then "
-                                            "finish again — or "
-                                            "finish without a verify command if "
-                                            "the check itself is "
-                                            "wrong.\n"
-                                            "</system-reminder>"
-                                        ),
-                                    ),
-                                )
-                            )
-                            continue  # verification failed — keep working
-                        else:
-                            # Cap reached: LOUD release — don't grind forever on a gate the
-                            # model can't satisfy (mirrors the browser-verify valve). The
-                            # failure stays visible (status detail + reminder + summary).
-                            await self._emit(
-                                StatusEvent(
-                                    status=ConversationStatus.RUNNING,
-                                    detail="finish_verify_release",
-                                )
-                            )
-                            await self._emit(
-                                MessageEvent(
-                                    source=EventSource.ENVIRONMENT,
-                                    message=LLMMessage(
-                                        role="user",
-                                        content=(
-                                            "<system-reminder>\n"
-                                            f"The verify command `{verify_cmd}` has failed "
-                                            f"{self._finish_verify_refusals} times. "
-                                            "Finishing anyway "
-                                            "so the run does not loop forever — "
-                                            "but the deliverable "
-                                            "may be incomplete. Note this clearly "
-                                            "in your summary.\n"
-                                            "</system-reminder>"
-                                        ),
-                                    ),
-                                )
-                            )
-                            # ⚠ human-facing: surfaces in the UI as a warning chip so the
-                            # user knows the run finished with a failing check.
-                            await self._emit(
-                                MessageEvent(
-                                    source=EventSource.ENVIRONMENT,
-                                    message=LLMMessage(
-                                        role="user",
-                                        content=(
-                                            "⚠ Finished despite the verification check failing "
-                                            f"{self._finish_verify_refusals}× — "
-                                            "the deliverable may "
-                                            "be incomplete; review it."
-                                        ),
-                                    ),
-                                )
-                            )
-                            self._finish_verify_refusals = 0
-                            # fall through to finish
-                    # C1c — external DoD evaluator gate. Runs AFTER the
-                    # agent's own verify check (which grades the agent's
-                    # own command) but BEFORE the step is committed to a
-                    # FINISHED status. The spec is captured at task start
-                    # and lives outside the agent's tool surface, so the
-                    # predicates are NOT the agent's own — they're a
-                    # structural, write-once acceptance bar (see
-                    # `core/dod.py`). When the spec exists and the verdict
-                    # fails, the finish is REFUSED and the run CONTINUES —
-                    # the same refuse-and-continue discipline verify-on-
-                    # finish uses. When no spec is set for the
-                    # conversation, the gate is a no-op (legacy path is
-                    # byte-identical). See `_finish_dod_gate_passed` for
-                    # the full algorithm + the byte-identical-no-spec
-                    # proof.
-                    if not await self._finish_dod_gate_passed():
-                        continue  # DoD unmet — keep working (status NOT finished)
-                    summary = str(step.tool_call.arguments.get("summary") or "").strip()
-                    step = step.model_copy(
-                        update={
-                            "finished": True,
-                            "tool_call": None,
-                            "thought": summary or step.thought,
-                        }
-                    )
+                    step, disp = await self._normalize_finish_step(step, events)
+                    if disp is Disp.CONTINUE:
+                        continue
 
                 # (e.5) PLAN GATE — in PLANNING mode the planner has THREE valid moves:
                 #   1. `submit_plan` → intercepted into a PlanEvent, loop halts for approval.
