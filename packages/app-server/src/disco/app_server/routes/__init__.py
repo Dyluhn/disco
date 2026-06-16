@@ -12,10 +12,12 @@ from .config import make_config_router
 from .health import make_health_router
 from .models import make_models_router
 from .openrouter import make_openrouter_router
+from .skills import make_skills_router
 
 __all__ = [
     "make_config_router",
     "make_health_router",
     "make_models_router",
     "make_openrouter_router",
+    "make_skills_router",
 ]

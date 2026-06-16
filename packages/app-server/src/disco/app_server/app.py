@@ -21,9 +21,6 @@ from .config.dtos import (
     McpConnectionDTO,
     McpServerApproveDTO,
     McpServerConfigDTO,
-    SkillCreate,
-    SkillDTO,
-    SkillPatch,
 )
 from .config_state import ConfigState
 from .routes import (
@@ -31,6 +28,7 @@ from .routes import (
     make_health_router,
     make_models_router,
     make_openrouter_router,
+    make_skills_router,
 )
 
 
@@ -71,28 +69,7 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
     app.include_router(make_models_router(state))
     app.include_router(make_config_router(state))
     app.include_router(make_openrouter_router(state))
-
-    # ---- skills — real, persistent .md instruction modules ------------------
-
-    @app.get("/api/skills")
-    async def get_skills() -> list[SkillDTO]:
-        return state.skills()
-
-    @app.post("/api/skills", status_code=201)
-    async def create_skill(create: SkillCreate) -> SkillDTO:
-        return state.create_skill(create)
-
-    @app.put("/api/skills/{skill_id}")
-    async def put_skill(skill_id: str, patch: SkillPatch) -> SkillDTO:
-        updated = state.update_skill(skill_id, patch)
-        if updated is None:
-            raise HTTPException(status_code=404, detail=f"unknown skill {skill_id!r}")
-        return updated
-
-    @app.delete("/api/skills/{skill_id}", status_code=204)
-    async def delete_skill(skill_id: str) -> None:
-        if not state.delete_skill(skill_id):
-            raise HTTPException(status_code=404, detail=f"unknown skill {skill_id!r}")
+    app.include_router(make_skills_router(state))
 
     # ---- mcp connections (live, persistent CRUD — rung B) -------------------
 
