@@ -418,6 +418,55 @@ class AudioOverviewTool:
             pcm_turns.append(pcm)
         return pcm_turns, None
 
+    def _mix_and_encode(self, pcm_turns: list[Any], silence_ms: int) -> bytes:
+        """Step 4: mix the per-turn PCM with inter-turn silence (one sample rate end
+        to end), then encode the whole overview to MP3 exactly once."""
+        mixed_pcm = mix_pcm(
+            pcm_turns, silence_ms=silence_ms, sample_rate=TTS_SAMPLE_RATE
+        )
+        return encode_mp3(mixed_pcm, sample_rate=TTS_SAMPLE_RATE)
+
+    async def _write_outputs(
+        self,
+        ctx: ToolContext,
+        filename: str,
+        mixed_mp3: bytes,
+        transcript_text: str,
+        cfg: _ResolvedTts,
+        *,
+        turn_count: int,
+        silence_ms: int,
+    ) -> ToolOutcome:
+        """Step 6: write the MP3 + transcript through the jailed sandbox and build the
+        success ToolOutcome (artifact paths + structured metadata)."""
+        mp3_path = f"{filename}.mp3"
+        transcript_path = f"{filename}.md"
+        assert ctx.sandbox is not None, "audio_overview requires a sandbox for file writes"
+        await ctx.sandbox.write_file(mp3_path, mixed_mp3)
+        await ctx.sandbox.write_file(transcript_path, transcript_text.encode("utf-8"))
+
+        return ToolOutcome(
+            success=True,
+            content=(
+                f"Audio overview generated.\n"
+                f"  MP3: {mp3_path} ({len(mixed_mp3)} bytes)\n"
+                f"  Transcript: {transcript_path}\n"
+                f"  Turns: {turn_count} | Voices: {cfg.voice_a} (A) + {cfg.voice_b} (B)\n"
+                f"  Backend: {cfg.backend} | Silence between turns: {silence_ms}ms"
+            ),
+            artifacts=[mp3_path, transcript_path],
+            structured={
+                "mp3_path": mp3_path,
+                "transcript_path": transcript_path,
+                "turn_count": turn_count,
+                "mp3_bytes": len(mixed_mp3),
+                "voice_a": cfg.voice_a,
+                "voice_b": cfg.voice_b,
+                "backend": cfg.provider,
+                "silence_ms": silence_ms,
+            },
+        )
+
     def _build_transcript(
         self, turns: list[Turn], voice_a: str, voice_b: str
     ) -> str:
@@ -457,7 +506,6 @@ class AudioOverviewTool:
         assert tts_cfg is not None  # enabled path resolves a config
         voice_a = tts_cfg.voice_a
         voice_b = tts_cfg.voice_b
-        backend = tts_cfg.backend
 
         # --- Steps 1 & 2: Generate turn-script via LLM (+ one retry) ---------
         turns, gen_failure = await self._generate_turn_script(report_text, LLM_URL)
@@ -472,39 +520,18 @@ class AudioOverviewTool:
         assert pcm_turns is not None
 
         # --- Step 4: Mix in PCM, then encode the whole overview to MP3 once --
-        mixed_pcm = mix_pcm(
-            pcm_turns, silence_ms=SILENCE_MS_DEFAULT, sample_rate=TTS_SAMPLE_RATE
-        )
-        mixed_mp3 = encode_mp3(mixed_pcm, sample_rate=TTS_SAMPLE_RATE)
+        mixed_mp3 = self._mix_and_encode(pcm_turns, SILENCE_MS_DEFAULT)
 
         # --- Step 5: Build transcript ---------------------------------------
         transcript_text = self._build_transcript(turns, voice_a, voice_b)
 
-        # --- Step 6: Write through sandbox (jailed) -------------------------
-        mp3_path = f"{filename}.mp3"
-        transcript_path = f"{filename}.md"
-        assert ctx.sandbox is not None, "audio_overview requires a sandbox for file writes"
-        await ctx.sandbox.write_file(mp3_path, mixed_mp3)
-        await ctx.sandbox.write_file(transcript_path, transcript_text.encode("utf-8"))
-
-        return ToolOutcome(
-            success=True,
-            content=(
-                f"Audio overview generated.\n"
-                f"  MP3: {mp3_path} ({len(mixed_mp3)} bytes)\n"
-                f"  Transcript: {transcript_path}\n"
-                f"  Turns: {len(turns)} | Voices: {voice_a} (A) + {voice_b} (B)\n"
-                f"  Backend: {backend} | Silence between turns: {SILENCE_MS_DEFAULT}ms"
-            ),
-            artifacts=[mp3_path, transcript_path],
-            structured={
-                "mp3_path": mp3_path,
-                "transcript_path": transcript_path,
-                "turn_count": len(turns),
-                "mp3_bytes": len(mixed_mp3),
-                "voice_a": voice_a,
-                "voice_b": voice_b,
-                "backend": tts.provider,
-                "silence_ms": SILENCE_MS_DEFAULT,
-            },
+        # --- Step 6: Write through sandbox (jailed) + return outcome ---------
+        return await self._write_outputs(
+            ctx,
+            filename,
+            mixed_mp3,
+            transcript_text,
+            tts_cfg,
+            turn_count=len(turns),
+            silence_ms=SILENCE_MS_DEFAULT,
         )
