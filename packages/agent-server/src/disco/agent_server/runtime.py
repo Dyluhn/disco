@@ -115,6 +115,8 @@ from disco.tools.sandbox._container import PREVIEW_PORT, USER_PORTS
 from disco.tools.sandbox.port_owner import port_owners
 from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
 
+from .runtime_model_probe import _do_live_model_probe, _model_label
+
 
 class _MCPToolWrapper:
     """Thin Tool-protocol wrapper that adapts an MCP ToolDef for the registry.
@@ -281,14 +283,6 @@ def build_sandbox_service(settings: SandboxSettings) -> SandboxService:
     return ProcessSandboxService()  # "process"/unknown → the dev backend (runs on host)
 
 
-def _model_label(model_id: str) -> str:
-    """A short human label from a model_id (drops the gguf/quant noise + provider path)."""
-    base = model_id.split("/")[-1].removesuffix(".gguf")
-    for suffix in ("-UD-Q5_K_XL", "-UD-Q4_K_XL", "-Q5_K_M", "-Q4_K_M", "-Q4_K_S", "-IQ4_XS"):
-        base = base.replace(suffix, "")
-    return base
-
-
 # Live model-server probe: derive the ACTUALLY-SERVED model name + context window
 # from the backend, rather than trusting the static ModelEntry — which drifts (a
 # config still saying "Qwen3.6-27B @131072" while llama.cpp serves gemma-4-E4B at
@@ -308,42 +302,6 @@ _PROBE_TTL_S: float = 60.0
 # callers (a /models + /health + first kick arriving together) schedule at most ONE
 # worker thread per url instead of one each.
 _LIVE_MODEL_PROBE_INFLIGHT: set[str] = set()
-
-
-def _do_live_model_probe(base_url: str, api_key: str | None) -> dict[str, Any]:
-    """The BLOCKING probe body. Must run OFF the event loop (worker thread / sync
-    context) — `httpx.get` here waits up to 2s. Populates the module cache on any
-    partial success. Never raises."""
-    out: dict[str, Any] = {"model_id": None, "n_ctx": None}
-    try:
-        import httpx
-
-        root = base_url.rstrip("/")
-        if root.endswith("/v1"):
-            root = root[:-3]
-        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-        r = httpx.get(f"{root}/props", headers=headers, timeout=2.0)
-        if r.status_code == 200:
-            d = r.json()
-            gen = d.get("default_generation_settings") or {}
-            n = gen.get("n_ctx")
-            # bool is a subclass of int — exclude it so a stray {"n_ctx": true}
-            # can't masquerade as a context window of 1.
-            if isinstance(n, int) and not isinstance(n, bool) and n > 0:
-                out["n_ctx"] = n
-            mp = d.get("model_path") or d.get("model")
-            if isinstance(mp, str) and mp.strip():
-                out["model_id"] = mp
-    except Exception:  # noqa: BLE001 — best effort; the static ModelEntry is the fallback
-        pass
-    # Cache only a SUCCESSFUL probe — so a server that was down at first call is
-    # picked up once it comes online (self-healing), instead of being pinned to
-    # the static fallback for the agent-server's whole lifetime. Store the
-    # monotonic ts alongside the value so _probe_live_model can apply a TTL
-    # and re-probe on a model hot-swap (T6/E2).
-    if out["model_id"] is not None or out["n_ctx"] is not None:
-        _LIVE_MODEL_PROBE_CACHE[base_url] = (out, time.monotonic())
-    return out
 
 
 def _probe_live_model(base_url: str | None, api_key: str | None = None) -> dict[str, Any]:
