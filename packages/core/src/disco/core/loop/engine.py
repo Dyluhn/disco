@@ -2971,8 +2971,10 @@ class AgentLoop:
                 tail = cap - head
                 shown = (
                     f"{text[:head]}\n"
-                    f"… [{len(text) - head - tail:,} chars truncated in this snapshot — "
-                    f"file_read {path} for the middle] …\n"
+                    f"… [{len(text) - head - tail:,} chars truncated — this file is too large to show in full. "
+                    f"Before editing it, call file_read on this path to see the full content. "
+                    f"For a large file like this, make targeted changes with file_edit (content-anchored old→new); "
+                    f"do NOT call file_write with regenerated content, which risks dropping the parts not shown here.] …\n"
                     f"{text[-tail:]}"
                 )
             else:
