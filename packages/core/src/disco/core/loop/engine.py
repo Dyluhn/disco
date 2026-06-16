@@ -4171,6 +4171,72 @@ class AgentLoop:
         )
         return step, Disp.FALLTHROUGH
 
+    async def _gate_planning_mode(self, step: AgentStep, events: list[Event]) -> Disp:
+        # (e.5) PLAN GATE — in PLANNING mode the planner has THREE valid moves:
+        #   1. `submit_plan` → intercepted into a PlanEvent, loop halts for approval.
+        #   2. Any OTHER tool in planning_tools (e.g. file_read, file_list, search,
+        #      extract) → fall through to the normal action path; the planner explores
+        #      before proposing (the Claude-Code-style "Phase 1: gather context").
+        #   3. No tool call at all (a prose answer) → nudge back to planning.
+        # The plan tool itself is NEVER executed.
+        if self.mode == OperatingMode.PLANNING:
+            tc = step.tool_call
+            if tc is not None and tc.tool_name == self._plan_tool:
+                plan = self._plan_from_args(tc.arguments, events)
+                await self._emit(plan)
+                if self._autonomous:
+                    # No human to approve → auto-approve INLINE, emitting the
+                    # exact same events approve_plan() would, so the event log
+                    # is identical whether a human or the harness approved.
+                    self.mode = self._execution_mode
+                    await self._emit(
+                        StatusEvent(
+                            status=ConversationStatus.RUNNING, detail="plan_approved"
+                        )
+                    )
+                    return Disp.CONTINUE
+                await self._emit(
+                    StatusEvent(
+                        status=ConversationStatus.AWAITING_PLAN_APPROVAL,
+                        detail=plan.id,
+                    )
+                )
+                return Disp.HALT
+            if tc is None:
+                # The planner spoke without calling a tool. PRESERVE the
+                # prose first — this is how the agent acknowledges the
+                # user's request conversationally before it starts
+                # exploring/planning ("Got it — you want X; let me look
+                # at the available APIs and think through the
+                # architecture."). Without this the acknowledgment was
+                # silently discarded and the user heard nothing back.
+                # THEN append the nudge to keep it moving toward
+                # submit_plan. No cap, no error — the loop's
+                # max_iterations and the user's kill switch are the
+                # ultimate exits. The counter stays for telemetry.
+                if step.thought.strip():
+                    await self._emit(
+                        MessageEvent(
+                            source=EventSource.AGENT,
+                            message=LLMMessage(
+                                role="assistant", content=step.thought
+                            ),
+                        )
+                    )
+                self._plan_nudges += 1
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(role="user", content=_PLAN_NUDGE),
+                    )
+                )
+                if await self._post_noop_valve() is Disp.HALT:
+                    return Disp.HALT
+                return Disp.CONTINUE
+            # tc is a planning-allowed read tool — productive exploration.
+            # Reset the nudge counter and fall through to the normal action path.
+        return Disp.FALLTHROUGH
+
     async def run(self) -> ConversationState:
         """Drive until a terminal-for-now status. Idempotent to call again after
         a pause/confirmation. [CONTRACT] returns the resulting ConversationState."""
@@ -4425,69 +4491,11 @@ class AgentLoop:
                     if disp is Disp.CONTINUE:
                         continue
 
-                # (e.5) PLAN GATE — in PLANNING mode the planner has THREE valid moves:
-                #   1. `submit_plan` → intercepted into a PlanEvent, loop halts for approval.
-                #   2. Any OTHER tool in planning_tools (e.g. file_read, file_list, search,
-                #      extract) → fall through to the normal action path; the planner explores
-                #      before proposing (the Claude-Code-style "Phase 1: gather context").
-                #   3. No tool call at all (a prose answer) → nudge back to planning.
-                # The plan tool itself is NEVER executed.
-                if self.mode == OperatingMode.PLANNING:
-                    tc = step.tool_call
-                    if tc is not None and tc.tool_name == self._plan_tool:
-                        plan = self._plan_from_args(tc.arguments, events)
-                        await self._emit(plan)
-                        if self._autonomous:
-                            # No human to approve → auto-approve INLINE, emitting the
-                            # exact same events approve_plan() would, so the event log
-                            # is identical whether a human or the harness approved.
-                            self.mode = self._execution_mode
-                            await self._emit(
-                                StatusEvent(
-                                    status=ConversationStatus.RUNNING, detail="plan_approved"
-                                )
-                            )
-                            continue  # re-enter the loop already in execution mode
-                        await self._emit(
-                            StatusEvent(
-                                status=ConversationStatus.AWAITING_PLAN_APPROVAL,
-                                detail=plan.id,
-                            )
-                        )
-                        return await self.get_state()
-                    if tc is None:
-                        # The planner spoke without calling a tool. PRESERVE the
-                        # prose first — this is how the agent acknowledges the
-                        # user's request conversationally before it starts
-                        # exploring/planning ("Got it — you want X; let me look
-                        # at the available APIs and think through the
-                        # architecture."). Without this the acknowledgment was
-                        # silently discarded and the user heard nothing back.
-                        # THEN append the nudge to keep it moving toward
-                        # submit_plan. No cap, no error — the loop's
-                        # max_iterations and the user's kill switch are the
-                        # ultimate exits. The counter stays for telemetry.
-                        if step.thought.strip():
-                            await self._emit(
-                                MessageEvent(
-                                    source=EventSource.AGENT,
-                                    message=LLMMessage(
-                                        role="assistant", content=step.thought
-                                    ),
-                                )
-                            )
-                        self._plan_nudges += 1
-                        await self._emit(
-                            MessageEvent(
-                                source=EventSource.ENVIRONMENT,
-                                message=LLMMessage(role="user", content=_PLAN_NUDGE),
-                            )
-                        )
-                        if await self._post_noop_valve() is Disp.HALT:
-                            return await self.get_state()
-                        continue
-                    # tc is a planning-allowed read tool — productive exploration.
-                    # Reset the nudge counter and fall through to the normal action path.
+                disp = await self._gate_planning_mode(step, events)
+                if disp is Disp.CONTINUE:
+                    continue
+                if disp is Disp.HALT:
+                    return await self.get_state()
                 # Any productive step (planning read OR execution action) resets the
                 # nudge counter so a recovered loop gets a fresh budget next time.
                 self._plan_nudges = 0
