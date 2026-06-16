@@ -212,7 +212,7 @@ def test_autonomous_deep_research_auto_approves_plan(tmp_path, monkeypatch):
     import asyncio
     from unittest.mock import AsyncMock
 
-    import disco.agent_server.runtime as rtmod
+    import disco.agent_server.deep_research_service as drsvc
     from disco.core.events import (
         ConversationStatus,
         EventSource,
@@ -228,7 +228,7 @@ def test_autonomous_deep_research_auto_approves_plan(tmp_path, monkeypatch):
     async def _fake_decompose(router, query, max_subq=5):
         return [_SubQ("sub one"), _SubQ("sub two")]
 
-    monkeypatch.setattr(rtmod, "decompose_query", _fake_decompose)
+    monkeypatch.setattr(drsvc, "decompose_query", _fake_decompose)
 
     def _details(events):
         return [e.detail for e in events if isinstance(e, StatusEvent)]
