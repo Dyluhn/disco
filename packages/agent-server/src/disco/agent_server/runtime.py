@@ -1123,6 +1123,7 @@ class ConversationRuntime:
     def _build_sandbox_spec(
         self,
         *,
+        surface: str = "build",
         mcp_egress_hosts: frozenset[str] | None = None,
     ) -> SandboxSpec:
         """The egress-posture spec for a Build sandbox. FILTERED by default
@@ -1136,7 +1137,10 @@ class ConversationRuntime:
         When mcp_egress_hosts is provided, they are UNIONed into the egress_allow set
         (SUPERSET, not replacement) — the pre-existing registry hosts AND the MCP
         hosts both survive (rung B egress-proxy routing)."""
-        egress = disco_env("BUILD_EGRESS", "filtered").lower().strip()
+        if surface == "agent":
+            egress = disco_env("AGENT_EGRESS", "open").lower().strip()
+        else:
+            egress = disco_env("BUILD_EGRESS", "filtered").lower().strip()
         if egress == "filtered":
             base_allow = REGISTRY_EGRESS_ALLOW
             if mcp_egress_hosts:
@@ -1157,7 +1161,10 @@ class ConversationRuntime:
         if conversation_id not in self._pending_sessions:
             self._pending_sessions[conversation_id] = SandboxSession(
                 self._sandbox_service_now(),
-                self._build_sandbox_spec(mcp_egress_hosts=self._mcp_egress_hosts()),
+                self._build_sandbox_spec(
+                    surface=self._surface_of(conversation_id),
+                    mcp_egress_hosts=self._mcp_egress_hosts(),
+                ),
                 conversation_id=conversation_id,
                 on_recreate=lambda: self._rehydrate_after_recreate(conversation_id),
             )
@@ -1204,7 +1211,10 @@ class ConversationRuntime:
         if session is None:
             session = SandboxSession(
                 self._sandbox_service_now(),
-                self._build_sandbox_spec(mcp_egress_hosts=self._mcp_egress_hosts()),
+                self._build_sandbox_spec(
+                    surface=self._surface_of(conversation_id),
+                    mcp_egress_hosts=self._mcp_egress_hosts(),
+                ),
                 conversation_id=conversation_id,
                 # Mid-run death (transport drop / OOM): restore the last snapshot
                 # into the fresh instance before the agent retries (bp-13 §2).
@@ -1485,6 +1495,7 @@ class ConversationRuntime:
             ConversationStatus.STUCK,
             ConversationStatus.ERROR,
             ConversationStatus.PAUSED,
+            ConversationStatus.IDLE,
         }
         if surface in self._BUILD_LIKE_SURFACES and state.execution_status in _ENDED:
             await self._maybe_snapshot(conversation_id)

@@ -598,12 +598,32 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         if runtime is None:
             raise HTTPException(status_code=404)
         session = runtime.live_session(conversation_id)
-        if session is None:
+        data = None
+        if session is not None:
+            try:
+                data = await session.read_file(norm)
+            except Exception:
+                pass
+        
+        if data is None:
+            project_store_method = getattr(runtime, "project_store", None)
+            if project_store_method is not None:
+                store = project_store_method()
+                if store is not None:
+                    store_path = store.path_for(conversation_id)
+                    if store_path is not None:
+                        disk_path = store_path / "snapshot" / norm
+                        # Prevent traversal out of snapshot
+                        try:
+                            disk_path = disk_path.resolve()
+                            snap_base = (store_path / "snapshot").resolve()
+                            if disk_path.is_file() and disk_path.is_relative_to(snap_base):
+                                data = disk_path.read_bytes()
+                        except Exception:
+                            pass
+        
+        if data is None:
             raise HTTPException(status_code=404)
-        try:
-            data = await session.read_file(norm)
-        except Exception:  # noqa: BLE001 — file absent or sandbox error → 404
-            raise HTTPException(status_code=404) from None
         return Response(
             content=data,
             media_type="image/png",

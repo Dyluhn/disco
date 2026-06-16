@@ -8,7 +8,7 @@
  * text, not screenshots), no broken <img> without a conversation to fetch against.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
 import { Download, FileCode2, FileSpreadsheet, FileText, Globe, Package, SquareTerminal } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -297,6 +297,11 @@ export function AgentCanvas({
     [],
   );
   const [tab, setTab] = useState<TabId>(initial);
+  
+  const hasScreenshots = collectScreenshots(events).length > 0;
+  useEffect(() => {
+    if (hasScreenshots) setTab("browser");
+  }, [hasScreenshots]);
 
   return (
     <Tabs.Root
