@@ -20,7 +20,9 @@ describe("AgentCanvas — the operator inspector", () => {
   it("defaults to Browser with an honest empty state when nothing has run", () => {
     render(<AgentCanvas events={[]} status="RUNNING" cid="c1" />);
     expect(screen.getByRole("tab", { name: /browser/i })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByText(/When the agent opens a browser/i)).toBeInTheDocument();
+    expect(screen.getByText(/the pages it visits show here/i)).toBeInTheDocument();
+    // honest framing: a screenshot reel, not a live video stream
+    expect(screen.getByText(/frame-by-frame reel, not a live video/i)).toBeInTheDocument();
   });
 
   it("defaults to Artifacts when files exist but no screenshot", () => {

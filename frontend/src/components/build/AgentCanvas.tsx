@@ -111,7 +111,10 @@ function BrowserPane({
       <div className="flex h-full min-h-0 flex-col">
         {Header}
         <Empty>
-          <p className="text-text-muted">When the agent opens a browser, you&apos;ll watch it here.</p>
+          <p className="text-text-muted">
+            When the agent uses a browser, the pages it visits show here — a screenshot for each
+            step, updated as it navigates (a frame-by-frame reel, not a live video).
+          </p>
           <p className="max-w-measure">
             External browser-MCP servers return fenced text, not screenshots — for those this shows
             status, not a faked viewport.
