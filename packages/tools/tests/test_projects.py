@@ -167,7 +167,11 @@ async def test_files_missing_when_workspace_deleted(tmp_path: Path) -> None:
     assert n == 0
 
 
-def test_list_projects_empty_when_unset() -> None:
+def test_list_projects_empty_when_unset(tmp_path, monkeypatch) -> None:
+    # E4: an unset root resolves to the auto-created default; isolate it to an empty
+    # tmp data dir so "unset" lists empty (the real ~/.local/share default may have
+    # projects from actual use).
+    monkeypatch.setenv("DISCO_DATA_DIR", str(tmp_path))
     store = ProjectStore("")
     assert store.list_projects() == []
 

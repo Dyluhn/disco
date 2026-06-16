@@ -28,6 +28,7 @@ from disco.core import (
     LLMMessage,
     MessageEvent,
     ObservationEvent,
+    ReportEvent,
     WSClientFrame,
     WSServerFrame,
 )
@@ -1308,6 +1309,88 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             status_code=200,
             media_type=media_type,
             headers=headers,
+        )
+
+    # ---- report audio overview (C2) ----------------------------------------
+    # NOTE: reconstructed 2026-06-16 — these routes were lost to a concurrent-worker
+    # clobber on app.py (only report_audio.py + the tests survived commit bb93cb5);
+    # the full regression sweep caught it. Mirrors report_export + the artifact jail.
+    from .report_audio import (
+        TtsBackendError,
+        TtsDisabled,
+        TurnScriptError,
+        generate_report_audio,
+        report_audio_cache_dir,
+    )
+
+    _AUDIO_MEDIA_TYPES = {".mp3": "audio/mpeg", ".md": "text/markdown; charset=utf-8"}
+
+    @app.post("/conversations/{conversation_id}/report/audio")
+    async def report_audio(conversation_id: str) -> dict:
+        """Generate (or return the cached) two-voice audio overview for the latest
+        Deep Research report on this conversation. Runs the audio pipeline in-process
+        (no sandbox), caching mp3 + transcript per conversation. 404 → no ReportEvent;
+        503 → TTS disabled in Settings; 502 → synth/LLM failure. 200 →
+        {"ok": True, "mp3_url": ..., "transcript_url": ...}."""
+        report: ReportEvent | None = None
+        with contextlib.suppress(Exception):
+            for e in reversed(await store.get_events(conversation_id)):
+                if isinstance(e, ReportEvent):
+                    report = e
+                    break
+        if report is None:
+            raise HTTPException(
+                status_code=404, detail={"ok": False, "reason": "no_report"}
+            )
+
+        from disco.core.llm import ConfigStore
+
+        tts = ConfigStore().load().tts
+        out_dir = report_audio_cache_dir() / conversation_id
+        try:
+            mp3_path, transcript_path = await generate_report_audio(
+                report, tts_settings=tts, out_dir=out_dir
+            )
+        except TtsDisabled:
+            raise HTTPException(
+                status_code=503, detail={"ok": False, "reason": "tts_disabled"}
+            ) from None
+        except (TtsBackendError, TurnScriptError) as exc:
+            raise HTTPException(
+                status_code=502,
+                detail={"ok": False, "reason": "tts_backend", "detail": str(exc)},
+            ) from exc
+
+        return {
+            "ok": True,
+            "mp3_url": f"/conversations/{conversation_id}/report/audio/{mp3_path.name}",
+            "transcript_url": (
+                f"/conversations/{conversation_id}/report/audio/{transcript_path.name}"
+            ),
+        }
+
+    @app.get("/conversations/{conversation_id}/report/audio/{name}")
+    async def report_audio_file(conversation_id: str, name: str) -> Response:
+        """Serve a cached audio-overview file (mp3 / transcript) as an attachment.
+        Jailed: canonical basename only + resolve-jail to this conversation's cache."""
+        if "/" in name or ".." in name:
+            raise HTTPException(status_code=404)
+        _, ext = posixpath.splitext(name)
+        media_type = _AUDIO_MEDIA_TYPES.get(ext.lower())
+        if media_type is None:
+            raise HTTPException(status_code=404)
+        cid_cache = (report_audio_cache_dir() / conversation_id).resolve()
+        fpath = (cid_cache / name).resolve()
+        if not fpath.is_relative_to(cid_cache) or not fpath.is_file():
+            raise HTTPException(status_code=404)
+        return Response(
+            content=fpath.read_bytes(),
+            media_type=media_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{name}"',
+                "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "private, no-store",
+            },
         )
 
     # ---- share links + static viewer (RP-06) -------------------------------
