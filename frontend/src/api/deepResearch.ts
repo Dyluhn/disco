@@ -122,8 +122,11 @@ function downloadBlob(blob: Blob, fallbackName: string, ext: string): void {
 /** The markdown serializer. Same shape the prior pmx-deep-verify.py script
  * produced — single source of truth for how a report looks as a portable
  * document. Includes citations as a footer table so the user can resolve
- * [[passage_id]] markers without the live UI. */
-function serializeReportToMarkdown(report: ReportEvent): string {
+ * [[passage_id]] markers without the live UI.
+ *
+ * Exported so the NeedMoreCard's File System Access API path can get the raw
+ * string (to write via showSaveFilePicker) without duplicating the logic. */
+export function serializeReportToMarkdown(report: ReportEvent): string {
   const lines: string[] = [];
   lines.push(`# Deep Research: ${report.query}`);
   lines.push("");

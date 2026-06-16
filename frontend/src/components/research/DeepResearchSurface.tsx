@@ -38,7 +38,7 @@ import { DeepProgressStrip } from "./DeepProgressStrip";
 import { DeepReportView } from "./DeepReportView";
 import { DepthTierSelector, type Tier } from "./DepthTierSelector";
 import { TieredSourcePanel } from "./TieredSourcePanel";
-import { ReportFollowUp } from "./ReportFollowUp";
+import { NeedMoreCard } from "./NeedMoreCard";
 
 interface Props {
   /** When passed via /deep/:cid, the surface resumes the existing conversation. */
@@ -283,12 +283,15 @@ export function DeepResearchSurface({ resumeCid, onScopeChange }: Props) {
           </div>
         )}
 
-        {/* Report follow-up — ask a question that reuses the report's corpus */}
-        {r.status === "FINISHED" && r.report && (
+        {/* "Need More?" card — Ask a Follow-Up / Export as… / Audio Overview.
+            Only visible once the report is FINISHED and present. */}
+        {r.status === "FINISHED" && r.report && r.cid && (
           <div className="mx-auto w-full max-w-doc">
-            <ReportFollowUp
-              onAsk={(question) => r.followUp(question)}
-              busy={false}
+            <NeedMoreCard
+              report={r.report}
+              cid={r.cid}
+              onFollowUp={(question) => r.followUp(question)}
+              followUpBusy={false}
             />
           </div>
         )}
