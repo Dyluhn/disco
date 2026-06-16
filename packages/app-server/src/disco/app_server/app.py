@@ -13,19 +13,15 @@ from __future__ import annotations
 
 from disco.core import DEFAULT_OWNER_ID
 from disco.core.store.sqlite import SqliteEventStore
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from .config.dtos import (
-    McpConnectionDTO,
-    McpServerApproveDTO,
-    McpServerConfigDTO,
-)
 from .config_state import ConfigState
 from .routes import (
     make_config_router,
     make_health_router,
+    make_mcp_router,
     make_models_router,
     make_openrouter_router,
     make_skills_router,
@@ -70,40 +66,7 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
     app.include_router(make_config_router(state))
     app.include_router(make_openrouter_router(state))
     app.include_router(make_skills_router(state))
-
-    # ---- mcp connections (live, persistent CRUD — rung B) -------------------
-
-    @app.get("/api/mcp")
-    async def get_mcp() -> list[McpConnectionDTO]:
-        return state.mcp_connections()
-
-    @app.post("/api/mcp/servers", status_code=201)
-    async def create_mcp_server(body: McpServerConfigDTO) -> McpConnectionDTO:
-        try:
-            return state.create_mcp_server(body)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.patch("/api/mcp/servers/{name}")
-    async def update_mcp_server(name: str, body: McpServerConfigDTO) -> McpConnectionDTO:
-        result = state.update_mcp_server(name, body)
-        if result is None:
-            raise HTTPException(status_code=404, detail=f"unknown server {name!r}")
-        return result
-
-    @app.delete("/api/mcp/servers/{name}", status_code=204)
-    async def delete_mcp_server(name: str) -> None:
-        if not state.delete_mcp_server(name):
-            raise HTTPException(status_code=404, detail=f"unknown server {name!r}")
-
-    @app.post("/api/mcp/servers/{name}/approve")
-    async def approve_mcp_server(name: str, body: McpServerApproveDTO) -> McpConnectionDTO:
-        try:
-            return state.approve_mcp_server(name, body)
-        except KeyError:
-            raise HTTPException(status_code=404, detail=f"unknown server {name!r}") from None
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+    app.include_router(make_mcp_router(state))
 
     # ---- library: owner-scoped conversation list + delete (§6.1) ------------
 
