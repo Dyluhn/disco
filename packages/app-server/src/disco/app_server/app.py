@@ -38,10 +38,10 @@ from .config.dtos import (
     SkillPatch,
     TtsConfigDTO,
 )
+from .config.mappers import normalize_openrouter
 from .config_state import (
     ConfigState,
     ConfigValidationError,
-    normalize_openrouter,
 )
 
 _OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"

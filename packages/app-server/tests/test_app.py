@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import pytest
 from disco.app_server import create_app
-from disco.app_server.config_state import ConfigState, normalize_openrouter
+from disco.app_server.config.mappers import normalize_openrouter
+from disco.app_server.config_state import ConfigState
 from disco.core import (
     ConversationStatus,
     EventSource,
