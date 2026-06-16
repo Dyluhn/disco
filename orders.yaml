@@ -866,3 +866,31 @@ scan-m4: done  # consolidated → docs/remaining-items-consolidated-2026-06-15.m
   - agent-projects/worker/scan-m4-report.md
 scan-g1: done  # consolidated → docs/remaining-items-consolidated-2026-06-15.md
   - agent-projects/worker/scan-g1-report.md
+
+# --- usability fix campaign (2026-06-16) — disjoint manifests, parallel-safe ---
+fix-a-drbackend: committed
+  - packages/retrieval/src/disco/retrieval/deep_research/depth.py
+  - packages/retrieval/src/disco/retrieval/deep_research/engine.py
+  - packages/agent-server/src/disco/agent_server/audio_config.py
+  - packages/agent-server/src/disco/agent_server/report_audio.py
+  - agent-projects/worker/fix-a-drbackend-report.md
+fix-b-buildengine: committed
+  - packages/core/src/disco/core/loop/engine.py
+  - agent-projects/worker/fix-b-buildengine-report.md
+fix-c-drfrontend: committed
+  - frontend/src/components/build/PlanPanel.tsx
+  - frontend/src/components/research/QueryInput.tsx
+  - frontend/src/components/ResearchSurface.tsx
+  - frontend/src/components/research/DeepResearchSurface.tsx
+  - frontend/src/hooks/useDeepResearch.ts
+  - frontend/src/components/research/NeedMoreCard.tsx
+  - agent-projects/worker/fix-c-drfrontend-report.md
+fix-d-agent: committed
+  - packages/agent-server/src/disco/agent_server/runtime.py
+  - packages/agent-server/src/disco/agent_server/app.py
+  - frontend/src/components/build/AgentCanvas.tsx
+  - agent-projects/worker/fix-d-agent-report.md
+fix-e-settingskey: committed
+  - frontend/src/components/settings/OpenRouterSection.tsx
+  - frontend/src/api/models.ts
+  - agent-projects/worker/fix-e-settingskey-report.md
