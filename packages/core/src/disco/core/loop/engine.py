@@ -70,6 +70,7 @@ from ..state import ConversationState
 from ..store.base import EventStore
 from ..view import Condenser, Summarizer, View, _latest_plan, microcompact
 from .boundaries import Agent, ConfirmationPolicy, SecurityAnalyzer, StopHook, ToolExecutor
+from .fc_kit import _nearest_tool_name
 from .stream_extract import extract_partial_string_field
 from .stuck import StuckDetector, StuckThresholds
 
@@ -78,52 +79,6 @@ _LOG = logging.getLogger("disco.loop")
 _sleep = asyncio.sleep
 _DRIVER_RETRY_BACKOFFS_S: tuple = (10.0, 30.0, 90.0)
 
-
-def _levenshtein(a: str, b: str) -> int:
-    """Small inline Levenshtein distance (edit cost 1 per ins/del/sub).
-
-    O(len(a) * len(b)) time, O(len(b)) space. Used only to nudge a hallucinated
-    tool name toward a real one in the Rung-7 hint when the assist gate is on
-    (F2 / T9). Tool names are short (a few dozen chars at most), so no
-    micro-optimisation is warranted; readability over cleverness.
-    """
-    if a == b:
-        return 0
-    if not a:
-        return len(b)
-    if not b:
-        return len(a)
-    # Make `b` the shorter string — the inner loop is the memory hot spot.
-    if len(a) < len(b):
-        a, b = b, a
-    prev = list(range(len(b) + 1))
-    for i, ca in enumerate(a, 1):
-        curr = [i] + [0] * len(b)
-        for j, cb in enumerate(b, 1):
-            cost = 0 if ca == cb else 1
-            curr[j] = min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost)
-        prev = curr
-    return prev[-1]
-
-
-def _nearest_tool_name(target: str, candidates: set[str]) -> str | None:
-    """Return the candidate with the smallest Levenshtein distance to `target`.
-
-    None if `candidates` is empty. The candidate set is whatever pool the
-    caller wants to suggest from — for the Rung-7 hint, that's the set the
-    model was *just* shown (`offered_names`); suggesting a tool the model
-    can't see would be a worse recovery than no suggestion.
-    """
-    if not candidates:
-        return None
-    best_name: str | None = None
-    best_dist = -1
-    for name in candidates:
-        d = _levenshtein(target, name)
-        if best_dist < 0 or d < best_dist:
-            best_dist = d
-            best_name = name
-    return best_name
 
 # Plan/meta tools that mutate bookkeeping state but do no real work. Excluded
 # from "did the agent act?" accounting everywhere (valve taxonomy + the
@@ -2971,10 +2926,13 @@ class AgentLoop:
                 tail = cap - head
                 shown = (
                     f"{text[:head]}\n"
-                    f"… [{len(text) - head - tail:,} chars truncated — this file is too large to show in full. "
-                    f"Before editing it, call file_read on this path to see the full content. "
-                    f"For a large file like this, make targeted changes with file_edit (content-anchored old→new); "
-                    f"do NOT call file_write with regenerated content, which risks dropping the parts not shown here.] …\n"
+                    f"… [{len(text) - head - tail:,} chars truncated — this file is "
+                    "too large to show in full. "
+                    "Before editing it, call file_read on this path to see the full content. "
+                    "For a large file like this, make targeted changes with file_edit "
+                    "(content-anchored old→new); "
+                    "do NOT call file_write with regenerated content, which risks "
+                    "dropping the parts not shown here.] …\n"
                     f"{text[-tail:]}"
                 )
             else:
