@@ -3452,6 +3452,68 @@ class AgentLoop:
             events = await self._events()  # include the nudge in this step's View
         return events
 
+    async def _gate_bookkeeping_streak(self, events: list[Event]) -> tuple[Disp, list[Event]]:
+        # (c.3) plan_step-spam guard (issue C). A soft nudge once at the
+        # streak threshold; a hard STUCK halt at the cap (the model is doing
+        # nothing but shuffling the plan tracker — every other valve misses
+        # this). STUCK (not a silent proceed) keeps the failure VISIBLE, which
+        # matters most for weak local models. Autonomous mode turns STUCK into
+        # a clean forfeit (issue A).
+        _bk_streak = self._bookkeeping_streak_len(events)
+        if _bk_streak == _BOOKKEEPING_STREAK_NUDGE_AT:
+            await self._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "<system-reminder>\n"
+                            f"You've called plan-tracking tools {_bk_streak} times "
+                            "in a row without doing any real work (no file edit, "
+                            "shell command, or other state-changing action). Marking "
+                            "steps does NOT advance the task. Take a REAL action now "
+                            "to make progress, or call `finish` if the work is "
+                            "already complete.\n"
+                            "</system-reminder>"
+                        ),
+                    ),
+                )
+            )
+            events = await self._events()
+        else:
+            # Spam cap scales with the active plan's step count (T7 / E3):
+            # a model finishing an N-step plan may legitimately emit
+            # ~N `plan_step` calls (one per step) plus a couple of
+            # over-corrections. Capping at N + slack lets the legit
+            # burst complete; the original `_BOOKKEEPING_STREAK_HALT_AT`
+            # floor still catches spam on a small/no-plan run.
+            _plan_steps = self._active_plan_step_count(events)
+            _bk_halt_cap = max(
+                _BOOKKEEPING_STREAK_HALT_AT,
+                _plan_steps + _BOOKKEEPING_PLAN_SLACK,
+            )
+            if _bk_streak >= _bk_halt_cap:
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                "⚠ Stopped: the agent kept updating the plan checklist "
+                                "without doing any real work. Re-run or steer it toward a "
+                                "concrete action."
+                            ),
+                        ),
+                    )
+                )
+                await self._emit(
+                    StatusEvent(
+                        status=ConversationStatus.STUCK, detail="bookkeeping_only"
+                    )
+                )
+                return Disp.HALT, events
+        return Disp.FALLTHROUGH, events
+
     async def run(self) -> ConversationState:
         """Drive until a terminal-for-now status. Idempotent to call again after
         a pause/confirmation. [CONTRACT] returns the resulting ConversationState."""
@@ -3634,65 +3696,9 @@ class AgentLoop:
 
                 events = await self._gate_plan_step_lag(events)
 
-                # (c.3) plan_step-spam guard (issue C). A soft nudge once at the
-                # streak threshold; a hard STUCK halt at the cap (the model is doing
-                # nothing but shuffling the plan tracker — every other valve misses
-                # this). STUCK (not a silent proceed) keeps the failure VISIBLE, which
-                # matters most for weak local models. Autonomous mode turns STUCK into
-                # a clean forfeit (issue A).
-                _bk_streak = self._bookkeeping_streak_len(events)
-                if _bk_streak == _BOOKKEEPING_STREAK_NUDGE_AT:
-                    await self._emit(
-                        MessageEvent(
-                            source=EventSource.ENVIRONMENT,
-                            message=LLMMessage(
-                                role="user",
-                                content=(
-                                    "<system-reminder>\n"
-                                    f"You've called plan-tracking tools {_bk_streak} times "
-                                    "in a row without doing any real work (no file edit, "
-                                    "shell command, or other state-changing action). Marking "
-                                    "steps does NOT advance the task. Take a REAL action now "
-                                    "to make progress, or call `finish` if the work is "
-                                    "already complete.\n"
-                                    "</system-reminder>"
-                                ),
-                            ),
-                        )
-                    )
-                    events = await self._events()
-                else:
-                    # Spam cap scales with the active plan's step count (T7 / E3):
-                    # a model finishing an N-step plan may legitimately emit
-                    # ~N `plan_step` calls (one per step) plus a couple of
-                    # over-corrections. Capping at N + slack lets the legit
-                    # burst complete; the original `_BOOKKEEPING_STREAK_HALT_AT`
-                    # floor still catches spam on a small/no-plan run.
-                    _plan_steps = self._active_plan_step_count(events)
-                    _bk_halt_cap = max(
-                        _BOOKKEEPING_STREAK_HALT_AT,
-                        _plan_steps + _BOOKKEEPING_PLAN_SLACK,
-                    )
-                    if _bk_streak >= _bk_halt_cap:
-                        await self._emit(
-                            MessageEvent(
-                                source=EventSource.ENVIRONMENT,
-                                message=LLMMessage(
-                                    role="user",
-                                    content=(
-                                        "⚠ Stopped: the agent kept updating the plan checklist "
-                                        "without doing any real work. Re-run or steer it toward a "
-                                        "concrete action."
-                                    ),
-                                ),
-                            )
-                        )
-                        await self._emit(
-                            StatusEvent(
-                                status=ConversationStatus.STUCK, detail="bookkeeping_only"
-                            )
-                        )
-                        return await self.get_state()
+                disp, events = await self._gate_bookkeeping_streak(events)
+                if disp is Disp.HALT:
+                    return await self.get_state()
 
                 # (d) build the model-facing View, condensing if triggered (§8)
                 view = await self._materialize_view(events)
