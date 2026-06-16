@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from disco.core.events import ActionEvent, SecurityRisk, ToolCall
+from disco.core.loop import signals
 from disco.core.llm.prompts import _EXECUTION_DRIVER_PROMPT, _PLANNING_DRIVER_PROMPT
 from disco.core.loop.engine import AgentLoop
 from disco.core.security.analyzers import RuleBasedAnalyzer, hard_deny_reason
@@ -20,7 +21,7 @@ def test_shell_exec_is_guarded_like_shell():
     def is_denied(tool_name: str, command: str) -> bool:
         call = ToolCall(tool_name=tool_name, arguments={"command": command})
         action = ActionEvent(thought="test", tool_call=call)
-        return AgentLoop._hard_deny_reason(action) is not None
+        return signals.hard_deny_reason(action) is not None
 
     # BOTH are denied for destructive root commands
     assert is_denied("shell", "rm -rf /") is True

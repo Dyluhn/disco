@@ -3,6 +3,7 @@ tools, the no-op backstop, and the circuit breaker."""
 
 from __future__ import annotations
 
+from disco.core.loop import signals
 from disco.core import (
     ConversationStatus,
     EventSource,
@@ -125,10 +126,10 @@ def test_consecutive_noops_helper_counts_and_resets():
 
     # 3 trailing agent prose messages → 3.
     seq = [user_msg("go"), agent_msg("a"), agent_msg("b"), agent_msg("c")]
-    assert AgentLoop._consecutive_noops(seq) == 3
+    assert signals.consecutive_noops(seq) == 3
     # A user message resets the count.
     seq2 = [agent_msg("a"), user_msg("go"), agent_msg("b")]
-    assert AgentLoop._consecutive_noops(seq2) == 1
+    assert signals.consecutive_noops(seq2) == 1
 
 
 # ---- the circuit breaker (distinct failures → hand off to user) -------------

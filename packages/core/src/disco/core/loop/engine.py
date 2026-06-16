@@ -81,7 +81,12 @@ from .dedup import (
     _f8_confirmed_file_writes,
     _f9_dedupable_read,
 )
+from . import signals
 from .fc_kit import _nearest_tool_name
+from .signals import (  # noqa: F401 — re-exported for back-compat (moved to signals.py)
+    _BOOKKEEPING_TOOLS,
+    _NON_PRODUCTIVE_TOOLS,
+)
 from .messages import (
     _describe_llm_error,
     _hs03_reground_message,
@@ -103,12 +108,8 @@ _sleep = asyncio.sleep
 _DRIVER_RETRY_BACKOFFS_S: tuple = (10.0, 30.0, 90.0)
 
 
-# Plan/meta tools that mutate bookkeeping state but do no real work. Excluded
-# from "did the agent act?" accounting everywhere (valve taxonomy + the
-# actionless streak) so a model can't look productive by shuffling plan state.
-_BOOKKEEPING_TOOLS = frozenset({"submit_plan", "propose_plan_update", "plan_step", "finish"})
-
-
+# `_BOOKKEEPING_TOOLS` + `_NON_PRODUCTIVE_TOOLS` now live in loop/signals.py
+# (the pure log-derived signal helpers that use them moved there too).
 
 
 # plan_step-spam guard (issue C). plan_step cycling through different step indices
@@ -276,36 +277,6 @@ _EXECUTION_NUDGE = (
 # through `_actionless_valve` (the same circuit breaker the (g) no-op path uses),
 # which lands the run cleanly after `_max_consecutive_noops` turns. The
 # `_execution_nudges` counter is telemetry so tests can observe firing.
-
-# The tool names that don't count as "productive work" for the execution gate:
-# meta tools + READ-ONLY/inspection tools that don't change workspace state. The
-# build-finish gate must require a STATE-CHANGING action since plan approval — a
-# model that only READ the files (file_read/list/search/extract/preview/browser)
-# and then declared done has delivered nothing (caught live: a macOS-clone
-# iteration "finished" after 5 file_reads with zero edits). plan_step is
-# informational; the planning tool would have been intercepted upstream.
-_NON_PRODUCTIVE_TOOLS = frozenset(
-    {
-        "submit_plan",
-        "plan_step",
-        "ask_user",
-        "propose_plan_update",
-        "notify_user",
-        "finish",
-        "remember",  # bookkeeping — recording a fact isn't task progress on its own
-        "serve",  # a handoff marker, not task work itself
-        # read-only / inspection: gather context but never change the deliverable
-        "file_read",
-        "file_list",
-        "search",
-        "extract",
-        "server_status",
-        "shell_view",
-        "shell_wait",
-        "browser",
-    }
-)
-
 
 # GAP B turn-taking tools — notify (non-blocking progress / mid-run reply) and
 # finish (the explicit, affirmative terminal move). Both are intercepted by the
@@ -1003,23 +974,6 @@ class AgentLoop:
                 break
         return OverflowSignal(difficulty=Difficulty.ROUTINE, consecutive_tool_errors=consecutive)
 
-    @staticmethod
-    def _estimate_tokens(view: View) -> int:
-        # ~4 chars/token heuristic. A-S1 fix: the old version summed only message
-        # `.content`, ignoring tool-call argument JSON, tool schemas, and the
-        # system prompt — so the real prompt was LARGER than estimated yet the
-        # trigger still fired. Now we also count serialized tool-call args and add
-        # a fixed allowance for the system prompt + tool-schema prefix.
-        chars = 0
-        for m in view.messages:
-            chars += len(m.content or "")
-            for tc in getattr(m, "tool_calls", None) or []:
-                # tool_calls may be dicts or pydantic models; stringify defensively.
-                chars += len(str(getattr(tc, "arguments", None) or tc))
-        # System prompt + tool-schema prefix allowance (~2k tokens), counted so the
-        # trigger reflects the true prompt size, not just the transcript tail.
-        return chars // 4 + 2_000
-
     # ---- plan-mode helpers (Build) ------------------------------------------
 
     def _readonly_tool_names(self) -> frozenset[str] | None:
@@ -1279,225 +1233,6 @@ class AgentLoop:
             options=options,
         )
 
-    @staticmethod
-    def _productive_action_since_approval(events: list[Event]) -> bool:
-        """Has the agent done any state-changing or information-gathering work since the
-        most recent plan approval? Used to gate the execution-mode FINISHED transition:
-        if False, the loop refuses to finish (the model would be declaring done without
-        having acted). If there is no plan_approved marker (plan-mode never entered, or
-        not yet approved), the gate is inert — return True so the regular finish path
-        runs untouched."""
-        # find the seq of the most recent plan-approval marker
-        approval_seq: int | None = None
-        for e in reversed(events):
-            if isinstance(e, StatusEvent) and e.detail == "plan_approved":
-                approval_seq = e.seq
-                break
-        if approval_seq is None:
-            return True  # no plan-first lifecycle here; don't gate the finish
-        # any ActionEvent after that point whose tool is NOT a meta tool counts
-        for e in events:
-            if (e.seq or 0) <= approval_seq:
-                continue
-            if isinstance(e, ActionEvent) and e.tool_call is not None:
-                if e.tool_call.tool_name not in _NON_PRODUCTIVE_TOOLS:
-                    return True
-        return False
-
-    @staticmethod
-    def _hard_deny_reason(action: ActionEvent) -> str | None:
-        """Cluster 3: a non-negotiable command-level refusal. Returns a reason if
-        the action is a hard-denied shell command (mkfs, raw-device write, fork
-        bomb, rm -rf /), else None. Refused outright before the confirm gate."""
-        from ..security.analyzers import hard_deny_reason
-
-        tc = action.tool_call
-        if tc is None or tc.tool_name not in ("shell", "shell_exec", "code_exec"):
-            return None
-        command = str(tc.arguments.get("command") or tc.arguments.get("code") or "")
-        return hard_deny_reason(command)
-
-    @staticmethod
-    def _count_recent_failures(events: list[Event]) -> int:
-        """Consecutive AgentErrorEvents walking back from the tail. Reset by a
-        successful ObservationEvent or a USER message (a fresh instruction).
-        Interleaved ActionEvents and agent/env messages do NOT reset. Drives the
-        Cluster 2 circuit breaker."""
-        streak = 0
-        for e in reversed(events):
-            if isinstance(e, AgentErrorEvent):
-                streak += 1
-            elif isinstance(e, ObservationEvent):
-                break
-            elif isinstance(e, MessageEvent) and e.source == EventSource.USER:
-                break
-        return streak
-
-    @staticmethod
-    def _recovery_requested_since_reset(events: list[Event]) -> bool:
-        """D2 guard: True if a circuit-breaker recovery was ALREADY requested in the
-        current failure streak (a `recovery_requested` StatusEvent before the streak's
-        reset boundary — a USER message or successful Observation). Stops the breaker
-        from re-asking every iteration; the second time through it falls to the step
-        (agent proposes) or, if it failed again, the hard halt."""
-        for e in reversed(events):
-            if isinstance(e, StatusEvent) and e.detail == "recovery_requested":
-                return True
-            if isinstance(e, ObservationEvent) and e.tool_result.success:
-                return False
-            if isinstance(e, MessageEvent) and e.source == EventSource.USER:
-                return False
-        return False
-
-    @staticmethod
-    def _stuck_escape_seq(events: list[Event]) -> int | None:
-        """The seq of the most recent `stuck_escape` marker since the last USER
-        message, else None. Reset only on a USER message — NOT on a successful
-        observation: pattern-1 stuck (the same *succeeding* no-op action repeated)
-        would otherwise reset every cycle and reframe forever. One reframe escape per
-        user turn; a second stall in the same turn halts."""
-        for e in reversed(events):
-            if isinstance(e, StatusEvent) and e.detail == "stuck_escape":
-                return e.seq
-            if isinstance(e, MessageEvent) and e.source == EventSource.USER:
-                return None
-        return None
-
-    @staticmethod
-    def _stuck_escape_attempt_count(events: list[Event]) -> int:
-        """C7 — total number of `stuck_escape` markers emitted so far in this
-        conversation. Used to select the rotating reminder text (the model's
-        view of the previous escape's reminder, if byte-identical, would
-        invite self-imitation). Counts ALL markers (not just since-last-user
-        message) so the rotation is global within a run: a model that has
-        seen reminder index 0 in a prior turn will see a different index on
-        the next escape, even after a user message resets the loop state.
-        Returns 0 when no escape has happened yet (the first escape gets
-        index 0, the second gets index 1, ...)."""
-        n = 0
-        for e in events:
-            if isinstance(e, StatusEvent) and e.detail == "stuck_escape":
-                n += 1
-        return n
-
-    @staticmethod
-    def _consecutive_noops(events: list[Event]) -> int:
-        """Count trailing agent steps consumed WITHOUT a real executed action:
-        prose MessageEvents, DeliverableEvents (the serve intercept), and
-        duplicate-`remember` ActionEvents (the dedup pair). Resets on any real
-        ActionEvent or a USER message; plan bookkeeping and fresh
-        KnowledgeEvents are neutral (neither break nor count).
-
-        The original version counted only prose messages and broke on ANY
-        ActionEvent — so a model spamming `serve` emitted 50+ DeliverableEvents
-        through the intercept `continue` path and never tripped a valve
-        (Phase-B re-run, 2026-06-10); only the stuck detector, 95 events
-        later, stopped it."""
-        count = 0
-        for e in reversed(events):
-            if isinstance(e, ObservationEvent):
-                continue  # paired with its action — judge the action instead
-            if isinstance(e, ActionEvent):
-                tool = e.tool_call.tool_name if e.tool_call is not None else None
-                if tool == "remember":
-                    count += 1  # only the duplicate path emits remember actions
-                    continue
-                if tool in _BOOKKEEPING_TOOLS:
-                    continue  # plan shuffling: neither real work nor spam signal
-                break
-            if isinstance(e, MessageEvent) and e.source == EventSource.USER:
-                break
-            if isinstance(e, MessageEvent) and e.source == EventSource.AGENT:
-                count += 1
-                continue
-            if isinstance(e, DeliverableEvent):
-                count += 1
-                continue
-        return count
-
-    @staticmethod
-    def _auto_continue_attempts(events: list[Event]) -> int:
-        """Count auto-continue events fired since the most recent USER message.
-        The cap resets every time the user sends a fresh prompt — each new
-        instruction gets its own auto-continue budget. The harness uses this
-        to keep the loop moving without infinite-looping."""
-        count = 0
-        for e in reversed(events):
-            if isinstance(e, MessageEvent) and e.source == EventSource.USER:
-                return count
-            if (
-                isinstance(e, StatusEvent)
-                and e.detail
-                and e.detail.startswith("auto_continue:")
-            ):
-                count += 1
-        return count
-
-    @staticmethod
-    def _plan_is_incomplete(events: list[Event]) -> tuple[bool, list[int]]:
-        """Is the most recent plan only partially done? Returns (incomplete, missing_idxs).
-
-        Walks the log to find the latest PlanEvent and the plan_step(index, state)
-        ActionEvents that report per-step progress. A step is "complete" iff the
-        agent emitted plan_step(idx, state="done") for it. If there's no plan at
-        all, returns (False, []) — nothing to gate on.
-
-        This is the truth-source for the FINISHED gate: if a plan exists and any
-        step is unmarked or stuck "active", the loop refuses to transition to
-        FINISHED and falls back to STUCK — honest about the work being incomplete
-        rather than lying about completion."""
-        # The latest plan (a re-plan supersedes prior).
-        plan: PlanEvent | None = None
-        for e in events:
-            if isinstance(e, PlanEvent):
-                if plan is None or e.revision >= plan.revision:
-                    plan = e
-        if plan is None or not plan.steps:
-            return (False, [])
-        # Only count plan_step marks made AFTER the current plan (a re-plan starts a
-        # fresh checklist — a prior plan's "done" marks must not satisfy the new gate).
-        plan_seq = plan.seq or 0
-        done: set[int] = set()
-        for e in events:
-            if not isinstance(e, ActionEvent) or e.tool_call is None:
-                continue
-            if e.tool_call.tool_name != "plan_step":
-                continue
-            if (e.seq or 0) < plan_seq:
-                continue
-            try:
-                idx = int(e.tool_call.arguments.get("index"))  # type: ignore[arg-type]
-                state = str(e.tool_call.arguments.get("state"))
-            except (TypeError, ValueError):
-                continue
-            if state == "done":
-                done.add(idx)
-        total = len(plan.steps)
-        missing = [i + 1 for i in range(total) if (i + 1) not in done]
-        return (bool(missing), missing)
-
-    @staticmethod
-    def _actions_since_last_resume(events: list[Event]) -> int:
-        """Count ActionEvents (excluding meta/bookkeeping tools and the
-        verify-on-finish probe) since the last
-        StatusEvent(RUNNING, detail="resumed") or since start."""
-        count = 0
-        for e in reversed(events):
-            if (
-                isinstance(e, StatusEvent)
-                and e.status == ConversationStatus.RUNNING
-                and e.detail == "resumed"
-            ):
-                break
-            if isinstance(e, ActionEvent) and e.tool_call is not None:
-                if e.meta.get("verify_probe"):
-                    # The finish gate's own probe — running it is not evidence
-                    # the AGENT did real work (re-run #6 leak).
-                    continue
-                if e.tool_call.tool_name not in _BOOKKEEPING_TOOLS:
-                    count += 1
-        return count
-
     async def _actionless_valve(self, events: list[Event], noops: int) -> bool:
         """Shared circuit-breaker ladder for steps that consumed a model turn
         without doing real work — the tool-less noop path AND the non-blocking
@@ -1510,7 +1245,7 @@ class AgentLoop:
         their bare `continue` skipped the noop bookkeeping entirely, so ~50
         serve spams and ~20 prose messages sailed past every DC-05a cap until
         the stuck detector fired ~95 events later."""
-        incomplete, _ = self._plan_is_incomplete(events)
+        incomplete, _ = signals.plan_is_incomplete(events)
         if incomplete and noops >= self._ACTIONLESS_BREAK_CAP:
             await self._emit(
                 MessageEvent(
@@ -1535,7 +1270,7 @@ class AgentLoop:
             # The model is spinning without acting and won't stop — end
             # cleanly rather than burn. (A real run resumes on a user steer;
             # the prompt steers toward finish/act.)
-            actions_since = self._actions_since_last_resume(events)
+            actions_since = signals.actions_since_last_resume(events)
             if incomplete and actions_since == 0:
                 await self._emit(
                     MessageEvent(
@@ -1594,130 +1329,8 @@ class AgentLoop:
             )
         return False
 
-    @staticmethod
-    def _plan_step_lag_signal(events: list[Event]) -> bool:
-        """The 'auditor' for the soft plan-step nudge. Returns True when the
-        agent has done substantial productive work but the capstone tracker is
-        clearly lagging — the classic 'did the work, forgot to check it off'
-        failure. The nudge that follows is SOFT (a gentle suggestion, not a
-        gate), and fires at most once per lag episode (no re-fire until the
-        agent marks another step or the lag clears).
-
-        Heuristic (all derivable from the log, stateless):
-          - a plan exists with steps, and we're past plan approval
-          - productive (state-changing) actions since approval >= total steps
-            (i.e. enough work has happened that *something* should be marked)
-          - fewer than half the steps are marked done (tracker is behind)
-          - no soft-lag nudge has fired since the last plan_step action
-            (so we nudge once per episode, not every iteration)
-        """
-        # Latest plan.
-        plan: PlanEvent | None = None
-        approval_seq: int | None = None
-        for e in events:
-            if isinstance(e, PlanEvent):
-                if plan is None or e.revision >= plan.revision:
-                    plan = e
-            if isinstance(e, StatusEvent) and e.detail == "plan_approved":
-                approval_seq = e.seq
-        if plan is None or not plan.steps or approval_seq is None:
-            return False
-        total = len(plan.steps)
-
-        productive = 0
-        steps_done: set[int] = set()
-        last_plan_step_seq = -1
-        last_lag_nudge_seq = -1
-        for e in events:
-            seq = e.seq or 0
-            if seq <= approval_seq:
-                continue
-            if isinstance(e, ActionEvent) and e.tool_call is not None:
-                name = e.tool_call.tool_name
-                if name == "plan_step":
-                    last_plan_step_seq = seq
-                    try:
-                        if str(e.tool_call.arguments.get("state")) == "done":
-                            steps_done.add(int(e.tool_call.arguments.get("index")))  # type: ignore[arg-type]
-                    except (TypeError, ValueError):
-                        pass
-                elif name not in _NON_PRODUCTIVE_TOOLS:
-                    productive += 1
-            elif (
-                isinstance(e, MessageEvent)
-                and e.source == EventSource.ENVIRONMENT
-                and e.message is not None
-                and "plan-step tracker" in e.message.content
-            ):
-                last_lag_nudge_seq = seq
-
-        if productive < total:
-            return False  # not enough work yet to expect check-offs
-        if len(steps_done) * 2 >= total:
-            return False  # tracker is keeping up (>= half done)
-        # Only nudge once per episode: skip if a lag nudge already fired more
-        # recently than the last plan_step action (the agent hasn't checked
-        # anything off since we last reminded it — no point repeating).
-        if last_lag_nudge_seq > last_plan_step_seq:
-            return False
-        return True
-
-    @staticmethod
-    def _bookkeeping_streak_len(events: list[Event]) -> int:
-        """Trailing count of consecutive BOOKKEEPING-only actions (plan_step /
-        submit_plan / propose_plan_update — NOT `finish`, which is intercepted before
-        it lands as an ActionEvent) since the last real action, user message, or
-        resume/approval marker. This is the signal the StuckDetector and noop valve
-        both miss for plan_step spam (issue C)."""
-        plan_bk = _BOOKKEEPING_TOOLS - {"finish"}
-        streak = 0
-        for e in reversed(events):
-            if isinstance(e, MessageEvent) and e.source == EventSource.USER:
-                break
-            if isinstance(e, StatusEvent) and e.detail in ("resumed", "plan_approved"):
-                break
-            if isinstance(e, ActionEvent) and e.tool_call is not None:
-                if e.tool_call.tool_name in plan_bk:
-                    streak += 1
-                else:
-                    break  # a real (state-changing) action ends the streak
-            # observations / other status events between actions are skipped
-        return streak
-
-    @staticmethod
-    def _active_plan_step_count(events: list[Event]) -> int:
-        # Step count of the latest PlanEvent, or 0 if no plan has been
-        # approved yet. Used by the (c.3) bookkeeping halt (T7 / E3) to scale
-        # the spam cap with the plan's actual size -- a model finishing an
-        # N-step plan may legitimately emit up to ~N `plan_step` calls; the
-        # halt threshold becomes max(HALT_AT, N + slack) so a legit burst
-        # does not trip it.
-        plan = None
-        for e in events:
-            if isinstance(e, PlanEvent):
-                if plan is None or e.revision >= plan.revision:
-                    plan = e
-        if plan is None or not plan.steps:
-            return 0
-        return len(plan.steps)
-
-    @staticmethod
-    def initial_mode(
-        events: list[Event],
-        *,
-        planning: OperatingMode = OperatingMode.PLANNING,
-        execution: OperatingMode = OperatingMode.LONG_HORIZON,
-        default: OperatingMode = OperatingMode.INTERACTIVE,
-    ) -> OperatingMode:
-        """Reconstruct the loop's operating mode from the log so a rebuilt loop
-        (process restart) resumes in the right phase. Reads the last mode marker
-        stamped on a StatusEvent.detail by approve_plan / enter_planning."""
-        for e in reversed(events):
-            if isinstance(e, StatusEvent) and e.detail == "plan_approved":
-                return execution
-            if isinstance(e, StatusEvent) and e.detail == "planning":
-                return planning
-        return default
+    # initial_mode delegates to signals (public API for rebuilt loops / restart).
+    initial_mode = staticmethod(signals.initial_mode)
 
     # ---- view materialization + condensation (§8) ---------------------------
 
@@ -2047,7 +1660,7 @@ class AgentLoop:
             return False  # closed end-to-end — capable-model default is byte-identical
         if _hs03_reground_message(events) is None:
             return False  # no plan → nothing to recap
-        actions = self._actions_since_last_resume(events)
+        actions = signals.actions_since_last_resume(events)
         if actions == 0 and not self._hs03_reground_post_resume_emitted:
             return True  # first eligible step of a fresh segment
         if actions > 0 and (actions % self._hs03_reground_cadence) == 0:
@@ -2094,7 +1707,7 @@ class AgentLoop:
         # _actions_since_last_resume is computed again to keep the
         # per-boundary flag precise (the predicate saw the same
         # number; storing it here is the single point of truth).
-        actions = self._actions_since_last_resume(events)
+        actions = signals.actions_since_last_resume(events)
         await self._emit(
             MessageEvent(
                 source=EventSource.ENVIRONMENT,
@@ -2136,7 +1749,7 @@ class AgentLoop:
         # and attaching it after is sound.
         snapshot = await self._workspace_snapshot_message(events)
         snap_tokens = len(snapshot.content) // 4 if snapshot is not None else 0
-        est = self._estimate_tokens(view) + snap_tokens
+        est = signals.estimate_tokens(view) + snap_tokens
         # H3: log the prompt size per step so cost regressions are visible (the 60k
         # bloat was invisible because nothing measured it). DEBUG-level; cheap.
         _LOG.debug("driver view: ~%d input tokens, %d messages", est, len(view.messages))
@@ -2947,7 +2560,7 @@ class AgentLoop:
             meta={"verify_probe": True},
         )
 
-        deny = self._hard_deny_reason(action)
+        deny = signals.hard_deny_reason(action)
         if deny is not None:
             await self._emit(action)
             await self._emit(
@@ -3211,7 +2824,7 @@ class AgentLoop:
         adds the invisible-step counter, and halts the run if the actionless
         valve trips. Byte-identical to the 4-line tail it replaces."""
         events = await self._events()
-        noops = self._consecutive_noops(events) + self._invisible_steps
+        noops = signals.consecutive_noops(events) + self._invisible_steps
         if await self._actionless_valve(events, noops):
             return Disp.HALT
         return Disp.CONTINUE
@@ -3246,7 +2859,7 @@ class AgentLoop:
             self._assist
             and not self._bootstrap_emitted
             and self.mode != OperatingMode.PLANNING
-            and self._actions_since_last_resume(events) == 0
+            and signals.actions_since_last_resume(events) == 0
         ):
             _sbx = getattr(self.executor, "sandbox", None)
             _workspace = (
@@ -3277,7 +2890,7 @@ class AgentLoop:
         # bump to break the self-imitation chain) BEFORE we declare STUCK. Only
         # if it repeats AGAIN after acting on the reframe do we halt — so a
         # transient rut doesn't dead-end a run the model could escape.
-        escape_seq = self._stuck_escape_seq(events)
+        escape_seq = signals.stuck_escape_seq(events)
         acted_since_escape = escape_seq is not None and any(
             isinstance(e, ActionEvent) and e.seq is not None and e.seq > escape_seq
             for e in events
@@ -3299,7 +2912,7 @@ class AgentLoop:
                 # is the in-context half, the temperature is the
                 # sampling-variance half, and together they break the
                 # self-imitation chain the way neither could alone.
-                attempt = self._stuck_escape_attempt_count(events)
+                attempt = signals.stuck_escape_attempt_count(events)
                 await self._emit(
                     MessageEvent(
                         source=EventSource.ENVIRONMENT,
@@ -3330,11 +2943,11 @@ class AgentLoop:
         # already), the HARNESS hands off to the user instead of grinding:
         # it halts at AWAITING_USER_DECISION with a summary of what failed.
         # The user's next message resets the streak (see _count_recent_failures).
-        fails = self._count_recent_failures(events)
+        fails = signals.count_recent_failures(events)
         recent_errors = [
             e.error for e in reversed(events) if isinstance(e, AgentErrorEvent)
         ][:fails]
-        recovery_requested = self._recovery_requested_since_reset(events)
+        recovery_requested = signals.recovery_requested_since_reset(events)
         if fails >= self._circuit_breaker_threshold and not recovery_requested:
             # D2 — FIRST time we hit the wall: don't dump a dead-end message.
             # Ask the agent to DIAGNOSE the failures and propose 2-3 CONCRETE
@@ -3451,7 +3064,7 @@ class AgentLoop:
         # the model is free to ignore it; it fires at most once per lag
         # episode. This is the proactive nudge (vs. the finish-boundary
         # auto-continue which catches the same thing at the end).
-        if self._plan_step_lag_signal(events):
+        if signals.plan_step_lag_signal(events):
             await self._emit(
                 MessageEvent(
                     source=EventSource.ENVIRONMENT,
@@ -3480,7 +3093,7 @@ class AgentLoop:
         # this). STUCK (not a silent proceed) keeps the failure VISIBLE, which
         # matters most for weak local models. Autonomous mode turns STUCK into
         # a clean forfeit (issue A).
-        _bk_streak = self._bookkeeping_streak_len(events)
+        _bk_streak = signals.bookkeeping_streak_len(events)
         if _bk_streak == _BOOKKEEPING_STREAK_NUDGE_AT:
             await self._emit(
                 MessageEvent(
@@ -3508,7 +3121,7 @@ class AgentLoop:
             # over-corrections. Capping at N + slack lets the legit
             # burst complete; the original `_BOOKKEEPING_STREAK_HALT_AT`
             # floor still catches spam on a small/no-plan run.
-            _plan_steps = self._active_plan_step_count(events)
+            _plan_steps = signals.active_plan_step_count(events)
             _bk_halt_cap = max(
                 _BOOKKEEPING_STREAK_HALT_AT,
                 _plan_steps + _BOOKKEEPING_PLAN_SLACK,
@@ -3591,7 +3204,7 @@ class AgentLoop:
         # escape_seq/acted_since_escape are pure functions of `events`
         # (the stuck gate recomputes its own copy); recompute here for the
         # temperature decision (folds into `_drive_step` on extraction).
-        escape_seq = self._stuck_escape_seq(events)
+        escape_seq = signals.stuck_escape_seq(events)
         acted_since_escape = escape_seq is not None and any(
             isinstance(e, ActionEvent) and e.seq is not None and e.seq > escape_seq
             for e in events
@@ -3602,7 +3215,7 @@ class AgentLoop:
         # real action (see _tools_for_step docstring — Phase-B re-run #4).
         fresh_session = (
             self.mode != OperatingMode.PLANNING
-            and self._actions_since_last_resume(events) == 0
+            and signals.actions_since_last_resume(events) == 0
         )
         try:
             attempts = 0
@@ -3802,7 +3415,7 @@ class AgentLoop:
         # feedback: pinned facts must come from THIS session's work.
         if (
             self.mode != OperatingMode.PLANNING
-            and self._actions_since_last_resume(events) == 0
+            and signals.actions_since_last_resume(events) == 0
         ):
             return await self._refuse_fresh_session(
                 step,
@@ -3884,7 +3497,7 @@ class AgentLoop:
         # meaningful after at least one real action this session (since
         # the last resume, or since start). Refuse with ACTIONABLE
         # feedback (B4: the model must see why, or it just retries).
-        if self._actions_since_last_resume(events) == 0:
+        if signals.actions_since_last_resume(events) == 0:
             return await self._refuse_fresh_session(
                 step,
                 "serve refused: no real work has happened yet in "
@@ -4273,7 +3886,7 @@ class AgentLoop:
         if (
             self._planning_tools  # plan-first lifecycle is configured
             and self.mode != OperatingMode.PLANNING  # we're executing
-            and not self._productive_action_since_approval(events)
+            and not signals.productive_action_since_approval(events)
         ):
             self._execution_nudges += 1  # telemetry
             # Surface the model's reasoning before nudging (don't
@@ -4395,9 +4008,9 @@ class AgentLoop:
             #
             # The cap resets when the user sends a new message —
             # each fresh prompt gets its own auto-continue budget.
-            incomplete, missing = self._plan_is_incomplete(events)
+            incomplete, missing = signals.plan_is_incomplete(events)
             if incomplete:
-                attempts = self._auto_continue_attempts(events)
+                attempts = signals.auto_continue_attempts(events)
                 if attempts < self._auto_continue_cap:
                     await self._emit(
                         MessageEvent(
@@ -4433,7 +4046,7 @@ class AgentLoop:
                 # and can steer if more work is needed. STUCK is
                 # reserved for genuine confusion (stuck detector),
                 # not for "model couldn't quite finish the bookkeeping".
-                actions_since = self._actions_since_last_resume(events)
+                actions_since = signals.actions_since_last_resume(events)
                 if actions_since == 0:
                     await self._emit(
                         MessageEvent(
@@ -4531,7 +4144,7 @@ class AgentLoop:
             step.tool_call is not None
             and step.tool_call.tool_name in ("ask_user", "clarify", "propose_plan_update")
             and self.mode != OperatingMode.PLANNING
-            and self._actions_since_last_resume(events) == 0
+            and signals.actions_since_last_resume(events) == 0
             # In autonomous mode, ask_user/clarify are owned by the headless-
             # stall guard below (a clean "no user — decide yourself" nudge);
             # don't pre-empt them here with the interactive "do work, then ask"
@@ -4783,7 +4396,7 @@ class AgentLoop:
         # (h.5) HARD DENY (Cluster 3) — catastrophic commands are refused
         # outright, BEFORE the confirm gate. No approval, policy, or LLM
         # can run them. The agent sees the refusal as an error and adapts.
-        deny_reason = self._hard_deny_reason(action)
+        deny_reason = signals.hard_deny_reason(action)
         if deny_reason is not None:
             await self._emit(action)  # record the proposed action for audit
             await self._emit(
@@ -5157,40 +4770,8 @@ class AgentLoop:
             await self._execute_and_observe(action_to_execute)
             # loop continues
 
-    @staticmethod
-    def _has_unprocessed_user_message(events: list[Event]) -> bool:
-        """True if a USER message arrived after the most recent agent activity —
-        i.e. there is fresh work (a new goal, or a reopen after FINISHED/STUCK)."""
-        last_user = max(
-            (
-                e.seq or 0
-                for e in events
-                if isinstance(e, MessageEvent) and e.source == EventSource.USER
-            ),
-            default=None,
-        )
-        if last_user is None:
-            return False
-        # Progress = the agent acted, spoke, or the loop reached a run/terminal
-        # status after the message. A finish-only step leaves no action/message,
-        # so the terminal StatusEvent is what marks the goal as processed.
-        activity_statuses = {
-            ConversationStatus.RUNNING,
-            ConversationStatus.FINISHED,
-            ConversationStatus.STUCK,
-            ConversationStatus.ERROR,
-        }
-        last_progress = max(
-            (
-                e.seq or 0
-                for e in events
-                if isinstance(e, ActionEvent)
-                or (isinstance(e, MessageEvent) and e.source == EventSource.AGENT)
-                or (isinstance(e, StatusEvent) and e.status in activity_statuses)
-            ),
-            default=0,
-        )
-        return last_user > last_progress
+    # _has_unprocessed_user_message delegates to signals (external callers + run()).
+    _has_unprocessed_user_message = staticmethod(signals.has_unprocessed_user_message)
 
     # ---- control operations (§7) — map from the wire frames -----------------
 

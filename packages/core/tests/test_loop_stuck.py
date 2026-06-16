@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from conftest import action, agent_error, agent_msg, observation, user_msg
 from disco.core import ConversationStatus, EventSource, MessageEvent, StatusEvent
+from disco.core.loop import signals
 from disco.core.loop import StuckDetector, StuckThresholds
 from loop_fakes import ScriptedAgent, action_step, build_loop, finish_step
 
@@ -299,7 +300,7 @@ def test_c7_stuck_escape_attempt_count_helper():
     from disco.core.loop.engine import AgentLoop
 
     # No events: count is 0.
-    assert AgentLoop._stuck_escape_attempt_count([]) == 0
+    assert signals.stuck_escape_attempt_count([]) == 0
 
     # One escape marker: count is 1 (the marker we just emitted).
     from conftest import user_msg
@@ -313,20 +314,20 @@ def test_c7_stuck_escape_attempt_count_helper():
         observation(),
         StatusEvent(status=ConversationStatus.RUNNING, detail="stuck_escape"),
     ]
-    assert AgentLoop._stuck_escape_attempt_count(events) == 1
+    assert signals.stuck_escape_attempt_count(events) == 1
 
     # Three markers: count is 3 (rotation wraps modulo len(POOL)).
     events += [
         StatusEvent(status=ConversationStatus.RUNNING, detail="stuck_escape"),
         StatusEvent(status=ConversationStatus.RUNNING, detail="stuck_escape"),
     ]
-    assert AgentLoop._stuck_escape_attempt_count(events) == 3
+    assert signals.stuck_escape_attempt_count(events) == 3
 
     # A user message does NOT reset the global count (the rotation is
     # global within a run, by design — see _stuck_escape_attempt_count
     # docstring).
     events += [user_msg("ok try again")]
-    assert AgentLoop._stuck_escape_attempt_count(events) == 3
+    assert signals.stuck_escape_attempt_count(events) == 3
 
 
 def test_c7_pool_selector_is_deterministic_and_injective_across_attempts():

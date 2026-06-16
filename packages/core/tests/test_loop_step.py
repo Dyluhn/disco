@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from disco.core.loop import signals
 from disco.core import (
     ActionEvent,
     AgentErrorEvent,
@@ -183,7 +184,7 @@ def test_plan_is_incomplete_helper_recognizes_partial_completion():
             tool_call=ToolCall(tool_name="plan_step", arguments={"index": 1, "state": "done"}),
         ),
     ]
-    incomplete, missing = AgentLoop._plan_is_incomplete(events)
+    incomplete, missing = signals.plan_is_incomplete(events)
     assert incomplete is True
     assert missing == [2, 3]
 
@@ -204,7 +205,7 @@ def test_plan_is_incomplete_helper_passes_when_all_steps_done():
             tool_call=ToolCall(tool_name="plan_step", arguments={"index": 2, "state": "done"}),
         ),
     ]
-    incomplete, missing = AgentLoop._plan_is_incomplete(events)
+    incomplete, missing = signals.plan_is_incomplete(events)
     assert incomplete is False
     assert missing == []
 
@@ -214,7 +215,7 @@ def test_plan_is_incomplete_helper_inert_without_plan():
     is a no-op for non-plan-first flows (Build runs without an explicit plan)."""
     from disco.core.loop.engine import AgentLoop
 
-    incomplete, missing = AgentLoop._plan_is_incomplete([])
+    incomplete, missing = signals.plan_is_incomplete([])
     assert incomplete is False
     assert missing == []
 
@@ -235,7 +236,7 @@ def test_plan_is_incomplete_helper_uses_latest_revision():
         # Re-plan with 2 steps; neither marked done yet.
         PlanEvent(summary="p2", steps=[{"title": "a"}, {"title": "b"}], revision=2),
     ]
-    incomplete, missing = AgentLoop._plan_is_incomplete(events)
+    incomplete, missing = signals.plan_is_incomplete(events)
     # plan #2 is the latest — step 1 of p2 was never explicitly marked (the prior
     # done was for p1's step 1, but it's the same index — the helper treats index
     # as opaque, so p1's done carries forward. The unmarked one is step 2.).
@@ -613,7 +614,7 @@ async def test_auto_continue_budget_resets_on_new_user_message():
         ),
     ]
     # The counter should reflect ONLY events since the last user message.
-    assert AgentLoop._auto_continue_attempts(events) == 1
+    assert signals.auto_continue_attempts(events) == 1
 
 
 # ---- talk-back: the agent acknowledges before/while it works -----------------
@@ -746,7 +747,7 @@ def test_plan_step_lag_signal_fires_when_work_outpaces_tracker():
             # 3 productive actions >= 3 steps; zero steps marked done.
         ]
     )
-    assert AgentLoop._plan_step_lag_signal(events) is True
+    assert signals.plan_step_lag_signal(events) is True
 
 
 def test_plan_step_lag_signal_silent_when_tracker_keeps_up():
@@ -768,7 +769,7 @@ def test_plan_step_lag_signal_silent_when_tracker_keeps_up():
         ]
     )
     # 2 productive >= 2 steps, but 1 of 2 steps done (>= half) → no nudge.
-    assert AgentLoop._plan_step_lag_signal(events) is False
+    assert signals.plan_step_lag_signal(events) is False
 
 
 def test_plan_step_lag_signal_fires_once_per_episode():
@@ -815,7 +816,7 @@ def test_plan_step_lag_signal_fires_once_per_episode():
         ]
     )
     # The nudge is more recent than the last plan_step (there is none) → silent.
-    assert AgentLoop._plan_step_lag_signal(events) is False
+    assert signals.plan_step_lag_signal(events) is False
 
 
 def test_productive_gate_rejects_read_only_then_finish():
@@ -839,11 +840,11 @@ def test_productive_gate_rejects_read_only_then_finish():
     )
 
     # only reads after approval → NOT productive (finish would be refused)
-    assert AgentLoop._productive_action_since_approval(_seqd([approved, rd, rd])) is False
+    assert signals.productive_action_since_approval(_seqd([approved, rd, rd])) is False
     # a write after approval → productive (finish allowed)
-    assert AgentLoop._productive_action_since_approval(_seqd([approved, rd, wr])) is True
+    assert signals.productive_action_since_approval(_seqd([approved, rd, wr])) is True
     # no plan-approval marker → gate inert (don't block)
-    assert AgentLoop._productive_action_since_approval(_seqd([rd])) is True
+    assert signals.productive_action_since_approval(_seqd([rd])) is True
 
 
 async def test_execution_nudge_without_action_lands_instead_of_livelocking():

@@ -1,4 +1,5 @@
 import pytest
+from disco.core.loop import signals
 from disco.core import (
     ActionEvent,
     ConversationStatus,
@@ -520,12 +521,12 @@ def test_actions_since_last_resume_resets_at_marker():
         meta={"verify_probe": True},
     )
 
-    assert AgentLoop._actions_since_last_resume([shell, shell]) == 2
-    assert AgentLoop._actions_since_last_resume([shell, resumed]) == 0
-    assert AgentLoop._actions_since_last_resume([shell, resumed, plan]) == 0
-    assert AgentLoop._actions_since_last_resume([shell, resumed, shell]) == 1
-    assert AgentLoop._actions_since_last_resume([resumed, probe]) == 0
-    assert AgentLoop._actions_since_last_resume([resumed, probe, shell]) == 1
+    assert signals.actions_since_last_resume([shell, shell]) == 2
+    assert signals.actions_since_last_resume([shell, resumed]) == 0
+    assert signals.actions_since_last_resume([shell, resumed, plan]) == 0
+    assert signals.actions_since_last_resume([shell, resumed, shell]) == 1
+    assert signals.actions_since_last_resume([resumed, probe]) == 0
+    assert signals.actions_since_last_resume([resumed, probe, shell]) == 1
 
 
 # ---- meta-tool suppression until first real action (Phase-B re-run #4) ----------
