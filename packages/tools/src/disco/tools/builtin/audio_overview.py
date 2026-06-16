@@ -234,6 +234,67 @@ class AudioOverviewTool:
         read_only=False,
     )
 
+    async def _generate_turn_script(
+        self, report_text: str, llm_url: str
+    ) -> tuple[list[Turn] | None, ToolOutcome | None]:
+        """Steps 1 & 2: call the LLM for a JSON turn-script, validate it, and retry
+        ONCE on malformed output. Returns (turns, None) on success or
+        (None, failure_outcome) on any unrecoverable error."""
+        payload = _build_llm_payload(report_text)
+        try:
+            raw_response = await _call_llm(payload, llm_url)
+        except Exception as e:
+            return None, ToolOutcome(
+                success=False,
+                content=f"LLM call failed while generating turn-script: {e}",
+                error=str(e),
+            )
+
+        raw_json = _extract_json(raw_response)
+        turns, error = _validate_turn_script(raw_json)
+
+        # One retry on malformed output.
+        if error is not None:
+            retry_payload = _build_llm_payload(report_text)
+            retry_payload["messages"].append(
+                {"role": "assistant", "content": raw_response}
+            )
+            retry_payload["messages"].append(
+                {
+                    "role": "user",
+                    "content": f"Your JSON output was invalid: {error}\n\n"
+                    f"Please fix the errors and output ONLY a valid JSON array "
+                    f"of turns. Each turn must have 'speaker' (A or B) and "
+                    f"'text' (non-empty string).",
+                }
+            )
+            try:
+                raw_response2 = await _call_llm(retry_payload, llm_url)
+            except Exception as e:
+                return None, ToolOutcome(
+                    success=False,
+                    content=(
+                        f"Turn-script validation failed: {error}\n"
+                        f"Retry LLM call also failed: {e}"
+                    ),
+                    error=error,
+                )
+
+            raw_json2 = _extract_json(raw_response2)
+            turns, error2 = _validate_turn_script(raw_json2)
+            if error2 is not None:
+                return None, ToolOutcome(
+                    success=False,
+                    content=(
+                        f"Turn-script validation failed after retry.\n"
+                        f"First error: {error}\n"
+                        f"Retry error: {error2}"
+                    ),
+                    error=error2,
+                )
+
+        return turns, None
+
     async def run(self, args: AudioOverviewArgs, ctx: ToolContext) -> ToolOutcome:
         from disco.agent_server.audio_config import (
             LLM_URL,
@@ -290,59 +351,10 @@ class AudioOverviewTool:
             remote_key = os.environ.get(tts.api_key_env, "") if tts.api_key_env else ""
             remote_model = tts.model or "tts-1"
 
-        # --- Step 1: Generate turn-script via LLM ---------------------------
-        payload = _build_llm_payload(report_text)
-        try:
-            raw_response = await _call_llm(payload, LLM_URL)
-        except Exception as e:
-            return ToolOutcome(
-                success=False,
-                content=f"LLM call failed while generating turn-script: {e}",
-                error=str(e),
-            )
-
-        raw_json = _extract_json(raw_response)
-        turns, error = _validate_turn_script(raw_json)
-
-        # --- Step 2: One retry on malformed output --------------------------
-        if error is not None:
-            retry_payload = _build_llm_payload(report_text)
-            retry_payload["messages"].append(
-                {"role": "assistant", "content": raw_response}
-            )
-            retry_payload["messages"].append(
-                {
-                    "role": "user",
-                    "content": f"Your JSON output was invalid: {error}\n\n"
-                    f"Please fix the errors and output ONLY a valid JSON array "
-                    f"of turns. Each turn must have 'speaker' (A or B) and "
-                    f"'text' (non-empty string).",
-                }
-            )
-            try:
-                raw_response2 = await _call_llm(retry_payload, LLM_URL)
-            except Exception as e:
-                return ToolOutcome(
-                    success=False,
-                    content=(
-                        f"Turn-script validation failed: {error}\n"
-                        f"Retry LLM call also failed: {e}"
-                    ),
-                    error=error,
-                )
-
-            raw_json2 = _extract_json(raw_response2)
-            turns, error2 = _validate_turn_script(raw_json2)
-            if error2 is not None:
-                return ToolOutcome(
-                    success=False,
-                    content=(
-                        f"Turn-script validation failed after retry.\n"
-                        f"First error: {error}\n"
-                        f"Retry error: {error2}"
-                    ),
-                    error=error2,
-                )
+        # --- Steps 1 & 2: Generate turn-script via LLM (+ one retry) ---------
+        turns, gen_failure = await self._generate_turn_script(report_text, LLM_URL)
+        if gen_failure is not None:
+            return gen_failure
 
         # --- Step 3: Synthesise each turn to PCM ----------------------------
         # Bundled in-process Kokoro (default) or remote Speaches, per Settings.
