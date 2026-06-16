@@ -3514,6 +3514,52 @@ class AgentLoop:
                 return Disp.HALT, events
         return Disp.FALLTHROUGH, events
 
+    def _known_tool_names_for_requery(self) -> set[str]:
+        _cn = getattr(self.executor, "callable_tool_names", None)
+        if callable(_cn):
+            known_tool_names = set(_cn())
+        else:
+            known_tool_names = {t.name for t in self.executor.available_tools()}
+        virtual_names = {
+            "ask_user",
+            "clarify",
+            "propose_plan_update",
+            "plan_step",
+            "notify_user",
+            "finish",
+            "remember",
+            "serve",
+            self._plan_tool,
+            # C20 — `delegate_explore`: read-only
+            # Explore/Plan helper. Listed in the
+            # known-names set so the Rung 7 requery
+            # doesn't bounce a valid fan-out call.
+            # The cap is enforced at the call site,
+            # NOT via schema suppression.
+            "delegate_explore",
+        }
+        # Include mode-scoped virtuals (planning tools) so
+        # we don't requery for valid exploration turns.
+        all_known_names = (
+            known_tool_names
+            | virtual_names
+            | set(self._planning_tools)
+        )
+        return all_known_names
+
+    def _unknown_tool_requery_hint(self, tool_name: str, offered_names: set[str]) -> str:
+        _hint = (
+            f"ERROR: Unknown tool '{tool_name}'. "
+            f"Available: {sorted(list(offered_names))}"
+        )
+        if self._assist:
+            _suggestion = _nearest_tool_name(
+                tool_name, offered_names
+            )
+            if _suggestion is not None:
+                _hint = f"{_hint} did you mean '{_suggestion}'?"
+        return _hint
+
     async def run(self) -> ConversationState:
         """Drive until a terminal-for-now status. Idempotent to call again after
         a pause/confirmation. [CONTRACT] returns the resulting ConversationState."""
@@ -3763,36 +3809,7 @@ class AgentLoop:
                             # The requery applies ONLY to names absent from the
                             # FULL tool registry (truly unknown), never to
                             # known-but-currently-withheld tools.
-                            _cn = getattr(self.executor, "callable_tool_names", None)
-                            if callable(_cn):
-                                known_tool_names = set(_cn())
-                            else:
-                                known_tool_names = {t.name for t in self.executor.available_tools()}
-                            virtual_names = {
-                                "ask_user",
-                                "clarify",
-                                "propose_plan_update",
-                                "plan_step",
-                                "notify_user",
-                                "finish",
-                                "remember",
-                                "serve",
-                                self._plan_tool,
-                                # C20 — `delegate_explore`: read-only
-                                # Explore/Plan helper. Listed in the
-                                # known-names set so the Rung 7 requery
-                                # doesn't bounce a valid fan-out call.
-                                # The cap is enforced at the call site,
-                                # NOT via schema suppression.
-                                "delegate_explore",
-                            }
-                            # Include mode-scoped virtuals (planning tools) so
-                            # we don't requery for valid exploration turns.
-                            all_known_names = (
-                                known_tool_names
-                                | virtual_names
-                                | set(self._planning_tools)
-                            )
+                            all_known_names = self._known_tool_names_for_requery()
 
                             if step.tool_call and step.tool_call.tool_name not in all_known_names:
                                 # A tool whose NAME alone trips the confirm policy's
@@ -3841,16 +3858,9 @@ class AgentLoop:
                                     # are reused — no new reroute path, no new cap.
                                     # Assist OFF (capable-model default) leaves the hint
                                     # byte-identical to today.
-                                    _hint = (
-                                        f"ERROR: Unknown tool '{step.tool_call.tool_name}'. "
-                                        f"Available: {sorted(list(offered_names))}"
+                                    _hint = self._unknown_tool_requery_hint(
+                                        step.tool_call.tool_name, offered_names
                                     )
-                                    if self._assist:
-                                        _suggestion = _nearest_tool_name(
-                                            step.tool_call.tool_name, offered_names
-                                        )
-                                        if _suggestion is not None:
-                                            _hint = f"{_hint} did you mean '{_suggestion}'?"
                                     transient_messages.append(
                                         LLMMessage(
                                             role="user",
