@@ -92,13 +92,13 @@ from disco.tools.sandbox import (
     PodmanSandboxService,
     SandboxConfig,
 )
-from disco.tools.sandbox._container import PREVIEW_PORT, USER_PORTS
-from disco.tools.sandbox.port_owner import port_owners
+from disco.tools.sandbox._container import PREVIEW_PORT
 from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
 
 from .deep_research_service import DeepResearchService
 from .lifecycle import LifecycleManager
 from .mcp_manager import McpManager
+from .preview_service import PreviewService
 from .resume_service import ResumeService
 from .runtime_model_probe import _do_live_model_probe, _model_label
 from .runtime_settings import RuntimeSettings
@@ -561,6 +561,10 @@ class ConversationRuntime:
         # constants stay on the runtime; the service reaches them + live_session
         # via a back-ref. See sessions_service.py.
         self._sessions = SessionsService(self)
+        # Live-preview proxy + suspended-sandbox wake. Stateless; reaches
+        # _executors / _wake_locks / _store + the loop/rehydrate resolvers via a
+        # back-ref. See preview_service.py.
+        self._preview = PreviewService(self)
 
     # The generative (text-producing) roles a model PICK drives. NLI_VERIFIER is a
     # cross-encoder (entailment scorer), NOT a chat model — pointing it at a picked
@@ -1389,16 +1393,7 @@ class ConversationRuntime:
         )
 
     def resolve_cid_prefix(self, cid8: str) -> str | None:
-        """Full conversation id whose uuid part starts with cid8 — live executors only
-        (a preview without a live sandbox is a 503 anyway). Ambiguous (>1) → None."""
-        matches = [
-            cid
-            for cid in self._executors.keys()
-            if cid.removeprefix("conv_").startswith(cid8)
-        ]
-        if len(matches) == 1:
-            return matches[0]
-        return None
+        return self._preview.resolve_cid_prefix(cid8)
 
     def preview_upstream(self, conversation_id: str) -> str | None:
         """The URL the AGENT-SERVER can reach the conversation's dev server at (the backend
@@ -1407,49 +1402,10 @@ class ConversationRuntime:
         return self.port_upstream(conversation_id, PREVIEW_PORT)
 
     def port_upstream(self, conversation_id: str, port: int) -> str | None:
-        """Generalized upstream resolution for any curated USER port (BP-10).
-        expose_port itself refuses non-USER ports — defense stays in the backend."""
-        executor = self._executors.get(conversation_id)
-        session = getattr(executor, "_sandbox", None) if executor is not None else None
-        if session is None:
-            return None
-        if getattr(getattr(session, "_service", None), "name", "?") == "podman":
-            return None  # stub here
-        return session.expose_port(port)
+        return self._preview.port_upstream(conversation_id, port)
 
     async def wake_for_preview(self, cid8: str, port: int) -> str | None:
-        """Wake a suspended sandbox if a preview request hits it.
-        Restores the workspace and the built-in static preview server on 8000.
-        It does NOT restart agent-started dev servers (vite/express) — requests
-        for ports nothing listens on after wake will proxy to a 502.
-        """
-        cid = self.resolve_cid_prefix(cid8)
-        if cid is not None:
-            return self.port_upstream(cid, port)
-
-        try:
-            summaries = await self._store.list_conversation_summaries(
-                owner_id=DEFAULT_OWNER_ID, limit=500, cursor=None
-            )
-            matches = [
-                s.conversation_id
-                for s in summaries
-                if s.conversation_id.removeprefix("conv_").startswith(cid8)
-            ]
-            if len(matches) != 1:
-                return None
-            cid = matches[0]
-        except Exception:
-            return None
-
-        lock = self._wake_locks.setdefault(cid, asyncio.Lock())
-        async with lock:
-            if cid in self._executors:
-                return self.port_upstream(cid, port)
-            woke = await self.ensure_preview(cid)
-            if woke:
-                return self.port_upstream(cid, port)
-            return None
+        return await self._preview.wake_for_preview(cid8, port)
 
     def live_session(self, conversation_id: str) -> SandboxSession | None:
         """Read-only sandbox accessor (BP-14). Does NOT create a session — a GET must
@@ -1484,97 +1440,10 @@ class ConversationRuntime:
         return await self._sessions.session_view(conversation_id, name, tail_chars)
 
     async def preview(self, conversation_id: str) -> dict[str, Any]:
-        """Backend-aware live preview availability. The browser iframes the agent-server's
-        proxy (/conversations/{id}/preview-app/), which forwards to the active backend's
-        dev server — so previews work over the tailnet via the one reachable origin, with no
-        random container ports exposed. Podman is an honest labeled stub; never a fake URL."""
-        executor = self._executors.get(conversation_id)
-        session = getattr(executor, "_sandbox", None) if executor is not None else None
-        if session is None:
-            return {"available": False, "reason": "The agent hasn't started a sandbox yet."}
-        if getattr(getattr(session, "_service", None), "name", "?") == "podman":
-            return {
-                "available": False,
-                "stub": True,
-                "reason": "Preview isn't wired for the Podman backend in this environment "
-                "— it's completed at deployment.",
-            }
-        # Passive probe ONLY: this GET is polled by the UI, and a read path must not
-        # create a sandbox (that's _ensure()'s side effect) or surface its failures
-        # as a 500. No live instance → no preview, plainly stated.
-        inst = getattr(session, "_instance", None)
-        if inst is None:
-            return {
-                "available": False,
-                "reason": "The agent's sandbox isn't running yet.",
-                "owner": None,
-            }
-        try:
-            owners = await port_owners(inst, sorted(USER_PORTS))
-        except Exception:  # noqa: BLE001 — a probe must never 500 the preview endpoint
-            owners = {}
-        owner = owners.get(PREVIEW_PORT)
-
-        ns = f"pmx-{session.sessions.namespace}"
-
-        def _owner_json(o):  # bound ports only; normalized session name
-            sess = o.session
-            if sess and sess.startswith(ns):
-                sess = sess[len(ns):]
-            return {"pid": o.pid, "cmdline": o.cmdline, "session": sess}
-
-        ports_payload = [
-            {"port": p, "owner": _owner_json(o)}
-            for p, o in sorted(owners.items())
-            if o is not None and o.pid is not None
-        ]
-
-        if owner is None or owner.pid is None:
-            return {
-                "available": False,
-                "reason": f"No dev server detected. Run one on port {PREVIEW_PORT} inside the "
-                "sandbox to see a live preview.",
-                "owner": None,
-                "ports": ports_payload,
-            }
-
-        return {
-            "available": True,
-            "proxy": True,
-            "owner": _owner_json(owner),
-            "ports": ports_payload,
-        }
+        return await self._preview.preview(conversation_id)
 
     async def ensure_preview(self, conversation_id: str) -> bool:
-        """Backend half of the UI 'Restart preview' button (§E7). Bounded + safe: the
-        same idempotent restart as SandboxSession.ensure_preview.
-
-        After a clean FINISH the sandbox is torn down (the G safe-leak fix in `_run`),
-        which would make this button a dead affordance. Instead, re-materialize through
-        the documented resume path: re-compose the loop/executor (lazy sandbox),
-        rehydrate the snapshot, then start the preview — the user explicitly asked to
-        see the artifact again, and that's exactly what the snapshot is for."""
-        executor = self._executors.get(conversation_id)
-        if executor is None:
-            store = self._project_store_now()
-            if store is None or store.status() != StorageStatus.OK:
-                return False
-            try:
-                record = store.get(conversation_id)
-            except Exception:  # noqa: BLE001 — manifest unreadable: nothing to revive
-                return False
-            if record is None or record.files_missing:
-                return False  # never had a build snapshot (e.g. research) — no preview
-            self._loop_for(conversation_id)  # registers a fresh executor + lazy sandbox
-            await self._maybe_rehydrate(conversation_id)
-            executor = self._executors.get(conversation_id)
-        session = getattr(executor, "_sandbox", None) if executor is not None else None
-        if session is None:
-            return False
-        try:
-            return await session.ensure_preview()
-        except Exception:  # noqa: BLE001
-            return False
+        return await self._preview.ensure_preview(conversation_id)
 
     # ---- control ops: the confirmation gate + kill switch (BoD §13.4/§13.6) -----
 

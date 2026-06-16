@@ -111,7 +111,7 @@ async def test_preview_is_backend_aware_and_honest():
     import unittest.mock
 
     with unittest.mock.patch(
-        "disco.agent_server.runtime.port_owners", side_effect=mock_port_owners
+        "disco.agent_server.preview_service.port_owners", side_effect=mock_port_owners
     ):
         loc = await rt.preview("loc")
         assert loc["available"] is True and loc.get("proxy") is True and "url" not in loc
@@ -119,7 +119,7 @@ async def test_preview_is_backend_aware_and_honest():
 
     # local with no dev server up → a reason, not a fake URL
     rt._executors["bare"] = _FakeExecutor(_FakeSession("local", None))
-    with unittest.mock.patch("disco.agent_server.runtime.port_owners", return_value={}):
+    with unittest.mock.patch("disco.agent_server.preview_service.port_owners", return_value={}):
         bare = await rt.preview("bare")
         assert bare["available"] is False
         assert rt.preview_upstream("bare") is None
