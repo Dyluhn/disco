@@ -387,6 +387,34 @@ _AUTONOMOUS_PROMPT_PREFIX = (
     "genuinely impossible, call `finish` and explain what is blocked in the summary.\n\n"
 )
 
+# [E5] Agent-surface planning: capability-awareness block.
+#
+# During planning the engine exposes ONLY read-only tools (search, extract,
+# file_read, file_list, ask_user, clarify, submit_plan, think).  Without this
+# block the model may falsely deny owning a browser, shell, slides generator,
+# etc. — because those tools are literally absent from its tool list.  Appending
+# this note to the AGENT-flavor planning prompt lets the model plan steps that
+# use execution tools freely while the engine gate stays closed until approval.
+# MUST NOT appear in the build-flavor prompt — build uses only _PLANNING_DRIVER_PROMPT.
+_AGENT_PLANNING_CAPABILITY_BLOCK = (
+    "\n\nEXECUTION TOOLS — available AFTER plan approval (NOT callable yet — locked until approval):\n"
+    "Once the user approves your plan the engine unlocks the full execution tool-set.  "
+    "Plan steps that rely on any of these freely; you simply cannot call them right now:\n"
+    "  • `browser` — navigate to URLs and capture screenshots of real pages.\n"
+    "  • `shell` / `shell_exec` / `shell_view` / `shell_write_to_process` / "
+    "`shell_kill_process` / `shell_wait` — persistent shell sessions in a sandboxed Linux workspace.\n"
+    "  • `file_write`, `file_edit`, `file_append`, `file_insert_lines`, `file_replace_lines` "
+    "— create and modify files in the workspace.\n"
+    "  • `code_exec` — run Python in a persistent IPython kernel.\n"
+    "  • `slides_generate` — produce presentation slides (html / pdf / pptx).\n"
+    "  • `sheet_generate` — produce spreadsheets (xlsx).\n"
+    "  • `image_generate` — generate images.\n"
+    "  • `audio_overview` — produce an audio summary of the deliverable.\n"
+    "  • `deploy_preview`, `serve`, `server_status`, `plan_step`, and other execution meta-tools.\n"
+    "Plan confidently against this full capability set.  The engine, not you, decides when a "
+    "tool becomes callable — approval unlocks all of the above at once."
+)
+
 
 class DriverPrompts:
     """[CONTRACT role] A PromptProvider that gives the AGENT_DRIVER role phase-aware
@@ -433,6 +461,10 @@ class DriverPrompts:
             planning_prompt = planning_prompt.replace(
                 "autonomous build agent", "autonomous task agent"
             )
+            # [E5] Tell the planning model about execution tools it will gain on
+            # approval so it doesn't falsely deny owning browser/shell/slides/etc.
+            # Appended ONLY here — the build-flavor path never touches this block.
+            planning_prompt = planning_prompt + _AGENT_PLANNING_CAPABILITY_BLOCK
             execution_prompt = execution_prompt.replace(
                 "autonomous build agent", "autonomous task agent"
             )
