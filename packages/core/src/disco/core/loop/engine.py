@@ -3249,6 +3249,57 @@ class AgentLoop:
             self._bootstrap_emitted = True
         return events
 
+    async def _gate_stuck(self, events: list[Event]) -> Disp:
+        # (c) stuck detection BEFORE more work (§6). ESCAPE-then-halt: a
+        # repeating action→error loop first gets ONE reframe attempt (a strong
+        # "stop repeating, try a different approach" reminder + a temperature
+        # bump to break the self-imitation chain) BEFORE we declare STUCK. Only
+        # if it repeats AGAIN after acting on the reframe do we halt — so a
+        # transient rut doesn't dead-end a run the model could escape.
+        escape_seq = self._stuck_escape_seq(events)
+        acted_since_escape = escape_seq is not None and any(
+            isinstance(e, ActionEvent) and e.seq is not None and e.seq > escape_seq
+            for e in events
+        )
+        if self._stuck.is_stuck(self._recent(events)):
+            if escape_seq is None:
+                # First time in this user turn: drop a `stuck_escape` MARKER
+                # (a status event) AND inject a C7 escape reminder (from the
+                # rotating pool, with a per-attempt serialization nonce) so
+                # the model's next step sees fresh anti-imitation text —
+                # the harness-doesn't-nudge rule (c97c1b3) is preserved by
+                # keeping the reminder INSIDE this escape branch (no
+                # reminder outside the existing stuck-escape path). The
+                # attempt count is the count of escape markers emitted
+                # BEFORE this one (so attempt 0 → pool[0], attempt 1 →
+                # pool[1], etc., rotating modulo len(pool) on later
+                # escapes within the same conversation). The next step's
+                # temperature is bumped (escape_temp below) — the reminder
+                # is the in-context half, the temperature is the
+                # sampling-variance half, and together they break the
+                # self-imitation chain the way neither could alone.
+                attempt = self._stuck_escape_attempt_count(events)
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=_stuck_escape_reminder(attempt),
+                        ),
+                    )
+                )
+                await self._emit(
+                    StatusEvent(status=ConversationStatus.RUNNING, detail="stuck_escape")
+                )
+                return Disp.CONTINUE
+            if acted_since_escape:
+                # The high-temp retry happened and it's STILL stuck → halt now.
+                await self._emit(StatusEvent(status=ConversationStatus.STUCK))
+                return Disp.HALT
+            # else: escape just marked, model hasn't retried yet → fall through
+            # and let it act this iteration (with the bumped temperature below).
+        return Disp.FALLTHROUGH
+
     async def run(self) -> ConversationState:
         """Drive until a terminal-for-now status. Idempotent to call again after
         a pause/confirmation. [CONTRACT] returns the resulting ConversationState."""
@@ -3417,54 +3468,11 @@ class AgentLoop:
                 # reminder — distinct purposes).
                 events = await self._maybe_emit_reground(events)
 
-                # (c) stuck detection BEFORE more work (§6). ESCAPE-then-halt: a
-                # repeating action→error loop first gets ONE reframe attempt (a strong
-                # "stop repeating, try a different approach" reminder + a temperature
-                # bump to break the self-imitation chain) BEFORE we declare STUCK. Only
-                # if it repeats AGAIN after acting on the reframe do we halt — so a
-                # transient rut doesn't dead-end a run the model could escape.
-                escape_seq = self._stuck_escape_seq(events)
-                acted_since_escape = escape_seq is not None and any(
-                    isinstance(e, ActionEvent) and e.seq is not None and e.seq > escape_seq
-                    for e in events
-                )
-                if self._stuck.is_stuck(self._recent(events)):
-                    if escape_seq is None:
-                        # First time in this user turn: drop a `stuck_escape` MARKER
-                        # (a status event) AND inject a C7 escape reminder (from the
-                        # rotating pool, with a per-attempt serialization nonce) so
-                        # the model's next step sees fresh anti-imitation text —
-                        # the harness-doesn't-nudge rule (c97c1b3) is preserved by
-                        # keeping the reminder INSIDE this escape branch (no
-                        # reminder outside the existing stuck-escape path). The
-                        # attempt count is the count of escape markers emitted
-                        # BEFORE this one (so attempt 0 → pool[0], attempt 1 →
-                        # pool[1], etc., rotating modulo len(pool) on later
-                        # escapes within the same conversation). The next step's
-                        # temperature is bumped (escape_temp below) — the reminder
-                        # is the in-context half, the temperature is the
-                        # sampling-variance half, and together they break the
-                        # self-imitation chain the way neither could alone.
-                        attempt = self._stuck_escape_attempt_count(events)
-                        await self._emit(
-                            MessageEvent(
-                                source=EventSource.ENVIRONMENT,
-                                message=LLMMessage(
-                                    role="user",
-                                    content=_stuck_escape_reminder(attempt),
-                                ),
-                            )
-                        )
-                        await self._emit(
-                            StatusEvent(status=ConversationStatus.RUNNING, detail="stuck_escape")
-                        )
-                        continue
-                    if acted_since_escape:
-                        # The high-temp retry happened and it's STILL stuck → halt now.
-                        await self._emit(StatusEvent(status=ConversationStatus.STUCK))
-                        return await self.get_state()
-                    # else: escape just marked, model hasn't retried yet → fall through
-                    # and let it act this iteration (with the bumped temperature below).
+                disp = await self._gate_stuck(events)
+                if disp is Disp.CONTINUE:
+                    continue
+                if disp is Disp.HALT:
+                    return await self.get_state()
 
                 # (c.2) CIRCUIT BREAKER (Cluster 2). StuckDetector only catches
                 # IDENTICAL action→error repeats; a model that tries N DIFFERENT
@@ -3683,6 +3691,14 @@ class AgentLoop:
                 # everything except the plan tool.
                 # Escape temperature: jitter HARD to break a self-imitation chain —
                 # the single step right after a stuck reframe (StuckDetector's escape).
+                # escape_seq/acted_since_escape are pure functions of `events`
+                # (the stuck gate recomputes its own copy); recompute here for the
+                # temperature decision (folds into `_drive_step` on extraction).
+                escape_seq = self._stuck_escape_seq(events)
+                acted_since_escape = escape_seq is not None and any(
+                    isinstance(e, ActionEvent) and e.seq is not None and e.seq > escape_seq
+                    for e in events
+                )
                 in_escape = escape_seq is not None and not acted_since_escape
                 escape_temp = _STUCK_ESCAPE_TEMP if in_escape else None
                 # Withhold the meta/handoff virtuals until this session's first
