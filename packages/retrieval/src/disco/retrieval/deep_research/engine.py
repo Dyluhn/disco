@@ -132,32 +132,25 @@ class DeepResearchRun:
     def bound(self) -> DepthBound:
         return self._bound
 
-    async def run(
+    async def _prepare_plan(
         self,
         plan_steps: list[str],
         *,
+        resume_sections: list[ReportSection] | None,
+        resume_passages: list[RetrievalPassage] | None,
+        resume_all_hits: list[Any] | None,
         emit: EmitFn,
-        should_cancel: Callable[[], bool] | None = None,
-        resume_sections: list[ReportSection] | None = None,
-        resume_passages: list[RetrievalPassage] | None = None,
-        resume_all_hits: list[Any] | None = None,
-    ) -> ReportFromRun:
-        """Execute the run. Returns the assembled report. `emit` is awaited
-        between phases so the agent-server can write events to the conversation
-        log; we never write to the store directly.
-
-        Each sub-question is gathered AND synthesized before moving to the next —
-        so a completed section is a durable checkpoint. `should_cancel` makes Stop
-        REAL: it is polled at each sub-question boundary; when it returns true the
-        run halts there and returns the partial report (every section completed so
-        far) with `bounded_by="stopped"`. Without it the run is uninterruptible.
-
-        Resume (checkpointed): pass `resume_sections` (+ their `resume_passages` /
-        `resume_all_hits`) from a prior stopped run's partial ReportEvent. Their
-        sub-questions are skipped — we only gather+synthesize the steps NOT already
-        done, then re-run the coherence pass over the full set. This is what makes
-        a resumed Deep Research run continue instead of redoing completed sections."""
-        started = time.monotonic()
+    ) -> tuple[
+        str | None,
+        list[SubQuestion],
+        list[ReportSection],
+        list[RetrievalPassage],
+        list[Any],
+    ]:
+        """Bound the plan width to the depth tier, carry forward already-completed
+        (resumed) sections, and emit the gather-phase + low-RAM transparency
+        events. Returns `(bounded_by, pending, sections, carried_passages,
+        carried_hits)` — the explicit state the rest of the run threads through."""
         bounded_by: str | None = None
         # honor the depth bound on plan width too
         if len(plan_steps) > self._bound.max_subquestions:
@@ -203,6 +196,47 @@ class DeepResearchRun:
                     ),
                 },
             )
+        return bounded_by, pending, sections, carried_passages, carried_hits
+
+    async def run(
+        self,
+        plan_steps: list[str],
+        *,
+        emit: EmitFn,
+        should_cancel: Callable[[], bool] | None = None,
+        resume_sections: list[ReportSection] | None = None,
+        resume_passages: list[RetrievalPassage] | None = None,
+        resume_all_hits: list[Any] | None = None,
+    ) -> ReportFromRun:
+        """Execute the run. Returns the assembled report. `emit` is awaited
+        between phases so the agent-server can write events to the conversation
+        log; we never write to the store directly.
+
+        Each sub-question is gathered AND synthesized before moving to the next —
+        so a completed section is a durable checkpoint. `should_cancel` makes Stop
+        REAL: it is polled at each sub-question boundary; when it returns true the
+        run halts there and returns the partial report (every section completed so
+        far) with `bounded_by="stopped"`. Without it the run is uninterruptible.
+
+        Resume (checkpointed): pass `resume_sections` (+ their `resume_passages` /
+        `resume_all_hits`) from a prior stopped run's partial ReportEvent. Their
+        sub-questions are skipped — we only gather+synthesize the steps NOT already
+        done, then re-run the coherence pass over the full set. This is what makes
+        a resumed Deep Research run continue instead of redoing completed sections."""
+        started = time.monotonic()
+        (
+            bounded_by,
+            pending,
+            sections,
+            carried_passages,
+            carried_hits,
+        ) = await self._prepare_plan(
+            plan_steps,
+            resume_sections=resume_sections,
+            resume_passages=resume_passages,
+            resume_all_hits=resume_all_hits,
+            emit=emit,
+        )
 
         # ---- per-sub-question: gather → synthesize (a durable checkpoint) ----
         # The source budget governs the NEW gathering this invocation does; carried
