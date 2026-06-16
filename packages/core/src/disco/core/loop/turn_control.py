@@ -21,7 +21,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from . import signals
 from ..events import (
     ActionEvent,
     AgentErrorEvent,
@@ -29,8 +28,8 @@ from ..events import (
     AlternativesEvent,
     ConversationStatus,
     DeliverableEvent,
-    EventSource,
     Event,
+    EventSource,
     KnowledgeEvent,
     LLMMessage,
     MessageEvent,
@@ -40,8 +39,9 @@ from ..events import (
     ToolResult,
 )
 from ..llm import OperatingMode
-from .boundaries import AgentStep
+from . import signals
 from .bootstrap import _detect_project_bootstrap
+from .boundaries import AgentStep
 from .control import Disp
 from .messages import _stuck_escape_reminder
 from .observe import _FANOUT_INPUT_MAX_CHARS

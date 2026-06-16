@@ -17,8 +17,8 @@ from typing import TYPE_CHECKING
 
 from ..events import (
     AgentErrorEvent,
-    EventSource,
     Event,
+    EventSource,
     LLMMessage,
     MessageEvent,
     ObservationEvent,

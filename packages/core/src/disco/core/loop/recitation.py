@@ -11,16 +11,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from . import signals
 from ..events import (
     ActionEvent,
-    EventSource,
     Event,
+    EventSource,
     KnowledgeEvent,
-    LLMMessage,
     MessageEvent,
 )
 from ..view import View, _latest_plan
+from . import signals
 from .messages import _hs03_reground_message
 
 if TYPE_CHECKING:

@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -36,7 +35,6 @@ from ..events import (
     EventSource,
     LLMMessage,
     MessageEvent,
-    ObservationEvent,
     PlanEvent,
     StatusEvent,
     ToolCall,
@@ -49,6 +47,7 @@ from ..llm import (
 from ..state import ConversationState
 from ..store.base import EventStore
 from ..view import Condenser, Summarizer, View
+from . import signals, view_render
 from .boundaries import (
     Agent,
     AgentStep,
@@ -58,39 +57,39 @@ from .boundaries import (
     ToolExecutor,
 )
 from .control import Disp
-from . import signals, view_render
 from .driver import Driver
 from .finish import (  # noqa: F401 — finish helpers/consts re-exported for back-compat
+    _DOD_REFUSAL_CAP,
+    _EXECUTION_NUDGE,
+    _FINISH_VERIFY_CAP,
     FinishGate,
     _app_verify_command,
     _browser_verified,
-    _DOD_REFUSAL_CAP,
     _DoDWorkspaceUnavailable,
-    _EXECUTION_NUDGE,
-    _FINISH_VERIFY_CAP,
     _is_web_deliverable,
     _last_productive_seq,
     _latest_browser_error,
     _static_verify_command,
 )
 from .observe import (  # noqa: F401 — _FANOUT_INPUT_MAX_CHARS re-exported for back-compat
-    Observer,
     _FANOUT_INPUT_MAX_CHARS,
+    Observer,
 )
 from .plan_conditions import PlanStepConditions
 from .plans import Planner
 from .recitation import (  # noqa: F401 — _RECITATION_SENTINEL re-exported for back-compat
-    RecitationRegrounder,
     _RECITATION_SENTINEL,
-)
-from .turn_control import (  # noqa: F401 — _CONTINUE_OPTION_ID re-exported for back-compat
-    MetaToolHandlers,
-    Valve,
-    _CONTINUE_OPTION_ID,
+    RecitationRegrounder,
 )
 from .signals import (  # noqa: F401 — re-exported for back-compat (moved to signals.py)
     _BOOKKEEPING_TOOLS,
     _NON_PRODUCTIVE_TOOLS,
+)
+from .stuck import StuckDetector, StuckThresholds
+from .turn_control import (  # noqa: F401 — _CONTINUE_OPTION_ID re-exported for back-compat
+    _CONTINUE_OPTION_ID,
+    MetaToolHandlers,
+    Valve,
 )
 from .view_render import (  # noqa: F401 — re-exported for back-compat (moved to view_render.py)
     _WS_MAX_FILES,
@@ -98,7 +97,6 @@ from .view_render import (  # noqa: F401 — re-exported for back-compat (moved 
     _WS_READ_TIMEOUT_S,
     _WS_TOTAL_CHARS,
 )
-from .stuck import StuckDetector, StuckThresholds
 
 _LOG = logging.getLogger("disco.loop")
 

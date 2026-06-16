@@ -14,7 +14,6 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
-from . import signals, view_render
 from ..events import (
     ActionEvent,
     ConversationStatus,
@@ -32,6 +31,7 @@ from ..llm import (
     OperatingMode,
 )
 from ..view import View
+from . import signals, view_render
 from .boundaries import AgentStep
 from .control import Disp
 from .fc_kit import _nearest_tool_name

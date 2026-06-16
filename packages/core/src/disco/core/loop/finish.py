@@ -15,14 +15,13 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from . import signals
 from ..dod_evaluator import DoDEvaluator
 from ..events import (
     ActionEvent,
     AgentErrorEvent,
     ConversationStatus,
-    EventSource,
     Event,
+    EventSource,
     LLMMessage,
     MessageEvent,
     ObservationEvent,
@@ -31,6 +30,7 @@ from ..events import (
 )
 from ..llm import OperatingMode
 from ..state import ConversationState
+from . import signals
 from .boundaries import AgentStep
 from .control import Disp
 from .signals import _NON_PRODUCTIVE_TOOLS

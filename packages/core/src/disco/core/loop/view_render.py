@@ -14,7 +14,6 @@ import logging
 import os
 from typing import TYPE_CHECKING
 
-from . import signals
 from ..events import (
     ActionEvent,
     AgentErrorEvent,
@@ -25,6 +24,7 @@ from ..events import (
 )
 from ..llm import Difficulty, OverflowSignal
 from ..view import View, microcompact
+from . import signals
 from .dedup import (
     _F8_PREFIX_CHARS,
     _F8_TRUNCATION_MARKER_TEMPLATE,
