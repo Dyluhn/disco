@@ -103,6 +103,7 @@ from .resume_service import ResumeService
 from .runtime_model_probe import _do_live_model_probe, _model_label
 from .runtime_settings import RuntimeSettings
 from .schedule_service import ScheduleService
+from .sessions_service import SessionsService
 from .share_service import ShareService
 
 
@@ -556,6 +557,10 @@ class ConversationRuntime:
         # runtime; the service reaches it + _store via a back-ref. See
         # schedule_service.py.
         self._schedule = ScheduleService(self)
+        # Shell-session reads + upload write-through. The caches + tuning
+        # constants stay on the runtime; the service reaches them + live_session
+        # via a back-ref. See sessions_service.py.
+        self._sessions = SessionsService(self)
 
     # The generative (text-producing) roles a model PICK drives. NLI_VERIFIER is a
     # cross-encoder (entailment scorer), NOT a chat model — pointing it at a picked
@@ -977,22 +982,7 @@ class ConversationRuntime:
         return self._sandbox_spec.model_copy(update=spec_update)
 
     def upload_session(self, conversation_id: str) -> SandboxSession:
-        """Session uploads write through. The executor's live session when a
-        loop exists; otherwise a pending session the NEXT build loop adopts."""
-        executor = self._executors.get(conversation_id)
-        if executor is not None:
-            return executor._sandbox
-        if conversation_id not in self._pending_sessions:
-            self._pending_sessions[conversation_id] = SandboxSession(
-                self._sandbox_service_now(),
-                self._build_sandbox_spec(
-                    surface=self._surface_of(conversation_id),
-                    mcp_egress_hosts=self._mcp_egress_hosts(),
-                ),
-                conversation_id=conversation_id,
-                on_recreate=lambda: self._rehydrate_after_recreate(conversation_id),
-            )
-        return self._pending_sessions[conversation_id]
+        return self._sessions.upload_session(conversation_id)
 
     def store_upload(self, conversation_id: str, filename: str, data: bytes) -> None:
         """[DC-07] Store an uploaded file in the server-side sidecar directory."""
@@ -1479,31 +1469,7 @@ class ConversationRuntime:
     _SESSIONS_LIST_BACKOFF_S: float = 0.25
 
     async def sessions_snapshot(self, conversation_id: str) -> tuple[list[SessionInfo], bool]:
-        """Session list + staleness. Fresh on success (cache updated); on
-        transport failure retry twice (0.25 s apart), then degrade to the
-        last-known list marked stale=True — a read-only listing must never
-        500 the UI poll loop (DEFECT-1). No sandbox -> ([], False)."""
-        session = self.live_session(conversation_id)
-        if session is None:
-            return ([], False)
-        last_exc: BaseException | None = None
-        for attempt in range(self._SESSIONS_LIST_RETRIES + 1):
-            if attempt > 0:
-                await asyncio.sleep(self._SESSIONS_LIST_BACKOFF_S)
-            try:
-                all_sessions = await session.sessions.list()
-                filtered = [s for s in all_sessions if not s.name.startswith("__")]
-                self._last_sessions[conversation_id] = filtered
-                return (filtered, False)
-            except Exception as exc:  # noqa: BLE001
-                last_exc = exc
-        _LOG.warning(
-            "sessions_snapshot: %s failed after %d attempts: %s",
-            conversation_id,
-            self._SESSIONS_LIST_RETRIES + 1,
-            last_exc,
-        )
-        return (self._last_sessions.get(conversation_id, []), True)
+        return await self._sessions.sessions_snapshot(conversation_id)
 
     async def sessions_list(self, conversation_id: str) -> list[SessionInfo]:
         """Compat wrapper — returns only the list, degraded on failure (DEFECT-1)."""
@@ -1515,25 +1481,7 @@ class ConversationRuntime:
     async def session_view(
         self, conversation_id: str, name: str, tail_chars: int
     ) -> SessionView | None:
-        """Coalesced capture-pane: at most one in-flight call per (cid, name),
-        result cached 0.5s so concurrent polls share one exec_shell round-trip."""
-        session = self.live_session(conversation_id)
-        if session is None:
-            return None
-        key = (conversation_id, name)
-        lock = self._session_view_locks.setdefault(key, asyncio.Lock())
-        async with lock:
-            loop = asyncio.get_running_loop()
-            now = loop.time()
-            cached = self._session_view_cache.get(key)
-            if cached is not None and (now - cached[0]) < self._SESSION_VIEW_CACHE_TTL:
-                view = cached[1]
-            else:
-                view = await session.sessions.view(name, tail_chars=self._SESSION_VIEW_MAX_CHARS)
-                self._session_view_cache[key] = (now, view)
-        if len(view.output) > tail_chars:
-            return SessionView(running=view.running, output=view.output[-tail_chars:])
-        return view
+        return await self._sessions.session_view(conversation_id, name, tail_chars)
 
     async def preview(self, conversation_id: str) -> dict[str, Any]:
         """Backend-aware live preview availability. The browser iframes the agent-server's
