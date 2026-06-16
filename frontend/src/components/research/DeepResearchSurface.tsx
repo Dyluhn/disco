@@ -308,6 +308,37 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
           </div>
         )}
 
+        {/* Wave 2 — follow-up Q&A. The RP-13 follow-up path appends the user's
+            question + the agent's grounded answer as MessageEvents after the
+            report; DeepReportView only renders the ReportEvent, so these were
+            generated server-side but never shown (the answer vanished). Render
+            them here as a thread. Plumbing messages are already suppressed in
+            the hook's `followUps` derivation (whitelist boundary). */}
+        {r.followUps.length > 0 && (
+          <div className="mx-auto w-full max-w-doc space-y-section">
+            {r.followUps.map((m, i) =>
+              m.message.role === "user" ? (
+                <p key={i} className="font-ui text-[0.95rem] font-medium text-text">
+                  <span className="text-text-faint">Follow-up: </span>
+                  {m.message.content}
+                </p>
+              ) : (
+                <div
+                  key={i}
+                  className="rounded-card border border-hairline bg-surface-1 px-body py-body"
+                >
+                  <p className="mb-inline font-ui text-[0.72rem] uppercase tracking-wide text-text-faint">
+                    Answer
+                  </p>
+                  <div className="whitespace-pre-wrap font-reading text-[0.95rem] leading-relaxed text-text">
+                    {m.message.content}
+                  </div>
+                </div>
+              ),
+            )}
+          </div>
+        )}
+
         {/* "Need More?" card — Ask a Follow-Up / Export as… / Audio Overview.
             Only visible once the report is FINISHED and present. */}
         {r.status === "FINISHED" && r.report && r.cid && (

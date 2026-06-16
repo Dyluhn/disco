@@ -167,6 +167,24 @@ export function useDeepResearch(
   // Legacy export (single-button MD download) — kept for backward compat.
   const exportReport = exportMd;
 
+  // Follow-up Q&A render (Wave 2 — the silent-drop fix). The RP-13 follow-up
+  // path appends the user's question + the agent's grounded answer as
+  // MessageEvents AFTER the report. DeepReportView only renders the ReportEvent,
+  // so these were generated server-side but NEVER shown (the answer vanished).
+  // We surface them here. DISPOSITION RULE (honors the whitelist boundary): only
+  // user + assistant messages render; environment/system plumbing
+  // (<system-reminder>, <reground-anchors>) is deliberately SUPPRESSED, not
+  // dumped. Anything past the report seq that isn't a clean Q/A is dropped.
+  const reportSeq = stream.report?.seq ?? -1;
+  const followUps = stream.events.filter(
+    (e): e is MessageEvent =>
+      e.kind === "message" &&
+      (e.seq ?? 0) > reportSeq &&
+      (e.message.role === "user" || e.message.role === "assistant") &&
+      !(e.message.content ?? "").includes("<system-reminder>") &&
+      !(e.message.content ?? "").includes("<reground-anchors>"),
+  );
+
   // The effective query for display: real query once recovered, a neutral loading
   // string while mid-replay, or null when no session exists.
   const effectiveQuery =
@@ -195,6 +213,9 @@ export function useDeepResearch(
     kill,
     retry,
     reset,
+    /** Wave 2: post-report follow-up Q&A (user question + agent answer),
+     *  in event order. Previously generated server-side but never rendered. */
+    followUps,
     exportReport,
     exportReportByFmt,
     /** fix-c #4: which export (if any) is currently in-flight on the server.
