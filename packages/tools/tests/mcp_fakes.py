@@ -127,6 +127,16 @@ class FakeStdioServer:
                                 "description": "List files in the temp dir",
                                 "inputSchema": {"type": "object", "properties": {}},
                             },
+                            {
+                                "name": "get_env",
+                                "description": "Report this subprocess's view of an "
+                                "env var (SEC-1 leak probe)",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {"name": {"type": "string"}},
+                                    "required": ["name"],
+                                },
+                            },
                         ]
                     },
                 }
@@ -171,6 +181,12 @@ class FakeStdioServer:
                         text = f.read()
             elif name == "list_files":
                 text = json.dumps(sorted(os.listdir(self._tempdir or ".")))
+            elif name == "get_env":
+                # The subprocess reports what IT can actually see — this is the
+                # end-to-end SEC-1 probe. Sentinel "<absent>" means the var did
+                # not flow across the process boundary.
+                var = args.get("name", "")
+                text = os.environ.get(var, "<absent>")
             else:
                 text = f"Error: unknown tool: {name}"
         except Exception as exc:

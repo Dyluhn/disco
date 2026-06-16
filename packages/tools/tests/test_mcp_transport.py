@@ -10,7 +10,7 @@ import asyncio
 import sys
 
 import pytest
-from disco.tools.mcp.stdio import McpStdioClient
+from disco.tools.mcp.stdio import McpStdioClient, _clean_base_env
 
 
 @pytest.fixture
@@ -78,6 +78,60 @@ async def test_stdio_client_session_raises_before_connect():
     )
     with pytest.raises(RuntimeError, match="not connected"):
         _ = client.session
+
+
+@pytest.mark.asyncio
+async def test_stdio_client_does_not_leak_host_secrets(fake_server_command, monkeypatch):
+    """SEC-1 regression — END-TO-END.
+
+    Set the Fernet master key + a provider key in the PARENT env, spawn a real
+    MCP subprocess, and have the subprocess report (via the get_env tool) what
+    IT can see. The secrets must NOT have crossed the process boundary, while
+    PATH (needed to locate runtimes) and an explicitly-attached per-server
+    secret ref MUST pass through.
+    """
+    # Poison the parent environment exactly as production would have it.
+    monkeypatch.setenv("DISCO_SECRET_KEY", "MASTER-KEY-must-not-leak")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-must-not-leak")
+
+    client = McpStdioClient(
+        command=[fake_server_command[0]],
+        args=fake_server_command[1:],
+        # The user explicitly attaches THIS server's own secret ref — it SHOULD
+        # reach the child (that's the legitimate channel).
+        env={"MY_SERVER_TOKEN": "attached-on-purpose"},
+        init_timeout_s=10.0,
+    )
+
+    async def _seen(var: str) -> str:
+        res = await client.call_tool("get_env", {"name": var})
+        # call_tool returns {"content": [TextContent...], "isError": bool}.
+        return res["content"][0].text
+
+    try:
+        await client.connect()
+        # The two host secrets must be ABSENT from the child's view.
+        assert await _seen("DISCO_SECRET_KEY") == "<absent>"
+        assert await _seen("OPENROUTER_API_KEY") == "<absent>"
+        # PATH must pass through (runtimes won't start otherwise).
+        assert await _seen("PATH") != "<absent>"
+        # The explicitly-attached per-server secret ref MUST reach the child.
+        assert await _seen("MY_SERVER_TOKEN") == "attached-on-purpose"
+    finally:
+        await client.close()
+
+
+def test_clean_base_env_excludes_secrets(monkeypatch):
+    """Unit guard on the allowlist itself — no secret-shaped key survives."""
+    monkeypatch.setenv("DISCO_SECRET_KEY", "x")
+    monkeypatch.setenv("PMX_SECRET_KEY", "x")
+    monkeypatch.setenv("OPENAI_API_KEY", "x")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    env = _clean_base_env()
+    assert "PATH" in env
+    leaked = [k for k in env if "KEY" in k or "TOKEN" in k or "SECRET" in k]
+    assert leaked == [], f"clean base env leaked {leaked}"
 
 
 @pytest.mark.asyncio

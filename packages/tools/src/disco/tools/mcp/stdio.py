@@ -20,6 +20,33 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 
 _LOG = logging.getLogger(__name__)
 
+# Only these keys are passed through from the host environment to an MCP
+# subprocess. Everything else — crucially DISCO_SECRET_KEY (the Fernet master
+# key) and every *_API_KEY provider credential read from os.environ — is
+# withheld, because the MCP server is third-party code (an `npx some-server`)
+# and the subprocess boundary is NOT a trust boundary. A compromised server
+# that inherited os.environ could decrypt ~/.config/disco/secrets.json and
+# harvest every provider key. The server still gets PATH (to locate its
+# interpreter/node), locale/tz, and a temp dir — plus the per-server secret
+# refs the user explicitly attached via `srv.env` (overlaid below). Mirrors
+# the sandbox process backend's `_clean_env` (sandbox/process.py).
+_SAFE_PASSTHROUGH = (
+    "PATH",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "TZ",
+    "TMPDIR",
+    "SystemRoot",  # Windows: many runtimes fail to start without it
+)
+
+
+def _clean_base_env() -> dict[str, str]:
+    """A minimal host env for an MCP subprocess — no secrets ever leak in."""
+    import os as _os
+
+    return {k: _os.environ[k] for k in _SAFE_PASSTHROUGH if k in _os.environ}
+
 
 class StdioConnectionClosed(Exception):
     """The stdio subprocess exited prematurely (before explicit close)."""
@@ -28,8 +55,11 @@ class StdioConnectionClosed(Exception):
 class McpStdioClient:
     """One MCP server over stdio — owns the subprocess lifecycle.
 
-    Uses the mcp SDK's stdio_client context manager for JSON-RPC framing;
-    the subprocess IS the process boundary (the sandbox's isolation).
+    Uses the mcp SDK's stdio_client context manager for JSON-RPC framing.
+    NOTE: the subprocess runs on the HOST and is NOT a trust boundary — the
+    server is third-party code. It receives only `_clean_base_env()` plus the
+    per-server secret refs the user attached; the host's DISCO_SECRET_KEY and
+    provider keys are deliberately withheld (see `_SAFE_PASSTHROUGH`).
     """
 
     def __init__(
@@ -57,10 +87,11 @@ class McpStdioClient:
         hang defense). Stderr is captured into a buffer.
         """
         full_cmd = self._command + self._args
-        # Merge the process env with our own (the env dict contains only the
-        # overrides — SecretsStore-resolved values — not the full environment).
-        import os as _os
-        resolved_env = dict(_os.environ)
+        # Start from a CLEAN base (PATH/locale/tmp only — never the host's
+        # secrets) and overlay only the SecretsStore-resolved refs the user
+        # explicitly attached to THIS server via `srv.env`. The subprocess is
+        # third-party code, so os.environ must not flow into it (SEC-1).
+        resolved_env = _clean_base_env()
         resolved_env.update(self._env)
 
         params = StdioServerParameters(
