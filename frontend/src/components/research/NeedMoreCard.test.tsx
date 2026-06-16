@@ -27,6 +27,10 @@ vi.mock("@/api/deepResearch", () => ({
   exportReportAsMarkdown: vi.fn(),
   exportReport: vi.fn().mockResolvedValue(true),
   serializeReportToMarkdown: vi.fn().mockReturnValue("# Report\n\nContent"),
+  requestReportAudio: vi.fn().mockResolvedValue({
+    mp3_url: "/conversations/c1/report/audio/audio_overview.mp3",
+    transcript_url: "/conversations/c1/report/audio/audio_overview.md",
+  }),
 }));
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -199,12 +203,10 @@ describe("NeedMoreCard", () => {
     await user.click(within(dialog).getByRole("button", { name: /Close export dialog/i }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
-    // Press Audio Overview (goes to unavailable state after stub throws)
+    // Press Audio Overview → success path shows the player + Export MP3 (real, not a stub)
     await user.click(screen.getByRole("button", { name: /Audio Overview/i }));
     await waitFor(() =>
-      expect(
-        screen.getByText(/audio overview backend not yet available/i),
-      ).toBeInTheDocument(),
+      expect(screen.getByRole("button", { name: /Export MP3/i })).toBeInTheDocument(),
     );
 
     // ── Regression: verify each control is STILL responsive ──
@@ -227,55 +229,48 @@ describe("NeedMoreCard", () => {
     await user.click(screen.getByRole("button", { name: /Close export dialog/i }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
-    // Audio: the "Try again" reset button is present and clickable
-    const resetAudioBtn = screen.getByRole("button", { name: /Reset audio overview state/i });
-    expect(resetAudioBtn).toBeEnabled();
-    await user.click(resetAudioBtn);
+    // Audio: success → done state; "Regenerate" resets back to idle
+    const regenBtn = screen.getByRole("button", { name: /Regenerate/i });
+    expect(regenBtn).toBeEnabled();
+    await user.click(regenBtn);
     // Returns to idle: Audio Overview button is back
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /Audio Overview/i })).toBeInTheDocument(),
     );
   });
 
-  // (e) Audio button shows honest not-wired state, NOT fake success
-  it("Audio Overview enters 'not yet available' state immediately, never fake success", async () => {
+  // (e) Audio Overview is wired to the real endpoint — success shows the player
+  it("Audio Overview success shows the player + Export MP3 (real, not a stub)", async () => {
     const user = userEvent.setup();
     renderCard();
 
     await user.click(screen.getByRole("button", { name: /Audio Overview/i }));
 
-    // Should NOT see "Play overview" or "Export MP3" (those are done-state affordances)
-    // Should see the honest unavailability message
+    // Done state: real Export MP3 + Regenerate affordances (gated on a real result)
     await waitFor(() =>
-      expect(
-        screen.getByText(/audio overview backend not yet available/i),
-      ).toBeInTheDocument(),
+      expect(screen.getByRole("button", { name: /Export MP3/i })).toBeInTheDocument(),
     );
-
-    // The stub message must appear
-    expect(screen.getByText(/not yet wired/i)).toBeInTheDocument();
-
-    // No fake success affordances
-    expect(screen.queryByRole("button", { name: /Play overview/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Export MP3/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Regenerate/i })).toBeInTheDocument();
   });
 
-  it("audio unavailable state is resettable back to idle", async () => {
+  it("audio failure surfaces an honest reason and is resettable to idle", async () => {
     const user = userEvent.setup();
+    const dr = await import("@/api/deepResearch");
+    vi.mocked(dr.requestReportAudio).mockRejectedValueOnce(
+      new Error("Audio overview is disabled in Settings → Audio — enable it to generate."),
+    );
     renderCard();
 
     await user.click(screen.getByRole("button", { name: /Audio Overview/i }));
     await waitFor(() =>
-      expect(screen.getByText(/audio overview backend not yet available/i)).toBeInTheDocument(),
+      expect(screen.getAllByText(/disabled in Settings/i).length).toBeGreaterThan(0),
     );
 
+    // Resettable back to idle via "Try again"
     await user.click(screen.getByRole("button", { name: /Reset audio overview state/i }));
-
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /Audio Overview/i })).toBeInTheDocument(),
     );
-    expect(
-      screen.queryByText(/audio overview backend not yet available/i),
-    ).not.toBeInTheDocument();
+    expect(screen.queryAllByText(/disabled in Settings/i)).toHaveLength(0);
   });
 });

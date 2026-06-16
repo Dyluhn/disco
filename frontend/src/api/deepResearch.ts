@@ -119,6 +119,32 @@ function downloadBlob(blob: Blob, fallbackName: string, ext: string): void {
   URL.revokeObjectURL(url);
 }
 
+/** Request a server-side two-voice audio overview for a finished report (C2).
+ * POSTs to the agent-server, which runs the audio pipeline in-process and caches
+ * the mp3 + transcript. Returns the agent-server-relative URLs. Throws a clear,
+ * typed reason on failure (e.g. TTS disabled in Settings) — never a fake success. */
+export async function requestReportAudio(
+  cid: string,
+): Promise<{ mp3_url: string; transcript_url: string }> {
+  const res = await fetch(`${agentHttpBase()}/conversations/${cid}/report/audio`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    let reason = `${res.status}`;
+    try {
+      const body = await res.json();
+      reason = body?.detail?.reason ?? body?.detail ?? reason;
+    } catch {
+      /* opaque; keep status */
+    }
+    if (reason === "tts_disabled") {
+      throw new Error("Audio overview is disabled in Settings → Audio — enable it to generate.");
+    }
+    throw new Error(`Audio overview failed: ${reason}`);
+  }
+  return res.json();
+}
+
 /** The markdown serializer. Same shape the prior pmx-deep-verify.py script
  * produced — single source of truth for how a report looks as a portable
  * document. Includes citations as a footer table so the user can resolve

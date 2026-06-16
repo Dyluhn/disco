@@ -33,8 +33,10 @@ import { cn } from "@/lib/cn";
 import {
   exportReport,
   exportReportAsMarkdown,
+  requestReportAudio,
   serializeReportToMarkdown,
 } from "@/api/deepResearch";
+import { agentHttpBase } from "@/api/client";
 import { useExportCapabilities } from "@/hooks/useExportCapabilities";
 import type { ReportEvent } from "@/types/agent";
 import { ReportFollowUp } from "./ReportFollowUp";
@@ -52,26 +54,13 @@ const ACTIVE_BTN =
 type AudioState =
   | { status: "idle" }
   | { status: "generating"; progress: number }
-  | { status: "done"; blob: Blob; audioUrl: string }
+  | { status: "done"; audioUrl: string }
   | { status: "unavailable"; reason: string };
 
-/**
- * TODO: Wire to a real /api/conversations/{cid}/report/audio-overview endpoint
- * when one ships. The audio_overview functionality exists only as a sandbox
- * BUILD tool (packages/tools/src/disco/tools/builtin/audio_overview.py) —
- * there is NO HTTP endpoint accessible from the Research surface as of 2026-06.
- * Confirmed by grepping packages/agent-server/src/disco/agent_server/app.py:
- * no route matches /conversations/{id}/report/audio or /report/overview.
- *
- * This stub throws "not yet wired" so the UI shows an honest error.
- * DO NOT replace with fake success or a silent no-op.
- */
-export async function requestAudioOverview(
-  _cid: string,
-  _onProgress?: (pct: number) => void,
-): Promise<Blob> {
-  throw new Error("not yet wired");
-}
+// Audio overview is wired to the agent-server endpoint
+// POST /conversations/{cid}/report/audio (see api/deepResearch.requestReportAudio).
+// On failure (e.g. TTS disabled in Settings) it surfaces the typed reason honestly
+// — never a fake success.
 
 // ── File System Access API types ──────────────────────────────────────────────
 
@@ -362,23 +351,17 @@ function AudioSection({ cid }: AudioSectionProps) {
   const generate = useCallback(async () => {
     setAudio({ status: "generating", progress: 0 });
     try {
-      const blob = await requestAudioOverview(cid, (pct) => {
-        setAudio({ status: "generating", progress: pct });
-      });
-      const audioUrl = URL.createObjectURL(blob);
-      setAudio({ status: "done", blob, audioUrl });
+      const { mp3_url } = await requestReportAudio(cid);
+      // The endpoint returns an agent-server-relative URL; prefix the agent base
+      // so the <audio> element + Export fetch the right origin.
+      setAudio({ status: "done", audioUrl: `${agentHttpBase()}${mp3_url}` });
     } catch (e: unknown) {
       const reason = e instanceof Error ? e.message : String(e);
       setAudio({ status: "unavailable", reason });
     }
   }, [cid]);
 
-  const reset = useCallback(() => {
-    setAudio((prev) => {
-      if (prev.status === "done") URL.revokeObjectURL(prev.audioUrl);
-      return { status: "idle" };
-    });
-  }, []);
+  const reset = useCallback(() => setAudio({ status: "idle" }), []);
 
   if (audio.status === "idle") {
     return (
@@ -432,7 +415,7 @@ function AudioSection({ cid }: AudioSectionProps) {
       <div className="flex flex-wrap items-center gap-inline">
         <Headphones className="size-3.5 shrink-0 text-text-faint" aria-hidden />
         <span className="font-ui text-[0.78rem] text-text-faint">
-          Audio overview backend not yet available
+          {audio.status === "unavailable" ? audio.reason : "Audio overview unavailable"}
         </span>
         <button
           type="button"
