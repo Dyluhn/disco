@@ -61,6 +61,14 @@ export function ProjectStorageSection() {
   const status = data.status;
   const help = STATUS_HELP[status];
 
+  // e4ux: when the user hasn't set a path, surface the AUTO-CREATED default
+  // the server will actually use. The input stays empty (placeholder visible)
+  // so the user can override; the "(default)" marker makes it transparent that
+  // the shown path is server-chosen, not user-typed. When projects_root IS
+  // set, behave as before — show the input value as the active location.
+  const usingDefault = data.projects_root.trim() === "";
+  const activeRoot = usingDefault ? data.effective_root : data.projects_root;
+
   // Surface any 400/JSON error reason returned by the server in the save error.
   const saveErrorMsg = (() => {
     if (!save.error) return null;
@@ -125,6 +133,22 @@ export function ProjectStorageSection() {
           )}
           {help.label} — {help.help}
         </p>
+        {activeRoot && (
+          <p
+            data-testid="projects-active-root"
+            className="font-ui text-[0.78rem] text-text-muted"
+          >
+            Saving to: <span className="font-mono text-text">{activeRoot}</span>
+            {usingDefault && (
+              <span
+                data-testid="projects-default-marker"
+                className="ml-hair rounded-pill border border-hairline px-hair py-[1px] font-ui text-[0.7rem] text-text-faint"
+              >
+                (default)
+              </span>
+            )}
+          </p>
+        )}
       </div>
 
       <div className="flex items-center gap-inline">

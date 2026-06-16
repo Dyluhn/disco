@@ -120,6 +120,60 @@ def test_projects_storage_config_unset_is_allowed(client):
     assert res.json()["status"] == "ok"
 
 
+def test_projects_storage_config_effective_root_reveals_auto_default(client, tmp_path, monkeypatch):
+    # e4ux: when projects_root is "" (the user hasn't set anything), the GET
+    # response carries the REAL directory in use on `effective_root` — the
+    # auto-created default — so the UI can show "Saving to: <path> (default)"
+    # rather than the prior confusing empty input. The configured value
+    # stays "" to preserve the "use the auto default" distinction, and the
+    # default directory actually exists on disk (resolve_projects_root
+    # mkdir -p's it).
+    #
+    # Isolated from the real DISCO_DATA_DIR via monkeypatch so the test
+    # doesn't leak into the operator's actual `~/.local/share/disco/projects`
+    # (the XDG fallback). With DISCO_DATA_DIR=tmp, the resolved default is
+    # `<tmp>/projects` — a real, writable, auto-created directory.
+    monkeypatch.setenv("DISCO_DATA_DIR", str(tmp_path))
+    # Drop the legacy PMX_DATA_DIR if it's set in the test runner, so the
+    # disco_env resolution deterministically picks DISCO_DATA_DIR.
+    monkeypatch.delenv("PMX_DATA_DIR", raising=False)
+
+    expected_default = str(tmp_path / "projects")
+    assert not (tmp_path / "projects").exists()  # sanity: nothing pre-created
+
+    cfg = client.get("/api/projects/storage/config").json()
+    # Raw configured value is empty — the explicit "use the auto default" sentinel.
+    assert cfg["projects_root"] == ""
+    # Status is ok because the auto default resolved + auto-created.
+    assert cfg["status"] == "ok"
+    # The new effective_root field carries the REAL directory the runtime is using.
+    assert cfg["effective_root"] == expected_default
+    # And that directory actually exists on disk — not a promise, a fact.
+    assert (tmp_path / "projects").is_dir()
+
+
+def test_projects_storage_config_effective_root_mirrors_explicit_path(client, tmp_path):
+    # e4ux: when projects_root IS set, effective_root must match it exactly
+    # (no auto-default twist) and the configured-vs-resolved distinction stays
+    # meaningful — the UI keeps the input as the active location and does NOT
+    # render the "(default)" marker.
+    target = tmp_path / "explicit-projects"
+    target.mkdir()
+
+    put = client.put(
+        "/api/projects/storage/config",
+        json={"projects_root": str(target), "status": "unset"},
+    )
+    assert put.status_code == 200
+    body = put.json()
+    assert body["projects_root"] == str(target)
+    assert body["effective_root"] == str(target)
+    # And the next GET agrees.
+    again = client.get("/api/projects/storage/config").json()
+    assert again["projects_root"] == str(target)
+    assert again["effective_root"] == str(target)
+
+
 def test_assignments_default_and_per_role(client):
     a = client.get("/api/models/assignments").json()
     assert a["default_model"] == "driver-local"

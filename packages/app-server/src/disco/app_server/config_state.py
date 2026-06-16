@@ -160,10 +160,17 @@ class ProjectStorageConfigDTO(BaseModel):
     on the GET path so the UI knows immediately whether the saved path is valid
     (ok / unset / not_found / not_a_directory / not_writable); on PUT, the path
     is validated server-side and a 400 with a typed reason is returned for any
-    non-OK status."""
+    non-OK status.
 
-    projects_root: str = ""
+    `effective_root` is the REAL directory in use — auto-created when
+    `projects_root` is empty (the zero-config default) and equal to
+    `projects_root` when the user has set one. This lets the UI show WHERE
+    builds will save (even with the input left blank) without losing the
+    explicit-vs-default distinction carried by `projects_root` itself."""
+
+    projects_root: str = ""  # raw configured value; "" means "use the auto default"
     status: str = "unset"  # informational; populated by the GET path
+    effective_root: str = ""  # the real, auto-created directory currently in use
 
 
 class SkillDTO(BaseModel):
@@ -433,8 +440,10 @@ def _projects_from(config: RouterConfig) -> ProjectStorageConfigDTO:
 
     When `projects_root` is empty (fresh install / unset), the effective path
     is computed and auto-created by :func:`resolve_projects_root`; the DTO then
-    carries that resolved path so the UI can show where data will live, and
-    `status` will be ``ok`` rather than ``unset``."""
+    carries that resolved path on `effective_root` so the UI can show where
+    data will live even with the input left blank, while `projects_root` stays
+    as "" to preserve the "use the auto default" semantics. `status` is ``ok``
+    rather than ``unset`` when the auto-default resolves successfully."""
     from disco.tools.projects import resolve_projects_root, validate_root
 
     p = config.projects
@@ -442,6 +451,7 @@ def _projects_from(config: RouterConfig) -> ProjectStorageConfigDTO:
     return ProjectStorageConfigDTO(
         projects_root=p.projects_root,  # preserve what the user explicitly saved
         status=validate_root(effective).value,
+        effective_root=effective,  # the real directory in use (auto-created if "")
     )
 
 

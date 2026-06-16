@@ -40,10 +40,19 @@ export interface ProjectsList {
 }
 
 /** The wire shape for the Settings → Project Storage section. `status` is
- * derived server-side on GET (so the UI shows live validity, not last-saved). */
+ * derived server-side on GET (so the UI shows live validity, not last-saved).
+ *
+ * `effective_root` is the REAL directory currently in use — auto-created when
+ * `projects_root` is empty (the zero-config default) and equal to
+ * `projects_root` when the user has set one. Lets the UI show "Saving to:
+ * <path> (default)" so a fresh user can see WHERE builds are saved without
+ * forcing them to type a path. `projects_root` stays as the raw configured
+ * value ("" = "use the auto default") so the explicit-vs-default distinction
+ * is preserved across round-trips. */
 export interface ProjectStorageConfig {
   projects_root: string;
   status: ProjectStorageStatus;
+  effective_root: string;
 }
 
 /** A row in the server-side directory picker — directory or file flag only;
