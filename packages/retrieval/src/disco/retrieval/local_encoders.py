@@ -5,13 +5,17 @@ ROCm pain on AMD).
 
 Three roles, two models:
   - Embedder  → `multilingual-e5-large`  (dense vectors; Space-corpus retrieval)
-  - Reranker  → `jina-reranker-v2-base-multilingual`  (cross-encoder relevance)
+  - Reranker  → `BAAI/bge-reranker-base`  (cross-encoder relevance, MIT)
   - NLI       → the SAME cross-encoder, framed as claim↔passage entailment
                 (replaces the lexical-overlap stub with a real signal)
 
-These are equivalent-class peers of the deployed bge-m3 / bge-reranker-v2-m3 —
-fastembed doesn't ship those exact ids, and the vector store is per-run (no
-persisted vectors to migrate), so the swap is safe.
+LICENSE NOTE: the default reranker is MIT (commercial-safe). It was previously
+`jinaai/jina-reranker-v2-base-multilingual`, which is CC-BY-NC-4.0 (non-commercial)
+and so shipped an unsafe default for any commercial deployment — swapped to MIT
+bge-reranker-base. fastembed doesn't ship bge-reranker-v2-m3 (the broad-multilingual
+MIT option) in this version; revisit on a fastembed upgrade if broad multilingual is
+needed commercially. The vector store is per-run (no persisted vectors to migrate),
+so the model swap is safe.
 
 Models load LAZILY on first use (the first call downloads ~1GB + loads to RAM)
 and are cached process-wide, so the cost is paid once. fastembed is synchronous
@@ -85,7 +89,12 @@ def _require_ram(model_name: str) -> None:
 # per-call override in tests, set the env before importing; lazy loaders
 # re-read the env at call time below so the tier-aware defaults still work.)
 EMBED_MODEL = disco_env("EMBED_MODEL", "intfloat/multilingual-e5-large")
-RERANK_MODEL = disco_env("RERANK_MODEL", "jinaai/jina-reranker-v2-base-multilingual")
+# Default reranker is MIT (commercial-safe). The broadly-multilingual
+# jinaai/jina-reranker-v2-base-multilingual is CC-BY-NC-4.0 (NON-commercial) so it is
+# NOT the default — set DISCO_RERANK_MODEL=jinaai/jina-reranker-v2-base-multilingual to
+# opt back into it IF your use permits the NC license. bge-reranker-base is MIT,
+# multilingual-capable (zh/en strong), and confirmed in fastembed's registry.
+RERANK_MODEL = disco_env("RERANK_MODEL", "BAAI/bge-reranker-base")
 
 # "lite" tier: small ONNX models for keyless / ≤8 GB boxes (~0.15 GB total).
 # Both confirmed in fastembed's list_supported_models() on 2026-06-13.

@@ -99,7 +99,7 @@ def test_error_message_contains_actionable_hint(monkeypatch):
 
     msg = str(exc_info.value)
     assert "GB" in msg  # threshold + available in GBs
-    assert "PMX_ENCODER_TIER" in msg  # the operator knows how to fix it
+    assert "DISCO_ENCODER_TIER" in msg  # the operator knows how to fix it
     assert "lite" in msg
 
 
