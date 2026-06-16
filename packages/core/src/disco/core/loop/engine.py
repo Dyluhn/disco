@@ -3422,6 +3422,36 @@ class AgentLoop:
             return Disp.HALT
         return Disp.FALLTHROUGH
 
+    async def _gate_plan_step_lag(self, events: list[Event]) -> list[Event]:
+        # (c.5) SOFT plan-step nudge — the auditor. When substantial work
+        # has happened but the capstone tracker is lagging (the "did the
+        # work, forgot to check it off" failure), inject ONE gentle
+        # reminder so the model keeps the tracker honest. NOT a gate —
+        # the model is free to ignore it; it fires at most once per lag
+        # episode. This is the proactive nudge (vs. the finish-boundary
+        # auto-continue which catches the same thing at the end).
+        if self._plan_step_lag_signal(events):
+            await self._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "<system-reminder>\n"
+                            "Gentle note: you've done a fair amount of work but "
+                            "the plan-step tracker is behind — most steps aren't "
+                            "marked done yet. If any completed steps are done, "
+                            "mark them with plan_step(idx, 'done') so the user can "
+                            "see real progress. No need to stop what you're doing; "
+                            "just keep the tracker in sync as you go.\n"
+                            "</system-reminder>"
+                        ),
+                    ),
+                )
+            )
+            events = await self._events()  # include the nudge in this step's View
+        return events
+
     async def run(self) -> ConversationState:
         """Drive until a terminal-for-now status. Idempotent to call again after
         a pause/confirmation. [CONTRACT] returns the resulting ConversationState."""
@@ -3602,33 +3632,7 @@ class AgentLoop:
                 if disp is Disp.HALT:
                     return await self.get_state()
 
-                # (c.5) SOFT plan-step nudge — the auditor. When substantial work
-                # has happened but the capstone tracker is lagging (the "did the
-                # work, forgot to check it off" failure), inject ONE gentle
-                # reminder so the model keeps the tracker honest. NOT a gate —
-                # the model is free to ignore it; it fires at most once per lag
-                # episode. This is the proactive nudge (vs. the finish-boundary
-                # auto-continue which catches the same thing at the end).
-                if self._plan_step_lag_signal(events):
-                    await self._emit(
-                        MessageEvent(
-                            source=EventSource.ENVIRONMENT,
-                            message=LLMMessage(
-                                role="user",
-                                content=(
-                                    "<system-reminder>\n"
-                                    "Gentle note: you've done a fair amount of work but "
-                                    "the plan-step tracker is behind — most steps aren't "
-                                    "marked done yet. If any completed steps are done, "
-                                    "mark them with plan_step(idx, 'done') so the user can "
-                                    "see real progress. No need to stop what you're doing; "
-                                    "just keep the tracker in sync as you go.\n"
-                                    "</system-reminder>"
-                                ),
-                            ),
-                        )
-                    )
-                    events = await self._events()  # include the nudge in this step's View
+                events = await self._gate_plan_step_lag(events)
 
                 # (c.3) plan_step-spam guard (issue C). A soft nudge once at the
                 # streak threshold; a hard STUCK halt at the cap (the model is doing
