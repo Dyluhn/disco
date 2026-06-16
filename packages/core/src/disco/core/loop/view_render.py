@@ -12,7 +12,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from typing import TYPE_CHECKING
 
+from . import signals
 from ..events import (
     ActionEvent,
     AgentErrorEvent,
@@ -22,12 +24,16 @@ from ..events import (
     ObservationEvent,
 )
 from ..llm import Difficulty, OverflowSignal
+from ..view import View, microcompact
 from .dedup import (
     _F8_PREFIX_CHARS,
     _F8_TRUNCATION_MARKER_TEMPLATE,
     _f8_confirmed_file_writes,
 )
 from .messages import _workspace_paths_from_events
+
+if TYPE_CHECKING:
+    from .engine import AgentLoop
 
 _LOG = logging.getLogger("disco.loop")
 
@@ -305,3 +311,83 @@ def f8_shrink_file_write_args(
         else:
             out.append(msg)
     return out
+
+
+class ViewBuilder:
+    """Materialize the model-facing View each turn: microcompact, condense if
+    triggered (§8), gate the C6 tail-recap, apply the F8 shrink (assist), and
+    append the always-fresh workspace snapshot. Back-ref collaborator: body is
+    byte-identical to the former AgentLoop._materialize_view with self. →
+    self._loop.."""
+
+    def __init__(self, loop: AgentLoop) -> None:
+        self._loop = loop
+
+    async def build(self, events: list[Event]) -> View:
+        # S3 Microcompact (GAP A): a cheap, no-model pass FIRST — tombstone no-op
+        # turns (a failed call an identical later call superseded) so the lossy
+        # model-summarization condenser fires on a smaller, denser residue (or not
+        # at all). Idempotent: re-running won't re-tombstone an already-dropped span.
+        micro = microcompact(events)
+        if micro:
+            for tomb in micro:
+                await self._loop._emit(tomb)
+            events = await self._loop._events()
+        view = View.of(events)
+        # A8: build the live workspace snapshot up-front so its size is counted in
+        # the condense decision (steelman finding #4 — otherwise the condenser
+        # undercounts the true prompt by ~4k tokens every turn, re-opening the same
+        # estimation gap the A-S1 fix closed). The snapshot content is disk-derived
+        # and independent of condensation, so building it before the condense check
+        # and attaching it after is sound.
+        snapshot = await self._loop._workspace_snapshot_message(events)
+        snap_tokens = len(snapshot.content) // 4 if snapshot is not None else 0
+        est = signals.estimate_tokens(view) + snap_tokens
+        # H3: log the prompt size per step so cost regressions are visible (the 60k
+        # bloat was invisible because nothing measured it). DEBUG-level; cheap.
+        _LOG.debug("driver view: ~%d input tokens, %d messages", est, len(view.messages))
+        req = self._loop.condenser.should_condense(view, token_count=est)
+        if req is not None:
+            tombstone = await self._loop.condenser.condense(
+                events, view, summarizer=self._loop.summarizer
+            )
+            if tombstone is not None:
+                await self._loop._emit(tombstone)
+                view = View.of(await self._loop._events())
+            # Soft trigger with no tombstone this step: proceed uncondensed and
+            # retry next iteration (§8). Non-fatal.
+        # Append the snapshot AFTER any condensation (so it is never rebuilt away by
+        # a re-projection) and outside View.of (so the render-time snip/mask never
+        # touch it). Disco's equivalent of Aider's always-fresh chat_files chunk.
+        # C6 — gate the tail-recap on cadence + drift BEFORE the snapshot
+        # append so the gate inspects a message list whose LAST element
+        # is the recap (or the final condensation-rebuilt tail), not the
+        # snapshot. The gate never touches the snapshot; the snapshot
+        # is appended AFTER the gate regardless of the gate's verdict
+        # (it's authoritative on-disk content the model needs).
+        view = self._loop._gate_recitation(view, events)
+        # F8 — GATED mid-turn arg truncation (assist-tier context-window
+        # reclaim). When assist is ON, replace the long `content` argument
+        # in any past assistant message whose `file_write` tool call was
+        # CONFIRMED successful with a short prefix + a path-aware marker.
+        # Lossless: the full content lives on disk (and in the snapshot) —
+        # `file_read <path>` recovers it. Render-time only: the persisted
+        # event log is unchanged. Assist OFF (the capable-model default)
+        # → no-op; the rendered messages are byte-identical to today.
+        # Runs AFTER the snapshot append so the snapshot (the
+        # authoritative current state) is never shrunk, and so any
+        # older assistant message in the history has the F8 transform
+        # applied to it on every step.
+        if self._loop._assist:
+            view = view.model_copy(
+                update={
+                    "messages": self._loop._f8_shrink_file_write_args(view.messages, events),
+                }
+            )
+        if snapshot is not None:
+            _LOG.info(
+                "A8 workspace snapshot injected: %d chars across the working set",
+                len(snapshot.content),
+            )
+            view = view.model_copy(update={"messages": [*view.messages, snapshot]})
+        return view
