@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import logging
 import os
 import time
@@ -102,6 +101,7 @@ from .lifecycle import LifecycleManager
 from .mcp_manager import McpManager
 from .resume_service import ResumeService
 from .runtime_model_probe import _do_live_model_probe, _model_label
+from .runtime_settings import RuntimeSettings
 from .share_service import ShareService
 
 
@@ -436,6 +436,11 @@ class ConversationRuntime:
         # every conversation's picked model to the default. Persisted to a JSON sidecar
         # next to the event DB (PMX_DB) so a resumed conversation keeps its model.
         db_path = disco_env("DB", "")
+        # Persisted per-conversation settings (B0): override / surface / autonomous /
+        # assist accessors. The dicts + sidecar paths stay declared below on the
+        # runtime; the stateless service reaches them via a back-ref. Constructed
+        # FIRST because the _load_* calls in this __init__ route through it.
+        self._settings = RuntimeSettings(self)
         self._override_path = f"{db_path}.overrides.json" if db_path else ""
         self._model_override: dict[str, str] = self._load_overrides()
         # Per-conversation surface ("research" | "build" | "deep_research"); set at
@@ -758,159 +763,55 @@ class ConversationRuntime:
         except Exception:  # noqa: BLE001 — best effort; the static config is the fallback
             pass
 
+    # ---- persisted settings (B0) — delegators to RuntimeSettings ------------
+
     def _load_overrides(self) -> dict[str, str]:
-        if self._override_path and os.path.exists(self._override_path):
-            try:
-                with open(self._override_path) as f:
-                    data = json.load(f)
-                return {str(k): str(v) for k, v in data.items() if v}
-            except Exception:  # noqa: BLE001 — corrupt/missing → start empty, never crash
-                return {}
-        return {}
+        return self._settings._load_overrides()
 
     def _save_overrides(self) -> None:
-        if not self._override_path:
-            return
-        import tempfile
-        try:
-            dir_name = os.path.dirname(self._override_path)
-            with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
-                json.dump(self._model_override, f)
-                tmp_name = f.name
-            os.replace(tmp_name, self._override_path)
-        except Exception:  # noqa: BLE001 — persistence is best-effort, never fatal
-            pass
-
-    def _load_surfaces(self) -> dict[str, str]:
-        """The persisted surface map (sidecar next to PMX_DB). Unknown values are
-        dropped (treated as never-set → the recovery ladder still applies), so a
-        hand-edited or future-versioned sidecar can't compose an invalid loop."""
-        if self._surface_path and os.path.exists(self._surface_path):
-            try:
-                with open(self._surface_path) as f:
-                    data = json.load(f)
-                return {
-                    str(k): str(v) for k, v in data.items() if v in self._VALID_SURFACES
-                }
-            except Exception:  # noqa: BLE001 — corrupt/missing → start empty, never crash
-                return {}
-        return {}
-
-    def _save_surfaces(self) -> None:
-        if not self._surface_path:
-            return
-        import tempfile
-        try:
-            dir_name = os.path.dirname(self._surface_path)
-            with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
-                json.dump(self._surface, f)
-                tmp_name = f.name
-            os.replace(tmp_name, self._surface_path)
-        except Exception:  # noqa: BLE001 — persistence is best-effort, never fatal
-            pass
-
-    def _load_autonomous(self) -> dict[str, bool]:
-        if self._autonomous_path and os.path.exists(self._autonomous_path):
-            try:
-                with open(self._autonomous_path) as f:
-                    return {str(k): bool(v) for k, v in json.load(f).items()}
-            except Exception:  # noqa: BLE001 — corrupt/missing → start empty
-                return {}
-        return {}
-
-    def _save_autonomous(self) -> None:
-        if not self._autonomous_path:
-            return
-        import tempfile
-        try:
-            dir_name = os.path.dirname(self._autonomous_path)
-            with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
-                json.dump(self._autonomous, f)
-                tmp_name = f.name
-            os.replace(tmp_name, self._autonomous_path)
-        except Exception:  # noqa: BLE001 — best-effort
-            pass
-
-    def set_autonomous(self, conversation_id: str, value: bool = True) -> None:
-        """Mark a conversation autonomous (headless) BEFORE it runs. Persisted (B0)."""
-        self._autonomous[conversation_id] = bool(value)
-        self._save_autonomous()
-
-    def _effective_autonomous(self, conversation_id: str) -> bool:
-        """The SINGLE source of truth for "is this conversation actually running
-        headless". Autonomous governs the plan-gate auto-approve + ask/clarify
-        suppression, so it only takes effect on surfaces that HAVE a plan gate:
-        build, agent, AND deep_research (plan→iterate→report). Gating in ONE place
-        keeps the prompt prefix (router), the loop's tool-suppression/auto-approve,
-        AND the UI badge from disagreeing. The plain `research` surface has no plan
-        gate, so an autonomous=True flag there is uniformly treated as interactive."""
-        return (
-            self._autonomous.get(conversation_id, False)
-            and self._surface_of(conversation_id) in self._AUTONOMOUS_SURFACES
-        )
-
-    def is_autonomous(self, conversation_id: str) -> bool:
-        # The public read (UI badge via /state extras) — gated, so the badge can't
-        # show "autonomous" on a surface that has no headless affordance.
-        return self._effective_autonomous(conversation_id)
-
-    def _is_small_assist_default(self, entry: Any) -> bool:
-        if not entry or not getattr(entry, "base_url", None):
-            return False
-        base_url = str(entry.base_url).lower()
-        is_local = any(x in base_url for x in ("localhost", "127.0.0.1", "192.168.", ".local"))
-        return is_local and "openrouter" not in base_url
-
-    def _load_assist(self) -> dict[str, bool]:
-        if self._assist_path and os.path.exists(self._assist_path):
-            try:
-                with open(self._assist_path) as f:
-                    return {str(k): bool(v) for k, v in json.load(f).items()}
-            except Exception:  # noqa: BLE001
-                return {}
-        return {}
-
-    def _save_assist(self) -> None:
-        if not self._assist_path:
-            return
-        import tempfile
-        try:
-            dir_name = os.path.dirname(self._assist_path)
-            with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
-                json.dump(self._assist, f)
-                tmp_name = f.name
-            os.replace(tmp_name, self._assist_path)
-        except Exception:  # noqa: BLE001
-            pass
-
-    def set_assist(self, conversation_id: str, value: bool = True) -> None:
-        """Mark a conversation assist tier (T1). Persisted."""
-        self._assist[conversation_id] = bool(value)
-        self._save_assist()
-
-    def _effective_assist(self, conversation_id: str) -> bool:
-        """The SINGLE source of truth for the assist gate."""
-        if conversation_id in self._assist:
-            return self._assist[conversation_id]
-        
-        # Default policy
-        override = self._model_override.get(conversation_id)
-        router = self._router_now(pick=override)
-        from disco.core.llm import ModelRole
-        key = router._config.model_for(ModelRole.AGENT_DRIVER, override=override)
-        entry = router._config.models.get(key)
-        return self._is_small_assist_default(entry)
-
-    def is_assist(self, conversation_id: str) -> bool:
-        return self._effective_assist(conversation_id)
+        self._settings._save_overrides()
 
     def set_model_override(self, conversation_id: str, model_id: str | None) -> None:
-        """Pin the driver model for a conversation (the Build chat model picker). The id
-        is a catalogue KEY; RouterAgent reassigns AGENT_DRIVER to it. Must be set before
-        the loop is built (at create time). PERSISTED (B0) so a restart keeps the pick."""
-        if model_id:
-            self._model_override[conversation_id] = model_id
-            self._save_overrides()
+        self._settings.set_model_override(conversation_id, model_id)
+
+    def _load_surfaces(self) -> dict[str, str]:
+        return self._settings._load_surfaces()
+
+    def _save_surfaces(self) -> None:
+        self._settings._save_surfaces()
+
+    def _load_autonomous(self) -> dict[str, bool]:
+        return self._settings._load_autonomous()
+
+    def _save_autonomous(self) -> None:
+        self._settings._save_autonomous()
+
+    def set_autonomous(self, conversation_id: str, value: bool = True) -> None:
+        self._settings.set_autonomous(conversation_id, value)
+
+    def _effective_autonomous(self, conversation_id: str) -> bool:
+        return self._settings._effective_autonomous(conversation_id)
+
+    def is_autonomous(self, conversation_id: str) -> bool:
+        return self._settings.is_autonomous(conversation_id)
+
+    def _is_small_assist_default(self, entry: Any) -> bool:
+        return self._settings._is_small_assist_default(entry)
+
+    def _load_assist(self) -> dict[str, bool]:
+        return self._settings._load_assist()
+
+    def _save_assist(self) -> None:
+        self._settings._save_assist()
+
+    def set_assist(self, conversation_id: str, value: bool = True) -> None:
+        self._settings.set_assist(conversation_id, value)
+
+    def _effective_assist(self, conversation_id: str) -> bool:
+        return self._settings._effective_assist(conversation_id)
+
+    def is_assist(self, conversation_id: str) -> bool:
+        return self._settings.is_assist(conversation_id)
 
     def driver_models(self) -> dict[str, Any]:
         """The driver-eligible models (live + tool-calling), deduped by underlying model,
