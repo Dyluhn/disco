@@ -18,11 +18,9 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from .config_state import (
+from .config.dtos import (
     AssignmentsDTO,
     AssignmentsPatch,
-    ConfigState,
-    ConfigValidationError,
     DataSourcesConfigDTO,
     EncodersConfigDTO,
     McpConnectionDTO,
@@ -39,6 +37,10 @@ from .config_state import (
     SkillDTO,
     SkillPatch,
     TtsConfigDTO,
+)
+from .config_state import (
+    ConfigState,
+    ConfigValidationError,
     normalize_openrouter,
 )
 
