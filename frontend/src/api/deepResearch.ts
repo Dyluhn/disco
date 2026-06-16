@@ -17,7 +17,7 @@
  * and client-driven exports.
  */
 
-import { agentLive, agentSend, fixtureDelay } from "./client";
+import { agentHttpBase, agentLive, agentSend, fixtureDelay } from "./client";
 import type { ReportEvent, ReportSection } from "@/types/agent";
 
 const OWNER_ID = (import.meta.env.VITE_OWNER_ID as string | undefined) ?? "local";
@@ -82,7 +82,7 @@ export async function exportReport(cid: string, fmt: ReportExportFmt): Promise<b
   if (fmt === "md") {
     throw new Error("Use exportReportAsMarkdown for md exports (client-side).");
   }
-  const res = await fetch(`/api/conversations/${cid}/report/export?fmt=${fmt}`, {
+  const res = await fetch(`${agentHttpBase()}/api/conversations/${cid}/report/export?fmt=${fmt}`, {
     method: "POST",
   });
   if (!res.ok) {
