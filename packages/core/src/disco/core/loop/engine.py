@@ -3300,6 +3300,128 @@ class AgentLoop:
             # and let it act this iteration (with the bumped temperature below).
         return Disp.FALLTHROUGH
 
+    async def _gate_circuit_breaker(self, events: list[Event]) -> Disp:
+        # (c.2) CIRCUIT BREAKER (Cluster 2). StuckDetector only catches
+        # IDENTICAL action→error repeats; a model that tries N DIFFERENT
+        # things that all fail would otherwise grind to max_iterations.
+        # After `_circuit_breaker_threshold` consecutive failures, if the
+        # model hasn't itself escalated (it would have halted at a gate
+        # already), the HARNESS hands off to the user instead of grinding:
+        # it halts at AWAITING_USER_DECISION with a summary of what failed.
+        # The user's next message resets the streak (see _count_recent_failures).
+        fails = self._count_recent_failures(events)
+        recent_errors = [
+            e.error for e in reversed(events) if isinstance(e, AgentErrorEvent)
+        ][:fails]
+        recovery_requested = self._recovery_requested_since_reset(events)
+        if fails >= self._circuit_breaker_threshold and not recovery_requested:
+            # D2 — FIRST time we hit the wall: don't dump a dead-end message.
+            # Ask the agent to DIAGNOSE the failures and propose 2-3 CONCRETE
+            # recovery options via `ask_user` (model-generated, runnable, from
+            # its own failure context — not a canned list). The marker
+            # (StatusEvent detail) guards against re-asking before it steps; the
+            # NEXT iteration falls through so the agent actually proposes.
+            errs = "\n".join(f"  • {err[:200]}" for err in recent_errors[:4])
+            if self._autonomous:
+                cb_content = (
+                    "<system-reminder>\n"
+                    f"You've failed {fails} times in a row:\n{errs}\n\n"
+                    "STOP repeating the same approach — no human is available to "
+                    "help. Diagnose the real blocker in one sentence, then take a "
+                    "DIFFERENT technical path (a different library, API, command, or "
+                    "algorithm). Narrate the pivot with `notify_user`. If it is "
+                    "genuinely impossible, call `finish` and state clearly in the "
+                    "summary what is blocked and why.\n"
+                    "</system-reminder>"
+                )
+            else:
+                cb_content = (
+                    "<system-reminder>\n"
+                    f"You've failed {fails} times in a row:\n{errs}\n\n"
+                    "STOP retrying blindly. Call `ask_user` NOW with: a "
+                    "1–2 sentence DIAGNOSIS of what is actually blocking you "
+                    "as the `question`, and 2–3 concrete recovery `options`, "
+                    "each a SPECIFIC tool action that CHANGES the approach "
+                    "(not a repeat of what just failed). The user will pick "
+                    "one — or let you continue.\n"
+                    "</system-reminder>"
+                )
+            await self._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(role="user", content=cb_content),
+                )
+            )
+            await self._emit(
+                StatusEvent(
+                    status=ConversationStatus.RUNNING, detail="recovery_requested"
+                )
+            )
+            return Disp.CONTINUE
+        if fails > self._circuit_breaker_threshold:
+            if self._autonomous:
+                # No human to hand off to → clean forfeit (STUCK), not an
+                # indefinite AWAITING_USER_DECISION stall. Bounded: we only
+                # reach here after the threshold + a failed recovery attempt,
+                # so this is NOT an infinite-continue token burn. The failure
+                # stays visible (STUCK + the error note) for a later human.
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                f"⚠ Autonomous run forfeited after {fails} consecutive "
+                                "failures (recovery attempted, still failing). "
+                                "Recent errors:\n"
+                                + "\n".join(f"  • {err[:200]}" for err in recent_errors[:4])
+                            ),
+                        ),
+                    )
+                )
+                await self._emit(StatusEvent(status=ConversationStatus.STUCK))
+                return Disp.HALT
+            # Recovery was already requested AND it failed again → hand off. The
+            # model never volunteered clickable options, so the HARNESS now
+            # SYNTHESIZES an AlternativesEvent (failure summary + the structural
+            # "Continue anyway" / steer escapes) so the UI renders the recovery
+            # GATE — not just dead-end prose. Picking continue resets the streak
+            # (pick_alternative special-cases _CONTINUE_OPTION_ID); steering is
+            # the manual escape. detail=the alt id so the View resolves the gate.
+            summary = (
+                f"I've hit {fails} failures in a row and couldn't find a way "
+                "through. Pausing for your direction. The recent errors were:\n"
+                + "\n".join(f"  • {err[:200]}" for err in recent_errors[:4])
+            )
+            failed_action_id = next(
+                (e.id for e in reversed(events) if isinstance(e, ActionEvent)), ""
+            )
+            alt = AlternativesEvent(
+                failed_action_id=failed_action_id,
+                summary=summary,
+                options=[
+                    AlternativeOption(
+                        id=_CONTINUE_OPTION_ID,
+                        title="Continue anyway",
+                        description=(
+                            "Reset the failure streak and let the agent try another "
+                            "approach with its own judgment."
+                        ),
+                        tool_name="",  # not a tool — the loop intercepts this id
+                        arguments={},
+                    )
+                ],
+            )
+            await self._emit(alt)
+            await self._emit(
+                StatusEvent(
+                    status=ConversationStatus.AWAITING_USER_DECISION,
+                    detail=alt.id,
+                )
+            )
+            return Disp.HALT
+        return Disp.FALLTHROUGH
+
     async def run(self) -> ConversationState:
         """Drive until a terminal-for-now status. Idempotent to call again after
         a pause/confirmation. [CONTRACT] returns the resulting ConversationState."""
@@ -3474,124 +3596,10 @@ class AgentLoop:
                 if disp is Disp.HALT:
                     return await self.get_state()
 
-                # (c.2) CIRCUIT BREAKER (Cluster 2). StuckDetector only catches
-                # IDENTICAL action→error repeats; a model that tries N DIFFERENT
-                # things that all fail would otherwise grind to max_iterations.
-                # After `_circuit_breaker_threshold` consecutive failures, if the
-                # model hasn't itself escalated (it would have halted at a gate
-                # already), the HARNESS hands off to the user instead of grinding:
-                # it halts at AWAITING_USER_DECISION with a summary of what failed.
-                # The user's next message resets the streak (see _count_recent_failures).
-                fails = self._count_recent_failures(events)
-                recent_errors = [
-                    e.error for e in reversed(events) if isinstance(e, AgentErrorEvent)
-                ][:fails]
-                recovery_requested = self._recovery_requested_since_reset(events)
-                if fails >= self._circuit_breaker_threshold and not recovery_requested:
-                    # D2 — FIRST time we hit the wall: don't dump a dead-end message.
-                    # Ask the agent to DIAGNOSE the failures and propose 2-3 CONCRETE
-                    # recovery options via `ask_user` (model-generated, runnable, from
-                    # its own failure context — not a canned list). The marker
-                    # (StatusEvent detail) guards against re-asking before it steps; the
-                    # NEXT iteration falls through so the agent actually proposes.
-                    errs = "\n".join(f"  • {err[:200]}" for err in recent_errors[:4])
-                    if self._autonomous:
-                        cb_content = (
-                            "<system-reminder>\n"
-                            f"You've failed {fails} times in a row:\n{errs}\n\n"
-                            "STOP repeating the same approach — no human is available to "
-                            "help. Diagnose the real blocker in one sentence, then take a "
-                            "DIFFERENT technical path (a different library, API, command, or "
-                            "algorithm). Narrate the pivot with `notify_user`. If it is "
-                            "genuinely impossible, call `finish` and state clearly in the "
-                            "summary what is blocked and why.\n"
-                            "</system-reminder>"
-                        )
-                    else:
-                        cb_content = (
-                            "<system-reminder>\n"
-                            f"You've failed {fails} times in a row:\n{errs}\n\n"
-                            "STOP retrying blindly. Call `ask_user` NOW with: a "
-                            "1–2 sentence DIAGNOSIS of what is actually blocking you "
-                            "as the `question`, and 2–3 concrete recovery `options`, "
-                            "each a SPECIFIC tool action that CHANGES the approach "
-                            "(not a repeat of what just failed). The user will pick "
-                            "one — or let you continue.\n"
-                            "</system-reminder>"
-                        )
-                    await self._emit(
-                        MessageEvent(
-                            source=EventSource.ENVIRONMENT,
-                            message=LLMMessage(role="user", content=cb_content),
-                        )
-                    )
-                    await self._emit(
-                        StatusEvent(
-                            status=ConversationStatus.RUNNING, detail="recovery_requested"
-                        )
-                    )
+                disp = await self._gate_circuit_breaker(events)
+                if disp is Disp.CONTINUE:
                     continue
-                if fails > self._circuit_breaker_threshold:
-                    if self._autonomous:
-                        # No human to hand off to → clean forfeit (STUCK), not an
-                        # indefinite AWAITING_USER_DECISION stall. Bounded: we only
-                        # reach here after the threshold + a failed recovery attempt,
-                        # so this is NOT an infinite-continue token burn. The failure
-                        # stays visible (STUCK + the error note) for a later human.
-                        await self._emit(
-                            MessageEvent(
-                                source=EventSource.ENVIRONMENT,
-                                message=LLMMessage(
-                                    role="user",
-                                    content=(
-                                        f"⚠ Autonomous run forfeited after {fails} consecutive "
-                                        "failures (recovery attempted, still failing). "
-                                        "Recent errors:\n"
-                                        + "\n".join(f"  • {err[:200]}" for err in recent_errors[:4])
-                                    ),
-                                ),
-                            )
-                        )
-                        await self._emit(StatusEvent(status=ConversationStatus.STUCK))
-                        return await self.get_state()
-                    # Recovery was already requested AND it failed again → hand off. The
-                    # model never volunteered clickable options, so the HARNESS now
-                    # SYNTHESIZES an AlternativesEvent (failure summary + the structural
-                    # "Continue anyway" / steer escapes) so the UI renders the recovery
-                    # GATE — not just dead-end prose. Picking continue resets the streak
-                    # (pick_alternative special-cases _CONTINUE_OPTION_ID); steering is
-                    # the manual escape. detail=the alt id so the View resolves the gate.
-                    summary = (
-                        f"I've hit {fails} failures in a row and couldn't find a way "
-                        "through. Pausing for your direction. The recent errors were:\n"
-                        + "\n".join(f"  • {err[:200]}" for err in recent_errors[:4])
-                    )
-                    failed_action_id = next(
-                        (e.id for e in reversed(events) if isinstance(e, ActionEvent)), ""
-                    )
-                    alt = AlternativesEvent(
-                        failed_action_id=failed_action_id,
-                        summary=summary,
-                        options=[
-                            AlternativeOption(
-                                id=_CONTINUE_OPTION_ID,
-                                title="Continue anyway",
-                                description=(
-                                    "Reset the failure streak and let the agent try another "
-                                    "approach with its own judgment."
-                                ),
-                                tool_name="",  # not a tool — the loop intercepts this id
-                                arguments={},
-                            )
-                        ],
-                    )
-                    await self._emit(alt)
-                    await self._emit(
-                        StatusEvent(
-                            status=ConversationStatus.AWAITING_USER_DECISION,
-                            detail=alt.id,
-                        )
-                    )
+                if disp is Disp.HALT:
                     return await self.get_state()
 
                 # (c.5) SOFT plan-step nudge — the auditor. When substantial work
