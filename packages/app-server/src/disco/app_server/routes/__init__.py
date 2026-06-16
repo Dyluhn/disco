@@ -11,9 +11,11 @@ from __future__ import annotations
 from .config import make_config_router
 from .health import make_health_router
 from .models import make_models_router
+from .openrouter import make_openrouter_router
 
 __all__ = [
     "make_config_router",
     "make_health_router",
     "make_models_router",
+    "make_openrouter_router",
 ]

@@ -11,7 +11,6 @@ cookie) so the dev frontend on another origin can call it.
 
 from __future__ import annotations
 
-import httpx
 from disco.core import DEFAULT_OWNER_ID
 from disco.core.store.sqlite import SqliteEventStore
 from fastapi import FastAPI, HTTPException, Query
@@ -22,18 +21,17 @@ from .config.dtos import (
     McpConnectionDTO,
     McpServerApproveDTO,
     McpServerConfigDTO,
-    OpenRouterKeyBody,
-    OpenRouterKeyStatus,
-    OpenRouterModelDTO,
     SkillCreate,
     SkillDTO,
     SkillPatch,
 )
-from .config.mappers import normalize_openrouter
 from .config_state import ConfigState
-from .routes import make_config_router, make_health_router, make_models_router
-
-_OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+from .routes import (
+    make_config_router,
+    make_health_router,
+    make_models_router,
+    make_openrouter_router,
+)
 
 
 class ConversationSummaryDTO(BaseModel):
@@ -72,36 +70,7 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
     app.include_router(make_health_router())
     app.include_router(make_models_router(state))
     app.include_router(make_config_router(state))
-
-    # ---- OpenRouter: live catalogue proxy + encrypted key -------------------
-
-    @app.get("/api/models/openrouter")
-    async def get_openrouter_models() -> list[OpenRouterModelDTO]:
-        # Public endpoint (no key needed to list). Proxied so the browser avoids
-        # CORS and gets a normalized shape. Adding a model reuses POST /api/models.
-        try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
-                resp = await client.get(_OPENROUTER_MODELS_URL)
-                resp.raise_for_status()
-                data = resp.json().get("data", [])
-        except (httpx.HTTPError, ValueError) as exc:
-            raise HTTPException(status_code=502, detail=f"OpenRouter unreachable: {exc}") from exc
-        return normalize_openrouter(data)
-
-    @app.get("/api/openrouter/key")
-    async def get_openrouter_key() -> OpenRouterKeyStatus:
-        return state.openrouter_key_status()
-
-    @app.put("/api/openrouter/key")
-    async def put_openrouter_key(body: OpenRouterKeyBody) -> OpenRouterKeyStatus:
-        try:
-            return state.set_openrouter_key(body.key)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.delete("/api/openrouter/key")
-    async def delete_openrouter_key() -> OpenRouterKeyStatus:
-        return state.clear_openrouter_key()
+    app.include_router(make_openrouter_router(state))
 
     # ---- skills — real, persistent .md instruction modules ------------------
 
