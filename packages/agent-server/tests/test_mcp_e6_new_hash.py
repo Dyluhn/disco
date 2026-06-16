@@ -48,6 +48,7 @@ _FAKE_SERVER_RAW_TOOLS = [
     {"name": "add", "description": "Add two numbers together"},
     {"name": "read_file", "description": "Read a file from the server temp dir"},
     {"name": "list_files", "description": "List files in the temp dir"},
+    {"name": "get_env", "description": "Report this subprocess's view of an env var (SEC-1 leak probe)"},
 ]
 _FAKE_SERVER_EXPECTED_HASH = compute_description_hash(_FAKE_SERVER_RAW_TOOLS)
 
