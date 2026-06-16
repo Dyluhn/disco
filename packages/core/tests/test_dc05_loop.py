@@ -219,14 +219,14 @@ async def test_dedup_remember():
 @pytest.mark.asyncio
 async def test_transient_error_retry_succeeds(monkeypatch):
     """2 transient errors then success → step completes, delays == (10.0, 30.0)."""
-    import disco.core.loop.engine as engine_module
+    import disco.core.loop.driver as driver_module
 
     delays = []
 
     async def mock_sleep(d):
         delays.append(d)
 
-    monkeypatch.setattr(engine_module, "_sleep", mock_sleep)
+    monkeypatch.setattr(driver_module, "_sleep", mock_sleep)
 
     # Indices 0 and 1 raise; index 2 returns the shell action; index 3 finishes.
     agent = ScriptedAgent([
@@ -245,12 +245,12 @@ async def test_transient_error_retry_succeeds(monkeypatch):
 @pytest.mark.asyncio
 async def test_transient_error_persistent_pauses(monkeypatch):
     """Persistent LLMTransientError → PAUSED driver-unavailable, 4 attempts, no ErrorEvent."""
-    import disco.core.loop.engine as engine_module
+    import disco.core.loop.driver as driver_module
 
     async def mock_sleep(_d):
         pass
 
-    monkeypatch.setattr(engine_module, "_sleep", mock_sleep)
+    monkeypatch.setattr(driver_module, "_sleep", mock_sleep)
 
     # Single-item list: ScriptedAgent repeats it on every call (min(i, 0) == 0).
     agent = ScriptedAgent([LLMTransientError("unavailable")])
