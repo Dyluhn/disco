@@ -9,7 +9,9 @@ an `APIRouter` — a 1:1 extraction of the route closures that used to live insi
 from __future__ import annotations
 
 from .health import make_health_router
+from .models import make_models_router
 
 __all__ = [
     "make_health_router",
+    "make_models_router",
 ]

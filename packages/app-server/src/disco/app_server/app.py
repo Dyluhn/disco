@@ -19,15 +19,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .config.dtos import (
-    AssignmentsDTO,
-    AssignmentsPatch,
     DataSourcesConfigDTO,
     EncodersConfigDTO,
     McpConnectionDTO,
     McpServerApproveDTO,
     McpServerConfigDTO,
-    ModelDTO,
-    ModelUpsert,
     OpenRouterKeyBody,
     OpenRouterKeyStatus,
     OpenRouterModelDTO,
@@ -43,7 +39,7 @@ from .config_state import (
     ConfigState,
     ConfigValidationError,
 )
-from .routes import make_health_router
+from .routes import make_health_router, make_models_router
 
 _OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 
@@ -82,33 +78,9 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
     )
 
     app.include_router(make_health_router())
+    app.include_router(make_models_router(state))
 
-    # ---- models + assignments (the absolute, manual model story) ------------
-
-    @app.get("/api/models")
-    async def get_models() -> list[ModelDTO]:
-        return state.models()
-
-    @app.post("/api/models", status_code=201)
-    async def add_model(upsert: ModelUpsert) -> list[ModelDTO]:
-        try:
-            return state.add_model(upsert)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.get("/api/models/assignments")
-    async def get_assignments() -> AssignmentsDTO:
-        return state.assignments()
-
-    @app.put("/api/models/assignments")
-    async def put_assignments(patch: AssignmentsPatch) -> AssignmentsDTO:
-        # Absolute: the system uses exactly what is set; capabilities are advisory
-        # + fail-loud at runtime, not blocked here. The one structural guard is that
-        # the model KEY must exist in the catalogue (else routing can't resolve it).
-        try:
-            return state.update_assignments(patch)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # ---- config matrices (sandbox / encoders / tts / data-sources / storage) -
 
     @app.get("/api/sandbox/config")
     async def get_sandbox_config() -> SandboxConfigDTO:
@@ -160,21 +132,6 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
                 status_code=400,
                 detail={"reason": exc.reason, "message": exc.detail or exc.reason},
             ) from exc
-
-    # Declared AFTER /assignments so that literal path wins over {model_id}.
-    @app.put("/api/models/{model_id}")
-    async def put_model(model_id: str, upsert: ModelUpsert) -> list[ModelDTO]:
-        try:
-            return state.update_model(model_id, upsert)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.delete("/api/models/{model_id}")
-    async def delete_model(model_id: str) -> list[ModelDTO]:
-        try:
-            return state.remove_model(model_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # ---- OpenRouter: live catalogue proxy + encrypted key -------------------
 
