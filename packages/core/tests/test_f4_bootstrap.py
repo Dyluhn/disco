@@ -54,7 +54,7 @@ from disco.core import (
     EventSource,
     MessageEvent,
 )
-from disco.core.loop.engine import (
+from disco.core.loop.bootstrap import (
     _F4_MAX_SCRIPTS_PER_MANIFEST,
     _detect_cargo_toml,
     _detect_go_mod,
