@@ -75,7 +75,10 @@ class BaseEvent(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str = Field(default_factory=_new_id)
-    kind: EventKind  # discriminator
+    # The `kind` discriminator is declared on each concrete subclass as a
+    # `Literal[EventKind.X]` (the idiomatic Pydantic discriminated-union shape;
+    # see `Event` below with `Field(discriminator="kind")`). Every concrete event
+    # therefore carries `kind` — BaseEvent is the never-instantiated envelope.
     source: EventSource
     timestamp: datetime = Field(default_factory=_now)  # VOLATILE (§6.3)
     schema_version: int = Field(default=SCHEMA_VERSION)
