@@ -400,6 +400,10 @@ class View(BaseModel):
                     and e.seq == latest_screenshot_seq
                     and latest_screenshot_seq is not None
                 ):
+                    # latest_screenshot_seq is only set (above) for an observation
+                    # whose structured payload carried a screenshot_b64, so the
+                    # seq-matched event here provably has a non-None `structured`.
+                    assert e.tool_result.structured is not None
                     b64 = e.tool_result.structured.get("screenshot_b64")
                     msg = msg.model_copy(update={"images": [f"data:image/png;base64,{b64}"]})
 
@@ -723,7 +727,7 @@ class LLMSummarizingCondenser:
             return seq is not None and any(a <= seq <= b for a, b in forgotten)
 
         # The still-live, LLM-visible events in seq order (already-forgotten dropped).
-        live = [
+        live: list[Event] = [
             e
             for e in events
             if isinstance(e, LLMConvertible) and e.seq is not None and not is_forgotten(e.seq)

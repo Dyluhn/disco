@@ -23,7 +23,7 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator, Iterable
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 
@@ -199,8 +199,8 @@ class OpenAIProvider:
     @staticmethod
     def _message(m: LLMMessage) -> dict:
         content: str | list = m.content
-        if getattr(m, "images", None):
-            parts = [{"type": "text", "text": m.content}]
+        if m.images:
+            parts: list[dict[str, Any]] = [{"type": "text", "text": m.content}]
             for img_url in m.images:
                 parts.append({"type": "image_url", "image_url": {"url": img_url}})
             content = parts

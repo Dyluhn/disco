@@ -10,7 +10,7 @@ byte-identical to the former AgentLoop methods.
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..dod import (
     CommandExitPredicate,
@@ -63,7 +63,10 @@ class PlanStepConditions:
         # `_plan_step_predicates` map is revision-scoped for exactly this
         # reason (a stale (revision, idx) must not match a fresh plan).
         try:
-            idx = int(args.get("index"))
+            # The value is dynamically typed (arguments: dict[str, Any]); a
+            # missing/None/non-numeric index is handled by the except below.
+            raw_index: Any = args.get("index")
+            idx = int(raw_index)
         except (TypeError, ValueError):
             return
         events = await self._loop._events()

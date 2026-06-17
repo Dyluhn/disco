@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from ..events import (
     ActionEvent,
@@ -45,6 +45,8 @@ from .tool_specs import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from ..llm import StreamChunk
     from .boundaries import StreamHook
     from .engine import AgentLoop
@@ -248,7 +250,9 @@ class Driver:
     def known_tool_names_for_requery(self) -> set[str]:
         _cn = getattr(self._loop.executor, "callable_tool_names", None)
         if callable(_cn):
-            known_tool_names = set(_cn())
+            # Duck-typed: executors exposing callable_tool_names return an
+            # iterable of tool-name strings (frozenset[str] on the real backend).
+            known_tool_names = set(cast("Iterable[str]", _cn()))
         else:
             known_tool_names = {t.name for t in self._loop.executor.available_tools()}
         virtual_names = {
