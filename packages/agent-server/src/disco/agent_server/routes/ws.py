@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from typing import Any, cast
 
 from disco.core import (
     WSClientFrame,
@@ -36,8 +37,13 @@ async def _handle_frame(
     ):
         # Imported (untrusted, read-only) conversations refuse every revive path —
         # the WS is one of them (the easy-to-miss kick site). Refuse, don't kick.
+        # `WSServerFrame.error` is typed `dict[str, Any] | None` but the wire
+        # contract here is a free-form reason string — cast to keep the
+        # runtime value byte-identical while satisfying the type checker.
         await websocket.send_json(
-            WSServerFrame(type="error", error="imported_read_only").model_dump(mode="json")
+            WSServerFrame(
+                type="error", error=cast("dict[str, Any]", "imported_read_only")
+            ).model_dump(mode="json")
         )
     elif frame.type == "send_message" and frame.content is not None:
         await store.append(conversation_id, _user_message(frame.content))

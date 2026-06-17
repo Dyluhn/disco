@@ -89,12 +89,15 @@ class McpManager:
         PMX_BUILD_EGRESS=open) → None (direct). host comes from
         PMX_MCP_EGRESS_PROXY_HOST (default loopback). See
         docs/workorders/RP-05b-orchestrator-proxy-decision.md."""
-        posture = disco_env("BUILD_EGRESS", "filtered").lower().strip()
+        egress_posture = disco_env("BUILD_EGRESS", "filtered")
+        assert egress_posture is not None  # default above is non-None
+        posture = egress_posture.lower().strip()
         if posture != "filtered":
             return None
         from disco.tools.sandbox._container import EGRESS_PROXY_PORT, proxy_env
 
         host = disco_env("MCP_EGRESS_PROXY_HOST", "127.0.0.1")
+        assert host is not None  # default above is non-None
         return proxy_env(host, EGRESS_PROXY_PORT)
 
     async def _start_mcp_pool(self) -> None:

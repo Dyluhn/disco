@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from disco.core.store.sqlite import SqliteEventStore
+from disco.tools.mcp import McpServerConfig
 from fastapi import APIRouter, HTTPException
 
 from ..runtime import ConversationRuntime
@@ -32,7 +35,11 @@ def make_mcp_router(
         srv_status = runtime._mcp_pool.server_status() if runtime._mcp_pool else {}
         approval_pending = runtime.mcp_approval_state()
 
-        for name, srv in mcp_cfg.servers.items():
+        for name, srv_raw in mcp_cfg.servers.items():
+            # RouterConfig.mcp.servers is typed `dict[str, dict]` (loose
+            # settings storage) but at runtime each entry is an McpServerConfig
+            # — cast to that so attribute access type-checks.
+            srv = cast(McpServerConfig, srv_raw)
             status = srv_status.get(name, "disconnected")
             # HTTP servers: override status from our own tracking
             if srv.transport == "streamable_http":
@@ -67,9 +74,13 @@ def make_mcp_router(
         if runtime is None:
             return {"name": name, "status": "disconnected", "reason": "no runtime"}
         cfg = runtime._config_store.load()
-        srv = cfg.mcp.servers.get(name)
-        if srv is None:
+        srv_raw = cfg.mcp.servers.get(name)
+        if srv_raw is None:
             raise HTTPException(status_code=404, detail={"reason": "server_not_found"})
+        # RouterConfig.mcp.servers is typed `dict[str, dict]` (loose
+        # settings storage) but at runtime each entry is an McpServerConfig
+        # — cast to that so attribute access type-checks.
+        srv = cast(McpServerConfig, srv_raw)
 
         status = "disconnected"
         if srv.transport == "streamable_http":

@@ -16,7 +16,7 @@ which formats are actually usable so the UI never offers a button that 500s.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal, cast
 
 from disco.core import ReportEvent
 
@@ -89,10 +89,15 @@ def _markdown_to_html(md: str, title: str = "Deep Research Report") -> str:
 
     import markdown as _md
 
+    # `markdown`'s typeshed stub is incomplete: it advertises
+    # `Literal["xhtml", "html"]`, but the runtime also accepts `"html5"` (a
+    # documented alias of `"html"`). Cast to the stub's union rather than
+    # loosening the stub or adding a type-ignore — the runtime contract is
+    # the same.
     body_html = _md.markdown(
         md,
         extensions=["tables", "fenced_code", "sane_lists", "nl2br"],
-        output_format="html5",
+        output_format=cast("Literal['xhtml', 'html']", "html5"),
     )
 
     return f"""<!DOCTYPE html>
@@ -153,7 +158,12 @@ def serialize_pdf(report: ReportEvent) -> bytes:
     html = _markdown_to_html(md, title=report.query)
     try:
         doc = weasyprint.HTML(string=html)
-        return doc.write_pdf()
+        # WeasyPrint's `write_pdf(target=None)` returns `bytes` (the per its
+        # docstring). The typeshed stub types it as `bytes | None` because
+        # `target=<file>` would return `None`; we never pass a target.
+        pdf = doc.write_pdf()
+        assert pdf is not None  # target not provided → bytes
+        return pdf
     except Exception as exc:
         raise RuntimeError(f"WeasyPrint PDF generation failed: {exc}") from exc
 

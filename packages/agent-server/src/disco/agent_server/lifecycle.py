@@ -320,7 +320,9 @@ class LifecycleManager:
         off. Lazy-imported and suppressed so the optional `tts` extra need not be
         installed, and a sweep failure never disturbs the sandbox sweep."""
         while True:
-            interval_s = float(disco_env("IDLE_SWEEP_INTERVAL_S", "60"))
+            sweep_interval = disco_env("IDLE_SWEEP_INTERVAL_S", "60")
+            assert sweep_interval is not None  # default above is non-None
+            interval_s = float(sweep_interval)
             try:
                 await asyncio.sleep(interval_s)
             except asyncio.CancelledError:
@@ -328,7 +330,10 @@ class LifecycleManager:
             with contextlib.suppress(Exception):
                 await self._rt.sweep_idle_once()
             with contextlib.suppress(Exception):
-                ttl_s = float(disco_env("TTS_IDLE_TTL_S", "1800"))
+                tts_idle_ttl = disco_env("TTS_IDLE_TTL_S", "1800")
+                assert tts_idle_ttl is not None  # default above is non-None
+                # maybe_unload_if_idle takes int; env values are integer TTLs.
+                ttl_s = int(float(tts_idle_ttl))
                 from disco.agent_server import tts_local
 
                 await tts_local.maybe_unload_if_idle(ttl_s=ttl_s)

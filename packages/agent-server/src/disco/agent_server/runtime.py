@@ -21,7 +21,7 @@ import os
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from disco.core import (
     DEFAULT_OWNER_ID,
@@ -91,6 +91,7 @@ from disco.tools.sandbox import (
     LocalSandboxService,
     PodmanSandboxService,
     SandboxConfig,
+    SandboxInstance,
 )
 from disco.tools.sandbox._container import PREVIEW_PORT
 from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
@@ -1046,7 +1047,13 @@ class ConversationRuntime:
         executor = DefaultToolExecutor(
             build_default_registry(),
             agent_scope(),
-            sandbox=session,
+            # SandboxSession is a drop-in SandboxInstance (it implements the
+            # protocol at runtime); the `id` attribute differs only in being a
+            # property rather than a plain attribute, which trips the
+            # type-checker's invariance check on a protocol field. Cast to
+            # the protocol type so the type checker is happy without
+            # touching runtime behavior.
+            sandbox=cast(SandboxInstance, session),
             broker=broker,
             conversation_id=conversation_id,
             assist=self._effective_assist(conversation_id),

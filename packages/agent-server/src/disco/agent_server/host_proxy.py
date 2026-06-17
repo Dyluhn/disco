@@ -4,7 +4,7 @@ import inspect
 import logging
 import re
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 import httpx
 import websockets
@@ -39,7 +39,10 @@ def _get_client() -> httpx.AsyncClient:
 
 class HostPreviewProxyMiddleware:
     def __init__(
-        self, app: ASGIApp, *, upstream_resolver: Callable[[str, int], str | None]
+        self,
+        app: ASGIApp,
+        *,
+        upstream_resolver: Callable[[str, int], str | None | Awaitable[str | None]],
     ) -> None:
         self.app = app
         self.upstream_resolver = upstream_resolver
