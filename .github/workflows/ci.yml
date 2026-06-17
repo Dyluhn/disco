@@ -38,7 +38,7 @@ jobs:
           uv run lint-imports
           uv run python scripts/gen_arch_diagram.py --check
 
-      - name: Python type-check (basedpyright — strict: zero type errors tree-wide)
+      - name: Python type-check (basedpyright — strict, zero type errors tree-wide)
         run: uv run basedpyright
 
       - name: Unit tests (excludes integration — see advisory job)
