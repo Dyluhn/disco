@@ -38,6 +38,9 @@ jobs:
           uv run lint-imports
           uv run python scripts/gen_arch_diagram.py --check
 
+      - name: Python type-check (basedpyright, baseline-gated — no NEW type errors)
+        run: uv run basedpyright
+
       - name: Unit tests (excludes integration — see advisory job)
         run: uv run pytest -m "not integration"
 
