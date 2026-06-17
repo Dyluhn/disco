@@ -145,7 +145,7 @@ export function IncludeFollowUpsModal({
           className={cn(
             "fixed left-1/2 top-1/2 z-50 w-[min(32rem,92vw)]",
             "-translate-x-1/2 -translate-y-1/2",
-            "bg-[color-mix(in_oklch,var(--surface-1)_90%,transparent)]",
+            "bg-[color-mix(in_oklch,var(--surface-1)_95%,transparent)]",
             "backdrop-blur-xl border border-hairline rounded-card p-body pmx-rise",
           )}
           aria-labelledby="include-fu-title"
