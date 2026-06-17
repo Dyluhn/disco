@@ -32,6 +32,33 @@ audio config) and is whitelisted in `.importlinter`; don't add more.
 - `agent-server` — per-conversation runtime + `AgentLoop` driver, WS+REST on :8000.
 - `app-server` — config/admin/library gateway the frontend calls, REST on :8800.
 
+## Navigating the code (use the symbol graph, not grep)
+
+This repo is wired for **Serena** — an LSP-backed code-navigation MCP server
+(config in `.mcp.json`; it indexes all Python under `packages/*/src` into
+`.serena/cache/`). When its tools are available (any Claude Code session started
+in this directory, and the subagents it spawns), **prefer them over `grep`/`rg`
+for symbol work**:
+
+- `find_symbol` (go-to-definition by name path, e.g. `DefaultLLMRouter/complete`)
+  — returns the one exact span. `grep "complete"` returns ~120 lines
+  (`stream_complete`, `CompletionRequest`, `completed`, comments) you then have to
+  Read and disambiguate.
+- `find_referencing_symbols` — the true reference/call graph, each hit tagged with
+  its *enclosing* function/class. `grep` gives flat line numbers with no structure
+  and import/`__all__`/annotation noise mixed in.
+- `get_symbols_overview` (a file's symbol tree), `find_implementations`,
+  `find_declaration`, `rename_symbol`.
+
+Why it matters here: names recur across the 5 packages (`run`, `complete`,
+`record`, `execute`), so the win is fewer tool-calls + tokens + no wrong-symbol
+disambiguation — exactly what bounds a subagent. Reach for `rg` for non-symbol
+text (log strings, config keys, comments) and when Serena isn't loaded.
+
+Note: `.mcp.json` is read at Claude Code **startup**, so adding/changing it only
+takes effect next launch. First index build is slow (minutes); it's cached after,
+warm symbol calls are sub-second.
+
 ## Running things
 
 Use the venv interpreter directly — **`.venv/bin/python3 -m pytest`, not
