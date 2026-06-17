@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
 import re
+import secrets as _secrets
 import time
 import uuid
 from collections.abc import Callable
@@ -17,6 +20,31 @@ from typing import Any
 from .base import SandboxError
 
 _LOG = logging.getLogger(__name__)
+
+# Dev fallback for the kernel-gateway auth token when no app secret is set —
+# a process-local random key (stable for this process's lifetime).
+_DEV_GATEWAY_SECRET = _secrets.token_bytes(32)
+
+
+def _gateway_auth_token(sandbox_id: str) -> str:
+    """The kernel gateway's auth token for one sandbox. SECURITY: the gateway
+    (`jupyter kernelgateway`) is an arbitrary-code-execution endpoint; without a
+    token any caller that can reach its port can drive a kernel. The token is
+    DERIVED, not stored, so it is STABLE and re-derivable: `_ensure_gateway`
+    lazily REUSES a surviving gateway across suspend/resume / agent-server
+    restart, and a fresh `GatewayKernel` must reconnect with the SAME token (a
+    per-object random token would lock the object out of its own kernel).
+
+    HMAC keyed on `DISCO_SECRET_KEY` so the value is secret from other sandboxes
+    (interiors never receive the master key — SEC-1) and from the network; a
+    process-local random key is the dev fallback when no app secret is set. The
+    token is observable only from inside this sandbox (the gateway runs in its
+    own container), which is the same trust boundary it protects."""
+    from disco.core.env import disco_env
+
+    master = disco_env("SECRET_KEY")
+    key = master.encode() if master else _DEV_GATEWAY_SECRET
+    return hmac.new(key, f"kernel-gateway:{sandbox_id}".encode(), hashlib.sha256).hexdigest()
 
 # C15: idle-cull knob. Default 300s (5 min) — long enough that an agent thinking
 # between tool calls doesn't trigger churn, short enough to free a forgotten
@@ -294,6 +322,17 @@ class GatewayKernel(KernelSession):
         self._seq = 0
         self._url: str | None = None
         self._session_id = str(uuid.uuid4())
+        # Per-sandbox gateway auth token (stable + re-derivable — see
+        # _gateway_auth_token). Sent on every gateway HTTP request and on the WS
+        # connect, and handed to the gateway at launch via --auth_token.
+        self._token = _gateway_auth_token(str(getattr(sandbox, "id", "default")))
+        self._auth_headers = {"Authorization": f"token {self._token}"}
+
+    def _ws_with_token(self, ws_url: str) -> str:
+        """Append the gateway token as a query param (version-agnostic across
+        websockets releases vs threading per-connect header kwargs)."""
+        sep = "&" if "?" in ws_url else "?"
+        return f"{ws_url}{sep}token={self._token}"
 
     async def _ensure_gateway(self) -> str:
         """Start the gateway lazily in tmux and wait for ready."""
@@ -317,7 +356,7 @@ class GatewayKernel(KernelSession):
         import httpx
         try:
             async with httpx.AsyncClient() as client:
-                res = await client.get(f"{self._url}/api", timeout=1.0)
+                res = await client.get(f"{self._url}/api", timeout=1.0, headers=self._auth_headers)
                 if res.status_code == 200:
                     return self._url
         except Exception:
@@ -327,8 +366,12 @@ class GatewayKernel(KernelSession):
         # container tmux default dir (WORKDIR /workspace), so kernels spawned by the
         # gateway inherit the workspace as cwd — user code's relative paths resolve
         # against the same tree the file API serves.
+        # --auth_token requires every caller (REST + WS) to present the token;
+        # without it the gateway is an unauthenticated RCE endpoint on whatever
+        # interface the port is published to. The token is hex (shell-safe).
         cmd = (
             f"jupyter kernelgateway --KernelGatewayApp.api=kernel_gateway.jupyter_websocket "
+            f"--KernelGatewayApp.auth_token={self._token} "
             f"--ip 0.0.0.0 --port {port}"
         )
         await self._sessions.exec("__kernel", cmd, None)
@@ -346,7 +389,7 @@ class GatewayKernel(KernelSession):
         async with httpx.AsyncClient() as client:
             for _ in range(max(1, budget_s)):
                 try:
-                    res = await client.get(f"{self._url}/api", timeout=1.0)
+                    res = await client.get(f"{self._url}/api", timeout=1.0, headers=self._auth_headers)
                     if res.status_code == 200:
                         return self._url
                     await asyncio.sleep(1.0)  # up but not 200 yet — wait, don't tight-loop
@@ -362,14 +405,14 @@ class GatewayKernel(KernelSession):
         url = await self._ensure_gateway()
         import httpx
         async with httpx.AsyncClient() as client:
-            res = await client.post(f"{url}/api/kernels")
+            res = await client.post(f"{url}/api/kernels", headers=self._auth_headers)
             res.raise_for_status()
             self._kernel_id = res.json()["id"]
-        
+
         # Connect WS
         import websockets
         ws_url = url.replace("http://", "ws://") + f"/api/kernels/{self._kernel_id}/channels"
-        self._ws = await websockets.connect(ws_url)
+        self._ws = await websockets.connect(self._ws_with_token(ws_url))
         
         # Setup memory limit
         setup_cell = (
@@ -517,13 +560,19 @@ class GatewayKernel(KernelSession):
         if self._url and self._kernel_id:
             import httpx
             async with httpx.AsyncClient() as client:
-                await client.post(f"{self._url}/api/kernels/{self._kernel_id}/interrupt")
+                await client.post(
+                    f"{self._url}/api/kernels/{self._kernel_id}/interrupt",
+                    headers=self._auth_headers,
+                )
 
     async def restart(self) -> None:
         if self._url and self._kernel_id:
             import httpx
             async with httpx.AsyncClient() as client:
-                await client.post(f"{self._url}/api/kernels/{self._kernel_id}/restart")
+                await client.post(
+                    f"{self._url}/api/kernels/{self._kernel_id}/restart",
+                    headers=self._auth_headers,
+                )
             
             if self._ws:
                 await self._ws.close()
@@ -532,7 +581,7 @@ class GatewayKernel(KernelSession):
             import websockets
             ws_base = self._url.replace("http://", "ws://")
             ws_url = f"{ws_base}/api/kernels/{self._kernel_id}/channels"
-            self._ws = await websockets.connect(ws_url)
+            self._ws = await websockets.connect(self._ws_with_token(ws_url))
             
             # Re-setup memory limit
             setup_cell = (
@@ -545,7 +594,9 @@ class GatewayKernel(KernelSession):
         if self._url and self._kernel_id:
             import httpx
             async with httpx.AsyncClient() as client:
-                await client.delete(f"{self._url}/api/kernels/{self._kernel_id}")
+                await client.delete(
+                    f"{self._url}/api/kernels/{self._kernel_id}", headers=self._auth_headers
+                )
             if self._ws:
                 await self._ws.close()
             self._kernel_id = None
