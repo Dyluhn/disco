@@ -66,7 +66,7 @@ def test_sandbox_config_get_and_put_round_trip(client):
             "docker_socket": "ssh://sandbox@100.81.82.115",
             "podman_url": cfg["podman_url"],
             "runtime": "runsc",
-            "image": "pmx-sandbox:base",
+            "image": "disco-sandbox:base",
             "workspace_root": "/opt/sandbox/workspaces",
         },
     )

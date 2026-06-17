@@ -37,7 +37,7 @@ services:
       DISCO_SECRETS: /data/secrets.json
       DISCO_SKILLS_DIR: /data/skills
     volumes:
-      - disco-data:/data
+      - pmx-data:/data
     ports:
       - "${DISCO_BIND:-${PMX_BIND:-127.0.0.1}}:${DISCO_APP_PORT:-${PMX_APP_PORT:-8800}}:8800"
     healthcheck:
@@ -79,7 +79,7 @@ services:
       # NOTE: DISCO_SANDBOX is intentionally UNSET — the backend stays Settings-driven
       # (defaults to `local`, which uses the mounted socket below).
     volumes:
-      - disco-data:/data
+      - pmx-data:/data
       # The host container socket → the agent-server spawns sibling sandbox
       # containers through it. SECURITY: this is root-equivalent on the host;
       # prefer a rootless Podman socket (see .env.example + docs/self-host.md).
@@ -137,4 +137,8 @@ services:
   # docs/self-host.md#models.
 
 volumes:
-  disco-data: # db + config + secrets + skills + projects + tts/encoder caches
+  # NOTE: the volume is intentionally named `pmx-data` (the pre-rebrand name), NOT
+  # `disco-data`. It is data-bearing (db + secrets + projects); renaming it would
+  # orphan an existing deployment's volume and silently lose their data on upgrade.
+  # The PMX_→DISCO_ rebrand MUST NOT rename data-bearing resources.
+  pmx-data: # db + config + secrets + skills + projects + tts/encoder caches

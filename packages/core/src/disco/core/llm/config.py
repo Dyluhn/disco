@@ -81,7 +81,7 @@ class SandboxSettings(BaseModel):
     podman_url: str = "http+ssh://sandbox@100.73.110.47/run/user/1000/podman/podman.sock"
     # the OCI runtime: runsc (gVisor), runc/crun (local/podman).
     runtime: str = "runc"
-    image: str = "pmx-sandbox:base"
+    image: str = "disco-sandbox:base"
     # host dir bind-mounted to the container workspace (gVisor); local uses a named volume.
     workspace_root: str = "/opt/sandbox/workspaces"
 

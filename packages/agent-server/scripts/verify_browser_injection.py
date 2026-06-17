@@ -27,6 +27,7 @@ from disco.core import (
     ObservationEvent,
     SqliteEventStore,
 )
+from disco.core.env import disco_env
 from disco.core.llm import DefaultLLMRouter, OperatingMode, RouterSummarizer
 from disco.core.llm.config import default_config
 from disco.core.llm.wiring import build_providers
@@ -87,9 +88,9 @@ async def main() -> None:
     service = LocalSandboxService(
         SandboxConfig(
             backend="local",
-            runtime=os.environ.get("PMX_LOCAL_RUNTIME", "runc"),
-            docker_socket=os.environ.get("PMX_LOCAL_SOCKET", "unix:///run/user/1000/podman/podman.sock"),
-            image=os.environ.get("PMX_LOCAL_IMAGE", "pmx-sandbox:base"),
+            runtime=disco_env("LOCAL_RUNTIME", "runc"),
+            docker_socket=disco_env("LOCAL_SOCKET", "unix:///run/user/1000/podman/podman.sock"),
+            image=disco_env("SANDBOX_IMAGE", "disco-sandbox:base"),
         )
     )
     session = SandboxSession(

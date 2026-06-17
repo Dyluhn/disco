@@ -5,7 +5,7 @@ REAL container sandbox, driving the composed loop end to end.
   uv run python packages/agent-server/scripts/verify_build_proof_of_life.py
 
 Needs the AGENT_DRIVER model reachable (default_config → the local Qwen llama-server)
-and a local container sandbox (this host's rootless Podman socket + pmx-sandbox:base).
+and a local container sandbox (this host's rootless Podman socket + disco-sandbox:base).
 
 Runs a multi-step coding task: write a program, run it in the sandbox, observe the
 output, then a DESTRUCTIVE cleanup (rm -rf) that the ConfirmRisky gate should pause on.
@@ -86,9 +86,9 @@ async def main() -> None:
     sbx = LocalSandboxService(
         SandboxConfig(
             backend="local",
-            runtime=os.environ.get("PMX_LOCAL_RUNTIME", "runc"),
-            docker_socket=os.environ.get("PMX_LOCAL_SOCKET", "unix:///run/user/1000/podman/podman.sock"),
-            image=os.environ.get("PMX_LOCAL_IMAGE", "pmx-sandbox:base"),
+            runtime=disco_env("LOCAL_RUNTIME", "runc"),
+            docker_socket=disco_env("LOCAL_SOCKET", "unix:///run/user/1000/podman/podman.sock"),
+            image=disco_env("SANDBOX_IMAGE", "disco-sandbox:base"),
         )
     )
     store = SqliteEventStore(":memory:")
