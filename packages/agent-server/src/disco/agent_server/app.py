@@ -25,6 +25,7 @@ from .host_proxy import HostPreviewProxyMiddleware
 from .routes import (
     make_activity_router,
     make_conversations_router,
+    make_debug_router,
     make_export_router,
     make_files_router,
     make_health_router,
@@ -121,5 +122,6 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     app.include_router(make_export_router(store, runtime))
     app.include_router(make_report_router(store, runtime))
     app.include_router(make_share_router(store, runtime))
+    app.include_router(make_debug_router(store, runtime))
 
     return app

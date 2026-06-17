@@ -39,6 +39,9 @@ from disco.core import (
     render_skills_for_prompt,
 )
 from disco.core.env import disco_env
+from disco.core.inspect import inspect_enabled
+from disco.core.inspect import install as install_inspect
+from disco.core.inspect import routing_sink_for
 from disco.core.llm import (
     ConfigStore,
     DefaultLLMRouter,
@@ -499,6 +502,11 @@ class ConversationRuntime:
         else:
             self._config_store = ConfigStore()
         self._mode = mode
+        # DISCO_INSPECT: attach the span-capture handler once, at construction, so
+        # both the live server and any test that builds a runtime get per-request
+        # traces. Idempotent + no-op when the flag is off.
+        if inspect_enabled():
+            install_inspect()
         self._loops: dict[str, AgentLoop] = {}
         self._tasks: dict[str, asyncio.Task] = {}
         # Cooperative-cancellation flags for Deep Research (whose engine isn't an
@@ -589,6 +597,7 @@ class ConversationRuntime:
         enable_thinking: bool | None = None,
         surface: str | None = None,
         autonomous: bool = False,
+        conversation_id: str | None = None,
     ) -> DefaultLLMRouter:
         """The router for the CURRENT assignments. Cheap to rebuild (providers are
         plain objects; the HTTP client is created per call), so we reload the config
@@ -627,12 +636,17 @@ class ConversationRuntime:
         # The "agent" surface gets the task-agent prompt flavor (an identity reframe);
         # build + every other surface keep the build driver prompts unchanged.
         flavor = "agent" if surface == "agent" else "build"
+        # DISCO_INSPECT: when on, bind a per-conversation routing sink so every
+        # RoutingDecision this (per-conversation) router emits lands in the trace.
+        # Off → None → the router's NullRoutingSink, i.e. zero overhead.
+        sink = routing_sink_for(conversation_id)
         return DefaultLLMRouter(
             cfg,
             providers,
             prompt_provider=DriverPrompts(
                 skills_block=skills_block, flavor=flavor, autonomous=autonomous
             ),
+            sink=sink,
         )
 
     # Four surfaces: research (single-pass /ws/research stream), build (agent +
@@ -914,7 +928,12 @@ class ConversationRuntime:
             # Single source of truth (gated by surface) shared with the loop compose
             # below and the UI badge — they can't desync.
             autonomous = self._effective_autonomous(conversation_id)
-            router = self._router_now(pick=override, surface=surface, autonomous=autonomous)
+            router = self._router_now(
+                pick=override,
+                surface=surface,
+                autonomous=autonomous,
+                conversation_id=conversation_id,
+            )
             # Research↔Build isolation: the SURFACE picks the agent class, so
             # completion semantics (prose=answer for Research vs affirmative
             # `finish` for Build) are owned by type, not a shared mode flag.
