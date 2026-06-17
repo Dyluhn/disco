@@ -68,6 +68,30 @@ class OpenRouterKeyBody(BaseModel):
     key: str
 
 
+class SecretBody(BaseModel):
+    """Set-request body for a generic named provider secret."""
+
+    value: str
+
+
+class SecretStatus(BaseModel):
+    """Status of one named secret. `value` is NEVER returned — only whether one
+    is stored, plus the store's lock/can-store state (shared with OpenRouter)."""
+
+    name: str
+    configured: bool  # an encrypted value is stored under this name
+    locked: bool  # a value is stored but can't be decrypted (no/wrong app secret)
+    can_store: bool  # the app secret is present, so a value can be encrypted + saved
+
+
+class SecretsListDTO(BaseModel):
+    """All currently-stored secret names (never the values) + store capability."""
+
+    names: list[str]
+    locked: bool
+    can_store: bool
+
+
 class AssignmentsDTO(BaseModel):
     default_model: str
     roles: dict[str, str]  # {rag_answerer, query_rewriter, summarizer, nli_verifier} -> model id

@@ -35,6 +35,8 @@ from .config.dtos import (
     ModelUpsert,
     OpenRouterKeyStatus,
     ProjectStorageConfigDTO,
+    SecretsListDTO,
+    SecretStatus,
     SandboxConfigDTO,
     SkillCreate,
     SkillDTO,
@@ -146,6 +148,48 @@ class ConfigState:
     def clear_openrouter_key(self) -> OpenRouterKeyStatus:
         self._secrets.clear_openrouter_key()
         return self.openrouter_key_status()
+
+    # generic provider secrets (encrypted at rest, keyed by api_key_env name) ---
+    # "openrouter" is reserved for the dedicated route/UI above; the generic
+    # surface neither lists nor accepts it (avoids two UIs fighting over one slot).
+
+    _RESERVED_SECRET = "openrouter"
+
+    def list_secrets(self) -> SecretsListDTO:
+        names = [n for n in self._secrets.secret_names() if n != self._RESERVED_SECRET]
+        return SecretsListDTO(
+            names=sorted(names), locked=self._secrets.locked, can_store=self._secrets.can_store
+        )
+
+    def secret_status(self, name: str) -> SecretStatus:
+        return SecretStatus(
+            name=name,
+            configured=self._secrets.has_secret(name),
+            locked=self._secrets.locked,
+            can_store=self._secrets.can_store,
+        )
+
+    def set_secret(self, name: str, value: str) -> SecretStatus:
+        """Encrypt + persist a provider key under its api_key_env NAME. Raises
+        ValueError (→ 400) on a reserved/invalid name, a blank value, or no app
+        secret to encrypt with."""
+        name = name.strip()
+        if name == self._RESERVED_SECRET:
+            raise ValueError("use the dedicated /api/openrouter/key route for the OpenRouter key")
+        if not value.strip():
+            raise ValueError("value is empty")
+        try:
+            self._secrets.set_secret(name, value.strip())
+        except RuntimeError as exc:  # no DISCO_SECRET_KEY → can't encrypt
+            raise ValueError(str(exc)) from exc
+        return self.secret_status(name)
+
+    def clear_secret(self, name: str) -> SecretStatus:
+        name = name.strip()
+        if name == self._RESERVED_SECRET:
+            raise ValueError("use the dedicated /api/openrouter/key route for the OpenRouter key")
+        self._secrets.clear_secret(name)
+        return self.secret_status(name)
 
     def assignments(self) -> AssignmentsDTO:
         return _assignments_from(self._store.load())
