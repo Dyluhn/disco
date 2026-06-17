@@ -18,9 +18,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
+    from ..security import RiskAssessment
     from .boundaries import StreamHook
 
 from ..dod import DoDPredicate
@@ -908,7 +909,9 @@ class AgentLoop:
         # implement only assess() are unaffected.
         detailed = getattr(self.analyzer, "assess_detailed", None)
         if callable(detailed):
-            assessment = detailed(action)
+            # Duck-typed: analyzers implementing the richer protocol return a
+            # RiskAssessment; the getattr(..., None) probe widens it to object.
+            assessment = cast("RiskAssessment", detailed(action))
             risk = assessment.risk
             audited_meta = {
                 **action.meta,
@@ -1119,6 +1122,9 @@ class AgentLoop:
                     continue
                 if disp is Disp.HALT:
                     return await self.get_state()
+                # drive_step returns a None step ONLY paired with CONTINUE/HALT
+                # (handled above); a fall-through disp always carries a real step.
+                assert step is not None
 
                 # (e.4) TURN-TAKING NORMALIZATION (GAP B fix). Completion is now
                 # AFFIRMATIVE: the agent ends a run only by calling the `finish`
@@ -1455,7 +1461,10 @@ class AgentLoop:
         # before returning to the main loop (analogous to confirm()'s
         # post-gate execute). The loop's next call to run() then proceeds
         # with the freshly-emitted observation in view.
-        await self._execute_and_observe(emitted)
+        # `emitted` is the persisted copy of the ActionEvent above (store.append
+        # returns the same event type with `seq` filled); _emit's return is typed
+        # as the broad Event union.
+        await self._execute_and_observe(cast("ActionEvent", emitted))
         return await self.run()
 
     async def enter_planning(self, text: str = "") -> ConversationState:
