@@ -29,7 +29,7 @@ dev = [
     # package layering in .importlinter; pair with scripts/check_arch_budget.py
     # (size caps) + scripts/gen_arch_diagram.py (the generated container diagram).
     "import-linter>=2.0",
-    "basedpyright>=1.39",  # Python static type-checking (baseline-gated; .basedpyright/baseline.json)
+    "basedpyright>=1.39",  # Python static type-checking (strict: zero errors tree-wide, no baseline)
     "httpx>=0.27",  # Starlette TestClient (WebSocket + REST testing, headless)
     "hypothesis>=6.155.2",
     # BP-08 process backend: ProcessKernel launches the host `python3` kernelspec

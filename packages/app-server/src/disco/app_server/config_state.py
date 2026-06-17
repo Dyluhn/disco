@@ -12,9 +12,16 @@ mirror the frontend's `src/types/models.ts` + `src/types/config.ts`.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from disco.core import SkillStore
 from disco.core.llm import ConfigStore, ModelRole, RouterConfig, SecretStore
 from disco.core.llm.config import McpSettings
+
+if TYPE_CHECKING:
+    # The shared mcp_approvals DB connection — a duck-typed sqlite3-like conn
+    # (execute/commit). Type-only import keeps it off the runtime path.
+    from disco.tools.mcp.migrations import _ApprovalConn
 
 from .config.dtos import (
     AssignmentsDTO,
@@ -76,7 +83,7 @@ class ConfigState:
         store: ConfigStore | None = None,
         secrets: SecretStore | None = None,
         skills: SkillStore | None = None,
-        db_conn: object = None,
+        db_conn: "_ApprovalConn | None" = None,
     ) -> None:
         if store is not None:
             self._store = store

@@ -29,7 +29,10 @@ class _ApprovalConn(Protocol):
     sqlite3 (so the helpers stay trivial to call from places that already
     have a different connection type)."""
 
-    def execute(self, sql: str, params: tuple[Any, ...] = ...) -> Any: ...
+    # `params` is positional-only (`/`) so a real sqlite3.Connection — whose
+    # 2nd execute() arg is named `parameters`, not `params` — structurally
+    # satisfies this Protocol. Every call site below passes params positionally.
+    def execute(self, sql: str, params: tuple[Any, ...] = ..., /) -> Any: ...
     def commit(self) -> None: ...
 
 
