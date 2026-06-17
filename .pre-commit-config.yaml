@@ -1,0 +1,23 @@
+# Architecture fitness functions (also enforced in CI's required job).
+# Install: `uv run pre-commit install`  (or `pip install pre-commit && pre-commit install`)
+repos:
+  - repo: local
+    hooks:
+      - id: arch-budget
+        name: architecture size budget (no god-objects)
+        entry: python scripts/check_arch_budget.py
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: import-linter
+        name: package layering + no cycles
+        entry: lint-imports
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: arch-diagram-fresh
+        name: architecture diagram is regenerated
+        entry: python scripts/gen_arch_diagram.py --check
+        language: system
+        pass_filenames: false
+        always_run: true
