@@ -10,6 +10,9 @@ import { apiGet, apiSend, fixtureDelay, isLive } from "./client";
 
 export interface SecretsList {
   names: string[];
+  /** The SPECIFIC stored keys that can't be decrypted right now (so the UI can
+   * name exactly which to restore/re-enter). `locked` = this is non-empty. */
+  locked_names: string[];
   locked: boolean;
   can_store: boolean;
 }
@@ -28,7 +31,7 @@ const fixtureCanStore = true;
 export async function listSecrets(): Promise<SecretsList> {
   if (isLive()) return apiGet<SecretsList>("/api/secrets");
   await fixtureDelay();
-  return { names: [...fixtureNames].sort(), locked: false, can_store: fixtureCanStore };
+  return { names: [...fixtureNames].sort(), locked_names: [], locked: false, can_store: fixtureCanStore };
 }
 
 export async function setSecret(name: string, value: string): Promise<SecretStatus> {

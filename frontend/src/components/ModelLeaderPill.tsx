@@ -38,7 +38,9 @@ export function ModelLeaderPill({ value, onChange }: Props) {
 
   const groups = useMemo(() => {
     const by: Record<ModelProvider, ModelInfo[]> = { local: [], openrouter: [] };
-    for (const m of models ?? []) by[m.provider].push(m);
+    // Defensive: an unexpected/missing provider must not crash the surface —
+    // bucket it under the remote group so it stays visible.
+    for (const m of models ?? []) (by[m.provider] ?? by.openrouter).push(m);
     return by;
   }, [models]);
 

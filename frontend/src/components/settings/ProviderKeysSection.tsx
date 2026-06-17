@@ -20,11 +20,13 @@ const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
  * "edit" is really "overwrite with a new value", which is exactly a PUT. */
 function StoredKeyRow({
   name,
+  locked,
   onSave,
   onClear,
   saving,
 }: {
   name: string;
+  locked: boolean;
   onSave: (value: string) => void;
   onClear: () => void;
   saving: boolean;
@@ -86,9 +88,19 @@ function StoredKeyRow({
   }
 
   return (
-    <li className="flex items-center justify-between gap-inline rounded-control border border-hairline bg-surface-1 px-body py-inline">
+    <li
+      className={`flex items-center justify-between gap-inline rounded-control border px-body py-inline ${
+        locked ? "border-unsupported/40 bg-unsupported/5" : "border-hairline bg-surface-1"
+      }`}
+    >
       <span className="flex items-center gap-hair font-mono text-[0.82rem] text-text">
-        <KeyRound className="size-3.5 text-supported" aria-hidden /> {name}
+        {locked ? (
+          <Lock className="size-3.5 text-unsupported" aria-hidden />
+        ) : (
+          <KeyRound className="size-3.5 text-supported" aria-hidden />
+        )}
+        {name}
+        {locked && <span className="font-ui text-[0.74rem] text-unsupported">can't decrypt</span>}
       </span>
       <div className="flex items-center gap-inline">
         <button
@@ -96,7 +108,7 @@ function StoredKeyRow({
           onClick={() => setEditing(true)}
           className="flex items-center gap-hair font-ui text-[0.8rem] text-text-muted hover:text-text"
         >
-          <Pencil className="size-3" aria-hidden /> Edit
+          <Pencil className="size-3" aria-hidden /> {locked ? "Re-enter" : "Edit"}
         </button>
         <button
           type="button"
@@ -134,7 +146,9 @@ export function ProviderKeysSection() {
   const storedNames = data?.names ?? [];
   const stored = new Set(storedNames);
   const canStore = data?.can_store ?? true;
-  const locked = data?.locked ?? false;
+  // The SPECIFIC keys that can't be decrypted — so we name them, not "one or more".
+  const lockedNames = data?.locked_names ?? [];
+  const lockedSet = new Set(lockedNames);
   // Keys the configured providers reference but that AREN'T stored yet — the
   // running app will look for these and fail to find them.
   const missing = expectedNames.filter((n) => !stored.has(n));
@@ -172,19 +186,26 @@ export function ProviderKeysSection() {
       </p>
 
       {/* Stored-but-undecryptable: DISCO_SECRET_KEY changed/lost since save. Loud,
-          because nothing here will actually authenticate until it's restored. */}
-      {locked && (
+          and SPECIFIC — names exactly which keys need restoring/re-entering. */}
+      {lockedNames.length > 0 && (
         <div role="alert" className="flex items-start gap-hair rounded-control border border-unsupported/40 bg-unsupported/5 px-body py-inline">
           <Lock className="mt-0.5 size-3.5 shrink-0 text-unsupported" aria-hidden />
           <p className="font-ui text-[0.78rem] leading-snug text-text">
-            One or more stored keys can't be decrypted — <code className="font-mono text-[0.76rem]">DISCO_SECRET_KEY</code> is
-            missing or different from when they were saved. Restore that app secret, or clear and
-            re-enter each key below.
+            {lockedNames.length === 1 ? "This key can't" : "These keys can't"} be decrypted —{" "}
+            {lockedNames.map((n, i) => (
+              <span key={n}>
+                {i > 0 && ", "}
+                <code className="font-mono text-[0.76rem] text-unsupported">{n}</code>
+              </span>
+            ))}
+            . <code className="font-mono text-[0.76rem]">DISCO_SECRET_KEY</code> is missing or
+            different from when {lockedNames.length === 1 ? "it was" : "they were"} saved. Restore
+            that app secret, or Edit each one below to re-enter its value.
           </p>
         </div>
       )}
 
-      {!canStore && !locked && (
+      {!canStore && lockedNames.length === 0 && (
         <div role="note" className="rounded-control border border-hairline bg-surface-1 px-body py-inline">
           <p className="font-ui text-[0.78rem] leading-snug text-text-muted">
             The server doesn't have <code className="font-mono text-[0.76rem] text-text">DISCO_SECRET_KEY</code> set, so keys can't be
@@ -199,6 +220,7 @@ export function ProviderKeysSection() {
             <StoredKeyRow
               key={n}
               name={n}
+              locked={lockedSet.has(n)}
               saving={setSecret.isPending}
               onSave={(v) => setSecret.mutate({ name: n, value: v })}
               onClear={() => clearSecret.mutate(n)}

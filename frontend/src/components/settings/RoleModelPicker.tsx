@@ -37,7 +37,9 @@ export function RoleModelPicker({ value, onSelect, ariaLabel, busy, disabled }: 
 
   const groups = useMemo(() => {
     const by: Record<ModelProvider, ModelInfo[]> = { local: [], openrouter: [] };
-    for (const m of models ?? []) by[m.provider].push(m);
+    // Defensive: an entry with an unexpected/missing provider must not crash the
+    // whole Settings page — bucket it under the remote group so it stays visible.
+    for (const m of models ?? []) (by[m.provider] ?? by.openrouter).push(m);
     return by;
   }, [models]);
 

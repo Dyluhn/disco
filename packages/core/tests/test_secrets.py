@@ -81,6 +81,21 @@ def test_openrouter_wrappers_use_the_reserved_slot(tmp_path):
     assert "openrouter" in store.secret_names()
 
 
+def test_undecryptable_names_with_wrong_app_secret(tmp_path):
+    """A store opened under a DIFFERENT app secret can't decrypt prior ciphertext
+    → undecryptable_names lists exactly the stored keys (so the UI can name them)."""
+    path = tmp_path / "secrets.json"
+    SecretStore(path, box=SecretBox("right-secret")).set_secret("OPENAI_API_KEY", "sk-x")
+    SecretStore(path, box=SecretBox("right-secret")).set_secret("TAVILY_API_KEY", "tvly-y")
+
+    wrong = SecretStore(path, box=SecretBox("WRONG-secret"))
+    assert sorted(wrong.undecryptable_names()) == ["OPENAI_API_KEY", "TAVILY_API_KEY"]
+
+    # the right secret decrypts everything → none undecryptable
+    right = SecretStore(path, box=SecretBox("right-secret"))
+    assert right.undecryptable_names() == []
+
+
 def test_weak_secret_predicate():
     from disco.core.llm.secrets import _looks_weak
 

@@ -85,9 +85,13 @@ class SecretStatus(BaseModel):
 
 
 class SecretsListDTO(BaseModel):
-    """All currently-stored secret names (never the values) + store capability."""
+    """All currently-stored secret names (never the values) + store capability.
+    `locked_names` are the SPECIFIC stored keys that can't be decrypted right now
+    (wrong/missing app secret, or a corrupted token) — so the UI can name exactly
+    which keys the operator must restore or re-enter. `locked` = any are locked."""
 
     names: list[str]
+    locked_names: list[str] = []
     locked: bool
     can_store: bool
 

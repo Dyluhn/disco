@@ -75,6 +75,27 @@ def test_openrouter_key_excluded_from_generic_list(client):
     assert names == ["TAVILY_API_KEY"]
 
 
+def test_locked_names_name_the_undecryptable_keys(tmp_path):
+    """When the app secret changed since save, GET /api/secrets names EXACTLY which
+    stored keys can't be decrypted (not just a global locked flag)."""
+    secrets_path = tmp_path / "secrets.json"
+    # write two keys under one app secret...
+    seed = SecretStore(secrets_path, box=SecretBox("original-secret"))
+    seed.set_secret("OPENAI_API_KEY", "sk-x")
+    seed.set_secret("TAVILY_API_KEY", "tvly-y")
+
+    # ...then serve with a DIFFERENT app secret → both are undecryptable
+    state = ConfigState(
+        store=ConfigStore(tmp_path / "config.json"),
+        secrets=SecretStore(secrets_path, box=SecretBox("changed-secret")),
+        skills=SkillStore(tmp_path / "skills"),
+    )
+    client = TestClient(create_app(SqliteEventStore(":memory:"), state))
+    body = client.get("/api/secrets").json()
+    assert body["locked"] is True
+    assert body["locked_names"] == ["OPENAI_API_KEY", "TAVILY_API_KEY"]
+
+
 def test_cannot_store_without_app_secret(tmp_path):
     """No DISCO_SECRET_KEY → no SecretBox → set is a clean 400, not a 500."""
     state = ConfigState(

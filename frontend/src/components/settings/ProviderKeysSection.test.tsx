@@ -37,7 +37,14 @@ function installFetch() {
   const stub = vi.fn(async (url: string, init?: RequestInit) => {
     const method = (init?.method ?? "GET").toUpperCase();
     if (method === "GET" && url === "/api/secrets") {
-      return jsonResponse({ names: [...names].sort(), locked: lockedFlag, can_store: true });
+      // when locked, the whole box can't decrypt → every stored name is locked
+      const locked_names = lockedFlag ? [...names].sort() : [];
+      return jsonResponse({
+        names: [...names].sort(),
+        locked_names,
+        locked: lockedFlag,
+        can_store: true,
+      });
     }
     // the cross-reference reads the current provider config:
     if (method === "GET" && url === "/api/models") {
@@ -178,13 +185,21 @@ describe("ProviderKeysSection — store any provider key encrypted by name", () 
     });
   });
 
-  it("surfaces a loud locked alert when keys can't be decrypted", async () => {
+  it("names the SPECIFIC keys that can't be decrypted (not 'one or more')", async () => {
     lockedFlag = true;
-    names = ["OPENAI_API_KEY"];
+    names = ["OPENAI_API_KEY", "TAVILY_API_KEY"];
     render(createElement(ProviderKeysSection), { wrapper: makeWrapper() });
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/can't be decrypted/i);
+    // the alert names BOTH locked keys + the app secret
+    expect(alert).toHaveTextContent("OPENAI_API_KEY");
+    expect(alert).toHaveTextContent("TAVILY_API_KEY");
     expect(alert).toHaveTextContent(/DISCO_SECRET_KEY/);
+    // never the vague "one or more"
+    expect(alert).not.toHaveTextContent(/one or more/i);
+    // each locked row is marked + offers a "Re-enter" affordance
+    expect(screen.getAllByText("can't decrypt").length).toBe(2);
+    expect(screen.getAllByRole("button", { name: /re-enter/i }).length).toBe(2);
   });
 
   it("flags a provider-referenced key that isn't stored, and prefills it", async () => {

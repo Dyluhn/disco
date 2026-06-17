@@ -157,8 +157,16 @@ class ConfigState:
 
     def list_secrets(self) -> SecretsListDTO:
         names = [n for n in self._secrets.secret_names() if n != self._RESERVED_SECRET]
+        # The SPECIFIC stored keys that can't be decrypted (named, so the UI can
+        # say which to fix) — generic, not the OpenRouter-only `locked` property.
+        locked_names = [
+            n for n in self._secrets.undecryptable_names() if n != self._RESERVED_SECRET
+        ]
         return SecretsListDTO(
-            names=sorted(names), locked=self._secrets.locked, can_store=self._secrets.can_store
+            names=sorted(names),
+            locked_names=sorted(locked_names),
+            locked=bool(locked_names),
+            can_store=self._secrets.can_store,
         )
 
     def secret_status(self, name: str) -> SecretStatus:

@@ -198,6 +198,18 @@ class SecretStore:
         """The names of all stored secrets (the ones with ciphertext present)."""
         return [k for k, v in self._raw().items() if v]
 
+    def undecryptable_names(self) -> list[str]:
+        """Stored names whose ciphertext can't currently be decrypted — a wrong
+        or missing app secret (then ALL stored names), or an individually
+        corrupted token. These are the keys the operator must restore the app
+        secret for, or clear and re-enter."""
+        raw = self._raw()
+        bad = []
+        for name, token in raw.items():
+            if isinstance(token, str) and token and self._box.decrypt(token) is None:
+                bad.append(name)
+        return bad
+
     # -- OpenRouter convenience wrappers (the reserved "openrouter" slot) ------
 
     def has_openrouter_key(self) -> bool:
