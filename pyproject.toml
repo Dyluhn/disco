@@ -25,6 +25,10 @@ dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.24",
     "ruff>=0.6",
+    # Architecture fitness functions (CI/pre-commit): import-linter enforces the
+    # package layering in .importlinter; pair with scripts/check_arch_budget.py
+    # (size caps) + scripts/gen_arch_diagram.py (the generated container diagram).
+    "import-linter>=2.0",
     "httpx>=0.27",  # Starlette TestClient (WebSocket + REST testing, headless)
     "hypothesis>=6.155.2",
     # BP-08 process backend: ProcessKernel launches the host `python3` kernelspec
