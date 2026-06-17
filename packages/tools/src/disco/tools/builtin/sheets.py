@@ -13,6 +13,7 @@ import io
 import re
 
 import openpyxl
+from openpyxl.cell.cell import MergedCell
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 from pydantic import BaseModel, Field
@@ -261,7 +262,9 @@ class SheetsTool:
         # 2. Build the workbook.
         wb = openpyxl.Workbook()
         # Remove the default sheet; we add our own.
-        wb.remove(wb.active)
+        default_ws = wb.active
+        assert default_ws is not None  # a fresh Workbook() always has an active sheet
+        wb.remove(default_ws)
 
         for sheet_spec in args.sheets:
             ws: Worksheet = wb.create_sheet(title=sheet_spec.name)
@@ -281,6 +284,9 @@ class SheetsTool:
             for ri, row in enumerate(sheet_spec.rows):
                 for ci, cell_val in enumerate(row):
                     cell = ws.cell(row=ri + 2, column=ci + 1)
+                    # ws.cell() returns Cell | MergedCell; we never merge cells
+                    # in this tool, so a real Cell is provable here.
+                    assert not isinstance(cell, MergedCell)
                     if isinstance(cell_val, str) and cell_val.startswith("="):
                         # Write as a formula — openpyxl stores it as the formula
                         # STRING, NOT the evaluated value.

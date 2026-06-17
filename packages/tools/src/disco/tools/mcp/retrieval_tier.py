@@ -8,6 +8,7 @@ the SAME GroundingPipeline as bundled providers.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -65,9 +66,8 @@ class _MCPRetrievalSearchProvider:
             return []
 
         try:
-            import json as _json
-            parsed = _json.loads(content_text)
-        except (_json.JSONDecodeError, TypeError):
+            parsed = json.loads(content_text)
+        except (json.JSONDecodeError, TypeError):
             return []
 
         if isinstance(parsed, dict) and "results" in parsed:
@@ -121,7 +121,6 @@ class _MCPRetrievalExtractionProvider:
                 url=url,
                 title="",
                 content=f"Extraction failed: {exc}",
-                source=self.name,
             )
 
         content_text = _extract_text(raw)

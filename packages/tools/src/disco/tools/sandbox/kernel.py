@@ -103,16 +103,17 @@ class ProcessKernel(KernelSession):
         self._seq = 0
 
     async def start(self) -> None:
-        from jupyter_client import AsyncKernelManager
+        from jupyter_client.manager import AsyncKernelManager
         self._km = AsyncKernelManager(kernel_name="python3")
         # Ensure the kernel runs in the workspace directory
         self._km.extra_arguments = ["--ProjectManager.root_dir=" + str(self._workspace)]
-        
+
         await self._km.start_kernel(cwd=str(self._workspace))
         self._kc = self._km.client()
+        assert self._kc is not None  # client() always returns a KernelClient
         self._kc.start_channels()
         await self._kc.wait_for_ready(timeout=60)
-        
+
         # Setup memory limit: 4GiB as required by BP-08
         setup_cell = (
             "import resource; "
@@ -123,8 +124,10 @@ class ProcessKernel(KernelSession):
     async def execute(self, code: str, *, timeout_s: int) -> KernelResult:
         if not self._kc:
             await self.start()
-        
-        msg_id = self._kc.execute(code)
+        assert self._kc is not None  # start() always populates both _km and _kc
+        kc = self._kc
+
+        msg_id = kc.execute(code)
         
         stdout = []
         stderr = []
@@ -136,18 +139,18 @@ class ProcessKernel(KernelSession):
             while True:
                 try:
                     # We use a smaller interval to check for timeout more frequently
-                    msg = await self._kc.get_iopub_msg(timeout=timeout_s)
+                    msg = await kc.get_iopub_msg(timeout=timeout_s)
                 except (TimeoutError, Empty):
                     # Timeout protocol (EXACT): interrupt() -> wait <=5s -> restart() if hangs
                     _LOG.warning("Kernel execution timed out, interrupting...")
                     await self.interrupt()
-                    
+
                     # Wait up to 5s for the kernel to return to idle
                     idle = False
                     start_wait = time.time()
                     while time.time() - start_wait < 5.0:
                         try:
-                            msg = await self._kc.get_iopub_msg(timeout=0.1)
+                            msg = await kc.get_iopub_msg(timeout=0.1)
                         except TimeoutError:
                             continue
                         
@@ -201,7 +204,7 @@ class ProcessKernel(KernelSession):
                     # We might need to skip stale replies from previous interrupted executions
                     try:
                         while True:
-                            reply = await self._kc.get_shell_msg(timeout=1)
+                            reply = await kc.get_shell_msg(timeout=1)
                             if reply.get("parent_header", {}).get("msg_id") == msg_id:
                                 ok = reply.get("content", {}).get("status") == "ok"
                                 res = KernelResult(
@@ -264,6 +267,7 @@ class ProcessKernel(KernelSession):
         if self._km:
             await self._km.restart_kernel()
             self._kc = self._km.client()
+            assert self._kc is not None  # client() always returns a KernelClient
             self._kc.start_channels()
             await self._kc.wait_for_ready(timeout=60)
             # Re-setup memory limit
@@ -377,6 +381,8 @@ class GatewayKernel(KernelSession):
     async def execute(self, code: str, *, timeout_s: int) -> KernelResult:
         if not self._ws:
             await self.start()
+        assert self._ws is not None  # start() always populates _ws
+        ws = self._ws
 
         msg_id = str(uuid.uuid4())
         msg = {
@@ -401,27 +407,31 @@ class GatewayKernel(KernelSession):
             "channel": "shell",
         }
         
-        await self._ws.send(json.dumps(msg))
-        
+        await ws.send(json.dumps(msg))
+
         stdout = []
         stderr = []
         result_repr = None
         error_traceback = None
         images = []
-        
+        # `ok` is only assigned when an `execute_reply` arrives; initialize so
+        # the idle-status branch is well-defined even if we go straight from
+        # busy to idle (no explicit reply).
+        ok = False
+
         try:
             while True:
                 try:
-                    raw_msg = await asyncio.wait_for(self._ws.recv(), timeout=timeout_s)
+                    raw_msg = await asyncio.wait_for(ws.recv(), timeout=timeout_s)
                     msg = json.loads(raw_msg)
                 except TimeoutError:
                     _LOG.warning("Kernel execution timed out, interrupting...")
                     await self.interrupt()
-                    
+
                     # Wait up to 5s for idle
                     try:
                         while True:
-                            raw_msg = await asyncio.wait_for(self._ws.recv(), timeout=5.0)
+                            raw_msg = await asyncio.wait_for(ws.recv(), timeout=5.0)
                             msg = json.loads(raw_msg)
                             if msg.get("parent_header", {}).get("msg_id") == msg_id:
                                 is_status = msg.get("header", {}).get("msg_type") == "status"
@@ -471,7 +481,7 @@ class GatewayKernel(KernelSession):
                     continue
                 elif msg_type == "status" and content.get("execution_state") == "idle":
                     res = KernelResult(
-                        ok=ok if 'ok' in locals() else False,
+                        ok=ok,
                         stdout="".join(stdout),
                         stderr="".join(stderr),
                         result_repr=result_repr,

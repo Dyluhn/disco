@@ -269,6 +269,7 @@ def _fallback_html(markdown: str, theme: str | None = None) -> str:
 
 async def _marp_available(ctx: ToolContext) -> bool:
     """True if the marp CLI is present INSIDE the sandbox."""
+    assert ctx.sandbox is not None  # slides tool declares runs_in="sandbox"
     try:
         res = await ctx.sandbox.exec_shell("command -v marp", timeout_s=10)
     except Exception:
@@ -286,6 +287,7 @@ async def _marp_render_in_sandbox(
 ) -> tuple[bool, str]:
     """Run `marp <src> -o <out>` INSIDE the sandbox (workdir = workspace). Both
     paths are workspace-relative names. Returns (ok, error_message)."""
+    assert ctx.sandbox is not None  # slides tool declares runs_in="sandbox"
     pptx = "--pptx " if fmt == "pptx" else ""
     cmd = f"marp {pptx}{shlex.quote(src_name)} -o {shlex.quote(out_name)}"
     res = await ctx.sandbox.exec_shell(cmd, timeout_s=timeout_s)
@@ -378,6 +380,7 @@ class SlidesTool:
         """Render via marp INSIDE the sandbox: write the markdown source into the
         jailed workspace, run marp in-box (output lands directly in the
         workspace), then clean up the source. No host temp files, no read-back."""
+        assert ctx.sandbox is not None  # slides tool declares runs_in="sandbox"
         # A hidden workspace-relative source file marp reads (workdir = workspace).
         src_name = f".{args.filename}.marp-src.md"
         await ctx.sandbox.write_file(src_name, markdown.encode("utf-8"))
@@ -433,6 +436,7 @@ class SlidesTool:
     ) -> ToolOutcome:
         """Fallback HTML renderer: produces a self-contained HTML deck without
         Marp. Used when marp CLI is not installed."""
+        assert ctx.sandbox is not None  # slides tool declares runs_in="sandbox"
         html_content = _fallback_html(markdown, args.theme)
         html_bytes = html_content.encode("utf-8")
 

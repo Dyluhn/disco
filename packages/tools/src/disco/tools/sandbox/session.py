@@ -21,7 +21,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from ._container import PREVIEW_PORT, USER_PORTS
 from .base import (
@@ -536,5 +536,8 @@ class SandboxSession:
             await inst.destroy()
 
 
-# Structural conformance: a SandboxSession IS a SandboxInstance (drop-in for the executor).
-_: type[SandboxInstance] = SandboxSession
+# Structural conformance: a SandboxSession IS a SandboxInstance (drop-in for the
+# executor). `cast` papers over the fact that `id` is a `@property` here but a
+# plain `str` attribute on the Protocol — the property *returns* a str, so the
+# structural shape is honored at runtime, the type checker just can't see it.
+_: type[SandboxInstance] = cast(type[SandboxInstance], SandboxSession)

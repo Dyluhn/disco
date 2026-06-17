@@ -86,7 +86,7 @@ class AllowlistProxy:
         self._allow = allow
         self._host = host
         self._port = port
-        self._server: asyncio.AbstractServer | None = None
+        self._server: asyncio.Server | None = None
         self.allowed = 0
         self.denied = 0
 
@@ -95,6 +95,8 @@ class AllowlistProxy:
         """The bound port (useful when constructed with port=0 in tests)."""
         if self._server is None:
             return self._port
+        # asyncio.Server.sockets is `tuple[socket, ...]` — at least one socket
+        # exists once the server is bound.
         return self._server.sockets[0].getsockname()[1]
 
     async def start(self) -> None:
