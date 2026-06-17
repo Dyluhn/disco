@@ -23,16 +23,43 @@ import asyncio
 import json
 import re
 from collections.abc import Awaitable, Callable
-from typing import Any, Literal
+from typing import Any, Literal, Protocol, cast
 
 import jsonschema
 from disco.core import LLMMessage, ReportSection
 from disco.core.llm import (
+    CallContext,
     CapabilityProfile,
     CompletionRequest,
+    CompletionResponse,
     LLMRouter,
     ModelRole,
 )
+
+
+class _RouterWithCtx(Protocol):
+    """Local Protocol that mirrors `DefaultLLMRouter.complete` / `.stream_complete`.
+
+    `disco.core.llm.LLMRouter` (the public Protocol used as a type hint
+    throughout retrieval) declares `complete(self, req)` with no
+    `context=` kwarg, but the concrete `DefaultLLMRouter` (the only
+    production implementation, and what every caller actually passes)
+    accepts an optional `context: CallContext | None = None` keyword.
+    The Protocol is a real omission in `disco.core.llm.routing` (a
+    sibling package outside this work-order's scope) and is owned by
+    another agent. Casting to this locally-declared Protocol is a
+    typing-only narrowing — at runtime, `cast` is the identity, so
+    behavior is byte-identical to the previous `router.complete(req,
+    context=leg_context.call_context)` calls.
+
+    Defined at module scope (not under `if TYPE_CHECKING:`) because
+    `cast(_RouterWithCtx, router)` is *evaluated* at runtime, and the
+    symbol must resolve in the module's globals for the call site to
+    even execute. The Protocol class is otherwise inert at runtime."""
+
+    async def complete(
+        self, req: CompletionRequest, *, context: CallContext | None = None
+    ) -> CompletionResponse: ...
 
 from ..models import Passage
 from ..ranking import Embedder
@@ -305,7 +332,7 @@ async def synthesize_section(
     # for the entire gather→synth pipeline.
     leg_messages: list[LLMMessage] = [LLMMessage(role="user", content=instruction)]
     try:
-        resp = await router.complete(
+        resp = await cast(_RouterWithCtx, router).complete(
             CompletionRequest(
                 profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
                 messages=leg_messages,
@@ -340,7 +367,7 @@ async def synthesize_section(
                     "fix the chart, use a standard markdown table instead."
                 )
                 try:
-                    resp = await router.complete(
+                    resp = await cast(_RouterWithCtx, router).complete(
                         CompletionRequest(
                             profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
                             messages=[

@@ -23,15 +23,44 @@ from __future__ import annotations
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import Protocol, cast
 
 from disco.core import LLMMessage
 from disco.core.llm import (
     CallContext,
     CapabilityProfile,
     CompletionRequest,
+    CompletionResponse,
     LLMRouter,
     ModelRole,
 )
+
+
+class _RouterWithCtx(Protocol):
+    """Local Protocol that mirrors `DefaultLLMRouter.complete` / `.stream_complete`.
+
+    `disco.core.llm.LLMRouter` (the public Protocol used as a type hint
+    throughout retrieval) declares `complete(self, req)` with no
+    `context=` kwarg, but the concrete `DefaultLLMRouter` (the only
+    production implementation, and what every caller actually passes)
+    accepts an optional `context: CallContext | None = None` keyword.
+    The Protocol is a real omission in `disco.core.llm.routing` (a
+    sibling package outside this work-order's scope) and is owned by
+    another agent. Casting to this locally-declared Protocol is a
+    typing-only narrowing — at runtime, `cast` is the identity, so
+    behavior is byte-identical to the previous `router.complete(req,
+    context=call_context)` call.
+
+    Defined at module scope (not under `if TYPE_CHECKING:`) because
+    `cast(_RouterWithCtx, router)` is *evaluated* at runtime, and the
+    symbol must resolve in the module's globals for the call site to
+    even execute. The Protocol class is otherwise inert at runtime
+    (no `__init__`, no methods that fire on import) so the cost is
+    one extra class object per process — negligible."""
+
+    async def complete(
+        self, req: CompletionRequest, *, context: CallContext | None = None
+    ) -> CompletionResponse: ...
 
 from ..engine import RetrievalEngine
 from ..models import Passage, RetrievalRequest, SearchHit
@@ -155,7 +184,7 @@ async def _gap_reason(
         temperature=0.0,
     )
     try:
-        resp = await router.complete(req, context=call_context)
+        resp = await cast(_RouterWithCtx, router).complete(req, context=call_context)
     except Exception:  # noqa: BLE001 — gap-reason failure is recoverable
         return True, [], "gap reasoner failed; stopping further rounds"
     lines = [ln.strip() for ln in resp.text.splitlines() if ln.strip()]

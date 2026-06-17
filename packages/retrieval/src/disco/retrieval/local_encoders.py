@@ -27,7 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-from typing import Any
+from typing import Any, cast
 
 from disco.core.env import disco_env
 
@@ -42,6 +42,17 @@ class EncoderUnavailable(RuntimeError):
 
     This is a typed signal the WebSocket handler can catch to emit an honest error
     frame instead of letting an OOM kill the process (exit 137 with a dead socket)."""
+
+
+def _env_default(suffix: str, default: str) -> str:
+    """Type-narrowed wrapper around `disco_env` for the case where a non-None
+    default is provided. `disco_env` is typed as `str | None` (its default
+    parameter is `str | None = None`), so without a `cast` every call returns
+    `str | None` even when the caller passed a non-None default and the runtime
+    value is provably `str`. The `cast` is a typing-only no-op at runtime —
+    byte-identical to the original `disco_env(...)` return value.
+    """
+    return cast(str, disco_env(suffix, default))
 
 
 def _mem_available_gb() -> float:
@@ -71,7 +82,7 @@ def _require_ram(model_name: str) -> None:
     """Raise EncoderUnavailable if available system RAM is below the tier-appropriate
     headroom threshold.  Called BEFORE each lazy model instantiation so an OOM never
     silently kills the process — the caller gets a typed exception to handle."""
-    tier = disco_env("ENCODER_TIER", _TIER_FULL).lower()
+    tier = _env_default("ENCODER_TIER", _TIER_FULL).lower()
     headroom = _HEADROOM_GB_LITE if tier == _TIER_LITE else _HEADROOM_GB_FULL
     available = _mem_available_gb()
     if available < headroom:
@@ -88,13 +99,13 @@ def _require_ram(model_name: str) -> None:
 # original behaviour when the env is unset. (Read once at import — for
 # per-call override in tests, set the env before importing; lazy loaders
 # re-read the env at call time below so the tier-aware defaults still work.)
-EMBED_MODEL = disco_env("EMBED_MODEL", "intfloat/multilingual-e5-large")
+EMBED_MODEL = _env_default("EMBED_MODEL", "intfloat/multilingual-e5-large")
 # Default reranker is MIT (commercial-safe). The broadly-multilingual
 # jinaai/jina-reranker-v2-base-multilingual is CC-BY-NC-4.0 (NON-commercial) so it is
 # NOT the default — set DISCO_RERANK_MODEL=jinaai/jina-reranker-v2-base-multilingual to
 # opt back into it IF your use permits the NC license. bge-reranker-base is MIT,
 # multilingual-capable (zh/en strong), and confirmed in fastembed's registry.
-RERANK_MODEL = disco_env("RERANK_MODEL", "BAAI/bge-reranker-base")
+RERANK_MODEL = _env_default("RERANK_MODEL", "BAAI/bge-reranker-base")
 
 # "lite" tier: small ONNX models for keyless / ≤8 GB boxes (~0.15 GB total).
 # Both confirmed in fastembed's list_supported_models() on 2026-06-13.
@@ -114,13 +125,13 @@ _TIER_FULL = "full"
 
 def _tier_embed_default() -> str:
     """Return the tier-appropriate embed model id (no explicit override applied here)."""
-    tier = disco_env("ENCODER_TIER", _TIER_FULL).lower()
+    tier = _env_default("ENCODER_TIER", _TIER_FULL).lower()
     return EMBED_MODEL_LITE if tier == _TIER_LITE else EMBED_MODEL
 
 
 def _tier_rerank_default() -> str:
     """Return the tier-appropriate rerank model id (no explicit override applied here)."""
-    tier = disco_env("ENCODER_TIER", _TIER_FULL).lower()
+    tier = _env_default("ENCODER_TIER", _TIER_FULL).lower()
     return RERANK_MODEL_LITE if tier == _TIER_LITE else RERANK_MODEL
 
 # A cross-encoder's attention is O(seq_len^2) per (query, passage) pair, and
@@ -139,7 +150,7 @@ _embedding_model: Any | None = None
 _cross_encoder: Any | None = None
 
 
-def _arena_session_kwargs() -> dict[str, bool]:
+def _arena_session_kwargs() -> dict[str, Any]:
     """ONNX Runtime session options for the encoders (fastembed 0.8 exposes
     `enable_cpu_mem_arena`).
 
@@ -153,7 +164,15 @@ def _arena_session_kwargs() -> dict[str, bool]:
     after a run. The cost is a small per-inference allocation overhead, a sound
     trade for a long-lived server (and essential on the 8 GB bundled tier, where a
     single quick DR otherwise retains ~7 GB). `DISCO_ENCODER_CPU_ARENA=on`
-    re-enables the arena (marginally faster, much higher retained RSS)."""
+    re-enables the arena (marginally faster, much higher retained RSS).
+
+    Return type is `dict[str, Any]` (not `dict[str, bool]`) because the dict is
+    unpacked into the encoder constructors as `**kwargs`. The encoder's keyword
+    param `enable_cpu_mem_arena` is `Any`-typed (`**kwargs: Any`), so the value
+    type at the call site is irrelevant — annotating it `bool` here was strictly
+    over-precise and tripped basedpyright's `**kwargs`-unpacking check against
+    every other constructor parameter (cache_dir / providers / device_ids).
+    """
     val = (disco_env("ENCODER_CPU_ARENA") or "off").strip().lower()
     return {"enable_cpu_mem_arena": val in ("on", "true", "1", "yes")}
 
