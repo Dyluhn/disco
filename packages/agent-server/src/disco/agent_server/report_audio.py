@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -77,14 +78,21 @@ class TurnScriptError(Exception):
 # ---- TTS settings resolution ------------------------------------------------
 
 
-def _resolve_remote_params(provider: str, base_url: str, api_key_env: str, model: str) -> tuple[str, str, str]:
+def _resolve_remote_params(
+    provider: str,
+    base_url: str,
+    api_key_env: str,
+    model: str,
+    resolve: Callable[[str | None], str | None] | None = None,
+) -> tuple[str, str, str]:
     """Map (provider, base_url, api_key_env, model) → (effective_base, key, model).
 
     Mirrors the tool's three-tier resolution: `bundled` returns all-empty
     (in-process Kokoro), `speaches` and `openai` use an OpenAI-compatible HTTP
     client.  The key is resolved from the ENV-VAR NAME the user set in
     Settings (never the raw key) — same convention as the rest of the
-    provider stack.
+    provider stack. `resolve` (the runtime's store-then-env resolver) lets the
+    key come from the encrypted store; absent it, fall back to the env var.
     """
     if provider == "bundled":
         return "", "", ""
@@ -100,7 +108,10 @@ def _resolve_remote_params(provider: str, base_url: str, api_key_env: str, model
         # Unknown provider (settings drifted) — treat as a backend error so
         # the user gets a clear message rather than a silent fallback.
         raise TtsBackendError(f"unknown TTS provider {provider!r}")
-    key = os.environ.get(api_key_env, "") if api_key_env else ""
+    if resolve is not None:
+        key = resolve(api_key_env) or ""
+    else:
+        key = os.environ.get(api_key_env, "") if api_key_env else ""
     effective_model = model or "tts-1"
     return effective_base, key, effective_model
 
@@ -190,6 +201,7 @@ async def generate_report_audio(
     *,
     tts_settings: Any,
     out_dir: Path,
+    resolve_key: Callable[[str | None], str | None] | None = None,
 ) -> tuple[Path, Path]:
     """Run the audio-overview pipeline for `report` and write the artifacts into
     `out_dir` (one cid-scoped subdir, created on demand).  Returns
@@ -228,6 +240,7 @@ async def generate_report_audio(
         getattr(tts_settings, "base_url", "") or "",
         getattr(tts_settings, "api_key_env", "") or "",
         getattr(tts_settings, "model", "") or "",
+        resolve_key,
     )
     is_remote = provider != "bundled"
 

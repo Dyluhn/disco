@@ -168,24 +168,49 @@ class SecretStore:
         """An encrypted secret exists but can't be decrypted (no/wrong app secret)."""
         return bool(self._raw().get("openrouter")) and not self._box.available
 
-    def has_openrouter_key(self) -> bool:
-        return bool(self._raw().get("openrouter"))
+    # -- generic named secrets (any provider key, encrypted at rest) ----------
+    # The store holds {name: ciphertext}. For provider keys the `name` is the
+    # `api_key_env` var name (e.g. "OPENAI_API_KEY", "DISCO_SEARCH_API_KEY"), so
+    # the agent-server can overlay the decrypted value into that env var at
+    # build time — exactly the OpenRouter mechanism, generalized. "openrouter"
+    # is a reserved legacy slot (see the wrappers below).
 
-    def get_openrouter_key(self) -> str | None:
-        token = self._raw().get("openrouter")
+    def has_secret(self, name: str) -> bool:
+        return bool(self._raw().get(name))
+
+    def get_secret(self, name: str) -> str | None:
+        token = self._raw().get(name)
         return self._box.decrypt(token) if isinstance(token, str) else None
 
-    def set_openrouter_key(self, plaintext: str) -> None:
+    def set_secret(self, name: str, plaintext: str) -> None:
         if not self._box.available:
             raise RuntimeError(f"{_ENV_SECRET} is not set — cannot store an encrypted key")
         data = self._raw()
-        data["openrouter"] = self._box.encrypt(plaintext)
+        data[name] = self._box.encrypt(plaintext)
         self._write(data)
 
-    def clear_openrouter_key(self) -> None:
+    def clear_secret(self, name: str) -> None:
         data = self._raw()
-        data.pop("openrouter", None)
+        data.pop(name, None)
         self._write(data)
+
+    def secret_names(self) -> list[str]:
+        """The names of all stored secrets (the ones with ciphertext present)."""
+        return [k for k, v in self._raw().items() if v]
+
+    # -- OpenRouter convenience wrappers (the reserved "openrouter" slot) ------
+
+    def has_openrouter_key(self) -> bool:
+        return self.has_secret("openrouter")
+
+    def get_openrouter_key(self) -> str | None:
+        return self.get_secret("openrouter")
+
+    def set_openrouter_key(self, plaintext: str) -> None:
+        self.set_secret("openrouter", plaintext)
+
+    def clear_openrouter_key(self) -> None:
+        self.clear_secret("openrouter")
 
     # -- internals ------------------------------------------------------------
 

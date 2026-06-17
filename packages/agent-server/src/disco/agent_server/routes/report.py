@@ -101,7 +101,12 @@ def make_report_router(
         out_dir = report_audio_cache_dir() / conversation_id
         try:
             mp3_path, transcript_path = await generate_report_audio(
-                report, tts_settings=tts, out_dir=out_dir
+                report,
+                tts_settings=tts,
+                out_dir=out_dir,
+                # Prefer an encrypted-store key for the remote TTS provider; falls
+                # back to the env var by name when the runtime/store isn't wired.
+                resolve_key=runtime._resolve_secret if runtime is not None else None,
             )
         except TtsDisabled:
             raise HTTPException(

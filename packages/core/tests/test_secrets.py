@@ -49,6 +49,38 @@ def test_store_persists_encrypted_and_plaintext_not_on_disk(tmp_path):
     )
 
 
+def test_generic_named_secrets_round_trip(tmp_path):
+    path = tmp_path / "secrets.json"
+    store = SecretStore(path, box=SecretBox("app-secret"))
+    store.set_secret("OPENAI_API_KEY", "sk-openai-PLAIN")
+    store.set_secret("DISCO_SEARCH_API_KEY", "tvly-PLAIN")
+
+    # ciphertext only on disk
+    raw = path.read_text()
+    assert "PLAIN" not in raw
+
+    fresh = SecretStore(path, box=SecretBox("app-secret"))
+    assert fresh.get_secret("OPENAI_API_KEY") == "sk-openai-PLAIN"
+    assert fresh.get_secret("DISCO_SEARCH_API_KEY") == "tvly-PLAIN"
+    assert fresh.has_secret("OPENAI_API_KEY")
+    assert not fresh.has_secret("NOPE")
+    assert set(fresh.secret_names()) == {"OPENAI_API_KEY", "DISCO_SEARCH_API_KEY"}
+
+    fresh.clear_secret("OPENAI_API_KEY")
+    assert not SecretStore(path, box=SecretBox("app-secret")).has_secret("OPENAI_API_KEY")
+
+
+def test_openrouter_wrappers_use_the_reserved_slot(tmp_path):
+    """The legacy openrouter helpers operate on the generic store under the
+    'openrouter' name — back-compat with existing secrets.json files."""
+    path = tmp_path / "secrets.json"
+    store = SecretStore(path, box=SecretBox("app-secret"))
+    store.set_openrouter_key("sk-or-v1-KEY")
+    assert store.get_secret("openrouter") == "sk-or-v1-KEY"
+    assert store.get_openrouter_key() == "sk-or-v1-KEY"
+    assert "openrouter" in store.secret_names()
+
+
 def test_weak_secret_predicate():
     from disco.core.llm.secrets import _looks_weak
 

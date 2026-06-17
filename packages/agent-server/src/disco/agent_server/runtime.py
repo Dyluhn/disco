@@ -590,6 +590,28 @@ class ConversationRuntime:
         ModelRole.SUMMARIZER,
     )
 
+    def _overlay_stored_secrets(self, env: dict[str, str]) -> None:
+        """Overlay every encrypted-at-rest provider key into `env` under its
+        env-var name, so build_providers authenticates from the store. The
+        reserved "openrouter" slot maps to OPENROUTER_API_KEY_ENV; all other
+        stored secrets are keyed BY their api_key_env name, so name == env var.
+        A stored value WINS over a pre-existing plaintext env var of the same
+        name (the encrypted source is authoritative)."""
+        for name in self._secret_store.secret_names():
+            value = self._secret_store.get_secret(name)
+            if not value:
+                continue
+            env[OPENROUTER_API_KEY_ENV if name == "openrouter" else name] = value
+
+    def _resolve_secret(self, name: str | None) -> str | None:
+        """A provider key by its api_key_env var name: the encrypted store wins,
+        else the live process env (back-compat for env-var-configured keys).
+        Used by the search/extract/TTS paths that read a key directly rather than
+        through build_providers' env."""
+        if not name:
+            return None
+        return self._secret_store.get_secret(name) or os.environ.get(name)
+
     def _router_now(
         self,
         pick: str | None = None,
@@ -617,13 +639,13 @@ class ConversationRuntime:
         if pick and pick in cfg.models:
             reassigned = {**cfg.assignments, **{r: pick for r in self._GENERATIVE_ROLES}}
             cfg = cfg.model_copy(update={"assignments": reassigned})
-        # Overlay the decrypted OpenRouter key into the env build_providers reads,
-        # so OR models (api_key_env=PMX_OPENROUTER_API_KEY) authenticate without the
-        # secret ever being on disk in plaintext.
+        # Overlay decrypted provider keys into the (per-request copy of the) env
+        # that build_providers reads, so any model authenticates from the encrypted
+        # store without its key being on disk in plaintext. OpenRouter uses a
+        # reserved slot mapped to its env-var name; every other stored secret is
+        # keyed BY its api_key_env var name, so it overlays onto itself.
         env = dict(os.environ)
-        or_key = self._secret_store.get_openrouter_key()
-        if or_key:
-            env[OPENROUTER_API_KEY_ENV] = or_key
+        self._overlay_stored_secrets(env)
         thinking = self._enable_thinking if enable_thinking is None else enable_thinking
         providers = build_providers(cfg, env=env, enable_thinking=thinking)
         # DriverPrompts gives the AGENT_DRIVER role phase-aware system prompts (the

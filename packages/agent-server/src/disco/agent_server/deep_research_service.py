@@ -142,10 +142,11 @@ class DeepResearchService:
             return self._rt._injected_research_providers
         cfg = self._rt._config_store.load()
         enc, sch, ext = cfg.encoders, cfg.search, cfg.extraction
-        # paid-provider keys resolve from os.environ by the configured env-var NAME
-        # (same mechanism as model api_key_env); bundled providers need no key.
-        search_key = os.environ.get(sch.api_key_env, "") if sch.api_key_env else ""
-        ext_key = os.environ.get(ext.api_key_env, "") if ext.api_key_env else ""
+        # paid-provider keys resolve by the configured env-var NAME (same mechanism
+        # as model api_key_env): the encrypted store wins, else the live env.
+        # Bundled providers (ddgs/local) need no key.
+        search_key = self._rt._resolve_secret(sch.api_key_env) or ""
+        ext_key = self._rt._resolve_secret(ext.api_key_env) or ""
         key = (
             enc.remote, enc.reranker_url, enc.embedder_url, enc.nli_url,
             sch.provider, sch.base_url, sch.api_key_env,
