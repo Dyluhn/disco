@@ -199,18 +199,31 @@ Three layers gate what the agent may do, before execution (`engine.py:2869-2932`
 
 - **Encrypted at rest with Fernet** (AES-128-CBC + HMAC). The OpenRouter API key is the only
   stored secret today (`secrets.py:1-12,64-97`).
-- **Key derivation.** The Fernet key derives from `PMX_SECRET_KEY` (SHA-256 → urlsafe-b64).
-  Use a high-entropy value (`openssl rand -base64 32`) — it is not a slow KDF
-  (`secrets.py:57-61`, `.env.example:20-24`).
-- **Plaintext never on disk.** Only ciphertext is persisted, to a file separate from the
-  config catalogue so the config stays credential-free (`secrets.py:1-12,96-153`). At build
-  time the decrypted key is overlaid into the provider env in memory, never written
-  (`secrets.py:51-54`).
-- **Fails closed.** With no/wrong `PMX_SECRET_KEY` the store reports `locked` and callers get
-  `None` rather than a broken key (`secrets.py:6-8,117-127`).
-- **Out of the project tree.** New installs write `~/.config/disco/secrets.json`, not
-  the repo root, so anything granted read of the working dir cannot copy the ciphertext
-  (`secrets.py:27-49`). In compose it lives in the `pmx-data` volume (`compose.yaml:39-40,61`).
+- **Key derivation.** The Fernet key derives from `DISCO_SECRET_KEY` (SHA-256 → urlsafe-b64).
+  This is **not** a slow/salted KDF, so it is secure only with a **high-entropy** secret —
+  use `openssl rand -base64 32`. A low-entropy secret is brute-forceable offline against the
+  ciphertext; the store logs a one-time warning if `DISCO_SECRET_KEY` looks weak. (A
+  work-factor KDF — Argon2id behind a versioned ciphertext format — is a planned upgrade.)
+- **Plaintext never on disk (via the store).** Only ciphertext is persisted, to a file
+  separate from the config catalogue so the config stays credential-free. At build time the
+  decrypted key is overlaid into a *per-request copy* of the provider env in memory, never
+  written and never mutating the live process env.
+- **Owner-only file perms.** The secrets file is written `0600` and its directory `0700`
+  (created via `os.open(..., 0o600)` + explicit `chmod`), so a co-tenant on a shared host
+  cannot copy even the ciphertext.
+- **Pick ONE key path.** A provider key can be supplied *either* through the encrypted store
+  (UI-set) *or* as a plaintext env var (`DISCO_OPENROUTER_API_KEY` in your `0600` `.env` /
+  `agent.env`). Both are fine on their own; keeping the SAME key in BOTH places means the
+  plaintext copy defeats the encryption — prefer one.
+- **Fails closed.** With no/wrong `DISCO_SECRET_KEY` the store reports `locked` and callers
+  get `None` rather than a broken key.
+- **Out of the project tree.** New installs write `~/.config/disco/secrets.json`, not the
+  repo root, so anything granted read of the working dir cannot copy the ciphertext. In
+  compose it lives in the `disco-data` volume (`compose.yaml:39-40,81`).
+- **Kernel gateway is authenticated.** The in-sandbox Jupyter kernel gateway (arbitrary code
+  execution) requires a per-sandbox auth token derived as
+  `hmac_sha256(DISCO_SECRET_KEY, "kernel-gateway:{sandbox_id}")`, so even where its port is
+  published it cannot be driven by an unauthenticated caller (`kernel.py`).
 - **Pin your key.** If `PMX_SECRET_KEY` is blank it is auto-generated into the data volume;
   pin it in `.env` so your encrypted keys survive a volume rebuild
   (`.env.example:20-24`, `docs/self-host.md:134-135`).
@@ -219,7 +232,7 @@ Three layers gate what the agent may do, before execution (`engine.py:2869-2932`
   container/subprocess construction cited in §2).
 
 **The no-auth corollary:** because v1 has no authentication, the only thing standing between
-these secrets and the network is the loopback bind. **Keep `PMX_BIND=127.0.0.1`** unless you
+these secrets and the network is the loopback bind. **Keep `DISCO_BIND=127.0.0.1`** unless you
 put TLS + auth in front (`.env.example:5-8`).
 
 ---
