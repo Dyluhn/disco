@@ -140,13 +140,13 @@ export function IncludeFollowUpsModal({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm" />
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40 backdrop-blur-md" />
         <Dialog.Content
           className={cn(
             "fixed left-1/2 top-1/2 z-50 w-[min(32rem,92vw)]",
             "-translate-x-1/2 -translate-y-1/2",
-            "bg-[color-mix(in_oklch,var(--surface-1)_80%,transparent)]",
-            "backdrop-blur-md border border-hairline rounded-card p-body pmx-rise",
+            "bg-[color-mix(in_oklch,var(--surface-1)_90%,transparent)]",
+            "backdrop-blur-xl border border-hairline rounded-card p-body pmx-rise",
           )}
           aria-labelledby="include-fu-title"
         >
