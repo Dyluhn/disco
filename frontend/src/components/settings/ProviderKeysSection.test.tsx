@@ -15,6 +15,7 @@ import * as clientModule from "@/api/client";
 import { ProviderKeysSection } from "./ProviderKeysSection";
 
 let names: string[];
+let lockedFlag = false;
 
 function jsonResponse(body: unknown, status = 200): Response {
   return {
@@ -31,7 +32,7 @@ function installFetch() {
   const stub = vi.fn(async (url: string, init?: RequestInit) => {
     const method = (init?.method ?? "GET").toUpperCase();
     if (method === "GET" && url === "/api/secrets") {
-      return jsonResponse({ names: [...names].sort(), locked: false, can_store: true });
+      return jsonResponse({ names: [...names].sort(), locked: lockedFlag, can_store: true });
     }
     if (method === "PUT" && url.startsWith("/api/secrets/")) {
       const name = decodeURIComponent(url.split("/api/secrets/")[1]);
@@ -59,6 +60,7 @@ let fetchStub: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   names = [];
+  lockedFlag = false;
   vi.spyOn(clientModule, "isLive").mockReturnValue(true);
   fetchStub = installFetch();
 });
@@ -130,5 +132,36 @@ describe("ProviderKeysSection — store any provider key encrypted by name", () 
         ),
       ).toBe(true),
     );
+  });
+
+  it("edits a stored key in place (PUT with the new value)", async () => {
+    names = ["OPENAI_API_KEY"];
+    render(createElement(ProviderKeysSection), { wrapper: makeWrapper() });
+    expect(await screen.findByText("OPENAI_API_KEY")).toBeInTheDocument();
+
+    // reveal the inline edit input, type a new value, save
+    fireEvent.click(screen.getByRole("button", { name: /edit/i }));
+    fireEvent.change(screen.getByLabelText("New value for OPENAI_API_KEY"), {
+      target: { value: "sk-openai-ROTATED" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => {
+      const put = fetchStub.mock.calls.find(
+        ([u, i]) =>
+          (i?.method ?? "GET").toUpperCase() === "PUT" && u === "/api/secrets/OPENAI_API_KEY",
+      );
+      expect(put).toBeTruthy();
+      expect(String(put?.[1]?.body)).toContain("sk-openai-ROTATED");
+    });
+  });
+
+  it("surfaces a loud locked alert when keys can't be decrypted", async () => {
+    lockedFlag = true;
+    names = ["OPENAI_API_KEY"];
+    render(createElement(ProviderKeysSection), { wrapper: makeWrapper() });
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/can't be decrypted/i);
+    expect(alert).toHaveTextContent(/DISCO_SECRET_KEY/);
   });
 });
