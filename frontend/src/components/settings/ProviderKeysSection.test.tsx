@@ -16,6 +16,11 @@ import { ProviderKeysSection } from "./ProviderKeysSection";
 
 let names: string[];
 let lockedFlag = false;
+// provider config the cross-reference reads (api_key_env names the app expects)
+let modelKeyEnvs: string[] = [];
+let searchKeyEnv = "";
+let extractionKeyEnv = "";
+let ttsKeyEnv = "";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return {
@@ -33,6 +38,19 @@ function installFetch() {
     const method = (init?.method ?? "GET").toUpperCase();
     if (method === "GET" && url === "/api/secrets") {
       return jsonResponse({ names: [...names].sort(), locked: lockedFlag, can_store: true });
+    }
+    // the cross-reference reads the current provider config:
+    if (method === "GET" && url === "/api/models") {
+      return jsonResponse(modelKeyEnvs.map((e) => ({ id: e, api_key_env: e })));
+    }
+    if (method === "GET" && url === "/api/data-sources/config") {
+      return jsonResponse({
+        search_api_key_env: searchKeyEnv,
+        extraction_api_key_env: extractionKeyEnv,
+      });
+    }
+    if (method === "GET" && url === "/api/tts/config") {
+      return jsonResponse({ api_key_env: ttsKeyEnv });
     }
     if (method === "PUT" && url.startsWith("/api/secrets/")) {
       const name = decodeURIComponent(url.split("/api/secrets/")[1]);
@@ -61,6 +79,10 @@ let fetchStub: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   names = [];
   lockedFlag = false;
+  modelKeyEnvs = [];
+  searchKeyEnv = "";
+  extractionKeyEnv = "";
+  ttsKeyEnv = "";
   vi.spyOn(clientModule, "isLive").mockReturnValue(true);
   fetchStub = installFetch();
 });
@@ -163,5 +185,35 @@ describe("ProviderKeysSection — store any provider key encrypted by name", () 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/can't be decrypted/i);
     expect(alert).toHaveTextContent(/DISCO_SECRET_KEY/);
+  });
+
+  it("flags a provider-referenced key that isn't stored, and prefills it", async () => {
+    // a configured paid model references ANTHROPIC_API_KEY; a search provider
+    // references TAVILY_API_KEY which IS stored.
+    modelKeyEnvs = ["ANTHROPIC_API_KEY"];
+    searchKeyEnv = "TAVILY_API_KEY";
+    names = ["TAVILY_API_KEY"];
+    render(createElement(ProviderKeysSection), { wrapper: makeWrapper() });
+
+    expect(await screen.findByText("Referenced by your providers")).toBeInTheDocument();
+    // the stored one shows "stored"; the missing one offers an Add-key prefill
+    expect(await screen.findByText("ANTHROPIC_API_KEY")).toBeInTheDocument();
+    const addButtons = await screen.findAllByRole("button", { name: /add key/i });
+    // there is the form's submit "Add key" PLUS the prefill "Add key" for the missing one
+    expect(addButtons.length).toBeGreaterThanOrEqual(2);
+
+    // clicking the missing key's prefill puts its name in the env-var input
+    const prefill = addButtons.find((b) => b.tagName === "BUTTON" && b.textContent === "Add key" && b.className.includes("text-accent"));
+    fireEvent.click(prefill ?? addButtons[0]);
+    const nameInput = screen.getByLabelText("Provider key env-var name") as HTMLInputElement;
+    await waitFor(() => expect(nameInput.value).toBe("ANTHROPIC_API_KEY"));
+  });
+
+  it("excludes the reserved OpenRouter env from the cross-reference", async () => {
+    modelKeyEnvs = ["DISCO_OPENROUTER_API_KEY"];
+    render(createElement(ProviderKeysSection), { wrapper: makeWrapper() });
+    await screen.findByText("Provider API keys");
+    // OpenRouter has its own section; it must NOT appear as a generic expected key
+    expect(screen.queryByText("Referenced by your providers")).not.toBeInTheDocument();
   });
 });

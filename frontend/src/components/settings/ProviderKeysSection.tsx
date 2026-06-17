@@ -1,7 +1,12 @@
-import { KeyRound, Lock, Pencil, X } from "lucide-react";
-import { useState } from "react";
+import { AlertTriangle, Check, KeyRound, Lock, Pencil, X } from "lucide-react";
+import { useRef, useState } from "react";
 import { ApiError } from "@/api/client";
-import { useClearSecret, useSecrets, useSetSecret } from "@/hooks/useSecrets";
+import {
+  useClearSecret,
+  useExpectedKeyNames,
+  useSecrets,
+  useSetSecret,
+} from "@/hooks/useSecrets";
 
 const field =
   "w-full rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text outline-none focus:border-hairline-strong";
@@ -117,16 +122,29 @@ export function ProviderKeysSection() {
   const { data } = useSecrets();
   const setSecret = useSetSecret();
   const clearSecret = useClearSecret();
+  const expectedNames = useExpectedKeyNames();
   const [name, setName] = useState("");
   const [value, setValue] = useState("");
   const [nameError, setNameError] = useState<string | null>(null);
+  const valueRef = useRef<HTMLInputElement>(null);
 
   // Render the section shell even before/without data (matches OpenRouterSection)
   // — the heading + entry form always show; the stored-list and notices fill in
   // once the query resolves. Never vanish the whole section on load.
   const storedNames = data?.names ?? [];
+  const stored = new Set(storedNames);
   const canStore = data?.can_store ?? true;
   const locked = data?.locked ?? false;
+  // Keys the configured providers reference but that AREN'T stored yet — the
+  // running app will look for these and fail to find them.
+  const missing = expectedNames.filter((n) => !stored.has(n));
+
+  // Prefill the add form with a referenced env-var name and focus the value box.
+  const prefill = (envName: string) => {
+    setName(envName);
+    setNameError(null);
+    valueRef.current?.focus();
+  };
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -189,6 +207,51 @@ export function ProviderKeysSection() {
         </ul>
       )}
 
+      {/* Cross-reference: env vars the configured providers reference, with
+          stored/missing status. The missing ones are what the running app will
+          fail to find — prefill the form to fix them in one click. */}
+      {expectedNames.length > 0 && (
+        <div className="flex flex-col gap-hair">
+          <span className="font-ui text-[0.78rem] text-text-muted">
+            Referenced by your providers
+            {missing.length > 0 && (
+              <span className="text-unsupported"> · {missing.length} not stored yet</span>
+            )}
+          </span>
+          <ul className="flex flex-col gap-hair">
+            {expectedNames.map((n) => {
+              const isStored = stored.has(n);
+              return (
+                <li
+                  key={n}
+                  className="flex items-center justify-between gap-inline rounded-control border border-hairline bg-bg px-body py-hair"
+                >
+                  <span className="flex items-center gap-hair font-mono text-[0.8rem] text-text">
+                    {isStored ? (
+                      <Check className="size-3.5 text-supported" aria-hidden />
+                    ) : (
+                      <AlertTriangle className="size-3.5 text-unsupported" aria-hidden />
+                    )}
+                    {n}
+                  </span>
+                  {isStored ? (
+                    <span className="font-ui text-[0.76rem] text-supported">stored</span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => prefill(n)}
+                      className="font-ui text-[0.78rem] text-accent hover:underline"
+                    >
+                      Add key
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
       <form onSubmit={submit} className="flex flex-col gap-hair">
         <div className="flex gap-inline">
           <input
@@ -199,6 +262,7 @@ export function ProviderKeysSection() {
             aria-label="Provider key env-var name"
           />
           <input
+            ref={valueRef}
             type="password"
             className={field}
             value={value}
