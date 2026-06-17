@@ -55,6 +55,12 @@ export interface ProjectStorageConfig {
   effective_root: string;
 }
 
+/** The SAVE request shape (PUT /api/projects/storage/config). The client only
+ * supplies `projects_root`; `status` and `effective_root` are derived
+ * server-side and returned on the response, so the client never invents them.
+ * (`Omit` keeps it in lockstep with `ProjectStorageConfig`.) */
+export type ProjectStorageSaveInput = Omit<ProjectStorageConfig, "effective_root">;
+
 /** A row in the server-side directory picker — directory or file flag only;
  * the picker never returns file contents. */
 export interface BrowseEntry {

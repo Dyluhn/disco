@@ -24,6 +24,7 @@ import type {
   Project,
   ProjectsList,
   ProjectStorageConfig,
+  ProjectStorageSaveInput,
 } from "@/types/project";
 
 const OWNER_ID = (import.meta.env.VITE_OWNER_ID as string | undefined) ?? "local";
@@ -36,6 +37,9 @@ const OWNER_ID = (import.meta.env.VITE_OWNER_ID as string | undefined) ?? "local
 let fixtureStorage: ProjectStorageConfig = {
   projects_root: "/home/dylan/disco-projects",
   status: "ok",
+  // Offline fixture: the user has set a root, so the effective (in-use) root
+  // equals the configured one (it only diverges in the zero-config default).
+  effective_root: "/home/dylan/disco-projects",
 };
 
 const fixtureProjects: Project[] = [
@@ -168,11 +172,17 @@ export async function getProjectsConfig(): Promise<ProjectStorageConfig> {
 }
 
 export async function updateProjectsConfig(
-  cfg: ProjectStorageConfig,
+  cfg: ProjectStorageSaveInput,
 ): Promise<ProjectStorageConfig> {
   if (!isLive()) {
     await fixtureDelay();
-    fixtureStorage = { ...cfg, status: cfg.projects_root ? "ok" : "unset" };
+    // Offline: mirror the server's derivation — status from validity, and the
+    // effective root equals the configured one (no auto-default to compute here).
+    fixtureStorage = {
+      ...cfg,
+      status: cfg.projects_root ? "ok" : "unset",
+      effective_root: cfg.projects_root,
+    };
     return { ...fixtureStorage };
   }
   return apiSend<ProjectStorageConfig>("PUT", "/api/projects/storage/config", cfg);

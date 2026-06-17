@@ -6,7 +6,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getProjectsConfig, updateProjectsConfig } from "@/api/projects";
-import type { ProjectStorageConfig } from "@/types/project";
+import type { ProjectStorageConfig, ProjectStorageSaveInput } from "@/types/project";
 
 const PROJECTS_CONFIG_KEY = ["projects-config"] as const;
 
@@ -20,7 +20,7 @@ export function useProjectsConfig() {
 export function useUpdateProjectsConfig() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (cfg: ProjectStorageConfig) => updateProjectsConfig(cfg),
+    mutationFn: (cfg: ProjectStorageSaveInput) => updateProjectsConfig(cfg),
     onSuccess: (next) => qc.setQueryData(PROJECTS_CONFIG_KEY, next),
   });
 }
