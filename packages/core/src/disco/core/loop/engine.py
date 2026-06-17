@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
-from typing import TYPE_CHECKING, cast
+from collections.abc import Callable, Coroutine
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from ..security import RiskAssessment
@@ -487,7 +487,9 @@ class AgentLoop:
         # C1c — DoD evaluator factory (test seam; see _finish_dod_gate_passed).
         # The default (None) builds a DoDEvaluator over the executor's sandbox
         # workspace_root; tests inject a fake-seamed evaluator.
-        dod_evaluator_factory: Callable[[], DoDEvaluator] | None = None,
+        dod_evaluator_factory: (
+            Callable[[], DoDEvaluator | Coroutine[Any, Any, DoDEvaluator]] | None
+        ) = None,
     ) -> None:
         # Autonomous mode (issue A): no human is available to answer questions or
         # approve plans (headless / unattended runs). Default False = today's
@@ -589,7 +591,9 @@ class AgentLoop:
         # default factory" (the evaluator is still wired when a DoD spec exists).
         # When no DoD spec exists for the conversation, the gate is a no-op
         # (legacy byte-identical path) — see _finish_dod_gate_passed.
-        self._dod_evaluator_factory: Callable[[], DoDEvaluator] | None = dod_evaluator_factory
+        self._dod_evaluator_factory: (
+            Callable[[], DoDEvaluator | Coroutine[Any, Any, DoDEvaluator]] | None
+        ) = dod_evaluator_factory
         # Consecutive DoD-refusal streak (telemetry; the gate has no cap — the
         # loop's max_iterations + the user's kill switch are the ultimate exit,
         # same as the browser-verify and execution-nudge gates).

@@ -13,7 +13,7 @@ in-collaborator).
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from ..dod_evaluator import DoDEvaluator
 from ..events import (
@@ -247,7 +247,7 @@ class FinishGate:
     def __init__(self, loop: AgentLoop) -> None:
         self._loop = loop
 
-    async def finish_verify_passed(self, command: str) -> bool:
+    async def finish_verify_passed(self, command: str) -> tuple[bool, bool]:
         """Run the agent's stated acceptance check before allowing `finish`
         (verify-on-finish post-condition gate). The agent attaches a shell
         command to finish whose exit 0 means the deliverable is good; we run it,
@@ -259,7 +259,9 @@ class FinishGate:
         normally require confirmation is refused here (we don't silently run a
         gated command as a 'verification') — the agent is told to run it as an
         ordinary, gated action first. Ordinary test/build/lint checks assess as
-        MEDIUM and run unimpeded. Returns True iff the check ran and passed."""
+        MEDIUM and run unimpeded. Returns (passed, malformed): `passed` is True
+        iff the check ran and passed; `malformed` is True iff the verify command
+        itself is broken (command-not-found / SyntaxError) rather than the task."""
         call = ToolCall(tool_name="shell", arguments={"command": command})
         # meta marker: this shell action is the GATE'S probe, not the agent's
         # work. Phase-B re-run #6 (2026-06-10): an unmarked probe counted as a
@@ -480,7 +482,10 @@ class FinishGate:
             result = self._loop._dod_evaluator_factory()
             if inspect.iscoroutine(result):
                 result = await result
-            return result
+            # inspect.iscoroutine is a TypeGuard (narrows only the positive
+            # branch), so the awaited-away Coroutine lingers in the static type;
+            # at runtime `result` is always the resolved DoDEvaluator here.
+            return cast(DoDEvaluator, result)
         sbx = getattr(self._loop.executor, "sandbox", None)
         workspace = getattr(sbx, "workspace_path", None) if sbx is not None else None
         if not workspace:
@@ -517,6 +522,7 @@ class FinishGate:
         # forcing function. The check is visible in the trace; on
         # failure the agent sees exactly what broke and adapts, instead
         # of declaring a broken build complete.
+        assert step.tool_call is not None  # caller (engine loop) enters only on the finish tool
         verify_cmd = self.resolve_verify_command(step.tool_call.arguments)
         if verify_cmd:
             passed, malformed = await self.finish_verify_passed(verify_cmd)
