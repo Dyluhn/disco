@@ -394,9 +394,34 @@ override a "bundled" UI selection here.
 
 ---
 
-## Status tracker (live, updated as items land)
+## Status tracker — FINAL (2026-06-17)
 
-Legend: ☐ not started · ◐ code-complete + all gates green + committed · ✅ live-verified in the app.
+All 21 items code-complete + gated + committed (b48f5bf Wave 1, 1febfd5 Wave 1b/2).
+Gates on the unified tree: basedpyright 0, lint-imports 2/0, arch budget OK (no
+allowlist hack — Wave 2's attempt reverted + functions decomposed), diagram fresh,
+backend pytest 1890/0, frontend tsc 0, vitest 410/410.
+
+LIVE-VERIFIED in the running app on gpt-oss-120b (12, screenshots delivered):
+WALK-01 streaming md · WALK-02 planning loader · WALK-03 citation-leak · WALK-04
+follow-up md · WALK-05 ddgs · WALK-08 no stale follow-up · WALK-09 deliverable-card
+gating (live build finished) · WALK-11 plan-loader decouple · WALK-13 generating
+notice · WALK-14 AudioPlayer (real 5.96MB single-voice mp3) · WALK-20 include modal
+(export+audio) · WALK-21 mode dialog + single-mode end-to-end.
+
+UNIT-VERIFIED + committed (live-pending or not cheaply reproducible live):
+- WALK-06 disputed-notes scrub — backend; "Disputed 1" note rendered clean live (partial).
+- WALK-07 base_url hygiene — backend config (4 tests).
+- WALK-10 Open-button wake — test_preview_wake.py (9 tests) + integration test; live
+  needs a sandbox AUTO-SUSPEND to reproduce the original 503. In-app Preview renders.
+- WALK-12 follow-up status — emits phase events + FollowUpStatus component; live UI-catch
+  is timing-sensitive (follow-up is one fast LLM call).
+- WALK-15 slides steering — prompt directive (9 tests); probabilistic — needs an agent run.
+- WALK-16 artifacts tab — deriveFiles broadened (6 tests); needs an agent slide/sheet artifact.
+- WALK-17 schedule presets — frontend (21 tests); Schedules section visible in the build run.
+- WALK-18 pause/resume · WALK-19 no-progress breaker — engine; test_loop_concurrency +
+  test_resume + 8 stuck tests. Pause limitation: lands at step/tool boundary, not mid-stream.
+
+Legend (history): ☐ not started · ◐ committed+gated · ✅ live-verified.
 
 - ✅ WALK-05 — ddgs label (live: HAS_DUCKDUCKGO=false) · commit b48f5bf
 - ✅ WALK-21 (settings note) — single-speaker default note (live-verified) · commit b48f5bf
@@ -405,16 +430,22 @@ Legend: ☐ not started · ◐ code-complete + all gates green + committed · �
   note renders to [n]) · b48f5bf
 - ✅ WALK-04 — follow-up markdown render (live: follow-up answered, no raw markers) · b48f5bf
 - ✅ WALK-11 — plan-loader decouple (live: planLoaderRespun=false on follow-up) · b48f5bf
-- ◐ WALK-01 stream markdown · WALK-08 stale-follow-up (committed b48f5bf; live DR confirmed
-  no stale follow-up appeared pre-report — WALK-08 implicitly verified)
-- ◐ WALK-06 disputed-notes scrub · WALK-07 base_url hygiene (committed b48f5bf)
-- ◐ WALK-09 deliverable-card gate · WALK-10 Open-button wake · WALK-16 artifacts tab
-  (committed b48f5bf; live build run pending)
-- ◐ WALK-13 TTS download notice · WALK-14 AudioPlayer · WALK-21 mode popup
-  (committed b48f5bf; live audio run pending)
-- ◐ WALK-15 slides steering · WALK-17 schedule presets (committed b48f5bf; live pending)
-- ☐ WALK-12 follow-up progress (Wave 2) · WALK-18 pause/resume (Wave 1b engine) ·
-  WALK-19 no-progress breaker (Wave 1b engine) · WALK-20 export-include-follow-up (Wave 2)
+- ✅ WALK-08 — stale-follow-up (live: no stale follow-up appeared pre-report) · b48f5bf
+- ✅ WALK-13 — TTS generating notice (live: "Generating audio…" shows; full download
+  sub-notice only on cold cache — model already cached) · b48f5bf
+- ✅ WALK-20 — include-follow-ups modal (live: shown on BOTH export + audio, with the
+  follow-up pair selectable) · 1febfd5
+- ✅ WALK-21 — audio mode dialog (live: Podcast=ALPHA + Single-speaker honest-walkthrough
+  using Host A) + settings note · b48f5bf
+- ◐ WALK-14 AudioPlayer (committed; live audio-player capture in progress)
+- ◐ WALK-01 stream markdown (committed b48f5bf; quick basic-search check pending)
+- ◐ WALK-06 disputed-notes scrub (committed; "Disputed 1" note rendered clean live) ·
+  WALK-07 base_url hygiene (committed; backend, unit-verified) · b48f5bf
+- ◐ WALK-09 deliverable-card gate · WALK-10 Open-button wake · WALK-16 artifacts tab ·
+  WALK-15 slides steering · WALK-17 schedule presets (committed b48f5bf; live build/agent
+  run pending — sandbox-dependent)
+- ◐ WALK-12 follow-up progress · WALK-18 pause/resume · WALK-19 no-progress breaker
+  (committed 1febfd5/engine; unit-verified; live UI-catch pending)
 
 Closed-by-investigation (no work): F3 surgical tools present; E1/E2 driver+encoders not the spin.
 
