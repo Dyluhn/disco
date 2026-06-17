@@ -524,6 +524,7 @@ class MetaToolHandlers:
         self._loop = loop
 
     async def handle_notify_user(self, step: AgentStep, events: list[Event]) -> Disp:
+        assert step.tool_call is not None  # caller (engine loop) dispatches by tool_name
         msg = str(step.tool_call.arguments.get("message") or "").strip() or step.thought
         if msg.strip():
             await self._loop._emit(
@@ -542,6 +543,7 @@ class MetaToolHandlers:
         return Disp.CONTINUE
 
     async def handle_remember(self, step: AgentStep, events: list[Event]) -> Disp:
+        assert step.tool_call is not None  # caller (engine loop) dispatches by tool_name
         # Durable memory: emit a PINNED KnowledgeEvent so the fact
         # survives condensation and is re-injected into context every
         # step. Non-blocking — like notify_user, the agent keeps
@@ -626,6 +628,7 @@ class MetaToolHandlers:
         return Disp.CONTINUE
 
     async def handle_serve(self, step: AgentStep, events: list[Event]) -> Disp:
+        assert step.tool_call is not None  # caller (engine loop) dispatches by tool_name
         # Finished-artifact HANDOFF: emit a DeliverableEvent the UI renders
         # as Open-the-app / Download-the-files. Non-blocking — the agent
         # serves, verifies, then finishes. A missing path/title or a
@@ -688,6 +691,7 @@ class MetaToolHandlers:
         return Disp.CONTINUE
 
     async def handle_delegate_explore(self, step: AgentStep, events: list[Event]) -> Disp:
+        assert step.tool_call is not None  # caller (engine loop) dispatches by tool_name
         # C20 — `delegate_explore`: a bounded, read-only Explore/Plan
         # helper the loop dispatches+joins. The driver calls it; the
         # loop:
@@ -883,6 +887,7 @@ class MetaToolHandlers:
         return Disp.FALLTHROUGH
 
     async def handle_propose_plan_update(self, step: AgentStep, events: list[Event]) -> Disp:
+        assert step.tool_call is not None  # caller (engine loop) dispatches by tool_name
         new_plan = self._loop._plan_from_args(step.tool_call.arguments, events)
         await self._loop._emit(new_plan)
         if self._loop._autonomous:
@@ -963,6 +968,7 @@ class MetaToolHandlers:
         return Disp.HALT
 
     async def handle_clarify(self, step: AgentStep, events: list[Event]) -> Disp:
+        assert step.tool_call is not None  # caller (engine loop) dispatches by tool_name
         # clarify → ClarifyEvent with typed questions. The planner
         # calls this when SEVERAL specifics are missing and
         # guessing would produce a bad plan. The loop emits a
@@ -1031,6 +1037,7 @@ class MetaToolHandlers:
         return Disp.HALT
 
     async def handle_ask_user(self, step: AgentStep, events: list[Event]) -> Disp:
+        assert step.tool_call is not None  # caller (engine loop) dispatches by tool_name
         alt = self._loop._alternatives_from_args(step.tool_call.arguments, events)
         if alt is not None:
             # ask_user WITH options → AlternativesEvent + gate
