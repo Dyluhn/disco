@@ -49,6 +49,34 @@ def test_store_persists_encrypted_and_plaintext_not_on_disk(tmp_path):
     )
 
 
+def test_weak_secret_predicate():
+    from disco.core.llm.secrets import _looks_weak
+
+    assert _looks_weak("short")  # too short
+    assert _looks_weak("aaaaaaaaaaaaaaaaaaaa")  # long but low diversity
+    assert not _looks_weak("Xk7$pQ2!mZ9vRt4wLn8c")  # 20 chars, diverse
+    # a real `openssl rand -base64 32`-style value passes
+    assert not _looks_weak("uF3kP1xV9bQwRtY2mN8sJ6hL0cZ4dA7gK5eB3rT9oM=")
+
+
+def test_weak_secret_logs_a_warning(caplog):
+    import disco.core.llm.secrets as secmod
+
+    secmod._weak_secret_warned = False  # reset the once-per-process latch
+    with caplog.at_level("WARNING", logger="disco.secrets"):
+        SecretBox("weak")  # short → should warn
+    assert any("low-entropy" in r.message for r in caplog.records)
+
+
+def test_strong_secret_does_not_warn(caplog):
+    import disco.core.llm.secrets as secmod
+
+    secmod._weak_secret_warned = False
+    with caplog.at_level("WARNING", logger="disco.secrets"):
+        SecretBox("uF3kP1xV9bQwRtY2mN8sJ6hL0cZ4dA7gK5eB3rT9oM=")
+    assert not any("low-entropy" in r.message for r in caplog.records)
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
 def test_secrets_file_and_dir_are_owner_only(tmp_path):
     """The credential file is written 0600 and its dir 0700 — another local user

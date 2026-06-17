@@ -17,11 +17,14 @@ import base64
 import contextlib
 import hashlib
 import json
+import logging
 import os
 from collections.abc import Mapping
 from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
+
+_LOG = logging.getLogger("disco.secrets")
 
 _ENV_SECRET = "DISCO_SECRET_KEY"
 # honored so ciphertext encrypted under the old key still decrypts
@@ -59,9 +62,41 @@ OPENROUTER_API_KEY_ENV = "DISCO_OPENROUTER_API_KEY"
 OPENROUTER_API_KEY_ENV_LEGACY = "PMX_OPENROUTER_API_KEY"
 
 
+def _looks_weak(secret: str) -> bool:
+    """Heuristic for a low-entropy app secret. The KDF below is a single
+    unsalted SHA-256 (no work factor), which is secure ONLY if the secret is
+    itself high-entropy; a short or low-diversity secret (a human password) is
+    brute-forceable offline. A 32-byte random key (`openssl rand -base64 32` →
+    44 chars, many distinct symbols) passes."""
+    return len(secret) < 16 or len(set(secret)) < 8
+
+
+_weak_secret_warned = False
+
+
+def _warn_if_weak_secret(secret: str) -> None:
+    """Log ONCE per process if the app secret looks weak. A warning, not an
+    error: an existing deployment with a short key must keep working (raising
+    would lock it out of its own encrypted secrets). The durable fix is a
+    work-factor KDF (Argon2id) behind a versioned ciphertext format."""
+    global _weak_secret_warned
+    if _weak_secret_warned or not _looks_weak(secret):
+        return
+    _weak_secret_warned = True
+    _LOG.warning(
+        "%s looks low-entropy (length %d). The secrets key-derivation is an "
+        "unsalted SHA-256 with no work factor, so a weak app secret is "
+        "brute-forceable offline against the stored ciphertext. Set a "
+        "high-entropy value — e.g. `openssl rand -base64 32`.",
+        _ENV_SECRET,
+        len(secret),
+    )
+
+
 def _fernet_from(secret: str) -> Fernet:
     # Derive a stable 32-byte Fernet key from the app secret. Use a high-entropy
-    # PMX_SECRET_KEY (e.g. `openssl rand -base64 32`) — this is not a slow KDF.
+    # DISCO_SECRET_KEY (e.g. `openssl rand -base64 32`) — this is not a slow KDF,
+    # so a weak secret is brute-forceable (see _warn_if_weak_secret).
     key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest())
     return Fernet(key)
 
@@ -71,6 +106,8 @@ class SecretBox:
     app secret the box is unavailable: it can neither encrypt nor decrypt."""
 
     def __init__(self, app_secret: str | None) -> None:
+        if app_secret:
+            _warn_if_weak_secret(app_secret)
         self._fernet = _fernet_from(app_secret) if app_secret else None
 
     @classmethod
