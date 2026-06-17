@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import asyncio
 
-from conftest import user_msg, with_seqs
+from event_fakes import user_msg, with_seqs
 from disco.core import (
     ActionEvent,
     LLMMessage,

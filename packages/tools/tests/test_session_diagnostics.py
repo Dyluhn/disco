@@ -12,7 +12,7 @@ Three layers under test:
 
 from __future__ import annotations
 
-from conftest import call
+from tool_fakes import call
 from disco.tools import DefaultToolExecutor, ToolContext, ToolDef, ToolOutcome
 from disco.tools.builtin.shell_sessions import ShellExecArgs, ShellExecTool
 from disco.tools.registry import ToolRegistry, ToolScope

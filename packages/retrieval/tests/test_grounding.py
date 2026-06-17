@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from conftest import FakeNLI, FakeRouter
+from research_fakes import FakeNLI, FakeRouter
 from disco.retrieval import (
     CrossEncoderNLIVerifier,
     GroundingPipeline,

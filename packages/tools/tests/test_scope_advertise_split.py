@@ -8,7 +8,7 @@ touching callability (execute / registry.get) or the planner-safety backstop
 from __future__ import annotations
 
 import pytest
-from conftest import call
+from tool_fakes import call
 from disco.tools.anatomy import ToolContext, ToolDef, ToolOutcome
 from disco.tools.executor import DefaultToolExecutor
 from disco.tools.registry import ToolRegistry, ToolScope

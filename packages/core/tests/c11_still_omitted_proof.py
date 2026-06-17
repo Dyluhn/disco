@@ -1,5 +1,5 @@
 """C11 evidence script #2 — still-omitted.txt output."""
-from conftest import action, agent_msg, observation, tombstone, user_msg, with_seqs
+from event_fakes import action, agent_msg, observation, tombstone, user_msg, with_seqs
 from disco.core import (
     CondensationEvent,
     View,

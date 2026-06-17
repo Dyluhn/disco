@@ -20,7 +20,7 @@ from pathlib import Path
 
 import openpyxl
 import pytest
-from conftest import FakeSandboxInstance, call
+from tool_fakes import FakeSandboxInstance, call
 from disco.tools.anatomy import ToolContext
 from disco.tools.builtin import build_default_registry
 from disco.tools.builtin.sheets import SheetGenerateArgs, SheetsTool

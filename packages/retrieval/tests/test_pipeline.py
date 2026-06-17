@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from conftest import FakeExtractionProvider, FakeRewriter, FakeSearchProvider, hit
+from research_fakes import FakeExtractionProvider, FakeRewriter, FakeSearchProvider, hit
 from disco.retrieval import (
     DefaultRetrievalEngine,
     LexicalReranker,

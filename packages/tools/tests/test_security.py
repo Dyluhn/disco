@@ -3,7 +3,7 @@ security-critical tests. The headline is `test_no_secret_in_the_box`."""
 
 from __future__ import annotations
 
-from conftest import call
+from tool_fakes import call
 from disco.tools import (
     CapabilityBroker,
     DefaultToolExecutor,

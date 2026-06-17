@@ -148,7 +148,7 @@ async def test_long_task_condenses_and_keeps_going():
 async def _seed_pairs(n: int) -> list:
     """A user instruction + n action/observation pairs (no store, hand-assigned seqs).
     Each pair is one tool-turn: action + observation. Returned list has 1 + 2n events."""
-    from conftest import with_seqs
+    from event_fakes import with_seqs
 
     def act(i: int) -> ActionEvent:
         return ActionEvent(
@@ -300,7 +300,7 @@ async def test_c10_agent_error_obs_pairs_like_a_turn_observation():
     """An AgentErrorEvent (a tool call that FAILED — loop-emitted error in place
     of a real observation) pairs with its action the same way an ObservationEvent
     does. The keep boundary must not split an action from its agent_error."""
-    from conftest import with_seqs
+    from event_fakes import with_seqs
 
     # 1 head user + 2 complete turn pairs (action,obs) + 1 incomplete turn:
     # action followed by an AgentErrorEvent (the tool failed) — the action +

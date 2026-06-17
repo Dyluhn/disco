@@ -10,7 +10,7 @@ real isolation/limits/secret-non-leak is the live check (verify_agent_tools_loca
 from __future__ import annotations
 
 import pytest
-from conftest import FakeSandboxInstance, call
+from tool_fakes import FakeSandboxInstance, call
 from disco.tools.builtin import build_default_registry
 from disco.tools.executor import DefaultToolExecutor
 from disco.tools.registry import agent_scope, research_scope

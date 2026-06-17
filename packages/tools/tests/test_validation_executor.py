@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from conftest import FakeSandboxInstance, call
+from tool_fakes import FakeSandboxInstance, call
 from disco.tools import (
     DefaultToolExecutor,
     ToolContext,

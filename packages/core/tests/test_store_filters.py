@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
-from conftest import action, agent_error, agent_msg, status, user_msg, with_seqs
+from event_fakes import action, agent_error, agent_msg, status, user_msg, with_seqs
 from disco.core import (
     ConversationStatus,
     EventFilter,

@@ -22,7 +22,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from conftest import FakeSandboxInstance, call
+from tool_fakes import FakeSandboxInstance, call
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin import build_default_registry
 from disco.tools.builtin.slides import (

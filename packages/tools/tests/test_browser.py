@@ -16,7 +16,7 @@ import json
 from typing import Any
 from unittest.mock import AsyncMock
 
-from conftest import FakeSandboxInstance, call
+from tool_fakes import FakeSandboxInstance, call
 from disco.core import (
     ActionEvent,
     EventSource,

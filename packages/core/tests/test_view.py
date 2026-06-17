@@ -10,7 +10,7 @@ strategy-specific tests are deferred. Here we test the View's tombstone
 
 from __future__ import annotations
 
-from conftest import (
+from event_fakes import (
     action,
     agent_msg,
     fatal,

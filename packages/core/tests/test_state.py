@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import random
 
-from conftest import action, fatal, status, user_msg, with_seqs
+from event_fakes import action, fatal, status, user_msg, with_seqs
 from disco.core import ConversationState, ConversationStatus
 
 CID = "conv"

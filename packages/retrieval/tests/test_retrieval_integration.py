@@ -9,7 +9,7 @@ provider key never reaches the tool observations or the answer (tool §6).
 
 from __future__ import annotations
 
-from conftest import FakeExtractionProvider, FakeRouter, FakeSearchProvider, hit
+from research_fakes import FakeExtractionProvider, FakeRouter, FakeSearchProvider, hit
 from disco.core import ConversationStatus, SqliteEventStore, ToolCall
 from disco.core.llm import OperatingMode
 from disco.core.loop import AgentLoop, AgentStep, NeverConfirm, NullSecurityAnalyzer

@@ -9,7 +9,7 @@ loop's ToolExecutor boundary and the secrets discipline holds end to end.
 
 from __future__ import annotations
 
-from conftest import ScriptedAgent
+from tool_fakes import ScriptedAgent
 from disco.core import (
     ActionEvent,
     ConversationStatus,

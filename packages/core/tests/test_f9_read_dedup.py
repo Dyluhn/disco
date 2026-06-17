@@ -55,7 +55,7 @@ synthetic observation are all observable without a full run() loop.
 
 from __future__ import annotations
 
-from conftest import user_msg, with_seqs
+from event_fakes import user_msg, with_seqs
 from disco.core import (
     ActionEvent,
     Event,

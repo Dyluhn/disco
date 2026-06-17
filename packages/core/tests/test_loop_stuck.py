@@ -6,7 +6,7 @@ event_content_eq) + loop integration (STUCK then resume on a new message).
 
 from __future__ import annotations
 
-from conftest import action, agent_error, agent_msg, observation, user_msg
+from event_fakes import action, agent_error, agent_msg, observation, user_msg
 from disco.core import ConversationStatus, EventSource, MessageEvent, StatusEvent
 from disco.core.loop import signals
 from disco.core.loop import StuckDetector, StuckThresholds
@@ -303,7 +303,7 @@ def test_c7_stuck_escape_attempt_count_helper():
     assert signals.stuck_escape_attempt_count([]) == 0
 
     # One escape marker: count is 1 (the marker we just emitted).
-    from conftest import user_msg
+    from event_fakes import user_msg
     events = [
         user_msg("go"),
         action(thought="a"),

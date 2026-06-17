@@ -3,7 +3,7 @@ import subprocess
 import sys
 
 import pytest
-from conftest import action, agent_msg, observation, user_msg, with_seqs
+from event_fakes import action, agent_msg, observation, user_msg, with_seqs
 from disco.core import PlanEvent, View
 from disco.core.events import PlanStep
 

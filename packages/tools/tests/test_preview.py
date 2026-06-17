@@ -95,7 +95,7 @@ def test_gvisor_preview_host_parsing():
 
 
 def test_local_publishes_curated_port_set_when_network_granted():
-    from conftest import FakeSandboxInstance  # noqa: F401 — ensures conftest path
+    from tool_fakes import FakeSandboxInstance  # noqa: F401 — ensures conftest path
     from disco.tools.sandbox import LocalSandboxService, SandboxConfig
     from test_local import FakeLocalClient  # reuse the local backend's fake docker client
 

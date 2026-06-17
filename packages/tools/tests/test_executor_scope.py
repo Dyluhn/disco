@@ -5,7 +5,7 @@ sandbox tool → 'sandbox', in_process tool → 'in_process', unregistered → '
 
 from __future__ import annotations
 
-from conftest import FakeSandboxInstance
+from tool_fakes import FakeSandboxInstance
 from disco.tools import (
     DefaultToolExecutor,
     ToolDef,

@@ -8,7 +8,7 @@ and forward-compatibility.
 from __future__ import annotations
 
 import pytest
-from conftest import (
+from event_fakes import (
     action,
     agent_error,
     fatal,

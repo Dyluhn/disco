@@ -42,11 +42,15 @@ class DepthBound:
 _TIERS: dict[DepthTier, DepthBound] = {
     # Quick: fast verification runs, ~90s on local Qwen. ~3 sub-questions, 1
     # round each. Suitable for "what's the consensus on X" — small enough to be
-    # near-realtime but with multi-section synthesis.
+    # near-realtime but with multi-section synthesis. The hard cap is 300s: a
+    # generous ~3x ceiling over the ~90s target that still sits strictly below
+    # standard-deep's 600s, so the three tiers' wall-clock budgets are distinct
+    # and ordered (quick < standard < exhaustive). 300s is ample for quick's
+    # 3 sub-q x 1 round — only the wider standard plan needed the 600s raise.
     DepthTier.QUICK: DepthBound(
         max_sources=10,
         max_rounds_per_subq=1,
-        max_wall_clock_s=600,
+        max_wall_clock_s=300,
         max_subquestions=3,
         discover_limit=8,
         extract_cap=4,

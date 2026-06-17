@@ -1,5 +1,5 @@
 import pytest
-from conftest import action, with_seqs
+from event_fakes import action, with_seqs
 from disco.core import (
     MessageEvent,
     NoOpCondenser,

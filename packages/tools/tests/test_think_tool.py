@@ -13,7 +13,7 @@ Acceptance:
 
 from __future__ import annotations
 
-from conftest import FakeSandboxInstance, call
+from tool_fakes import FakeSandboxInstance, call
 from disco.tools import (
     DefaultToolExecutor,
     agent_scope,
