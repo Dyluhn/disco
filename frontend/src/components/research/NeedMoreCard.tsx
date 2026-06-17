@@ -26,20 +26,21 @@ import {
   Headphones,
   Loader2,
   MessageCircleQuestion,
-  Play,
+  Mic,
+  Radio,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import {
   exportReport,
   exportReportAsMarkdown,
-  requestReportAudio,
   serializeReportToMarkdown,
 } from "@/api/deepResearch";
 import { agentHttpBase } from "@/api/client";
 import { useExportCapabilities } from "@/hooks/useExportCapabilities";
 import type { ReportEvent } from "@/types/agent";
 import { ReportFollowUp } from "./ReportFollowUp";
+import { AudioPlayer } from "./AudioPlayer";
 
 // ── Shared button tokens (match CTRL_BTN in DeepResearchSurface.tsx) ─────────
 
@@ -49,18 +50,20 @@ const CTRL_BTN =
 const ACTIVE_BTN =
   "flex items-center gap-hair rounded-control border border-accent/60 bg-accent/5 px-inline py-hair font-ui text-[0.78rem] text-accent transition-colors hover:border-accent";
 
-// ── Audio state machine ───────────────────────────────────────────────────────
+// ── Audio types ───────────────────────────────────────────────────────────────
+
+type AudioMode = "podcast" | "single";
 
 type AudioState =
   | { status: "idle" }
-  | { status: "generating"; progress: number }
+  | { status: "generating" }
   | { status: "done"; audioUrl: string }
   | { status: "unavailable"; reason: string };
 
-// Audio overview is wired to the agent-server endpoint
-// POST /conversations/{cid}/report/audio (see api/deepResearch.requestReportAudio).
-// On failure (e.g. TTS disabled in Settings) it surfaces the typed reason honestly
-// — never a fake success.
+// Audio overview calls the agent-server endpoint directly so that the `mode`
+// query param can be threaded through without touching the shared deepResearch.ts
+// API file (owned by another lane).  The mode is chosen via a popup dialog before
+// generation starts (WALK-21 / D3).
 
 // ── File System Access API types ──────────────────────────────────────────────
 
@@ -339,6 +342,101 @@ function ExportModal({ open, onOpenChange, report, cid }: ExportModalProps) {
   );
 }
 
+// ── Audio mode chooser dialog ─────────────────────────────────────────────────
+
+interface AudioModeDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onChoose: (mode: AudioMode) => void;
+}
+
+function AudioModeDialog({ open, onOpenChange, onChoose }: AudioModeDialogProps) {
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm" />
+        <Dialog.Content
+          className={cn(
+            "fixed left-1/2 top-1/2 z-50 w-[min(26rem,92vw)]",
+            "-translate-x-1/2 -translate-y-1/2",
+            "bg-[color-mix(in_oklch,var(--surface-1)_80%,transparent)]",
+            "backdrop-blur-md border border-hairline rounded-card p-body pmx-rise",
+          )}
+          aria-labelledby="audio-mode-title"
+        >
+          <div className="flex items-center justify-between">
+            <Dialog.Title
+              id="audio-mode-title"
+              className="font-ui text-[0.95rem] font-semibold text-text"
+            >
+              Generate audio overview
+            </Dialog.Title>
+            <Dialog.Close asChild>
+              <button
+                type="button"
+                aria-label="Close audio mode dialog"
+                className="rounded-control p-hair text-text-faint transition-colors hover:text-text"
+              >
+                <X className="size-4" aria-hidden />
+              </button>
+            </Dialog.Close>
+          </div>
+
+          <Dialog.Description className="mt-hair font-ui text-[0.82rem] text-text-muted">
+            Choose an audio style for this research report.
+          </Dialog.Description>
+
+          <div className="mt-section flex flex-col gap-inline">
+            {/* Podcast style */}
+            <button
+              type="button"
+              onClick={() => onChoose("podcast")}
+              className={cn(
+                "flex items-start gap-inline rounded-card border border-hairline p-inline",
+                "font-ui text-[0.85rem] text-text-muted transition-colors text-left",
+                "hover:border-accent hover:text-accent",
+              )}
+            >
+              <Radio className="mt-px size-4 shrink-0 text-accent" aria-hidden />
+              <div className="flex-1">
+                <div className="flex items-center gap-hair font-medium text-text">
+                  Podcast style
+                  <span className="rounded border border-accent/40 bg-accent/10 px-[0.3rem] py-px font-ui text-[0.65rem] font-semibold uppercase tracking-wide text-accent">
+                    alpha
+                  </span>
+                </div>
+                <div className="text-[0.74rem] text-text-faint">
+                  Two hosts discuss the key findings in a conversational back-and-forth.
+                </div>
+              </div>
+            </button>
+
+            {/* Single speaker */}
+            <button
+              type="button"
+              onClick={() => onChoose("single")}
+              className={cn(
+                "flex items-start gap-inline rounded-card border border-hairline p-inline",
+                "font-ui text-[0.85rem] text-text-muted transition-colors text-left",
+                "hover:border-accent hover:text-accent",
+              )}
+            >
+              <Mic className="mt-px size-4 shrink-0 text-accent" aria-hidden />
+              <div className="flex-1">
+                <div className="font-medium text-text">Single speaker</div>
+                <div className="text-[0.74rem] text-text-faint">
+                  An honest walkthrough — covers the findings, discusses gaps, and gives a
+                  balanced breakdown. Uses the Host A voice from Settings.
+                </div>
+              </div>
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 // ── Audio section ─────────────────────────────────────────────────────────────
 
 interface AudioSectionProps {
@@ -347,44 +445,91 @@ interface AudioSectionProps {
 
 function AudioSection({ cid }: AudioSectionProps) {
   const [audio, setAudio] = useState<AudioState>({ status: "idle" });
+  const [modeOpen, setModeOpen] = useState(false);
 
-  const generate = useCallback(async () => {
-    setAudio({ status: "generating", progress: 0 });
-    try {
-      const { mp3_url } = await requestReportAudio(cid);
-      // The endpoint returns an agent-server-relative URL; prefix the agent base
-      // so the <audio> element + Export fetch the right origin.
-      setAudio({ status: "done", audioUrl: `${agentHttpBase()}${mp3_url}` });
-    } catch (e: unknown) {
-      const reason = e instanceof Error ? e.message : String(e);
-      setAudio({ status: "unavailable", reason });
-    }
-  }, [cid]);
+  // Called after the user picks a mode in the dialog.
+  // Calls the endpoint directly (not via requestReportAudio from deepResearch.ts)
+  // so we can thread the ?mode= query param without editing that file (WALK-21).
+  const generate = useCallback(
+    async (mode: AudioMode) => {
+      setModeOpen(false);
+      setAudio({ status: "generating" });
+      try {
+        const res = await fetch(
+          `${agentHttpBase()}/conversations/${cid}/report/audio?mode=${mode}`,
+          { method: "POST" },
+        );
+        if (!res.ok) {
+          let reason = `${res.status}`;
+          try {
+            const body = (await res.json()) as { detail?: { reason?: string } | string };
+            const detail = body?.detail;
+            if (typeof detail === "object" && detail !== null) {
+              reason = detail.reason ?? reason;
+            } else if (typeof detail === "string") {
+              reason = detail;
+            }
+          } catch {
+            /* opaque */
+          }
+          if (reason === "tts_disabled") {
+            throw new Error(
+              "Audio overview is disabled in Settings → Audio — enable it to generate.",
+            );
+          }
+          throw new Error(`Audio overview failed: ${reason}`);
+        }
+        const data = (await res.json()) as { mp3_url: string };
+        // Prefix the agent-server base so the AudioPlayer fetches from the right origin.
+        setAudio({ status: "done", audioUrl: `${agentHttpBase()}${data.mp3_url}` });
+      } catch (e: unknown) {
+        const reason = e instanceof Error ? e.message : String(e);
+        setAudio({ status: "unavailable", reason });
+      }
+    },
+    [cid],
+  );
 
   const reset = useCallback(() => setAudio({ status: "idle" }), []);
 
   if (audio.status === "idle") {
     return (
-      <button type="button" onClick={generate} className={CTRL_BTN}>
-        <Headphones className="size-3.5" aria-hidden />
-        Audio Overview
-      </button>
+      <>
+        <button
+          type="button"
+          onClick={() => setModeOpen(true)}
+          className={CTRL_BTN}
+        >
+          <Headphones className="size-3.5" aria-hidden />
+          Audio Overview
+        </button>
+        <AudioModeDialog
+          open={modeOpen}
+          onOpenChange={setModeOpen}
+          onChoose={generate}
+        />
+      </>
     );
   }
 
   if (audio.status === "generating") {
     return (
-      <div className="flex items-center gap-hair">
-        <Loader2 className="size-3.5 animate-spin text-text-faint" aria-hidden />
-        <span className="font-ui text-[0.78rem] text-text-muted">
-          Generating audio{audio.progress > 0 ? ` ${audio.progress}%` : "…"}
+      <div className="flex flex-col gap-hair">
+        <div className="flex items-center gap-hair">
+          <Loader2 className="size-3.5 animate-spin text-text-faint" aria-hidden />
+          <span className="font-ui text-[0.78rem] text-text-muted">Generating audio…</span>
+        </div>
+        {/* WALK-13 / D1: static notice so users know why first-run is slow */}
+        <span className="font-ui text-[0.73rem] text-text-faint">
+          Downloading voice model (~300 MB, first run only) if needed — this may take a
+          minute.
         </span>
       </div>
     );
   }
 
   if (audio.status === "done") {
-    // Real Play + Export affordances — gated on a real Blob, never a fake.
+    // Real play + export affordances — gated on a real audio URL, never a fake.
     const downloadMp3 = () => {
       const a = document.createElement("a");
       a.href = audio.audioUrl;
@@ -395,14 +540,15 @@ function AudioSection({ cid }: AudioSectionProps) {
     };
 
     return (
-      <div className="flex items-center gap-inline">
-        <audio src={audio.audioUrl} controls className="h-8 max-w-[16rem]" />
+      <div className="flex flex-wrap items-center gap-inline">
+        {/* WALK-14 / D2: custom AudioPlayer instead of native <audio controls> */}
+        <AudioPlayer src={audio.audioUrl} className="max-w-[18rem] flex-1" />
         <button type="button" onClick={downloadMp3} className={CTRL_BTN}>
           <ArrowDown className="size-3.5" aria-hidden />
           Export MP3
         </button>
         <button type="button" onClick={reset} className={CTRL_BTN}>
-          <Play className="size-3.5" aria-hidden />
+          <Headphones className="size-3.5" aria-hidden />
           Regenerate
         </button>
       </div>
@@ -426,9 +572,6 @@ function AudioSection({ cid }: AudioSectionProps) {
           Try again
         </button>
       </div>
-      {/* fix-c #7: the audio endpoint is real now — the previous "(stub: …)"
-          note was stale and dishonest. The typed reason above is the honest
-          signal; no second line needed. */}
     </div>
   );
 }

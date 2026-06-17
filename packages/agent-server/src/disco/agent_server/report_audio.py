@@ -201,11 +201,17 @@ async def generate_report_audio(
     *,
     tts_settings: Any,
     out_dir: Path,
+    mode: str = "podcast",
     resolve_key: Callable[[str | None], str | None] | None = None,
 ) -> tuple[Path, Path]:
     """Run the audio-overview pipeline for `report` and write the artifacts into
     `out_dir` (one cid-scoped subdir, created on demand).  Returns
     ``(mp3_path, transcript_path)``.
+
+    ``mode`` is ``"podcast"`` (default — two-host dialogue) or ``"single"``
+    (single-voice honest walkthrough).  The two modes write **different cache
+    files** so they never collide on the same conversation:
+    ``audio_overview_podcast.mp3`` and ``audio_overview_single.mp3``.
 
     Honors `tts_settings.enabled` (fail-soft with a clear message via
     :class:`TtsDisabled`).  Backend / LLM / synthesis failures raise one of
@@ -220,9 +226,14 @@ async def generate_report_audio(
     if not tts_settings.enabled:
         raise TtsDisabled("Audio overview is disabled in Settings → Audio.")
 
+    if mode not in ("podcast", "single"):
+        raise ValueError(f"Unknown audio mode {mode!r}; expected 'podcast' or 'single'.")
+
     out_dir.mkdir(parents=True, exist_ok=True)
-    mp3_path = out_dir / "audio_overview.mp3"
-    transcript_path = out_dir / "audio_overview.md"
+    # Mode-aware filenames prevent cache collision when both modes are requested
+    # for the same conversation (WALK-21 / D3).
+    mp3_path = out_dir / f"audio_overview_{mode}.mp3"
+    transcript_path = out_dir / f"audio_overview_{mode}.md"
 
     # If a previous run for this conversation already wrote both files, hand
     # them back verbatim.  The pipeline is deterministic given the report, the
@@ -246,19 +257,26 @@ async def generate_report_audio(
 
     # --- Step 1: turn-script ------------------------------------------------
     overview_text = report_to_overview_text(report)
+    # Select validator based on mode: single-speaker relaxes the ≥2-turns rule
+    # and coerces any stray 'B' speakers to 'A'.
+    _validate = (
+        audio_overview._validate_turn_script_single
+        if mode == "single"
+        else audio_overview._validate_turn_script
+    )
     try:
         raw_response = await _authenticated_call_llm(
-            audio_overview._build_llm_payload(overview_text), LLM_URL
+            audio_overview._build_llm_payload(overview_text, mode=mode), LLM_URL
         )
     except Exception as e:
         raise TurnScriptError(f"LLM call failed while generating turn-script: {e}") from e
 
     raw_json = audio_overview._extract_json(raw_response)
-    turns, error = audio_overview._validate_turn_script(raw_json)
+    turns, error = _validate(raw_json)
 
     # One retry on malformed output (mirrors the tool).
     if error is not None:
-        retry_payload = audio_overview._build_llm_payload(overview_text)
+        retry_payload = audio_overview._build_llm_payload(overview_text, mode=mode)
         retry_payload["messages"].append({"role": "assistant", "content": raw_response})
         retry_payload["messages"].append(
             {
@@ -279,7 +297,7 @@ async def generate_report_audio(
             ) from e
 
         raw_json2 = audio_overview._extract_json(raw_response2)
-        turns, error2 = audio_overview._validate_turn_script(raw_json2)
+        turns, error2 = _validate(raw_json2)
         if error2 is not None:
             raise TurnScriptError(
                 f"Turn-script validation failed after retry. First: {error}; retry: {error2}"
@@ -330,18 +348,32 @@ async def generate_report_audio(
     mixed_mp3 = encode_mp3(mixed_pcm, sample_rate=audio_overview.TTS_SAMPLE_RATE)
 
     # --- Step 4: build transcript -------------------------------------------
-    transcript_lines: list[str] = [
-        "# Audio Overview Transcript",
-        "",
-        f"Query: {report.query}",
-        f"Voices: Host A = {voice_a}, Host B = {voice_b}",
-        f"Turns: {len(turns)}",
-        "",
-    ]
-    for turn in turns:
-        label = "Host A" if turn.speaker == "A" else "Host B"
-        transcript_lines.append(f"**{label}:** {turn.text}")
-        transcript_lines.append("")
+    if mode == "single":
+        # Single-speaker: no "Host A/B" labels — just the spoken text.
+        transcript_lines: list[str] = [
+            "# Audio Overview Transcript",
+            "",
+            f"Query: {report.query}",
+            f"Voice: {voice_a}",
+            f"Turns: {len(turns)}",
+            "",
+        ]
+        for turn in turns:
+            transcript_lines.append(turn.text)
+            transcript_lines.append("")
+    else:
+        transcript_lines = [
+            "# Audio Overview Transcript",
+            "",
+            f"Query: {report.query}",
+            f"Voices: Host A = {voice_a}, Host B = {voice_b}",
+            f"Turns: {len(turns)}",
+            "",
+        ]
+        for turn in turns:
+            label = "Host A" if turn.speaker == "A" else "Host B"
+            transcript_lines.append(f"**{label}:** {turn.text}")
+            transcript_lines.append("")
     transcript_text = "\n".join(transcript_lines)
 
     # --- Step 5: write to the cid-scoped cache dir --------------------------

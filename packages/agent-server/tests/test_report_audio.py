@@ -360,7 +360,7 @@ def test_get_endpoint_jail_rejects_traversal(
 
 def test_get_endpoint_404_for_missing_cid(client: TestClient) -> None:
     """No cached audio for a fresh cid → 404."""
-    r = client.get("/conversations/conv_no_audio/report/audio/audio_overview.mp3")
+    r = client.get("/conversations/conv_no_audio/report/audio/audio_overview_podcast.mp3")
     assert r.status_code == 404
 
 
@@ -372,3 +372,167 @@ def test_report_to_overview_text_strips_citations() -> None:
     assert "Query:" in text
     assert "African Swallow" in text
     assert "Executive summary" in text
+
+
+# ---- WALK-21 / D3: mode-aware cache + single-speaker tests ------------------
+
+
+def test_mode_aware_cache_key_no_collision(
+    configure_tts, tts_enabled, tmp_path
+) -> None:
+    """Podcast and single modes write DIFFERENT cache files in the same out_dir.
+
+    This prevents the two modes from colliding when both are requested for the
+    same conversation (WALK-21 / D3 critical cache-collision fix)."""
+    configure_tts(tts_enabled)
+    out_dir = tmp_path / "conv_modes" / "audio"
+
+    # Patch the LLM for single mode (all-A script).
+    _SINGLE_SCRIPT = """[
+      {"speaker": "A", "text": "Here is an honest overview of the research."},
+      {"speaker": "A", "text": "The main finding is that African swallows are faster."}
+    ]"""
+
+    from disco.tools.builtin import audio_overview as _ao
+
+    original_llm = _ao._call_llm  # noqa: SLF001
+
+    # Must be named '_fake_llm' so _authenticated_call_llm's test-detection check passes.
+    async def _fake_llm(payload: dict, llm_url: str) -> str:  # noqa: ARG001
+        content = payload["messages"][0]["content"]
+        # Detect single mode by presence of the single-speaker prompt marker.
+        if "narrator" in content.lower() or "single-voice" in content.lower():
+            return _SINGLE_SCRIPT
+        return _GOOD_TURN_SCRIPT
+
+    import asyncio
+
+    _ao._call_llm = _fake_llm  # type: ignore[assignment]
+    try:
+        mp3_podcast, tr_podcast = asyncio.run(
+            report_audio_mod.generate_report_audio(
+                _make_report(), tts_settings=tts_enabled, out_dir=out_dir, mode="podcast"
+            )
+        )
+        mp3_single, tr_single = asyncio.run(
+            report_audio_mod.generate_report_audio(
+                _make_report(), tts_settings=tts_enabled, out_dir=out_dir, mode="single"
+            )
+        )
+    finally:
+        _ao._call_llm = original_llm  # type: ignore[assignment]
+
+    # Two distinct filenames → no collision.
+    assert mp3_podcast != mp3_single
+    assert tr_podcast != tr_single
+    assert "podcast" in mp3_podcast.name
+    assert "single" in mp3_single.name
+    # Both files exist independently.
+    assert mp3_podcast.exists()
+    assert mp3_single.exists()
+
+
+def test_single_mode_transcript_no_host_labels(
+    configure_tts, tts_enabled, tmp_path
+) -> None:
+    """Single-mode transcript must NOT emit 'Host A' / 'Host B' labels (WALK-21 / D3).
+    The voice is just spoken text — no dialogue attribution."""
+    configure_tts(tts_enabled)
+    out_dir = tmp_path / "conv_single_tr" / "audio"
+
+    _SINGLE_ONLY_SCRIPT = """[
+      {"speaker": "A", "text": "Welcome to this research breakdown."},
+      {"speaker": "A", "text": "The evidence points to a nuanced picture."}
+    ]"""
+
+    from disco.tools.builtin import audio_overview as _ao
+
+    original_llm = _ao._call_llm  # noqa: SLF001
+
+    # Must be named '_fake_llm' so _authenticated_call_llm's test-detection check passes.
+    async def _fake_llm(payload: dict, llm_url: str) -> str:  # noqa: ARG001
+        return _SINGLE_ONLY_SCRIPT
+
+    import asyncio
+
+    _ao._call_llm = _fake_llm  # type: ignore[assignment]
+    try:
+        _, tr_path = asyncio.run(
+            report_audio_mod.generate_report_audio(
+                _make_report(), tts_settings=tts_enabled, out_dir=out_dir, mode="single"
+            )
+        )
+    finally:
+        _ao._call_llm = original_llm  # type: ignore[assignment]
+
+    tr = tr_path.read_text(encoding="utf-8")
+    assert "Host A" not in tr and "Host B" not in tr, (
+        "Single-mode transcript must not emit 'Host A'/'Host B' speaker labels"
+    )
+    assert "Audio Overview Transcript" in tr
+    assert "Welcome to this research breakdown" in tr
+
+
+def test_endpoint_400_for_invalid_mode(
+    client: TestClient, store: SqliteEventStore, configure_tts, tts_enabled
+) -> None:
+    """Unknown mode → 400 (fail-fast, not a silent default)."""
+    configure_tts(tts_enabled)
+    cid = _create_conv(client)
+    _seed_report(store, cid)
+
+    r = client.post(f"/conversations/{cid}/report/audio?mode=bogus")
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert detail["reason"] == "invalid_mode"
+
+
+def test_endpoint_single_mode_200(
+    client: TestClient, store: SqliteEventStore, configure_tts, tts_enabled
+) -> None:
+    """Single mode returns 200 and writes a separate cache file (not the podcast file)."""
+    configure_tts(tts_enabled)
+    cid = _create_conv(client)
+    _seed_report(store, cid)
+
+    r = client.post(f"/conversations/{cid}/report/audio?mode=single")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True
+    assert "single" in body["mp3_url"], (
+        f"Expected 'single' in mp3_url; got {body['mp3_url']!r}"
+    )
+
+
+# ---- WALK-13 / D1: reporthook test -----------------------------------------
+
+
+def test_fetch_reporthook_logs_progress(tmp_path, monkeypatch) -> None:
+    """_fetch must pass a reporthook to urlretrieve that logs percent progress."""
+    from disco.agent_server.tts_local import _fetch
+
+    captured_hooks: list = []
+
+    def _mock_urlretrieve(url: str, dest: str, reporthook=None, data=None) -> tuple:  # noqa: ANN001
+        captured_hooks.append(reporthook)
+        # Simulate a 100-byte download in two 50-byte blocks.
+        if reporthook is not None:
+            reporthook(1, 50, 100)  # 50 %
+            reporthook(2, 50, 100)  # 100 %
+        # Write a dummy file so rename works.
+        import pathlib
+        pathlib.Path(dest).write_bytes(b"fake")
+        return (dest, {})
+
+    import hashlib
+
+    # SHA256 of the dummy "fake" bytes we'll write.
+    sha = hashlib.sha256(b"fake").hexdigest()
+
+    monkeypatch.setattr("urllib.request.urlretrieve", _mock_urlretrieve)
+
+    dest = tmp_path / "model.onnx"
+    _fetch("https://example.com/model.onnx", dest, sha)
+
+    assert len(captured_hooks) == 1, "urlretrieve must be called exactly once"
+    assert captured_hooks[0] is not None, "_fetch must pass a reporthook (not None)"

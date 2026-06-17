@@ -43,13 +43,19 @@ export interface DeepResearchSession {
 
 interface RawState {
   status: ConversationStatus;
+  /** Tracks the current follow-up phase without overwriting the main status.
+   *  "follow_up" = a follow-up answer is being generated (loop re-entered);
+   *  "follow_up_complete" = the last follow-up finished;
+   *  null = no follow-up in flight (plan-run or idle). */
+  followUpStatus: "follow_up" | "follow_up_complete" | null;
   events: AgentEvent[];
   pendingPlanId: string | null;
   error: string | null;
 }
 
-const initial: RawState = {
+export const initial: RawState = {
   status: "IDLE",
+  followUpStatus: null,
   events: [],
   pendingPlanId: null,
   error: null,
@@ -63,9 +69,10 @@ function upsert(events: AgentEvent[], event: AgentEvent): AgentEvent[] {
   return next;
 }
 
-type Action = { type: "reset" } | { type: "frame"; frame: WSServerFrame };
+export type Action = { type: "reset" } | { type: "frame"; frame: WSServerFrame };
 
-function reducer(state: RawState, action: Action): RawState {
+/** Pure reducer — exported for unit tests. */
+export function reducer(state: RawState, action: Action): RawState {
   if (action.type === "reset") return initial;
   const f = action.frame;
   if (f.type === "state") {
@@ -78,14 +85,23 @@ function reducer(state: RawState, action: Action): RawState {
   if (f.type === "event") {
     const events = upsert(state.events, f.event);
     if (f.event.kind === "status") {
+      const detail = f.event.detail ?? null;
+      // Follow-up status events MUST NOT overwrite the main conversation status.
+      // If they did, re-entering RUNNING for a follow-up re-spins DeepProgressStrip
+      // (the original-plan loader flashes again). Track them in a separate field
+      // so the plan-progress UI can stay calm while the follow-up answer generates.
+      if (detail === "follow_up" || detail === "follow_up_complete") {
+        return { ...state, events, followUpStatus: detail };
+      }
       const status = f.event.status;
       return {
         ...state,
         events,
         status,
+        followUpStatus: null,
         pendingPlanId:
           status === "AWAITING_PLAN_APPROVAL"
-            ? (f.event.detail ?? state.pendingPlanId)
+            ? (detail ?? state.pendingPlanId)
             : null,
       };
     }
@@ -107,6 +123,10 @@ function reducer(state: RawState, action: Action): RawState {
 
 export interface DeepResearchStream {
   status: ConversationStatus;
+  /** Separate from `status` so the plan-progress UI can stay calm while a
+   *  follow-up answer is generating. null when idle; "follow_up" during
+   *  generation; "follow_up_complete" after the answer lands. */
+  followUpStatus: "follow_up" | "follow_up_complete" | null;
   events: AgentEvent[];
   error: string | null;
   /** The proposed plan (sub-questions). Null until decompose completes. */
@@ -143,7 +163,13 @@ export function useDeepResearchStream(
   const handle = useRef<AgentHandle | null>(null);
 
   useEffect(() => {
-    if (!session) return;
+    if (!session) {
+      // Dispatch reset so derived state (followUps, plan, report …) clears
+      // immediately when the session goes away (e.g. navigate away → back).
+      // Without this the reducer held stale events from the previous run.
+      dispatch({ type: "reset" });
+      return;
+    }
     dispatch({ type: "reset" });
     const h = subscribeConversation(session.cid, (frame) =>
       dispatch({ type: "frame", frame }),
@@ -192,6 +218,7 @@ export function useDeepResearchStream(
 
   return {
     status: state.status,
+    followUpStatus: state.followUpStatus,
     events: state.events,
     error: state.error,
     plan,

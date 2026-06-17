@@ -60,16 +60,16 @@ class _ResolvedTts:
     remote_model: str
 
 
-_TURN_SCRIPT_PROMPT = """You are a podcast scriptwriter. Given a research report, write a short 
-two-host audio script covering the key insights. Host A is the lead analyst; 
+_TURN_SCRIPT_PROMPT = """You are a podcast scriptwriter. Given a research report, write a short
+two-host audio script covering the key insights. Host A is the lead analyst;
 Host B is the co-host who asks follow-ups and adds colour.
 
 Output ONLY a JSON array of turns. Each turn is an object with:
   "speaker": "A" or "B"
   "text": one or two sentences (natural spoken language, no markdown)
 
-Keep turns conversational. ~12-20 turns total. Each turn's text should be 
-~100-200 tokens (a comfortable spoken sentence or two). Start with Host A 
+Keep turns conversational. ~12-20 turns total. Each turn's text should be
+~100-200 tokens (a comfortable spoken sentence or two). Start with Host A
 introducing the topic.
 
 Report to convert:
@@ -77,16 +77,34 @@ Report to convert:
 
 Output ONLY valid JSON array, nothing else:"""
 
+_SINGLE_SCRIPT_PROMPT = """You are an audio narrator. Given a research report, write an honest,
+thorough single-voice walkthrough of the key findings.
+Cover the main insights, openly discuss any gaps or tensions in the sources,
+and give the listener a balanced, honest assessment of what the research shows.
 
-def _build_llm_payload(report_text: str) -> dict:
+Output ONLY a JSON array of turns. Each turn is an object with:
+  "speaker": "A"
+  "text": two to three sentences (natural spoken language, no markdown)
+
+Keep it informative and conversational. ~10-16 turns total. Each turn should be
+~100-200 tokens. Start with a brief introduction to the topic.
+
+Report to narrate:
+{report_text}
+
+Output ONLY valid JSON array, nothing else:"""
+
+
+def _build_llm_payload(report_text: str, mode: str = "podcast") -> dict:
     from disco.agent_server.audio_config import LLM_MODEL
 
+    prompt = _SINGLE_SCRIPT_PROMPT if mode == "single" else _TURN_SCRIPT_PROMPT
     return {
         "model": LLM_MODEL,
         "messages": [
             {
                 "role": "user",
-                "content": _TURN_SCRIPT_PROMPT.format(report_text=report_text),
+                "content": prompt.format(report_text=report_text),
             }
         ],
         "temperature": 0.7,
@@ -161,6 +179,41 @@ def _validate_turn_script(raw_json: str) -> tuple[list[Turn] | None, str | None]
         if not isinstance(text, str) or not text.strip():
             return None, f"Turn {i}: text must be a non-empty string"
         turns.append(Turn(speaker=speaker, text=text.strip()))
+
+    return turns, None
+
+
+def _validate_turn_script_single(raw_json: str) -> tuple[list[Turn] | None, str | None]:
+    """Validate a single-speaker turn script (all speakers must be 'A').
+
+    Relaxed rules vs :func:`_validate_turn_script`:
+    - At least **1** turn (not 2) — a single-voice monologue may be terse.
+    - Speaker must be ``'A'``; any ``'B'`` that slips through the prompt is
+      silently coerced to ``'A'`` so the whole overview uses ``voice_a``.
+    """
+    try:
+        data = json.loads(raw_json)
+    except json.JSONDecodeError as e:
+        return None, f"Invalid JSON: {e}"
+
+    if not isinstance(data, list):
+        return None, "Turn script must be a JSON array of turns"
+
+    if len(data) < 1:
+        return None, "Turn script must have at least 1 turn"
+
+    turns: list[Turn] = []
+    for i, item in enumerate(data):
+        if not isinstance(item, dict):
+            return None, f"Turn {i} is not an object"
+        speaker = item.get("speaker", "A")
+        if speaker not in ("A", "B"):
+            return None, f"Turn {i}: speaker must be 'A' or 'B', got {speaker!r}"
+        text = item.get("text", "")
+        if not isinstance(text, str) or not text.strip():
+            return None, f"Turn {i}: text must be a non-empty string"
+        # Coerce any 'B' to 'A' — single-speaker always maps to voice_a.
+        turns.append(Turn(speaker="A", text=text.strip()))
 
     return turns, None
 

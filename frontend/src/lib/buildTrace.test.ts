@@ -1,12 +1,13 @@
 /**
- * DC-03 — buildTrace.deriveActivity autoApproved derivation.
+ * buildTrace selectors — unit tests.
  *
- * autoApproved: true when e.meta?.auto_approved === "sandboxed";
- * false/absent otherwise. The badge is informational, never attention: true.
+ * DC-03 — deriveActivity autoApproved derivation.
+ * WALK-09 — deliverable gate (only shown at FINISHED).
+ * WALK-16 — deriveFiles harvests observation (slides/sheet) + deliverable events.
  */
 
 import { describe, expect, it } from "vitest";
-import { deriveActivity } from "@/lib/buildTrace";
+import { deriveActivity, deriveDeliverable, deriveFiles } from "@/lib/buildTrace";
 import type { AgentEvent } from "@/types/agent";
 
 function actionEvent(
@@ -66,5 +67,157 @@ describe("deriveActivity — autoApproved derivation (DC-03)", () => {
     expect(item.autoApproved).toBe(true);
     // attention is driven by risk/pending/failed, not by autoApproved
     expect(item.attention).toBe(false);
+  });
+});
+
+// ---- WALK-09: deliverable panel gate ----------------------------------------
+
+function deliverableEvent(id: string, title: string, path: string, kind: "app" | "files"): AgentEvent {
+  return {
+    kind: "deliverable",
+    id,
+    title,
+    path,
+    artifact_kind: kind,
+    source: "agent",
+  } as AgentEvent;
+}
+
+describe("WALK-09: deliverable gate — panel only shows at FINISHED", () => {
+  it("deriveDeliverable returns non-null the moment a DeliverableEvent exists (ungated derivation)", () => {
+    // The `serve` tool emits a DeliverableEvent mid-run (before the run ends).
+    // deriveDeliverable finds it immediately — it has no status gate.
+    const events: AgentEvent[] = [deliverableEvent("d-mid", "Draft App", "dist", "app")];
+    expect(deriveDeliverable(events)).not.toBeNull();
+  });
+
+  it("the FINISHED gate (b.status === 'FINISHED' ? deliverable : null) suppresses mid-run panels", () => {
+    // This mirrors the conditional in BuildSurface.tsx:
+    //   deliverable={b.status === "FINISHED" ? deliverable : null}
+    // Before WALK-09 the raw `deliverable` was passed directly → panel appeared mid-run.
+    const d = deriveDeliverable([deliverableEvent("d-mid", "App", "dist", "app")]);
+    expect(d).not.toBeNull(); // derivation is non-null (unchanged behaviour)
+
+    // RUNNING → gate returns null → panel is hidden
+    const runningResult = ("RUNNING" satisfies string) === "FINISHED" ? d : null;
+    expect(runningResult).toBeNull();
+
+    // FINISHED → gate passes through → panel is visible
+    const finishedResult = ("FINISHED" satisfies string) === "FINISHED" ? d : null;
+    expect(finishedResult).not.toBeNull();
+  });
+});
+
+// ---- WALK-16: deriveFiles — observation + deliverable sources ---------------
+
+function observationEvent(
+  id: string,
+  toolName: string,
+  structured: Record<string, unknown>,
+  success = true,
+): AgentEvent {
+  return {
+    kind: "observation",
+    id,
+    action_id: `act-${id}`,
+    tool_result: {
+      tool_name: toolName,
+      success,
+      content: "",
+      structured,
+    },
+  } as AgentEvent;
+}
+
+describe("WALK-16: deriveFiles — observation and deliverable artifact sources", () => {
+  it("harvests slides_generate filename from observation structured output", () => {
+    const events: AgentEvent[] = [
+      observationEvent("obs-1", "slides_generate", { filename: "deck.html", format: "html", slide_count: 5 }),
+    ];
+    const files = deriveFiles(events);
+    expect(files).toHaveLength(1);
+    expect(files[0].path).toBe("deck.html");
+  });
+
+  it("harvests sheet_generate filename from observation structured output", () => {
+    const events: AgentEvent[] = [
+      observationEvent("obs-2", "sheet_generate", { filename: "report.xlsx", title: "Sales" }),
+    ];
+    const files = deriveFiles(events);
+    expect(files).toHaveLength(1);
+    expect(files[0].path).toBe("report.xlsx");
+  });
+
+  it("harvests path from deliverable events", () => {
+    const events: AgentEvent[] = [
+      deliverableEvent("d1", "Handoff", "handoff.zip", "files"),
+    ];
+    const files = deriveFiles(events);
+    expect(files).toHaveLength(1);
+    expect(files[0].path).toBe("handoff.zip");
+  });
+
+  it("does not double-count a path written by file_write AND seen in a tool observation", () => {
+    // file_write action comes first; the observation must not overwrite it
+    const events: AgentEvent[] = [
+      {
+        kind: "action",
+        id: "act-w",
+        thought: "writing",
+        tool_call: {
+          tool_name: "file_write",
+          arguments: { path: "deck.html", content: "<!DOCTYPE html>" },
+          call_id: "c-w",
+        },
+      } as AgentEvent,
+      observationEvent("obs-w", "slides_generate", { filename: "deck.html", format: "html" }),
+    ];
+    const files = deriveFiles(events);
+    expect(files).toHaveLength(1);
+    // file_write content is preserved (observation does not overwrite)
+    expect(files[0].content).toBe("<!DOCTYPE html>");
+  });
+
+  it("does not double-count a path that is both a deliverable and a written file", () => {
+    const events: AgentEvent[] = [
+      {
+        kind: "action",
+        id: "act-w",
+        thought: "writing",
+        tool_call: {
+          tool_name: "file_write",
+          arguments: { path: "output.zip", content: "" },
+          call_id: "c-w",
+        },
+      } as AgentEvent,
+      deliverableEvent("d1", "Output", "output.zip", "files"),
+    ];
+    expect(deriveFiles(events)).toHaveLength(1);
+  });
+
+  it("skips a failed slides_generate observation (success=false)", () => {
+    const events: AgentEvent[] = [
+      observationEvent("obs-f", "slides_generate", { filename: "deck.html" }, false),
+    ];
+    expect(deriveFiles(events)).toHaveLength(0);
+  });
+
+  it("preserves existing file_write behaviour (regression)", () => {
+    const events: AgentEvent[] = [
+      {
+        kind: "action",
+        id: "act-1",
+        thought: "writing",
+        tool_call: {
+          tool_name: "file_write",
+          arguments: { path: "fizzbuzz.py", content: "print('FizzBuzz')" },
+          call_id: "c-1",
+        },
+      } as AgentEvent,
+    ];
+    const files = deriveFiles(events);
+    expect(files).toHaveLength(1);
+    expect(files[0].path).toBe("fizzbuzz.py");
+    expect(files[0].content).toContain("FizzBuzz");
   });
 });

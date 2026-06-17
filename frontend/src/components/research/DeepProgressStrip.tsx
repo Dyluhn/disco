@@ -35,9 +35,22 @@ interface Props {
   trace: ActivityItem[];
   stats: DeepStats;
   status: ConversationStatus;
+  /** Separate follow-up phase signal. When "follow_up", a follow-up answer is
+   *  generating and the PLAN-RUN loaders must stay calm. */
+  followUpStatus: "follow_up" | "follow_up_complete" | null;
 }
 
-function StatsRow({ stats, status }: { stats: DeepStats; status: ConversationStatus }) {
+function StatsRow({
+  stats,
+  status,
+  planActive,
+}: {
+  stats: DeepStats;
+  status: ConversationStatus;
+  /** True only when the PLAN run is actively working — false during a follow-up
+   *  so the "Working" spinner doesn't re-flash on the plan strip. */
+  planActive: boolean;
+}) {
   const isFinished = status === "FINISHED";
   return (
     <div className="flex flex-wrap items-center gap-body font-mono text-[0.78rem] text-text-muted">
@@ -62,7 +75,7 @@ function StatsRow({ stats, status }: { stats: DeepStats; status: ConversationSta
           </span>
         </>
       )}
-      {status === "RUNNING" && (
+      {planActive && (
         <>
           <span className="text-text-faint">·</span>
           <span className="flex items-center gap-hair text-accent">
@@ -77,8 +90,15 @@ function StatsRow({ stats, status }: { stats: DeepStats; status: ConversationSta
 
 /** The "now" line — what the engine is doing RIGHT NOW, so a long quiet stretch
  * (a 30-60s section write on a local model) reads as work, not a hang. */
-function Heartbeat({ stats, status }: { stats: DeepStats; status: ConversationStatus }) {
-  if (status !== "RUNNING") return null;
+function Heartbeat({
+  stats,
+  planActive,
+}: {
+  stats: DeepStats;
+  /** True only during the original plan run — suppressed during follow-up. */
+  planActive: boolean;
+}) {
+  if (!planActive) return null;
   let now: string | null = null;
   if (stats.activeSection) {
     const n = stats.activeSection.index || stats.subquestionsDone + 1;
@@ -108,8 +128,13 @@ function Heartbeat({ stats, status }: { stats: DeepStats; status: ConversationSt
   );
 }
 
-export function DeepProgressStrip({ plan, progress, trace, stats, status }: Props) {
+export function DeepProgressStrip({ plan, progress, trace, stats, status, followUpStatus }: Props) {
   const isFinished = status === "FINISHED" || status === "IDLE";
+  // planActive: the plan run itself is working (not a follow-up answer).
+  // When followUpStatus === "follow_up", the loop re-entered for a follow-up
+  // but the plan-progress strip must stay calm — only the follow-up indicator
+  // (WALK-12, separate lane) shows activity.
+  const planActive = status === "RUNNING" && followUpStatus !== "follow_up";
   const [collapsedManually, setCollapsedManually] = useState(false);
   // when finished, default collapsed unless the user expands; while running,
   // always expanded.
@@ -141,7 +166,7 @@ export function DeepProgressStrip({ plan, progress, trace, stats, status }: Prop
             How it researched
           </span>
           <span className="ml-auto">
-            <StatsRow stats={stats} status={status} />
+            <StatsRow stats={stats} status={status} planActive={planActive} />
           </span>
         </button>
       </section>
@@ -161,11 +186,11 @@ export function DeepProgressStrip({ plan, progress, trace, stats, status }: Prop
             <ChevronDown className="size-3.5" aria-hidden />
           </button>
         )}
-        <StatsRow stats={stats} status={status} />
+        <StatsRow stats={stats} status={status} planActive={planActive} />
       </header>
 
       {/* The heartbeat — what's happening RIGHT NOW + the engine's latest thought. */}
-      <Heartbeat stats={stats} status={status} />
+      <Heartbeat stats={stats} planActive={planActive} />
 
       {/* Plan checklist — reuses Build's PlanPanel in read-only mode. */}
       {planForPanel && (

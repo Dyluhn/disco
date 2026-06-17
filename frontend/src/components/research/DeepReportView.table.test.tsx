@@ -140,3 +140,98 @@ describe("DeepReportView table rendering", () => {
     expect(screen.queryByText(/\[\[/)).not.toBeInTheDocument();
   });
 });
+
+// ---- WALK-03 (C1): disputed_notes must not leak raw [[id]] ------------------
+
+describe("DeepReportView — WALK-03 disputed_notes citation resolution", () => {
+  it("WALK-03: [[passage_id]] in disputed_notes renders as a citation chip, not raw text", () => {
+    const mockReport: ReportEvent = {
+      id: "r1",
+      kind: "report",
+      seq: 5,
+      query: "test query",
+      summary: null as unknown as string,
+      sections: [
+        {
+          id: "sec1",
+          title: "Section 1",
+          markdown: "Body text.",
+          cited_passage_ids: ["p1"],
+          confidence: "mixed",
+          // A disputed note containing a raw [[id]] citation marker
+          disputed_notes: ["One source argues X [[p1]]."],
+          unsupported_count: 0,
+        },
+      ],
+      passages: [
+        { id: "p1", source_url: "http://example.com", source_title: "Example", text: "T" },
+      ],
+      all_hits: [],
+      unsupported_count: 0,
+      bounded_by: null,
+      depth_tier: "standard_deep",
+    } as any;
+
+    render(
+      <DeepReportView
+        query="test query"
+        summary={null}
+        assembling={[
+          {
+            id: "sec1",
+            title: "Section 1",
+            state: "done",
+            section: mockReport.sections[0],
+          },
+        ]}
+        report={mockReport}
+      />
+    );
+
+    // The "Sources disagree." callout must appear
+    expect(screen.getByRole("note")).toBeInTheDocument();
+    // The raw [[p1]] marker must NOT appear as literal text
+    expect(screen.queryByText(/\[\[p1\]\]/)).not.toBeInTheDocument();
+    // The surrounding prose must still be readable
+    expect(screen.getByText(/One source argues X/)).toBeInTheDocument();
+  });
+
+  it("WALK-03: disputed_notes without [[id]] renders as plain text (no chips)", () => {
+    const mockReport: ReportEvent = {
+      id: "r2",
+      kind: "report",
+      seq: 5,
+      query: "q",
+      summary: null as unknown as string,
+      sections: [
+        {
+          id: "sec1",
+          title: "Section 1",
+          markdown: "Body.",
+          cited_passage_ids: [],
+          confidence: "mixed",
+          disputed_notes: ["Two papers reach opposite conclusions."],
+          unsupported_count: 0,
+        },
+      ],
+      passages: [],
+      all_hits: [],
+      unsupported_count: 0,
+      bounded_by: null,
+      depth_tier: "standard_deep",
+    } as any;
+
+    render(
+      <DeepReportView
+        query="q"
+        summary={null}
+        assembling={[
+          { id: "sec1", title: "Section 1", state: "done", section: mockReport.sections[0] },
+        ]}
+        report={mockReport}
+      />
+    );
+
+    expect(screen.getByText(/Two papers reach opposite conclusions/)).toBeInTheDocument();
+  });
+});

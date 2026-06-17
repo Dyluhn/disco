@@ -233,7 +233,12 @@ export function AudioSection() {
               )}
               <div className="grid grid-cols-2 gap-inline">
                 <label className="flex flex-col gap-hair">
-                  <span className="font-ui text-[0.8rem] text-text">Host A voice</span>
+                  <span className="flex items-baseline gap-hair font-ui text-[0.8rem] text-text">
+                    Host A voice
+                    <span className="font-ui text-[0.72rem] text-text-faint">
+                      · single-speaker default
+                    </span>
+                  </span>
                   <input
                     spellCheck={false}
                     value={voiceA}

@@ -78,12 +78,28 @@ def make_report_router(
         )
 
     @router.post("/conversations/{conversation_id}/report/audio")
-    async def report_audio(conversation_id: str) -> dict:
-        """Generate (or return the cached) two-voice audio overview for the latest
-        Deep Research report on this conversation. Runs the audio pipeline in-process
-        (no sandbox), caching mp3 + transcript per conversation. 404 → no ReportEvent;
-        503 → TTS disabled in Settings; 502 → synth/LLM failure. 200 →
-        {"ok": True, "mp3_url": ..., "transcript_url": ...}."""
+    async def report_audio(
+        conversation_id: str,
+        mode: str = Query("podcast"),
+    ) -> dict:
+        """Generate (or return the cached) audio overview for the latest Deep
+        Research report on this conversation.  Runs the audio pipeline in-process
+        (no sandbox), caching mp3 + transcript per conversation.
+
+        ``mode`` query param: ``podcast`` (default — two-host dialogue) or
+        ``single`` (single-voice honest walkthrough).  The two modes write
+        separate cache files so re-pressing with a different mode generates a
+        fresh artifact instead of colliding (WALK-21 / D3).
+
+        404 → no ReportEvent; 400 → unknown mode; 503 → TTS disabled in
+        Settings; 502 → synth/LLM failure. 200 →
+        ``{"ok": True, "mp3_url": ..., "transcript_url": ...}``."""
+        if mode not in ("podcast", "single"):
+            raise HTTPException(
+                status_code=400,
+                detail={"ok": False, "reason": "invalid_mode", "detail": f"Unknown mode {mode!r}"},
+            )
+
         report: ReportEvent | None = None
         with contextlib.suppress(Exception):
             for e in reversed(await store.get_events(conversation_id)):
@@ -104,6 +120,7 @@ def make_report_router(
                 report,
                 tts_settings=tts,
                 out_dir=out_dir,
+                mode=mode,
                 # Prefer an encrypted-store key for the remote TTS provider; falls
                 # back to the env var by name when the runtime/store isn't wired.
                 resolve_key=runtime._resolve_secret if runtime is not None else None,

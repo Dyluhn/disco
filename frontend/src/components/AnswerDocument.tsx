@@ -1,4 +1,5 @@
 import type { AnswerBlock, GroundedAnswer } from "@/types/grounded";
+import { Markdown } from "@/components/Markdown";
 import { BlockView } from "./blocks";
 
 interface Props {
@@ -38,10 +39,10 @@ export function AnswerDocument({
           </div>
         ))}
         {streamingText !== undefined && (
-          <p className="prose-reading">
-            {streamingText}
+          <div className="prose-reading">
+            <Markdown>{streamingText}</Markdown>
             <span className="ml-px inline-block h-[1.1em] w-[2px] translate-y-[0.15em] animate-pulse bg-accent align-middle" />
-          </p>
+          </div>
         )}
       </article>
 

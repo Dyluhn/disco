@@ -12,7 +12,7 @@ import json
 
 import pytest
 from disco.core.llm import ConfigStore, ModelRole, default_config
-from disco.core.llm.config import ModelEntry
+from disco.core.llm.config import ExtractionSettings, ModelEntry, SearchSettings
 
 
 def _entry(**kw) -> ModelEntry:
@@ -127,3 +127,67 @@ def test_stale_keys_in_overlay_are_dropped_not_crashed(tmp_path):
     base = default_config()
     assert cfg.default_model == base.default_model
     assert cfg.model_for(ModelRole.RAG_ANSWERER) == base.model_for(ModelRole.RAG_ANSWERER)
+
+
+# ---------------------------------------------------------------------------
+# WALK-07 — save_search / save_extraction null base_url on bundled-tier flip
+# ---------------------------------------------------------------------------
+
+
+def test_save_search_ddgs_clears_stale_base_url(tmp_path):
+    """Switching to the bundled ddgs tier must zero out any persisted base_url
+    so a stale searxng LAN address cannot silently re-engage later."""
+    store = _store(tmp_path)
+    # Simulate a prior searxng selection with a LAN URL
+    store.save_search(
+        SearchSettings(provider="searxng", base_url="http://192.168.1.202:8888")
+    )
+    assert store.load().search.base_url == "http://192.168.1.202:8888"
+
+    # Flip to bundled — even if the caller passes the old URL it must be cleared
+    store.save_search(
+        SearchSettings(provider="ddgs", base_url="http://192.168.1.202:8888")
+    )
+    cfg = store.load()
+    assert cfg.search.provider == "ddgs"
+    assert cfg.search.base_url == ""
+
+
+def test_save_search_selfhost_preserves_base_url(tmp_path):
+    """Switching TO searxng (self-host) must keep the supplied base_url intact."""
+    store = _store(tmp_path)
+    store.save_search(
+        SearchSettings(provider="searxng", base_url="http://192.168.1.202:8888")
+    )
+    cfg = store.load()
+    assert cfg.search.provider == "searxng"
+    assert cfg.search.base_url == "http://192.168.1.202:8888"
+
+
+def test_save_extraction_local_clears_stale_base_url(tmp_path):
+    """Switching to the bundled local tier must zero out any persisted base_url
+    so a stale crawl4ai LAN address cannot silently re-engage later."""
+    store = _store(tmp_path)
+    store.save_extraction(
+        ExtractionSettings(provider="crawl4ai", base_url="http://192.168.1.237:11235")
+    )
+    assert store.load().extraction.base_url == "http://192.168.1.237:11235"
+
+    # Flip to bundled — even if the caller passes the old URL it must be cleared
+    store.save_extraction(
+        ExtractionSettings(provider="local", base_url="http://192.168.1.237:11235")
+    )
+    cfg = store.load()
+    assert cfg.extraction.provider == "local"
+    assert cfg.extraction.base_url == ""
+
+
+def test_save_extraction_selfhost_preserves_base_url(tmp_path):
+    """Switching TO crawl4ai (self-host) must keep the supplied base_url intact."""
+    store = _store(tmp_path)
+    store.save_extraction(
+        ExtractionSettings(provider="crawl4ai", base_url="http://192.168.1.237:11235")
+    )
+    cfg = store.load()
+    assert cfg.extraction.provider == "crawl4ai"
+    assert cfg.extraction.base_url == "http://192.168.1.237:11235"

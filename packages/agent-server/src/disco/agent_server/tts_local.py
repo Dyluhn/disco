@@ -58,12 +58,33 @@ def _sha256(path: Path) -> str:
 
 def _fetch(url: str, dest: Path, sha: str) -> None:
     """Download `url` → `dest` on first use and verify its SHA256. A checksum
-    mismatch raises (never caches garbage from a moved/replaced release)."""
+    mismatch raises (never caches garbage from a moved/replaced release).
+
+    Logs progress at 10 % intervals so the server log shows the download is
+    alive — the first-run Kokoro download is ~300 MB and takes 30–90 s on a
+    fast connection (WALK-13 / D1).
+    """
     if dest.exists() and dest.stat().st_size > 0:
         return
-    _LOG.info("TTS: downloading %s → %s (first use)", url, dest)
+    _LOG.info(
+        "TTS: downloading %s → %s (~300 MB, first run only — this may take a minute)",
+        url,
+        dest,
+    )
     tmp = dest.with_suffix(dest.suffix + ".part")
-    urllib.request.urlretrieve(url, tmp)  # noqa: S310 — pinned GitHub release URL
+
+    _last_bucket: list[int] = [-1]  # mutable closure for progress tracking
+
+    def _hook(count: int, block_size: int, total_size: int) -> None:
+        if total_size <= 0:
+            return
+        pct = min(100, count * block_size * 100 // total_size)
+        bucket = (pct // 10) * 10  # log at 0, 10, 20, …, 100 %
+        if bucket != _last_bucket[0]:
+            _last_bucket[0] = bucket
+            _LOG.info("TTS: download %d%% — %s", bucket, dest.name)
+
+    urllib.request.urlretrieve(url, tmp, reporthook=_hook)  # noqa: S310 — pinned GitHub release URL
     got = _sha256(tmp)
     if got != sha:
         tmp.unlink(missing_ok=True)

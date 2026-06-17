@@ -177,7 +177,13 @@ _SECTION_PROMPT = (
     "  - For (c): peer-reviewed measured findings can be stated more "
     "directly. "
     "If a citation comes from a company promoting its own tech, mark it as a "
-    "claim, not a fact.\n\n"
+    "claim, not a fact. "
+    "NEVER refer to a source by its publishing PLATFORM (e.g. 'a Medium post', "
+    "'a Reddit thread', 'a YouTube video', 'a Substack article'). Describe "
+    "what the source IS instead: 'an independent analyst note', 'an industry "
+    "report', 'a community discussion', 'a primary vendor statement'. The "
+    "platform name is irrelevant noise — the content type and provenance are "
+    "what matter.\n\n"
     "3. MEASURED, ANALYTICAL REGISTER. Cut these words and any like them: "
     "'transformative,' 'revolutionary,' 'poised to revolutionize,' 'pivotal,' "
     "'game-changing,' 'breakthrough,' 'paradigm shift,' 'cutting-edge.' "
@@ -249,15 +255,33 @@ def _confidence_from_claims(claims: list[dict]) -> tuple[_Confidence, int]:
 def _extract_disputed_notes(markdown: str) -> list[str]:
     """The section prompt asks the model to call out conflicts. Extract those
     sentences as `disputed_notes` so the UI can surface them as a callout
-    above the section body. Pattern: sentences mentioning 'disagree',
-    'conflict', 'dispute', 'contradict', 'however' near 'source', etc."""
+    above the section body.
+
+    A sentence qualifies only if ALL THREE hold:
+    1. It contains a genuine conflict cue word (disagree / conflict / dispute /
+       contradict / inconsistent / versus).
+    2. It contains at least one [[id]] citation marker — so every surfaced note
+       is grounded in a specific source, not a free-floating hedge.
+    3. It is long enough to carry real content (> 40 chars), filtering out
+       tautologies like "the sources leave important tensions unresolved."
+
+    Dropped: the old `however[, ].+sources?` branch, which matched any hedging
+    sentence ("However, the sources leave important tensions unresolved.") with
+    no citation and no specific conflict — exactly the vacuous notes users
+    complained about."""
     sentences = re.split(r"(?<=[.!?])\s+", markdown)
+    # Anchor at the word START only so inflected forms match:
+    # "contradicts", "conflicting", "disputed", "disagreement" etc. all qualify.
     cue = re.compile(
-        r"\b(disagree|conflict|dispute|contradict|inconsistent|versus|"
-        r"however[, ].+sources?)\b",
+        r"\b(?:disagree|conflict|dispute|contradict|inconsistent|versus)",
         re.IGNORECASE,
     )
-    return [s.strip() for s in sentences if cue.search(s) and len(s) > 20][:3]
+    citation = re.compile(r"\[\[[\w-]+\]\]")
+    return [
+        s.strip()
+        for s in sentences
+        if cue.search(s) and citation.search(s) and len(s) > 40
+    ][:3]
 
 
 async def _retrieve_for_section(

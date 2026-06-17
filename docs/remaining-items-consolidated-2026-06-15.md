@@ -196,3 +196,30 @@ So no one re-builds these. **All cross-checked against code/commits:**
 (2026-06-15) supersedes the older roadmaps. **Active completion plan:**
 `.omo/plans/finish-everything-plan.md` (Phase 0–5). When in doubt, those two +
 this register over anything in `docs/archive/` (where the old `*-plan.md` now live).
+
+---
+
+## ADDENDUM — Dylan's live walkthrough, 2026-06-17 (WALK-01..21)
+
+A full live-driving session on the booted dev stack (all surfaces) surfaced 24
+issues, each traced to code with file:line evidence by 7 parallel read-only
+investigators + live event-log/config corroboration. Verbatim notes + full
+root-cause breakdown live in **`docs/dylans-walkthru-6-17-26.md`** (the source of
+truth for these). Summary of the actionable items folded here:
+
+**P0 (breaks/confuses a core flow):**
+- WALK-03 — `[[id]]` citation id leaks into the "Sources disagree" callout (`DeepReportView.tsx:174`).
+- WALK-08 — stale "Follow-up: <query>" shows before the report exists (`useDeepResearch.ts:178-186`, `-1` seq fallback).
+- WALK-09 — build Deliverable/manifest card surfaced at serve-time, not FINISHED (`BuildSurface.tsx:367-379`).
+- WALK-10 — build "Open" button uses the deprecated non-waking `preview-app` route → 503 after suspend (`routes/preview.py:33-43`).
+- WALK-18 — **(ENGINE)** pause/steer/resume not really wired (`engine.pause()` dead code; idempotent `kick` drops resume).
+- WALK-19 — **(ENGINE)** build loop has no failure-independent no-progress breaker → grinds toward `max_iterations=500` on capable models (trace: 160 obs / 7 errors in one run).
+
+**P1 (quality / UX):** WALK-01 stream markdown live (basic search); WALK-02 follow-up markdown render; WALK-04 DR "Planning…" loader; WALK-05 rename "DuckDuckGo"→"ddgs"; WALK-06 tighten disputed-notes extraction (platform-name + vacuous hedges); WALK-07 null persisted base_url on bundled flip; WALK-11 decouple follow-up indicator from plan loader; WALK-12 follow-up progress events + "what the model is doing" section; WALK-13 first-run TTS download progress; WALK-14 custom AudioPlayer on the design system; WALK-15 steer agent to `slides_generate`/`sheet_generate` at execution time; WALK-16 enumerate observation/deliverable artifacts in the Artifacts tab; WALK-17 schedule UX (presets + cron validation + rename).
+
+**P2 (feature):** WALK-20 include-follow-up in exports/audio + modular "how many?" popup; WALK-21 podcast-vs-single-speaker popup + single-voice honest-walkthrough mode.
+
+**Closed by investigation (no work):** surgical line-edit tools are present & wired
+(not removed); the deepseek-v4 driver and encoders were NOT the mini-PC spin cause —
+Settings was truthful, the cause was persisted crawl4ai/searxng (already fixed by
+switching to bundled; null the stale base_urls per WALK-07).

@@ -175,15 +175,22 @@ export function useDeepResearch(
   // user + assistant messages render; environment/system plumbing
   // (<system-reminder>, <reground-anchors>) is deliberately SUPPRESSED, not
   // dumped. Anything past the report seq that isn't a clean Q/A is dropped.
-  const reportSeq = stream.report?.seq ?? -1;
-  const followUps = stream.events.filter(
-    (e): e is MessageEvent =>
-      e.kind === "message" &&
-      (e.seq ?? 0) > reportSeq &&
-      (e.message.role === "user" || e.message.role === "assistant") &&
-      !(e.message.content ?? "").includes("<system-reminder>") &&
-      !(e.message.content ?? "").includes("<reground-anchors>"),
-  );
+  //
+  // STALE-FOLLOW-UP FIX (WALK-08 A4): when no report exists yet, reportSeq
+  // would be -1 (the ?? -1 fallback), so the run's OWN initiating user message
+  // (seq ≥ 0 > -1) gets misclassified as a "follow-up".  Bail to [] whenever
+  // stream.report is null — a follow-up can't exist without a report.
+  const followUps: MessageEvent[] =
+    stream.report == null
+      ? []
+      : stream.events.filter(
+          (e): e is MessageEvent =>
+            e.kind === "message" &&
+            (e.seq ?? 0) > (stream.report!.seq ?? -1) &&
+            (e.message.role === "user" || e.message.role === "assistant") &&
+            !(e.message.content ?? "").includes("<system-reminder>") &&
+            !(e.message.content ?? "").includes("<reground-anchors>"),
+        );
 
   // The effective query for display: real query once recovered, a neutral loading
   // string while mid-replay, or null when no session exists.

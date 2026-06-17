@@ -164,8 +164,16 @@ export function serializeReportToMarkdown(report: ReportEvent): string {
     lines.push(`## ${s.title}`);
     lines.push("");
     if (s.disputed_notes && s.disputed_notes.length > 0) {
-      lines.push(`_Conflicts noted: ${s.disputed_notes.join("; ")}_`);
-      lines.push("");
+      // Strip [[passage_id]] citation markers — they are UI artefacts that
+      // can't resolve in a plain-text document.
+      const stripped = s.disputed_notes
+        .map((n) => n.replace(/\[\[[\w-]+\]\]/g, "").trim())
+        .filter(Boolean)
+        .join("; ");
+      if (stripped) {
+        lines.push(`_Conflicts noted: ${stripped}_`);
+        lines.push("");
+      }
     }
     lines.push(s.markdown);
     lines.push("");

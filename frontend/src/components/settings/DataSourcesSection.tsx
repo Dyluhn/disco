@@ -26,7 +26,7 @@ interface Opt<P extends string> {
 }
 
 const SEARCH_OPTS: Opt<SearchProvider>[] = [
-  { id: "ddgs", tier: "bundled", label: "Bundled — DuckDuckGo", help: "Keyless, in-process. No setup. Moderate rate limits — fine for personal use. The default." },
+  { id: "ddgs", tier: "bundled", label: "Bundled — ddgs", help: "Keyless, in-process. No setup. Moderate rate limits — fine for personal use. The default." },
   { id: "searxng", tier: "selfhost", label: "Self-hosted SearXNG", help: "Your own SearXNG instance — set its URL below." },
   { id: "tavily", tier: "paid", label: "Tavily (paid)", help: "Hosted search API. Set the env-var name that holds your key." },
 ];

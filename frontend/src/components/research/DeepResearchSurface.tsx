@@ -27,6 +27,7 @@
 
 import { Ban, File, FileText, FileType, Loader2, Play, RotateCcw, Settings as SettingsIcon, Square } from "lucide-react";
 import { Link } from "react-router-dom";
+import { Markdown } from "@/components/Markdown";
 import { PlanPanel } from "@/components/build/PlanPanel";
 import { useDeepResearch } from "@/hooks/useDeepResearch";
 import { useExportCapabilities } from "@/hooks/useExportCapabilities";
@@ -35,7 +36,7 @@ import { EmptyState, ErrorState } from "@/components/states";
 import type { ScopeId } from "@/shell/mode";
 import { DeepBoundedNotice } from "./DeepBoundedNotice";
 import { DeepProgressStrip } from "./DeepProgressStrip";
-import { DeepReportView } from "./DeepReportView";
+import { asGroundedAnswer, DeepReportView } from "./DeepReportView";
 import { DepthTierSelector, type Tier } from "./DepthTierSelector";
 import { TieredSourcePanel } from "./TieredSourcePanel";
 import { NeedMoreCard } from "./NeedMoreCard";
@@ -240,6 +241,16 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
           />
         )}
 
+        {/* Planning loader — the gap between submit and the first PlanEvent
+            arriving (typically 3-8 s). Without this the area below the H1 is
+            completely blank, which looks like a hang. */}
+        {!r.plan && r.status === "RUNNING" && (
+          <div className="flex items-center gap-inline font-ui text-[0.86rem] text-text-muted">
+            <Loader2 className="size-4 animate-spin text-accent" aria-hidden />
+            Planning the research…
+          </div>
+        )}
+
         {/* Plan-edit gate — present only at AWAITING_PLAN_APPROVAL */}
         {r.awaitingPlan && r.plan && (
           <PlanPanel
@@ -268,6 +279,7 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
             trace={r.trace}
             stats={r.stats}
             status={r.status}
+            followUpStatus={r.followUpStatus}
           />
         )}
 
@@ -313,8 +325,11 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
             report; DeepReportView only renders the ReportEvent, so these were
             generated server-side but never shown (the answer vanished). Render
             them here as a thread. Plumbing messages are already suppressed in
-            the hook's `followUps` derivation (whitelist boundary). */}
-        {r.followUps.length > 0 && (
+            the hook's `followUps` derivation (whitelist boundary).
+            Gate on report + FINISHED (WALK-08 A4): before the report exists,
+            reportSeq would be -1 and the run's own initiating message would
+            be misclassified as a follow-up. This gate prevents that ghost. */}
+        {r.report && r.status === "FINISHED" && r.followUps.length > 0 && (
           <div className="mx-auto w-full max-w-doc space-y-section">
             {r.followUps.map((m, i) =>
               m.message.role === "user" ? (
@@ -330,8 +345,14 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
                   <p className="mb-inline font-ui text-[0.72rem] uppercase tracking-wide text-text-faint">
                     Answer
                   </p>
-                  <div className="whitespace-pre-wrap font-reading text-[0.95rem] leading-relaxed text-text">
-                    {m.message.content}
+                  {/* Render through <Markdown> so the model's markdown (bold,
+                      lists, code, etc.) formats properly. Pass the report's
+                      passage corpus so [[id]] citation markers resolve to chips
+                      instead of staying as raw brackets. */}
+                  <div className="prose-reading">
+                    <Markdown answer={asGroundedAnswer(r.report, r.query ?? "")}>
+                      {m.message.content}
+                    </Markdown>
                   </div>
                 </div>
               ),

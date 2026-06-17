@@ -9,6 +9,7 @@
 
 import { AlertTriangle, CircleDot, Loader2 } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
+import { CitedText } from "@/components/blocks";
 import { ClaimVerdicts } from "@/components/research/ClaimVerdicts";
 import { SupportMeter } from "@/components/research/SupportMeter";
 import { cn } from "@/lib/cn";
@@ -51,8 +52,10 @@ const CONFIDENCE_VARIANT: Record<
 
 /** Cast report.passages + report.all_hits into the typed shapes CitedText
  * resolves. They're plain dicts on the event wire (kept core-free of
- * retrieval imports); the cast lives at the render boundary. */
-function asGroundedAnswer(report: ReportEvent | null, query: string): GroundedAnswer | null {
+ * retrieval imports); the cast lives at the render boundary.
+ * Exported so sibling surfaces (DeepResearchSurface) can resolve [[id]]
+ * markers in follow-up answers with the same report corpus. */
+export function asGroundedAnswer(report: ReportEvent | null, query: string): GroundedAnswer | null {
   if (!report) return null;
   return {
     query,
@@ -171,7 +174,9 @@ function SectionView({
           <AlertTriangle className="mt-px size-3.5 shrink-0 text-weak" aria-hidden />
           <div className="font-ui text-[0.84rem] leading-snug text-text-muted">
             <span className="font-medium text-weak">Sources disagree.</span>{" "}
-            {real.disputed_notes.join(" ")}
+            {/* Render through CitedText so [[passage_id]] markers resolve
+                to citation chips instead of leaking as raw text. */}
+            <CitedText text={real.disputed_notes.join(" ")} answer={answer} />
           </div>
         </aside>
       )}

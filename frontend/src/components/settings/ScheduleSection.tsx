@@ -77,6 +77,17 @@ async function previewSchedule(rrule: string, n = 3): Promise<PreviewResult> {
   return r.json();
 }
 
+// ---- schedule presets -------------------------------------------------------
+
+/** Known-good cron presets. Exported so tests can verify each cron is valid. */
+export const SCHEDULE_PRESETS = [
+  { label: "Daily 9am",     cron: "0 9 * * *",   description: "daily at 9:00 AM" },
+  { label: "Weekdays 9am",  cron: "0 9 * * 1-5", description: "every weekday at 9:00 AM" },
+  { label: "Weekly Mon 9am", cron: "0 9 * * 1",  description: "every Monday at 9:00 AM" },
+  { label: "Hourly",        cron: "0 * * * *",   description: "every hour" },
+  { label: "Every 6 hours", cron: "0 */6 * * *", description: "every 6 hours" },
+] as const;
+
 // ---- sub-components ---------------------------------------------------------
 
 function fmtDatetime(iso: string): string {
@@ -216,6 +227,23 @@ export function ScheduleSection({ conversationId }: { conversationId: string }) 
     }
   };
 
+  /** Select a known-good preset: set the input and immediately fetch a preview. */
+  const handleSelectPreset = async (cron: string) => {
+    setDraft({ input: cron });
+    setParseError(null);
+    setPreviewError(null);
+    setPreviewLoading(true);
+    setPreview(null);
+    try {
+      const result = await previewSchedule(cron, 3);
+      setPreview({ ...result, rrule: cron });
+    } catch (err) {
+      setPreviewError(err instanceof Error ? err.message : "Preview failed");
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
   const handleConfirm = () => {
     if (!preview) return;
     const parsed = parseScheduleNL(draft.input);
@@ -266,6 +294,23 @@ export function ScheduleSection({ conversationId }: { conversationId: string }) 
 
       {creating && !preview && (
         <div className="flex flex-col gap-inline rounded-card border border-accent/40 bg-surface-1 p-body">
+          {/* Quick-pick presets — emit known-good cron directly */}
+          <div className="flex flex-wrap gap-hair">
+            {SCHEDULE_PRESETS.map(({ label, cron }) => (
+              <button
+                key={cron}
+                type="button"
+                disabled={previewLoading}
+                onClick={() => handleSelectPreset(cron)}
+                className="rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text disabled:opacity-40"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="font-ui text-[0.74rem] text-text-faint">
+            Or type your own:
+          </p>
           <input
             value={draft.input}
             onChange={(e) => {

@@ -96,11 +96,25 @@ class ConfigStore:
         return self.save(self.load().model_copy(update={"tts": tts}))
 
     def save_search(self, search: SearchSettings) -> RouterConfig:
-        """Persist the web-discovery provider (ddgs/searxng/tavily) over the config."""
+        """Persist the web-discovery provider (ddgs/searxng/tavily) over the config.
+
+        When the provider is the bundled in-process tier (ddgs), the persisted
+        base_url is cleared so a stale self-host LAN URL (e.g. from a previous
+        searxng selection) cannot silently re-engage if the user later switches
+        back to searxng without re-entering the URL."""
+        if search.provider == "ddgs":
+            search = search.model_copy(update={"base_url": ""})
         return self.save(self.load().model_copy(update={"search": search}))
 
     def save_extraction(self, extraction: ExtractionSettings) -> RouterConfig:
-        """Persist the extraction provider (local/crawl4ai/firecrawl) over the config."""
+        """Persist the extraction provider (local/crawl4ai/firecrawl) over the config.
+
+        When the provider is the bundled in-process tier (local), the persisted
+        base_url is cleared so a stale self-host LAN URL (e.g. from a previous
+        crawl4ai selection) cannot silently re-engage if the user later switches
+        back to crawl4ai without re-entering the URL."""
+        if extraction.provider == "local":
+            extraction = extraction.model_copy(update={"base_url": ""})
         return self.save(self.load().model_copy(update={"extraction": extraction}))
 
     # -- Build-project persistence --------------------------------------------

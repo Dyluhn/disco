@@ -167,8 +167,11 @@ async def test_port_proxy_route_auth_and_defense():
     # 503 if the upstream isn't available (box down / no executor)
     assert client.get("/conversations/x/port/3000/").status_code == 503
 
-    # 200 (proxied) if available. Mock runtime.port_upstream to return a stub
-    with unittest.mock.patch.object(rt, "port_upstream", return_value="http://localhost:32769"):
+    # 200 (proxied) if available. WALK-10: the route now wakes a suspended sandbox via
+    # runtime.wake_for_preview (async) instead of the passive port_upstream, so stub that.
+    with unittest.mock.patch.object(
+        rt, "wake_for_preview", new=unittest.mock.AsyncMock(return_value="http://localhost:32769")
+    ):
         # We need a real-ish response from the stubbed upstream or httpx will fail.
         # Use a mock for httpx.AsyncClient.get
         with unittest.mock.patch("httpx.AsyncClient.get") as mock_get:

@@ -27,11 +27,21 @@ vi.mock("@/api/deepResearch", () => ({
   exportReportAsMarkdown: vi.fn(),
   exportReport: vi.fn().mockResolvedValue(true),
   serializeReportToMarkdown: vi.fn().mockReturnValue("# Report\n\nContent"),
-  requestReportAudio: vi.fn().mockResolvedValue({
-    mp3_url: "/conversations/c1/report/audio/audio_overview.mp3",
-    transcript_url: "/conversations/c1/report/audio/audio_overview.md",
-  }),
+  // requestReportAudio is no longer used in NeedMoreCard (WALK-21: direct fetch
+  // with ?mode= param instead). The mock is kept so existing import graph resolves.
+  requestReportAudio: vi.fn(),
 }));
+
+// Mock the fetch used by AudioSection.generate so we don't need a real
+// agent-server in unit tests.  Returns a podcast-mode mp3_url by default.
+const _fetchMock = vi.fn().mockResolvedValue({
+  ok: true,
+  json: vi.fn().mockResolvedValue({
+    mp3_url: "/conversations/c1/report/audio/audio_overview_podcast.mp3",
+    transcript_url: "/conversations/c1/report/audio/audio_overview_podcast.md",
+  }),
+});
+vi.stubGlobal("fetch", _fetchMock);
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -203,8 +213,12 @@ describe("NeedMoreCard", () => {
     await user.click(within(dialog).getByRole("button", { name: /Close export dialog/i }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
-    // Press Audio Overview → success path shows the player + Export MP3 (real, not a stub)
+    // Press Audio Overview → opens mode chooser dialog → pick Podcast
     await user.click(screen.getByRole("button", { name: /Audio Overview/i }));
+    const modeDialog = await screen.findByRole("dialog", { name: /Generate audio overview/i });
+    await user.click(within(modeDialog).getByRole("button", { name: /Podcast style/i }));
+
+    // Done state: AudioPlayer + Export MP3 (real, not a stub)
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /Export MP3/i })).toBeInTheDocument(),
     );
@@ -239,29 +253,90 @@ describe("NeedMoreCard", () => {
     );
   });
 
-  // (e) Audio Overview is wired to the real endpoint — success shows the player
-  it("Audio Overview success shows the player + Export MP3 (real, not a stub)", async () => {
+  // (e) Audio Overview → mode dialog → Podcast → success shows the player + Export MP3
+  it("Audio Overview mode dialog: Podcast choice shows player + Export MP3", async () => {
     const user = userEvent.setup();
     renderCard();
 
     await user.click(screen.getByRole("button", { name: /Audio Overview/i }));
 
-    // Done state: real Export MP3 + Regenerate affordances (gated on a real result)
+    // Mode chooser dialog opens
+    const modeDialog = await screen.findByRole("dialog", { name: /Generate audio overview/i });
+    expect(
+      within(modeDialog).getByRole("button", { name: /Podcast style/i }),
+    ).toBeInTheDocument();
+    expect(
+      within(modeDialog).getByRole("button", { name: /Single speaker/i }),
+    ).toBeInTheDocument();
+    // "alpha" badge is visible on the Podcast option
+    expect(within(modeDialog).getByText(/alpha/i)).toBeInTheDocument();
+
+    // Pick Podcast
+    await user.click(within(modeDialog).getByRole("button", { name: /Podcast style/i }));
+
+    // Done state: custom AudioPlayer + Export MP3 (real, not a stub)
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /Export MP3/i })).toBeInTheDocument(),
     );
     expect(screen.getByRole("button", { name: /Regenerate/i })).toBeInTheDocument();
+    // AudioPlayer renders (play button, seek slider)
+    expect(
+      screen.getByRole("button", { name: /Play audio overview/i }),
+    ).toBeInTheDocument();
+  });
+
+  // (f) Audio Overview → mode dialog → Single speaker → success
+  it("Audio Overview mode dialog: Single speaker choice also succeeds", async () => {
+    const user = userEvent.setup();
+    // Override fetch to return a single-mode URL
+    _fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        mp3_url: "/conversations/c1/report/audio/audio_overview_single.mp3",
+        transcript_url: "/conversations/c1/report/audio/audio_overview_single.md",
+      }),
+    });
+    renderCard();
+
+    await user.click(screen.getByRole("button", { name: /Audio Overview/i }));
+    const modeDialog = await screen.findByRole("dialog", { name: /Generate audio overview/i });
+    await user.click(within(modeDialog).getByRole("button", { name: /Single speaker/i }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Export MP3/i })).toBeInTheDocument(),
+    );
+  });
+
+  // (g) Mode chooser dialog can be dismissed without generating
+  it("closing the mode dialog returns to idle without generating", async () => {
+    const user = userEvent.setup();
+    renderCard();
+
+    await user.click(screen.getByRole("button", { name: /Audio Overview/i }));
+    const modeDialog = await screen.findByRole("dialog", { name: /Generate audio overview/i });
+
+    // Close via the X button
+    await user.click(
+      within(modeDialog).getByRole("button", { name: /Close audio mode dialog/i }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    // Still in idle — Audio Overview button is still there
+    expect(screen.getByRole("button", { name: /Audio Overview/i })).toBeInTheDocument();
   });
 
   it("audio failure surfaces an honest reason and is resettable to idle", async () => {
     const user = userEvent.setup();
-    const dr = await import("@/api/deepResearch");
-    vi.mocked(dr.requestReportAudio).mockRejectedValueOnce(
-      new Error("Audio overview is disabled in Settings → Audio — enable it to generate."),
-    );
+    _fetchMock.mockResolvedValueOnce({
+      ok: false,
+      json: vi.fn().mockResolvedValue({ detail: { reason: "tts_disabled" } }),
+    });
     renderCard();
 
     await user.click(screen.getByRole("button", { name: /Audio Overview/i }));
+    const modeDialog = await screen.findByRole("dialog", { name: /Generate audio overview/i });
+    await user.click(within(modeDialog).getByRole("button", { name: /Podcast style/i }));
+
     await waitFor(() =>
       expect(screen.getAllByText(/disabled in Settings/i).length).toBeGreaterThan(0),
     );
@@ -272,5 +347,28 @@ describe("NeedMoreCard", () => {
       expect(screen.getByRole("button", { name: /Audio Overview/i })).toBeInTheDocument(),
     );
     expect(screen.queryAllByText(/disabled in Settings/i)).toHaveLength(0);
+  });
+
+  // (h) Generating state shows the static "Downloading voice model" notice (WALK-13 / D1)
+  it("generating state shows the static download notice", async () => {
+    const user = userEvent.setup();
+    // Hang the fetch so we can observe the "generating" state
+    let resolveHang!: (value: unknown) => void;
+    _fetchMock.mockReturnValueOnce(new Promise((res) => { resolveHang = res; }));
+    renderCard();
+
+    await user.click(screen.getByRole("button", { name: /Audio Overview/i }));
+    const modeDialog = await screen.findByRole("dialog", { name: /Generate audio overview/i });
+    await user.click(within(modeDialog).getByRole("button", { name: /Podcast style/i }));
+
+    // While generating, the download notice must be visible
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Downloading voice model.*first run only/i),
+      ).toBeInTheDocument(),
+    );
+
+    // Unblock so the component can clean up
+    resolveHang({ ok: true, json: vi.fn().mockResolvedValue({ mp3_url: "/test.mp3" }) });
   });
 });

@@ -363,9 +363,13 @@ export function BuildSurface({
 
         {/* gate · steer · re-plan — pinned under the feed */}
         <div className="flex flex-col gap-inline border-t border-hairline px-body py-inline">
-          {/* finished-artifact handoff: open the live app / download the files */}
+          {/* finished-artifact handoff: open the live app / download the files.
+              WALK-09: gate on FINISHED — `serve` emits a DeliverableEvent mid-run
+              (before the plan/build ends) so `deriveDeliverable` returns non-null
+              while the manifest record doesn't exist yet → Manifest button 404s and
+              Open 503s. Only show the panel once the run is truly done. */}
           <DeliverablePanel
-            deliverable={deliverable}
+            deliverable={b.status === "FINISHED" ? deliverable : null}
             onOpen={() =>
               b.cid &&
               window.open(

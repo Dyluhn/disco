@@ -21,9 +21,67 @@ export interface NLParseResult {
 
 // Matches a 5-field cron expression like "*/5 * * * *" or "0 9 * * 1-5"
 const CRON_RE = /^[\d/*,\-? ]+$/;
+
+/**
+ * Validate a single cron field against [min, max] inclusive.
+ * Handles: *, ?, *\/N (step), N-M (range), N,M,... (list), N (single value).
+ * Returns false if any numeric part falls outside [min, max].
+ */
+function validateCronField(field: string, min: number, max: number): boolean {
+  if (field === "*" || field === "?") return true;
+
+  // Step on wildcard: */N
+  if (/^\*\/\d+$/.test(field)) {
+    const n = parseInt(field.slice(2), 10);
+    return !isNaN(n) && n >= 1;
+  }
+
+  // List: N,M,... — each element must be in range
+  if (field.includes(",")) {
+    return field.split(",").every((p) => {
+      const n = parseInt(p.trim(), 10);
+      return !isNaN(n) && n >= min && n <= max;
+    });
+  }
+
+  // Range with optional step: N-M or N-M/S
+  if (field.includes("-")) {
+    const [rangePart, stepPart] = field.split("/");
+    const [rawA, rawB] = (rangePart ?? "").split("-");
+    const a = parseInt(rawA, 10);
+    const b = parseInt(rawB, 10);
+    if (isNaN(a) || isNaN(b) || a < min || b > max || a > b) return false;
+    if (stepPart !== undefined) {
+      const s = parseInt(stepPart, 10);
+      if (isNaN(s) || s < 1) return false;
+    }
+    return true;
+  }
+
+  // Value with step: N/S
+  if (field.includes("/")) {
+    const [basePart, stepPart] = field.split("/");
+    const n = parseInt(basePart, 10);
+    const s = parseInt(stepPart, 10);
+    return !isNaN(n) && n >= min && n <= max && !isNaN(s) && s >= 1;
+  }
+
+  // Single numeric value
+  const n = parseInt(field, 10);
+  return !isNaN(n) && n >= min && n <= max;
+}
+
 function looksLikeCron(s: string): boolean {
   const parts = s.trim().split(/\s+/);
-  return parts.length === 5 && CRON_RE.test(s);
+  if (parts.length !== 5 || !CRON_RE.test(s)) return false;
+  const [minute, hour, dom, month, dow] = parts;
+  return (
+    validateCronField(minute, 0, 59) &&
+    validateCronField(hour, 0, 23) &&
+    validateCronField(dom, 1, 31) &&
+    validateCronField(month, 1, 12) &&
+    validateCronField(dow, 0, 7)
+  );
 }
 
 // ---- RFC-2445 RRULE-ish parsing ------------------------------------------

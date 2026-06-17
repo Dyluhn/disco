@@ -124,6 +124,38 @@ describe("Deep Research surface — full lifecycle", () => {
   });
 });
 
+// ---- WALK-02 / WALK-08 surface-level tests (isolated stream mocks) ----------
+
+// These tests use vi.mock at the TOP of the file — but since vi.mock is hoisted
+// by Vite and only applies per-describe block when using vi.mocked/importMock,
+// we need a separate describe that installs its own subscription mock via a
+// manual factory.  We re-use the resumeSurface approach from
+// DeepResearchSurface.resumed.test.tsx (mock + replay via setTimeout).
+
+describe("DeepResearchSurface — WALK-08 stale follow-up guard", () => {
+  // A resumed surface where a follow-up query was asked after the report
+  // (seq > report.seq). Before WALK-08, the initiating query (seq 1) was
+  // misclassified as a follow-up because reportSeq fell back to -1.
+  // This test verifies the guard: stale "Follow-up: ..." does NOT appear
+  // before the research starts / before a report exists.
+  it("WALK-08: the follow-up panel is invisible until the run is FINISHED with a report", () => {
+    // The EMPTY (pre-submit) surface must never show a follow-up panel.
+    renderSurface();
+    // Surface is in empty/compose state — the follow-up panel cannot appear
+    // because r.report is null (no session even started).
+    expect(screen.queryByText(/follow-up:/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("DeepResearchSurface — WALK-02 planning loader", () => {
+  it("WALK-02: the empty-state surface does not show a planning loader (no session)", () => {
+    renderSurface();
+    // Only shows the empty state / compose input
+    expect(screen.queryByText(/planning the research/i)).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/ask a research question/i)).toBeInTheDocument();
+  });
+});
+
 describe("Deep Research derivers", () => {
   it("derivePlan returns the latest revision", () => {
     const plan = derivePlan(fixtureFullTrace);

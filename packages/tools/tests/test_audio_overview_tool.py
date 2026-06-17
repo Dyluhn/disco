@@ -20,6 +20,10 @@ from disco.tools.builtin._audio_mixer import (
 from disco.tools.builtin.audio_overview import (
     _extract_json,
     _validate_turn_script,
+    _validate_turn_script_single,
+    _build_llm_payload,
+    _TURN_SCRIPT_PROMPT,
+    _SINGLE_SCRIPT_PROMPT,
 )
 from disco.tools.registry import agent_scope, research_scope
 from disco.tools.secrets import CapabilityBroker
@@ -142,6 +146,99 @@ def test_validate_non_dict_turn():
     )
     assert turns is None
     assert "object" in error.lower()
+
+
+# ---- WALK-21 / D3: single-speaker validator ---------------------------------
+
+
+def test_validate_single_accepts_all_a():
+    """All-'A' script passes the single-mode validator — that is the expected output
+    from the single-speaker prompt (WALK-21 / D3)."""
+    raw = json.dumps([
+        {"speaker": "A", "text": "Welcome to this honest walkthrough."},
+        {"speaker": "A", "text": "The main finding is quite clear."},
+        {"speaker": "A", "text": "However, there are some important caveats."},
+    ])
+    turns, error = _validate_turn_script_single(raw)
+    assert error is None, f"Expected no error; got: {error!r}"
+    assert turns is not None
+    assert all(t.speaker == "A" for t in turns)
+    assert len(turns) == 3
+
+
+def test_validate_single_accepts_one_turn():
+    """Single mode allows a 1-turn script (unlike the podcast validator which needs ≥2)."""
+    raw = json.dumps([{"speaker": "A", "text": "One-sentence overview."}])
+    turns, error = _validate_turn_script_single(raw)
+    assert error is None
+    assert turns is not None and len(turns) == 1
+
+
+def test_validate_single_coerces_b_to_a():
+    """Single mode coerces any stray 'B' speaker to 'A' (LLM sometimes ignores prompts).
+    All turns end up with speaker 'A', using voice_a for the entire overview."""
+    raw = json.dumps([
+        {"speaker": "A", "text": "Main point."},
+        {"speaker": "B", "text": "Stray B speaker that LLM accidentally emitted."},
+        {"speaker": "A", "text": "Wrap up."},
+    ])
+    turns, error = _validate_turn_script_single(raw)
+    assert error is None
+    assert turns is not None
+    assert all(t.speaker == "A" for t in turns), (
+        "Single mode must coerce all speakers to 'A'"
+    )
+
+
+def test_validate_single_rejects_empty_text():
+    """Empty / whitespace-only text is still invalid in single mode."""
+    raw = json.dumps([
+        {"speaker": "A", "text": "Good line."},
+        {"speaker": "A", "text": "   "},
+    ])
+    turns, error = _validate_turn_script_single(raw)
+    assert turns is None
+    assert error is not None
+
+
+def test_validate_single_rejects_invalid_json():
+    turns, error = _validate_turn_script_single("not json")
+    assert turns is None
+    assert "Invalid JSON" in (error or "")
+
+
+def test_validate_single_rejects_empty_list():
+    turns, error = _validate_turn_script_single("[]")
+    assert turns is None
+    assert "at least 1 turn" in (error or "")
+
+
+# ---- WALK-21: _build_llm_payload mode switching -----------------------------
+
+
+def test_build_payload_podcast_mode_uses_podcast_prompt(monkeypatch):
+    """Default (podcast) mode uses the two-host prompt."""
+    monkeypatch.setattr(
+        "disco.agent_server.audio_config.LLM_MODEL", "test-model", raising=False
+    )
+    payload = _build_llm_payload("Report text here.", mode="podcast")
+    content = payload["messages"][0]["content"]
+    assert "two-host" in content or "Host A" in content or "Host B" in content, (
+        "Podcast prompt should mention two hosts"
+    )
+
+
+def test_build_payload_single_mode_uses_single_prompt(monkeypatch):
+    """Single mode uses the narrator/walkthrough prompt (all-A speakers expected)."""
+    monkeypatch.setattr(
+        "disco.agent_server.audio_config.LLM_MODEL", "test-model", raising=False
+    )
+    payload = _build_llm_payload("Report text here.", mode="single")
+    content = payload["messages"][0]["content"]
+    # Single prompt must NOT steer toward B speakers.
+    assert "Host B" not in content, "Single prompt must not mention Host B"
+    # Single prompt must instruct speaker 'A' only.
+    assert '"A"' in content or "speaker" in content.lower()
 
 
 # ---- mixer: PCM concatenation + MP3 encoding -------------------------------
