@@ -72,6 +72,31 @@ async def test_pause_lands_between_steps_never_mid_action():
     assert len(loop.executor.calls) == 2  # both actions ran to completion
 
 
+async def test_pause_does_not_block_on_the_held_lock():
+    """WALK-18: pause() sets a cooperative flag WITHOUT taking self._lock, so it
+    returns PROMPTLY even while the in-flight turn holds the lock across its
+    model step. The old pause() took the lock and could not land until the step
+    finished — the 'pause does nothing until I steer' bug. The loop then lands
+    PAUSED at its next step boundary, and the flag is cleared when consumed."""
+    agent = GatedAgent([action_step(), action_step(), finish_step()], gate_at=1)
+    loop, store = build_loop(agent)
+    await loop.send_message("go")
+
+    run_task = asyncio.create_task(loop.run())
+    await agent.reached.wait()  # loop is INSIDE step 1, holding the lock
+    # The lock is held; pause() must still return promptly (no lock contention).
+    # On the OLD lock-taking pause() this would block past the timeout → fail.
+    await asyncio.wait_for(loop.pause(), timeout=1.0)
+    assert loop._pause_requested.is_set()  # flag set while the step is mid-flight
+
+    agent.proceed.set()  # let the in-flight step complete
+    state = await run_task
+
+    assert state.execution_status == ConversationStatus.PAUSED
+    assert loop._pause_requested.is_set() is False  # cleared when the loop consumed it
+    assert _dangling(await store.get_events(CID)) == []  # in-flight action wasn't aborted
+
+
 async def test_cancel_stops_the_loop_at_a_checkpoint():
     agent = GatedAgent([action_step(), action_step(), finish_step()], gate_at=1)
     loop, store = build_loop(agent)

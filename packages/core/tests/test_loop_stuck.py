@@ -10,6 +10,8 @@ from event_fakes import action, agent_error, agent_msg, observation, user_msg
 from disco.core import ConversationStatus, EventSource, MessageEvent, StatusEvent
 from disco.core.loop import signals
 from disco.core.loop import StuckDetector, StuckThresholds
+from disco.core.loop.control import Disp
+from disco.core.loop.stuck import repeated_verify_no_progress
 from loop_fakes import ScriptedAgent, action_step, build_loop, finish_step
 
 CID = "conv"
@@ -699,6 +701,147 @@ def test_f6_per_file_rewrite_directive_resets_on_user_message_assist_on():
     assert result.rewrite_directive is None, (
         f"a user message must reset the per-file count; only 1 failure on the "
         f"post-user window must NOT fire, got {result.rewrite_directive!r}"
+    )
+
+
+# ---- WALK-19 — semantic no-progress detector (failure-independent) ----------
+#
+# The black-screen-game: a capable model writes a DIFFERENT edit each turn (so
+# patterns 1-4 never fire), each edit "succeeds" (writes apply, dev server 200 —
+# so the failure-keyed circuit breaker never trips), and it grinds to
+# max_iterations. The semantic signal: the same probe/verify OUTCOME recurs
+# across many VARIED edits = no real progress.
+
+
+def _edit(i: int):
+    """A distinct (varied) file edit — patterns 1-4 stay quiet on these."""
+    return action(thought=f"edit {i}", tool="file_edit", args={"path": "App.tsx", "patch": f"v{i}"})
+
+
+def _probe(content: str = "HTTP 200, no console errors"):
+    """A probe action (server_status) + its observation carrying the outcome."""
+    a = action(thought="check the app", tool="server_status", args={})
+    o = observation(action_id=a.id, content=content, tool="server_status")
+    return [a, o]
+
+
+def test_no_progress_trips_on_varied_edits_same_symptom():
+    """4 DISTINCT edits, each followed by the SAME probe outcome ⇒ trip."""
+    events = [user_msg("build the app")]
+    for i in range(4):
+        events.append(_edit(i))
+        events += _probe()  # identical outcome every time
+    assert repeated_verify_no_progress(events) is True
+
+
+def test_no_progress_does_not_trip_when_outcome_changes():
+    """Genuine progress: the final edit CHANGES the probe outcome ⇒ no trip
+    (the trailing constant-outcome run is just the new, single observation)."""
+    events = [user_msg("build the app")]
+    for i in range(3):
+        events.append(_edit(i))
+        events += _probe("HTTP 200, blank page")
+    events.append(_edit(3))
+    events += _probe("HTTP 200, heading now visible")  # outcome finally changed
+    assert repeated_verify_no_progress(events) is False
+
+
+def test_no_progress_below_distinct_edit_threshold_does_not_trip():
+    """Only 3 distinct edits against a stable outcome (< the default 4) ⇒ no trip."""
+    events = [user_msg("go")]
+    for i in range(3):
+        events.append(_edit(i))
+        events += _probe()
+    assert repeated_verify_no_progress(events) is False
+
+
+def test_no_progress_requires_two_probes():
+    """Many varied edits but only ONE probe observation ⇒ no trip (a single
+    outcome is not a RECURRING symptom)."""
+    events = [user_msg("go"), _edit(0), _edit(1), _edit(2), _edit(3)]
+    events += _probe()
+    assert repeated_verify_no_progress(events) is False
+
+
+def test_no_progress_identical_edits_are_not_distinct():
+    """Byte-identical edits are pattern-1's job, NOT this detector's — they must
+    NOT be double-counted as distinct varied edits, so an identical-edit loop
+    against a stable outcome does NOT trip here."""
+    events = [user_msg("go")]
+    for _ in range(4):
+        events.append(action(thought="same", tool="file_edit", args={"path": "a", "patch": "x"}))
+        events += _probe()
+    assert repeated_verify_no_progress(events) is False
+
+
+def test_no_progress_resets_on_user_message():
+    """A new USER instruction is a new goal — the pre-message symptom does not
+    count toward the post-message window."""
+    events = [user_msg("go")]
+    for i in range(4):
+        events.append(_edit(i))
+        events += _probe()
+    events.append(user_msg("new direction"))
+    events.append(_edit(99))
+    events += _probe()
+    assert repeated_verify_no_progress(events) is False
+
+
+async def test_no_progress_gate_nudges_then_halts():
+    """Loop integration via the real Valve gate + store: first trip emits a
+    corrective nudge (CONTINUE); a second trip after the model made MORE varied
+    edits with the SAME symptom halts STUCK (instead of grinding to the ceiling)."""
+    loop, store = build_loop(ScriptedAgent([finish_step()]))
+    await store.append(CID, user_msg("build the app"))
+    for i in range(4):
+        await store.append(CID, _edit(i))
+        for e in _probe():
+            await store.append(CID, e)
+
+    events = await store.get_events(CID)
+    disp = await loop._valve.gate_no_progress(events)
+    assert disp is Disp.CONTINUE  # first trip → nudge, not halt
+    events = await store.get_events(CID)
+    assert any(
+        isinstance(e, StatusEvent) and e.detail == "no_progress" for e in events
+    ), "first trip must drop a no_progress marker"
+    assert any(
+        isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and "outcome has NOT changed" in (e.message.content or "")
+        for e in events
+    ), "first trip must inject the corrective reminder"
+
+    # The model acts again (more varied edits) but the symptom is unchanged.
+    await store.append(CID, _edit(5))
+    for e in _probe():
+        await store.append(CID, e)
+    events = await store.get_events(CID)
+    disp = await loop._valve.gate_no_progress(events)
+    assert disp is Disp.HALT
+    events = await store.get_events(CID)
+    assert any(
+        isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.STUCK
+        and e.detail == "no_progress"
+        for e in events
+    ), "second trip after acting must halt STUCK with detail=no_progress"
+
+
+async def test_no_progress_gate_silent_on_genuine_progress():
+    """The gate must NOT fire when the outcome is changing (real progress)."""
+    loop, store = build_loop(ScriptedAgent([finish_step()]))
+    await store.append(CID, user_msg("build it"))
+    for i in range(4):
+        await store.append(CID, _edit(i))
+        for e in _probe(f"render #{i}"):  # outcome changes every edit
+            await store.append(CID, e)
+    events = await store.get_events(CID)
+    disp = await loop._valve.gate_no_progress(events)
+    assert disp is Disp.FALLTHROUGH
+    assert not any(
+        isinstance(e, StatusEvent) and e.detail == "no_progress"
+        for e in await store.get_events(CID)
     )
 
 

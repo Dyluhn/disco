@@ -45,6 +45,7 @@ from .boundaries import AgentStep
 from .control import Disp
 from .messages import _stuck_escape_reminder
 from .observe import _FANOUT_INPUT_MAX_CHARS
+from .stuck import repeated_verify_no_progress
 
 if TYPE_CHECKING:
     from .engine import AgentLoop
@@ -71,6 +72,35 @@ _PROPOSE_PLAN_UPDATE_REPEAT_CAP = 3
 # and let the agent keep going. The frontend renders it as a distinct button;
 # pick_alternative special-cases it (reset streak + resume) rather than running a tool.
 _CONTINUE_OPTION_ID = "__continue__"
+
+# WALK-19 — the corrective reminder injected when the no-progress breaker first
+# trips. Failure-independent: the model's edits are "succeeding" but the app is
+# unchanged, so the message reframes toward a hypothesis + a DIFFERENT outcome.
+_NO_PROGRESS_REMINDER = (
+    "<system-reminder>\n"
+    "Your recent edits keep applying successfully but the app/verify outcome "
+    "has NOT changed across several different attempts — you are likely editing "
+    "code that does not affect what you're observing (wrong file, wrong layer, a "
+    "cached build, or the symptom has a different root cause). STOP making more "
+    "varied edits. State a concrete hypothesis for WHY the outcome is unchanged, "
+    "then take a DIFFERENT diagnostic step (read the actual served output / "
+    "console errors, check the build is rebuilding, or inspect a different layer) "
+    "before editing again. If you cannot make the observed result change, call "
+    "`finish` and state what is blocked.\n"
+    "</system-reminder>"
+)
+
+
+def _no_progress_marker_seq(events: list[Event]) -> int | None:
+    """Seq of the most recent `no_progress` marker since the last USER message,
+    else None — mirrors `signals.stuck_escape_seq`. One nudge per user turn;
+    a second no-progress trip after the model acted on the nudge halts."""
+    for e in reversed(events):
+        if isinstance(e, StatusEvent) and e.detail == "no_progress":
+            return e.seq
+        if isinstance(e, MessageEvent) and e.source == EventSource.USER:
+            return None
+    return None
 
 
 class Valve:
@@ -424,6 +454,42 @@ class Valve:
                 )
             )
             return Disp.HALT
+        return Disp.FALLTHROUGH
+
+    async def gate_no_progress(self, events: list[Event]) -> Disp:
+        # (c.4) WALK-19 — SEMANTIC no-progress breaker. Failure-INDEPENDENT and
+        # NOT assist-gated: catches the "successful but useless varied edits"
+        # loop (writes apply, dev server 200, no errors — the black-screen-game)
+        # that every failure-keyed breaker (stuck/circuit) sails past, grinding
+        # to max_iterations. Escalate-then-halt like gate_stuck: a corrective
+        # nudge first, then — if the SAME outcome persists after the model acted
+        # on the nudge — halt STUCK rather than burn the rest of the budget.
+        if not repeated_verify_no_progress(self._loop._recent(events)):
+            return Disp.FALLTHROUGH
+        marker_seq = _no_progress_marker_seq(events)
+        if marker_seq is None:
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(role="user", content=_NO_PROGRESS_REMINDER),
+                )
+            )
+            await self._loop._emit(
+                StatusEvent(status=ConversationStatus.RUNNING, detail="no_progress")
+            )
+            return Disp.CONTINUE
+        acted_since = any(
+            isinstance(e, ActionEvent) and e.seq is not None and e.seq > marker_seq
+            for e in events
+        )
+        if acted_since:
+            # Nudged, the model made MORE varied edits, still the same symptom →
+            # halt visibly (STUCK) instead of looping to the iteration ceiling.
+            await self._loop._emit(
+                StatusEvent(status=ConversationStatus.STUCK, detail="no_progress")
+            )
+            return Disp.HALT
+        # Marker present but the model hasn't acted on the nudge yet → let it act.
         return Disp.FALLTHROUGH
 
     async def gate_plan_step_lag(self, events: list[Event]) -> list[Event]:

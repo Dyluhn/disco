@@ -111,6 +111,12 @@ from .schedule_service import ScheduleService
 from .sessions_service import SessionsService
 from .share_service import ShareService
 
+# WALK-18 — max seconds resume waits for a cooperatively-cancelled loop task to
+# wind down before hard-cancelling it (a cooperative Stop already persisted the
+# terminal status, so the task returns at its next step boundary; the cap only
+# guards against a wedged model step).
+_RESUME_DRAIN_TIMEOUT_S = 10.0
+
 
 class _MCPToolWrapper:
     """Thin Tool-protocol wrapper that adapts an MCP ToolDef for the registry.
@@ -1520,8 +1526,26 @@ class ConversationRuntime:
         loop = self._loop_for(conversation_id)
         await loop.pick_alternative(option_id)
 
+    async def pause(self, conversation_id: str) -> None:
+        return await self._control.pause(conversation_id)
+
     async def cancel(self, conversation_id: str) -> None:
         return await self._control.cancel(conversation_id)
+
+    async def _drain_finishing_task(self, conversation_id: str) -> None:
+        """WALK-18 resume fix. A cooperative Stop (cancel) persists a terminal
+        status, but its loop task may still be finishing its in-flight model
+        step. `kick()` is idempotent over a non-done task, so re-kicking before
+        that task clears silently NO-OPs (the "resume does nothing" bug). Pop the
+        lingering task and await it to completion so the subsequent kick spawns a
+        FRESH run; bound the wait and hard-cancel a wedged step (resume then
+        reconstructs context for the dangling action). Already-done / absent →
+        nothing to drain."""
+        task = self._tasks.pop(conversation_id, None)
+        if task is None or task.done():
+            return
+        with contextlib.suppress(asyncio.CancelledError, TimeoutError, Exception):
+            await asyncio.wait_for(task, _RESUME_DRAIN_TIMEOUT_S)
 
     async def resume(self, conversation_id: str) -> None:
         """Continue a stopped (PAUSED) Deep Research run. Clears the cancel flag and

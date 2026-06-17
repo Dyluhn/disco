@@ -72,6 +72,16 @@ class ControlOps:
         await loop.enter_planning(text)
         self._rt.kick(conversation_id)  # produce the (revised) plan
 
+    async def pause(self, conversation_id: str) -> None:
+        """WALK-18 cooperative pause: set the loop's pause flag so it lands PAUSED
+        at the next step boundary (resume re-kicks). Unlike `cancel`, this takes
+        NO lock and emits no terminal status — it must not contend with the
+        in-flight model step. A no-op when no live loop exists (nothing running
+        to pause); the only loop that matters is an in-memory, running one."""
+        loop = self._rt._loops.get(conversation_id)
+        if loop is not None:
+            await loop.pause()
+
     async def cancel(self, conversation_id: str) -> None:
         """Cooperative stop (distinct from the hard kill): the loop winds down. For
         Deep Research (engine, not an AgentLoop) this ALSO sets the cancel flag the

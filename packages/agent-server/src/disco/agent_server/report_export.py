@@ -25,13 +25,22 @@ logger = logging.getLogger(__name__)
 # ---- Markdown serializer (ported verbatim from deepResearch.ts:88-127) ----
 
 
-def serialize_markdown(report: ReportEvent) -> str:
+def serialize_markdown(
+    report: ReportEvent,
+    follow_ups: list[tuple[str, str]] | None = None,
+) -> str:
     """Serialize a ReportEvent to markdown.
 
     Ported VERBATIM from `serializeReportToMarkdown` in
     frontend/src/api/deepResearch.ts:88-127. Same heading levels, citation
     rendering, section order, and bounded_by honesty footer. The byte-parity
     test asserts this against a captured sample from the client-side output.
+
+    ``follow_ups`` is an optional list of (question, answer) pairs from
+    post-report follow-up Q&A turns. When provided and non-empty, a
+    ``## Follow-up Q&A`` section is appended after the passages footer.
+    When absent or empty the output is byte-identical to the baseline
+    (backwards-compatible — the byte-parity test still passes).
     """
     lines: list[str] = []
     lines.append(f"# Deep Research: {report.query}")
@@ -66,6 +75,18 @@ def serialize_markdown(report: ReportEvent) -> str:
         title = str(p.get("source_title", ""))
         url = str(p.get("source_url", ""))
         lines.append(f"- [{pid}] {title} — {url}")
+    # WALK-20: optional follow-up Q&A section — byte-identical output when
+    # follow_ups is None or empty (the byte-parity contract is preserved).
+    if follow_ups:
+        lines.append("")
+        lines.append("## Follow-up Q&A")
+        for i, (question, answer) in enumerate(follow_ups, 1):
+            lines.append("")
+            lines.append(f"### Follow-up {i}")
+            lines.append("")
+            lines.append(f"**Q:** {question}")
+            lines.append("")
+            lines.append(answer)
     return "\n".join(lines)
 
 
@@ -143,7 +164,10 @@ def _lazy_import_weasyprint():
     return weasyprint
 
 
-def serialize_pdf(report: ReportEvent) -> bytes:
+def serialize_pdf(
+    report: ReportEvent,
+    follow_ups: list[tuple[str, str]] | None = None,
+) -> bytes:
     """Serialize a ReportEvent to PDF via WeasyPrint.
 
     WeasyPrint renders HTML+CSS to PDF. We convert the markdown to a styled HTML
@@ -154,7 +178,7 @@ def serialize_pdf(report: ReportEvent) -> bytes:
     cleanly). Raises RuntimeError on rendering failure.
     """
     weasyprint = _lazy_import_weasyprint()
-    md = serialize_markdown(report)
+    md = serialize_markdown(report, follow_ups)
     html = _markdown_to_html(md, title=report.query)
     try:
         doc = weasyprint.HTML(string=html)
@@ -171,7 +195,11 @@ def serialize_pdf(report: ReportEvent) -> bytes:
 # ---- DOCX serializer (md → pandoc, INSIDE a sandbox) ----------------------
 
 
-async def serialize_docx(report: ReportEvent, sandbox: Any) -> bytes:
+async def serialize_docx(
+    report: ReportEvent,
+    sandbox: Any,
+    follow_ups: list[tuple[str, str]] | None = None,
+) -> bytes:
     """Serialize a ReportEvent to DOCX via `pandoc` INSIDE a sandbox container.
 
     pandoc ships in the sandbox image (NOT the host), so the runtime creates a
@@ -180,7 +208,7 @@ async def serialize_docx(report: ReportEvent, sandbox: Any) -> bytes:
     read back, and the runtime destroys the throwaway sandbox. No host install,
     jailed like marp. Raises RuntimeError on failure.
     """
-    md = serialize_markdown(report)
+    md = serialize_markdown(report, follow_ups)
     await sandbox.write_file("_export.md", md.encode("utf-8"))
     res = await sandbox.exec_shell(
         "pandoc _export.md -f markdown -t docx -o _export.docx", timeout_s=60
@@ -211,20 +239,28 @@ EXTENSIONS: dict[str, str] = {
 }
 
 
-def export_report(report: ReportEvent, fmt: str) -> tuple[bytes, str, str]:
+def export_report(
+    report: ReportEvent,
+    fmt: str,
+    follow_ups: list[tuple[str, str]] | None = None,
+) -> tuple[bytes, str, str]:
     """Export a ReportEvent to MD or PDF (both rendered in-process).
 
     DOCX is NOT handled here — it renders inside a transient sandbox (pandoc ships
     in the sandbox image, not the host), so the runtime calls `serialize_docx`
     directly with a sandbox instance. Returns (payload, media_type, suffix).
-    Raises ValueError for unknown formats (caller converts to 400)."""
+    Raises ValueError for unknown formats (caller converts to 400).
+
+    ``follow_ups`` is forwarded to the serializer so selected follow-up Q&A
+    pairs appear in the exported document (WALK-20).
+    """
     if fmt not in _EXPORT_FORMATS:
         raise ValueError(f"Unknown export format: {fmt!r}. Valid: md, pdf, docx")
 
     if fmt == "md":
-        payload = serialize_markdown(report).encode("utf-8")
+        payload = serialize_markdown(report, follow_ups).encode("utf-8")
     elif fmt == "pdf":
-        payload = serialize_pdf(report)
+        payload = serialize_pdf(report, follow_ups)
     elif fmt == "docx":
         raise ValueError("docx is rendered in a sandbox — call serialize_docx(report, sandbox)")
     else:

@@ -68,6 +68,11 @@ async def _handle_frame(
     elif frame.type == "pick_alternative" and runtime is not None and frame.option_id is not None:
         # User chose one of the agent's proposed alternatives (after 4+ failures).
         await runtime.pick_alternative(conversation_id, frame.option_id)
+    elif frame.type == "pause" and runtime is not None:
+        # WALK-18 — cooperative pause: sets a flag the loop observes at its next
+        # step boundary and lands PAUSED (unlike `cancel`, no lock contention with
+        # the in-flight model step). `resume` re-kicks. Hard stop is kill.
+        await runtime.pause(conversation_id)
     elif frame.type == "cancel" and runtime is not None:
         # Cooperative stop (the hard kill is POST /conversations/{id}/kill).
         await runtime.cancel(conversation_id)
@@ -75,7 +80,6 @@ async def _handle_frame(
         # Continue a stopped/incomplete run — re-points at resume_conversation, the
         # same mode-agnostic path the HTTP POST /resume route uses.
         await runtime.resume_conversation(conversation_id)
-    # pause: loop-level control, accepted here; wired with the UI later.
 
 
 def make_ws_router(

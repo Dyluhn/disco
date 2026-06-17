@@ -629,6 +629,17 @@ class DeepResearchService:
         passages = prior_report.passages or []
         if not passages:
             # No corpus to ground on — just answer directly.
+            # WALK-12: emit a phase signal so the UI can show "Writing answer…"
+            # instead of appearing frozen (the backend call is otherwise opaque).
+            await self._rt._store.append(
+                conversation_id,
+                ActionEvent(
+                    thought="Follow-up: synthesizing answer (no passage corpus)",
+                    tool_call=ToolCall(
+                        tool_name="phase", arguments={"phase": "synthesizing"}
+                    ),
+                ),
+            )
             router = self._rt._router_now()
             try:
                 answer = await router.complete(
@@ -667,6 +678,17 @@ class DeepResearchService:
                 )
                 return
         else:
+            # WALK-12: emit "reading" phase so the UI shows "Reading sources…"
+            # while we build the grounding block from the report corpus.
+            await self._rt._store.append(
+                conversation_id,
+                ActionEvent(
+                    thought="Follow-up: reading grounding passages from report corpus",
+                    tool_call=ToolCall(
+                        tool_name="phase", arguments={"phase": "reading"}
+                    ),
+                ),
+            )
             # Build a grounding block from the report's cited passages so the
             # answerer can cite them. Limit to a reasonable context window.
             MAX_PASSAGE_CHARS = 12_000
@@ -695,6 +717,16 @@ class DeepResearchService:
                 f"Follow-up question: {follow_up_query}"
             )
 
+            # WALK-12: emit "synthesizing" phase so the UI shows "Writing answer…"
+            await self._rt._store.append(
+                conversation_id,
+                ActionEvent(
+                    thought="Follow-up: synthesizing grounded answer",
+                    tool_call=ToolCall(
+                        tool_name="phase", arguments={"phase": "synthesizing"}
+                    ),
+                ),
+            )
             router = self._rt._router_now()
             try:
                 answer = await router.complete(

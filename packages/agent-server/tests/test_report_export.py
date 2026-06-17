@@ -434,3 +434,155 @@ def test_pdf_available_returns_bool() -> None:
     """pdf_available() reflects whether weasyprint is importable (drives the
     /api/export/capabilities pdf flag — no false affordance)."""
     assert isinstance(pdf_available(), bool)
+
+
+# ---- WALK-20: follow-up Q&A in exports (acceptance) -------------------------
+
+
+def test_markdown_with_follow_ups_appends_qa_section() -> None:
+    """serialize_markdown with follow_ups appends a ## Follow-up Q&A section."""
+    report = _make_sample_report()
+    follow_ups = [
+        ("What about sea gulls?", "Sea gulls also fly but at different speeds."),
+        ("Is this well studied?", "Yes, extensively by ornithologists worldwide."),
+    ]
+    result = serialize_markdown(report, follow_ups)
+    assert "## Follow-up Q&A" in result
+    assert "### Follow-up 1" in result
+    assert "**Q:** What about sea gulls?" in result
+    assert "Sea gulls also fly but at different speeds." in result
+    assert "### Follow-up 2" in result
+    assert "**Q:** Is this well studied?" in result
+    assert "Yes, extensively by ornithologists worldwide." in result
+    # Q&A section must appear AFTER the passages footer
+    passages_pos = result.index("Passages cited")
+    qa_pos = result.index("## Follow-up Q&A")
+    assert qa_pos > passages_pos
+
+
+def test_markdown_without_follow_ups_is_byte_identical() -> None:
+    """serialize_markdown with no follow_ups is byte-identical to the baseline.
+
+    This is the key backwards-compat contract: callers that don't pass
+    follow_ups must receive exactly the same bytes as before (the py↔ts
+    byte-parity test still passes when follow_ups is absent).
+    """
+    report = _make_sample_report()
+    baseline = serialize_markdown(report)
+    with_none = serialize_markdown(report, None)
+    with_empty: str = serialize_markdown(report, [])
+    assert baseline == with_none, "follow_ups=None must produce baseline output"
+    assert baseline == with_empty, "follow_ups=[] must produce baseline output"
+
+
+def test_export_report_md_with_follow_ups() -> None:
+    """export_report('md', follow_ups=[...]) includes the Q&A section in bytes."""
+    report = _make_sample_report()
+    follow_ups = [("Tell me more.", "There is more to know.")]
+    payload, media_type, ext = export_report(report, "md", follow_ups)
+    text = payload.decode("utf-8")
+    assert "## Follow-up Q&A" in text
+    assert "**Q:** Tell me more." in text
+    assert "There is more to know." in text
+
+
+def test_export_report_md_no_follow_ups_byte_identical() -> None:
+    """export_report('md') with no follow_ups is byte-identical to the baseline."""
+    report = _make_sample_report()
+    baseline, _, _ = export_report(report, "md")
+    with_none, _, _ = export_report(report, "md", None)
+    with_empty, _, _ = export_report(report, "md", [])
+    assert baseline == with_none
+    assert baseline == with_empty
+
+
+def test_endpoint_md_export_with_follow_up_seqs(
+    store: SqliteEventStore, client_with_runtime: TestClient
+) -> None:
+    """Export endpoint with follow_up_seqs in the JSON body includes Q&A section."""
+    import asyncio
+    from disco.core import (
+        ConversationStatus,
+        EventSource as _ES,
+        LLMMessage,
+        MessageEvent,
+        ReportEvent as RE,
+        StatusEvent,
+    )
+
+    cid = _create_conversation(client_with_runtime)
+    report = _make_sample_report()
+
+    loop = asyncio.new_event_loop()
+    try:
+        # Seed report then a follow-up Q&A pair
+        loop.run_until_complete(store.append(cid, report))
+        loop.run_until_complete(store.append(cid, StatusEvent(status=ConversationStatus.FINISHED)))
+        loop.run_until_complete(
+            store.append(
+                cid,
+                MessageEvent(
+                    source=_ES.USER,
+                    message=LLMMessage(role="user", content="Elaborate further."),
+                ),
+            )
+        )
+        loop.run_until_complete(
+            store.append(
+                cid,
+                MessageEvent(
+                    source=_ES.AGENT,
+                    message=LLMMessage(role="assistant", content="There is much more to say."),
+                ),
+            )
+        )
+    finally:
+        loop.close()
+
+    # Fetch events to discover the user-message seq
+    import asyncio as _a
+    loop2 = _a.new_event_loop()
+    try:
+        events = loop2.run_until_complete(store.get_events(cid))
+    finally:
+        loop2.close()
+    from disco.core import MessageEvent as ME
+    user_msg = next(
+        (e for e in events if isinstance(e, ME) and e.message.role == "user"
+         and "Elaborate" in (e.message.content or "")),
+        None,
+    )
+    assert user_msg is not None, "User message not found in event log"
+    user_seq = user_msg.seq
+
+    r = client_with_runtime.post(
+        f"/api/conversations/{cid}/report/export?fmt=md",
+        json={"follow_up_seqs": [user_seq]},
+    )
+    assert r.status_code == 200, r.text
+    text = r.content.decode("utf-8")
+    assert "## Follow-up Q&A" in text
+    assert "**Q:** Elaborate further." in text
+    assert "There is much more to say." in text
+
+
+def test_endpoint_md_export_without_follow_up_seqs_byte_identical(
+    store: SqliteEventStore, client_with_runtime: TestClient
+) -> None:
+    """Export endpoint with no follow_up_seqs in the body is byte-identical."""
+    cid = _create_conversation(client_with_runtime)
+    report = _make_sample_report()
+    _seed_event(store, cid, report)
+
+    # With empty body (no follow_up_seqs)
+    r1 = client_with_runtime.post(f"/api/conversations/{cid}/report/export?fmt=md")
+    # With explicit empty list
+    r2 = client_with_runtime.post(
+        f"/api/conversations/{cid}/report/export?fmt=md",
+        json={"follow_up_seqs": []},
+    )
+    assert r1.status_code == 200, r1.text
+    assert r2.status_code == 200, r2.text
+    assert r1.content == r2.content, "Empty follow_up_seqs must be byte-identical to no-body"
+    # And both must equal the captured baseline
+    assert r1.content == CAPTURED_MARKDOWN.encode("utf-8")

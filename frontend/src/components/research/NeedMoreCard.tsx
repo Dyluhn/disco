@@ -34,13 +34,13 @@ import { cn } from "@/lib/cn";
 import {
   exportReport,
   exportReportAsMarkdown,
-  serializeReportToMarkdown,
 } from "@/api/deepResearch";
 import { agentHttpBase } from "@/api/client";
 import { useExportCapabilities } from "@/hooks/useExportCapabilities";
-import type { ReportEvent } from "@/types/agent";
+import type { MessageEvent, ReportEvent } from "@/types/agent";
 import { ReportFollowUp } from "./ReportFollowUp";
 import { AudioPlayer } from "./AudioPlayer";
+import { IncludeFollowUpsModal } from "./IncludeFollowUpsModal";
 
 // ── Shared button tokens (match CTRL_BTN in DeepResearchSurface.tsx) ─────────
 
@@ -101,26 +101,60 @@ interface ExportModalProps {
   onOpenChange: (open: boolean) => void;
   report: ReportEvent;
   cid: string;
+  /** Selected follow-up user-message seqs to include (WALK-20). */
+  followUpSeqs?: number[];
 }
 
-function ExportModal({ open, onOpenChange, report, cid }: ExportModalProps) {
+function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportModalProps) {
   const exportCaps = useExportCapabilities();
   const [exporting, setExporting] = useState<"md" | "pdf" | "docx" | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   const fsa = hasFSA();
+
+  // Build [question, answer] pairs from followUpSeqs for client-side MD.
+  // (The seqs come from IncludeFollowUpsModal; we don't have the events here,
+  // so we can only do this for the FSA save-picker path where we call the
+  // server with the seqs.)
+  const hasFollowUps = Boolean(followUpSeqs && followUpSeqs.length > 0);
 
   const handleMd = useCallback(async () => {
     setExporting("md");
     setExportError(null);
     try {
       if (fsa) {
-        const md = serializeReportToMarkdown(report);
-        const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+        // For FSA path, include follow_up_seqs in the server request so the
+        // server-rendered markdown carries the Q&A section.  Then we pipe the
+        // blob through the save picker (same as pdf/docx).
+        const bodyPayload = hasFollowUps
+          ? JSON.stringify({ follow_up_seqs: followUpSeqs })
+          : undefined;
+        const res = await fetch(
+          `/api/conversations/${cid}/report/export?fmt=md`,
+          {
+            method: "POST",
+            headers: bodyPayload ? { "Content-Type": "application/json" } : undefined,
+            body: bodyPayload,
+          },
+        );
+        if (!res.ok) {
+          let detail = `${res.status}`;
+          try {
+            const body = await res.json();
+            detail = body.detail?.reason || body.detail || JSON.stringify(body);
+          } catch {
+            // not JSON
+          }
+          throw new Error(`Export failed (${res.status}): ${detail}`);
+        }
+        const blob = await res.blob();
         await saveViaPicker(blob, {
           suggestedName: sanitizeFilename(report.query) + ".md",
           types: [{ description: "Markdown", accept: { "text/markdown": [".md"] } }],
         });
       } else {
+        // Non-FSA path: client-side MD with no follow_ups content (the API call
+        // is the canonical way to get follow_ups in the doc, but for the fallback
+        // download path we just use the simple client-side serializer).
         exportReportAsMarkdown(report);
       }
     } catch (e: unknown) {
@@ -131,18 +165,27 @@ function ExportModal({ open, onOpenChange, report, cid }: ExportModalProps) {
     } finally {
       setExporting(null);
     }
-  }, [report, fsa]);
+  }, [report, cid, fsa, hasFollowUps, followUpSeqs]);
 
   const handleFmt = useCallback(
     async (fmt: "pdf" | "docx") => {
       setExporting(fmt);
       setExportError(null);
       try {
+        const bodyPayload =
+          hasFollowUps && fmt !== "docx" // docx doesn't support follow_ups via sandbox
+            ? JSON.stringify({ follow_up_seqs: followUpSeqs })
+            : undefined;
+
         if (fsa) {
           // Fetch the blob from the server so we can pass it to showSaveFilePicker
           const res = await fetch(
             `/api/conversations/${cid}/report/export?fmt=${fmt}`,
-            { method: "POST" },
+            {
+              method: "POST",
+              headers: bodyPayload ? { "Content-Type": "application/json" } : undefined,
+              body: bodyPayload,
+            },
           );
           if (!res.ok) {
             let detail = `${res.status}`;
@@ -165,7 +208,11 @@ function ExportModal({ open, onOpenChange, report, cid }: ExportModalProps) {
             types: [{ description: fmt.toUpperCase(), accept: { [mimeType]: [ext] } }],
           });
         } else {
-          await exportReport(cid, fmt);
+          await exportReport(
+            cid,
+            fmt,
+            fmt !== "docx" ? followUpSeqs : undefined,
+          );
         }
       } catch (e: unknown) {
         if (!(e instanceof DOMException && e.name === "AbortError")) {
@@ -175,7 +222,7 @@ function ExportModal({ open, onOpenChange, report, cid }: ExportModalProps) {
         setExporting(null);
       }
     },
-    [cid, fsa, report.query],
+    [cid, fsa, hasFollowUps, followUpSeqs, report.query],
   );
 
   return (
@@ -441,23 +488,36 @@ function AudioModeDialog({ open, onOpenChange, onChoose }: AudioModeDialogProps)
 
 interface AudioSectionProps {
   cid: string;
+  /** Selected follow-up seqs to include in the audio (WALK-20). */
+  followUpSeqs?: number[];
+  /** Controlled: whether the mode-pick dialog is open (parent drives this
+   *  when it needs to insert the include-follow-ups step first). */
+  modeOpen: boolean;
+  onModeOpenChange: (open: boolean) => void;
 }
 
-function AudioSection({ cid }: AudioSectionProps) {
+function AudioSection({ cid, followUpSeqs, modeOpen, onModeOpenChange }: AudioSectionProps) {
   const [audio, setAudio] = useState<AudioState>({ status: "idle" });
-  const [modeOpen, setModeOpen] = useState(false);
 
   // Called after the user picks a mode in the dialog.
   // Calls the endpoint directly (not via requestReportAudio from deepResearch.ts)
-  // so we can thread the ?mode= query param without editing that file (WALK-21).
+  // so we can thread the ?mode= query param + JSON body without editing that file.
   const generate = useCallback(
     async (mode: AudioMode) => {
-      setModeOpen(false);
+      onModeOpenChange(false);
       setAudio({ status: "generating" });
       try {
+        const bodyPayload =
+          followUpSeqs && followUpSeqs.length > 0
+            ? JSON.stringify({ follow_up_seqs: followUpSeqs })
+            : undefined;
         const res = await fetch(
           `${agentHttpBase()}/conversations/${cid}/report/audio?mode=${mode}`,
-          { method: "POST" },
+          {
+            method: "POST",
+            headers: bodyPayload ? { "Content-Type": "application/json" } : undefined,
+            body: bodyPayload,
+          },
         );
         if (!res.ok) {
           let reason = `${res.status}`;
@@ -487,7 +547,7 @@ function AudioSection({ cid }: AudioSectionProps) {
         setAudio({ status: "unavailable", reason });
       }
     },
-    [cid],
+    [cid, followUpSeqs, onModeOpenChange],
   );
 
   const reset = useCallback(() => setAudio({ status: "idle" }), []);
@@ -495,17 +555,9 @@ function AudioSection({ cid }: AudioSectionProps) {
   if (audio.status === "idle") {
     return (
       <>
-        <button
-          type="button"
-          onClick={() => setModeOpen(true)}
-          className={CTRL_BTN}
-        >
-          <Headphones className="size-3.5" aria-hidden />
-          Audio Overview
-        </button>
         <AudioModeDialog
           open={modeOpen}
-          onOpenChange={setModeOpen}
+          onOpenChange={onModeOpenChange}
           onChoose={generate}
         />
       </>
@@ -599,6 +651,10 @@ export interface NeedMoreCardProps {
   onFollowUp: (question: string) => void;
   /** True while a follow-up is being submitted. */
   followUpBusy: boolean;
+  /** Post-report follow-up Q&A MessageEvents (WALK-20). When non-empty an
+   *  "Include follow-ups?" modal is shown before Export / Audio so the user can
+   *  choose which pairs to include. Empty list = skip the modal. */
+  followUps?: MessageEvent[];
 }
 
 export function NeedMoreCard({
@@ -606,12 +662,52 @@ export function NeedMoreCard({
   cid,
   onFollowUp,
   followUpBusy,
+  followUps = [],
 }: NeedMoreCardProps) {
   // Independent, resettable state per action.
   const [followUpOpen, setFollowUpOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
 
+  // WALK-20: include-follow-ups modal state for Export and Audio.
+  const [includeForExportOpen, setIncludeForExportOpen] = useState(false);
+  const [exportFollowUpSeqs, setExportFollowUpSeqs] = useState<number[]>([]);
+  const [includeForAudioOpen, setIncludeForAudioOpen] = useState(false);
+  const [audioFollowUpSeqs, setAudioFollowUpSeqs] = useState<number[]>([]);
+  const [audioModeOpen, setAudioModeOpen] = useState(false);
+
+  const hasFollowUps = followUps.length > 0;
+
   const toggleFollowUp = useCallback(() => setFollowUpOpen((v) => !v), []);
+
+  // Export button: show include-modal first if follow-ups exist.
+  const handleExportClick = useCallback(() => {
+    if (hasFollowUps) {
+      setIncludeForExportOpen(true);
+    } else {
+      setExportOpen(true);
+    }
+  }, [hasFollowUps]);
+
+  const handleExportIncludeConfirm = useCallback((seqs: number[]) => {
+    setExportFollowUpSeqs(seqs);
+    setIncludeForExportOpen(false);
+    setExportOpen(true);
+  }, []);
+
+  // Audio button: show include-modal first if follow-ups exist.
+  const handleAudioClick = useCallback(() => {
+    if (hasFollowUps) {
+      setIncludeForAudioOpen(true);
+    } else {
+      setAudioModeOpen(true);
+    }
+  }, [hasFollowUps]);
+
+  const handleAudioIncludeConfirm = useCallback((seqs: number[]) => {
+    setAudioFollowUpSeqs(seqs);
+    setIncludeForAudioOpen(false);
+    setAudioModeOpen(true);
+  }, []);
 
   return (
     <section
@@ -641,18 +737,31 @@ export function NeedMoreCard({
           )}
         </button>
 
-        {/* 2. Export as… — opens the modal */}
+        {/* 2. Export as… — opens include-modal first if follow-ups exist */}
         <button
           type="button"
-          onClick={() => setExportOpen(true)}
+          onClick={handleExportClick}
           className={CTRL_BTN}
         >
           <Download className="size-3.5" aria-hidden />
           Export as…
         </button>
 
-        {/* 3. Audio Overview — state machine */}
-        <AudioSection cid={cid} />
+        {/* 3. Audio Overview — opens include-modal first if follow-ups exist */}
+        <button
+          type="button"
+          onClick={handleAudioClick}
+          className={CTRL_BTN}
+        >
+          <Headphones className="size-3.5" aria-hidden />
+          Audio Overview
+        </button>
+        <AudioSection
+          cid={cid}
+          followUpSeqs={audioFollowUpSeqs}
+          modeOpen={audioModeOpen}
+          onModeOpenChange={setAudioModeOpen}
+        />
       </div>
 
       {/* Inline follow-up panel (pmx-rise on mount) */}
@@ -667,12 +776,31 @@ export function NeedMoreCard({
         </div>
       )}
 
+      {/* WALK-20: include-follow-ups modal for Export */}
+      <IncludeFollowUpsModal
+        open={includeForExportOpen}
+        onOpenChange={setIncludeForExportOpen}
+        followUps={followUps}
+        onConfirm={handleExportIncludeConfirm}
+        actionLabel="Export"
+      />
+
+      {/* WALK-20: include-follow-ups modal for Audio */}
+      <IncludeFollowUpsModal
+        open={includeForAudioOpen}
+        onOpenChange={setIncludeForAudioOpen}
+        followUps={followUps}
+        onConfirm={handleAudioIncludeConfirm}
+        actionLabel="Generate audio"
+      />
+
       {/* Export modal (Radix Dialog) */}
       <ExportModal
         open={exportOpen}
         onOpenChange={setExportOpen}
         report={report}
         cid={cid}
+        followUpSeqs={exportFollowUpSeqs.length > 0 ? exportFollowUpSeqs : undefined}
       />
     </section>
   );

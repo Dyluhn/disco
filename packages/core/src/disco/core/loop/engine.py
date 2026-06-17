@@ -599,6 +599,11 @@ class AgentLoop:
         # same as the browser-verify and execution-nudge gates).
         self._dod_refusals = 0
         self._lock = asyncio.Lock()
+        # WALK-18 — cooperative pause flag. pause() SETS it WITHOUT taking
+        # self._lock (so a pause lands while the in-flight turn holds the lock,
+        # unlike cancel() which must take the lock to emit IDLE); the run() loop
+        # observes it at its next step boundary, emits PAUSED, and returns.
+        self._pause_requested = asyncio.Event()
         # Watch-it-write sink (optional). The runtime wires this to the store's
         # ephemeral broadcast; when set, the driver's streamed tool-call arg
         # fragments are decoded into growing file-content frames and published
@@ -1060,6 +1065,16 @@ class AgentLoop:
                 )
                 status = state.execution_status
 
+                # WALK-18 — cooperative pause lands here at the step boundary
+                # (pause() only SET the flag, without the lock). Emit PAUSED
+                # ourselves and return; resume re-kicks (the flag is cleared at
+                # run() entry). This is a step-boundary pause — a true
+                # mid-model-step interrupt would need driver cooperation.
+                if self._pause_requested.is_set():
+                    self._pause_requested.clear()
+                    await self._emit(StatusEvent(status=ConversationStatus.PAUSED))
+                    return await self.get_state()
+
                 # (a) honor control transitions decided between steps
                 if status in (
                     ConversationStatus.PAUSED,
@@ -1107,6 +1122,13 @@ class AgentLoop:
                     return await self.get_state()
 
                 disp = await self._valve.gate_circuit_breaker(events)
+                if disp is Disp.CONTINUE:
+                    continue
+                if disp is Disp.HALT:
+                    return await self.get_state()
+
+                # WALK-19 — semantic no-progress breaker (failure-independent)
+                disp = await self._valve.gate_no_progress(events)
                 if disp is Disp.CONTINUE:
                     continue
                 if disp is Disp.HALT:
@@ -1489,11 +1511,16 @@ class AgentLoop:
         return await self.get_state()
 
     async def pause(self) -> ConversationState:
-        async with self._lock:
-            await self._emit(StatusEvent(status=ConversationStatus.PAUSED))
+        """WALK-18 — cooperative pause. Deliberately does NOT take self._lock
+        (unlike cancel): the running turn holds the lock across its model step,
+        so taking it here would block until the step finishes — exactly the
+        "pause does nothing until I steer" bug. Instead set a flag the run()
+        loop observes at its next step boundary, where it emits PAUSED."""
+        self._pause_requested.set()
         return await self.get_state()
 
     async def resume(self) -> ConversationState:
+        self._pause_requested.clear()  # WALK-18 — resume cancels a pending pause
         async with self._lock:
             await self._emit(StatusEvent(status=ConversationStatus.RUNNING))
         return await self.run()

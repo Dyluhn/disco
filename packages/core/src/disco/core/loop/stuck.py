@@ -19,7 +19,7 @@ yet — see `is_stuck()` which is the byte-identical bool facade). Assist OFF
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel
 
@@ -45,6 +45,16 @@ _F6_FILE_MUTATING_TOOLS = frozenset({
     "file_replace_lines",
     "file_insert_lines",
 })
+
+# WALK-19 — probe/verify tools whose ObservationEvent carries the "what does the
+# running app actually look like now" signal. When this signal is unchanged
+# across many DISTINCT edits, the model is making successful-but-useless edits
+# (the black-screen-game). `serve` is intercepted by the engine into a
+# DeliverableEvent (no ObservationEvent), so it is not a probe here.
+_NO_PROGRESS_PROBE_TOOLS = frozenset({"browser", "server_status", "deploy_preview"})
+# Distinct varied edits that must recur against ONE stable probe outcome before
+# the no-progress breaker trips. 4 mirrors the circuit-breaker's failure budget.
+NO_PROGRESS_DISTINCT_EDITS = 4
 
 
 class StuckThresholds(BaseModel):
@@ -308,3 +318,69 @@ class StuckDetector:
         return all(event_content_eq(x, a) for x in evens) and all(
             event_content_eq(y, b) for y in odds
         )
+
+
+# -- WALK-19: semantic no-progress detector -----------------------------------
+#
+# Failure-INDEPENDENT and NOT assist-gated (a free function, not a gated method
+# on StuckDetector). Every other breaker keys on a FAILURE or a BYTE-IDENTICAL
+# repeat; a capable model debugging a black screen writes a DIFFERENT edit each
+# turn (so patterns 1-4 never fire), each edit "succeeds" (writes apply, dev
+# server returns 200 — so the circuit breaker's failure count stays 0), and it
+# grinds to max_iterations. The semantic signal it misses: the same probe/verify
+# OUTCOME recurring across many varied edits = no real progress.
+
+
+def repeated_verify_no_progress(
+    events: list[Event],
+    *,
+    distinct_edits: int = NO_PROGRESS_DISTINCT_EDITS,
+    probe_tools: frozenset[str] = _NO_PROGRESS_PROBE_TOOLS,
+    edit_tools: frozenset[str] = _F6_FILE_MUTATING_TOOLS,
+) -> bool:
+    """True when >= `distinct_edits` DISTINCT edit actions all yield the SAME
+    probe/verify outcome — the successful-but-useless varied-edit loop (F4).
+
+    Pure function of the recent window. A new USER instruction resets it (a new
+    goal means 'not stuck'). The outcome key is the probe observation's
+    (success, content); distinctness of edits uses `event_content_eq` so a
+    byte-identical re-edit (pattern 1's job) is not double-counted. Requires at
+    least two probe observations so a single recurrence cannot trip it.
+    """
+    if distinct_edits <= 0:
+        return False
+    window = _after_last_user_message(events)
+    tool_by_id: dict[str, str] = {
+        e.id: e.tool_call.tool_name
+        for e in window
+        if isinstance(e, ActionEvent) and e.tool_call is not None
+    }
+    # Ordered trail of edit ActionEvents and probe-observation outcome keys.
+    trail: list[tuple[str, object]] = []
+    for e in window:
+        if (
+            isinstance(e, ActionEvent)
+            and e.tool_call is not None
+            and e.tool_call.tool_name in edit_tools
+        ):
+            trail.append(("edit", e))
+        elif isinstance(e, ObservationEvent) and tool_by_id.get(e.action_id) in probe_tools:
+            trail.append(("probe", (e.tool_result.success, e.tool_result.content)))
+
+    last_key: object | None = next(
+        (payload for kind, payload in reversed(trail) if kind == "probe"), None
+    )
+    if last_key is None:
+        return False
+    # Walk back over the maximal trailing run of probes sharing `last_key`,
+    # counting the DISTINCT edits interleaved in that run's span.
+    probe_count = 0
+    distinct: list[ActionEvent] = []
+    for kind, payload in reversed(trail):
+        if kind == "probe":
+            if payload != last_key:
+                break
+            probe_count += 1
+        elif not any(event_content_eq(cast("ActionEvent", payload), d) for d in distinct):
+            distinct.append(cast("ActionEvent", payload))
+    return probe_count >= 2 and len(distinct) >= distinct_edits

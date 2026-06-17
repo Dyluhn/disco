@@ -66,8 +66,11 @@ export type ReportExportFmt = "md" | "pdf" | "docx";
 /** Export a finished ReportEvent as a markdown document downloaded to the
  * user's machine. Reuses Projects' Blob → URL.createObjectURL → invisible
  * <a download> pattern; client-side serialization (no new endpoint). */
-export function exportReportAsMarkdown(report: ReportEvent): void {
-  const md = serializeReportToMarkdown(report);
+export function exportReportAsMarkdown(
+  report: ReportEvent,
+  followUps?: Array<[string, string]>,
+): void {
+  const md = serializeReportToMarkdown(report, followUps);
   downloadBlob(new Blob([md], { type: "text/markdown;charset=utf-8" }), report.query, ".md");
 }
 
@@ -75,15 +78,28 @@ export function exportReportAsMarkdown(report: ReportEvent): void {
  * For `md`, we still use the client-side serializer to avoid the round-trip.
  * The UI should gate pdf/docx: if the call returns a non-OK response (e.g.
  * the sandbox image hasn't been rebuilt yet), surface the error to the user.
- * Never silent — missing report → error detail; unknown fmt → error detail. */
-export async function exportReport(cid: string, fmt: ReportExportFmt): Promise<boolean> {
+ * Never silent — missing report → error detail; unknown fmt → error detail.
+ *
+ * ``followUpSeqs`` — optional list of USER MessageEvent seq values whose Q&A
+ * pairs to include in the exported document (WALK-20). Passed to the server
+ * via the JSON body; empty / absent = report only. */
+export async function exportReport(
+  cid: string,
+  fmt: ReportExportFmt,
+  followUpSeqs?: number[],
+): Promise<boolean> {
   // MD stays client-side for now (the endpoint also supports it, but the
   // client-side path is zero-latency and byte-identical).
   if (fmt === "md") {
     throw new Error("Use exportReportAsMarkdown for md exports (client-side).");
   }
+  const body = followUpSeqs && followUpSeqs.length > 0
+    ? JSON.stringify({ follow_up_seqs: followUpSeqs })
+    : undefined;
   const res = await fetch(`${agentHttpBase()}/api/conversations/${cid}/report/export?fmt=${fmt}`, {
     method: "POST",
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body,
   });
   if (!res.ok) {
     let detail = `${res.status}`;
@@ -119,16 +135,29 @@ function downloadBlob(blob: Blob, fallbackName: string, ext: string): void {
   URL.revokeObjectURL(url);
 }
 
-/** Request a server-side two-voice audio overview for a finished report (C2).
+/** Request a server-side audio overview for a finished report (C2).
  * POSTs to the agent-server, which runs the audio pipeline in-process and caches
  * the mp3 + transcript. Returns the agent-server-relative URLs. Throws a clear,
- * typed reason on failure (e.g. TTS disabled in Settings) — never a fake success. */
+ * typed reason on failure (e.g. TTS disabled in Settings) — never a fake success.
+ *
+ * ``mode`` — "podcast" (default) or "single".
+ * ``followUpSeqs`` — optional USER MessageEvent seq values to include (WALK-20). */
 export async function requestReportAudio(
   cid: string,
+  mode: "podcast" | "single" = "podcast",
+  followUpSeqs?: number[],
 ): Promise<{ mp3_url: string; transcript_url: string }> {
-  const res = await fetch(`${agentHttpBase()}/conversations/${cid}/report/audio`, {
-    method: "POST",
-  });
+  const body = followUpSeqs && followUpSeqs.length > 0
+    ? JSON.stringify({ follow_up_seqs: followUpSeqs })
+    : undefined;
+  const res = await fetch(
+    `${agentHttpBase()}/conversations/${cid}/report/audio?mode=${mode}`,
+    {
+      method: "POST",
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body,
+    },
+  );
   if (!res.ok) {
     let reason = `${res.status}`;
     try {
@@ -151,8 +180,17 @@ export async function requestReportAudio(
  * [[passage_id]] markers without the live UI.
  *
  * Exported so the NeedMoreCard's File System Access API path can get the raw
- * string (to write via showSaveFilePicker) without duplicating the logic. */
-export function serializeReportToMarkdown(report: ReportEvent): string {
+ * string (to write via showSaveFilePicker) without duplicating the logic.
+ *
+ * ``followUps`` — optional list of [question, answer] pairs from selected
+ * post-report Q&A turns (WALK-20). When provided and non-empty a
+ * ``## Follow-up Q&A`` section is appended after the passages footer.
+ * When absent or empty the output is byte-identical to the baseline
+ * (the byte-parity contract with Python's serialize_markdown is preserved). */
+export function serializeReportToMarkdown(
+  report: ReportEvent,
+  followUps?: Array<[string, string]>,
+): string {
   const lines: string[] = [];
   lines.push(`# Deep Research: ${report.query}`);
   lines.push("");
@@ -197,6 +235,20 @@ export function serializeReportToMarkdown(report: ReportEvent): string {
     const title = String((p as Record<string, unknown>).source_title ?? "");
     const url = String((p as Record<string, unknown>).source_url ?? "");
     lines.push(`- [${id}] ${title} — ${url}`);
+  }
+  // WALK-20: optional follow-up Q&A section — byte-identical output when
+  // followUps is absent or empty (preserves the py↔ts byte-parity contract).
+  if (followUps && followUps.length > 0) {
+    lines.push("");
+    lines.push("## Follow-up Q&A");
+    followUps.forEach(([q, a], i) => {
+      lines.push("");
+      lines.push(`### Follow-up ${i + 1}`);
+      lines.push("");
+      lines.push(`**Q:** ${q}`);
+      lines.push("");
+      lines.push(a);
+    });
   }
   return lines.join("\n");
 }

@@ -349,6 +349,12 @@ class ResumeService:
         if not legal:
             return {"ok": False, "reason": f"illegal_state_{status.value}"}
 
+        # WALK-18 — drain any lingering loop task from a cooperative Stop BEFORE
+        # we reconstruct context or flip to RUNNING. Otherwise kick() no-ops over
+        # the still-finishing task (resume silently does nothing), and a flip to
+        # RUNNING before the old task checkpoints would make it keep running.
+        await self._rt._drain_finishing_task(conversation_id)
+
         # Reconstruct resume context: synthesized observations + reality block.
         # All new events are appended BEFORE the RUNNING status flip so View.of
         # sees resolved action→observation pairs and the model re-orients correctly.
@@ -358,6 +364,13 @@ class ResumeService:
 
         # Clear any lingering cancel flag from a prior Stop.
         self._rt._cancel_flags.pop(conversation_id, None)
+        # WALK-18 — cancel a pending cooperative pause on a cached loop so the
+        # re-kick isn't immediately re-paused at its first checkpoint (the
+        # already-consumed-pause case cleared it at the checkpoint; this covers a
+        # pause that was requested but never reached a checkpoint to land).
+        _loop = self._rt._loops.get(conversation_id)
+        if _loop is not None and hasattr(_loop, "_pause_requested"):
+            _loop._pause_requested.clear()
 
         surface = self._rt._surface_of(conversation_id)
         if surface == "deep_research":

@@ -26,6 +26,7 @@
  */
 
 import { Ban, File, FileText, FileType, Loader2, Play, RotateCcw, Settings as SettingsIcon, Square } from "lucide-react";
+import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import { Markdown } from "@/components/Markdown";
 import { PlanPanel } from "@/components/build/PlanPanel";
@@ -34,12 +35,15 @@ import { useExportCapabilities } from "@/hooks/useExportCapabilities";
 import { QueryInput } from "@/components/QueryInput";
 import { EmptyState, ErrorState } from "@/components/states";
 import type { ScopeId } from "@/shell/mode";
+import type { ReportExportFmt } from "@/api/deepResearch";
 import { DeepBoundedNotice } from "./DeepBoundedNotice";
 import { DeepProgressStrip } from "./DeepProgressStrip";
 import { asGroundedAnswer, DeepReportView } from "./DeepReportView";
 import { DepthTierSelector, type Tier } from "./DepthTierSelector";
 import { TieredSourcePanel } from "./TieredSourcePanel";
 import { NeedMoreCard } from "./NeedMoreCard";
+import { FollowUpStatus } from "./FollowUpStatus";
+import { IncludeFollowUpsModal } from "./IncludeFollowUpsModal";
 
 interface Props {
   /** When passed via /deep/:cid, the surface resumes the existing conversation. */
@@ -70,6 +74,35 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
   // gated on the REAL server capability — never a clickable button that 500s. MD
   // always works; PDF/DOCX enable wherever the server has the toolchain.
   const exportCaps = useExportCapabilities();
+
+  // WALK-20: include-follow-ups modal for the TOP-BAR export buttons.
+  // When followUps exist, clicking MD/PDF/DOCX in the header opens this modal
+  // first; on confirm the real export runs with the selected seqs threaded in.
+  const [topBarPendingFmt, setTopBarPendingFmt] = useState<ReportExportFmt | null>(null);
+  const [topBarIncludeOpen, setTopBarIncludeOpen] = useState(false);
+
+  const handleTopBarExport = useCallback(
+    (fmt: ReportExportFmt) => {
+      if (r.followUps.length > 0) {
+        setTopBarPendingFmt(fmt);
+        setTopBarIncludeOpen(true);
+      } else {
+        void r.exportReportByFmt(fmt);
+      }
+    },
+    [r],
+  );
+
+  const handleTopBarIncludeConfirm = useCallback(
+    (seqs: number[]) => {
+      setTopBarIncludeOpen(false);
+      if (topBarPendingFmt) {
+        void r.exportReportByFmt(topBarPendingFmt, seqs);
+      }
+      setTopBarPendingFmt(null);
+    },
+    [topBarPendingFmt, r],
+  );
 
   if (!started) {
     return (
@@ -164,7 +197,7 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
               <>
                 <button
                   type="button"
-                  onClick={() => r.exportReportByFmt("md")}
+                  onClick={() => handleTopBarExport("md")}
                   className={CTRL_BTN}
                   title="Download as Markdown"
                 >
@@ -173,7 +206,7 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
                 </button>
                 <button
                   type="button"
-                  onClick={() => r.exportReportByFmt("pdf")}
+                  onClick={() => handleTopBarExport("pdf")}
                   // fix-c #4: disable while in-flight so a second click can't
                   // double-fire the server export; the icon swaps to a spinner
                   // when this fmt is the active pending one. Mirrors the
@@ -196,7 +229,7 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
                 </button>
                 <button
                   type="button"
-                  onClick={() => r.exportReportByFmt("docx")}
+                  onClick={() => handleTopBarExport("docx")}
                   disabled={!exportCaps.docx || r.exportPending !== null}
                   aria-disabled={!exportCaps.docx || r.exportPending !== null}
                   className={exportCaps.docx ? CTRL_BTN : PENDING_BTN}
@@ -232,6 +265,15 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
             )}
           </div>
         </header>
+
+        {/* WALK-20: include-follow-ups modal for top-bar export buttons */}
+        <IncludeFollowUpsModal
+          open={topBarIncludeOpen}
+          onOpenChange={setTopBarIncludeOpen}
+          followUps={r.followUps}
+          onConfirm={handleTopBarIncludeConfirm}
+          actionLabel="Export"
+        />
 
         {/* Error state */}
         {r.status === "ERROR" && (
@@ -360,6 +402,16 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
           </div>
         )}
 
+        {/* WALK-12: follow-up activity indicator. Shows "Reading sources…" /
+            "Writing answer…" while a follow-up is generating so the UI
+            doesn't look frozen. Driven by followUpStatus (WALK-11) + the
+            phase ActionEvents the backend emits during _follow_up_deep_research.
+            Rendered BELOW the Q&A thread and ABOVE the NeedMoreCard. */}
+        <FollowUpStatus
+          followUpStatus={r.followUpStatus}
+          events={r.events}
+        />
+
         {/* "Need More?" card — Ask a Follow-Up / Export as… / Audio Overview.
             Only visible once the report is FINISHED and present. */}
         {r.status === "FINISHED" && r.report && r.cid && (
@@ -369,6 +421,7 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
               cid={r.cid}
               onFollowUp={(question) => r.followUp(question)}
               followUpBusy={false}
+              followUps={r.followUps}
             />
           </div>
         )}

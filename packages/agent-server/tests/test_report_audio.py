@@ -536,3 +536,98 @@ def test_fetch_reporthook_logs_progress(tmp_path, monkeypatch) -> None:
 
     assert len(captured_hooks) == 1, "urlretrieve must be called exactly once"
     assert captured_hooks[0] is not None, "_fetch must pass a reporthook (not None)"
+
+
+# ---- WALK-20 / B3: follow-up text in audio overview -------------------------
+
+
+def test_report_to_overview_text_includes_follow_ups() -> None:
+    """report_to_overview_text appends follow-up Q&A when provided."""
+    report = _make_report()
+    follow_ups = [
+        ("What about the sparrow?", "The sparrow is much slower at 4 m/s."),
+        ("Any penguins?", "Penguins cannot fly but swim at 6 m/s."),
+    ]
+    text = report_audio_mod.report_to_overview_text(report, follow_ups)
+    assert "Follow-up Q&A:" in text
+    assert "Follow-up 1: What about the sparrow?" in text
+    assert "The sparrow is much slower at 4 m/s." in text
+    assert "Follow-up 2: Any penguins?" in text
+    assert "Penguins cannot fly" in text
+
+
+def test_report_to_overview_text_no_follow_ups_unchanged() -> None:
+    """report_to_overview_text output is byte-identical when follow_ups is None or []."""
+    report = _make_report()
+    baseline = report_audio_mod.report_to_overview_text(report)
+    assert report_audio_mod.report_to_overview_text(report, None) == baseline
+    assert report_audio_mod.report_to_overview_text(report, []) == baseline
+    assert "Follow-up Q&A:" not in baseline
+
+
+def test_generate_report_audio_with_follow_ups(
+    configure_tts, tts_enabled, tmp_path, monkeypatch
+) -> None:
+    """generate_report_audio passes follow_ups to the LLM payload and uses a
+    distinct fu-suffixed cache filename so it doesn't collide with the base audio."""
+    configure_tts(tts_enabled)
+
+    # Capture the payload the LLM sees so we can verify follow-up text reaches it.
+    # IMPORTANT: _authenticated_call_llm checks __name__ == "_fake_llm" to detect
+    # the test stub; our recording wrapper must preserve that name.
+    captured_payloads: list[dict] = []
+
+    from disco.tools.builtin import audio_overview as _ao
+
+    async def _recording_fake(payload: dict, llm_url: str) -> str:  # noqa: ARG001
+        captured_payloads.append(payload)
+        return _GOOD_TURN_SCRIPT
+
+    _recording_fake.__name__ = "_fake_llm"  # satisfy the guard in _authenticated_call_llm
+    monkeypatch.setattr(_ao, "_call_llm", _recording_fake)
+
+    follow_ups = [("What about the European swallow?", "It flies at 8 m/s.")]
+    out_dir = tmp_path / "conv_fu" / "audio"
+    mp3_path, transcript_path = asyncio.run(
+        report_audio_mod.generate_report_audio(
+            _make_report(),
+            tts_settings=tts_enabled,
+            out_dir=out_dir,
+            follow_ups=follow_ups,
+        )
+    )
+    # Cache file should be fu-suffixed (WALK-20 anti-collision rule).
+    assert "_fu1" in mp3_path.name, f"expected _fu1 in filename, got {mp3_path.name!r}"
+    assert "_fu1" in transcript_path.name
+    assert mp3_path.exists() and mp3_path.stat().st_size > 0
+    # The LLM payload user-content must include the follow-up text.
+    assert len(captured_payloads) >= 1
+    user_content = " ".join(
+        m.get("content", "") for m in captured_payloads[0].get("messages", [])
+        if m.get("role") == "user"
+    )
+    assert "European swallow" in user_content or "Follow-up" in user_content
+
+
+def test_generate_report_audio_follow_ups_separate_cache(
+    configure_tts, tts_enabled, tmp_path, monkeypatch
+) -> None:
+    """The base audio and follow-up audio write to different cache files."""
+    configure_tts(tts_enabled)
+    report = _make_report()
+    follow_ups = [("Extra question?", "Extra answer.")]
+    out_dir = tmp_path / "conv_sep" / "audio"
+
+    base_mp3, _ = asyncio.run(
+        report_audio_mod.generate_report_audio(
+            report, tts_settings=tts_enabled, out_dir=out_dir
+        )
+    )
+    fu_mp3, _ = asyncio.run(
+        report_audio_mod.generate_report_audio(
+            report, tts_settings=tts_enabled, out_dir=out_dir, follow_ups=follow_ups
+        )
+    )
+    assert base_mp3 != fu_mp3, "base and follow-up audio must use distinct filenames"
+    assert "_fu" not in base_mp3.name
+    assert "_fu1" in fu_mp3.name

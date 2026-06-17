@@ -148,13 +148,20 @@ def report_audio_cache_dir() -> Path:
 # ---- Report → input text ---------------------------------------------------
 
 
-def report_to_overview_text(report: ReportEvent) -> str:
+def report_to_overview_text(
+    report: ReportEvent,
+    follow_ups: list[tuple[str, str]] | None = None,
+) -> str:
     """Reduce a ReportEvent to a plain-text script input the LLM can summarise.
 
     We don't want the LLM to literally read the markdown (it'd add artefacts like
     "Conflicts noted" or the bounded-by footer); we want a clean prose digest of
     the actual findings.  Same data the tool's caller (the model in the loop)
     would pass as `report_text`.
+
+    ``follow_ups`` — optional list of (question, answer) tuples from post-report
+    Q&A turns. When provided, they are appended after the main sections so the
+    audio overview can mention them. (WALK-20)
     """
     parts: list[str] = []
     parts.append(f"Query: {report.query}")
@@ -170,6 +177,14 @@ def report_to_overview_text(report: ReportEvent) -> str:
         if text:
             parts.append(text)
         parts.append("")
+    if follow_ups:
+        parts.append("Follow-up Q&A:")
+        parts.append("")
+        for i, (question, answer) in enumerate(follow_ups, 1):
+            parts.append(f"Follow-up {i}: {question}")
+            if answer:
+                parts.append(re.sub(r"\[\[[\w-]+\]\]", "", answer).strip())
+            parts.append("")
     return "\n".join(parts).strip() or report.query
 
 
@@ -196,69 +211,13 @@ async def _authenticated_call_llm(payload: dict, llm_url: str) -> str:
         return data["choices"][0]["message"]["content"]
 
 
-async def generate_report_audio(
-    report: ReportEvent,
-    *,
-    tts_settings: Any,
-    out_dir: Path,
-    mode: str = "podcast",
-    resolve_key: Callable[[str | None], str | None] | None = None,
-) -> tuple[Path, Path]:
-    """Run the audio-overview pipeline for `report` and write the artifacts into
-    `out_dir` (one cid-scoped subdir, created on demand).  Returns
-    ``(mp3_path, transcript_path)``.
+async def _generate_turn_script(overview_text: str, mode: str) -> list[Any]:
+    """LLM turn-script generation + validation, with one malformed-output retry.
 
-    ``mode`` is ``"podcast"`` (default — two-host dialogue) or ``"single"``
-    (single-voice honest walkthrough).  The two modes write **different cache
-    files** so they never collide on the same conversation:
-    ``audio_overview_podcast.mp3`` and ``audio_overview_single.mp3``.
-
-    Honors `tts_settings.enabled` (fail-soft with a clear message via
-    :class:`TtsDisabled`).  Backend / LLM / synthesis failures raise one of
-    :class:`TtsBackendError` / :class:`TurnScriptError`; the route maps these
-    to 502, never a fake success.
-
-    Mirrors `audio_overview.py:AudioOverviewTool.run` so the bundled tool and
-    the server endpoint stay in lock-step — the route, NOT a different code
-    path, is the only thing that changes.
+    Mode ``"single"`` relaxes the ≥2-turns rule and coerces stray 'B' speakers
+    to 'A'.  Raises :class:`TurnScriptError` if the LLM call fails or the output
+    is still invalid after the retry.  Returns the validated list of turns.
     """
-    # --- Gate: settings -----------------------------------------------------
-    if not tts_settings.enabled:
-        raise TtsDisabled("Audio overview is disabled in Settings → Audio.")
-
-    if mode not in ("podcast", "single"):
-        raise ValueError(f"Unknown audio mode {mode!r}; expected 'podcast' or 'single'.")
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    # Mode-aware filenames prevent cache collision when both modes are requested
-    # for the same conversation (WALK-21 / D3).
-    mp3_path = out_dir / f"audio_overview_{mode}.mp3"
-    transcript_path = out_dir / f"audio_overview_{mode}.md"
-
-    # If a previous run for this conversation already wrote both files, hand
-    # them back verbatim.  The pipeline is deterministic given the report, the
-    # LLM, and the voice settings — and the LLM call is the slow / expensive
-    # step.  This makes the endpoint idempotent (idempotency is good for
-    # retries, and the UI can re-press the button without re-spending RAM).
-    if mp3_path.exists() and transcript_path.exists():
-        return mp3_path, transcript_path
-
-    voice_a = getattr(tts_settings, "voice_a", "af_heart")
-    voice_b = getattr(tts_settings, "voice_b", "af_bella")
-    provider = getattr(tts_settings, "provider", "bundled")
-    remote_base, remote_key, remote_model = _resolve_remote_params(
-        provider,
-        getattr(tts_settings, "base_url", "") or "",
-        getattr(tts_settings, "api_key_env", "") or "",
-        getattr(tts_settings, "model", "") or "",
-        resolve_key,
-    )
-    is_remote = provider != "bundled"
-
-    # --- Step 1: turn-script ------------------------------------------------
-    overview_text = report_to_overview_text(report)
-    # Select validator based on mode: single-speaker relaxes the ≥2-turns rule
-    # and coerces any stray 'B' speakers to 'A'.
     _validate = (
         audio_overview._validate_turn_script_single
         if mode == "single"
@@ -304,6 +263,79 @@ async def generate_report_audio(
             )
 
     assert turns is not None  # validated above
+    return turns
+
+
+async def generate_report_audio(
+    report: ReportEvent,
+    *,
+    tts_settings: Any,
+    out_dir: Path,
+    mode: str = "podcast",
+    resolve_key: Callable[[str | None], str | None] | None = None,
+    follow_ups: list[tuple[str, str]] | None = None,
+) -> tuple[Path, Path]:
+    """Run the audio-overview pipeline for `report` and write the artifacts into
+    `out_dir` (one cid-scoped subdir, created on demand).  Returns
+    ``(mp3_path, transcript_path)``.
+
+    ``mode`` is ``"podcast"`` (default — two-host dialogue) or ``"single"``
+    (single-voice honest walkthrough).  The two modes write **different cache
+    files** so they never collide on the same conversation:
+    ``audio_overview_podcast.mp3`` and ``audio_overview_single.mp3``.
+
+    ``follow_ups`` — optional list of (question, answer) tuples from selected
+    post-report Q&A turns. When provided, the audio script includes them.
+    The cache key includes the follow-up count so different selections get
+    separate cached files. (WALK-20)
+
+    Honors `tts_settings.enabled` (fail-soft with a clear message via
+    :class:`TtsDisabled`).  Backend / LLM / synthesis failures raise one of
+    :class:`TtsBackendError` / :class:`TurnScriptError`; the route maps these
+    to 502, never a fake success.
+
+    Mirrors `audio_overview.py:AudioOverviewTool.run` so the bundled tool and
+    the server endpoint stay in lock-step — the route, NOT a different code
+    path, is the only thing that changes.
+    """
+    # --- Gate: settings -----------------------------------------------------
+    if not tts_settings.enabled:
+        raise TtsDisabled("Audio overview is disabled in Settings → Audio.")
+
+    if mode not in ("podcast", "single"):
+        raise ValueError(f"Unknown audio mode {mode!r}; expected 'podcast' or 'single'.")
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    # Mode-aware + follow-up-count-aware filenames prevent cache collisions
+    # when both modes or different follow-up selections are requested for the
+    # same conversation (WALK-20 / WALK-21 / D3).
+    fu_suffix = f"_fu{len(follow_ups)}" if follow_ups else ""
+    mp3_path = out_dir / f"audio_overview_{mode}{fu_suffix}.mp3"
+    transcript_path = out_dir / f"audio_overview_{mode}{fu_suffix}.md"
+
+    # If a previous run for this conversation already wrote both files, hand
+    # them back verbatim.  The pipeline is deterministic given the report, the
+    # LLM, and the voice settings — and the LLM call is the slow / expensive
+    # step.  This makes the endpoint idempotent (idempotency is good for
+    # retries, and the UI can re-press the button without re-spending RAM).
+    if mp3_path.exists() and transcript_path.exists():
+        return mp3_path, transcript_path
+
+    voice_a = getattr(tts_settings, "voice_a", "af_heart")
+    voice_b = getattr(tts_settings, "voice_b", "af_bella")
+    provider = getattr(tts_settings, "provider", "bundled")
+    remote_base, remote_key, remote_model = _resolve_remote_params(
+        provider,
+        getattr(tts_settings, "base_url", "") or "",
+        getattr(tts_settings, "api_key_env", "") or "",
+        getattr(tts_settings, "model", "") or "",
+        resolve_key,
+    )
+    is_remote = provider != "bundled"
+
+    # --- Step 1: turn-script ------------------------------------------------
+    overview_text = report_to_overview_text(report, follow_ups)
+    turns = await _generate_turn_script(overview_text, mode)
     backend = {
         "bundled": "bundled Kokoro",
         "speaches": "self-host Speaches",

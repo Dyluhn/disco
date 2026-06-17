@@ -394,6 +394,32 @@ override a "bundled" UI selection here.
 
 ---
 
+## Status tracker (live, updated as items land)
+
+Legend: ☐ not started · ◐ code-complete + all gates green + committed · ✅ live-verified in the app.
+
+- ✅ WALK-05 — ddgs label (live: HAS_DUCKDUCKGO=false) · commit b48f5bf
+- ✅ WALK-21 (settings note) — single-speaker default note (live-verified) · commit b48f5bf
+- ✅ WALK-02 — planning loader (live: "Planning the research…" caught in the gap) · b48f5bf
+- ✅ WALK-03 — citation-leak fixed (live: finished report rawCiteMarkers=[], "Disputed 1"
+  note renders to [n]) · b48f5bf
+- ✅ WALK-04 — follow-up markdown render (live: follow-up answered, no raw markers) · b48f5bf
+- ✅ WALK-11 — plan-loader decouple (live: planLoaderRespun=false on follow-up) · b48f5bf
+- ◐ WALK-01 stream markdown · WALK-08 stale-follow-up (committed b48f5bf; live DR confirmed
+  no stale follow-up appeared pre-report — WALK-08 implicitly verified)
+- ◐ WALK-06 disputed-notes scrub · WALK-07 base_url hygiene (committed b48f5bf)
+- ◐ WALK-09 deliverable-card gate · WALK-10 Open-button wake · WALK-16 artifacts tab
+  (committed b48f5bf; live build run pending)
+- ◐ WALK-13 TTS download notice · WALK-14 AudioPlayer · WALK-21 mode popup
+  (committed b48f5bf; live audio run pending)
+- ◐ WALK-15 slides steering · WALK-17 schedule presets (committed b48f5bf; live pending)
+- ☐ WALK-12 follow-up progress (Wave 2) · WALK-18 pause/resume (Wave 1b engine) ·
+  WALK-19 no-progress breaker (Wave 1b engine) · WALK-20 export-include-follow-up (Wave 2)
+
+Closed-by-investigation (no work): F3 surgical tools present; E1/E2 driver+encoders not the spin.
+
+---
+
 ## Section 3 — Consolidated search list additions
 
 Folded into the standing register (`docs/remaining-items-consolidated-2026-06-15.md`). Grouped

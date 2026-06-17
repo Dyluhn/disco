@@ -138,15 +138,46 @@ export function useDeepResearch(
 
   const reset = useCallback(() => setSession(null), []);
 
-  const exportMd = useCallback(() => {
-    if (stream.report) exportReportAsMarkdown(stream.report);
-  }, [stream.report]);
+  const exportMd = useCallback(
+    (followUps?: Array<[string, string]>) => {
+      if (stream.report) exportReportAsMarkdown(stream.report, followUps);
+    },
+    [stream.report],
+  );
 
   const exportReportByFmt = useCallback(
-    async (fmt: ReportExportFmt) => {
+    async (fmt: ReportExportFmt, followUpSeqs?: number[]) => {
       if (!session?.cid) return;
       if (fmt === "md") {
-        exportMd();
+        // Build [question, answer] pairs from followUpSeqs for client-side MD.
+        // The seqs are user-message seqs; find them in stream.events.
+        let followUps: Array<[string, string]> | undefined;
+        if (followUpSeqs && followUpSeqs.length > 0 && stream.report) {
+          const selected = new Set(followUpSeqs);
+          const post = stream.events.filter(
+            (e) =>
+              e.kind === "message" &&
+              (e.seq ?? 0) > (stream.report!.seq ?? -1),
+          );
+          const pairs: Array<[string, string]> = [];
+          for (let i = 0; i < post.length; i++) {
+            const e = post[i];
+            if (
+              e.kind === "message" &&
+              e.message.role === "user" &&
+              selected.has(e.seq ?? -1)
+            ) {
+              const next = post[i + 1];
+              const answer =
+                next && next.kind === "message" && next.message.role === "assistant"
+                  ? (next.message.content ?? "")
+                  : "";
+              pairs.push([e.message.content ?? "", answer]);
+            }
+          }
+          if (pairs.length > 0) followUps = pairs;
+        }
+        exportMd(followUps);
         return;
       }
       // Server-side export for pdf/docx. The UI reports errors via toast/surface.
@@ -156,12 +187,12 @@ export function useDeepResearch(
       // server call takes seconds).
       setExportPending(fmt);
       try {
-        await exportReportApi(session.cid, fmt);
+        await exportReportApi(session.cid, fmt, followUpSeqs);
       } finally {
         setExportPending(null);
       }
     },
-    [session?.cid, exportMd],
+    [session?.cid, exportMd, stream.report, stream.events],
   );
 
   // Legacy export (single-button MD download) — kept for backward compat.

@@ -276,6 +276,48 @@ async def test_double_resume_second_call_is_409():
     await _cancel_task(rt)
 
 
+# ---- WALK-18: resume drains a lingering cancelled task before re-kicking ------
+
+
+async def test_resume_drains_lingering_task_then_rekicks(monkeypatch):
+    """WALK-18: after a cooperative Stop the loop task may still be finishing its
+    in-flight model step. kick() is idempotent over a non-done task, so without a
+    drain the re-kick silently NO-OPs ('Resume does nothing'). resume must drain
+    the lingering task FIRST, then spawn a fresh run."""
+    import disco.agent_server.runtime as rt_mod
+
+    # Keep the hard-cancel fallback fast for the test's wedged-step simulation.
+    monkeypatch.setattr(rt_mod, "_RESUME_DRAIN_TIMEOUT_S", 0.05)
+
+    store = SqliteEventStore(":memory:")
+    store.create_conversation(CID, owner_id="local")
+    rt = _runtime(store)
+    rt.set_surface(CID, "build")
+    await store.append(CID, _user("build it"))
+    await store.append(CID, _plan_event())
+    await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
+
+    # A cooperatively-cancelled loop task still winding down (NOT done) at the
+    # moment the user clicks Resume — here wedged so kick() would no-op over it.
+    blocker = asyncio.Event()
+
+    async def _wedged():
+        await blocker.wait()
+
+    lingering = asyncio.create_task(_wedged())
+    rt._tasks[CID] = lingering
+
+    result = await rt.resume_conversation(CID)
+    assert result["ok"] is True
+    # The lingering task was drained (hard-cancelled after the patched timeout)…
+    assert lingering.done()
+    # …and a FRESH task was spawned — resume actually re-kicked the loop.
+    new_task = rt._tasks.get(CID)
+    assert new_task is not None and new_task is not lingering
+
+    await _cancel_task(rt)
+
+
 # ---- HTTP route (via TestClient) ---------------------------------------------
 
 
