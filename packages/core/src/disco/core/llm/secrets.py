@@ -14,6 +14,7 @@ the config file stays free of credentials and can be shared/inspected safely.
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -158,7 +159,20 @@ class SecretStore:
             return {}
 
     def _write(self, data: dict) -> None:
+        # The secrets file holds credential ciphertext — lock it to the owner
+        # (0600), and the parent dir to 0700, so another local user can't even
+        # copy the ciphertext. Defense-in-depth: decrypting still needs the app
+        # secret, but best practice is least-privilege on anything credential-bearing.
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        with contextlib.suppress(OSError):  # best-effort on non-POSIX / odd mounts
+            os.chmod(self._path.parent, 0o700)
         tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, indent=2))
-        tmp.replace(self._path)  # atomic on POSIX
+        # Create the temp file 0600 from the start (don't briefly expose 0644):
+        # open with O_CREAT|O_WRONLY|O_TRUNC at mode 0o600, then write.
+        fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, json.dumps(data, indent=2).encode())
+        finally:
+            os.close(fd)
+        os.chmod(tmp, 0o600)  # explicit: umask can mask bits off the O_CREAT mode
+        tmp.replace(self._path)  # atomic on POSIX; the 0600 mode rides along

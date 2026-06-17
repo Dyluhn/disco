@@ -6,6 +6,11 @@ only usable with the right app secret (else the store is `locked` and yields Non
 
 from __future__ import annotations
 
+import stat
+import sys
+
+import pytest
+
 from pathlib import Path
 
 from disco.core.llm import SecretBox, SecretStore
@@ -42,6 +47,23 @@ def test_store_persists_encrypted_and_plaintext_not_on_disk(tmp_path):
     assert (
         SecretStore(path, box=SecretBox("app-secret")).get_openrouter_key() == "sk-or-v1-PLAINTEXT"
     )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+def test_secrets_file_and_dir_are_owner_only(tmp_path):
+    """The credential file is written 0600 and its dir 0700 — another local user
+    can't even copy the ciphertext (defense-in-depth atop the app-secret)."""
+    secret_dir = tmp_path / "cfg"
+    path = secret_dir / "secrets.json"
+    store = SecretStore(path, box=SecretBox("app-secret"))
+    store.set_openrouter_key("sk-or-v1-PLAINTEXT")
+
+    file_mode = stat.S_IMODE(path.stat().st_mode)
+    dir_mode = stat.S_IMODE(secret_dir.stat().st_mode)
+    assert file_mode == 0o600, f"secrets file is {oct(file_mode)}, expected 0o600"
+    assert dir_mode == 0o700, f"secrets dir is {oct(dir_mode)}, expected 0o700"
+    # no group/other read bit on the file, ever
+    assert not (file_mode & (stat.S_IRGRP | stat.S_IROTH | stat.S_IWGRP | stat.S_IWOTH))
 
 
 def test_store_locked_without_app_secret(tmp_path):
