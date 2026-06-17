@@ -40,6 +40,17 @@ export interface VerifiedClaim {
   entailment_score: number;
 }
 
+/** One chart data point. All fields optional because the meaningful set varies
+ * by chart_type (bar/line/pie use label+value; scatter uses x+y+group). The
+ * chart component validates at runtime before plotting. */
+export interface ChartDatum {
+  label?: string | number;
+  value?: number;
+  x?: number;
+  y?: number;
+  group?: string;
+}
+
 /**
  * Structured answer content (BoD §13.3: components, not a markdown blob). The
  * backend streams these blocks; the UI renders a component per `kind`. Each
@@ -54,7 +65,7 @@ export type AnswerBlock =
       kind: "chart";
       id: string;
       chart_type: "bar" | "line" | "pie" | "scatter";
-      data: any; // Narrow per-type schemas handled in component
+      data: ChartDatum[];
       title?: string;
       x_label?: string;
       y_label?: string;

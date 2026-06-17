@@ -9,7 +9,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/cn";
 import { ChartBlockComponent, CitationMarker } from "./blocks";
-import type { GroundedAnswer } from "@/types/grounded";
+import type { ChartDatum, GroundedAnswer } from "@/types/grounded";
 
 /** Parse a ```chart fence's JSON payload, or null when it isn't a valid chart.
  * Deep-research report sections arrive as RAW markdown (the synthesis prompt embeds
@@ -17,7 +17,7 @@ import type { GroundedAnswer } from "@/types/grounded";
  * unlike the standard research surface, which gets structured chart blocks. */
 function parseChartPayload(node: React.ReactNode): {
   chart_type: string;
-  data: unknown;
+  data: ChartDatum[];
   title?: string;
   x_label?: string;
   y_label?: string;
@@ -147,7 +147,7 @@ export function Markdown({ children, className, answer = null }: MarkdownProps) 
     const wrap =
       (tag: "p" | "li" | "td" | "th" | "h1" | "h2" | "h3" | "blockquote") =>
       (props: { children?: React.ReactNode }) => {
-        const Original = (COMPONENTS as any)[tag];
+        const Original = (COMPONENTS as Record<string, React.ElementType>)[tag];
         return <Original {...props}>{processCitations(props.children, answer)}</Original>;
       };
     return {

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Chart, registerables } from "chart.js";
+import { Chart, registerables, type ChartType, type ChartDataset } from "chart.js";
+import type { ChartDatum } from "@/types/grounded";
 import { TableView } from "./TableView";
 
 Chart.register(...registerables);
@@ -16,7 +17,7 @@ export function ChartBlockComponent({
   y_label,
 }: {
   chart_type: string;
-  data: any;
+  data: ChartDatum[];
   title?: string;
   x_label?: string;
   y_label?: string;
@@ -30,12 +31,12 @@ export function ChartBlockComponent({
       if (chart_type === "scatter") {
         return {
           columns: ["Group", x_label || "X", y_label || "Y"],
-          rows: data.map((d: any) => [String(d.group || "Default"), String(d.x), String(d.y)]),
+          rows: data.map((d: ChartDatum) => [String(d.group || "Default"), String(d.x), String(d.y)]),
         };
       }
       return {
         columns: [x_label || "Label", y_label || "Value"],
-        rows: data.map((d: any) => [
+        rows: data.map((d: ChartDatum) => [
           String(d.label || d.x || ""),
           String(d.value !== undefined ? d.value : d.y || ""),
         ]),
@@ -57,27 +58,27 @@ export function ChartBlockComponent({
       const isPie = chart_type === "pie";
 
       chart = new Chart(ctx, {
-        type: (chart_type as any) || "bar",
+        type: (chart_type as ChartType) || "bar",
         data: {
-          labels: isScatter ? [] : data.map((d: any) => d.label || d.x || ""),
-          datasets: isScatter
-            ? Array.from(new Set(data.map((d: any) => d.group || "Default"))).map((g, i) => ({
+          labels: isScatter ? [] : data.map((d: ChartDatum) => d.label || d.x || ""),
+          datasets: (isScatter
+            ? Array.from(new Set(data.map((d: ChartDatum) => d.group || "Default"))).map((g, i) => ({
                 label: String(g),
                 data: data
-                  .filter((d: any) => (d.group || "Default") === g)
-                  .map((d: any) => ({ x: d.x, y: d.y })),
+                  .filter((d: ChartDatum) => (d.group || "Default") === g)
+                  .map((d: ChartDatum) => ({ x: d.x ?? 0, y: d.y ?? 0 })),
                 backgroundColor: COLORS[i % COLORS.length],
               }))
             : [
                 {
                   label: y_label || "Value",
-                  data: data.map((d: any) => (d.value !== undefined ? d.value : d.y || 0)),
+                  data: data.map((d: ChartDatum) => (d.value !== undefined ? d.value : d.y || 0)),
                   backgroundColor: isPie ? COLORS : COLORS[0],
                   borderColor: COLORS[0],
                   borderWidth: isPie ? 0 : 2,
                   tension: 0.1,
                 },
-              ],
+              ]) as ChartDataset[],
         },
         options: {
           responsive: true,

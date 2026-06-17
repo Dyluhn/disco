@@ -17,7 +17,7 @@ import { cn } from "@/lib/cn";
 import type { AgentEvent, ConversationStatus, IsolationInfo } from "@/types/agent";
 import { useModels } from "@/hooks/useModels";
 import { calculateUsageCost, formatCost } from "@/lib/cost";
-import { isFree } from "@/types/models";
+import { isFree, type TokenUsage } from "@/types/models";
 
 const STATUS_LABEL: Record<ConversationStatus, string> = {
   IDLE: "Stopped",
@@ -260,7 +260,7 @@ function CostMeter({ events, modelId }: { events: AgentEvent[]; modelId: string 
     for (const e of events) {
       if (e.kind !== "action") continue;
       // Usage may be in a top-level field or tucked in meta.
-      const usage = (e as any).usage || e.meta?.usage;
+      const usage = (e as { usage?: TokenUsage }).usage || (e.meta?.usage as TokenUsage | undefined);
       if (usage) usageSeen = true;
       // Attribute the cost using the model that was active for THAT action.
       const mId = (e.meta?.model_id as string) || modelId;
