@@ -33,6 +33,7 @@ from .dedup import (
 from .messages import _workspace_paths_from_events
 
 if TYPE_CHECKING:
+    from .boundaries import Sandbox
     from .engine import AgentLoop
 
 _LOG = logging.getLogger("disco.loop")
@@ -57,7 +58,7 @@ def overflow_signal(events: list[Event]) -> OverflowSignal:
     return OverflowSignal(difficulty=Difficulty.ROUTINE, consecutive_tool_errors=consecutive)
 
 
-async def workspace_snapshot_message(sbx: object | None, events: list[Event]) -> LLMMessage | None:
+async def workspace_snapshot_message(sbx: Sandbox | None, events: list[Event]) -> LLMMessage | None:
     """Re-derive the CURRENT on-disk content of the working-set files from the
     sandbox each turn and render it as an authoritative, always-fresh message.
 

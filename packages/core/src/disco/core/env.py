@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import overload
 
 _LOG = logging.getLogger("disco.env")
 
@@ -31,6 +32,10 @@ _NEW_PREFIX = "DISCO_"
 _OLD_PREFIX = "PMX_"
 
 
+@overload
+def disco_env(suffix: str, default: str) -> str: ...
+@overload
+def disco_env(suffix: str, default: None = None) -> str | None: ...
 def disco_env(suffix: str, default: str | None = None) -> str | None:
     """Return the env var ``DISCO_<suffix>``, falling back to the legacy
     ``PMX_<suffix>`` (with a one-time deprecation log), else ``default``.

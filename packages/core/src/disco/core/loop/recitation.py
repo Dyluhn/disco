@@ -23,6 +23,7 @@ from . import signals
 from .messages import _hs03_reground_message
 
 if TYPE_CHECKING:
+    from .boundaries import Sandbox
     from .engine import AgentLoop
 
 # The view.py tag for the tail recitation. We look at the last rendered
@@ -262,7 +263,7 @@ class RecitationRegrounder:
         `remember` handler already dedupes (see _remember_tool_singleton's
         `seen` set in this file), so the file only ever sees novel facts.
         """
-        sbx = getattr(self._loop.executor, "sandbox", None)
+        sbx: Sandbox | None = getattr(self._loop.executor, "sandbox", None)
         if sbx is None:
             return
         path = self._loop._MEMORY_PATH

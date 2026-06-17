@@ -77,6 +77,19 @@ class ToolExecutor(Protocol):
 
 
 @runtime_checkable
+class Sandbox(Protocol):
+    """[CONTRACT BOUNDARY — the Tool/Sandbox contract owns the full surface]
+    The minimal file-IO slice of a sandbox instance the loop's projection /
+    memory-mirror steps touch. The concrete `SandboxInstance` (packages/tools)
+    structurally satisfies this; core stays dependency-light by binding only to
+    this duck-typed view (it neither imports nor owns the sandbox)."""
+
+    async def read_file(self, path: str) -> bytes: ...
+    async def write_file(self, path: str, data: bytes) -> None: ...
+    async def list_dir(self, path: str) -> list[str]: ...
+
+
+@runtime_checkable
 class SecurityAnalyzer(Protocol):
     """[CONTRACT BOUNDARY — defined in the Security design, BoD §17] Scores a
     proposed action's risk BEFORE execution. May override the agent's
