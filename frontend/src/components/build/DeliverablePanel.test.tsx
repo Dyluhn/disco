@@ -86,7 +86,7 @@ describe("DeliverablePanel", () => {
     expect(anchor).toHaveAttribute("download");
   });
 
-  it("a files deliverable without cid falls back to onDownload callback", () => {
+  it("a files deliverable without cid falls back to onDownload callback", async () => {
     const onDownload = vi.fn();
     render(
       <DeliverablePanel
@@ -100,7 +100,7 @@ describe("DeliverablePanel", () => {
     expect(onDownload).toHaveBeenCalledOnce();
   });
 
-  it("a files deliverable with directory path (no extension) falls back to onDownload", () => {
+  it("a files deliverable with directory path (no extension) falls back to onDownload", async () => {
     // F1: directories don't have extensions, so they can't use the per-file route
     const onDownload = vi.fn();
     render(
