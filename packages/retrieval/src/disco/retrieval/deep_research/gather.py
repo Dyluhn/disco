@@ -215,6 +215,7 @@ async def gather_for_subquestion(
     remaining_source_budget: int,
     leg_context: GatherLegContext,
     recency_window: Literal["month", "week"] | None = None,
+    extra_passages: list[Passage] = [],  # noqa: B006 — read-only default; safe
 ) -> SubQuestionResult:
     """Run the retrieve-reason-refine loop for one sub-question. Returns the
     accumulated result. Stops on: (a) gap-reasoner sufficient, (b) round cap,
@@ -228,10 +229,19 @@ async def gather_for_subquestion(
     lives in this function's locals — nothing is shared with sibling legs.
     The leg's `SubQuestionResult` is the only thing that escapes, and it
     escapes to the synthesis boundary in `DeepResearchRun.run`, never into
-    a sibling leg."""
+    a sibling leg.
+
+    G1/DR-4 F2: ``extra_passages`` seeds this leg's working set with
+    pre-attached upload passages so they are available for synthesis alongside
+    web-retrieved passages. The OFF-path (empty list, the default) is
+    byte-identical to the pre-DR-4 code."""
+    # G1/DR-4 F2: seed the leg's working set with upload passages (if any).
+    # Dedup by id so a passage the retrieval engine also finds isn't doubled.
     result = SubQuestionResult(subq=subq)
+    if extra_passages:
+        result.passages.extend(extra_passages)
     current_queries = [subq.title]
-    seen_passage_ids: set[str] = set()
+    seen_passage_ids: set[str] = {p.id for p in extra_passages}
     seen_urls: set[str] = set()
 
     for round_idx in range(bound.max_rounds_per_subq):

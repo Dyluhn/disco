@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { createBuildConversation, killConversation } from "@/api/agent";
+import { agentLive } from "@/api/client";
 import { useBuildStream, type BuildSession } from "./useBuildStream";
 
 /** Opens a build-like conversation. `surface` is "build" (software framing) or
@@ -20,6 +21,26 @@ export function useBuild(resumeCid?: string | null, surface: "build" | "agent" =
   // Create-time choice: run this build headless (no questions, auto-approve plan).
   // Off by default. Locked once the conversation is created (it's a per-run mode).
   const [autonomousChoice, setAutonomousChoice] = useState(false);
+
+  // G1/DR-4: pre-created cid for the empty state UploadComposer.
+  // Created eagerly on mount with default settings so a paperclip is rendered
+  // before the user types anything. On submit, this cid is USED instead of
+  // creating a new one, so uploads already in the pending session survive.
+  const [preCid, setPreCid] = useState<string | null>(null);
+  const preCreate = useMutation({
+    mutationFn: (opts: { modelOverride: string | null; autonomous: boolean }) =>
+      createBuildConversation(opts.modelOverride, surface, opts.autonomous),
+  });
+
+  useEffect(() => {
+    if (resumeCid || session !== null || !agentLive()) return;
+    if (preCid) return; // already pre-created; don't re-create
+    preCreate.mutate(
+      { modelOverride: null, autonomous: false },
+      { onSuccess: setPreCid },
+    );
+  }, [resumeCid, session]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const stream = useBuildStream(session);
 
   // Resume path: when a route param hands us a cid, jump straight in. The
@@ -39,12 +60,18 @@ export function useBuild(resumeCid?: string | null, surface: "build" | "agent" =
     (task: string) => {
       const trimmed = task.trim();
       if (!trimmed) return;
+      // G1/DR-4: use pre-created cid if available so uploads survive.
+      if (preCid) {
+        setSession({ cid: preCid, task: trimmed, kick: true });
+        setPreCid(null);
+        return;
+      }
       create.mutate(
         { modelOverride: modelId, autonomous: autonomousChoice },
         { onSuccess: (cid) => setSession({ cid, task: trimmed, kick: true }) },
       );
     },
-    [create, modelId, autonomousChoice],
+    [create, modelId, autonomousChoice, preCid],
   );
 
   const kill = useCallback(async () => {
@@ -67,6 +94,9 @@ export function useBuild(resumeCid?: string | null, surface: "build" | "agent" =
     submit,
     kill,
     reset,
+    /** G1/DR-4: pre-created cid for the empty state UploadComposer. null once
+     *  a session is live (the cid is on session.cid then) or on the resume path. */
+    preCid: session === null && !resumeCid ? preCid : null,
     ...stream,
     // A failed create (e.g. backend unreachable) was silent — the surface stayed
     // on the empty state with no signal. Expose it so the UI can show an error.

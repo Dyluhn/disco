@@ -130,6 +130,11 @@ export interface ReScope {
   /** The Think toggle: run the answerer in reasoning mode (it thinks first, then
    *  the answer streams). Honored by the live backend for reasoning models. */
   think?: boolean;
+  /** G1/DR-4: pre-created conversation id for the research session. When set,
+   *  the server loads any pre-attached upload passages (text files from the
+   *  initial-box UploadComposer) and seeds them into the rerank step.
+   *  null/undefined → OFF path (byte-identical to pre-DR-4 code). */
+  conversation_id?: string | null;
 }
 
 // ---- WS frames (event-state §7.2) — what the stream delivers ----------------

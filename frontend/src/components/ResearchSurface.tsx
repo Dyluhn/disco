@@ -2,6 +2,7 @@ import { Square } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useResearch } from "@/hooks/useResearch";
 import type { ScopeId } from "@/shell/mode";
+import { UploadComposer } from "@/components/build/BuildSurface";
 import { AnswerDocument } from "./AnswerDocument";
 import { ExampleQueries } from "./ExampleQueries";
 import { FollowUps } from "./FollowUps";
@@ -59,7 +60,23 @@ export function ResearchSurface() {
         <main className="flex flex-1 flex-col items-center justify-center gap-major px-body pb-[12vh]">
           <EmptyState />
           <div className="w-full max-w-measure">
-            <QueryInput onSubmit={submit} busy={r.submitting} autoFocus {...clusterProps} />
+            <QueryInput
+              onSubmit={submit}
+              busy={r.submitting}
+              autoFocus
+              {...clusterProps}
+              footer={
+                /* G1/DR-4: UploadComposer in the research empty state. The preCid
+                   is pre-created on mount; its attached text files seed the rerank
+                   step via seed_passages. No false affordance — only render when
+                   the cid is ready (agentLive path only). */
+                r.preCid ? (
+                  <div className="flex items-center gap-inline">
+                    <UploadComposer cid={r.preCid} />
+                  </div>
+                ) : undefined
+              }
+            />
             {r.submitError && (
               <p role="alert" className="mt-inline font-ui text-[0.8rem] text-unsupported">
                 {r.submitError instanceof Error

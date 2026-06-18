@@ -26,6 +26,7 @@
  */
 
 import { Ban, File, FileText, FileType, Loader2, Navigation, Play, RotateCcw, Settings as SettingsIcon, Square } from "lucide-react";
+import { UploadComposer } from "@/components/build/BuildSurface";
 import { useCallback, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Markdown } from "@/components/Markdown";
@@ -133,6 +134,10 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
                   <div className="flex items-center gap-inline">
                     <DepthTierSelector value={r.depthTier as Tier} onChange={r.setDepthTier} />
                     <RecencySelector value={r.recencyWindow} onChange={r.setRecencyWindow} />
+                    {/* G1/DR-4: UploadComposer in the empty state. The preCid is
+                        created eagerly on mount so this renders immediately.
+                        Only shown when a live cid is available (no false affordance). */}
+                    {r.preCid && <UploadComposer cid={r.preCid} />}
                   </div>
                   <p className="font-ui text-[0.74rem] text-text-faint">
                     Deep runs take minutes. The leader pill picks the driver model.

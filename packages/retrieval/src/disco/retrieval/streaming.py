@@ -353,6 +353,7 @@ async def stream_research_answer(
     discover_limit: int = 10,
     extract_cap: int = 6,
     top_k: int = 6,
+    seed_passages: Sequence[Passage] = (),
 ) -> AsyncIterator[dict[str, Any]]:
     """Yield the frontend's research frames for a live, grounded answer. The
     re-scope controls apply here: `domains_deny` filters discovery; `drop_weak`
@@ -368,7 +369,12 @@ async def stream_research_answer(
     "phase":"reformulating"}` frame is emitted between rounds so the UI shows
     activity. The OFF-path (≥1 supported claim on round 0, or the default
     `max_research_rounds=1`) is byte-identical to the pre-F1 code — the retry
-    block is unreachable when no extra rounds are allowed."""
+    block is unreachable when no extra rounds are allowed.
+
+    ``seed_passages`` — pre-attached upload passages (G1/DR-4 F3). When non-empty
+    they are prepended to the web-extracted passages BEFORE the rerank step so
+    they compete for ``top_k`` slots alongside live-web content. The OFF-path
+    (empty seeds, the default) is byte-identical to the pre-DR-4 code."""
     # F1: cap extra rounds at 2 regardless of the caller's value.
     bounded_extra = min(max(max_research_rounds - 1, 0), 2)
 
@@ -408,6 +414,17 @@ async def stream_research_answer(
             all_hits = [{**h.model_dump(), "status": status_by_url.get(h.url)} for h in hits]
             this_round_urls = frozenset(h.url for h in hits)
 
+            # 3a. Inject seed passages (G1/DR-4 F3) BEFORE the empty-passage
+            # early-exit so that uploaded files can answer the query even when
+            # web extraction fails. Dedup by id so a seed that was also
+            # extracted from the web doesn't get double-counted.
+            # OFF-path: empty seeds → no change.
+            if seed_passages:
+                seen_seed_ids = {p.id for p in passages}
+                passages = list(passages) + [
+                    p for p in seed_passages if p.id not in seen_seed_ids
+                ]
+
             if not passages:
                 unreadable = sum(1 for d in docs if d.status in ("blocked", "paywalled", "not_found"))
                 yield {
@@ -420,7 +437,8 @@ async def stream_research_answer(
                 }
                 return
 
-            # 3. rerank to the working set
+            # 3b. rerank to the working set (web passages + any seeds that
+            # survived the dedup above).
             top = await reranker.rerank(current_query, passages, top_k=top_k)
             by_id = {p.id: p for p in top}
 

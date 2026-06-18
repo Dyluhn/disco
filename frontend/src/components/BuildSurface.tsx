@@ -208,6 +208,16 @@ export function BuildSurface({
               busy={b.submitting}
               autoFocus
               placeholder={copy.placeholder}
+              footer={
+                /* G1/DR-4: UploadComposer in the empty state. The preCid is
+                   eagerly pre-created on mount so the paperclip renders before
+                   the user types anything. No false affordance — only when ready. */
+                b.preCid ? (
+                  <div className="flex items-center gap-inline">
+                    <UploadComposer cid={b.preCid} />
+                  </div>
+                ) : undefined
+              }
             />
             <p className="mt-inline text-center font-ui text-[0.78rem] text-text-faint">
               The agent works in a sandbox and shows its plan.{" "}

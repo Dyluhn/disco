@@ -13,7 +13,7 @@
  *   - CONTROL is explicit: stop (pause), kill (end), resume (continue), retry.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import {
   createDeepResearchConversation,
@@ -24,6 +24,7 @@ import {
   type ReportExportFmt,
 } from "@/api/deepResearch";
 import { killConversation } from "@/api/agent";
+import { agentLive } from "@/api/client";
 import type { MessageEvent } from "@/types/agent";
 import {
   useDeepResearchStream,
@@ -52,6 +53,38 @@ export function useDeepResearch(
   // take seconds — without a pending signal the button looked dead. MD stays
   // synchronous (client-side blob) so it never sets this.
   const [exportPending, setExportPending] = useState<ReportExportFmt | null>(null);
+
+  // G1/DR-4: pre-created cid for the empty state so UploadComposer can render
+  // before the user submits their first query. Created eagerly on mount
+  // (and re-created when depth/recency change so the run's settings match
+  // what was set when the user typed their query). The preCid is passed
+  // to submit() which uses it as the existing cid rather than creating a new
+  // one — so any uploaded files are already in the right conversation.
+  // Resume path: no pre-create (we have the server's cid already).
+  const [preCid, setPreCid] = useState<string | null>(null);
+  const preCreate = useMutation({ mutationFn: createDeepResearchConversation });
+  // Track which depth/recency combo the current preCid was created for so we
+  // only re-create when they actually change (not on every render).
+  const preCidSettingsRef = useRef<{ depthTier: Tier; recencyWindow: "month" | "week" | null } | null>(null);
+
+  useEffect(() => {
+    // Don't pre-create on the resume path (we already have a cid) or when
+    // a session is live (the run has already started), or offline (no server).
+    if (resumeCid || session !== null || !agentLive()) return;
+    const alreadyMatchesCurrent =
+      preCidSettingsRef.current !== null &&
+      preCidSettingsRef.current.depthTier === depthTier &&
+      preCidSettingsRef.current.recencyWindow === recencyWindow;
+    if (alreadyMatchesCurrent) return;
+    preCidSettingsRef.current = { depthTier, recencyWindow };
+    preCreate.mutate(
+      // query is intentionally empty — no USER message is sent at pre-create
+      // time; the cid is just a lightweight conversation record for uploads.
+      { query: "", depthTier, recencyWindow },
+      { onSuccess: setPreCid },
+    );
+  }, [resumeCid, session, depthTier, recencyWindow]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const stream = useDeepResearchStream(session);
 
   // Recover the real query from replayed events (resume path).
@@ -80,6 +113,17 @@ export function useDeepResearch(
     (query: string) => {
       const trimmed = query.trim();
       if (!trimmed) return;
+      // G1/DR-4: if we pre-created a cid (for upload support in the empty state),
+      // USE IT instead of creating a new one — so any uploaded files are already
+      // associated with the conversation that will run. The settings (depth/recency)
+      // were set at pre-create time to match what was showing in the UI.
+      // If preCid is not yet available (pre-create in flight or offline),
+      // fall through to the normal create path.
+      if (preCid) {
+        setSession({ cid: preCid, query: trimmed, depthTier, kick: true });
+        setPreCid(null); // consumed; a fresh preCid will be created for the next run
+        return;
+      }
       create.mutate(
         { query: trimmed, leaderId, depthTier, recencyWindow },
         {
@@ -89,7 +133,7 @@ export function useDeepResearch(
         },
       );
     },
-    [create, leaderId, depthTier, recencyWindow],
+    [create, leaderId, depthTier, recencyWindow, preCid],
   );
 
   // fix-c #5: the bounded-by "Run on exhaustive tier" button used to call
@@ -236,6 +280,10 @@ export function useDeepResearch(
   return {
     started: session !== null,
     cid: session?.cid ?? null,
+    /** G1/DR-4: the pre-created cid for the empty state (before first submit).
+     *  Pass to UploadComposer so text files can be attached before submitting.
+     *  null when a session is already live or on the resume path. */
+    preCid: session === null && !resumeCid ? preCid : null,
     query: effectiveQuery,
     /** True once the real query text is available (not the loading placeholder). */
     queryResolved:

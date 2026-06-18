@@ -31,15 +31,22 @@ ALLOW_CLASSES = {
     # C6 wiring added ~42 LOC (per-conversation _artifact_mode dict + delegators
     # + _compose_build_loop branch) — same irreducible-coordinator rationale.
     # D3 +8 LOC: two per-cid queue dicts + comments.
-    ("agent_server/runtime.py", "ConversationRuntime"): 1335,  # +C6 artifact_mode +P3 last_model +D3 steer queues
+    # G1/DR-4 +15 LOC: _upload_passages dict init + add/get_upload_passages methods
+    # + research_stream conversation_id param.
+    ("agent_server/runtime.py", "ConversationRuntime"): 1360,  # +C6 artifact_mode +P3 last_model +D3 steer queues +G1/DR-4 upload corpus
     # D3 +20 LOC: pop_steers/pop_injected closures + queue init/cleanup.
-    ("agent_server/deep_research_service.py", "DeepResearchService"): 825,  # +D3 steer/inject wiring
+    # G1/DR-4 +18 LOC: seed_passages/upload_passages wiring in research_stream
+    # and _execute_deep_research.
+    ("agent_server/deep_research_service.py", "DeepResearchService"): 850,  # +D3 steer/inject wiring +G1/DR-4 upload corpus
 }
 ALLOW_FUNCS = {
     ("core/loop/engine.py", "run"): 330,            # the agent-loop dispatcher
     ("core/loop/engine.py", "__init__"): 240,       # collaborator wiring + comments
     # D3 +3 LOC: pop_steers/pop_injected params + queue cleanup in finally.
     ("deep_research_service.py", "_execute_deep_research"): 250,  # +D3 steer/inject orchestration
+    # G1/DR-4 +1 LOC: self._upload_passages dict init tipped __init__ just over
+    # the default 200-line cap; D3 steer-queue inits were already close to 200.
+    ("agent_server/runtime.py", "__init__"): 210,   # +G1/DR-4 upload_passages init
 }
 
 
