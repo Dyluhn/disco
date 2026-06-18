@@ -17,6 +17,7 @@ from __future__ import annotations
 from .config import (
     EncodersSettings,
     ExtractionSettings,
+    ImageGenSettings,
     McpSettings,
     ModelEntry,
     ProjectStorageSettings,
@@ -116,6 +117,7 @@ __all__ = [
     "EncodersSettings",
     "TtsSettings",
     "ExtractionSettings",
+    "ImageGenSettings",
     "SearchSettings",
     "RouterSummarizer",
     "RoutingDecision",

@@ -25,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import io
 
+import httpx
 import pytest
 from disco.tools.anatomy import ToolContext
 from disco.tools.builtin import ImageGenTool, build_default_registry
@@ -33,6 +34,9 @@ from disco.tools.builtin.image_gen import (
     ImageGenArgs,
     _PILProceduralBackend,
     _prompt_seed,
+    _OpenAIImageBackend,
+    _ComfyUIBackend,
+    select_image_backend,
 )
 from disco.tools.registry import agent_scope, research_scope
 from disco.tools.secrets import CapabilityBroker
@@ -395,3 +399,316 @@ async def _run_with(backend, sbx):
         ImageGenArgs(prompt="x", filename="x", format="png"),
         _ctx(sbx),
     )
+
+
+# ---- backend selection + factory --------------------------------------------
+
+
+def test_select_image_backend_returns_procedural_by_default(monkeypatch):
+    """When no provider is configured (procedural default), the factory
+    returns the keyless PIL procedural backend."""
+    from disco.tools.builtin.image_gen import select_image_backend, _PILProceduralBackend
+
+    # Mock ConfigStore to return procedural provider
+    class _MockConfig:
+        image_gen = type('obj', (object,), {'provider': 'procedural', 'base_url': '', 'api_key_env': ''})()
+
+    class _MockStore:
+        def load(self):
+            return _MockConfig()
+
+    monkeypatch.setattr('disco.tools.builtin.image_gen.ConfigStore', lambda: _MockStore())
+
+    backend = select_image_backend()
+    assert isinstance(backend, _PILProceduralBackend)
+    assert backend.name == "pil-procedural"
+    assert backend.is_remote is False
+
+
+def test_select_image_backend_falls_back_to_procedural_when_openai_has_no_key(monkeypatch):
+    """When openai provider is configured but no API key is available,
+    the factory falls back to procedural."""
+    from disco.tools.builtin.image_gen import select_image_backend, _PILProceduralBackend
+
+    class _MockConfig:
+        image_gen = type('obj', (object,), {
+            'provider': 'openai',
+            'base_url': 'https://api.openai.com/v1',
+            'api_key_env': 'OPENAI_API_KEY'
+        })()
+
+    class _MockStore:
+        def load(self):
+            return _MockConfig()
+
+    # Mock SecretStore to return no secret
+    class _MockSecrets:
+        def get_secret(self, name):
+            return None
+
+    monkeypatch.setattr('disco.tools.builtin.image_gen.ConfigStore', lambda: _MockStore())
+    monkeypatch.setattr('disco.tools.builtin.image_gen.SecretStore', lambda: _MockSecrets())
+
+    backend = select_image_backend()
+    assert isinstance(backend, _PILProceduralBackend)
+
+
+def test_select_image_backend_falls_back_when_comfyui_has_no_url(monkeypatch):
+    """When comfyui provider is configured but no base_url is set,
+    the factory falls back to procedural."""
+    from disco.tools.builtin.image_gen import select_image_backend, _PILProceduralBackend
+
+    class _MockConfig:
+        image_gen = type('obj', (object,), {
+            'provider': 'comfyui',
+            'base_url': '',  # Empty URL
+            'api_key_env': ''
+        })()
+
+    class _MockStore:
+        def load(self):
+            return _MockConfig()
+
+    monkeypatch.setattr('disco.tools.builtin.image_gen.ConfigStore', lambda: _MockStore())
+
+    backend = select_image_backend()
+    assert isinstance(backend, _PILProceduralBackend)
+
+
+def test_select_image_backend_returns_openai_with_key(monkeypatch):
+    """When openai provider is configured with a valid API key,
+    the factory returns the OpenAI-compatible backend."""
+    from disco.tools.builtin.image_gen import select_image_backend, _OpenAIImageBackend
+
+    class _MockConfig:
+        image_gen = type('obj', (object,), {
+            'provider': 'openai',
+            'base_url': 'https://api.openai.com/v1',
+            'api_key_env': 'OPENAI_API_KEY'
+        })()
+
+    class _MockStore:
+        def load(self):
+            return _MockConfig()
+
+    class _MockSecrets:
+        def get_secret(self, name):
+            return "test-api-key-12345"
+
+    monkeypatch.setattr('disco.tools.builtin.image_gen.ConfigStore', lambda: _MockStore())
+    monkeypatch.setattr('disco.tools.builtin.image_gen.SecretStore', lambda: _MockSecrets())
+
+    backend = select_image_backend()
+    assert isinstance(backend, _OpenAIImageBackend)
+    assert backend.name == "openai-compatible"
+    assert backend.is_remote is True
+
+
+def test_select_image_backend_returns_comfyui_with_url(monkeypatch):
+    """When comfyui provider is configured with a base_url,
+    the factory returns the ComfyUI backend."""
+    from disco.tools.builtin.image_gen import select_image_backend, _ComfyUIBackend
+
+    class _MockConfig:
+        image_gen = type('obj', (object,), {
+            'provider': 'comfyui',
+            'base_url': 'http://localhost:8188',
+            'api_key_env': ''
+        })()
+
+    class _MockStore:
+        def load(self):
+            return _MockConfig()
+
+    monkeypatch.setattr('disco.tools.builtin.image_gen.ConfigStore', lambda: _MockStore())
+
+    backend = select_image_backend()
+    assert isinstance(backend, _ComfyUIBackend)
+    assert backend.name == "comfyui"
+    assert backend.is_remote is True
+
+
+def test_select_image_backend_unknown_provider_falls_back(monkeypatch):
+    """When an unknown provider is configured, the factory falls back
+    to procedural."""
+    from disco.tools.builtin.image_gen import select_image_backend, _PILProceduralBackend
+
+    class _MockConfig:
+        image_gen = type('obj', (object,), {
+            'provider': 'unknown-provider',
+            'base_url': '',
+            'api_key_env': ''
+        })()
+
+    class _MockStore:
+        def load(self):
+            return _MockConfig()
+
+    monkeypatch.setattr('disco.tools.builtin.image_gen.ConfigStore', lambda: _MockStore())
+
+    backend = select_image_backend()
+    assert isinstance(backend, _PILProceduralBackend)
+
+
+# ---- OpenAI-compatible backend tests ----------------------------------------
+
+
+def test_openai_backend_builds_correct_request_shape():
+    """The OpenAI-compatible backend builds a proper /v1/images/generations
+    request with the correct payload shape."""
+    import base64
+    from unittest.mock import MagicMock, patch
+    from disco.tools.builtin.image_gen import _OpenAIImageBackend
+
+    # Create a minimal valid PNG (1x1 transparent)
+    png_data = base64.b64encode(b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82')
+
+    # Mock the httpx client
+    mock_response = MagicMock()
+    mock_response.json.return_value = {'data': [{'b64_json': png_data.decode()}]}
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.post.return_value = mock_response
+
+    with patch('disco.tools.builtin.image_gen.httpx.Client', return_value=mock_client):
+        backend = _OpenAIImageBackend(
+            base_url='https://api.openai.com/v1',
+            api_key='test-key',
+        )
+
+        result = backend.generate(
+            prompt='a sunset',
+            width=512,
+            height=512,
+            seed=42,
+            fmt='png',
+        )
+
+        # Verify the request was made with correct payload
+        mock_client.post.assert_called_once()
+        call_args = mock_client.post.call_args
+
+        assert '/v1/images/generations' in str(call_args)
+        body = call_args.kwargs.get('json') or call_args[1].get('json')
+        assert body['prompt'] == 'a sunset'
+        assert body['size'] == '512x512'
+        assert body['n'] == 1
+        assert body['response_format'] == 'b64_json'
+
+        headers = call_args.kwargs.get('headers') or call_args[1].get('headers')
+        assert 'Authorization' in headers
+        assert headers['Authorization'] == 'Bearer test-key'
+
+        # Verify we got the image back
+        assert result.startswith(b'\x89PNG')
+
+
+def test_openai_backend_raises_on_api_error():
+    """The OpenAI-compatible backend raises on API errors."""
+    from unittest.mock import MagicMock, patch
+    import httpx
+    from disco.tools.builtin.image_gen import _OpenAIImageBackend
+
+    # Mock the httpx client to raise an error
+    mock_response = MagicMock()
+    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "401 Unauthorized",
+        request=MagicMock(),
+        response=MagicMock(status_code=401),
+    )
+
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.post.return_value = mock_response
+
+    with patch('disco.tools.builtin.image_gen.httpx.Client', return_value=mock_client):
+        backend = _OpenAIImageBackend(
+            base_url='https://api.openai.com/v1',
+            api_key='invalid-key',
+        )
+
+        with pytest.raises(httpx.HTTPStatusError):
+            backend.generate(
+                prompt='a sunset',
+                width=512,
+                height=512,
+                seed=42,
+                fmt='png',
+            )
+
+
+# ---- ComfyUI backend tests --------------------------------------------------
+
+
+def test_comfyui_backend_builds_workflow_and_polls():
+    """The ComfyUI backend submits a prompt and polls for completion."""
+    from unittest.mock import MagicMock, patch
+    from disco.tools.builtin.image_gen import _ComfyUIBackend
+
+    # Track call count for polling
+    call_count = [0]
+
+    def mock_get(url, **kwargs):
+        call_count[0] += 1
+        mock_resp = MagicMock()
+        if '/prompt' in str(url):
+            mock_resp.json.return_value = {'prompt_id': 'test-prompt-123'}
+            mock_resp.raise_for_status = MagicMock()
+        elif '/history/test-prompt-123' in str(url):
+            if call_count[0] <= 2:
+                # Not ready yet
+                mock_resp.json.return_value = {}
+            else:
+                # Ready
+                mock_resp.json.return_value = {
+                    'test-prompt-123': {
+                        'outputs': {
+                            '9': {
+                                'images': [
+                                    {
+                                        'filename': 'test.png',
+                                        'subfolder': '',
+                                        'type': 'output',
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            mock_resp.raise_for_status = MagicMock()
+        elif '/view' in str(url):
+            mock_resp.content = b'\x89PNG\r\n\x1a\n' + b'fake png data'
+            mock_resp.raise_for_status = MagicMock()
+        return mock_resp
+
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.post.side_effect = lambda url, **kwargs: mock_get(url, **kwargs)
+    mock_client.get.side_effect = lambda url, **kwargs: mock_get(url, **kwargs)
+
+    with patch('disco.tools.builtin.image_gen.httpx.Client', return_value=mock_client):
+        backend = _ComfyUIBackend(base_url='http://localhost:8188')
+
+        result = backend.generate(
+            prompt='a sunset',
+            width=512,
+            height=512,
+            seed=42,
+            fmt='png',
+        )
+
+        # Verify prompt was submitted
+        mock_client.post.assert_called_once()
+        call_args = mock_client.post.call_args
+        assert '/prompt' in str(call_args)
+
+        # Verify polling happened
+        assert mock_client.get.call_count >= 2
+
+        # Verify we got image data
+        assert result == b'\x89PNG\r\n\x1a\n' + b'fake png data'

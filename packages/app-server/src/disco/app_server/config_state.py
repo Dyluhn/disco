@@ -28,6 +28,7 @@ from .config.dtos import (
     AssignmentsPatch,
     DataSourcesConfigDTO,
     EncodersConfigDTO,
+    ImageGenConfigDTO,
     McpConnectionDTO,
     McpServerApproveDTO,
     McpServerConfigDTO,
@@ -48,6 +49,7 @@ from .config.mappers import (
     _data_sources_from,
     _encoders_from,
     _entry_from,
+    _image_gen_from,
     _mcp_live_status,
     _models_from,
     _projects_from,
@@ -279,6 +281,27 @@ class ConfigState:
             )
         )
         return _tts_from(self._store.load())
+
+    # image generation: procedural / ComfyUI / OpenAI-compatible (persisted) -----
+
+    def image_gen_config(self) -> ImageGenConfigDTO:
+        return _image_gen_from(self._store.load())
+
+    def update_image_gen_config(self, dto: ImageGenConfigDTO) -> ImageGenConfigDTO:
+        """Persist the image generation provider choice. The agent-server reloads the
+        config per request, so a change takes effect on the NEXT image-gen call.
+        `procedural` (default) is keyless; `comfyui` is self-hosted; `openai` is
+        paid and requires an api_key_env secret to be stored via /api/secrets."""
+        from disco.core.llm import ImageGenSettings
+
+        self._store.save_image_gen(
+            ImageGenSettings(
+                provider=dto.provider,
+                base_url=dto.base_url.strip(),
+                api_key_env=dto.api_key_env.strip(),
+            )
+        )
+        return _image_gen_from(self._store.load())
 
     # data sources: web search + extraction provider tiers (persisted) ----------
 

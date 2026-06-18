@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException
 from ..config.dtos import (
     DataSourcesConfigDTO,
     EncodersConfigDTO,
+    ImageGenConfigDTO,
     ProjectStorageConfigDTO,
     SandboxConfigDTO,
     TtsConfigDTO,
@@ -45,6 +46,14 @@ def make_config_router(state: ConfigState) -> APIRouter:
     @router.put("/api/tts/config")
     async def put_tts_config(dto: TtsConfigDTO) -> TtsConfigDTO:
         return state.update_tts_config(dto)
+
+    @router.get("/api/image-gen/config")
+    async def get_image_gen_config() -> ImageGenConfigDTO:
+        return state.image_gen_config()
+
+    @router.put("/api/image-gen/config")
+    async def put_image_gen_config(dto: ImageGenConfigDTO) -> ImageGenConfigDTO:
+        return state.update_image_gen_config(dto)
 
     @router.get("/api/data-sources/config")
     async def get_data_sources_config() -> DataSourcesConfigDTO:

@@ -158,6 +158,25 @@ class TtsConfigDTO(BaseModel):
     voice_b: str = "af_bella"
 
 
+class ImageGenConfigDTO(BaseModel):
+    """Image generation provider DTO — the universal THREE-tier provider pattern
+    (same shape as TTS / Search / Extraction):
+      - `procedural` (default) — bundled in-process Pillow-based procedural patterns
+        (keyless, no network, no model). First-run default so image-gen works
+        immediately.
+      - `comfyui` — self-hosted ComfyUI graph API (`base_url`; empty → default),
+        keyless (assumes local/network-accessible). Uses /prompt + /history poll.
+      - `openai` — paid OpenAI-compatible `/v1/images/generations` endpoint
+        (`base_url` + `api_key_env` naming the secret/env var, never the key
+        itself), e.g. DALL-E 3.
+    Wire mirror of core's ImageGenSettings — the agent-server honors it on the
+    next image-gen call. NOT an LLM-router role assignment."""
+
+    provider: Literal["procedural", "comfyui", "openai"] = "procedural"
+    base_url: str = ""
+    api_key_env: str = ""
+
+
 class DataSourcesConfigDTO(BaseModel):
     """The universal web-data providers (§B). Each slot has three tiers; the bundled
     defaults (`ddgs` / `local`) need no key. `api_key_env` is the NAME of the env var

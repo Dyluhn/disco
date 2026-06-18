@@ -21,7 +21,7 @@ from .files import (
     FileStrReplaceTool,
     FileWriteTool,
 )
-from .image_gen import ImageGenTool
+from .image_gen import ImageGenTool, select_image_backend
 from .plan import PlanStepTool, SubmitPlanTool
 from .retrieval import ExtractTool, SearchTool
 from .server import ServerStatusTool
@@ -52,6 +52,7 @@ __all__ = [
     "FileStrReplaceTool",
     "FileWriteTool",
     "ImageGenTool",
+    "select_image_backend",
     "PlanStepTool",
     "SearchTool",
     "ServerStatusTool",
@@ -98,8 +99,9 @@ def build_default_registry() -> ToolRegistry:
         AudioOverviewTool(),  # audio_overview: two-voice TTS from finished report
         SlidesTool(),  # slides_generate: Marp-rendered slide decks (HTML/PDF/PPTX)
         ThinkTool(),  # think: NO-OP reasoning scratchpad (avoids prose-into-action degeneration)
-        # image_generate: keyless/local image synthesis (PIL procedural; live diffusers deferred)
-        ImageGenTool(),
+        # image_generate: keyless/local image synthesis (PIL procedural; configurable
+        # via Settings to use OpenAI-compatible or ComfyUI backends)
+        ImageGenTool(backend=select_image_backend()),
         # C20: read-only Explore/Plan helper dispatch+join (intercepted by loop)
         DelegateExploreTool(),
     ):

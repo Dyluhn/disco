@@ -17,6 +17,7 @@ from .dtos import (
     AssignmentsDTO,
     DataSourcesConfigDTO,
     EncodersConfigDTO,
+    ImageGenConfigDTO,
     ModelDTO,
     ModelUpsert,
     OpenRouterModelDTO,
@@ -192,6 +193,15 @@ def _tts_from(config: RouterConfig) -> TtsConfigDTO:
         model=t.model,
         voice_a=t.voice_a,
         voice_b=t.voice_b,
+    )
+
+
+def _image_gen_from(config: RouterConfig) -> ImageGenConfigDTO:
+    i = config.image_gen
+    return ImageGenConfigDTO(
+        provider=i.provider,
+        base_url=i.base_url,
+        api_key_env=i.api_key_env,
     )
 
 
