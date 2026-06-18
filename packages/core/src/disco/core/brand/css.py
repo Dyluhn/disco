@@ -293,6 +293,45 @@ pre{
   white-space:nowrap;
   break-inside:avoid;
 }
+.chip-unknown{color:var(--text-faint);background:transparent;border-color:var(--hairline);}
+
+/* ---- charts (```chart fences rendered to inline SVG, table fallback) ---- */
+.chart-figure{
+  margin:1em 0;
+  padding:0;
+  break-inside:avoid;
+  text-align:center;
+}
+.chart-figure svg{max-width:100%;height:auto;}
+.chart-table{
+  width:100%;
+  border-collapse:collapse;
+  margin:1em 0;
+  font-family:var(--ui);
+  font-size:9.5pt;
+  break-inside:avoid;
+}
+.chart-table caption{
+  font-weight:600;
+  color:var(--text);
+  margin-bottom:.4em;
+  text-align:left;
+}
+.chart-table th,.chart-table td{
+  border:1px solid var(--hairline);
+  padding:.3em .55em;
+  text-align:left;
+}
+.chart-table th{background:var(--surface-2);color:var(--text);font-weight:600;}
+.chart-raw{
+  white-space:pre-wrap;
+  font-family:var(--mono);
+  font-size:8pt;
+  color:var(--text-muted);
+  background:var(--surface-1);
+  padding:.6em;
+  border-radius:4px;
+}
 
 /* ---- executive summary box ---- */
 .exec-summary{

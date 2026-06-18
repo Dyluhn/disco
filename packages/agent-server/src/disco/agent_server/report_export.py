@@ -29,6 +29,7 @@ from __future__ import annotations
 import html as _html
 import importlib.resources
 import io
+import json
 import logging
 import re
 import zipfile
@@ -47,6 +48,8 @@ from disco.core.brand import (
     wordmark_html,
 )
 from disco.core.brand.tokens import Theme
+
+from .chart_svg import Palette, palette_from_theme, render_chart_svg, render_chart_table
 
 logger = logging.getLogger(__name__)
 
@@ -169,18 +172,84 @@ def _markdown_to_html(md: str, title: str = "Deep Research Report") -> str:
 # ---- Structured HTML builder (DR-2 / §1.5) ---------------------------------
 
 
-def _render_section_body(text: str) -> str:
-    """Render section markdown as HTML, converting [[id]] chips to .chip spans."""
-    text = re.sub(
-        r"\[\[([^\]]+)\]\]",
-        r'<span class="chip">[\1]</span>',
-        text,
-    )
+_CITE_RE = re.compile(r"\[\[([^\]]+)\]\]")
+# ```chart fences hold a JSON chart spec the frontend lifts into a Chart.js canvas;
+# the PDF path renders them to inline SVG (or a table) instead of a raw code block.
+_CHART_FENCE_RE = re.compile(r"```chart[^\n]*\n(.*?)```", re.DOTALL)
+
+
+def _citation_map(report: ReportEvent) -> dict[str, int]:
+    """passage-id → 1-based citation number, by passage order — the SAME mapping
+    the frontend uses (sources.ts:citationNumbers). The PDF previously leaked the
+    raw internal id (e.g. ``7a6ee0_p1``) inside the chip; this turns it into ``[1]``."""
+    return {str(p.get("id")): i + 1 for i, p in enumerate(report.passages) if p.get("id")}
+
+
+def _cite_chip(raw_id: str, cite_map: dict[str, int] | None) -> str:
+    """Render a ``[[id]]`` citation as a numbered chip linked to the sources
+    appendix. Unknown ids degrade to a neutral marker (never leak the raw hash)."""
+    n = (cite_map or {}).get(raw_id.strip())
+    if n is not None:
+        return f'<a class="chip" href="#src-{n}">{n}</a>'
+    return '<span class="chip chip-unknown">∗</span>'
+
+
+def _render_chart_block(raw_json: str, pal: Palette | None) -> str:
+    """Render one ```chart fence body to inline SVG, falling back to a data table
+    (and, only if the JSON itself is unparseable, to a labeled preformatted block)."""
+    try:
+        spec = json.loads(raw_json)
+    except (ValueError, TypeError):
+        return f'<pre class="chart-raw">{_html.escape(raw_json.strip())}</pre>'
+    svg = render_chart_svg(spec, pal) if pal is not None else None
+    inner = svg if svg else render_chart_table(spec)
+    return f'<figure class="chart-figure">{inner}</figure>'
+
+
+def _render_md_segment(text: str, cite_map: dict[str, int] | None) -> str:
+    """Citation chips + markdown for a non-chart text segment."""
+    text = _CITE_RE.sub(lambda m: _cite_chip(m.group(1), cite_map), text)
     return _md.markdown(
         text,
         extensions=["tables", "fenced_code", "sane_lists"],
         output_format=cast("Literal['xhtml', 'html']", "html5"),
     )
+
+
+def _render_section_body(
+    text: str,
+    cite_map: dict[str, int] | None = None,
+    pal: Palette | None = None,
+) -> str:
+    """Render section markdown to HTML: numbered citation chips, and ```chart
+    fences lifted into inline SVG charts (with a table fallback) instead of raw
+    code blocks. Non-chart segments go through python-markdown; chart segments
+    are spliced in so markdown can't mangle the SVG."""
+    parts: list[str] = []
+    last = 0
+    for m in _CHART_FENCE_RE.finditer(text):
+        parts.append(_render_md_segment(text[last : m.start()], cite_map))
+        parts.append(_render_chart_block(m.group(1), pal))
+        last = m.end()
+    parts.append(_render_md_segment(text[last:], cite_map))
+    return "".join(parts)
+
+
+def _cover_subtitle_text(summary: str | None, limit: int = 240) -> str:
+    """Cover subtitle text trimmed at a sentence/word boundary (the old code hard-
+    sliced ``summary[:200]``, cutting mid-word). Collapses whitespace; appends an
+    ellipsis when it had to cut."""
+    # Strip [[id]] citation markers — the cover teaser shouldn't show raw refs.
+    s = " ".join(_CITE_RE.sub("", summary or "").split())
+    if len(s) <= limit:
+        return s
+    cut = s[:limit]
+    for sep in (". ", "! ", "? "):
+        idx = cut.rfind(sep)
+        if idx >= limit * 0.5:
+            return cut[: idx + 1].strip()
+    sp = cut.rfind(" ")
+    return (cut[:sp] if sp > 0 else cut).rstrip() + "…"
 
 
 def _build_pdf_html(
@@ -205,6 +274,10 @@ def _build_pdf_html(
     passages = report.passages
     n_sections = len(sections)
     n_passages = len(passages)
+
+    # Numbered-citation map (id → [N]) + theme palette for inline SVG charts.
+    cite_map = _citation_map(report)
+    pal = palette_from_theme(theme)
 
     # ---- running header ----
     running_header = (
@@ -231,7 +304,7 @@ def _build_pdf_html(
         '<div class="cover-page">'
         '<div class="cover-rule"></div>'
         f'<div class="cover-title">{title_html}</div>'
-        f'<div class="cover-subtitle">{_html.escape((report.summary or "")[:200])}</div>'
+        f'<div class="cover-subtitle">{_html.escape(_cover_subtitle_text(report.summary))}</div>'
         '<div class="cover-meta">'
         f'<span><span class="meta-label">Depth</span>&nbsp;{depth_label}</span>'
         f'<span><span class="meta-label">Sources</span>&nbsp;{src_count}</span>'
@@ -259,7 +332,7 @@ def _build_pdf_html(
     # ---- executive summary ----
     summary_html = (
         '<div class="exec-summary">'
-        f"{_render_section_body(report.summary or '')}"
+        f"{_render_section_body(report.summary or '', cite_map, pal)}"
         "</div>"
     )
 
@@ -270,8 +343,12 @@ def _build_pdf_html(
         conflict = ""
         if s.disputed_notes:
             notes = _html.escape("; ".join(s.disputed_notes))
+            # disputed_notes is plain text (escaped), but it can carry [[id]]
+            # citations too — convert them to numbered chips like the body, so a
+            # conflict note never leaks a raw passage id.
+            notes = _CITE_RE.sub(lambda m: _cite_chip(m.group(1), cite_map), notes)
             conflict = f'<div class="conflict-note">Conflicts noted: {notes}</div>'
-        body = _render_section_body(s.markdown)
+        body = _render_section_body(s.markdown, cite_map, pal)
         sections_html_parts.append(
             f'<section id="s{i}">'
             f'<div class="section-no">{no_label}</div>'
@@ -298,7 +375,7 @@ def _build_pdf_html(
     if follow_ups:
         items = ""
         for j, (question, answer) in enumerate(follow_ups, 1):
-            answer_html = _render_section_body(answer)
+            answer_html = _render_section_body(answer, cite_map, pal)
             items += (
                 '<div class="followup-item">'
                 f'<div class="followup-q">Q {j}: {_html.escape(question)}</div>'
@@ -316,13 +393,13 @@ def _build_pdf_html(
     # ---- sources appendix ----
     two_col_class = " sources-2col" if n_passages > 30 else ""
     src_items = ""
-    for p in passages:
-        pid = _html.escape(str(p.get("id", "?")))
+    for i, p in enumerate(passages):
+        n = i + 1  # same 1-based number as the inline citation chips
         ptitle = _html.escape(str(p.get("source_title", "")))
         url = _html.escape(str(p.get("source_url", "")))
         src_items += (
-            "<li>"
-            f'<span class="src-id">[{pid}]</span>'
+            f'<li id="src-{n}">'
+            f'<span class="src-id">[{n}]</span>'
             f'<a href="{url}">{ptitle}</a>'
             f" &mdash; {url}"
             "</li>"
