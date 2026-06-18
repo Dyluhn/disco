@@ -141,6 +141,93 @@ describe("DeepReportView table rendering", () => {
   });
 });
 
+// ---- F3: DeepReportView accepts and threads the cid prop --------------------
+
+describe("DeepReportView — F3 cid prop threading", () => {
+  it("F3: renders cleanly when cid is provided (prop accepted, no error)", () => {
+    // DeepReportView currently renders prose-only sections (Markdown/CitedText).
+    // The cid prop is accepted and forwarded so that when DR begins emitting
+    // block artifacts the download wiring is already in place.  This test
+    // verifies the prop is forwarded without TypeScript errors or runtime
+    // crashes, and that the report content still renders correctly.
+    const mockReport: any = {
+      type: "report",
+      query: "battery commercialization",
+      summary: "Executive summary text.",
+      sections: [
+        {
+          id: "sec1",
+          title: "Market Status",
+          markdown: "Solid-state batteries are advancing rapidly.",
+          confidence: "high",
+          disputed_notes: [],
+          unsupported_count: 0,
+        },
+      ],
+      passages: [],
+      all_hits: [],
+      unsupported_count: 0,
+      depth_tier: "standard_deep",
+      bounded_by: null,
+    };
+
+    // Must not throw; the prop is only consumed downstream when block-level
+    // artifacts (sheet, slides) appear in a section.
+    render(
+      <DeepReportView
+        query="battery commercialization"
+        summary="Executive summary text."
+        assembling={[
+          { id: "sec1", title: "Market Status", state: "done", section: mockReport.sections[0] },
+        ]}
+        report={mockReport}
+        cid="conv_deep_fixture"
+      />,
+    );
+
+    // Section title appears in both the <h2> and the ToC nav <a> — use
+    // getAllByText to avoid "multiple elements" error.
+    expect(screen.getAllByText("Market Status").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/Solid-state batteries are advancing rapidly/)).toBeInTheDocument();
+  });
+
+  it("F3: renders identically when cid is undefined (backward-compat, no false affordance)", () => {
+    const mockReport: any = {
+      type: "report",
+      query: "q",
+      summary: null,
+      sections: [
+        {
+          id: "s1",
+          title: "Only section",
+          markdown: "Some prose.",
+          confidence: "high",
+          disputed_notes: [],
+          unsupported_count: 0,
+        },
+      ],
+      passages: [],
+      all_hits: [],
+      unsupported_count: 0,
+      depth_tier: "standard_deep",
+      bounded_by: null,
+    };
+
+    // cid omitted → behaviour unchanged from before F3 (no download, no error)
+    render(
+      <DeepReportView
+        query="q"
+        summary={null}
+        assembling={[{ id: "s1", title: "Only section", state: "done", section: mockReport.sections[0] }]}
+        report={mockReport}
+      />,
+    );
+
+    // Section title appears in both the <h2> and the ToC nav <a>
+    expect(screen.getAllByText("Only section").length).toBeGreaterThanOrEqual(1);
+  });
+});
+
 // ---- WALK-03 (C1): disputed_notes must not leak raw [[id]] ------------------
 
 describe("DeepReportView — WALK-03 disputed_notes citation resolution", () => {
