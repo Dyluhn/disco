@@ -239,7 +239,13 @@ def _apply_mcp_scope(
                 "advertised_tools": non_mcp_allowed | {"tool_search"},
             }
         )
-    # else: advertised_tools remains None → all allowed tools shown (current behavior)
+    elif executor._scope.advertised_tools is not None:
+        # Under cap but advertised_tools was already explicitly set (e.g. W4 weak-tier
+        # withholding). Extend it with the MCP tool names so they appear in the LLM's
+        # tool list. If advertised_tools is None (show-all), leave it None — no change.
+        executor._scope = executor._scope.model_copy(
+            update={"advertised_tools": executor._scope.advertised_tools | mcp_names}
+        )
 
 
 _LOG = logging.getLogger(__name__)

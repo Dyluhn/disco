@@ -18,6 +18,7 @@ from .files import (
     FileListTool,
     FileReadTool,
     FileReplaceLinesTool,
+    FileStrReplaceTool,
     FileWriteTool,
 )
 from .image_gen import ImageGenTool
@@ -48,6 +49,7 @@ __all__ = [
     "FileListTool",
     "FileReadTool",
     "FileReplaceLinesTool",
+    "FileStrReplaceTool",
     "FileWriteTool",
     "ImageGenTool",
     "PlanStepTool",
@@ -77,6 +79,7 @@ def build_default_registry() -> ToolRegistry:
         FileEditTool(),
         FileReplaceLinesTool(),
         FileInsertLinesTool(),
+        FileStrReplaceTool(),  # W4: anchored str-replace; withheld from weak-tier advertised set
         FileListTool(),
         ShellTool(),
         ShellExecTool(),

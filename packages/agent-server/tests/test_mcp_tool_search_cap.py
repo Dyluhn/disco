@@ -12,6 +12,7 @@ import pytest
 from disco.agent_server.runtime import _apply_mcp_scope
 from disco.core import SecurityRisk, ToolCall
 from disco.tools import DefaultToolExecutor, agent_scope, build_default_registry
+from disco.tools.registry import _WEAK_TIER_ADVERTISED
 from disco.tools.anatomy import ToolDef
 from pydantic import BaseModel
 
@@ -123,12 +124,20 @@ def test_under_cap_no_tool_search():
 
 
 def test_zero_mcp_tools_noop():
-    """Empty MCP tool list → executor unchanged (no-op)."""
+    """Empty MCP tool list → executor unchanged (no-op).
+
+    W4: agent_scope() now returns advertised_tools=_WEAK_TIER_ADVERTISED for the
+    default (no-ANCHORED_EDIT) tier — None is no longer the default. The no-op
+    check is that allowed_tools and the advertised set are both unchanged.
+    """
     ex = _executor()
     before_allowed = ex._scope.allowed_tools
+    before_advertised = ex._scope.advertised_tools
     _apply_mcp_scope(ex, [], _FakeCallTarget(), max_active_schemas=20)
     assert ex._scope.allowed_tools == before_allowed
-    assert ex._scope.advertised_tools is None
+    assert ex._scope.advertised_tools == before_advertised
+    # Confirm the weak tier withholds file_str_replace from advertised set
+    assert ex._scope.advertised_tools == _WEAK_TIER_ADVERTISED
 
 
 # ---- readonly_tool_names planner-safety (allowed_tools, not advertised) ------
