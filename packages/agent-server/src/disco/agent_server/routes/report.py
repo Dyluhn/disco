@@ -133,7 +133,11 @@ async def _resolve_export_payload(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    if follow_up_seqs and fmt in ("md", "pdf"):
+    # md/pdf ALWAYS serialize inline so theme/mode (and any follow-ups) are honored.
+    # The runtime.export_report path below does NOT thread theme/mode — routing
+    # md/pdf through it dropped dark-mode PDFs to light. Only docx (sandbox/pandoc)
+    # needs the runtime path.
+    if fmt in ("md", "pdf"):
         from ..report_export import (
             EXTENSIONS,
             MEDIA_TYPES,
