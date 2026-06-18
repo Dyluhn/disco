@@ -518,6 +518,7 @@ class AgentLoop:
         self._plan_tool = plan_tool  # the structured-plan signal, intercepted
         self._execution_mode = execution_mode  # the mode an approved plan runs in
         self._plan_nudges = 0  # consecutive nudges while planning (safety cap)
+        self._plan_explore_reads = 0  # (B2/B6) consecutive PLANNING reads w/o a plan
         self._execution_nudges = 0  # consecutive "you must act" nudges in execution
         self._browser_verify_refusals = 0  # consecutive browser-verification refusals
         self._identical_plan_revisions = 0  # C8 (T11): consecutive identical-steps
@@ -831,6 +832,7 @@ class AgentLoop:
         if self.mode == OperatingMode.PLANNING:
             tc = step.tool_call
             if tc is not None and tc.tool_name == self._plan_tool:
+                self._plan_explore_reads = 0  # (B2/B6) a plan was proposed
                 plan = self._plan_from_args(tc.arguments, events)
                 await self._emit(plan)
                 if self._autonomous:
@@ -883,7 +885,10 @@ class AgentLoop:
                     return Disp.HALT
                 return Disp.CONTINUE
             # tc is a planning-allowed read tool — productive exploration.
-            # Reset the nudge counter and fall through to the normal action path.
+            # (B2/B6) Count it + force a plan at the cap (logic in Planner), then
+            # fall through to the normal action path. Phase-1 reads below the cap
+            # are unchanged.
+            await self._planner.note_planning_read_and_maybe_force()
         return Disp.FALLTHROUGH
 
     async def _gate_hard_deny(self, action: ActionEvent) -> Disp:
@@ -1507,7 +1512,12 @@ class AgentLoop:
                     )
                 )
             self.mode = OperatingMode.PLANNING
+            self._plan_explore_reads = 0  # (B2/B6) fresh planning segment
             await self._emit(StatusEvent(status=ConversationStatus.RUNNING, detail="planning"))
+            # (B2/B6) On a revision (prior plan_approved) with a concrete new
+            # instruction, frame the turn so the model RE-plans instead of
+            # free-building against the OLD plan (logic in Planner).
+            await self._planner.emit_replan_framing_if_revision(text)
         return await self.get_state()
 
     async def pause(self) -> ConversationState:
