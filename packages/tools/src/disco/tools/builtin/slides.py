@@ -6,7 +6,9 @@ Format support:
   - html: always works (Marp CLI render or self-contained fallback).
   - pdf, pptx: requires marp + Chromium (ships in the sandbox image); returns
     a clean failure when the toolchain is absent.
-  - marp --pptx output is image-based slides — editable PPTX is v2.
+  - Marp --pptx output is image-based slides.
+    Native editable PPTX (real text boxes) is produced by _pptx_render.py (C3)
+    when a structured MinimalDeck is supplied; the C2 pipeline wires this path.
 """
 
 from __future__ import annotations
@@ -309,8 +311,8 @@ class SlidesTool:
             "source with '---' (three dashes on their own line) to separate slides. "
             "Front matter directives (theme, paginate, etc.) are supported. "
             "HTML always works; PDF and PPTX require the Marp+Chromium toolchain "
-            "in the sandbox image. PPTX output is image-based slides (editable "
-            "PPTX is v2)."
+            "in the sandbox image. Marp PPTX is image-based; native editable PPTX "
+            "is produced by the C3 renderer (_pptx_render.py) via the C2 deck pipeline."
         ),
         args_model=SlidesGenerateArgs,
         needs=frozenset({Capability.FILESYSTEM}),
@@ -405,8 +407,9 @@ class SlidesTool:
         note = ""
         if fmt == "pptx":
             note = (
-                "\nNOTE: PPTX output is image-based slides (each slide is a static image). "
-                "Editable PPTX is v2."
+                "\nNOTE: Marp PPTX output is image-based slides (each slide is a static image). "
+                "Native editable PPTX with real text boxes is available via the C3 renderer "
+                "(_pptx_render.py) when a structured deck is supplied (C2 pipeline)."
             )
 
         slide_count = len(_split_slides(args.markdown))

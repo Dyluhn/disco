@@ -48,6 +48,16 @@ ENV CHROME_PATH=/usr/local/bin/marp-chromium \
 RUN apt-get update && apt-get install -y --no-install-recommends pandoc \
     && rm -rf /var/lib/apt/lists/*
 
+# C3: LibreOffice headless — converts native editable .pptx decks to PDF inside the
+# sandbox (same jailing rationale as marp: agent-generated deck content runs only
+# in the jail).  `soffice --headless --convert-to pdf --outdir . deck.pptx`.
+# libreoffice-impress is the minimal Impress-only pull; fonts-liberation gives
+# standard metric-compatible fonts so slide geometry doesn't shift on conversion.
+# Absent soffice → C3 render_deck() returns a clear error, never a silent blank PDF.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libreoffice-impress fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+
 
 # Build toolchain + common CLIs build agents reach for. `build-essential` gives
 # gcc/g++/make/libc-dev — without it `make`-based builds exit 127 and C-extension
