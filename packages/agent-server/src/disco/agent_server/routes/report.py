@@ -30,9 +30,15 @@ class ExportBody(BaseModel):
     ``follow_up_seqs`` — the seq values of USER MessageEvents whose Q&A pairs
     to include in the exported document (WALK-20). Empty / absent = export the
     report only (byte-identical to the pre-WALK-20 baseline).
+
+    ``theme`` / ``mode`` — brand theme selection for PDF exports (§1.5).
+    Defaults to disco/light.  Unknown theme → 400.  MD is byte-identical
+    regardless of theme.
     """
 
     follow_up_seqs: list[int] | None = None
+    theme: str = "disco"
+    mode: str = "light"
 
 
 class AudioBody(BaseModel):
@@ -108,14 +114,25 @@ async def _resolve_export_payload(
     conversation_id: str,
     fmt: str,
     follow_up_seqs: list[int],
+    theme: str = "disco",
+    mode: str = "light",
 ) -> tuple[bytes, str | None, str]:
     """Resolve ``(payload, media_type, ext)`` for a report export.
 
     With ``follow_up_seqs`` (md/pdf) gather the selected Q&A pairs and serialize
     inline — bypassing ConversationRuntime so follow-ups can be threaded without
     touching runtime.py.  Otherwise use the existing runtime export path.
-    Raises HTTPException(404) when no report exists, (400) on a serializer error.
+    Raises HTTPException(404) when no report exists, (400) on a serializer error
+    or unknown theme.
     """
+    # Validate the theme early so callers get a clear 400 before any I/O.
+    from disco.core.brand import resolve_theme as _resolve_theme
+
+    try:
+        _resolve_theme(theme, mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     if follow_up_seqs and fmt in ("md", "pdf"):
         from ..report_export import (
             EXTENSIONS,
@@ -141,7 +158,11 @@ async def _resolve_export_payload(
                     MEDIA_TYPES[fmt],
                     EXTENSIONS[fmt],
                 )
-            return serialize_pdf(report, follow_ups), MEDIA_TYPES[fmt], EXTENSIONS[fmt]
+            return (
+                serialize_pdf(report, follow_ups, theme=theme, mode=mode),
+                MEDIA_TYPES[fmt],
+                EXTENSIONS[fmt],
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -193,7 +214,13 @@ def make_report_router(
 
         # Resolve the export bytes (follow-up-aware md/pdf inline, else runtime path).
         payload, media_type, ext = await _resolve_export_payload(
-            store, runtime, conversation_id, fmt, body.follow_up_seqs or []
+            store,
+            runtime,
+            conversation_id,
+            fmt,
+            body.follow_up_seqs or [],
+            theme=body.theme,
+            mode=body.mode,
         )
 
         # Build a safe filename from the conversation id
