@@ -19,7 +19,7 @@ import asyncio
 import hashlib
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, Literal
 
 from disco.core import ReportEvent, ReportSection
 from disco.core.llm import CallContext, LLMRouter
@@ -104,6 +104,7 @@ class DeepResearchRun:
         depth: DepthTier | str = DepthTier.STANDARD_DEEP,
         conversation_id: str = "deep_research",
         gather_concurrency: int | None = None,
+        recency_window: Literal["month", "week"] | None = None,
     ) -> None:
         self._query = query
         self._router = router
@@ -114,6 +115,8 @@ class DeepResearchRun:
         self._bound: DepthBound = bounds_for(depth)
         self._depth = depth if isinstance(depth, str) else depth.value
         self._namespace = conversation_id
+        # DR-3 E2: recency window for time-filtered search + date prompt injection.
+        self._recency_window = recency_window
         # RAM-aware peak-memory guard (OOM fix) — applies on EVERY tier, because
         # not OOMing is a correctness guarantee, not a free-tier compensation.
         # Each concurrent gather leg holds its own fetch buffers + extracted
@@ -305,6 +308,7 @@ class DeepResearchRun:
                     emit=emit,
                     remaining_source_budget=subq_budget,
                     leg_context=leg_context,
+                    recency_window=self._recency_window,
                 )
             )
             gather_tasks.append((subq, task, subq_id, subq_namespace, leg_context))
@@ -388,6 +392,7 @@ class DeepResearchRun:
                     top_k_for_section=self._bound.rerank_top_k,
                     emit=emit,
                     leg_context=leg_context,
+                    recency_window=self._recency_window,
                 )
             except Exception:
                 # A synthesis failure must not leak the still-running retrieval
@@ -456,7 +461,10 @@ class DeepResearchRun:
 
         # ---- reduce step: coherence pass produces the executive summary ----
         await emit("phase", {"phase": "coherence"})
-        summary = await coherence_pass(self._query, sections, router=self._router)
+        summary = await coherence_pass(
+            self._query, sections, router=self._router,
+            recency_window=self._recency_window,
+        )
 
         return self._assemble_report(
             sections=sections,

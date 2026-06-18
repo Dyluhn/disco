@@ -48,6 +48,7 @@ class _MCPRetrievalSearchProvider:
         limit: int = 10,
         domains_allow: frozenset[str] | None = None,
         domains_deny: frozenset[str] | None = None,
+        time_filter: str | None = None,
     ) -> list[SearchHit]:
         """Call the MCP search tool and convert results to SearchHits."""
         try:
@@ -251,6 +252,7 @@ class CompositeSearchProvider:
         limit: int = 10,
         domains_allow: frozenset[str] | None = None,
         domains_deny: frozenset[str] | None = None,
+        time_filter: str | None = None,
     ) -> list[SearchHit]:
         merged: list[SearchHit] = []
         seen: set[str] = set()
@@ -261,6 +263,7 @@ class CompositeSearchProvider:
                     limit=limit,
                     domains_allow=domains_allow,
                     domains_deny=domains_deny,
+                    time_filter=time_filter,
                 )
             except TypeError:
                 # An MCP provider with a narrower signature — call positionally.

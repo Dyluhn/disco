@@ -63,13 +63,19 @@ class SearxngSearchProvider:
         limit: int = 10,
         domains_allow: frozenset[str] | None = None,
         domains_deny: frozenset[str] | None = None,
+        time_filter: str | None = None,
     ) -> list[SearchHit]:
+        # DR-3 E1: SearXNG uses `time_range` param; accept "month"/"week".
+        # "day" is avoided per spec (near-zero results).
+        params: dict = {"q": query, "format": "json"}
+        if time_filter in {"month", "week"}:
+            params["time_range"] = time_filter
         try:
             async with httpx.AsyncClient(
                 timeout=self._timeout, transport=self._transport
             ) as client:
                 resp = await client.get(
-                    f"{self._base}/search", params={"q": query, "format": "json"}
+                    f"{self._base}/search", params=params
                 )
                 resp.raise_for_status()
                 results = resp.json().get("results", [])

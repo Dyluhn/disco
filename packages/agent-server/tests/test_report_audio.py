@@ -596,9 +596,12 @@ def test_generate_report_audio_with_follow_ups(
             follow_ups=follow_ups,
         )
     )
-    # Cache file should be fu-suffixed (WALK-20 anti-collision rule).
-    assert "_fu1" in mp3_path.name, f"expected _fu1 in filename, got {mp3_path.name!r}"
-    assert "_fu1" in transcript_path.name
+    # Cache file must include a hash that encodes the follow-up content (B3:
+    # content-hash cache key); the file name format is audio_overview_<mode>_<hash12>.mp3.
+    import re as _re
+    assert _re.search(r"audio_overview_\w+_[0-9a-f]{12}\.mp3$", mp3_path.name), (
+        f"expected content-hash filename, got {mp3_path.name!r}"
+    )
     assert mp3_path.exists() and mp3_path.stat().st_size > 0
     # The LLM payload user-content must include the follow-up text.
     assert len(captured_payloads) >= 1
@@ -628,6 +631,10 @@ def test_generate_report_audio_follow_ups_separate_cache(
             report, tts_settings=tts_enabled, out_dir=out_dir, follow_ups=follow_ups
         )
     )
+    # B3: content-hash cache key — follow-up content changes the hash so the two
+    # files are distinct even though "_fu" is no longer a literal suffix.
     assert base_mp3 != fu_mp3, "base and follow-up audio must use distinct filenames"
-    assert "_fu" not in base_mp3.name
-    assert "_fu1" in fu_mp3.name
+    # Both names follow the audio_overview_<mode>_<hash12> pattern.
+    import re as _re
+    assert _re.search(r"audio_overview_\w+_[0-9a-f]{12}\.mp3$", base_mp3.name)
+    assert _re.search(r"audio_overview_\w+_[0-9a-f]{12}\.mp3$", fu_mp3.name)

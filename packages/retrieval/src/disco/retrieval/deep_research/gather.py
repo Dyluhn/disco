@@ -23,7 +23,7 @@ from __future__ import annotations
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 
 from disco.core import LLMMessage
 from disco.core.llm import (
@@ -214,6 +214,7 @@ async def gather_for_subquestion(
     emit: EmitFn,
     remaining_source_budget: int,
     leg_context: GatherLegContext,
+    recency_window: Literal["month", "week"] | None = None,
 ) -> SubQuestionResult:
     """Run the retrieve-reason-refine loop for one sub-question. Returns the
     accumulated result. Stops on: (a) gap-reasoner sufficient, (b) round cap,
@@ -255,6 +256,9 @@ async def gather_for_subquestion(
                 query=query,
                 depth="standard",  # we already do the multi-round shape
                 top_k=min(bound.rerank_top_k, remaining_source_budget),
+                # DR-3 E2: thread recency_window so the engine's search call
+                # applies a time filter when the user selected one.
+                recency_window=recency_window,
             )
             retrieval = await engine.retrieve(req)
         except Exception as exc:  # noqa: BLE001 — retrieval failure is recoverable

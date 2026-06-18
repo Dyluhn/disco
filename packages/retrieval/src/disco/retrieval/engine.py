@@ -71,6 +71,7 @@ class DefaultRetrievalEngine:
                     limit=max(req.top_k * 3, 10),
                     domains_allow=req.domains_allow,
                     domains_deny=req.domains_deny,
+                    time_filter=req.recency_window,
                 )
             )
         if len(hit_lists) > 1:

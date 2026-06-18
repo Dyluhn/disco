@@ -40,6 +40,7 @@ import { DeepBoundedNotice } from "./DeepBoundedNotice";
 import { DeepProgressStrip } from "./DeepProgressStrip";
 import { asGroundedAnswer, DeepReportView } from "./DeepReportView";
 import { DepthTierSelector, type Tier } from "./DepthTierSelector";
+import { RecencySelector } from "./RecencySelector";
 import { TieredSourcePanel } from "./TieredSourcePanel";
 import { NeedMoreCard } from "./NeedMoreCard";
 import { FollowUpStatus } from "./FollowUpStatus";
@@ -126,7 +127,10 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
                 // card (via QueryInput's `footer` slot), not as a sibling
                 // <div> floating below the card border.
                 <div className="flex items-center justify-between gap-inline">
-                  <DepthTierSelector value={r.depthTier as Tier} onChange={r.setDepthTier} />
+                  <div className="flex items-center gap-inline">
+                    <DepthTierSelector value={r.depthTier as Tier} onChange={r.setDepthTier} />
+                    <RecencySelector value={r.recencyWindow} onChange={r.setRecencyWindow} />
+                  </div>
                   <p className="font-ui text-[0.74rem] text-text-faint">
                     Deep runs take minutes. The leader pill picks the driver model.
                   </p>

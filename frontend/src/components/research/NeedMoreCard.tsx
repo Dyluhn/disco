@@ -31,10 +31,8 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
-import {
-  exportReport,
-  exportReportAsMarkdown,
-} from "@/api/deepResearch";
+// B1/B4: MD and PDF/DOCX non-FSA paths now use inline fetch+blob-URL
+// so we no longer call exportReport / exportReportAsMarkdown from deepResearch.ts.
 import { agentHttpBase } from "@/api/client";
 import { useExportCapabilities } from "@/hooks/useExportCapabilities";
 import type { MessageEvent, ReportEvent } from "@/types/agent";
@@ -111,108 +109,105 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
   const [exportError, setExportError] = useState<string | null>(null);
   const fsa = hasFSA();
 
-  // Build [question, answer] pairs from followUpSeqs for client-side MD.
-  // (The seqs come from IncludeFollowUpsModal; we don't have the events here,
-  // so we can only do this for the FSA save-picker path where we call the
-  // server with the seqs.)
   const hasFollowUps = Boolean(followUpSeqs && followUpSeqs.length > 0);
+
+  // Shared helper: fetch export blob from server and trigger a download.
+  // Used by both FSA and non-FSA paths so all 4 export types get titles.
+  async function _fetchExportBlob(
+    fmt: "md" | "pdf" | "docx",
+    bodyPayload: string | undefined,
+  ): Promise<Blob> {
+    const res = await fetch(
+      `/api/conversations/${cid}/report/export?fmt=${fmt}`,
+      {
+        method: "POST",
+        headers: bodyPayload ? { "Content-Type": "application/json" } : undefined,
+        body: bodyPayload,
+      },
+    );
+    if (!res.ok) {
+      let detail = `${res.status}`;
+      try {
+        const body = await res.json();
+        detail = body.detail?.reason || body.detail || JSON.stringify(body);
+      } catch {
+        /* not JSON */
+      }
+      throw new Error(`Export failed (${res.status}): ${detail}`);
+    }
+    return res.blob();
+  }
+
+  // B4: derive filename from report title, not conv_id.
+  const baseFilename = sanitizeFilename(report.query);
 
   const handleMd = useCallback(async () => {
     setExporting("md");
     setExportError(null);
+    // B1: always route through the server endpoint so follow-ups are included
+    // regardless of FSA availability.  (The server endpoint is idempotent —
+    // no extra cost over the client-side serializer.)
+    const bodyPayload = hasFollowUps
+      ? JSON.stringify({ follow_up_seqs: followUpSeqs })
+      : undefined;
     try {
+      const blob = await _fetchExportBlob("md", bodyPayload);
       if (fsa) {
-        // For FSA path, include follow_up_seqs in the server request so the
-        // server-rendered markdown carries the Q&A section.  Then we pipe the
-        // blob through the save picker (same as pdf/docx).
-        const bodyPayload = hasFollowUps
-          ? JSON.stringify({ follow_up_seqs: followUpSeqs })
-          : undefined;
-        const res = await fetch(
-          `/api/conversations/${cid}/report/export?fmt=md`,
-          {
-            method: "POST",
-            headers: bodyPayload ? { "Content-Type": "application/json" } : undefined,
-            body: bodyPayload,
-          },
-        );
-        if (!res.ok) {
-          let detail = `${res.status}`;
-          try {
-            const body = await res.json();
-            detail = body.detail?.reason || body.detail || JSON.stringify(body);
-          } catch {
-            // not JSON
-          }
-          throw new Error(`Export failed (${res.status}): ${detail}`);
-        }
-        const blob = await res.blob();
         await saveViaPicker(blob, {
-          suggestedName: sanitizeFilename(report.query) + ".md",
+          suggestedName: baseFilename + ".md",
           types: [{ description: "Markdown", accept: { "text/markdown": [".md"] } }],
         });
       } else {
-        // Non-FSA path: client-side MD with no follow_ups content (the API call
-        // is the canonical way to get follow_ups in the doc, but for the fallback
-        // download path we just use the simple client-side serializer).
-        exportReportAsMarkdown(report);
+        // B4: use report title as filename.
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = baseFilename + ".md";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
       }
     } catch (e: unknown) {
-      // User cancelled the save picker — not an error condition
       if (!(e instanceof DOMException && e.name === "AbortError")) {
         setExportError(e instanceof Error ? e.message : String(e));
       }
     } finally {
       setExporting(null);
     }
-  }, [report, cid, fsa, hasFollowUps, followUpSeqs]);
+  }, [report.query, cid, fsa, hasFollowUps, followUpSeqs, baseFilename]);
 
   const handleFmt = useCallback(
     async (fmt: "pdf" | "docx") => {
       setExporting(fmt);
       setExportError(null);
-      try {
-        const bodyPayload =
-          hasFollowUps && fmt !== "docx" // docx doesn't support follow_ups via sandbox
-            ? JSON.stringify({ follow_up_seqs: followUpSeqs })
-            : undefined;
+      // B2: include follow_ups for DOCX too (remove the old fmt!=="docx" guard).
+      const bodyPayload = hasFollowUps
+        ? JSON.stringify({ follow_up_seqs: followUpSeqs })
+        : undefined;
 
+      try {
+        const ext = fmt === "pdf" ? ".pdf" : ".docx";
+        const mimeType =
+          fmt === "pdf"
+            ? "application/pdf"
+            : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        const blob = await _fetchExportBlob(fmt, bodyPayload);
         if (fsa) {
-          // Fetch the blob from the server so we can pass it to showSaveFilePicker
-          const res = await fetch(
-            `/api/conversations/${cid}/report/export?fmt=${fmt}`,
-            {
-              method: "POST",
-              headers: bodyPayload ? { "Content-Type": "application/json" } : undefined,
-              body: bodyPayload,
-            },
-          );
-          if (!res.ok) {
-            let detail = `${res.status}`;
-            try {
-              const body = await res.json();
-              detail = body.detail?.reason || body.detail || JSON.stringify(body);
-            } catch {
-              // not JSON
-            }
-            throw new Error(`Export failed (${res.status}): ${detail}`);
-          }
-          const blob = await res.blob();
-          const ext = fmt === "pdf" ? ".pdf" : ".docx";
-          const mimeType =
-            fmt === "pdf"
-              ? "application/pdf"
-              : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
           await saveViaPicker(blob, {
-            suggestedName: sanitizeFilename(report.query) + ext,
+            suggestedName: baseFilename + ext,
             types: [{ description: fmt.toUpperCase(), accept: { [mimeType]: [ext] } }],
           });
         } else {
-          await exportReport(
-            cid,
-            fmt,
-            fmt !== "docx" ? followUpSeqs : undefined,
-          );
+          // B4: use report title for non-FSA download too.
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = baseFilename + ext;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
         }
       } catch (e: unknown) {
         if (!(e instanceof DOMException && e.name === "AbortError")) {
@@ -222,7 +217,7 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
         setExporting(null);
       }
     },
-    [cid, fsa, hasFollowUps, followUpSeqs, report.query],
+    [cid, fsa, hasFollowUps, followUpSeqs, baseFilename],
   );
 
   return (
@@ -494,9 +489,17 @@ interface AudioSectionProps {
    *  when it needs to insert the include-follow-ups step first). */
   modeOpen: boolean;
   onModeOpenChange: (open: boolean) => void;
+  /** B4: report title/query for a meaningful download filename. */
+  reportQuery: string;
 }
 
-function AudioSection({ cid, followUpSeqs, modeOpen, onModeOpenChange }: AudioSectionProps) {
+function AudioSection({
+  cid,
+  followUpSeqs,
+  modeOpen,
+  onModeOpenChange,
+  reportQuery,
+}: AudioSectionProps) {
   const [audio, setAudio] = useState<AudioState>({ status: "idle" });
 
   // Called after the user picks a mode in the dialog.
@@ -552,79 +555,78 @@ function AudioSection({ cid, followUpSeqs, modeOpen, onModeOpenChange }: AudioSe
 
   const reset = useCallback(() => setAudio({ status: "idle" }), []);
 
-  if (audio.status === "idle") {
-    return (
-      <>
-        <AudioModeDialog
-          open={modeOpen}
-          onOpenChange={onModeOpenChange}
-          onChoose={generate}
-        />
-      </>
-    );
-  }
-
-  if (audio.status === "generating") {
-    return (
-      <div className="flex flex-col gap-hair">
-        <div className="flex items-center gap-hair">
-          <Loader2 className="size-3.5 animate-spin text-text-faint" aria-hidden />
-          <span className="font-ui text-[0.78rem] text-text-muted">Generating audio…</span>
-        </div>
-        {/* WALK-13 / D1: static notice so users know why first-run is slow */}
-        <span className="font-ui text-[0.73rem] text-text-faint">
-          Downloading voice model (~300 MB, first run only) if needed — this may take a
-          minute.
-        </span>
-      </div>
-    );
-  }
-
-  if (audio.status === "done") {
-    // Real play + export affordances — gated on a real audio URL, never a fake.
-    const downloadMp3 = () => {
-      const a = document.createElement("a");
-      a.href = audio.audioUrl;
-      a.download = "audio-overview.mp3";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-    };
-
-    return (
-      <div className="flex flex-wrap items-center gap-inline">
-        {/* WALK-14 / D2: custom AudioPlayer instead of native <audio controls> */}
-        <AudioPlayer src={audio.audioUrl} className="max-w-[18rem] flex-1" />
-        <button type="button" onClick={downloadMp3} className={CTRL_BTN}>
-          <ArrowDown className="size-3.5" aria-hidden />
-          Export MP3
-        </button>
-        <button type="button" onClick={reset} className={CTRL_BTN}>
-          <Headphones className="size-3.5" aria-hidden />
-          Regenerate
-        </button>
-      </div>
-    );
-  }
-
-  // "unavailable" — honest error, NO false success, resettable
+  // B3: AudioModeDialog is ALWAYS rendered (outside the status branches) so
+  // it remains reachable after audio is generated, not just in the idle branch.
+  // Radix Dialog handles open/close via the `open` prop; unmounting it would
+  // lose any open-animation state and break the dialog after first generation.
   return (
-    <div className="flex flex-col gap-hair">
-      <div className="flex flex-wrap items-center gap-inline">
-        <Headphones className="size-3.5 shrink-0 text-text-faint" aria-hidden />
-        <span className="font-ui text-[0.78rem] text-text-faint">
-          {audio.status === "unavailable" ? audio.reason : "Audio overview unavailable"}
-        </span>
-        <button
-          type="button"
-          onClick={reset}
-          aria-label="Reset audio overview state"
-          className={CTRL_BTN}
-        >
-          Try again
-        </button>
-      </div>
-    </div>
+    <>
+      <AudioModeDialog
+        open={modeOpen}
+        onOpenChange={onModeOpenChange}
+        onChoose={generate}
+      />
+
+      {audio.status === "generating" && (
+        <div className="flex flex-col gap-hair">
+          <div className="flex items-center gap-hair">
+            <Loader2 className="size-3.5 animate-spin text-text-faint" aria-hidden />
+            <span className="font-ui text-[0.78rem] text-text-muted">Generating audio…</span>
+          </div>
+          {/* WALK-13 / D1: static notice so users know why first-run is slow */}
+          <span className="font-ui text-[0.73rem] text-text-faint">
+            Downloading voice model (~300 MB, first run only) if needed — this may take a
+            minute.
+          </span>
+        </div>
+      )}
+
+      {audio.status === "done" && (
+        // Real play + export affordances — gated on a real audio URL, never a fake.
+        <div className="flex flex-wrap items-center gap-inline">
+          {/* WALK-14 / D2: custom AudioPlayer instead of native <audio controls> */}
+          <AudioPlayer src={audio.audioUrl} className="max-w-[18rem] flex-1" />
+          <button
+            type="button"
+            onClick={() => {
+              // B4: filename derived from report title, not hardcoded "audio-overview.mp3".
+              const a = document.createElement("a");
+              a.href = audio.audioUrl;
+              a.download = sanitizeFilename(reportQuery) + ".mp3";
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+            }}
+            className={CTRL_BTN}
+          >
+            <ArrowDown className="size-3.5" aria-hidden />
+            Export MP3
+          </button>
+          <button type="button" onClick={reset} className={CTRL_BTN}>
+            <Headphones className="size-3.5" aria-hidden />
+            Regenerate
+          </button>
+        </div>
+      )}
+
+      {audio.status === "unavailable" && (
+        // Honest error, NO false success, resettable
+        <div className="flex flex-col gap-hair">
+          <div className="flex flex-wrap items-center gap-inline">
+            <Headphones className="size-3.5 shrink-0 text-text-faint" aria-hidden />
+            <span className="font-ui text-[0.78rem] text-text-faint">{audio.reason}</span>
+            <button
+              type="button"
+              onClick={reset}
+              aria-label="Reset audio overview state"
+              className={CTRL_BTN}
+            >
+              Try again
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -761,6 +763,7 @@ export function NeedMoreCard({
           followUpSeqs={audioFollowUpSeqs}
           modeOpen={audioModeOpen}
           onModeOpenChange={setAudioModeOpen}
+          reportQuery={report.query}
         />
       </div>
 

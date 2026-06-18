@@ -28,6 +28,8 @@ export interface DeepResearchSubmit {
   leaderId?: string | null;
   /** Depth tier (quick / standard_deep / exhaustive). Defaults to standard_deep. */
   depthTier?: "quick" | "standard_deep" | "exhaustive";
+  /** DR-3 recency filter: "month" = past 30 days, "week" = past 7 days, null = off. */
+  recencyWindow?: "month" | "week" | null;
 }
 
 /** Fixture cid for offline rendering — the fixture stream replays a canned
@@ -55,6 +57,9 @@ export async function createDeepResearchConversation(
       // (the backend tolerates the extra field — Pydantic ignores when not
       // declared, and where it IS declared it gets persisted as the run's tier).
       depth_tier: opts.depthTier ?? "standard_deep",
+      // DR-3: recency_window is optional; omit (undefined) when null/off so the
+      // backend receives no field rather than explicit null (cleaner log).
+      ...(opts.recencyWindow != null ? { recency_window: opts.recencyWindow } : {}),
     },
   );
   return res.conversation_id;

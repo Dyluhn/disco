@@ -72,6 +72,7 @@ class _FakeSearch:
         limit: int = 10,
         domains_allow: Any = None,
         domains_deny: Any = None,
+        time_filter: str | None = None,
     ) -> list[SearchHit]:
         self.calls.append(query)
         return [

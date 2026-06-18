@@ -20,6 +20,7 @@ machinery already resolves.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import re
 from collections.abc import Awaitable, Callable
@@ -320,6 +321,7 @@ async def synthesize_section(
     top_k_for_section: int,
     emit: EmitFn,
     leg_context: GatherLegContext,
+    recency_window: str | None = None,
 ) -> ReportSection:
     """Synthesize one section from the corpus + verify per-claim. Returns a
     ReportSection ready for the ReportEvent. Any failure mode degrades
@@ -345,7 +347,18 @@ async def synthesize_section(
             confidence="low",
         )
 
-    instruction = _SECTION_PROMPT.format(
+    # DR-3 E4: date + recency directive (section synthesis).
+    # When recency_window is None the preamble is empty → byte-identical to
+    # a run without recency (the OFF assertion).
+    _synth_preamble = ""
+    if recency_window is not None:
+        _today = datetime.date.today().isoformat()
+        _label = "month" if recency_window == "month" else "week"
+        _synth_preamble = (
+            f"Today's date is {_today}. Focus on findings from the PAST {_label.upper()}. "
+            f"Prefer recent data over historical baselines where sources differ.\n\n"
+        )
+    instruction = _synth_preamble + _SECTION_PROMPT.format(
         topic=sub_result.subq.title, passages=_format_passages(passages)
     )
     # Per-leg isolation: the synthesis LLM call is also scoped to this leg's
@@ -475,6 +488,7 @@ async def coherence_pass(
     sections: list[ReportSection],
     *,
     router: LLMRouter,
+    recency_window: str | None = None,
 ) -> str:
     """One small reduce call: take the section titles + a one-line gist of
     each, produce the executive summary that opens the report. Cheap (no
@@ -498,7 +512,16 @@ async def coherence_pass(
         suffix = f"  [{'; '.join(marks)}]" if marks else ""
         outline_lines.append(f"- **{s.title}** — {lead}{suffix}")
     outline = "\n".join(outline_lines)
-    instruction = _COHERENCE_PROMPT.format(query=query, outline=outline)
+    # DR-3 E4: date + recency preamble for coherence pass.
+    _coh_preamble = ""
+    if recency_window is not None:
+        _today = datetime.date.today().isoformat()
+        _label = "month" if recency_window == "month" else "week"
+        _coh_preamble = (
+            f"Today's date is {_today}. This research focused on the PAST {_label.upper()}. "
+            f"Reflect that recency bias in the summary.\n\n"
+        )
+    instruction = _coh_preamble + _COHERENCE_PROMPT.format(query=query, outline=outline)
     try:
         resp = await router.complete(
             CompletionRequest(

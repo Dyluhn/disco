@@ -63,7 +63,8 @@ def test_local_extractor_emits_markdown_and_drops_noise():
 def test_ddgs_degrades_to_empty_on_failure(monkeypatch):
     """A rate-limit / network error returns [] — it never crashes the run."""
     prov = DdgsSearchProvider()
-    monkeypatch.setattr(prov, "_blocking_search", lambda q, n: [])
+    # _blocking_search(query, limit, timelimit) — timelimit added for DR-3.
+    monkeypatch.setattr(prov, "_blocking_search", lambda q, n, tl=None: [])
     assert asyncio.run(prov.search("anything", limit=3)) == []
 
 
