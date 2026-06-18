@@ -120,25 +120,55 @@ class Valve:
         serve spams and ~20 prose messages sailed past every DC-05a cap until
         the stuck detector fired ~95 events later."""
         incomplete, _ = signals.plan_is_incomplete(events)
-        if incomplete and noops >= self._loop._ACTIONLESS_BREAK_CAP:
-            await self._loop._emit(
-                MessageEvent(
-                    source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(
-                        role="user",
-                        content=(
-                            "The agent produced 3 consecutive responses"
-                            " without doing any real work while plan steps"
-                            " remain undone — pausing instead of burning"
-                            " tokens. Resume to continue."
+        if noops >= self._loop._ACTIONLESS_BREAK_CAP:
+            # B5 — completion BEFORE pause. A model that signals "done" via
+            # notify_user (×N) instead of finish() trips the actionless valve.
+            # If the build's definition-of-done is actually met (a plan exists
+            # and EVERY step is marked done), the run is finished — land a clean
+            # FINISHED rather than PAUSED so a completed build doesn't read as
+            # paused. Conservative: `plan_steps_complete` is False for the
+            # no-plan / partially-done cases, so a genuine stall still PAUSES
+            # below (the thrash guard is untouched).
+            if signals.plan_steps_complete(events):
+                await self._loop._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                "All plan steps are complete — the agent"
+                                " signaled completion without calling finish."
+                                " Marking the build finished."
+                            ),
                         ),
-                    ),
+                    )
                 )
-            )
-            await self._loop._emit(
-                StatusEvent(status=ConversationStatus.PAUSED, detail="actionless")
-            )
-            return True
+                await self._loop._emit(
+                    StatusEvent(
+                        status=ConversationStatus.FINISHED,
+                        detail="completed_via_notify",
+                    )
+                )
+                return True
+            if incomplete:
+                await self._loop._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                "The agent produced 3 consecutive responses"
+                                " without doing any real work while plan steps"
+                                " remain undone — pausing instead of burning"
+                                " tokens. Resume to continue."
+                            ),
+                        ),
+                    )
+                )
+                await self._loop._emit(
+                    StatusEvent(status=ConversationStatus.PAUSED, detail="actionless")
+                )
+                return True
 
         if noops >= self._loop._max_consecutive_noops:
             # The model is spinning without acting and won't stop — end

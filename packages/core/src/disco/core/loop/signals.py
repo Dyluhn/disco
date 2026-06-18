@@ -259,6 +259,30 @@ def plan_is_incomplete(events: list[Event]) -> tuple[bool, list[int]]:
     return (bool(missing), missing)
 
 
+def plan_steps_complete(events: list[Event]) -> bool:
+    """B5 — the definition-of-done signal for the actionless valve. True iff a
+    plan EXISTS with steps AND every step is marked done (the affirmative
+    inverse of `plan_is_incomplete`, reusing it as the truth source).
+
+    The valve uses this to tell a genuinely-finished build apart from a real
+    stall: a model that signals completion via `notify_user` (instead of
+    `finish()`) tips the actionless valve, and without this check a DONE build
+    would land PAUSED. Deliberately CONSERVATIVE about the no-plan case — when
+    there is no plan at all (Research runs, ad-hoc tasks) there is nothing to
+    judge completeness against, so this returns False and the valve keeps its
+    existing pause/continue behavior. Only an explicit, fully-checked-off plan
+    reads as complete; ambiguity never auto-finishes."""
+    plan: PlanEvent | None = None
+    for e in events:
+        if isinstance(e, PlanEvent):
+            if plan is None or e.revision >= plan.revision:
+                plan = e
+    if plan is None or not plan.steps:
+        return False  # no plan to judge → ambiguous, never auto-finish here
+    incomplete, _ = plan_is_incomplete(events)
+    return not incomplete
+
+
 def actions_since_last_resume(events: list[Event]) -> int:
     """Count ActionEvents (excluding meta/bookkeeping tools and the
     verify-on-finish probe) since the last
