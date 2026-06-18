@@ -19,8 +19,17 @@ import type { ReportEvent } from "@/types/agent";
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
+// Mutable export capabilities so individual tests can enable PDF/DOCX.
+// Default mirrors a server without WeasyPrint/pandoc (pdf:false, docx:false).
+const _caps = vi.hoisted(() => ({
+  current: { md: true, pdf: false, docx: false } as {
+    md: boolean;
+    pdf: boolean;
+    docx: boolean;
+  },
+}));
 vi.mock("@/hooks/useExportCapabilities", () => ({
-  useExportCapabilities: () => ({ md: true, pdf: false, docx: false }),
+  useExportCapabilities: () => _caps.current,
 }));
 
 vi.mock("@/api/deepResearch", () => ({
@@ -98,6 +107,8 @@ function renderCard(overrides?: Partial<React.ComponentProps<typeof NeedMoreCard
 describe("NeedMoreCard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Restore default capabilities (pdf/docx off) before each test.
+    _caps.current = { md: true, pdf: false, docx: false };
   });
 
   // (a) All three buttons render
@@ -370,5 +381,89 @@ describe("NeedMoreCard", () => {
 
     // Unblock so the component can clean up
     resolveHang({ ok: true, json: vi.fn().mockResolvedValue({ mp3_url: "/test.mp3" }) });
+  });
+
+  // (i) ④ PDF appearance toggle threads `mode` into the export POST body.
+  describe("PDF appearance (Light/Dark) toggle", () => {
+    const findExportCall = () =>
+      _fetchMock.mock.calls.find(([url]) =>
+        String(url).includes("/report/export?fmt=pdf"),
+      );
+
+    function stubBlobAndUrl() {
+      // PDF export goes through the non-FSA download path (jsdom has no FSA),
+      // so stub object-URL plumbing and give fetch a blob() to download.
+      vi.stubGlobal("URL", {
+        ...URL,
+        createObjectURL: vi.fn(() => "blob:mock"),
+        revokeObjectURL: vi.fn(),
+      });
+      _fetchMock.mockResolvedValue({
+        ok: true,
+        blob: vi.fn().mockResolvedValue(new Blob(["%PDF-1.7"], { type: "application/pdf" })),
+      });
+    }
+
+    it("defaults to Light and POSTs mode:light when exporting PDF", async () => {
+      _caps.current = { md: true, pdf: true, docx: true };
+      stubBlobAndUrl();
+      const user = userEvent.setup();
+      renderCard();
+
+      await user.click(screen.getByRole("button", { name: /Export as/i }));
+      const dialog = await screen.findByRole("dialog");
+
+      // Toggle present and defaulting to Light (no Dark selection made).
+      const group = within(dialog).getByRole("group", { name: /PDF appearance/i });
+      expect(within(group).getByRole("button", { name: /^Light$/i })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+
+      await user.click(within(dialog).getByRole("button", { name: /PDF/i }));
+
+      await waitFor(() => expect(findExportCall()).toBeTruthy());
+      const [, init] = findExportCall()!;
+      const body = JSON.parse((init as RequestInit).body as string);
+      expect(body.mode).toBe("light");
+    });
+
+    it("selecting Dark then exporting PDF POSTs mode:dark", async () => {
+      _caps.current = { md: true, pdf: true, docx: true };
+      stubBlobAndUrl();
+      const user = userEvent.setup();
+      renderCard();
+
+      await user.click(screen.getByRole("button", { name: /Export as/i }));
+      const dialog = await screen.findByRole("dialog");
+
+      // Select Dark.
+      const group = within(dialog).getByRole("group", { name: /PDF appearance/i });
+      await user.click(within(group).getByRole("button", { name: /^Dark$/i }));
+      expect(within(group).getByRole("button", { name: /^Dark$/i })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+
+      // Export PDF.
+      await user.click(within(dialog).getByRole("button", { name: /PDF/i }));
+
+      await waitFor(() => expect(findExportCall()).toBeTruthy());
+      const [, init] = findExportCall()!;
+      const body = JSON.parse((init as RequestInit).body as string);
+      expect(body.mode).toBe("dark");
+    });
+
+    it("hides the appearance toggle when PDF export is unavailable", async () => {
+      // Default caps: pdf:false → no toggle (no dead control).
+      const user = userEvent.setup();
+      renderCard();
+
+      await user.click(screen.getByRole("button", { name: /Export as/i }));
+      const dialog = await screen.findByRole("dialog");
+      expect(
+        within(dialog).queryByRole("group", { name: /PDF appearance/i }),
+      ).not.toBeInTheDocument();
+    });
   });
 });
