@@ -36,7 +36,7 @@ import asyncio
 import logging
 import os
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Literal
 
 from disco.core import (
     DEFAULT_OWNER_ID,
@@ -131,6 +131,32 @@ class DeepResearchService:
             self._rt._depth = {}
         if tier and tier in {t.value for t in DepthTier}:
             self._rt._depth[conversation_id] = tier
+
+    # ── DR-3 recency window (E2) ──────────────────────────────────────────────
+
+    def set_recency(self, conversation_id: str, window: str | None) -> None:
+        """Pin the recency window for this conversation's Deep Research run
+        (sent via CreateConversationBody.recency_window at submit time).
+
+        Accepts ``"month"`` or ``"week"``; None means off (default — no
+        time-filtering, no date injection → byte-identical to a run without
+        recency set). Stored in memory; recovery defaults to None on restart,
+        which falls to the off path (safe, conservative)."""
+        if not hasattr(self._rt, "_recency"):
+            self._rt._recency = {}
+        if window in {"month", "week"}:
+            self._rt._recency[conversation_id] = window
+        elif window is None:
+            self._rt._recency.pop(conversation_id, None)
+
+    def _recency_for(self, conversation_id: str) -> Literal["month", "week"] | None:
+        """Return the recency window for this conversation (None = off)."""
+        if not hasattr(self._rt, "_recency"):
+            return None
+        val = self._rt._recency.get(conversation_id)
+        if val in ("month", "week"):
+            return val  # type: ignore[return-value]
+        return None
 
     def _research(self) -> dict[str, Any]:
         # A statically-injected provider set (tests) is used as-is. Otherwise build
@@ -297,9 +323,11 @@ class DeepResearchService:
         # a user's pick silently applied to gather/synthesis but NOT to the
         # decompose/plan step (the exact half-applied-pill bug).
         router = self._rt._router_now(pick=self._rt._model_override.get(conversation_id))
+        recency_window = self._recency_for(conversation_id)
         try:
             subqs = await decompose_query(
-                router, query, max_subq=bound.max_subquestions
+                router, query, max_subq=bound.max_subquestions,
+                recency_window=recency_window,
             )
         except Exception as exc:  # noqa: BLE001 — surface as a system reminder
             await self._rt._store.append(
@@ -388,6 +416,7 @@ class DeepResearchService:
         )
         plan_steps = [s.title for s in plan.steps]
         tier = self._rt._depth_for(conversation_id)
+        recency_window = self._recency_for(conversation_id)
 
         # Build the engine. Providers come from the existing research-stream
         # plumbing (search, extract, reranker, embedder, nli); the vectorstore
@@ -439,6 +468,7 @@ class DeepResearchService:
             depth=tier,
             conversation_id=conversation_id,
             gather_concurrency=gather_cap,
+            recency_window=recency_window,
         )
 
         # Emit callback: every engine event becomes an Action/Observation pair
@@ -698,7 +728,7 @@ class DeepResearchService:
                 pid = str(p.get("id", ""))
                 ptext = str(p.get("text", ""))
                 src = str(p.get("source_title", p.get("source_url", "")))
-                block = f"[{pid}] ({src})\n{ptext}\n"
+                block = f"[[{pid}]] ({src})\n{ptext}\n"
                 if total + len(block) > MAX_PASSAGE_CHARS:
                     break
                 passage_blocks.append(block)

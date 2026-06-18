@@ -46,6 +46,8 @@ export function useDeepResearch(
   // the run to a different model silently).
   const [leaderId, setLeaderId] = useState<string | null>(initialLeaderId ?? null);
   const [depthTier, setDepthTier] = useState<Tier>("standard_deep");
+  // DR-3: recency filter — null = off (any time), "month"/"week" = date-bounded.
+  const [recencyWindow, setRecencyWindow] = useState<"month" | "week" | null>(null);
   // fix-c #4: PDF/DOCX export runs on the server (WeasyPrint / pandoc) and can
   // take seconds — without a pending signal the button looked dead. MD stays
   // synchronous (client-side blob) so it never sets this.
@@ -79,7 +81,7 @@ export function useDeepResearch(
       const trimmed = query.trim();
       if (!trimmed) return;
       create.mutate(
-        { query: trimmed, leaderId, depthTier },
+        { query: trimmed, leaderId, depthTier, recencyWindow },
         {
           // kick:true — this is the ONLY path that starts the run.
           onSuccess: (cid) =>
@@ -87,7 +89,7 @@ export function useDeepResearch(
         },
       );
     },
-    [create, leaderId, depthTier],
+    [create, leaderId, depthTier, recencyWindow],
   );
 
   // fix-c #5: the bounded-by "Run on exhaustive tier" button used to call
@@ -245,6 +247,8 @@ export function useDeepResearch(
     setLeaderId,
     depthTier,
     setDepthTier,
+    recencyWindow,
+    setRecencyWindow,
     submit,
     runExhaustive,
     stop,

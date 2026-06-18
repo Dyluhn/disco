@@ -88,8 +88,16 @@ class DdgsSearchProvider:
         limit: int = 10,
         domains_allow: frozenset[str] | None = None,
         domains_deny: frozenset[str] | None = None,
+        time_filter: str | None = None,
     ) -> list[SearchHit]:
-        rows = await asyncio.to_thread(self._blocking_search, query, limit)
+        # DR-3 E1: convert recency_window → ddgs timelimit ("m"=month, "w"=week).
+        # "day" is avoided (near-zero results per spec).
+        _timelimit: str | None = None
+        if time_filter == "month":
+            _timelimit = "m"
+        elif time_filter == "week":
+            _timelimit = "w"
+        rows = await asyncio.to_thread(self._blocking_search, query, limit, _timelimit)
         _LOG.info("ddgs search %r → %d raw rows", query[:80], len(rows))
         hits: list[SearchHit] = []
         for i, r in enumerate(rows):
@@ -109,7 +117,9 @@ class DdgsSearchProvider:
             )
         return hits
 
-    def _blocking_search(self, query: str, limit: int) -> list[dict]:
+    def _blocking_search(
+        self, query: str, limit: int, timelimit: str | None = None
+    ) -> list[dict]:
         # DuckDuckGo rate-limits aggressively; a rate-limited call raises OR returns
         # an empty list — INDISTINGUISHABLE from a genuine no-results one to the
         # caller (both surface as "No sources"). Retry a few times with backoff so a
@@ -123,7 +133,10 @@ class DdgsSearchProvider:
                 from ddgs import DDGS  # lazy: keeps import cost off the hot path
 
                 with DDGS() as d:
-                    rows = list(d.text(query, max_results=limit))
+                    kw: dict = {"max_results": limit}
+                    if timelimit is not None:
+                        kw["timelimit"] = timelimit
+                    rows = list(d.text(query, **kw))
                 if rows:
                     return rows
             except Exception as e:  # noqa: BLE001 — rate-limit / network: retry then degrade

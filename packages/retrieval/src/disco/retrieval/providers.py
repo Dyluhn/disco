@@ -27,6 +27,7 @@ class SearchProvider(Protocol):
         limit: int = 10,
         domains_allow: frozenset[str] | None = None,
         domains_deny: frozenset[str] | None = None,
+        time_filter: str | None = None,
     ) -> list[SearchHit]: ...
 
 

@@ -1195,6 +1195,9 @@ class ConversationRuntime:
     def set_depth(self, conversation_id: str, tier: str | None) -> None:
         return self._dr.set_depth(conversation_id, tier)
 
+    def set_recency(self, conversation_id: str, window: str | None) -> None:
+        return self._dr.set_recency(conversation_id, window)
+
     def _research(self) -> dict[str, Any]:
         return self._dr._research()
 

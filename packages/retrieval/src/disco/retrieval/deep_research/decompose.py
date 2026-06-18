@@ -15,6 +15,7 @@ flowing back from the engine).
 
 from __future__ import annotations
 
+import datetime
 import re
 from dataclasses import dataclass
 
@@ -75,16 +76,40 @@ def _clean(line: str) -> str:
     return line.rstrip(":").strip()
 
 
+def _recency_preamble(recency_window: str | None) -> str:
+    """Build the date + recency context prefix for the decompose prompt.
+
+    When recency_window is None the function returns an empty string so the
+    prompt is byte-identical to the pre-DR-3 version (the OFF assertion)."""
+    if recency_window is None:
+        return ""
+    today = datetime.date.today().isoformat()
+    label = "month" if recency_window == "month" else "week"
+    return (
+        f"Today's date is {today}. "
+        f"The user wants research focused on the PAST {label.upper()}. "
+        f"Phrase sub-questions to elicit recent information, "
+        f"recent events, and up-to-date figures rather than historical background.\n\n"
+    )
+
+
 async def decompose_query(
     router: LLMRouter,
     query: str,
     *,
     max_subq: int,
+    recency_window: str | None = None,
 ) -> list[SubQuestion]:
     """Decompose `query` into up to `max_subq` sub-questions via the
     QUERY_REWRITER role. Returns at least one sub-question (falls back to the
-    original query) so the planner can never propose an empty plan."""
-    instruction = _PROMPT_TEMPLATE.format(query=query.strip(), n=max_subq)
+    original query) so the planner can never propose an empty plan.
+
+    ``recency_window`` is ``"month"`` or ``"week"`` (DR-3 E4): when set, the
+    prompt is prefixed with today's date and a recency directive so the model
+    frames sub-questions toward recent sources.  ``None`` → byte-identical to
+    a call without the argument (the OFF assertion)."""
+    preamble = _recency_preamble(recency_window)
+    instruction = preamble + _PROMPT_TEMPLATE.format(query=query.strip(), n=max_subq)
     req = CompletionRequest(
         profile=CapabilityProfile(role=ModelRole.QUERY_REWRITER),
         messages=[LLMMessage(role="user", content=instruction)],

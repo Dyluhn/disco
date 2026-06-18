@@ -225,7 +225,7 @@ def test_autonomous_deep_research_auto_approves_plan(tmp_path, monkeypatch):
         def __init__(self, title):
             self.title = title
 
-    async def _fake_decompose(router, query, max_subq=5):
+    async def _fake_decompose(router, query, max_subq=5, recency_window=None):
         return [_SubQ("sub one"), _SubQ("sub two")]
 
     monkeypatch.setattr(drsvc, "decompose_query", _fake_decompose)

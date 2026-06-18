@@ -59,6 +59,10 @@ class RetrievalRequest(BaseModel):
     domains_allow: frozenset[str] | None = None
     domains_deny: frozenset[str] | None = None
     provider: str | None = None  # override default SearchProvider
+    # DR-3 E2: recency window for time-filtered search + date prompt injection.
+    # ``None`` (default) = no time filter, no date text injected → byte-identical
+    # to a request without this field (the OFF path assertion in tests).
+    recency_window: Literal["month", "week"] | None = None
 
 
 class RetrievalResult(BaseModel):

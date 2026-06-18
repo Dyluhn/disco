@@ -25,6 +25,7 @@ Differences from the sandboxed BUILD tool:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -145,6 +146,57 @@ def report_audio_cache_dir() -> Path:
     return root
 
 
+# ---- C1: markdown normalizer for TTS ----------------------------------------
+
+_CITATION_RE = re.compile(r"\[\[[\w-]+\]\]")  # [[id]] citation chips
+_HEADING_RE = re.compile(r"^#{1,6}\s+", re.MULTILINE)
+_BOLD_ITALIC_RE = re.compile(r"\*{1,3}([^*]+)\*{1,3}")
+_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+_BULLET_RE = re.compile(r"^[ \t]*[-*•]\s+", re.MULTILINE)
+_CODE_FENCE_RE = re.compile(r"```[^\n]*\n.*?```", re.DOTALL)
+_INLINE_CODE_RE = re.compile(r"`[^`]+`")
+
+
+def _normalize_for_tts(text: str) -> str:
+    """Strip markdown formatting from *text* so TTS engines receive clean prose.
+
+    Removed: headings (``#``), bold/italic (``**``/``*``/``***``), markdown
+    links (keeping the anchor text), list bullets, fenced code-blocks, inline
+    code, and citation chips (``[[id]]``).  The result is plain ASCII/Unicode
+    prose — no markup characters that would be read letter-by-letter by TTS.
+
+    The on-screen TRANSCRIPT is built from the raw ``Turn.text`` BEFORE this
+    normalizer runs — only the bytes passed to the TTS synth are cleaned.
+    """
+    # Drop fenced code blocks entirely (they carry no speakable information).
+    text = _CODE_FENCE_RE.sub("", text)
+    # Strip inline code backticks (keep the word, drop the ticks).
+    text = _INLINE_CODE_RE.sub(lambda m: m.group(0)[1:-1], text)
+    # Drop citation chips — ``[[p0]]`` adds nothing to speech.
+    text = _CITATION_RE.sub("", text)
+    # Strip heading markers but keep the heading text.
+    text = _HEADING_RE.sub("", text)
+    # Keep link anchor text, drop the URL.
+    text = _LINK_RE.sub(r"\1", text)
+    # Strip bold/italic markers, keep the text.
+    text = _BOLD_ITALIC_RE.sub(r"\1", text)
+    # Strip list bullets.
+    text = _BULLET_RE.sub("", text)
+    # Collapse blank lines.
+    lines = [ln.rstrip() for ln in text.splitlines()]
+    cleaned: list[str] = []
+    prev_blank = False
+    for ln in lines:
+        if not ln:
+            if not prev_blank:
+                cleaned.append("")
+            prev_blank = True
+        else:
+            cleaned.append(ln)
+            prev_blank = False
+    return "\n".join(cleaned).strip()
+
+
 # ---- Report → input text ---------------------------------------------------
 
 
@@ -223,19 +275,35 @@ async def _generate_turn_script(overview_text: str, mode: str) -> list[Any]:
         if mode == "single"
         else audio_overview._validate_turn_script
     )
+    # C2: inject acronym-first-mention instruction into the payload.
+    # This supplements the existing prompt (owned by the audio_overview tool) by
+    # inserting a system message that the local server-side adapter controls, so
+    # the TTS script expands abbreviations (HTTP/3, API, ML) on first mention —
+    # avoiding letter-soup in generated speech.
+    payload = audio_overview._build_llm_payload(overview_text, mode=mode)
+    payload["messages"].insert(0, {
+        "role": "system",
+        "content": (
+            "IMPORTANT: When you encounter an acronym or abbreviation for the FIRST TIME "
+            "in the script, expand it in full. Example: write "
+            "'HTTP/3 (Hypertext Transfer Protocol version 3)' not just 'HTTP/3'. "
+            "After the first mention you may use the short form freely."
+        ),
+    })
     try:
-        raw_response = await _authenticated_call_llm(
-            audio_overview._build_llm_payload(overview_text, mode=mode), LLM_URL
-        )
+        raw_response = await _authenticated_call_llm(payload, LLM_URL)
     except Exception as e:
         raise TurnScriptError(f"LLM call failed while generating turn-script: {e}") from e
 
     raw_json = audio_overview._extract_json(raw_response)
     turns, error = _validate(raw_json)
 
-    # One retry on malformed output (mirrors the tool).
+    # One retry on malformed output (mirrors the tool).  Re-use the already-built
+    # payload (with the C2 system message already prepended) for the retry, so
+    # the retry also benefits from the acronym instruction.
     if error is not None:
-        retry_payload = audio_overview._build_llm_payload(overview_text, mode=mode)
+        retry_payload = dict(payload)  # shallow copy; messages list will be extended
+        retry_payload["messages"] = list(payload["messages"])  # own copy of the list
         retry_payload["messages"].append({"role": "assistant", "content": raw_response})
         retry_payload["messages"].append(
             {
@@ -306,12 +374,20 @@ async def generate_report_audio(
         raise ValueError(f"Unknown audio mode {mode!r}; expected 'podcast' or 'single'.")
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    # Mode-aware + follow-up-count-aware filenames prevent cache collisions
-    # when both modes or different follow-up selections are requested for the
-    # same conversation (WALK-20 / WALK-21 / D3).
-    fu_suffix = f"_fu{len(follow_ups)}" if follow_ups else ""
-    mp3_path = out_dir / f"audio_overview_{mode}{fu_suffix}.mp3"
-    transcript_path = out_dir / f"audio_overview_{mode}{fu_suffix}.md"
+    # B3: Content-hash cache key — the key is a hash of the report text + follow-up
+    # content so that regenerating after an edit (new summary/sections/follow-ups)
+    # busts the cache and produces a fresh audio file.  The hash replaces the old
+    # mode+fu_count suffix which collided across edits of the same conversation.
+    _content_seed = (
+        report.query
+        + (report.summary or "")
+        + "".join(s.markdown for s in report.sections)
+        + ("|".join(f"{q}:{a}" for q, a in follow_ups) if follow_ups else "")
+        + mode
+    )
+    _content_hash = hashlib.sha256(_content_seed.encode()).hexdigest()[:12]
+    mp3_path = out_dir / f"audio_overview_{mode}_{_content_hash}.mp3"
+    transcript_path = out_dir / f"audio_overview_{mode}_{_content_hash}.md"
 
     # If a previous run for this conversation already wrote both files, hand
     # them back verbatim.  The pipeline is deterministic given the report, the
@@ -343,20 +419,24 @@ async def generate_report_audio(
     }.get(provider, provider)
 
     # --- Step 2: synthesize each turn to PCM --------------------------------
+    # C1: normalize the text fed to TTS — strip markdown so the engine speaks
+    # clean prose, not raw markup.  The transcript (Step 4) is built from the
+    # ORIGINAL turn.text so it stays raw and readable as markdown.
     pcm_turns: list[Any] = []
     for i, turn in enumerate(turns):
         voice = voice_a if turn.speaker == "A" else voice_b
+        tts_text = _normalize_for_tts(turn.text)
         try:
             if is_remote:
                 pcm = await audio_overview._synthesize_remote(
-                    turn.text,
+                    tts_text,
                     voice,
                     remote_base,
                     api_key=remote_key,
                     model=remote_model,
                 )
             else:
-                pcm = await audio_overview._synthesize_local(turn.text, voice)
+                pcm = await audio_overview._synthesize_local(tts_text, voice)
         except httpx.ConnectError as e:
             raise TtsBackendError(
                 f"TTS endpoint unreachable at {remote_base} (turn {i + 1}/{len(turns)}): {e}"
@@ -431,6 +511,7 @@ __all__ = [
     "TtsDisabled",
     "TtsBackendError",
     "TurnScriptError",
+    "_normalize_for_tts",
     "generate_report_audio",
     "report_audio_cache_dir",
     "report_to_overview_text",
