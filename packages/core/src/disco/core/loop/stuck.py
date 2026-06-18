@@ -56,9 +56,23 @@ _NO_PROGRESS_PROBE_TOOLS = frozenset({"browser", "server_status", "deploy_previe
 # the no-progress breaker trips. 4 mirrors the circuit-breaker's failure budget.
 NO_PROGRESS_DISTINCT_EDITS = 4
 
+# W1 — wait/poll tools exempted from patterns 1 and 4 (but NOT 2): a legit
+# "poll until server up" loop must not be flagged as stuck (OpenHands #5355 FP
+# class). Pattern 2 keeps them: a perpetually-erroring poll IS stuck.
+_WAIT_POLL_TOOLS = frozenset({
+    "sleep", "wait", "server_status", "poll", "browser_wait", "job_status", "deploy_status"
+})
+
+# W1 — plan/meta tools managed by the dedicated bookkeeping halt
+# (turn_control.py gate_bookkeeping_streak). Excluded from patterns 1 and 4
+# to avoid double-firing with the bookkeeping gate. Mirrors _BOOKKEEPING_TOOLS
+# in signals.py — kept inline so stuck.py stays self-contained; a new tool
+# added to _BOOKKEEPING_TOOLS must also be added here.
+_PLAN_META_TOOLS = frozenset({"submit_plan", "propose_plan_update", "plan_step", "finish"})
+
 
 class StuckThresholds(BaseModel):
-    repeat_action_observation: int = 3  # identical action→obs cycles
+    repeat_action_observation: int = 4  # identical action→obs cycles (W1: raised 3→4)
     repeat_action_error: int = 3  # identical action→error cycles
     agent_monologue: int = 4  # consecutive agent msgs, no user
     alternating: int = 3  # A-B-A-B cycles
@@ -172,11 +186,41 @@ class StuckDetector:
             or self._repeated_action_error(recent)
             or self._agent_monologue(recent)
             or self._alternating(recent)
+            or self._pure_repeat(recent)  # W1: Roo-style back-to-back action repeat
         )
         rewrite_directive: RewriteDirective | None = None
         if self._assist:
             rewrite_directive = self._per_file_rewrite_directive(recent)
         return StuckResult(is_stuck=stuck, rewrite_directive=rewrite_directive)
+
+    # -- W1 pattern 5: Roo-style pure-repeat (back-to-back identical actions) ----
+    #
+    # Catches a model that fires the same tool call repeatedly WITHOUT waiting
+    # for a paired observation — e.g. a tight loop issuing back-to-back
+    # file_read("x.py") with no observation in between. Pattern 1 requires
+    # action→obs pairs; this pattern works on the raw non-wait action stream.
+    # Uses ignore_thought=True so thought paraphrasing does not mask the loop.
+    # Wait/poll and plan/meta tools are exempt (same rationale as patterns 1+4).
+
+    def _pure_repeat(self, events: list[Event]) -> bool:
+        threshold = self.t.repeat_action_observation
+        _exempt = _WAIT_POLL_TOOLS | _PLAN_META_TOOLS
+        actions = [
+            e for e in events
+            if isinstance(e, ActionEvent)
+            and e.tool_call is not None
+            and e.tool_call.tool_name not in _exempt
+        ]
+        if len(actions) < threshold:
+            return False
+        last = actions[-1]
+        run = 0
+        for x in reversed(actions):
+            if event_content_eq(x, last, ignore_thought=True):
+                run += 1
+            else:
+                break
+        return run >= threshold
 
     # -- F6 pattern 5: per-file patch-spiral → rewrite directive --------------
     #
@@ -271,23 +315,42 @@ class StuckDetector:
 
     def _repeated_action_observation(self, events: list[Event]) -> bool:
         n = self.t.repeat_action_observation
-        pairs = _consecutive_pairs(events, ActionEvent, ObservationEvent)
+        # W1: exempt wait/poll tools (legit poll loops) and plan/meta tools
+        # (managed by the dedicated bookkeeping halt). Filter the ACTION events
+        # only — the paired ObservationEvents stay in the stream so the
+        # consecutive-pairs logic sees the correct adjacency structure.
+        _exempt = _WAIT_POLL_TOOLS | _PLAN_META_TOOLS
+        filtered = [
+            e for e in events
+            if not (
+                isinstance(e, ActionEvent)
+                and e.tool_call is not None
+                and e.tool_call.tool_name in _exempt
+            )
+        ]
+        pairs = _consecutive_pairs(filtered, ActionEvent, ObservationEvent)
         if len(pairs) < n:
             return False
         last = pairs[-n:]
         a0, o0 = last[0]
-        return all(event_content_eq(a, a0) and event_content_eq(o, o0) for a, o in last)
+        # W1: ignore_thought=True so thought-paraphrasing does not mask a loop.
+        return all(
+            event_content_eq(a, a0, ignore_thought=True) and event_content_eq(o, o0)
+            for a, o in last
+        )
 
     # -- pattern 2: identical action→error cycles -----------------------------
 
     def _repeated_action_error(self, events: list[Event]) -> bool:
         n = self.t.repeat_action_error
+        # W1: NO tool filter here — a perpetually-erroring poll IS stuck.
         pairs = _consecutive_pairs(events, ActionEvent, AgentErrorEvent)
         if len(pairs) < n:
             return False
         last = pairs[-n:]
         a0, e0 = last[0]
-        return all(event_content_eq(a, a0) and event_content_eq(e, e0) for a, e in last)
+        # W1: ignore_thought=True so thought-paraphrasing does not mask a loop.
+        return all(event_content_eq(a, a0, ignore_thought=True) and event_content_eq(e, e0) for a, e in last)
 
     # -- pattern 3: agent monologue (consecutive agent messages) --------------
 
@@ -307,16 +370,24 @@ class StuckDetector:
     def _alternating(self, events: list[Event]) -> bool:
         cycles = self.t.alternating
         need = 2 * cycles
-        actions = [e for e in events if isinstance(e, ActionEvent)]
+        # W1: exempt wait/poll and plan/meta tools (same rationale as pattern 1).
+        _exempt = _WAIT_POLL_TOOLS | _PLAN_META_TOOLS
+        actions = [
+            e for e in events
+            if isinstance(e, ActionEvent)
+            and e.tool_call is not None
+            and e.tool_call.tool_name not in _exempt
+        ]
         if len(actions) < need:
             return False
         window = actions[-need:]
         evens, odds = window[0::2], window[1::2]
         a, b = evens[0], odds[0]
-        if event_content_eq(a, b):
-            return False  # identical => that's pattern 1, not alternation
-        return all(event_content_eq(x, a) for x in evens) and all(
-            event_content_eq(y, b) for y in odds
+        # W1: ignore_thought=True so thought paraphrasing does not mask the loop.
+        if event_content_eq(a, b, ignore_thought=True):
+            return False  # identical (ignoring thought) => pattern 1, not alternation
+        return all(event_content_eq(x, a, ignore_thought=True) for x in evens) and all(
+            event_content_eq(y, b, ignore_thought=True) for y in odds
         )
 
 
@@ -381,6 +452,6 @@ def repeated_verify_no_progress(
             if payload != last_key:
                 break
             probe_count += 1
-        elif not any(event_content_eq(cast("ActionEvent", payload), d) for d in distinct):
+        elif not any(event_content_eq(cast("ActionEvent", payload), d, ignore_thought=True) for d in distinct):
             distinct.append(cast("ActionEvent", payload))
     return probe_count >= 2 and len(distinct) >= distinct_edits

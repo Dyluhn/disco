@@ -26,15 +26,22 @@ from .events import (
 _VOLATILE_FIELDS = {"id", "seq", "timestamp", "meta"}
 
 
-def event_content_eq(a: Event, b: Event) -> bool:
+def event_content_eq(a: Event, b: Event, *, ignore_thought: bool = False) -> bool:
     """[CONTRACT] True if two events are semantically equal ignoring volatile
-    fields. Used by stuck detection and idempotency reasoning. Same-type only."""
+    fields. Used by stuck detection and idempotency reasoning. Same-type only.
+
+    When `ignore_thought=True` the ActionEvent.thought field is excluded from
+    the comparison. Pass this flag ONLY at stuck-detection call-sites — a model
+    that paraphrases its reasoning each turn while emitting the identical tool
+    call must still be detected as a repeat. Leave idempotency / dedup callers
+    on the default so genuinely different reasoning is preserved.
+    """
     if type(a) is not type(b) or a.source != b.source:
         return False
 
     if isinstance(a, ActionEvent) and isinstance(b, ActionEvent):
         return (
-            a.thought == b.thought
+            (ignore_thought or a.thought == b.thought)
             and a.tool_call.tool_name == b.tool_call.tool_name
             and a.tool_call.arguments == b.tool_call.arguments
         )
