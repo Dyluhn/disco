@@ -1,14 +1,19 @@
-"""Slide generation tool — writes Marp-rendered slide decks (HTML/PDF/PPTX) to
-the workspace. The model authors the markdown deck source, and this tool
-renders it via Marp CLI.
+"""Slide generation tool — writes rendered slide decks (HTML/PDF/PPTX) to
+the workspace.
+
+Primary path (C2): when a ``goal`` is supplied, the staged C2 pipeline
+(outline → fill → assets → lower_deck → C3 render) generates a structured
+AuthoredDeck and renders it to native editable .pptx / brand HTML.  On parse
+failure after one retry the Marp fallback is taken automatically — no crash.
+
+Marp fallback: when only ``markdown`` is supplied, or when C2 fails, the
+tool falls back to Marp CLI (or the pure-HTML fallback when Marp is absent).
 
 Format support:
-  - html: always works (Marp CLI render or self-contained fallback).
-  - pdf, pptx: requires marp + Chromium (ships in the sandbox image); returns
-    a clean failure when the toolchain is absent.
-  - Marp --pptx output is image-based slides.
-    Native editable PPTX (real text boxes) is produced by _pptx_render.py (C3)
-    when a structured MinimalDeck is supplied; the C2 pipeline wires this path.
+  - html: always works (C3 brand HTML, or Marp CLI, or self-contained fallback).
+  - pdf: requires marp + Chromium or LibreOffice in the sandbox image.
+  - pptx: C3 native editable PPTX (real text boxes) via python-pptx; or
+          Marp --pptx (image-based) when the C2 path is not used.
 """
 
 from __future__ import annotations
@@ -18,9 +23,12 @@ import re
 import shlex
 from textwrap import dedent
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from .image_gen import select_image_backend
 
 # ---- args model --------------------------------------------------------------
 
@@ -28,13 +36,23 @@ from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 class SlidesGenerateArgs(BaseModel):
     """Arguments for the slides_generate tool."""
 
-    markdown: str = Field(
+    goal: str | None = Field(
+        default=None,
         description=(
-            "Marp-compatible markdown source for the slide deck. "
-            "Use CommonMark with '---' (three dashes on their own line) to "
-            "separate slides. Front matter directives (theme, paginate, etc.) "
-            "are supported."
-        )
+            "Natural-language description of the desired slide deck (e.g. "
+            "'A 6-slide investor pitch for an EV battery startup'). "
+            "When provided, the C2 structured pipeline generates the deck "
+            "automatically via outline → fill → render stages. "
+            "Takes priority over ``markdown`` when both are supplied."
+        ),
+    )
+    markdown: str = Field(
+        default="",
+        description=(
+            "Marp-compatible markdown source for the slide deck (backward-compat "
+            "path). Use CommonMark with '---' (three dashes on their own line) to "
+            "separate slides. Ignored when ``goal`` is supplied."
+        ),
     )
     filename: str = Field(
         description=(
@@ -49,6 +67,19 @@ class SlidesGenerateArgs(BaseModel):
     theme: str | None = Field(
         default=None,
         description="Optional Marp theme CSS to include inline (e.g. custom colors, fonts).",
+    )
+    slide_count: int = Field(
+        default=5,
+        ge=2,
+        le=30,
+        description="Approximate number of slides (used by the C2 pipeline; ignored for markdown path).",
+    )
+    mode: Literal["deck", "markdown"] = Field(
+        default="deck",
+        description=(
+            "'deck' uses the C2 structured pipeline (default when goal supplied). "
+            "'markdown' forces the Marp/fallback path regardless of goal."
+        ),
     )
 
 
@@ -307,24 +338,24 @@ class SlidesTool:
     definition = ToolDef(
         name="slides_generate",
         description=(
-            "Write a slide deck (HTML/PDF/PPTX) to the workspace. Provide markdown "
-            "source with '---' (three dashes on their own line) to separate slides. "
-            "Front matter directives (theme, paginate, etc.) are supported. "
-            "HTML always works; PDF and PPTX require the Marp+Chromium toolchain "
-            "in the sandbox image. Marp PPTX is image-based; native editable PPTX "
-            "is produced by the C3 renderer (_pptx_render.py) via the C2 deck pipeline."
+            "Write a slide deck (HTML/PDF/PPTX) to the workspace.\n\n"
+            "Primary path (recommended): supply ``goal`` (e.g. 'A 6-slide investor "
+            "pitch for an EV battery startup') and the C2 pipeline generates a "
+            "structured, brand-themed deck automatically (native editable PPTX + "
+            "brand HTML).  On failure, automatically falls back to Marp.\n\n"
+            "Markdown path (backward-compat): supply ``markdown`` with '---' slide "
+            "separators; rendered via Marp CLI (image-based PPTX) or the HTML "
+            "fallback.\n\n"
+            "HTML always works.  PDF and native PPTX require the sandbox toolchain."
         ),
         args_model=SlidesGenerateArgs,
         needs=frozenset({Capability.FILESYSTEM}),
-        base_risk=None,  # file write — sandbox-jailed, no network needed
+        base_risk=None,
         runs_in="sandbox",
         read_only=False,
     )
 
     async def run(self, args: SlidesGenerateArgs, ctx: ToolContext) -> ToolOutcome:
-        # This tool declares runs_in="sandbox": all I/O MUST go through the
-        # sandbox instance, which jails the path and lands the file in the
-        # conversation's workspace.
         assert ctx.sandbox is not None  # sandbox tools always receive an instance
 
         fmt = args.format.lower()
@@ -335,29 +366,186 @@ class SlidesTool:
                 error=f"Unsupported format: {fmt!r}.",
             )
 
+        # ---- C2 deck pipeline (primary path when goal is supplied) ----
+        use_c2 = bool(args.goal) and args.mode != "markdown"
+        if use_c2:
+            return await self._run_c2_pipeline(args, ctx, fmt)
+
+        # ---- Marp / markdown path (fallback or explicit mode="markdown") ----
+        return await self._run_marp_path(args, ctx, fmt)
+
+    async def _run_c2_pipeline(
+        self, args: SlidesGenerateArgs, ctx: ToolContext, fmt: str
+    ) -> ToolOutcome:
+        """Run the C2 staged generation pipeline.  Falls back to Marp on failure."""
+        from disco.tools.builtin._slides_pipeline import generate_deck
+        from disco.tools.builtin._pptx_render import render_pptx, render_html
+
+        assert args.goal is not None  # caller-checked
+        backend = select_image_backend()
+
+        c1_deck, fallback_md, err = await generate_deck(
+            args.goal,
+            args.filename,
+            ctx,
+            backend,
+            slide_count=args.slide_count,
+        )
+
+        if c1_deck is not None:
+            # C2 succeeded — render via C3
+            return await self._render_c1_deck(c1_deck, args, ctx, fmt)
+
+        # C2 failed → fall back to Marp/html fallback with the generated markdown
+        if fallback_md:
+            marp_args = SlidesGenerateArgs(
+                goal=None,
+                markdown=fallback_md,
+                filename=args.filename,
+                format=args.format,
+                theme=args.theme,
+                mode="markdown",
+            )
+            outcome = await self._run_marp_path(marp_args, ctx, fmt)
+            # Annotate content to indicate C2 failure + fallback
+            note = f"\n[C2 pipeline failed ({err}); rendered via Marp fallback]"
+            return ToolOutcome(
+                success=outcome.success,
+                content=outcome.content + note,
+                error=outcome.error,
+                artifacts=outcome.artifacts,
+                structured=outcome.structured,
+            )
+
+        return ToolOutcome(
+            success=False,
+            content=f"Deck generation failed: {err}",
+            error=err or "deck_generation_failed",
+        )
+
+    async def _render_c1_deck(
+        self, deck, args: SlidesGenerateArgs, ctx: ToolContext, fmt: str
+    ) -> ToolOutcome:
+        """Render a C1 Deck to the sandbox and return a ToolOutcome."""
+        from disco.tools.builtin._pptx_render import render_pptx, render_html, convert_to_pdf
+
+        out_filename = f"{args.filename}.{fmt}"
+
+        if fmt == "html":
+            html_str = render_html(deck)
+            await ctx.sandbox.write_file(out_filename, html_str.encode("utf-8"))
+            return ToolOutcome(
+                success=True,
+                content=(
+                    f"Slide deck '{args.filename}' written to {out_filename}\n"
+                    f"Format: HTML (C3 brand renderer)\n"
+                    f"Slides: {len(deck.slides)}"
+                ),
+                artifacts=[out_filename],
+                structured={
+                    "filename": out_filename,
+                    "base_name": args.filename,
+                    "format": "html",
+                    "slide_count": len(deck.slides),
+                    "renderer": "c3-brand",
+                    "slides": [{"type": s.type, "layout": s.layout} for s in deck.slides],
+                },
+            )
+
+        if fmt == "pptx":
+            pptx_bytes = render_pptx(deck)
+            await ctx.sandbox.write_file(out_filename, pptx_bytes)
+
+            # Also write brand HTML alongside
+            html_name = f"{args.filename}.html"
+            try:
+                html_str = render_html(deck)
+                await ctx.sandbox.write_file(html_name, html_str.encode("utf-8"))
+                artifacts = [out_filename, html_name]
+            except Exception:
+                artifacts = [out_filename]
+
+            # Attempt PDF via LibreOffice
+            pdf_note = ""
+            pdf_ok, pdf_err = await convert_to_pdf(ctx, out_filename)
+            if pdf_ok:
+                pdf_name = f"{args.filename}.pdf"
+                artifacts.append(pdf_name)
+            else:
+                pdf_note = f"\nPDF: {pdf_err}"
+
+            return ToolOutcome(
+                success=True,
+                content=(
+                    f"Slide deck '{args.filename}' written to {out_filename}\n"
+                    f"Format: PPTX (C3 native editable — real text boxes)\n"
+                    f"Slides: {len(deck.slides)}{pdf_note}"
+                ),
+                artifacts=artifacts,
+                structured={
+                    "filename": out_filename,
+                    "base_name": args.filename,
+                    "format": "pptx",
+                    "slide_count": len(deck.slides),
+                    "renderer": "pptx-native",
+                    "slides": [{"type": s.type, "layout": s.layout} for s in deck.slides],
+                },
+            )
+
+        if fmt == "pdf":
+            # Render PPTX first, then convert
+            pptx_bytes = render_pptx(deck)
+            pptx_name = f"{args.filename}.pptx"
+            await ctx.sandbox.write_file(pptx_name, pptx_bytes)
+            pdf_ok, pdf_err = await convert_to_pdf(ctx, pptx_name)
+            if not pdf_ok:
+                return ToolOutcome(
+                    success=False,
+                    content=f"PDF conversion failed: {pdf_err}",
+                    error=pdf_err,
+                )
+            return ToolOutcome(
+                success=True,
+                content=(
+                    f"Slide deck '{args.filename}' written to {out_filename}\n"
+                    f"Format: PDF (via LibreOffice + C3 PPTX)\n"
+                    f"Slides: {len(deck.slides)}"
+                ),
+                artifacts=[out_filename, pptx_name],
+                structured={
+                    "filename": out_filename,
+                    "base_name": args.filename,
+                    "format": "pdf",
+                    "slide_count": len(deck.slides),
+                    "renderer": "libreoffice",
+                },
+            )
+
+        return ToolOutcome(
+            success=False,
+            content=f"Unsupported format: {fmt!r}",
+            error=f"Unsupported format: {fmt!r}",
+        )
+
+    async def _run_marp_path(
+        self, args: SlidesGenerateArgs, ctx: ToolContext, fmt: str
+    ) -> ToolOutcome:
+        """Run the Marp/markdown rendering path."""
         out_filename = f"{args.filename}.{fmt}"
 
         # Prepare markdown: inject theme as frontmatter if provided
         markdown = args.markdown
         if args.theme:
-            # Prepend theme as a <style> directive if not already present
             theme_block = f"<!-- theme: custom -->\n<style>\n{args.theme}\n</style>\n\n"
             markdown = theme_block + markdown
 
         have_marp = await _marp_available(ctx)
 
-        # ---- HTML path ----
         if fmt == "html":
             if have_marp:
-                return await self._render_with_marp(
-                    markdown, out_filename, fmt, ctx, args
-                )
-            else:
-                return await self._render_html_fallback(
-                    markdown, out_filename, ctx, args
-                )
+                return await self._render_with_marp(markdown, out_filename, fmt, ctx, args)
+            return await self._render_html_fallback(markdown, out_filename, ctx, args)
 
-        # ---- PDF / PPTX paths (require marp + Chromium in the sandbox image) ----
         if not have_marp:
             return ToolOutcome(
                 success=False,

@@ -1,20 +1,20 @@
 """C3 — Native editable PPTX renderer.
 
-Renders a MinimalDeck to:
+Renders a Deck (C1 Layer-2 precise representation) to:
   - .pptx  via python-pptx (real text boxes, brand fonts/colors — NOT image-per-slide)
   - 16:9 brand HTML (self-contained, OFL font-face via file:// abs URLs)
   - PDF   via LibreOffice headless inside the sandbox (gated on soffice present;
           graceful failure when absent — no false affordance)
 
-MinimalDeck is a minimal typed deck representation used until the full C1
-AuthoredDeck/Deck schema is frozen by the C4 experiment verdict.  When C1
-ships, the render_pptx/render_html entry-points will accept the full Deck
-instead; the per-layout helpers are stable and do not need to change.
+C1 integration: ``render_pptx(deck: Deck)`` and ``render_html(deck: Deck)``
+now consume the full C1 Layer-2 Deck from ``_deck_schema.py``.  Each slide's
+``elements`` list is iterated and each Element is mapped to a python-pptx shape
+by ``_render_element``.
 
-# NOTE: MinimalDeck will align to the C1 Layer-2 Deck after the C4 verdict.
-# The layout names and element positions here are intentionally conservative
-# (centered/padded, 0.5in margins) and will be refined once the C4 overflow
-# scorer + C1 _fit_text measurements are available.
+Backward compat: ``MinimalDeck`` / ``DeckSlide`` remain exported and the old
+``render_pptx`` / ``render_html`` signatures still accept them.  Internally
+they convert via ``_minimal_to_authored`` → ``lower_deck`` → the C1 path.
+Existing tests continue to pass without modification.
 
 Layering: disco.tools → disco.core (legal downward import).
           disco.tools ≠→ disco.agent_server (upward import — illegal, not done here).
@@ -36,39 +36,78 @@ from disco.core.brand.tokens import Theme
 if TYPE_CHECKING:
     from disco.tools.anatomy import ToolContext
 
+# C1 imports (same package — legal same-layer import)
+from disco.tools.builtin._deck_schema import (
+    AuthoredDeck,
+    AuthoredSlide,
+    Deck,
+    Element,
+    Slide,
+    lower_deck,
+)
+
 # ---------------------------------------------------------------------------
-# Minimal deck representation
-# (pending C1 AuthoredDeck/Deck — will align after C4 experiment verdict)
+# MinimalDeck / DeckSlide — backward compat shim (C1 Deck is the real thing)
 # ---------------------------------------------------------------------------
+# These types are kept so that test_pptx_render.py (and any external code that
+# imports them) continues to work.  Internally, render_pptx/render_html convert
+# MinimalDeck → AuthoredDeck → Deck via the C1 lowerer.
 
 LayoutHint = Literal["title", "bullets", "section", "image_right"]
 
 
 @dataclass
 class DeckSlide:
-    """One slide in the minimal deck.  Maps to a single slide in the PPTX/HTML."""
+    """Compatibility shim — maps to an AuthoredSlide on the C1 path."""
 
     title: str
     bullets: list[str] = field(default_factory=list)
     layout: LayoutHint = "bullets"
-    # image_url: only used in image_right layout; stub for C7 image-gen wiring
     image_url: str | None = None
     notes: str | None = None
 
 
 @dataclass
 class MinimalDeck:
-    """Minimal typed deck, pending C1 full schema.
+    """Compatibility shim — converts to AuthoredDeck on the C1 path.
 
     theme_name + theme_mode resolve via core.brand.resolve_theme(name, mode).
-    Splitting "disco-light" → ("disco", "light") is the caller's job (two-arg
-    signature, per C1 spec note).
     """
 
     title: str
     slides: list[DeckSlide] = field(default_factory=list)
     theme_name: str = "disco"
     theme_mode: str = "light"
+
+
+def _minimal_to_authored(deck: MinimalDeck) -> AuthoredDeck:
+    """Convert a MinimalDeck (compat shim) to an AuthoredDeck for the C1 path."""
+    _LAYOUT_MAP = {
+        "title": "title",
+        "bullets": "bullets",
+        "section": "section_header",
+        "image_right": "image_right",
+    }
+    slides = []
+    for ds in deck.slides:
+        slides.append(AuthoredSlide(
+            type=_LAYOUT_MAP.get(ds.layout, "bullets"),
+            title=ds.title,
+            body=ds.bullets,
+            image_prompt=None,  # image_url is a path, not a prompt
+            notes=ds.notes,
+        ))
+    theme_str = f"{deck.theme_name}-{deck.theme_mode}"
+    if theme_str not in ("disco-light", "disco-dark", "neutral-light"):
+        theme_str = "disco-light"
+    # Remap neutral-light → neutral
+    if theme_str == "neutral-light":
+        theme_str = "neutral"
+    return AuthoredDeck(
+        title=deck.title,
+        theme=theme_str,  # type: ignore[arg-type]
+        slides=slides,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -437,10 +476,10 @@ def _image_placeholder(prs_slide, left: int, top: int, w: int, h: int, theme: Th
 
 
 # ---------------------------------------------------------------------------
-# Layout dispatch
+# MinimalDeck layout dispatch (compat path)
 # ---------------------------------------------------------------------------
 
-_LAYOUT_FNS = {
+_MINIMAL_LAYOUT_FNS = {
     "title": _layout_title_slide,
     "bullets": _layout_bullets_slide,
     "section": _layout_section_slide,
@@ -449,33 +488,141 @@ _LAYOUT_FNS = {
 
 
 # ---------------------------------------------------------------------------
-# render_pptx — main PPTX entry point
+# C1 Element renderer — maps each Element to a python-pptx shape
 # ---------------------------------------------------------------------------
 
-def render_pptx(deck: MinimalDeck) -> bytes:
+def _render_element(prs_slide, el: Element, theme: Theme) -> None:  # type: ignore[type-arg]
+    """Render one C1 Element to a python-pptx slide shape."""
+    from pptx.util import Emu
+
+    if el.kind == "text":
+        _render_text_element(prs_slide, el)
+    elif el.kind == "accent_bar":
+        _render_accent_bar_element(prs_slide, el)
+    elif el.kind == "image":
+        _render_image_element(prs_slide, el, theme)
+    elif el.kind == "rect":
+        _render_rect_element(prs_slide, el)
+    # unknown kinds are skipped cleanly (no crash)
+
+
+def _render_text_element(prs_slide, el: Element) -> None:  # type: ignore[type-arg]
+    """Render a text Element as an absolutely-positioned textbox."""
+    from pptx.enum.text import PP_ALIGN
+    from pptx.util import Pt
+
+    _ALIGN_MAP = {"LEFT": PP_ALIGN.LEFT, "CENTER": PP_ALIGN.CENTER, "RIGHT": PP_ALIGN.RIGHT}
+    tf = _add_textbox(
+        prs_slide,
+        int(el.left), int(el.top), int(el.width), int(el.height),
+    )
+    tf.word_wrap = el.word_wrap
+    p = tf.paragraphs[0]
+    p.alignment = _ALIGN_MAP.get(el.align, PP_ALIGN.LEFT)
+    run = p.add_run()
+    _set_run_style(
+        run, el.text,
+        el.font_name or "Helvetica",
+        el.font_size_pt,
+        el.hex_color or "#1a1813",
+        bold=el.bold,
+        italic=el.italic,
+    )
+
+
+def _render_accent_bar_element(prs_slide, el: Element) -> None:  # type: ignore[type-arg]
+    """Render an accent_bar Element as a thin filled rectangle."""
+    _add_accent_bar(
+        prs_slide,
+        int(el.left), int(el.top), int(el.width),
+        el.fill_hex,
+    )
+
+
+def _render_image_element(prs_slide, el: Element, theme: Theme) -> None:  # type: ignore[type-arg]
+    """Render an image Element; falls back to styled placeholder when no image_path."""
+    from pptx.util import Emu
+
+    if el.image_path:
+        try:
+            prs_slide.shapes.add_picture(
+                el.image_path,
+                Emu(int(el.left)), Emu(int(el.top)),
+                Emu(int(el.width)), Emu(int(el.height)),
+            )
+            return
+        except Exception:
+            pass  # fall through to placeholder
+
+    # Styled placeholder box (visible "image" label)
+    _image_placeholder(
+        prs_slide,
+        int(el.left), int(el.top),
+        int(el.width), int(el.height),
+        theme,
+    )
+
+
+def _render_rect_element(prs_slide, el: Element) -> None:  # type: ignore[type-arg]
+    """Render a rect Element as a filled rectangle shape."""
+    from pptx.util import Emu
+
+    box = prs_slide.shapes.add_shape(
+        1,
+        Emu(int(el.left)), Emu(int(el.top)),
+        Emu(int(el.width)), Emu(int(el.height)),
+    )
+    box.fill.solid()
+    box.fill.fore_color.rgb = _rgb_from_hex(el.fill_hex)
+    if el.border_hex:
+        box.line.color.rgb = _rgb_from_hex(el.border_hex)
+    else:
+        box.line.fill.background()
+
+
+# ---------------------------------------------------------------------------
+# render_pptx — accepts Deck (C1) or MinimalDeck (compat)
+# ---------------------------------------------------------------------------
+
+def render_pptx(deck: "Deck | MinimalDeck") -> bytes:
     """Render *deck* to native editable .pptx bytes (python-pptx, real text boxes).
 
-    Uses the blank slide layout (index 6) so no placeholder frames conflict with
-    the absolutely-positioned textboxes.  Returns raw bytes suitable for
-    sandbox.write_file(name, bytes).  NEVER call .encode() on the result —
-    it's already binary.
+    Accepts either a C1 ``Deck`` (from ``_deck_schema.lower_deck``) or a
+    ``MinimalDeck`` (backward-compat shim).  Returns raw bytes suitable for
+    ``sandbox.write_file(name, bytes)``.  NEVER call ``.encode()`` on the
+    result — it is already binary.
     """
     from pptx import Presentation
     from pptx.util import Emu
 
-    theme = resolve_theme(deck.theme_name, deck.theme_mode)
+    if isinstance(deck, MinimalDeck):
+        # Convert via the C1 path
+        authored = _minimal_to_authored(deck)
+        c1_deck = lower_deck(authored)
+        return _render_pptx_c1(c1_deck)
+    # Already a C1 Deck
+    return _render_pptx_c1(deck)
+
+
+def _render_pptx_c1(deck: Deck) -> bytes:
+    """Render a C1 Deck to .pptx bytes."""
+    from pptx import Presentation
+    from pptx.util import Emu
 
     prs = Presentation()
     prs.slide_width = Emu(_SLIDE_W)
     prs.slide_height = Emu(_SLIDE_H)
-
-    # Blank layout (index 6) — no competing placeholder frames
     blank_layout = prs.slide_layouts[6]
 
-    for slide_data in deck.slides:
+    for slide in deck.slides:
         prs_slide = prs.slides.add_slide(blank_layout)
-        layout_fn = _LAYOUT_FNS.get(slide_data.layout, _layout_bullets_slide)
-        layout_fn(prs_slide, slide_data, theme)
+        _set_slide_bg(prs_slide, deck.theme.bg)
+
+        for el in slide.elements:
+            _render_element(prs_slide, el, deck.theme)
+
+        if slide.notes:
+            prs_slide.notes_slide.notes_text_frame.text = slide.notes
 
     buf = io.BytesIO()
     prs.save(buf)
@@ -483,32 +630,36 @@ def render_pptx(deck: MinimalDeck) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# render_html — 16:9 brand HTML
+# render_html — 16:9 brand HTML (accepts Deck or MinimalDeck)
 # ---------------------------------------------------------------------------
 
-def render_html(deck: MinimalDeck) -> str:  # noqa: C901
+def render_html(deck: "Deck | MinimalDeck") -> str:  # noqa: C901
     """Render *deck* to a self-contained 16:9 brand HTML string.
 
+    Accepts a C1 ``Deck`` or a ``MinimalDeck`` (backward-compat shim).
     One ``<section class="slide">`` per slide.  Keyboard navigation (←/→).
-    OFL @font-face declarations via file:// abs URLs (same as font_face_css()
-    in core.brand.css).  Brand CSS vars from theme_css_vars().
     """
+    if isinstance(deck, MinimalDeck):
+        authored = _minimal_to_authored(deck)
+        c1_deck = lower_deck(authored)
+        return _render_html_c1(c1_deck)
+    return _render_html_c1(deck)
+
+
+def _render_html_c1(deck: Deck) -> str:  # noqa: C901
+    """Render a C1 Deck to a self-contained 16:9 brand HTML string."""
     from disco.core.brand.css import font_face_css, theme_css_vars
 
-    theme = resolve_theme(deck.theme_name, deck.theme_mode)
+    theme = deck.theme
     font_css = font_face_css()
     vars_css = theme_css_vars(theme)
-
-    # Determine accent-contrast text for section slides
-    # (surface_1 background → still use theme.text)
 
     sections_html: list[str] = []
     for i, slide in enumerate(deck.slides):
         active = ' active' if i == 0 else ''
-        bg = theme.surface_1 if slide.layout == "section" else theme.bg
+        bg = theme.surface_1 if slide.layout == "section_header" else theme.bg
 
-        # Build inner content based on layout
-        inner = _html_for_slide(slide, theme)
+        inner = _html_for_c1_slide(slide, theme)
         sections_html.append(
             f'<section class="slide{active}" id="slide-{i}" '
             f'data-layout="{html.escape(slide.layout)}" '
@@ -595,6 +746,122 @@ body{{background:#000;display:flex;align-items:center;justify-content:center;
 </script>
 </body>
 </html>"""
+
+
+def _html_for_c1_slide(slide: Slide, theme: Theme) -> str:
+    """Return inner HTML for a C1 Slide by extracting its text Elements."""
+    # Separate text and image elements
+    texts = [el for el in slide.elements if el.kind == "text"]
+    images = [el for el in slide.elements if el.kind == "image"]
+
+    if not texts and not images:
+        return ""
+
+    # Sort text by font size desc (largest = most prominent = title)
+    texts_sorted = sorted(texts, key=lambda e: e.font_size_pt, reverse=True)
+
+    layout = slide.layout
+
+    if layout == "title":
+        primary = texts_sorted[0] if texts_sorted else None
+        rest = texts_sorted[1:]
+        title_html = (
+            f'<h1 class="slide-title">{html.escape(primary.text)}</h1>'
+            if primary else ""
+        )
+        sub_html = (
+            f'<p class="slide-subtitle">{html.escape(rest[0].text)}</p>'
+            if rest else ""
+        )
+        return f'<div class="slide-title-bar"></div>\n{title_html}\n{sub_html}'
+
+    if layout == "section_header":
+        kicker_texts = [t for t in texts if t.font_size_pt <= 12]
+        head_texts = [t for t in texts if t.font_size_pt > 12]
+        kicker_sorted = sorted(kicker_texts, key=lambda e: e.font_size_pt)
+        head_sorted = sorted(head_texts, key=lambda e: e.font_size_pt, reverse=True)
+        kicker = f'<p class="slide-section-kicker">{html.escape(kicker_sorted[0].text)}</p>' if kicker_sorted else ""
+        title = f'<h2 class="slide-section-title">{html.escape(head_sorted[0].text)}</h2>' if head_sorted else ""
+        sub = f'<p class="slide-subtitle">{html.escape(head_sorted[1].text)}</p>' if len(head_sorted) > 1 else ""
+        return f'{kicker}<div class="slide-title-bar"></div>\n{title}\n{sub}'
+
+    if layout in ("image_right", "image_left", "full_image"):
+        # Find the main title (largest text)
+        title_el = texts_sorted[0] if texts_sorted else None
+        body_els = texts_sorted[1:]
+
+        title_html = f'<h2 class="slide-heading">{html.escape(title_el.text)}</h2>' if title_el else ""
+        bullet_items = "".join(
+            f'<li>{html.escape(el.text.lstrip("• "))}</li>' for el in body_els
+        )
+        bullets_html = f'<ul class="slide-bullets">{bullet_items}</ul>' if bullet_items else ""
+
+        img_html = ""
+        if images:
+            img_el = images[0]
+            if img_el.image_path:
+                img_html = f'<img src="{html.escape(img_el.image_path)}" alt="" style="max-width:48%;max-height:90%;object-fit:contain;">'
+            else:
+                img_html = (
+                    '<div style="width:46%;height:80%;background:var(--surface-2);'
+                    'border:1px solid var(--hairline);display:flex;align-items:center;'
+                    'justify-content:center;color:var(--text-faint);'
+                    'font-family:var(--ui);font-size:1.2vw;">[image]</div>'
+                )
+
+        if layout == "full_image":
+            return (
+                f'<div style="position:relative;width:100%;height:100%;">'
+                f'{img_html}'
+                f'<div style="position:absolute;bottom:5%;left:5%;">{title_html}</div>'
+                f'</div>'
+            )
+
+        text_div = (
+            f'<div style="flex:1;display:flex;flex-direction:column;">'
+            f'{title_html}<div class="slide-rule"></div>{bullets_html}'
+            f'</div>'
+        )
+        if layout == "image_left":
+            return f'<div style="display:flex;gap:4%;width:100%;height:100%;align-items:center;">{img_html}{text_div}</div>'
+        return f'<div style="display:flex;gap:4%;width:100%;height:100%;align-items:center;">{text_div}{img_html}</div>'
+
+    if layout == "closing":
+        primary = texts_sorted[0] if texts_sorted else None
+        rest = texts_sorted[1:]
+        title_html = f'<h1 class="slide-title">{html.escape(primary.text)}</h1>' if primary else ""
+        sub_html = f'<p class="slide-subtitle">{html.escape(rest[0].text)}</p>' if rest else ""
+        return f'<div class="slide-title-bar"></div>\n{title_html}\n{sub_html}'
+
+    if layout in ("two_column", "comparison"):
+        # Split text elements into two groups
+        title_el = next((t for t in texts_sorted if t.bold and t.font_size_pt > 20), None)
+        body_els = [t for t in texts if t is not title_el]
+        mid = max(1, len(body_els) // 2)
+        left_els = body_els[:mid]
+        right_els = body_els[mid:]
+        title_html = f'<h2 class="slide-heading">{html.escape(title_el.text)}</h2>' if title_el else ""
+        left_items = "".join(f'<li>{html.escape(e.text.lstrip("• "))}</li>' for e in left_els)
+        right_items = "".join(f'<li>{html.escape(e.text.lstrip("• "))}</li>' for e in right_els)
+        left_ul = f'<ul class="slide-bullets">{left_items}</ul>'
+        right_ul = f'<ul class="slide-bullets">{right_items}</ul>'
+        return (
+            f'{title_html}<div class="slide-rule"></div>'
+            f'<div style="display:flex;gap:4%;width:100%;">'
+            f'<div style="flex:1">{left_ul}</div>'
+            f'<div style="flex:1">{right_ul}</div>'
+            f'</div>'
+        )
+
+    # Default: bullets
+    title_el = texts_sorted[0] if texts_sorted else None
+    body_els = texts_sorted[1:] if len(texts_sorted) > 1 else []
+    title_html = f'<h2 class="slide-heading">{html.escape(title_el.text)}</h2>' if title_el else ""
+    bullet_items = "".join(
+        f'<li>{html.escape(el.text.lstrip("• "))}</li>' for el in body_els
+    )
+    bullets_html = f'<ul class="slide-bullets">{bullet_items}</ul>' if bullet_items else ""
+    return f'{title_html}\n<div class="slide-rule"></div>\n{bullets_html}'
 
 
 def _html_for_slide(slide: DeckSlide, theme: Theme) -> str:
@@ -726,9 +993,10 @@ async def convert_to_pdf(ctx: "ToolContext", pptx_name: str) -> tuple[bool, str]
 # render_deck — convenience orchestrator
 # ---------------------------------------------------------------------------
 
-def render_deck(deck: MinimalDeck) -> dict[str, bytes | str]:
+def render_deck(deck: "Deck | MinimalDeck") -> dict[str, bytes | str]:
     """Render *deck* to pptx_bytes + html_str.
 
+    Accepts a C1 ``Deck`` or ``MinimalDeck`` (backward-compat shim).
     PDF requires a sandbox context; call ``convert_to_pdf(ctx, pptx_name)``
     separately after writing the .pptx to the workspace.
 
