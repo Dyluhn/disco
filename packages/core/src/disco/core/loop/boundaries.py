@@ -88,6 +88,14 @@ class Sandbox(Protocol):
     async def write_file(self, path: str, data: bytes) -> None: ...
     async def list_dir(self, path: str) -> list[str]: ...
 
+    @property
+    def workspace_path(self) -> str | None:
+        """The sandbox's workspace root as an absolute path on the HOST filesystem
+        (process backend) or None when unavailable. Consumed by C18 `file_exists`
+        resolution and the C1c DoD evaluator so predicates resolve against the
+        real sandbox FS rather than the agent-server CWD."""
+        ...
+
 
 @runtime_checkable
 class SecurityAnalyzer(Protocol):

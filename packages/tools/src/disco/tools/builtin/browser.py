@@ -148,6 +148,24 @@ def _fence(view: dict[str, Any]) -> str:
     )
 
 
+def _vision_mode() -> bool:
+    """W6 V5 — runtime vision gate: include b64 screenshot in the browser job when
+    the driver or a configured escalation model can see images.
+
+    Conditions (OR):
+      • DISCO_DRIVER_VISION=1 (or PMX_DRIVER_VISION=1): local driver has a vision
+        projection loaded (mmproj).
+      • DISCO_VISION_ESCALATION_MODEL (or PMX_VISION_ESCALATION_MODEL) is set: a
+        separate vision-capable escalation model is configured.
+
+    The env-vars are the contract surface; wiring.py/config.py own setting them.
+    This function only READS them — it does NOT set Requirement.VISION."""
+    return (
+        disco_env("DRIVER_VISION") == "1"
+        or bool(disco_env("VISION_ESCALATION_MODEL"))
+    )
+
+
 class BrowserArgs(BaseModel):
     action: Literal[
         "navigate", "screenshot", "click", "fill", "submit", "back", "console_view"
@@ -158,6 +176,22 @@ class BrowserArgs(BaseModel):
     )
     url: str = Field(default="", description="URL to navigate to.")
     index: int | None = Field(default=None, description="Element index for click/fill/submit.")
+    # W6: CSS selector and visible-text alternatives to index for click actions.
+    # Useful when the page uses div/span-based clickables without data-pmx-index.
+    selector: str = Field(
+        default="",
+        description=(
+            "CSS selector for click action (alternative to index). "
+            "E.g. '#my-button', '.dock-icon[data-app=finder]'."
+        ),
+    )
+    click_text: str = Field(
+        default="",
+        description=(
+            "Click by visible text content (alternative to index/selector). "
+            "Playwright text= selector: case-insensitive prefix match."
+        ),
+    )
     text: str = Field(default="", description="Text for fill action.")
     full_page: bool = Field(default=False, description="Whether to take a full page screenshot.")
 
@@ -189,9 +223,14 @@ class BrowserTool:
                 "action": args.action,
                 "url": args.url,
                 "index": args.index,
+                # W6: CSS-selector and text alternatives to index for click.
+                "selector": args.selector,
+                "click_text": args.click_text,
                 "text": args.text,
                 "full_page": args.full_page,
-                "include_screenshot_b64": disco_env("DRIVER_VISION") == "1",
+                # W6 V5: include b64 screenshot when vision is enabled (local
+                # driver OR escalation model configured), not just DRIVER_VISION.
+                "include_screenshot_b64": _vision_mode(),
             }
             await ctx.sandbox.write_file(
                 "/workspace/.pmx/job.json", json.dumps(job).encode("utf-8")

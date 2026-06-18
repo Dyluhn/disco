@@ -393,16 +393,58 @@ class SandboxSession:
     async def list_dir(self, path: str) -> list[str]:
         return await self._resilient(lambda i: i.list_dir(path))
 
+    @property
+    def workspace_path(self) -> str | None:
+        """W5 — expose the workspace root for C18 / C1c predicate resolution.
+        Delegates to the inner SandboxInstance; None when no instance exists yet
+        or when the backend doesn't expose a host-side path (container backends)."""
+        if self._instance is not None:
+            return getattr(self._instance, "workspace_path", None)
+        return None
+
     def display_url(self) -> str | None:
         return self._instance.display_url() if self._instance is not None else None
 
     def expose_port(self, port: int) -> str | None:
         return self._instance.expose_port(port) if self._instance is not None else None
 
+    async def _detect_serve_dir(self, inst: SandboxInstance, workspace: str) -> str:
+        """W6 — detect the subdirectory containing index.html and serve THAT dir.
+
+        Supports subdir apps (e.g. `macos-clone/index.html`): the preview should
+        serve the subdir, not the workspace root (which shows raw files instead of
+        the app). Falls back to workspace root when no index.html is found or the
+        shell command fails.
+
+        Skips `.pmx/` and `node_modules/` — those directories are internal and
+        should never be the serve root."""
+        try:
+            res = await inst.exec_shell(
+                # Find first index.html, skipping internal dirs, sort shallowest first
+                f"find {workspace} -name 'index.html'"
+                f" -not -path '*/.pmx/*' -not -path '*/node_modules/*'"
+                f" | sort | head -1",
+                timeout_s=5,
+            )
+            if res.exit_code == 0:
+                found = res.stdout.strip()
+                if found:
+                    import os as _os
+                    subdir = _os.path.dirname(found)
+                    if subdir and subdir != workspace:
+                        return subdir
+        except Exception:  # noqa: BLE001 — preview is a convenience, never wedge
+            pass
+        return workspace
+
     async def ensure_preview(self, port: int = PREVIEW_PORT) -> bool:
         """Start (idempotently) the static preview as visible session 'preview'.
         Returns False without side effects if :port is already bound (someone — maybe
         the agent's own dev server — owns it; that is fine and not ours to fight).
+
+        W6 — serves the app's index.html SUBDIRECTORY when one is detected (e.g.
+        `macos-clone/`) rather than always falling back to the workspace root.
+        A root-level index.html gets the original behavior.
 
         BP-G9 — the static preview is now ONE tracked service among potentially
         many. The entry is registered in `self._tracked_services[port]` so the
@@ -419,19 +461,21 @@ class SandboxSession:
 
         res = await inst.exec_shell("pwd", timeout_s=5)
         workspace = res.stdout.strip()
-        cmd = f"python3 -m http.server {port} -d {workspace}"
+        # W6: serve the deepest index.html directory, not always the workspace root.
+        serve_dir = await self._detect_serve_dir(inst, workspace)
+        cmd = f"python3 -m http.server {port} -d {serve_dir}"
 
         await self.sessions.exec(
             "preview",
             cmd,
-            exec_dir=workspace
+            exec_dir=serve_dir
         )
         # BP-G9: register the static preview as a tracked service so the wake
         # machinery has a single source of truth for "what to rematerialize on
         # a fresh box" — works alongside the C3 `_persistent_servers` dict that
         # `shell_exec` populates implicitly.
         self._tracked_services[port] = TrackedService(
-            name="preview", port=port, command=cmd, exec_dir=workspace,
+            name="preview", port=port, command=cmd, exec_dir=serve_dir,
         )
         return True
 

@@ -15,6 +15,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, cast
 
+from ..env import disco_env
+
 from ..dod_evaluator import DoDEvaluator
 from ..events import (
     ActionEvent,
@@ -57,6 +59,13 @@ _FINISH_VERIFY_CAP = 3
 # refusals the gate RELEASES (finish lands) with a LOUD warning; the prior
 # refusal events remain the visible audit trail.
 _DOD_REFUSAL_CAP = 3
+
+# W5 — execution-nudge cap. The execution gate was the ONE uncapped gate in the
+# finish path (the comment "No cap" in the old code). After _EXECUTION_NUDGE_CAP
+# consecutive nudges the gate RELEASES with a LOUD warning so an agent that cannot
+# act (e.g. every tool is withheld) doesn't grind forever. Mirror the cap-3
+# pattern of _FINISH_VERIFY_CAP / _DOD_REFUSAL_CAP / _browser_verify_refusals.
+_EXECUTION_NUDGE_CAP = 3
 
 # Symmetric to _PLAN_NUDGE on the execution side: a hard gate that refuses FINISHED
 # until the agent has done productive work since the most recent plan approval.
@@ -201,6 +210,47 @@ def _browser_verified(events: list[Event], since_seq: int) -> tuple[bool, str | 
             break
 
     return ok, first_error_line
+
+
+def _vision_mode() -> bool:
+    """W6 — runtime vision gate for the browser and finish gates.
+
+    True when the driver or escalation model can accept images:
+      • DISCO_DRIVER_VISION=1 (or legacy PMX_DRIVER_VISION=1): the local driver
+        has a vision projection loaded.
+      • DISCO_VISION_ESCALATION_MODEL (or legacy PMX_VISION_ESCALATION_MODEL) is
+        set: a separate vision-capable model is configured for escalation.
+
+    The env-var check is the contract surface here; wiring.py / config.py set
+    these on startup from the resolved RouterConfig. Consumer code (this module,
+    browser.py) reads them; config.py/wiring.py own them."""
+    return (
+        disco_env("DRIVER_VISION") == "1"
+        or bool(disco_env("VISION_ESCALATION_MODEL"))
+    )
+
+
+def _latest_browser_screenshot(events: list[Event]) -> str | None:
+    """W6 — screenshot_path from the LATEST qualifying browser observation.
+
+    Searches backward through events for a successful browser observation on
+    port :8000; returns the `screenshot_path` field if present. None when the
+    agent never browsed :8000 or the daemon didn't produce a screenshot."""
+    for ev in reversed(events):
+        if not (isinstance(ev, ObservationEvent) and ev.tool_result.tool_name == "browser"):
+            continue
+        res = ev.tool_result
+        if not (res.success and res.structured):
+            continue
+        url = str(res.structured.get("url", ""))
+        if not (
+            url.startswith("http://127.0.0.1:8000") or url.startswith("http://localhost:8000")
+        ):
+            continue
+        path = res.structured.get("screenshot_path")
+        if path:
+            return str(path)
+    return None
 
 
 def _latest_browser_error(events: list[Event]) -> str | None:
@@ -654,15 +704,55 @@ class FinishGate:
         # the loop is in execution mode (planning_tools configured) and the
         # agent declares "done" without any productive action since plan
         # approval, refuse the finish: append an IMPLICIT system-reminder
-        # and re-enter the loop. No cap — the reminder keeps firing as long
-        # as the agent tries to walk away without acting. The loop's own
-        # max_iterations + the user's kill switch are the ultimate exits.
+        # and re-enter the loop. W5: capped at _EXECUTION_NUDGE_CAP (3) for
+        # parity with the other finish-path gates — after cap the gate
+        # RELEASES with a visible warning rather than running forever.
         if (
             self._loop._planning_tools  # plan-first lifecycle is configured
             and self._loop.mode != OperatingMode.PLANNING  # we're executing
             and not signals.productive_action_since_approval(events)
         ):
-            self._loop._execution_nudges += 1  # telemetry
+            # W5 cap: after _EXECUTION_NUDGE_CAP nudges without productive
+            # action, RELEASE by landing the run FINISHED with a loud warning.
+            # Emitting FINISHED here (rather than FALLTHROUGH) bypasses the
+            # finalize_finish auto-continue ladder, which would loop forever
+            # when plan steps remain incomplete: the cap is the terminal exit
+            # for this path, not a gate permitting further continuation.
+            if self._loop._execution_nudges >= _EXECUTION_NUDGE_CAP:
+                _LOG.warning(
+                    "execution-nudge cap (%d) reached for %s — releasing finish gate; "
+                    "the plan was approved but never executed.",
+                    _EXECUTION_NUDGE_CAP,
+                    self._loop.conversation_id,
+                )
+                await self._loop._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                "<system-reminder>\n"
+                                f"⚠ The execution gate fired {self._loop._execution_nudges}× "
+                                "without the agent taking action since plan approval. "
+                                "Releasing the finish gate — the plan may be unexecuted; "
+                                "note this clearly in your summary.\n"
+                                "</system-reminder>"
+                            ),
+                        ),
+                    )
+                )
+                # Land the run FINISHED so the caller sees a clean
+                # terminal status. Return HALT — the engine exits the
+                # loop and `get_state()` surfaces the FINISHED status.
+                await self._loop._emit(
+                    StatusEvent(
+                        status=ConversationStatus.FINISHED,
+                        detail="execution_nudge_cap",
+                    )
+                )
+                return Disp.HALT
+
+            self._loop._execution_nudges += 1  # telemetry + cap counter
             # Surface the model's reasoning before nudging (don't
             # discard it) — mirror the plan-nudge sibling.
             if step.thought.strip():
@@ -686,19 +776,16 @@ class FinishGate:
                     message=LLMMessage(role="user", content=_EXECUTION_NUDGE),
                 )
             )
-            # BACKSTOP (was missing — the confirm/reject livelock's
-            # second defect): route through the shared actionless
-            # valve. A nudge-only turn emits no ActionEvent, so
-            # `iteration`/max_iterations NEVER advances on it — the
-            # old "max_iterations is the ultimate exit" claim was
-            # false and a model that declared done without ever
-            # acting spun here forever. The valve now lands it
-            # cleanly (FINISHED/PAUSED:noop_limit) after
-            # `_max_consecutive_noops` actionless turns; a model that
-            # recovers and acts resets the streak (engine §h).
-            if await self._loop._post_noop_valve() is Disp.HALT:
-                return Disp.HALT
+            # The execution-nudge cap (_EXECUTION_NUDGE_CAP) is the
+            # backstop for this path: after N nudges the gate emits
+            # FINISHED and halts above. The old noop valve call has
+            # been removed — it fired at _ACTIONLESS_BREAK_CAP (3),
+            # same count as the cap, and would PAUSED the run before
+            # the cap's FINISHED release could land (W5 fix).
             return Disp.CONTINUE
+        # Productive action found — reset the nudge streak so a fresh
+        # plan-approval cycle gets a full _EXECUTION_NUDGE_CAP budget.
+        self._loop._execution_nudges = 0
         return Disp.FALLTHROUGH
 
     async def gate_browser_verify(self, step: AgentStep, events: list[Event]) -> Disp:
@@ -717,6 +804,19 @@ class FinishGate:
             first_error = _latest_browser_error(events)
             if ok:
                 self._loop._browser_verify_refusals = 0  # reset on clean pass
+                # W6 vision artifact: when the browser observation includes a
+                # screenshot, emit a StatusEvent so the UI / post-run harness can
+                # find it (satisfies "finish-gate captures a screenshot" in the
+                # no-test UI finish-gate). Only emitted when vision mode is active.
+                if _vision_mode():
+                    shot = _latest_browser_screenshot(events)
+                    if shot:
+                        await self._loop._emit(
+                            StatusEvent(
+                                status=ConversationStatus.RUNNING,
+                                detail=f"vision_artifact:{shot}",
+                            )
+                        )
             elif self._loop._browser_verify_refusals < 3:
                 self._loop._browser_verify_refusals += 1
                 if first_error:

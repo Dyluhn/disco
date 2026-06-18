@@ -252,6 +252,13 @@ class ContainerInstance:
         except Exception as exc:  # noqa: BLE001
             raise self._classify_failure(exc) from exc
 
+    @property
+    def workspace_path(self) -> str | None:
+        """W5 — container workspaces live INSIDE the container, not on the host FS.
+        Returns None so C18 file_exists and C1c DoD degrade to no-op gracefully
+        (they check `getattr(sbx, 'workspace_path', None)` and skip when None)."""
+        return None
+
     def _container_path(self, path: str) -> str:
         """Resolve `path` to an absolute path INSIDE the workspace, rejecting escapes
         (../, absolute). File ops go through the container, so this is the only jail."""

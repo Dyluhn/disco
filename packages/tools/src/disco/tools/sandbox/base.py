@@ -116,6 +116,11 @@ class SandboxInstance(Protocol):
     # does not change existing behavior; backends that don't implement it return None.
     def expose_port(self, port: int) -> str | None: ...
     async def destroy(self) -> None: ...
+    # [W5 — workspace_path] Workspace root as an absolute host-FS path (process
+    # backend) or None (container backends where the host has no direct view of
+    # the box FS). C18 and C1c consume this to resolve done-condition predicates.
+    @property
+    def workspace_path(self) -> str | None: ...
 
 
 @runtime_checkable
