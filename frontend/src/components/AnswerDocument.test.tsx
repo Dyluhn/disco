@@ -1,10 +1,15 @@
 /**
  * WALK-01 (A1): AnswerDocument streaming text renders through <Markdown>
  * instead of raw text, so partial markdown (e.g. **bold**) formats in-flight.
+ *
+ * F3 — cid threading contract: AnswerDocument forwards cid to BlockView so
+ * sheet/slides blocks carry a working download link when (and only when) a
+ * real cid is present. No cid = no download (no false affordance).
  */
 
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import type { AnswerBlock } from "@/types/grounded";
 import { AnswerDocument } from "./AnswerDocument";
 
 describe("AnswerDocument — streaming block", () => {
@@ -71,5 +76,81 @@ describe("AnswerDocument — streaming block", () => {
     expect(screen.queryByText(/\*\*partial\*\*/)).not.toBeInTheDocument();
     // No caret — the streaming container is gone
     expect(container.querySelector(".animate-pulse")).not.toBeInTheDocument();
+  });
+});
+
+// ---- F3: cid threading — block download in AnswerDocument -------------------
+
+describe("AnswerDocument — F3 cid threading for block downloads", () => {
+  const sheetBlock: AnswerBlock = {
+    kind: "sheet",
+    id: "sh1",
+    title: "Revenue Model",
+    filename: "revenue.xlsx",
+    sheet_names: ["Income", "Costs"],
+    formulas_evaluated: false,
+  };
+
+  it("F3: sheet block without cid renders NO download link (no false affordance)", () => {
+    const { container } = render(
+      <AnswerDocument
+        blocks={[sheetBlock]}
+        partial={{}}
+        streamingBlockId={null}
+        answer={null}
+      />,
+    );
+    // No download anchor — the cid is absent, so the artifact route is unknown.
+    expect(container.querySelector("a[download]")).toBeNull();
+  });
+
+  it("F3: sheet block with cid=null renders NO download link (explicit null = absent)", () => {
+    const { container } = render(
+      <AnswerDocument
+        blocks={[sheetBlock]}
+        partial={{}}
+        streamingBlockId={null}
+        answer={null}
+        cid={null}
+      />,
+    );
+    expect(container.querySelector("a[download]")).toBeNull();
+  });
+
+  it("F3: sheet block with a real cid renders a download link to the artifact route", () => {
+    const CID = "conv_f3_sheet_1";
+    render(
+      <AnswerDocument
+        blocks={[sheetBlock]}
+        partial={{}}
+        streamingBlockId={null}
+        answer={null}
+        cid={CID}
+      />,
+    );
+    // The SheetDownload anchor must point at the declared-artifact route so a
+    // real fetch can succeed (no 404 false affordance).
+    const link = screen.getByRole("link", { name: /Revenue Model/i });
+    expect(link).toHaveAttribute("download");
+    expect(link.getAttribute("href")).toContain(
+      `/conversations/${CID}/artifacts/revenue.xlsx`,
+    );
+  });
+
+  it("F3: cid is forwarded verbatim (the URL embeds the exact cid string)", () => {
+    const CID = "conv-my-exact-cid-abc123";
+    render(
+      <AnswerDocument
+        blocks={[sheetBlock]}
+        partial={{}}
+        streamingBlockId={null}
+        answer={null}
+        cid={CID}
+      />,
+    );
+    const link = screen.getByRole("link", { name: /Revenue Model/i });
+    expect(link.getAttribute("href")).toMatch(
+      new RegExp(`/conversations/${CID}/artifacts/`),
+    );
   });
 });

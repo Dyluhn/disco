@@ -356,6 +356,7 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
             summary={r.report?.summary ?? null}
             assembling={r.assembling}
             report={r.report}
+            cid={r.cid}
           />
         )}
 

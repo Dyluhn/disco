@@ -24,6 +24,12 @@ interface Props {
   /** When present, the finished report — supplies the authoritative passages
    * + all_hits used by CitedText to resolve [[id]] markers. */
   report: ReportEvent | null;
+  /** Conversation id — threaded through so any block-level artifacts (sheet,
+   *  slides, image) that DR emits can carry a working download.  ABSENT = no
+   *  block download (no false affordance).  Currently DeepReportView renders
+   *  prose-only sections; cid is accepted now so the wiring is in place when
+   *  DR begins emitting block artifacts. */
+  cid?: string | null;
 }
 
 /** Confidence mapping → existing verdict tokens. Quiet UI: dot + text, no
@@ -128,9 +134,15 @@ function SectionSkeleton({ title, state }: { title: string; state: "pending" | "
 function SectionView({
   section,
   answer,
+  cid: _cid,
 }: {
   section: AssemblingSection;
   answer: GroundedAnswer | null;
+  /** Forwarded from DeepReportView — enables block-level downloads when
+   *  DR emits sheet/slides/image artifacts (currently prose-only sections
+   *  have no blocks to download; this prop is reserved for that future path
+   *  and _cid is intentionally unused until BlockView calls appear here). */
+  cid?: string | null;
 }) {
   const real = section.section!;
   const conf = CONFIDENCE_VARIANT[real.confidence] ?? CONFIDENCE_VARIANT.high;
@@ -193,7 +205,7 @@ function SectionView({
   );
 }
 
-export function DeepReportView({ query, summary, assembling, report }: Props) {
+export function DeepReportView({ query, summary, assembling, report, cid }: Props) {
   const answer = asGroundedAnswer(report, query);
   // ToC: every section title with a state badge (writing / pending get an
   // indicator beside the link so the user knows they're in flight).
@@ -227,7 +239,7 @@ export function DeepReportView({ query, summary, assembling, report }: Props) {
 
         {assembling.map((s) =>
           s.state === "done" && s.section ? (
-            <SectionView key={s.id} section={s} answer={answer} />
+            <SectionView key={s.id} section={s} answer={answer} cid={cid} />
           ) : (
             // A section reaches "done" only once its ReportSection is present
             // (deriveAssemblingSections), so here state is "pending" | "writing".
