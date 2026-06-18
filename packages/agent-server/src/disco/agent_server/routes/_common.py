@@ -89,6 +89,15 @@ class CreateConversationBody(BaseModel):
     # depth picker sends it here; the runtime reads it via _depth_for. Without
     # wiring it through, every run silently used the standard_deep default.
     depth_tier: str | None = None
+    # --- Shared schema points pre-seeded for the runthru-v2 fan-out (each is wired
+    # by its owning wave; default = OFF / byte-identical to today until wired). ---
+    # DR-3 (Track B §11.4): bias research toward recent sources. None ⇒ no change.
+    recency_window: Literal["month", "week"] | None = None
+    # §1.5: per-export/-conversation brand theme for reports + decks. None ⇒ Disco default.
+    brand_theme: str | None = None
+    # C6 (Track C §3.6): low-friction artifact authoring (NeverConfirm + INTERACTIVE +
+    # artifact_scope) on the build-like machinery. False ⇒ normal build loop.
+    artifact_mode: bool = False
 
 
 class SendMessageBody(BaseModel):

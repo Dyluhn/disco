@@ -45,6 +45,11 @@ class Requirement(str, Enum):
     LONG_CONTEXT = "long_context"  # must handle large inputs (>~64k)
     TOOL_CALLING = "tool_calling"  # must support structured tool calls
     JSON_MODE = "json_mode"  # must support constrained/JSON output
+    # W4 (Track-A §10.8): the model is reliable at ANCHORED edits (SEARCH/REPLACE
+    # / str_replace against live disk text). Default-OFF — unknown/weak models do
+    # NOT get it and fall back to whole-file writes through the syntax-gate.
+    # Capable models that benchmark well on diff edits opt in via ModelEntry.
+    ANCHORED_EDIT = "anchored_edit"
 
 
 class OperatingMode(str, Enum):
