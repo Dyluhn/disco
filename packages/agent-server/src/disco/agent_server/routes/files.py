@@ -16,7 +16,7 @@ from disco.core import (
 )
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import StorageStatus
-from fastapi import APIRouter, File, HTTPException, Response, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import JSONResponse
 
 from ..runtime import ConversationRuntime
@@ -161,20 +161,53 @@ def make_files_router(
             return JSONResponse({"saved": saved, "rejected": rejected}, status_code=413)
         return JSONResponse({"saved": saved, "rejected": rejected}, status_code=200)
 
+    # C5 — Content-Security-Policy applied when ?inline=true is set.
+    # sandbox allow-scripts: sandboxes the document (like a sandboxed iframe) but
+    # permits JavaScript so brand decks can run slide-navigation scripts.
+    # default-src 'none': blocks all resource loads by default.
+    # style-src 'unsafe-inline': permits inline <style> / style= attributes (brand
+    #   HTML decks use inlined CSS; no external stylesheets needed).
+    # img-src 'self' data:: permits same-origin images and data-URI thumbnails only.
+    # font-src 'self' data:: permits same-origin and data-URI embedded fonts (OFL set).
+    # frame-ancestors 'self': the deck may only be framed by this origin — prevents
+    #   clickjacking from an external page embedding the artifact URL directly.
+    _INLINE_CSP = (
+        "sandbox allow-scripts; "
+        "default-src 'none'; "
+        "style-src 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "font-src 'self' data:; "
+        "frame-ancestors 'self'"
+    )
+
     @router.get("/conversations/{conversation_id}/artifacts/{path:path}")
-    async def artifact_file(conversation_id: str, path: str) -> Response:
+    async def artifact_file(
+        conversation_id: str,
+        path: str,
+        inline: bool = Query(default=False),
+    ) -> Response:
         """Download a generated artifact by its workspace-relative path.
         Jails: (1) the path must have been DECLARED as an artifact in the event log;
         (2) extension allowlist (_ARTIFACT_TYPES); (3) traversal-normalized + host-path
         resolve-jail.  Reads the live sandbox first, falling back to the host
         ProjectStore snapshot so a FINISHED run (no live session) still serves.
-        404 uniformly on any rejection (no probe)."""
+        404 uniformly on any rejection (no probe).
+
+        C5: ?inline=true returns HTML with Content-Disposition: inline + a strict
+        Content-Security-Policy (sandbox; no allow-same-origin) so an HTML artifact
+        can be embedded in an iframe without granting same-origin access to this
+        instance's APIs.  Only .html is allowed in inline mode — all other extensions
+        still 404 on ?inline=true so the inline allowlist stays minimal.
+        The default (no param) is unchanged: always attachment."""
         norm = posixpath.normpath(path)
         if posixpath.isabs(norm) or norm.startswith(".."):
             raise HTTPException(status_code=404)
         _, ext = posixpath.splitext(norm)
         media_type = _ARTIFACT_TYPES.get(ext.lower())
         if media_type is None:
+            raise HTTPException(status_code=404)
+        # C5: inline mode is restricted to .html only — no other type may be inlined.
+        if inline and ext.lower() != ".html":
             raise HTTPException(status_code=404)
         if runtime is None:
             raise HTTPException(status_code=404)
@@ -201,11 +234,26 @@ def make_files_router(
         if len(data) > 50 * 1024 * 1024:  # 50 MB cap
             raise HTTPException(status_code=404)
 
+        basename = posixpath.basename(norm)
+        if inline:
+            # C5: serve HTML inline so a sandboxed iframe can render the artifact.
+            # No allow-same-origin on the caller's iframe sandbox attr → the framed
+            # page cannot reach this instance's APIs even though it runs scripts.
+            return Response(
+                content=data,
+                media_type=media_type,
+                headers={
+                    "Content-Disposition": f'inline; filename="{basename}"',
+                    "X-Content-Type-Options": "nosniff",
+                    "Content-Security-Policy": _INLINE_CSP,
+                    "Cache-Control": "private, no-store",
+                },
+            )
         return Response(
             content=data,
             media_type=media_type,
             headers={
-                "Content-Disposition": f'attachment; filename="{posixpath.basename(norm)}"',
+                "Content-Disposition": f'attachment; filename="{basename}"',
                 "X-Content-Type-Options": "nosniff",
                 "Cache-Control": "private, no-store",
             },

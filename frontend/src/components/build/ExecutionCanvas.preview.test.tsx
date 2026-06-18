@@ -14,6 +14,8 @@ import { render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExecutionCanvas } from "@/components/build/ExecutionCanvas";
+import { FilesPane } from "@/components/build/canvas/FilesPane";
+import { PreviewPane } from "@/components/build/canvas/PreviewPane";
 import { previewHostUrl } from "@/api/client";
 import type { AgentEvent, PreviewInfo } from "@/types/agent";
 
@@ -230,6 +232,125 @@ describe("PreviewPane — E3: Open-in-new-tab link to the /preview-app/ path rou
     expect(link.getAttribute("href")).toMatch(
       /\/conversations\/conv_e2e3firefox\/preview-app\/$/,
     );
+  });
+});
+
+// ---- C5: FilesPane — suppress "0 B" for zero-byte (server-side) artifacts ----
+//
+// slides_generate / deliverable files land with content="" → bytes=0 in deriveFiles.
+// Before the fix the pane showed "0 B" next to the path, which was misleading since
+// the file is real and live on the server. After the fix, zero-byte entries show
+// nothing (the span is suppressed) so the user sees only the path.
+
+function slidesObservationEvent(filename: string): AgentEvent {
+  return {
+    kind: "observation",
+    id: `obs-${filename}`,
+    action_id: `act-${filename}`,
+    tool_result: {
+      tool_name: "slides_generate",
+      success: true,
+      content: "",
+      structured: { filename },
+    },
+  } as AgentEvent;
+}
+
+describe("FilesPane — C5: zero-byte server-side artifacts do not render '0 B'", () => {
+  it("does NOT render '0 B' for a server-side slides artifact (bytes=0)", () => {
+    render(<FilesPane events={[slidesObservationEvent("deck.html")]} streamingFile={null} />);
+    expect(screen.queryByText(/0 B/)).toBeNull();
+  });
+
+  it("DOES render the byte count for a client-side file_write artifact (bytes > 0)", () => {
+    const events: AgentEvent[] = [
+      {
+        kind: "action",
+        id: "act-w",
+        thought: "",
+        tool_call: {
+          tool_name: "file_write",
+          arguments: { path: "app.html", content: "<h1>hello</h1>" },
+          call_id: "c-w",
+        },
+      } as AgentEvent,
+    ];
+    render(<FilesPane events={events} streamingFile={null} />);
+    expect(screen.getByText(/\d+ B/)).toBeInTheDocument();
+    expect(screen.queryByText(/^0 B$/)).toBeNull();
+  });
+});
+
+// ---- C5: PreviewPane — inline artifact iframe for server-side HTML -----------
+//
+// When a server-side HTML artifact exists (slides_generate / deliverable with
+// empty content), deriveSrcDoc returns null (C5 fix) and the pane should fall
+// through to the ?inline=true iframe rather than the blank-frame or placeholder.
+// The inline iframe must use sandbox="allow-scripts" WITHOUT allow-same-origin.
+//
+// We test PreviewPane directly (not wrapped in ExecutionCanvas) to avoid
+// Radix Tabs lazy-rendering: inactive tab panels are not rendered to the DOM
+// until first activation, which makes assertions on the iframe impossible
+// without simulating a tab-click.  PreviewPane is the unit that owns the inline
+// render logic, so direct testing is more precise anyway.
+
+describe("PreviewPane — C5: server-side HTML artifact renders via ?inline=true iframe", () => {
+  // The E2/E3 tests above call mockReturnValue; vi.clearAllMocks() (afterEach) clears
+  // calls/results but NOT return values.  Reset to the default (no proxy) before each
+  // C5 test so the mock doesn't bleed between suites.
+  beforeEach(() => {
+    useBuildPreviewMock.mockReturnValue({ data: null });
+  });
+
+  it("renders an 'Artifact preview' iframe (not a blank placeholder) for a server-side HTML artifact", () => {
+    render(
+      withClient(
+        <PreviewPane
+          events={[slidesObservationEvent("deck.html")]}
+          status="FINISHED"
+          cid="conv_c5inline"
+        />,
+      ),
+    );
+    // The inline artifact iframe should be present.
+    const iframe = screen.getByTitle("Artifact preview");
+    expect(iframe).toBeInTheDocument();
+    // The src must point at the ?inline=true route.
+    expect(iframe.getAttribute("src")).toMatch(/\/artifacts\/deck\.html\?inline=true/);
+    // Must NOT have allow-same-origin — that would let the framed page reach APIs.
+    expect(iframe.getAttribute("sandbox")).not.toContain("allow-same-origin");
+    expect(iframe.getAttribute("sandbox")).toContain("allow-scripts");
+  });
+
+  it("uses empty sandbox (no allow-scripts) for an untrusted run with inline artifact", () => {
+    render(
+      withClient(
+        <PreviewPane
+          events={[slidesObservationEvent("deck.html")]}
+          status="FINISHED"
+          cid="conv_c5trust"
+          untrusted
+        />,
+      ),
+    );
+    // untrusted → sandbox="" (scripts disabled) so a compromised deck can't reach APIs.
+    const iframe = screen.getByTitle("Artifact preview");
+    expect(iframe).toBeInTheDocument();
+    expect(iframe.getAttribute("sandbox")).toBe("");
+  });
+
+  it("does NOT render 'Artifact preview' when cid is null (no route to fetch from)", () => {
+    render(
+      withClient(
+        <PreviewPane
+          events={[slidesObservationEvent("deck.html")]}
+          status="FINISHED"
+          cid={null}
+        />,
+      ),
+    );
+    // cid is null → no inline URL can be constructed → falls back to placeholder.
+    expect(screen.queryByTitle("Artifact preview")).not.toBeInTheDocument();
   });
 });
 

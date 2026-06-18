@@ -379,7 +379,10 @@ export function deriveSrcDoc(files: WorkspaceFile[]): string | null {
   const entry =
     files.find((f) => /(^|\/)index\.html$/i.test(f.path)) ??
     files.find((f) => /\.html$/i.test(f.path));
-  if (!entry) return null;
+  // C5: server-side artifacts land with content="" (bytes=0) — return null so the
+  // existing `srcDoc != null` guards suppress the blank white frame and the pane
+  // can fall back to the ?inline=true route or the placeholder instead.
+  if (!entry || !entry.content) return null;
   let html = entry.content;
   // Inline <link rel="stylesheet" href="local.css">
   html = html.replace(

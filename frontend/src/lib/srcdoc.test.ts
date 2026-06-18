@@ -52,6 +52,20 @@ describe("deriveSrcDoc", () => {
     expect(deriveSrcDoc([f("app.js", "console.log(1)")])).toBeNull();
   });
 
+  // C5: server-side artifacts (slides_generate / deliverable) land with
+  // content="" — deriveSrcDoc must return null so the `srcDoc != null` guards
+  // suppress the blank white iframe.  Before this fix it returned "", which the
+  // guard misread as a real document and rendered an empty frame.
+  it("returns null for a content-empty .html (server-side artifact, C5)", () => {
+    expect(deriveSrcDoc([f("deck.html", "")])).toBeNull();
+    expect(deriveSrcDoc([f("index.html", "")])).toBeNull();
+  });
+
+  it("returns non-null for a real-content .html (not a server-side artifact)", () => {
+    const doc = deriveSrcDoc([f("deck.html", "<section>slide</section>")]);
+    expect(doc).toBe("<section>slide</section>");
+  });
+
   it("renders a bare index.html as-is", () => {
     const doc = deriveSrcDoc([f("index.html", "<h1>Hi</h1>")]);
     expect(doc).toBe("<h1>Hi</h1>");

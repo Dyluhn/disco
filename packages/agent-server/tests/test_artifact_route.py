@@ -23,12 +23,15 @@ PNG_MAGIC = b"\x89PNG\r\n\x1a\n" + b"stub-image"  # PNG signature
 MP3_MAGIC = b"\xff\xfb\x90\x00" + b"stub-audio"   # MPEG frame header
 
 
+HTML_STUB = b"<!DOCTYPE html><html><body><h1>Deck</h1></body></html>"
+
 _STUB_BYTES: dict[str, bytes] = {
     ".xlsx": XLSX,
     ".pptx": XLSX,  # also a zip container
     ".png": PNG_MAGIC,
     ".mp3": MP3_MAGIC,
     ".md": b"# transcript\n",
+    ".html": HTML_STUB,
 }
 
 
@@ -326,3 +329,51 @@ def test_disallowed_extension_still_404_after_e7(live_client: TestClient) -> Non
     cid = _create(live_client)
     _declare_sheet(live_client._store, cid, "notes.txt")  # type: ignore[attr-defined]
     assert live_client.get(f"/conversations/{cid}/artifacts/notes.txt").status_code == 404
+
+
+# ---- C5: ?inline=true — HTML inline mode with CSP / non-HTML 404 guard ------
+
+_INLINE_CSP_FRAGMENT = "sandbox allow-scripts"
+
+
+def test_html_inline_true_serves_inline_with_csp(live_client: TestClient) -> None:
+    """C5: ?inline=true on a declared .html returns text/html + inline disposition +
+    a strict Content-Security-Policy (sandbox; no allow-same-origin) so the artifact
+    can be embedded in a sandboxed iframe without granting API access."""
+    cid = _create(live_client)
+    _declare_slides(live_client._store, cid, "deck.html")  # type: ignore[attr-defined]
+    r = live_client.get(f"/conversations/{cid}/artifacts/deck.html?inline=true")
+    assert r.status_code == 200
+    assert r.content == HTML_STUB
+    assert "text/html" in r.headers["content-type"]
+    # Disposition must be INLINE (not attachment) so the browser renders it.
+    assert r.headers["content-disposition"].startswith("inline;")
+    assert 'filename="deck.html"' in r.headers["content-disposition"]
+    # CSP must be present and must restrict the sandboxed page.
+    csp = r.headers["content-security-policy"]
+    assert _INLINE_CSP_FRAGMENT in csp          # sandbox allow-scripts
+    assert "default-src 'none'" in csp
+    assert "frame-ancestors 'self'" in csp
+    # The existing nosniff header must be preserved.
+    assert r.headers["x-content-type-options"] == "nosniff"
+
+
+def test_html_without_inline_remains_attachment(live_client: TestClient) -> None:
+    """C5: the default route (no ?inline=true) continues to return 'attachment' for
+    HTML — no regression to the download path."""
+    cid = _create(live_client)
+    _declare_slides(live_client._store, cid, "deck.html")  # type: ignore[attr-defined]
+    r = live_client.get(f"/conversations/{cid}/artifacts/deck.html")
+    assert r.status_code == 200
+    assert r.headers["content-disposition"].startswith("attachment;")
+    assert "content-security-policy" not in r.headers
+
+
+def test_inline_true_non_html_returns_404(live_client: TestClient) -> None:
+    """C5: ?inline=true is restricted to .html only — all other declared extensions
+    must 404 so the inline allowlist stays minimal."""
+    cid = _create(live_client)
+    _declare_sheet(live_client._store, cid, "budget.xlsx")  # type: ignore[attr-defined]
+    _declare_image(live_client._store, cid, "cover.png")  # type: ignore[attr-defined]
+    assert live_client.get(f"/conversations/{cid}/artifacts/budget.xlsx?inline=true").status_code == 404
+    assert live_client.get(f"/conversations/{cid}/artifacts/cover.png?inline=true").status_code == 404
