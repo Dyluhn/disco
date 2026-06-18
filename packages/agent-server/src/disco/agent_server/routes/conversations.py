@@ -23,6 +23,22 @@ from ._common import (
 )
 
 
+def _resolve_model(body_model_override: str | None, runtime: ConversationRuntime) -> str | None:
+    """P3 — resolve the effective driver model for a new conversation.
+
+    Precedence: explicit body.model_override > last-selected (if valid in cfg)
+    > None (fall through to RouterConfig.default_model). The cfg guard prevents
+    a stale/deleted model key from composing an invalid routing decision."""
+    if body_model_override:
+        return body_model_override
+    last = runtime.get_last_selected_model()
+    if last:
+        cfg = runtime._config_store.load()
+        if last in cfg.models:
+            return last
+    return None
+
+
 def make_conversations_router(
     store: SqliteEventStore, runtime: ConversationRuntime | None
 ) -> APIRouter:
@@ -42,7 +58,7 @@ def make_conversations_router(
         # pin the driver model if the picker chose one.
         if runtime is not None:
             runtime.set_surface(conversation_id, body.surface)
-            runtime.set_model_override(conversation_id, body.model_override)
+            runtime.set_model_override(conversation_id, _resolve_model(body.model_override, runtime))
             if body.autonomous:
                 runtime.set_autonomous(conversation_id, True)
             # Weak-model assist tier: None ⇒ leave the model-derived default;

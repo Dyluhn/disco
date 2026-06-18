@@ -38,6 +38,9 @@ class _StubRuntime:
 
     def set_depth(self, cid: str, tier: object) -> None: ...
 
+    def get_last_selected_model(self) -> str | None:
+        return None  # no last pick in the stub
+
     def sandbox_backend_name(self) -> str | None:
         return "gvisor"
 

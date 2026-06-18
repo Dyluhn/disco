@@ -41,7 +41,7 @@ class ScriptedAgent:
 
     async def step(
         self, view, tools, *, mode: OperatingMode, overflow_signal, on_stream=None,
-        temperature=None, assist=False, attempt: int = 1,
+        temperature=None, assist=False, attempt: int = 1, provider_prefs=None,
     ):
         i = self.calls
         if i in self._before:
@@ -69,7 +69,7 @@ class GatedAgent:
         self.calls = 0
 
     async def step(self, view, tools, *, mode, overflow_signal, on_stream=None,
-                   temperature=None, assist=False, attempt: int = 1):
+                   temperature=None, assist=False, attempt: int = 1, provider_prefs=None):
         i = self.calls
         self.calls += 1
         if i == self.gate_at:

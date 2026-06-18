@@ -38,6 +38,14 @@ class LLMTransientError(LLMError):
         self.retry_after_s = retry_after_s
 
 
+class LLMProviderUnavailable(LLMTransientError):
+    """A provider-routing rejection: the upstream (e.g. Chutes via OpenRouter)
+    refused the request because of auth/availability, NOT because the model
+    payload was malformed. Subclasses LLMTransientError so it inherits the
+    back-off path; the driver catches it FIRST (before LLMTransientError) to
+    escalate provider_prefs instead of sleeping on the same upstream."""
+
+
 class LLMContextWindowExceeded(LLMError):
     """The input exceeded the model's context window. THIS is the case the
     condenser's hard-reset path depends on (event contract §5.3)."""

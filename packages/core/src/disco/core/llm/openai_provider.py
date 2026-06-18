@@ -33,6 +33,7 @@ from .errors import (
     LLMContentFiltered,
     LLMContextWindowExceeded,
     LLMError,
+    LLMProviderUnavailable,
     LLMTransientError,
 )
 from .toolcall_recovery import recover_tool_calls
@@ -188,6 +189,17 @@ class OpenAIProvider:
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(timeout=self._timeout, transport=self._transport)
 
+    def _is_openrouter(self) -> bool:
+        """True when this provider routes through OpenRouter. Reuses the same
+        idiom as runtime_settings.py:155 (_is_small_assist_default). Both
+        self._base (base_url) and self.name are checked so an operator who
+        names a provider "openrouter-free" without changing the base_url still
+        gets the block — and vice versa."""
+        return (
+            "openrouter" in self._base.lower()
+            or "openrouter" in self.name.lower()
+        )
+
     # -- request shaping ------------------------------------------------------
 
     def _headers(self) -> dict[str, str]:
@@ -292,6 +304,18 @@ class OpenAIProvider:
                 }
                 for t in req.tools
             ]
+        # P1 — OpenRouter provider routing preference injection. The `provider`
+        # block steers OpenRouter away from upstreams that don't support tool
+        # calls (e.g. free Chutes tier) and enables fallback on transient
+        # upstream failures. GATED on _is_openrouter() so local/OpenAI payloads
+        # are byte-identical to today (non-OR servers reject unknown top-level
+        # keys). Caller-supplied req.provider_prefs extends/overrides the floor.
+        if self._is_openrouter():
+            body["provider"] = {
+                "require_parameters": True,
+                "allow_fallbacks": True,
+                **(req.provider_prefs or {}),
+            }
         # Per-call override wins over the provider/model default (the answerer turns
         # thinking OFF so a reasoning model doesn't spend its whole budget thinking).
         et = req.enable_thinking if req.enable_thinking is not None else self._enable_thinking
@@ -382,6 +406,24 @@ class OpenAIProvider:
             raise LLMContentFiltered(message, provider=self.name)
         if status == 429 or status >= 500:
             raise LLMTransientError(message, provider=self.name)
+        # P2 — provider-availability rejection classification. These messages
+        # are upstream routing failures (Chutes/OpenRouter), NOT model errors:
+        # the model payload is fine; an upstream provider is unavailable or
+        # excluded by routing rules. Raising LLMProviderUnavailable (a
+        # LLMTransientError subclass) lets the driver escalate provider_prefs
+        # (routing retry) instead of blaming the model ("check your JSON").
+        _msg_lower = message.lower()
+        _type_lower = err_type.lower()
+        _provider_phrases = (
+            "no cookie auth",
+            "no allowed providers",
+            "no instances available",
+            "no endpoints found",
+            "provider returned error",
+            "requires moderation",
+        )
+        if any(p in _msg_lower for p in _provider_phrases) or _type_lower.startswith("provider"):
+            raise LLMProviderUnavailable(message, provider=self.name)
         raise LLMError(message, provider=self.name)
 
     # -- response shaping -----------------------------------------------------

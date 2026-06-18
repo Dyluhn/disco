@@ -29,13 +29,22 @@ def make_schedules_router(
             raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
         _reject_if_imported(store, conversation_id)  # a schedule would revive a read-only import
         try:
+            # P3: seed from last-selected when the schedule has no explicit
+            # model_override. An explicit schedule pick stays authoritative.
+            schedule_model = body.model_override
+            if not schedule_model:
+                last = runtime.get_last_selected_model()
+                if last:
+                    cfg = runtime._config_store.load()
+                    if last in cfg.models:
+                        schedule_model = last
             result = runtime.create_schedule(
                 conversation_id=conversation_id,
                 owner_id=DEFAULT_OWNER_ID,
                 rrule=body.rrule,
                 description=body.description,
                 depth=body.depth,
-                model_override=body.model_override,
+                model_override=schedule_model,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail={"reason": str(exc)}) from exc

@@ -121,6 +121,13 @@ class CompletionRequest(BaseModel):
     # (first try) so it is byte-identical to today for any caller that
     # does not set it. See openai_provider._payload / _truncate_think_block.
     attempt: int = 1
+    # P1 — OpenRouter provider routing preferences. VOLATILE: merged into the
+    # top-level `provider` body object ONLY when the target is an OpenRouter
+    # endpoint; every non-OpenRouter payload is byte-identical to today.
+    # Caller-supplied keys win on collision (e.g. escalation can add `ignore`).
+    # The OpenAI adapter always applies {require_parameters, allow_fallbacks}
+    # as a floor; this field extends/overrides that floor per-call.
+    provider_prefs: dict[str, Any] | None = None
     # Opaque per-call correlation id, surfaced back on the response and carried
     # into ActionEvent.llm_response_id (event contract). VOLATILE.
     request_id: str | None = None

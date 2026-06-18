@@ -486,6 +486,10 @@ class ConversationRuntime:
         # C6: per-conversation artifact_mode flag. In-memory only — set at create
         # time from the body; artifact sessions are short-lived, no sidecar needed.
         self._artifact_mode: dict[str, bool] = {}
+        # P3 — global last-selected driver model (single-value sidecar). Persisted
+        # so a new conversation seeds from whatever the user picked last; falls back
+        # to RouterConfig.default_model when never set. B0 pattern (atomic writes).
+        self._last_model_path = f"{db_path}.last_model.json" if db_path else ""
         # Per-conversation server-side uploads sidecar directory (B0 pattern).
         # DC-07 (2026-06-11): uploads survive sandbox recreation.
         self._uploads_base = f"{db_path}.uploads" if db_path else ""
@@ -908,6 +912,18 @@ class ConversationRuntime:
 
     def _effective_artifact_mode(self, conversation_id: str) -> bool:
         return self._settings._effective_artifact_mode(conversation_id)
+    # ---- last-selected model (P3) — delegators to RuntimeSettings -----------
+
+    def get_last_selected_model(self) -> str | None:
+        """The globally-persisted last-picked driver model (P3). Used by
+        conversation-create routes to seed a new conversation's model when no
+        explicit override is provided. None = no pick ever made."""
+        return self._settings.get_last_selected_model()
+
+    def set_last_selected_model(self, model_id: str | None) -> None:
+        """Persist the last-picked driver model. Called from set_model_override
+        automatically; exposed here for tests."""
+        self._settings.set_last_selected_model(model_id)
 
     def driver_models(self) -> dict[str, Any]:
         """The driver-eligible models (live + tool-calling), deduped by underlying model,

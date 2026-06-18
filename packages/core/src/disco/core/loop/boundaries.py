@@ -62,6 +62,7 @@ class Agent(Protocol):
         temperature: float | None = None,
         assist: bool = False,
         attempt: int = 1,
+        provider_prefs: dict | None = None,
     ) -> AgentStep: ...
 
 

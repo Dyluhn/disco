@@ -27,6 +27,7 @@ from ..events import (
 from ..llm import (
     LLMContextWindowExceeded,
     LLMError,
+    LLMProviderUnavailable,
     LLMTransientError,
     OperatingMode,
 )
@@ -55,6 +56,18 @@ _LOG = logging.getLogger("disco.loop")
 
 _sleep = asyncio.sleep
 _DRIVER_RETRY_BACKOFFS_S: tuple = (10.0, 30.0, 90.0)
+
+
+def _escalated_provider_prefs(n: int) -> dict:
+    """P2 — escalation ladder for provider routing retries.
+
+    n=1 (first occurrence): enable fallbacks (allow OpenRouter to try the next
+    upstream). n≥2: additionally hard-exclude Chutes (the observed free-pool
+    offender) so OpenRouter doesn't route there again. Cap: the caller enforces
+    ≤2 total provider retries (reusing the existing requery budget)."""
+    if n >= 2:
+        return {"allow_fallbacks": True, "ignore": ["Chutes"]}
+    return {"allow_fallbacks": True}
 
 # A hard temperature jitter for the single stuck-escape retry step. When the loop
 # detects a repeating action→error/obs rut it gives the model ONE retry at this
@@ -116,6 +129,30 @@ class Driver:
             )
 
         return _hook
+
+    async def _pause_driver_unavailable(self) -> tuple[None, "Disp"]:
+        """Emit the standard PAUSED/driver-unavailable event pair and HALT.
+        Called from both the LLMProviderUnavailable and LLMTransientError
+        exhaustion paths to keep drive_step within its LOC budget."""
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(
+                    role="user",
+                    content=(
+                        "model driver unavailable — conversation"
+                        " paused, resume when the model is back"
+                    ),
+                ),
+            )
+        )
+        await self._loop._emit(
+            StatusEvent(
+                status=ConversationStatus.PAUSED,
+                detail="driver-unavailable",
+            )
+        )
+        return None, Disp.HALT
 
     def readonly_tool_names(self) -> frozenset[str] | None:
         """The executor's set of read-only tool names, or None if this executor
@@ -321,6 +358,7 @@ class Driver:
         try:
             attempts = 0
             requery_count = 0
+            provider_retry_count = 0  # P2: tracks LLMProviderUnavailable occurrences
             transient_messages: list[LLMMessage] = []
             while True:
                 try:
@@ -347,6 +385,15 @@ class Driver:
                         # untouched (the provider's gate ignores the field
                         # when req.assist is False).
                         attempt=attempts + 1,
+                        # P2: escalated provider prefs on routing retries.
+                        # None on the first/normal call; populated after the
+                        # first LLMProviderUnavailable so the NEXT step
+                        # carries a steering hint to OpenRouter.
+                        provider_prefs=(
+                            _escalated_provider_prefs(provider_retry_count)
+                            if provider_retry_count > 0
+                            else None
+                        ),
                     )
 
                     # Rung 7: Invalid-tool reroute (weak-model FC kit).
@@ -419,31 +466,34 @@ class Driver:
                     break  # Step is valid or requeries exhausted
                 except LLMContextWindowExceeded:
                     raise  # handled by view-materialization hard-reset (§8)
+                except LLMProviderUnavailable as e:
+                    # P2 — provider-routing rejection (Chutes / no instances /
+                    # no cookie auth). The model did nothing wrong; the upstream
+                    # is unavailable or excluded. Re-issue with escalated
+                    # provider_prefs (OpenRouter steering hint) instead of
+                    # blaming the model. Capped at the existing requery budget
+                    # (≤2); after the cap, fall through to PAUSE (a provider
+                    # outage is recoverable on resume, not a fatal model error).
+                    # IMPORTANT: this arm MUST precede `except LLMTransientError`
+                    # because LLMProviderUnavailable IS a LLMTransientError subclass
+                    # — Python matches in order; wrong order → wrong arm fires.
+                    if provider_retry_count < 2:
+                        provider_retry_count += 1
+                        _LOG.warning(
+                            f"Provider unavailable: {e}. Escalating provider_prefs "
+                            f"(retry {provider_retry_count}/2)..."
+                        )
+                        # No transient hint appended — the model did nothing wrong.
+                        continue
+                    # Cap exhausted → PAUSE (a provider outage is recoverable).
+                    return await self._pause_driver_unavailable()
                 except LLMTransientError:
                     if attempts < len(_DRIVER_RETRY_BACKOFFS_S):
                         await _sleep(_DRIVER_RETRY_BACKOFFS_S[attempts])
                         attempts += 1
                         continue
                     else:
-                        await self._loop._emit(
-                            MessageEvent(
-                                source=EventSource.ENVIRONMENT,
-                                message=LLMMessage(
-                                    role="user",
-                                    content=(
-                                        "model driver unavailable — conversation"
-                                        " paused, resume when the model is back"
-                                    ),
-                                ),
-                            )
-                        )
-                        await self._loop._emit(
-                            StatusEvent(
-                                status=ConversationStatus.PAUSED,
-                                detail="driver-unavailable",
-                            )
-                        )
-                        return None, Disp.HALT
+                        return await self._pause_driver_unavailable()
                 except LLMError as e:
                     # DEFECT-6: Provider 4xx "rejected request" must not be
                     # terminal; enter requery path with a hint.
