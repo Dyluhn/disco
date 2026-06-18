@@ -19,10 +19,55 @@ constants used EXCLUSIVELY by the moved builders moved with them.
 
 from __future__ import annotations
 
-from ..events import ActionEvent, Event, LLMMessage
+from ..events import ActionEvent, Event, EventSource, LLMMessage, MessageEvent
 from ..llm import LLMError
 from ..view import _latest_plan
 from .dedup import _WORKSPACE_MUTATING_TOOLS, _WORKSPACE_READ_TOOLS
+
+# (B2/B6) Cap on consecutive PLANNING-mode read/list tool calls before the loop
+# forces a plan. A re-plan model can stay in an "execution frame of mind" and
+# explore (file_read/file_list/search) indefinitely without ever proposing a
+# plan — the live trace showed ~17 reads and no submit_plan, so the revise
+# spinner hung forever. After this many consecutive planning reads with no
+# submit_plan, ONE forcing reminder is injected (append-once per threshold
+# crossing). Reads are still legitimate Phase-1 context-gathering BELOW the cap.
+_PLAN_EXPLORE_READ_CAP = 5
+
+# Injected ONCE when the planner hits _PLAN_EXPLORE_READ_CAP consecutive
+# planning-mode reads without proposing a plan. Unlike _PLAN_NUDGE (which fires
+# on a tool-LESS prose turn) this fires on productive-but-endless exploration.
+_PLAN_EXPLORE_FORCE = (
+    "<system-reminder>\n"
+    "You've explored {n} files in PLANNING mode without proposing a plan. You "
+    "have enough context — call `submit_plan` now with your revised plan. Do NOT "
+    "start editing files; in PLANNING mode `submit_plan` is your only terminal "
+    "move.\n"
+    "</system-reminder>"
+)
+
+# (B2/B6) Injected when RE-entering planning after a build was already approved
+# (a revision, not a first plan). Frames the turn so the model proposes a
+# revised plan instead of free-building against the old plan.
+_REPLAN_FRAMING = (
+    "<system-reminder>\n"
+    "RE-PLANNING: the user added a new instruction to an existing build. Produce "
+    "a REVISED plan by calling `submit_plan` — do NOT start editing files yet. "
+    "The plan revision number will increment.\n"
+    "</system-reminder>"
+)
+
+
+def _latest_user_instruction(events: list[Event]) -> str | None:
+    """The text of the most recent USER MessageEvent, or None if there is
+    none. (B2/B6) Used to re-ground on the latest instruction while RE-planning
+    instead of anchoring to the original build GOAL (the superseded plan's
+    summary)."""
+    for e in reversed(events):
+        if isinstance(e, MessageEvent) and e.source == EventSource.USER:
+            text = (e.message.content or "").strip()
+            if text:
+                return text
+    return None
 
 
 def _describe_llm_error(e: LLMError) -> str:
@@ -80,7 +125,9 @@ _HS03_REGROUND_SENTINEL = "<reground-anchors>"
 # second prompt. The whole recap stays well under ~1k chars.
 _HS03_REGROUND_SECTION_CHARS = 200
 _HS03_REGROUND_MAX_FILES = 4  # only the most recent few files in the recap
-def _hs03_reground_message(events: list[Event]) -> LLMMessage | None:
+def _hs03_reground_message(
+    events: list[Event], *, goal_override: str | None = None
+) -> LLMMessage | None:
     """HS-03 — build a short RECAP of the stable facts (goal, plan state,
     recently-touched files, optional constraints from the plan's
     exploration context). PURE function over the event log — no model
@@ -127,8 +174,12 @@ def _hs03_reground_message(events: list[Event]) -> LLMMessage | None:
             return s[: cap - 1] + "\u2026"
         return s
 
-    # 1. GOAL: plan summary (the one-line "what this plan delivers").
-    goal = _clip(plan.summary or "(no summary)")
+    # 1. GOAL: plan summary (the one-line "what this plan delivers"). (B2/B6)
+    # When re-grounding in PLANNING mode (a re-plan), `goal_override` carries the
+    # LATEST user instruction so the recap anchors to the NEW task instead of the
+    # superseded plan's summary — otherwise the old GOAL re-injection reinforces
+    # "keep executing the old plan" and the model never re-plans.
+    goal = _clip((goal_override or "").strip() or plan.summary or "(no summary)")
 
     # 2. PROGRESS: per-step checklist. Mirrors _recitation_signature's
     # accounting (only plan_step marks AFTER the current plan's seq),

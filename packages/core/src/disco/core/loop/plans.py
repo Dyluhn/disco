@@ -18,8 +18,17 @@ from ..events import (
     AlternativeOption,
     AlternativesEvent,
     Event,
+    EventSource,
+    LLMMessage,
+    MessageEvent,
     PlanEvent,
     PlanStep,
+    StatusEvent,
+)
+from .messages import (
+    _PLAN_EXPLORE_FORCE,
+    _PLAN_EXPLORE_READ_CAP,
+    _REPLAN_FRAMING,
 )
 from .turn_control import _CONTINUE_OPTION_ID
 
@@ -32,6 +41,53 @@ _LOG = logging.getLogger("disco.loop")
 class Planner:
     def __init__(self, loop: AgentLoop) -> None:
         self._loop = loop
+
+    async def note_planning_read_and_maybe_force(self) -> None:
+        """(B2/B6) Count one consecutive PLANNING-mode read and, on CROSSING the
+        cap, inject ONE forcing reminder ("you have enough context — submit_plan
+        now"). Append-once: it fires only at the exact threshold, never on every
+        subsequent read. The counter is reset on a submit_plan and on
+        (re-)entering planning, so legitimate Phase-1 gathering below the cap is
+        unchanged. Without this a re-plan model in an execution frame of mind
+        reads indefinitely and never proposes a plan (the revise spinner hangs
+        forever — B2 — and it free-builds without re-planning — B6)."""
+        self._loop._plan_explore_reads += 1
+        if self._loop._plan_explore_reads == _PLAN_EXPLORE_READ_CAP:
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=_PLAN_EXPLORE_FORCE.format(
+                            n=self._loop._plan_explore_reads
+                        ),
+                    ),
+                )
+            )
+
+    async def emit_replan_framing_if_revision(self, text: str) -> None:
+        """(B2/B6) When RE-entering planning after a build was already approved
+        (a revision — a prior `plan_approved` StatusEvent exists) AND the user
+        gave a concrete new instruction, emit ONE RE-PLANNING framing reminder so
+        the model proposes a revised plan instead of free-building against the
+        old plan. A first plan (no prior approval) gets nothing — unchanged.
+
+        Safe to call AFTER enter_planning has emitted the new user turn + the
+        `planning` status: neither adds a `plan_approved` status, so the revision
+        check is identical whether computed before or after them."""
+        if not text.strip():
+            return
+        is_revision = any(
+            isinstance(e, StatusEvent) and e.detail == "plan_approved"
+            for e in await self._loop._events()
+        )
+        if is_revision:
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(role="user", content=_REPLAN_FRAMING),
+                )
+            )
 
     def plan_from_args(self, arguments: dict, events: list[Event]) -> PlanEvent:
         """Build a PlanEvent from a `submit_plan` tool call. Defensive against the

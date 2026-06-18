@@ -18,9 +18,10 @@ from ..events import (
     KnowledgeEvent,
     MessageEvent,
 )
+from ..llm import OperatingMode
 from ..view import View, _latest_plan
 from . import signals
-from .messages import _hs03_reground_message
+from .messages import _hs03_reground_message, _latest_user_instruction
 
 if TYPE_CHECKING:
     from .boundaries import Sandbox
@@ -221,7 +222,15 @@ class RecitationRegrounder:
         """
         if not self._loop._should_emit_reground(events):
             return events
-        recap = _hs03_reground_message(events)
+        # (B2/B6) While RE-planning (mode flipped back to PLANNING after a build),
+        # anchor the recap to the LATEST user instruction, not the old plan's
+        # GOAL — re-injecting the original build goal reinforces "execute the old
+        # plan" and the model never proposes a revision. Execution mode is
+        # unchanged (no override → the plan summary stays the GOAL).
+        goal_override: str | None = None
+        if self._loop.mode == OperatingMode.PLANNING:
+            goal_override = _latest_user_instruction(events)
+        recap = _hs03_reground_message(events, goal_override=goal_override)
         if recap is None:  # defensive: the predicate already checked
             return events
         # _actions_since_last_resume is computed again to keep the
