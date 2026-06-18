@@ -211,19 +211,28 @@ class DeepResearchService:
         model, `domains_deny` filters discovery, `drop_weak` prunes the answer, and
         `think` runs the answerer in reasoning mode (it thinks, then the answer
         streams; the reasoning is never emitted as answer tokens)."""
+        from disco.retrieval import RouterQueryRewriter
         from disco.retrieval.streaming import stream_research_answer
 
         deps = self._rt._research()
         # RP-05b §3: MCP retrieval providers join the citation path here too — the
         # composite hands MCP-discovered hits to the SAME GroundingPipeline.
         search, extraction = self._rt._compose_mcp_retrieval(deps)
+        router = self._rt._router_now(pick=model_override, enable_thinking=think)
         return stream_research_answer(
             query,
-            router=self._rt._router_now(pick=model_override, enable_thinking=think),
+            router=router,
             search=search,
             extraction=extraction,
             reranker=deps["reranker"],
             nli=deps["nli"],
+            # F1: keep-searching on no-answer. Pass the rewriter and allow up to 2
+            # extra rounds when the first answer has zero supported claims.  The
+            # RouterQueryRewriter reuses the existing QUERY_REWRITER role prompt so
+            # no new prompt is introduced.  max_research_rounds=1 is the default, so
+            # all existing callers remain byte-identical until this wiring opts them in.
+            rewriter=RouterQueryRewriter(router),
+            max_research_rounds=2,
             domains_deny=domains_deny,
             drop_weak=drop_weak,
             think=think,

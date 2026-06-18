@@ -29,7 +29,7 @@ from disco.core.llm import (
 from .local_encoders import EncoderUnavailable
 from .models import Passage
 from .providers import ExtractionProvider, SearchProvider
-from .ranking import Reranker
+from .ranking import QueryRewriter, Reranker
 
 # NLI verdict (3-way) -> the UI's claim band.
 _VERDICT = {"entail": "supported", "neutral": "weak", "contradict": "unsupported"}
@@ -345,6 +345,8 @@ async def stream_research_answer(
     extraction: ExtractionProvider,
     reranker: Reranker,
     nli: _NLILike,
+    rewriter: QueryRewriter | None = None,
+    max_research_rounds: int = 1,
     domains_deny: frozenset[str] = frozenset(),
     drop_weak: bool = False,
     think: bool = False,
@@ -356,84 +358,136 @@ async def stream_research_answer(
     re-scope controls apply here: `domains_deny` filters discovery; `drop_weak`
     prunes the final answer to its supported claims; `think` raises the token
     budget so a reasoning model has room to think AND still emit the answer (with
-    a small budget, reasoning eats it all and the content comes back empty)."""
+    a small budget, reasoning eats it all and the content comes back empty).
+
+    When `rewriter` is provided and `max_research_rounds > 1`, the pipeline
+    detects a no-answer result (zero supported claims after NLI verification) and
+    reformulates the query for up to `min(max_research_rounds - 1, 2)` extra
+    rounds. Token frames are buffered and only emitted for the accepted round so
+    the user never sees a doomed draft. A lightweight `{"type":"phase",
+    "phase":"reformulating"}` frame is emitted between rounds so the UI shows
+    activity. The OFF-path (≥1 supported claim on round 0, or the default
+    `max_research_rounds=1`) is byte-identical to the pre-F1 code — the retry
+    block is unreachable when no extra rounds are allowed."""
+    # F1: cap extra rounds at 2 regardless of the caller's value.
+    bounded_extra = min(max(max_research_rounds - 1, 0), 2)
+
     yield {"type": "state", "status": "running"}
     try:
-        # 1. discovery (honoring the denied domains from re-scope)
-        hits = await search.search(query, limit=discover_limit, domains_deny=domains_deny or None)
-        if not hits:
-            yield {"type": "error", "message": "No search results were found for this query."}
-            return
-        # 2. extraction (with provenance + honest failure status). Extraction
-        # failures cluster under load (Crawl4AI does real browser crawls), so a
-        # whole batch can blip to empty — retry once with a wider net (more hits)
-        # before giving up, since the next results are usually readable too.
-        urls = [h.url for h in hits[:extract_cap]]
-        docs = await extraction.extract_many(urls)
-        passages = [p for d in docs if d.fetched_ok for p in d.passages]
-        if not passages and len(hits) > extract_cap:
-            extra = await extraction.extract_many([h.url for h in hits[extract_cap:discover_limit]])
-            docs = docs + extra
-            passages = [p for d in docs if d.fetched_ok for p in d.passages]
-        status_by_url = {d.url: d.status for d in docs}
-        all_hits = [{**h.model_dump(), "status": status_by_url.get(h.url)} for h in hits]
-        if not passages:
-            unreadable = sum(1 for d in docs if d.status in ("blocked", "paywalled", "not_found"))
-            yield {
-                "type": "error",
-                "message": (
-                    f"Found {len(hits)} sources but couldn't read any of them right now "
-                    f"({unreadable} blocked or paywalled, the rest failed to fetch). This is "
-                    "usually a temporary extraction hiccup — try the search again."
-                ),
-            }
-            return
-        # 3. rerank to the working set
-        top = await reranker.rerank(query, passages, top_k=top_k)
-        by_id = {p.id: p for p in top}
+        exclude_urls: frozenset[str] = frozenset()
+        current_query = query
 
-        # 4. constrained, streamed generation
-        answer_text = ""
-        async for chunk in router.stream_complete(
-            CompletionRequest(
-                profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
-                messages=_answer_prompt(query, top),
-                temperature=0.0,
-                # `think=False` (default) turns the reasoning model's thinking OFF so it
-                # answers directly and cites. Otherwise a reasoning model (Qwen3.6 et al)
-                # spends its whole budget in `reasoning_content`, hits the token ceiling
-                # mid-thought, and `content` comes back EMPTY — no claims, empty prose
-                # (the canary's "up but not grounding" failure). `think=True` keeps it on
-                # with a bigger budget for a deeper, reasoned answer.
-                enable_thinking=think,
-                max_tokens=4096 if think else 1200,
-                stream=True,
+        for round_idx in range(1 + bounded_extra):
+            is_last_round = round_idx == bounded_extra
+
+            # 1. discovery (honoring the denied domains from re-scope)
+            hits = await search.search(
+                current_query, limit=discover_limit, domains_deny=domains_deny or None
             )
-        ):
-            if chunk.delta_text:
-                answer_text += chunk.delta_text
-                yield {"type": "token", "token": chunk.delta_text, "block_id": "answer"}
+            if not hits:
+                yield {"type": "error", "message": "No search results were found for this query."}
+                return
 
-        # 5. structure + verify. The NLI verifier is SYNC (blocking httpx), so run
-        # it in a thread — otherwise its many calls freeze the event loop and the
-        # WebSocket's keepalive pings time out, dropping the connection mid-answer.
-        blocks = _to_blocks(answer_text)
-        claims = await asyncio.to_thread(_verify_claims, answer_text, by_id, nli)
-        follow_ups = await _follow_ups(router, query, answer_text)
+            # 2. extraction (with provenance + honest failure status). Extraction
+            # failures cluster under load (Crawl4AI does real browser crawls), so a
+            # whole batch can blip to empty — retry once with a wider net (more hits)
+            # before giving up, since the next results are usually readable too.
+            # On re-search rounds, skip URLs already extracted in prior rounds so we
+            # fetch fresh sources.
+            candidate_hits = [h for h in hits if h.url not in exclude_urls] or hits
+            urls = [h.url for h in candidate_hits[:extract_cap]]
+            docs = await extraction.extract_many(urls)
+            passages = [p for d in docs if d.fetched_ok for p in d.passages]
+            if not passages and len(candidate_hits) > extract_cap:
+                extra = await extraction.extract_many(
+                    [h.url for h in candidate_hits[extract_cap:discover_limit]]
+                )
+                docs = docs + extra
+                passages = [p for d in docs if d.fetched_ok for p in d.passages]
+            status_by_url = {d.url: d.status for d in docs}
+            all_hits = [{**h.model_dump(), "status": status_by_url.get(h.url)} for h in hits]
+            this_round_urls = frozenset(h.url for h in hits)
 
-        answer = {
-            "query": query,
-            "blocks": blocks,
-            "claims": claims,
-            "passages": [p.model_dump() for p in top],
-            "all_hits": all_hits,
-            "unsupported_count": sum(1 for c in claims if c["verdict"] == "unsupported"),
-            "follow_ups": follow_ups,
-        }
-        if drop_weak:
-            answer = _drop_weak(answer)
-        yield {"type": "final", "answer": answer}
-        yield {"type": "state", "status": "finished"}
+            if not passages:
+                unreadable = sum(1 for d in docs if d.status in ("blocked", "paywalled", "not_found"))
+                yield {
+                    "type": "error",
+                    "message": (
+                        f"Found {len(hits)} sources but couldn't read any of them right now "
+                        f"({unreadable} blocked or paywalled, the rest failed to fetch). This is "
+                        "usually a temporary extraction hiccup — try the search again."
+                    ),
+                }
+                return
+
+            # 3. rerank to the working set
+            top = await reranker.rerank(current_query, passages, top_k=top_k)
+            by_id = {p.id: p for p in top}
+
+            # 4. constrained generation — buffer tokens; only emit on the accepted round.
+            # This keeps a doomed first draft off the wire while still letting the final
+            # accepted answer stream token-by-token to the frontend.
+            token_frames: list[dict[str, Any]] = []
+            answer_text = ""
+            async for chunk in router.stream_complete(
+                CompletionRequest(
+                    profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
+                    messages=_answer_prompt(current_query, top),
+                    temperature=0.0,
+                    # `think=False` (default) turns the reasoning model's thinking OFF so it
+                    # answers directly and cites. Otherwise a reasoning model (Qwen3.6 et al)
+                    # spends its whole budget in `reasoning_content`, hits the token ceiling
+                    # mid-thought, and `content` comes back EMPTY — no claims, empty prose
+                    # (the canary's "up but not grounding" failure). `think=True` keeps it on
+                    # with a bigger budget for a deeper, reasoned answer.
+                    enable_thinking=think,
+                    max_tokens=4096 if think else 1200,
+                    stream=True,
+                )
+            ):
+                if chunk.delta_text:
+                    answer_text += chunk.delta_text
+                    token_frames.append(
+                        {"type": "token", "token": chunk.delta_text, "block_id": "answer"}
+                    )
+
+            # 5. structure + verify. The NLI verifier is SYNC (blocking httpx), so run
+            # it in a thread — otherwise its many calls freeze the event loop and the
+            # WebSocket's keepalive pings time out, dropping the connection mid-answer.
+            blocks = _to_blocks(answer_text)
+            claims = await asyncio.to_thread(_verify_claims, answer_text, by_id, nli)
+
+            # F1 no-answer signal: zero supported claims after NLI verification.
+            # Also catches an all-unsupported/neutral answer (equally "not grounded").
+            supported = sum(1 for c in claims if c["verdict"] == "supported")
+
+            if supported > 0 or rewriter is None or is_last_round:
+                # Accepted round — emit the buffered tokens, then the final frames.
+                for frame in token_frames:
+                    yield frame
+                follow_ups = await _follow_ups(router, query, answer_text)
+                answer = {
+                    "query": query,
+                    "blocks": blocks,
+                    "claims": claims,
+                    "passages": [p.model_dump() for p in top],
+                    "all_hits": all_hits,
+                    "unsupported_count": sum(1 for c in claims if c["verdict"] == "unsupported"),
+                    "follow_ups": follow_ups,
+                }
+                if drop_weak:
+                    answer = _drop_weak(answer)
+                yield {"type": "final", "answer": answer}
+                yield {"type": "state", "status": "finished"}
+                return
+
+            # No supported claims + rewriter available + rounds remain → reformulate.
+            exclude_urls = exclude_urls | this_round_urls
+            yield {"type": "phase", "phase": "reformulating"}
+            new_qs = await rewriter.rewrite(current_query, n=1)
+            current_query = new_qs[0] if new_qs else current_query
+            # Buffered token_frames from the doomed round are discarded here.
+
     except EncoderUnavailable as exc:
         # RAM guard: the encoder pre-check stopped a model load that would OOM the
         # process.  Emit an honest, actionable error frame so the UI shows the real
