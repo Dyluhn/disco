@@ -622,7 +622,9 @@ def _render_pptx_c1(deck: Deck) -> bytes:
             _render_element(prs_slide, el, deck.theme)
 
         if slide.notes:
-            prs_slide.notes_slide.notes_text_frame.text = slide.notes
+            _ntf = prs_slide.notes_slide.notes_text_frame
+            if _ntf is not None:
+                _ntf.text = slide.notes
 
     buf = io.BytesIO()
     prs.save(buf)

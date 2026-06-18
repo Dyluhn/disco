@@ -429,11 +429,14 @@ class SlidesTool:
         """Render a C1 Deck to the sandbox and return a ToolOutcome."""
         from disco.tools.builtin._pptx_render import render_pptx, render_html, convert_to_pdf
 
+        if ctx.sandbox is None:
+            return ToolOutcome(success=False, content="No sandbox available to write the slide deck.")
+        sbx = ctx.sandbox
         out_filename = f"{args.filename}.{fmt}"
 
         if fmt == "html":
             html_str = render_html(deck)
-            await ctx.sandbox.write_file(out_filename, html_str.encode("utf-8"))
+            await sbx.write_file(out_filename, html_str.encode("utf-8"))
             return ToolOutcome(
                 success=True,
                 content=(
@@ -454,13 +457,13 @@ class SlidesTool:
 
         if fmt == "pptx":
             pptx_bytes = render_pptx(deck)
-            await ctx.sandbox.write_file(out_filename, pptx_bytes)
+            await sbx.write_file(out_filename, pptx_bytes)
 
             # Also write brand HTML alongside
             html_name = f"{args.filename}.html"
             try:
                 html_str = render_html(deck)
-                await ctx.sandbox.write_file(html_name, html_str.encode("utf-8"))
+                await sbx.write_file(html_name, html_str.encode("utf-8"))
                 artifacts = [out_filename, html_name]
             except Exception:
                 artifacts = [out_filename]
@@ -496,7 +499,7 @@ class SlidesTool:
             # Render PPTX first, then convert
             pptx_bytes = render_pptx(deck)
             pptx_name = f"{args.filename}.pptx"
-            await ctx.sandbox.write_file(pptx_name, pptx_bytes)
+            await sbx.write_file(pptx_name, pptx_bytes)
             pdf_ok, pdf_err = await convert_to_pdf(ctx, pptx_name)
             if not pdf_ok:
                 return ToolOutcome(
