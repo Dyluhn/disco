@@ -51,3 +51,9 @@ re-gates from main.
 - MiniMax delegation finding: works on IMPERATIVE step-lists, NOT spec docs; drafts ~partial then exits before test/commit. Workflow = MiniMax drafts → I complete+gate+commit.
 - Drafts in worktrees (MiniMax, uncommitted): editor (9 files: selectionBridge/Overlay/agent + iframe wiring), c7img (10 files: image backends + config), attach (2 files). filedelivery: redraft needed.
 - Next: complete each draft lane-by-lane with full gates, then integrate.
+
+### Wave 1 — banked to main (2026-06-18)
+- chart_svg→core + P4 (e875249) · C7 image backends (313d357) · FILE-DELIVERY F1+F2 (c804f55) — all gated + suite-green on main.
+- MiniMax pattern confirmed: IMPERATIVE step-list prompts → complete, self-tested drafts (can't git-commit from worktree due to fs perms → I commit). c7img drafted clean; filedelivery drafted F1+F2 solid, F3/F4 partial → I completed F1+F2, deferred F4 (needs DR on-demand-export model, not a workspace DeliverableEvent).
+- INCIDENT: a worktree's frontend/node_modules SYMLINK got staged in the filedelivery merge → replaced main's real node_modules with a self-symlink → I removed it + `npm install` restored. LESSON: never `git add -A` a worktree with a node_modules symlink; the merge carried it. Fixed (11251ac) + node_modules untracked.
+- STILL OPEN: attach (18-file MiniMax draft, wave1-attach, UNVERIFIED) · editor substrate (imperative relaunch came back empty — needs redo) · Wave 2/3/4 (native pptx, deck editor, C4 experiment, DR steer, RP-09, noVNC).
