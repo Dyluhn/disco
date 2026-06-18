@@ -375,11 +375,14 @@ real local container, PASS ×4:**
 
 B1 verified by Dylan earlier ("exports work").
 
-**Still requiring live UI visual evidence (mandatory per CLAUDE.md, deferred to a
-running dev server):**
-- B3 — Firefox screenshot: New-from-build lands on the search surface.
-- B7 — a real broken-page browser observation showing the new stack/source-line/
-  `NETWORK FAIL` detail. (Unit-proven in `test_browser_daemon.py`; live capture pending.)
+**Live UI visual evidence — CAPTURED (2026-06-18, dev stack restarted on `0e6d1b6`):**
+- **B3 PASS** — Firefox (Playwright): on the Build surface, clicking New lands on the
+  Search surface (slider flips build→search; "Ask anything…" input + research chips
+  appear). Screenshots `/tmp/b3-02-build.png`, `/tmp/b3-03-after-new.png` (sent to Dylan).
+- **B7 PASS** — `packages/tools/scripts/verify_b7_browser_errors.py` drove the REAL
+  browser daemon against a broken page; the agent-visible observation now carries
+  console `source:line`, pageerror **stacks** (`at boom (…:9:32)`), and two
+  `NETWORK FAIL` lines (404 + refused) — vs the old bare `(N errors)`. 6/6 checks PASS.
 
 **Adjacent finding (NOT one of the 7 — flagged for follow-up): free-pool driver
 flakiness.** `disco-config.json` sets the driver to `or-gpt-oss-120b-free`. The live
