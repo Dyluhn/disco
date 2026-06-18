@@ -852,15 +852,13 @@ async def test_execution_nudge_without_action_lands_instead_of_livelocking():
     (every step marked done) yet NO productive action happened since approval, a
     model that keeps declaring `finish` must NOT spin forever on the execution
     gate. The plan-completeness auto-continue ladder is inert here (nothing is
-    missing), so the execution-finish gate is the only thing standing between the
-    loop and an infinite re-query of `finish`. The gate must route through the
-    shared actionless valve and land the run cleanly at FINISHED:noop_limit.
+    missing). W5 added an explicit cap (_EXECUTION_NUDGE_CAP = 3): after 3 nudges
+    the gate emits FINISHED:execution_nudge_cap directly and halts.
 
     Inverse proof: the script caps at an `LLMError` sentinel after 20 finish
     attempts, so a REVERTED backstop (bare `continue`) terminates into a
-    model_error ERROR state instead of noop_limit — and never lands FINISHED.
-    (It also can't hang the suite.) The FIXED path lands in ~7 turns, well before
-    the cap."""
+    model_error ERROR state — and never lands FINISHED. The FIXED path lands
+    in ~4 turns (3 nudges + 1 cap release), well before the sentinel cap."""
     from disco.core import ActionEvent as AE
     from disco.core import (
         ConversationStatus,
@@ -902,6 +900,8 @@ async def test_execution_nudge_without_action_lands_instead_of_livelocking():
     )
 
     # finish forever, then a hard LLMError cap so a broken loop can't hang.
+    from disco.core.loop.finish import _EXECUTION_NUDGE_CAP
+
     agent = ScriptedAgent([finish_step()] * 20 + [LLMError("spin-cap reached")])
     loop, _ = build_loop(agent, store=store, mode=OperatingMode.LONG_HORIZON)
     loop._planning_tools = frozenset({"submit_plan"})
@@ -909,15 +909,17 @@ async def test_execution_nudge_without_action_lands_instead_of_livelocking():
 
     state = await store.get_state(CID)
     events = await store.get_events(CID)
-    # Landed cleanly via the actionless valve — NOT spun to the LLMError cap.
+    # Landed cleanly via the W5 execution-nudge cap — NOT spun to the LLMError cap.
+    # W5 changed the exit mechanism: the cap emits FINISHED:execution_nudge_cap
+    # directly (bypassing the noop valve) so the run lands in bounded turns.
     assert state.execution_status == ConversationStatus.FINISHED
     terminal = next(
         e
         for e in reversed(events)
         if isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED
     )
-    assert terminal.detail == "noop_limit"
+    assert terminal.detail == "execution_nudge_cap"
     # The execution gate actually fired (the path under test ran)...
-    assert loop._execution_nudges > 0
+    assert loop._execution_nudges >= _EXECUTION_NUDGE_CAP
     # ...and it terminated promptly — well short of the 20-finish LLMError cap.
     assert agent.calls < 15

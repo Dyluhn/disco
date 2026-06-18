@@ -12,6 +12,9 @@ SCREENSHOT_DIR = os.path.join(WORKSPACE_ROOT, ".pmx/screenshots")
 MAX_CONSOLE = 200
 MAX_TEXT = 4000
 MAX_ELEMENTS = 120
+# W6: click timeout cut from Playwright's 30s default to a few seconds so a
+# div-based dock/button that is briefly un-clickable doesn't stall a full turn.
+CLICK_TIMEOUT_MS = 3000
 
 class BrowserState:
     def __init__(self):
@@ -100,10 +103,25 @@ class BrowserHandler(BaseHTTPRequestHandler):
         elif action == "screenshot":
             pass # Just take a screenshot at the end
         elif action == "click":
+            # W6: click supports index (data-pmx-index attr), CSS selector, or
+            # visible text — whichever the agent provides. Timeout cut to a few
+            # seconds so a momentarily-unclickable element doesn't stall a turn.
             index = params.get("index")
-            if index is None:
-                return {"ok": False, "error": "Index required for click"}
-            page.click(f"[data-pmx-index='{index}']")
+            css_selector = params.get("selector", "")
+            click_text = params.get("click_text", "")
+            if index is not None:
+                page.click(
+                    f"[data-pmx-index='{index}']",
+                    timeout=CLICK_TIMEOUT_MS,
+                )
+            elif css_selector:
+                page.click(css_selector, timeout=CLICK_TIMEOUT_MS)
+            elif click_text:
+                # Playwright text= selector: finds element whose visible text
+                # contains click_text (case-insensitive prefix match by default).
+                page.click(f"text={click_text}", timeout=CLICK_TIMEOUT_MS)
+            else:
+                return {"ok": False, "error": "index, selector, or click_text required for click"}
             page.wait_for_timeout(500)
         elif action == "fill":
             index = params.get("index")
@@ -173,24 +191,52 @@ class BrowserHandler(BaseHTTPRequestHandler):
             return res
 
     def _get_elements(self, page):
-        # JS walker to find interactive elements and index them
+        # W6: broaden the element walker beyond standard interactive elements.
+        # We now also index:
+        #   - <div>, <span>, <li> elements that have onclick handlers (already
+        #     covered by [onclick] but this ensures we capture them with the
+        #     extended selector set)
+        #   - elements whose computed CSS cursor is 'pointer' (the idiomatic
+        #     signal for "this is clickable" in modern SPAs and design-system
+        #     components that use divs as buttons)
+        # The walker assigns data-pmx-index to each found element so the
+        # click action can reach it by index without knowing the CSS path.
         return page.evaluate(f"""
             () => {{
-                const interactiveSelectors = [
+                // Standard interactive elements — always indexed.
+                const standardSelectors = [
                     'a', 'button', 'input', 'select', 'textarea',
                     '[role="button"]', '[onclick]'
                 ];
-                const elements = Array
-                    .from(document.querySelectorAll(interactiveSelectors.join(',')))
-                    .filter(el => {{
-                        const rect = el.getBoundingClientRect();
-                        return rect.width > 0 && rect.height > 0 && 
-                               window.getComputedStyle(el).visibility !== 'hidden' &&
-                               window.getComputedStyle(el).display !== 'none';
-                    }})
-                    .slice(0, {MAX_ELEMENTS});
+                const standardSet = new Set(
+                    Array.from(document.querySelectorAll(standardSelectors.join(',')))
+                );
 
-                return elements.map((el, i) => {{
+                // Extended: block/inline elements with cursor:pointer that aren't
+                // already covered by the standard set.
+                const extendedTags = ['div', 'span', 'li', 'td', 'th', 'label',
+                                      'article', 'section', 'header', 'nav', 'aside'];
+                const pointerCandidates = Array.from(
+                    document.querySelectorAll(extendedTags.join(','))
+                ).filter(el => {{
+                    if (standardSet.has(el)) return false;  // already in standard set
+                    return window.getComputedStyle(el).cursor === 'pointer';
+                }});
+
+                // Union: standard first (preserve ordering), then pointer extras.
+                const allElements = [
+                    ...Array.from(standardSet),
+                    ...pointerCandidates,
+                ]
+                .filter(el => {{
+                    const rect = el.getBoundingClientRect();
+                    return rect.width > 0 && rect.height > 0 &&
+                           window.getComputedStyle(el).visibility !== 'hidden' &&
+                           window.getComputedStyle(el).display !== 'none';
+                }})
+                .slice(0, {MAX_ELEMENTS});
+
+                return allElements.map((el, i) => {{
                     const index = i + 1;
                     el.setAttribute('data-pmx-index', index.toString());
                     const tag = el.tagName.toLowerCase();
@@ -199,7 +245,6 @@ class BrowserHandler(BaseHTTPRequestHandler):
                     if (text.length > 80) text = text.substring(0, 77) + "...";
                     return `${{index}}[:] <${{tag}}>${{text}}</${{tag}}>`;
                 }});
-
             }}
         """)
 

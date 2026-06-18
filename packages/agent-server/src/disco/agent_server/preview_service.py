@@ -84,6 +84,16 @@ class PreviewService:
                 return self._rt.port_upstream(cid, port)
             woke = await self._rt.ensure_preview(cid)
             if woke:
+                # W6: after ensure_preview launches the http.server tmux session,
+                # the process takes a moment to bind the port.  Poll briefly so
+                # expose_port()'s socket-probe finds it before we return None to
+                # the route handler and the user sees a 503.
+                for _ in range(10):
+                    url = self._rt.port_upstream(cid, port)
+                    if url is not None:
+                        return url
+                    await asyncio.sleep(0.3)
+                # Final attempt — best effort; a 503 is still safe.
                 return self._rt.port_upstream(cid, port)
             return None
 
