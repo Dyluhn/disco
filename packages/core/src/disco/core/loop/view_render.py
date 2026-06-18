@@ -29,7 +29,9 @@ from .dedup import (
     _F8_PREFIX_CHARS,
     _F8_TRUNCATION_MARKER_TEMPLATE,
     _f8_confirmed_file_writes,
+    collapse_superseded_reads,
 )
+from .file_state import FileStateTracker, file_state_notice
 from .messages import _workspace_paths_from_events
 
 if TYPE_CHECKING:
@@ -58,7 +60,13 @@ def overflow_signal(events: list[Event]) -> OverflowSignal:
     return OverflowSignal(difficulty=Difficulty.ROUTINE, consecutive_tool_errors=consecutive)
 
 
-async def workspace_snapshot_message(sbx: Sandbox | None, events: list[Event]) -> LLMMessage | None:
+async def workspace_snapshot_message(
+    sbx: Sandbox | None,
+    events: list[Event],
+    *,
+    tracker: FileStateTracker | None = None,
+    stale: frozenset[str] | None = None,
+) -> LLMMessage | None:
     """Re-derive the CURRENT on-disk content of the working-set files from the
     sandbox each turn and render it as an authoritative, always-fresh message.
 
@@ -78,10 +86,22 @@ async def workspace_snapshot_message(sbx: Sandbox | None, events: list[Event]) -
     condenser (which acts on EVENTS) can never erase it. Returns None if there
     is no sandbox or no tracked files — degrading to prior behavior.
 
+    W2 — stale-aware rendering (tracker + stale set):
+      * tracker is None (default): backward-compat mode — all files shown in full
+        every turn (identical to the pre-W2 behavior; used by the loop's own
+        _workspace_snapshot_message delegator and legacy tests).
+      * tracker provided: emit FULL body only for files in
+        (stale ∪ never-shown-in-tracker); collapse every other file to a
+        one-line "✓ {path} — current, shown earlier" pointer. The stale set
+        is pre-computed by ViewBuilder.build (via FileStateTracker.stale_paths)
+        and passed in so the snapshot does not re-read just for staleness.
+        After showing a file in full, the tracker is updated.
+
     Layering-safe: reaches the sandbox via the same duck-typed
     getattr(self.executor, "sandbox", None) seam as _execute_and_observe."""
     if sbx is None:
         return None
+    _stale: frozenset[str] = stale if stale is not None else frozenset()
     mutated, read_only = _workspace_paths_from_events(events)
     ordered = mutated + read_only  # mutated first → never evicted by reads (#1)
     if not ordered:
@@ -184,19 +204,34 @@ async def workspace_snapshot_message(sbx: Sandbox | None, events: list[Event]) -
             omitted_notes.append(f"[binary omitted: {path}]")
             continue
         text = raw.decode("utf-8", "replace")
+        # W2 — pointer for unchanged known files (tracker mode only).
+        # If the tracker is active, this file has been shown in full before,
+        # and its disk SHA has NOT changed since (not in the stale set), emit
+        # a one-line pointer instead of re-dumping the whole body. This is the
+        # primary context-reduction mechanism: a file shown on turn 1 that
+        # hasn't changed costs 1 line on every subsequent turn.
+        if (
+            tracker is not None
+            and tracker.is_known(path)
+            and path not in _stale
+        ):
+            pointer = f"✓ {path} — current, shown earlier"
+            budget -= len(pointer)
+            blocks.append(pointer)
+            shown_count += 1
+            continue
+        # Full body: file is stale, never-shown-in-tracker, or tracker is None
+        # (backward-compat mode). Render head + tail when oversize.
         cap = min(_WS_PER_FILE_CHARS, budget)
         if len(text) > cap:
             head = cap * 3 // 4
             tail = cap - head
             shown = (
                 f"{text[:head]}\n"
-                f"… [{len(text) - head - tail:,} chars truncated — this file is "
-                "too large to show in full. "
-                "Before editing it, call file_read on this path to see the full content. "
-                "For a large file like this, make targeted changes with file_edit "
-                "(content-anchored old→new); "
-                "do NOT call file_write with regenerated content, which risks "
-                "dropping the parts not shown here.] …\n"
+                f"… [{len(text) - head - tail:,} more chars — this file is large. "
+                "To see a region: file_read(path, offset=L, limit=M). "
+                "To change it: file_edit with a content anchor, or "
+                "file_replace_lines on a freshly-read range.] …\n"
                 f"{text[-tail:]}"
             )
         else:
@@ -214,6 +249,10 @@ async def workspace_snapshot_message(sbx: Sandbox | None, events: list[Event]) -
         budget -= len(block)  # charge the WHOLE block incl header/markers (#6)
         blocks.append(block)
         shown_count += 1
+        # W2 — update tracker after showing full body (seq=0: the snapshot
+        # doesn't have its own seq; SHA is the ground truth for staleness).
+        if tracker is not None:
+            tracker.record_agent_io(path, raw, seq=0)
     # E4 (T8) — return None only when there is NOTHING to tell the model.
     # If every file was omitted (binary / gone / permission / spill) we
     # still want to surface the notes so the model knows the working
@@ -319,10 +358,19 @@ class ViewBuilder:
     triggered (§8), gate the C6 tail-recap, apply the F8 shrink (assist), and
     append the always-fresh workspace snapshot. Back-ref collaborator: body is
     byte-identical to the former AgentLoop._materialize_view with self. →
-    self._loop.."""
+    self._loop..
+
+    W2 addition: holds a ``FileStateTracker`` instance across turns to power
+    the stale-aware snapshot (full body only for stale/never-shown files,
+    one-line pointer for unchanged known files) and the stale-change notice."""
 
     def __init__(self, loop: AgentLoop) -> None:
         self._loop = loop
+        # W2 — per-ViewBuilder file-state tracker (mutable, survives across
+        # turns). Starts empty; populated by workspace_snapshot_message as
+        # files are shown in full. No lock needed: build() runs under the
+        # loop's conversation lock.
+        self._file_tracker: FileStateTracker = FileStateTracker()
 
     async def build(self, events: list[Event]) -> View:
         # S3 Microcompact (GAP A): a cheap, no-model pass FIRST — tombstone no-op
@@ -335,13 +383,32 @@ class ViewBuilder:
                 await self._loop._emit(tomb)
             events = await self._loop._events()
         view = View.of(events)
+        # W2 — stale check before snapshot: identify files whose disk SHA
+        # diverged from what the snapshot last showed (externally changed).
+        # This runs first so the snapshot can mark those files as full-body
+        # and the stale notice names exactly those paths. The check is
+        # guarded by sandbox availability and a non-empty working set.
+        sbx = getattr(getattr(self._loop, "executor", None), "sandbox", None)
+        mutated, read_only = _workspace_paths_from_events(events)
+        working_set = mutated + read_only
+        stale: list[str] = []
+        if sbx is not None and working_set:
+            stale = await self._file_tracker.stale_paths(sbx, working_set)
         # A8: build the live workspace snapshot up-front so its size is counted in
         # the condense decision (steelman finding #4 — otherwise the condenser
         # undercounts the true prompt by ~4k tokens every turn, re-opening the same
         # estimation gap the A-S1 fix closed). The snapshot content is disk-derived
         # and independent of condensation, so building it before the condense check
         # and attaching it after is sound.
-        snapshot = await self._loop._workspace_snapshot_message(events)
+        # W2: call the module-level function directly (bypasses the loop's
+        # _workspace_snapshot_message delegator) so we can pass the tracker +
+        # pre-computed stale set. The loop delegator is kept for back-compat tests.
+        snapshot = await workspace_snapshot_message(
+            sbx,
+            events,
+            tracker=self._file_tracker,
+            stale=frozenset(stale),
+        )
         snap_tokens = len(snapshot.content) // 4 if snapshot is not None else 0
         est = signals.estimate_tokens(view) + snap_tokens
         # H3: log the prompt size per step so cost regressions are visible (the 60k
@@ -367,6 +434,13 @@ class ViewBuilder:
         # is appended AFTER the gate regardless of the gate's verdict
         # (it's authoritative on-disk content the model needs).
         view = self._loop._gate_recitation(view, events)
+        # W2 — collapse superseded reads (ALL tiers, NOT assist-gated).
+        # Rewrite every earlier file_read tool-result for a path to a short
+        # "[superseded...]" stub; keep only the most-recent result in full.
+        # This is a pure render-time compaction — the event log is unchanged.
+        view = view.model_copy(
+            update={"messages": collapse_superseded_reads(view.messages, events)}
+        )
         # F8 — GATED mid-turn arg truncation (assist-tier context-window
         # reclaim). When assist is ON, replace the long `content` argument
         # in any past assistant message whose `file_write` tool call was
@@ -375,20 +449,30 @@ class ViewBuilder:
         # `file_read <path>` recovers it. Render-time only: the persisted
         # event log is unchanged. Assist OFF (the capable-model default)
         # → no-op; the rendered messages are byte-identical to today.
-        # Runs AFTER the snapshot append so the snapshot (the
-        # authoritative current state) is never shrunk, and so any
-        # older assistant message in the history has the F8 transform
-        # applied to it on every step.
+        # Runs AFTER the collapse so the F8 marker is applied to history
+        # and after the snapshot append so the snapshot (authoritative
+        # current state) is never shrunk.
         if self._loop._assist:
             view = view.model_copy(
                 update={
                     "messages": self._loop._f8_shrink_file_write_args(view.messages, events),
                 }
             )
+        # W2 — assemble trailing context: stale notice (if any) + snapshot.
+        # Stale notice goes BEFORE the snapshot so the model reads "these
+        # files changed" immediately before seeing the authoritative content.
+        # Both are appended AFTER all history transforms (F8, collapse) so
+        # they are never accidentally shrunk or collapsed.
+        extra: list[LLMMessage] = []
+        stale_msg = file_state_notice(stale)
+        if stale_msg is not None:
+            extra.append(stale_msg)
         if snapshot is not None:
             _LOG.info(
                 "A8 workspace snapshot injected: %d chars across the working set",
                 len(snapshot.content),
             )
-            view = view.model_copy(update={"messages": [*view.messages, snapshot]})
+            extra.append(snapshot)
+        if extra:
+            view = view.model_copy(update={"messages": [*view.messages, *extra]})
         return view

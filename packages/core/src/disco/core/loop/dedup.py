@@ -23,7 +23,7 @@ engine import (no cycle).
 
 from __future__ import annotations
 
-from ..events import ActionEvent, AgentErrorEvent, Event, ObservationEvent
+from ..events import ActionEvent, AgentErrorEvent, Event, LLMMessage, ObservationEvent
 
 # A8 (file-state survival): single-file tools whose `path` arg names a file the
 # agent has touched — the working set re-read from disk each turn by
@@ -268,6 +268,100 @@ def _f9_path_was_mutated_after(events: list[Event], path: str, after_seq: int) -
         if isinstance(ep, str) and ep == path:
             return True
     return False
+
+
+# ---------------------------------------------------------------------------
+# W2 — RENDER-TIME history body-collapse for ALL tiers (not assist-gated).
+#
+# Every earlier file_read result for a path is replaced with a short
+# "[superseded...]" notice when a LATER result for the same path exists in
+# the prompt. This eliminates the bulk of repeated file_read context (e.g.
+# the same file read 5× across history → 4 pages replaced by 4 one-liners).
+# The model sees only the final current version, which is what matters.
+#
+# NOT assist-gated: unlike F9 (execution-time dedup), this is purely a
+# render-time compaction that never changes observable behavior — the model
+# always sees at least one full copy of each file_read result. Applying it
+# unconditionally on all tiers reduces context bloat for every model.
+#
+# Keep F9's EXECUTION-TIME short-circuit assist-gated (it changes which
+# tool calls actually execute; changing that on capable models would hide
+# information). This W2 collapse is render-only and always safe.
+# ---------------------------------------------------------------------------
+
+_SUPERSEDED_READ_NOTICE = (
+    "[superseded file_read of {path} — current content shown later in this prompt]"
+)
+
+
+def collapse_superseded_reads(
+    messages: list[LLMMessage], events: list[Event]
+) -> list[LLMMessage]:
+    """W2 RENDER-TIME transform — NOT assist-gated.
+
+    For every file_read path in the prompt history, the LATEST tool-result
+    message is kept in full; every EARLIER tool-result for the same path is
+    replaced with a ``_SUPERSEDED_READ_NOTICE`` stub.
+
+    Effect: eliminates repeated-read context (the same file read 5× across
+    history → 4 full pages replaced by 4 one-liners each). The model sees
+    the final current version and can identify that earlier copies existed.
+
+    Does NOT collapse:
+      * The MOST RECENT tool-result for each path (the current authoritative
+        copy — it must stay readable).
+      * Tool results that do not correspond to a file_read ActionEvent
+        (other tool names, or results with no matching action in events).
+      * Non-tool-result messages (assistant, user, system).
+
+    Returns a new list; input is not mutated.
+    """
+    # Build call_id → path for file_read actions from the event log.
+    # _WORKSPACE_READ_TOOLS = frozenset({"file_read"}) — use the single
+    # source of truth from this module rather than a new frozenset.
+    file_read_calls: dict[str, str] = {}  # call_id → path
+    for e in events:
+        if (
+            isinstance(e, ActionEvent)
+            and e.tool_call is not None
+            and e.tool_call.tool_name in _WORKSPACE_READ_TOOLS
+        ):
+            p = e.tool_call.arguments.get("path")
+            if isinstance(p, str) and p:
+                file_read_calls[e.tool_call.call_id] = p
+
+    if not file_read_calls:
+        return messages
+
+    # Forward scan: for each path, record the index of the LAST tool-result
+    # message whose call_id maps to a file_read of that path. This is the
+    # one we must keep in full.
+    last_idx: dict[str, int] = {}  # path → index of its latest tool-result
+    for i, msg in enumerate(messages):
+        if msg.role == "tool" and msg.tool_call_id in file_read_calls:
+            path = file_read_calls[msg.tool_call_id]
+            last_idx[path] = i
+
+    if not last_idx:
+        return messages
+
+    # Build the output list: replace any non-last file_read result.
+    out: list[LLMMessage] = []
+    for i, msg in enumerate(messages):
+        if msg.role == "tool" and msg.tool_call_id in file_read_calls:
+            path = file_read_calls[msg.tool_call_id]
+            if last_idx.get(path) != i:
+                # Earlier result for this path → replace with a stub.
+                out.append(
+                    msg.model_copy(
+                        update={
+                            "content": _SUPERSEDED_READ_NOTICE.format(path=path)
+                        }
+                    )
+                )
+                continue
+        out.append(msg)
+    return out
 
 
 def _f9_dedupable_read(
