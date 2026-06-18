@@ -3,6 +3,7 @@ import { Search, Plus, Clock, FolderGit2, Settings, Moon, Sun } from "lucide-rea
 import { useEffect, useMemo, useState, useCallback, type ComponentType } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTheme } from "@/lib/useTheme";
+import { useMode } from "@/shell/mode";
 import { cn } from "@/lib/cn";
 
 interface CommandItem {
@@ -18,9 +19,12 @@ export function CommandPalette() {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const navigate = useNavigate();
   const { theme, toggle: toggleTheme } = useTheme();
+  const { setMode } = useMode();
 
   const commands: CommandItem[] = useMemo(() => [
-    { id: "new", label: "New build", icon: Plus, action: () => navigate("/") },
+    // "New" resets the surface to the default landing mode (Search) before
+    // navigating home, so it doesn't pin the user to their last surface (e.g. Build).
+    { id: "new", label: "New", icon: Plus, action: () => { setMode("search"); navigate("/"); } },
     { id: "history", label: "History", icon: Clock, action: () => navigate("/history") },
     { id: "projects", label: "Projects", icon: FolderGit2, action: () => navigate("/projects") },
     { id: "settings", label: "Settings", icon: Settings, action: () => navigate("/settings") },
@@ -30,7 +34,7 @@ export function CommandPalette() {
       icon: theme === "dark" ? Sun : Moon,
       action: toggleTheme,
     },
-  ], [navigate, theme, toggleTheme]);
+  ], [navigate, theme, toggleTheme, setMode]);
 
   const filteredCommands = useMemo(() => {
     return commands.filter(c => c.label.toLowerCase().includes(query.toLowerCase()));
