@@ -174,6 +174,25 @@ class ExtractionSettings(BaseModel):
     api_key_env: str = ""  # secrets key name for firecrawl (never the key itself)
 
 
+class ImageGenSettings(BaseModel):
+    """[settings] Image generation provider. The THREE tiers of the universal
+    design (same pattern as TTS / Search / Extraction):
+      (a) BUNDLED `procedural` — in-process Pillow-based deterministic procedural
+          patterns (keyless, no network, no model download). The FIRST-RUN DEFAULT
+          so image-gen works out of the box with zero config.
+      (b) self-host `comfyui` — a self-hosted ComfyUI graph API via `base_url`,
+          keyless (assumes local/network-accessible). Uses the /history poll pattern.
+      (c) paid `openai` — an OpenAI-compatible `/v1/images/generations` endpoint
+          (`base_url` + `api_key_env` naming the secret/env var, never the key
+          itself), e.g. DALL-E 3.
+    The provider is persisted; the agent-server honors it on the next image-gen call.
+    This is NOT an LLM-router role assignment."""
+
+    provider: Literal["procedural", "comfyui", "openai"] = "procedural"
+    base_url: str = ""  # for comfyui (self-host) / openai-compatible endpoint; empty → default
+    api_key_env: str = ""  # secrets key name for openai (never the key itself)
+
+
 class McpSettings(BaseModel):
     """[settings] MCP (Model Context Protocol) client settings — RP-05.
     The explicit McpServerConfig typed dict lives in tools/mcp; this is the
@@ -199,6 +218,9 @@ class RouterConfig(BaseModel):
     # install works with no keys; upgradeable to self-host or paid in Settings.
     search: SearchSettings = Field(default_factory=SearchSettings)
     extraction: ExtractionSettings = Field(default_factory=ExtractionSettings)
+    # image generation: bundled procedural (keyless) by default; upgradeable to
+    # self-host ComfyUI or paid OpenAI-compatible endpoint via Settings.
+    image_gen: ImageGenSettings = Field(default_factory=ImageGenSettings)
     # MCP (Model Context Protocol) — external tool servers (RP-05).
     # Off by default; the pool is built at agent-server start when enabled.
     mcp: McpSettings = Field(default_factory=McpSettings)

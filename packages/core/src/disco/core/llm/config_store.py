@@ -24,6 +24,7 @@ from ..env import disco_env
 from .config import (
     EncodersSettings,
     ExtractionSettings,
+    ImageGenSettings,
     ModelEntry,
     ProjectStorageSettings,
     RouterConfig,
@@ -112,6 +113,14 @@ class ConfigStore:
         """Persist the audio-overview TTS settings (toggle, bundled-vs-remote, voices).
         The agent-server reloads per-request; disabling it also frees the model."""
         return self.save(self.load().model_copy(update={"tts": tts}))
+
+    def save_image_gen(self, image_gen: ImageGenSettings) -> RouterConfig:
+        """Persist the image generation provider (procedural/comfyui/openai). The
+        agent-server reloads per-request; a change takes effect on the NEXT image-gen.
+        When the provider is bundled (procedural), base_url is cleared."""
+        if image_gen.provider == "procedural":
+            image_gen = image_gen.model_copy(update={"base_url": ""})
+        return self.save(self.load().model_copy(update={"image_gen": image_gen}))
 
     def save_search(self, search: SearchSettings) -> RouterConfig:
         """Persist the web-discovery provider (ddgs/searxng/tavily) over the config.

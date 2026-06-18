@@ -13,6 +13,14 @@ tiers; the live `diffusers`+`torch` wire is **deferred** (neither is installed
 in this environment; importing them would force a multi-GB model download at
 tool-import time and break the package's headless build).
 
+The system also supports two additional backends configured via Settings:
+- `_OpenAIImageBackend`: OpenAI-compatible /v1/images/generations API (paid)
+- `_ComfyUIBackend`: Self-hosted ComfyUI graph API (self-hosted, keyless)
+
+The `select_image_backend()` factory reads from ConfigStore and chooses the
+appropriate backend based on the saved provider setting. Falls back to procedural
+when no valid provider is configured.
+
 Why a procedural backend is honest for a keyless default
 ---------------------------------------------------------
 The point of a "keyless" tier is to ship SOMETHING that produces a valid
@@ -49,6 +57,12 @@ No bytes in text context
 1024 bytes to image.png, 64x64 PNG"). The actual image bytes live ONLY in the
 sandbox filesystem and are referenced by the artifact path. The model never
 sees the raw bytes — only metadata (size, dimensions, format, prompt, seed).
+
+Secret handling
+---------------
+The OpenAI-compatible backend fetches the API key from the encrypted secret
+store via the api_key_env name. Keys are NEVER logged or echoed — only the
+presence/absence of the key is surfaced in error messages.
 """
 
 from __future__ import annotations
@@ -58,7 +72,11 @@ import io
 import os
 from typing import Protocol
 
+import httpx
 from pydantic import BaseModel, Field
+
+from disco.core.llm.config_store import ConfigStore
+from disco.core.llm.secrets import SecretStore
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 
@@ -248,6 +266,262 @@ class _PILProceduralBackend:
         buf = io.BytesIO()
         img.save(buf, format=out_fmt)
         return buf.getvalue()
+
+
+class _OpenAIImageBackend:
+    """OpenAI-compatible /v1/images/generations API backend.
+
+    Connects to any OpenAI-compatible endpoint (OpenAI, Azure OpenAI,
+    local LLM servers with vision support, etc.). Uses the `api_key_env`
+    to look up the secret from the encrypted store. Never logs or echoes
+    the key — only presence/absence is surfaced in error messages.
+
+    This is a PAID backend: it requires an API key to be configured via
+    Settings. Without a key, it falls back to procedural.
+    """
+
+    name = "openai-compatible"
+    is_remote = True
+
+    def __init__(self, base_url: str, api_key: str | None) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._api_key = api_key
+
+    def generate(
+        self,
+        *,
+        prompt: str,
+        width: int,
+        height: int,
+        seed: int,
+        fmt: str,
+    ) -> bytes:
+        # Map our format to the API's response_format
+        # Both PNG and JPEG use b64_json for direct byte return
+        response_format = "b64_json"
+
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+
+        payload = {
+            "prompt": prompt,
+            "n": 1,
+            "size": f"{width}x{height}",
+            "response_format": response_format,
+        }
+
+        with httpx.Client(timeout=60.0) as client:
+            response = client.post(
+                f"{self._base_url}/v1/images/generations",
+                json=payload,
+                headers=headers,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        # The response is {"data": [{"b64_json": "...", ...}]}
+        b64_data = data["data"][0].get("b64_json")
+        if b64_data:
+            import base64
+
+            return base64.b64decode(b64_data)
+
+        # Fallback: try URL format
+        image_url = data["data"][0].get("url")
+        if image_url:
+            # Fetch the image
+            img_response = client.get(image_url)
+            img_response.raise_for_status()
+            return img_response.content
+
+        raise ValueError("OpenAI images API returned no image data")
+
+
+class _ComfyUIBackend:
+    """Self-hosted ComfyUI graph API backend.
+
+    Connects to a local/network ComfyUI instance via its REST API.
+    Uses the /prompt endpoint to queue a generation and polls /history
+    until the image is ready, then fetches it.
+
+    This is a SELF-HOSTED backend: it's keyless (assumes local/network
+    access) but requires a ComfyUI instance to be running.
+    """
+
+    name = "comfyui"
+    is_remote = True
+
+    def __init__(self, base_url: str) -> None:
+        self._base_url = base_url.rstrip("/")
+
+    def generate(
+        self,
+        *,
+        prompt: str,
+        width: int,
+        height: int,
+        seed: int,
+        fmt: str,
+    ) -> bytes:
+        # Build a minimal ComfyUI workflow for text-to-image
+        # This is a basic implementation - real workflows may be more complex
+        workflow = {
+            "3": {
+                "inputs": {
+                    "text": prompt,
+                    "clip": ["4", 0],
+                },
+                "class_type": "CLIPTextEncode",
+                "_meta": {"title": "CLIP Text Encode"},
+            },
+            "4": {
+                "inputs": {
+                    "clip_name": "t5xxl_fp8_e4m3fn.safetensors",
+                },
+                "class_type": "CLIPLoader",
+                "_meta": {"title": "CLIP Loader"},
+            },
+            "5": {
+                "inputs": {
+                    "seed": seed,
+                    "steps": 20,
+                    "cfg": 8.0,
+                    "sampler_name": "euler",
+                    "scheduler": "normal",
+                    "positive": ["3", 0],
+                    "negative": ["6", 0],
+                    "model": ["7", 0],
+                    "latent_image": ["8", 0],
+                },
+                "class_type": "KSampler",
+                "_meta": {"title": "KSampler"},
+            },
+            "6": {
+                "inputs": {
+                    "text": "",
+                    "clip": ["4", 0],
+                },
+                "class_type": "CLIPTextEncode",
+                "_meta": {"title": "CLIP Text Encode"},
+            },
+            "7": {
+                "inputs": {
+                    "model_name": "flux1-dev.safetensors",
+                },
+                "class_type": "CheckpointLoaderSimple",
+                "_meta": {"title": "Load Checkpoint"},
+            },
+            "8": {
+                "inputs": {
+                    "width": width,
+                    "height": height,
+                    "batch_size": 1,
+                },
+                "class_type": "EmptyLatentImage",
+                "_meta": {"title": "Empty Latent Image"},
+            },
+            "9": {
+                "inputs": {
+                    "samples": ["5", 0],
+                    "filename_prefix": "disco-image",
+                },
+                "class_type": "SaveImage",
+                "_meta": {"title": "Save Image"},
+            },
+        }
+
+        with httpx.Client(timeout=120.0) as client:
+            # Submit the prompt
+            prompt_response = client.post(
+                f"{self._base_url}/prompt",
+                json={"prompt": workflow},
+            )
+            prompt_response.raise_for_status()
+            prompt_data = prompt_response.json()
+            prompt_id = prompt_data["prompt_id"]
+
+            # Poll for completion
+            import time
+
+            for _ in range(120):  # 2 minutes max
+                time.sleep(1)
+                history_response = client.get(f"{self._base_url}/history/{prompt_id}")
+                history_response.raise_for_status()
+                history = history_response.json()
+
+                if prompt_id in history:
+                    # Check if outputs exist
+                    outputs = history[prompt_id].get("outputs", {})
+                    for node_id, node_output in outputs.items():
+                        if "images" in node_output:
+                            images = node_output["images"]
+                            if images:
+                                image_info = images[0]
+                                # Fetch the actual image
+                                img_response = client.get(
+                                    f"{self._base_url}/view",
+                                    params={
+                                        "filename": image_info["filename"],
+                                        "subfolder": image_info["subfolder"],
+                                        "type": image_info["type"],
+                                    },
+                                )
+                                img_response.raise_for_status()
+                                return img_response.content
+
+                    # Generation completed but no images yet - wait a bit more
+                    if history[prompt_id].get("status"):
+                        status = history[prompt_id]["status"]
+                        if status.get("completed"):
+                            break
+
+            raise TimeoutError("ComfyUI generation timed out")
+
+
+def select_image_backend() -> ImageBackend:
+    """Factory function to select the image generation backend based on settings.
+
+    Reads the provider configuration from ConfigStore and returns the appropriate
+    backend. Falls back to the procedural backend when:
+    - No provider is configured (first run)
+    - The configured provider requires a key but none is available
+    - The configured provider is unknown
+
+    Returns a keyless local backend by default so image-gen works out of the box.
+    """
+    config = ConfigStore().load()
+    settings = config.image_gen
+    provider = settings.provider
+
+    # If procedural (default), return the bundled keyless backend
+    if provider == "procedural":
+        return _PILProceduralBackend()
+
+    # For openai, we need a key
+    if provider == "openai":
+        base_url = settings.base_url or "https://api.openai.com/v1"
+        api_key_env = settings.api_key_env
+
+        # Look up the secret
+        if api_key_env:
+            secrets = SecretStore()
+            api_key = secrets.get_secret(api_key_env)
+            if api_key:
+                return _OpenAIImageBackend(base_url, api_key)
+        # No key available - fall back to procedural
+        return _PILProceduralBackend()
+
+    # For comfyui, we need a base_url
+    if provider == "comfyui":
+        base_url = settings.base_url
+        if base_url:
+            return _ComfyUIBackend(base_url)
+        # No URL configured - fall back to procedural
+        return _PILProceduralBackend()
+
+    # Unknown provider - fall back to procedural
+    return _PILProceduralBackend()
 
 
 # ---- tool implementation ----------------------------------------------------
