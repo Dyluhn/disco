@@ -17,6 +17,9 @@ dependencies = [
     "jupyter_client",
     "websockets",
     "openpyxl>=3.1",
+    # C3: native editable PPTX renderer (real text boxes, NOT image-per-slide).
+    # BSD-3-Clause; no transitive non-permissive deps.
+    "python-pptx>=1.0.2",
 ]
 
 [project.optional-dependencies]
