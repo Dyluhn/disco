@@ -347,3 +347,50 @@ all touch `packages/core` — keep them in **separate worktrees** (the
 - B4: container build → zero false C18 advisories.
 - B5: completed build lands FINISHED, not PAUSED.
 - B3/B7: Firefox screenshots (UI) + a real broken-page observation (browser).
+
+---
+
+## §6 — RESULTS (2026-06-18, executed)
+
+All five fixes built in isolated worktrees, merged to `build-surface-recovery-ux`,
+**all four fitness gates green from the main checkout** (basedpyright 0, lint-imports
+2/0, arch-budget OK, diagram fresh), Python unit suite EXIT 0, frontend tsc 0 +
+vitest 431/431.
+
+Commits: `06ca387` B5 · `24db311` B4 · `0e5e1cb` B2+B6 · `09d99e1` B3 · `db1d793` B7
+· merges `0983840…1abbf08` · `18b6505` live acceptance harness.
+
+**Live acceptance — `scripts/verify_replan_acceptance.py`, real gpt-oss-120b +
+real local container, PASS ×4:**
+- **B4 PASS** — a real container build wrote multiple files; **zero** false
+  "file-missing"/C18-not-met advisories (the bug only manifests on the container
+  backend, which unit tests fake — so this is the load-bearing proof).
+- **B5 PASS** — both phases landed `FINISHED · completed_via_notify` (model signalled
+  done via notify, no `finish()`); no PAUSED.
+- **B6 PASS** — the re-plan (via `request_plan`) re-entered PLANNING and produced a
+  `revision=2` PlanEvent.
+- **B2 PASS** — that plan was emitted and gated for approval; execution writes
+  happened only AFTER approval — i.e. a plan arrives (no infinite spinner), no
+  free-build.
+
+B1 verified by Dylan earlier ("exports work").
+
+**Still requiring live UI visual evidence (mandatory per CLAUDE.md, deferred to a
+running dev server):**
+- B3 — Firefox screenshot: New-from-build lands on the search surface.
+- B7 — a real broken-page browser observation showing the new stack/source-line/
+  `NETWORK FAIL` detail. (Unit-proven in `test_browser_daemon.py`; live capture pending.)
+
+**Adjacent finding (NOT one of the 7 — flagged for follow-up): free-pool driver
+flakiness.** `disco-config.json` sets the driver to `or-gpt-oss-120b-free`. The live
+acceptance initially failed with *"No cookie auth credentials found"* on EVERY model
+(incl. Anthropic-direct) — OpenRouter's free pool routes `:free` tool-calling
+requests to the **Chutes** provider, which rejects API-key auth (it wants a browser
+cookie). The driver requeries 2× then ERRORs. In production this would surface to a
+user as a hang/error on the build/agent surface, intermittently. Recommend pinning a
+non-free driver (or OpenRouter `provider` routing that excludes cookie-only
+providers) for the build surface. The acceptance works around it via `DISCO_CONFIG`
+→ a paid `openai/gpt-oss-120b` entry. Secondary gotcha found en route: the runtime's
+`_router_now` reloads `disco-config.json` per request, so an in-memory `config=`
+override is ignored — drive model choice via the config file or `set_model_override`,
+not a passed object.
