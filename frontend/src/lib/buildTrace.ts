@@ -55,6 +55,9 @@ export interface ActivityItem {
       slide_count?: number;
       slides?: { title?: string; content?: string }[];
     };
+    // F2: an agent-emitted file (via serve(kind="files")). Downloadable via the
+    // declared-artifact route. Rendered as a first-class download card in the feed.
+    file?: { filename: string; title?: string };
   };
   status: "done" | "running" | "pending" | "failed" | "pending_send";
   attention: boolean; // confidence gradient: risky/novel steps float up, routine recede
@@ -289,6 +292,25 @@ export function deriveActivity(
         status: "done",
         attention: true,
       });
+    } else if (e.kind === "deliverable") {
+      // F2: Agent handed off a file via serve(kind="files"). Render as a
+      // download card in the feed so the user can grab it immediately.
+      // Only render for "files" kind (not "app" which opens a live URL).
+      if (e.artifact_kind === "files") {
+        out.push({
+          id: e.id,
+          kind: "action",
+          label: `Delivered: ${e.title}`,
+          detail: e.path,
+          expandable: {
+            tool_name: "serve",
+            arguments: {},
+            file: { filename: e.path, title: e.title },
+          },
+          status: "done",
+          attention: false,
+        });
+      }
     }
   }
   return out;

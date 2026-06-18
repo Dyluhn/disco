@@ -2,6 +2,8 @@
  * Deliverable handoff — `deriveDeliverable` + the DeliverablePanel. Proves the
  * panel is a real affordance (one wired action, kind-driven) and that it stays
  * hidden until there's an actual thing to hand off (no false affordance).
+ *
+ * F1: tests for per-file artifact route download (not whole-project ZIP).
  */
 
 import { render, screen } from "@testing-library/react";
@@ -64,11 +66,47 @@ describe("DeliverablePanel", () => {
     expect(onOpen).toHaveBeenCalledOnce();
   });
 
-  it("a files deliverable offers Download and calls onDownload", async () => {
+  it("a files deliverable with cid + file path renders direct download anchor", () => {
+    // F1: when cid is provided and it's a file (has extension), render an anchor
+    // to the per-file artifact route, NOT a button calling onDownload
+    render(
+      <DeliverablePanel
+        deliverable={{ id: "d", title: "Sales report", path: "report.pdf", kind: "files" }}
+        cid="conv-123"
+        onOpen={vi.fn()}
+        onDownload={vi.fn()}
+      />,
+    );
+    // Should render an anchor, not a button
+    const anchor = screen.getByRole("link", { name: /download the deliverable/i });
+    expect(anchor).toHaveAttribute(
+      "href",
+      expect.stringContaining("/conversations/conv-123/artifacts/report.pdf"),
+    );
+    expect(anchor).toHaveAttribute("download");
+  });
+
+  it("a files deliverable without cid falls back to onDownload callback", () => {
     const onDownload = vi.fn();
     render(
       <DeliverablePanel
         deliverable={{ id: "d", title: "Sales report", path: "report.pdf", kind: "files" }}
+        onOpen={vi.fn()}
+        onDownload={onDownload}
+      />,
+    );
+    const btn = screen.getByRole("button", { name: /download the deliverable/i });
+    await userEvent.click(btn);
+    expect(onDownload).toHaveBeenCalledOnce();
+  });
+
+  it("a files deliverable with directory path (no extension) falls back to onDownload", () => {
+    // F1: directories don't have extensions, so they can't use the per-file route
+    const onDownload = vi.fn();
+    render(
+      <DeliverablePanel
+        deliverable={{ id: "d", title: "Project files", path: "dist", kind: "files" }}
+        cid="conv-123"
         onOpen={vi.fn()}
         onDownload={onDownload}
       />,

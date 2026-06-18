@@ -221,3 +221,43 @@ describe("WALK-16: deriveFiles — observation and deliverable artifact sources"
     expect(files[0].content).toContain("FizzBuzz");
   });
 });
+
+// ---- F2: deliverable event → activity item conversion -----------------------
+
+describe("F2: deriveActivity — deliverable events become file download cards", () => {
+  it("converts deliverable(kind=files) to activity item with file expandable", () => {
+    const events: AgentEvent[] = [
+      deliverableEvent("d1", "Sales Report", "report.pdf", "files"),
+    ];
+    const items = deriveActivity(events, null, "FINISHED");
+    // Should create an activity item
+    const deliverableItem = items.find((i) => i.id === "d1");
+    expect(deliverableItem).toBeDefined();
+    expect(deliverableItem?.kind).toBe("action");
+    expect(deliverableItem?.label).toBe("Delivered: Sales Report");
+    expect(deliverableItem?.detail).toBe("report.pdf");
+    expect(deliverableItem?.expandable?.file).toEqual({ filename: "report.pdf", title: "Sales Report" });
+    expect(deliverableItem?.status).toBe("done");
+    expect(deliverableItem?.attention).toBe(false);
+  });
+
+  it("skips deliverable(kind=app) from activity feed (opens live URL instead)", () => {
+    const events: AgentEvent[] = [
+      deliverableEvent("d2", "My App", "dist", "app"),
+    ];
+    const items = deriveActivity(events, null, "FINISHED");
+    // App deliverables don't create activity items (they open live URLs)
+    const deliverableItem = items.find((i) => i.id === "d2");
+    expect(deliverableItem).toBeUndefined();
+  });
+
+  it("multiple deliverable events all appear in activity feed", () => {
+    const events: AgentEvent[] = [
+      deliverableEvent("d1", "Report", "report.pdf", "files"),
+      deliverableEvent("d2", "Data", "data.csv", "files"),
+    ];
+    const items = deriveActivity(events, null, "FINISHED");
+    const deliverableItems = items.filter((i) => i.expandable?.file);
+    expect(deliverableItems).toHaveLength(2);
+  });
+});
