@@ -33,6 +33,17 @@ from typing import TYPE_CHECKING, Literal
 from disco.core.brand import resolve_theme
 from disco.core.brand.tokens import Theme
 
+# C8 chart/table layout helpers (must come after core imports; no cycle — these
+# modules don't import _pptx_render).
+from disco.tools.builtin._c8_chart_layouts import (  # noqa: E402
+    ChartSpec,
+    TableSpec,
+    html_chart_content,
+    html_table_content,
+    layout_chart_slide_pptx,
+    layout_table_slide_pptx,
+)
+
 if TYPE_CHECKING:
     from disco.tools.anatomy import ToolContext
 
@@ -53,7 +64,7 @@ from disco.tools.builtin._deck_schema import (
 # imports them) continues to work.  Internally, render_pptx/render_html convert
 # MinimalDeck → AuthoredDeck → Deck via the C1 lowerer.
 
-LayoutHint = Literal["title", "bullets", "section", "image_right"]
+LayoutHint = Literal["title", "bullets", "section", "image_right", "chart", "table"]
 
 
 @dataclass
@@ -65,6 +76,9 @@ class DeckSlide:
     layout: LayoutHint = "bullets"
     image_url: str | None = None
     notes: str | None = None
+    # C8: structured chart/table data — set layout="chart" or layout="table"
+    chart: ChartSpec | None = None
+    table: TableSpec | None = None
 
 
 @dataclass
@@ -484,6 +498,9 @@ _MINIMAL_LAYOUT_FNS = {
     "bullets": _layout_bullets_slide,
     "section": _layout_section_slide,
     "image_right": _layout_image_right_slide,
+    # C8 chart/table layouts
+    "chart": layout_chart_slide_pptx,
+    "table": layout_table_slide_pptx,
 }
 
 
@@ -707,6 +724,29 @@ body{{background:#000;display:flex;align-items:center;justify-content:center;
   margin-bottom:1%;}}
 .slide-section-title{{font-family:var(--display);font-size:4.5vw;
   color:var(--text);line-height:1.1;}}
+/* C8 chart/table slide styles */
+.slide-chart{{flex:1;display:flex;align-items:center;justify-content:center;
+  overflow:hidden;margin-top:1%;}}
+.slide-chart svg{{max-width:100%;max-height:75%;}}
+.chart-table{{font-family:var(--ui);font-size:1.1vw;border-collapse:collapse;
+  width:100%;margin-top:1%;}}
+.chart-table caption{{font-weight:700;margin-bottom:0.4%;color:var(--text);}}
+.chart-table th{{background:var(--accent);color:#fff;padding:0.3em 0.7em;
+  text-align:left;}}
+.chart-table td{{padding:0.25em 0.7em;border-bottom:1px solid var(--hairline);
+  color:var(--text);}}
+.chart-fallback{{font-family:var(--ui);font-size:1.1vw;color:var(--text-muted);
+  margin-top:2%;}}
+.slide-table-wrap{{flex:1;overflow:auto;margin-top:1%;}}
+.slide-table{{width:100%;border-collapse:collapse;font-family:var(--ui);
+  font-size:1.2vw;}}
+.slide-table th{{background:var(--accent);color:#fff;padding:0.4em 0.8em;
+  text-align:left;font-weight:700;}}
+.slide-table td{{padding:0.3em 0.8em;border-bottom:1px solid var(--hairline);
+  color:var(--text);}}
+.slide-table tr:nth-child(even) td{{background:var(--surface-1);}}
+.slide-table-empty{{font-family:var(--ui);font-size:1.2vw;
+  color:var(--text-muted);margin-top:2%;}}
 /* nav controls */
 .nav{{position:fixed;bottom:1%;right:1%;display:flex;gap:.5em;z-index:10;}}
 .nav button{{background:var(--surface-2);border:1px solid var(--hairline);
@@ -919,6 +959,27 @@ def _html_for_slide(slide: DeckSlide, theme: Theme) -> str:
             f'<div class="slide-rule"></div>'
             f'{bullets_html}</div>'
             f'{img_html}</div>'
+        )
+
+    # C8 — chart layout: embed SVG from render_chart_svg (fallback: table)
+    if slide.layout == "chart":
+        if slide.chart is not None:
+            return html_chart_content(slide.title, slide.chart, theme)
+        # chart field missing but layout="chart" — degrade to bullets
+        return (
+            f'<h2 class="slide-heading">{title_esc}</h2>\n'
+            f'<div class="slide-rule"></div>\n'
+            f'<p class="chart-fallback">[chart data unavailable]</p>'
+        )
+
+    # C8 — table layout: native HTML table from TableSpec
+    if slide.layout == "table":
+        if slide.table is not None:
+            return html_table_content(slide.title, slide.table, theme)
+        return (
+            f'<h2 class="slide-heading">{title_esc}</h2>\n'
+            f'<div class="slide-rule"></div>\n'
+            f'<p class="slide-table-empty">[table data unavailable]</p>'
         )
 
     # Default: bullets layout
