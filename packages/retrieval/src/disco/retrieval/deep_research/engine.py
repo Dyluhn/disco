@@ -33,6 +33,12 @@ from .depth import DepthBound, DepthTier, bounds_for
 from .gather import GatherLegContext, SubQuestionResult, gather_for_subquestion
 from .synthesis import coherence_pass, synthesize_section
 
+# Callable types for mid-run steer / inject hooks (D3).
+# Both default to None in every public-API call → the OFF-path is byte-identical
+# to a run without hooks installed.
+PopSteersFn = Callable[[], list[str]] | None
+PopInjectedSourcesFn = Callable[[], list[RetrievalPassage]] | None
+
 # Same EmitFn shape across the submodule. The agent-server installs a callback
 # that takes (event_kind: str, payload: dict) and appends an ActionEvent or
 # ObservationEvent to the conversation log so the UI sees progress live.
@@ -314,6 +320,60 @@ class DeepResearchRun:
             gather_tasks.append((subq, task, subq_id, subq_namespace, leg_context))
         return gather_tasks
 
+    def _start_one_steer_task(
+        self,
+        subq: SubQuestion,
+        source_budget: int,
+        *,
+        emit: EmitFn,
+    ) -> tuple[
+        SubQuestion,
+        asyncio.Task[SubQuestionResult],
+        str,
+        str,
+        GatherLegContext,
+    ]:
+        """Start a single gather task for a mid-run steer sub-question.
+
+        Uses the same leg-construction logic as `_start_gather_tasks` but
+        accepts an explicit `source_budget` so the caller can give the steer
+        leg a proportional fraction of the total budget (rather than the full
+        `max_sources` amount). The semaphore from the parent run is NOT
+        re-installed here — steer legs are created sequentially at a section
+        boundary, never in a burst, so peak-memory contention is the same as
+        a single normal leg."""
+        subq_hash = hashlib.sha256(subq.title.encode()).hexdigest()[:8]
+        subq_namespace = f"{self._namespace}/{subq_hash}"
+        subq_id = f"s{subq_hash}"
+        leg_call_context = CallContext(
+            conversation_id=f"{self._namespace}/{subq_id}",
+        )
+        leg_context = GatherLegContext(
+            subq_id=subq_id,
+            namespace=subq_namespace,
+            call_context=leg_call_context,
+        )
+
+        async def _gather_leg(_subq: SubQuestion, **kw: Any) -> SubQuestionResult:
+            return await gather_for_subquestion(_subq, **kw)
+
+        task = asyncio.create_task(
+            _gather_leg(
+                subq,
+                engine=self._engine,
+                router=self._router,
+                embedder=self._embedder,
+                vector_store=self._vector_store,
+                namespace=subq_namespace,
+                bound=self._bound,
+                emit=emit,
+                remaining_source_budget=source_budget,
+                leg_context=leg_context,
+                recency_window=self._recency_window,
+            )
+        )
+        return (subq, task, subq_id, subq_namespace, leg_context)
+
     async def _drain_and_synthesize(
         self,
         gather_tasks: list[
@@ -331,13 +391,27 @@ class DeepResearchRun:
         bounded_by: str | None,
         should_cancel: Callable[[], bool] | None,
         emit: EmitFn,
-    ) -> tuple[list[SubQuestionResult], str | None]:
+        pop_steers: PopSteersFn = None,
+        pop_injected_sources: PopInjectedSourcesFn = None,
+    ) -> tuple[list[SubQuestionResult], str | None, list[RetrievalPassage]]:
         """RP-04 consumer: drain the gather tasks in order, synthesizing each
         section immediately (a durable checkpoint) before consuming the next.
         Honors Stop (`should_cancel`) and the wall-clock bound at every
         sub-question boundary, cancelling the still-running legs when either
         trips. Appends completed sections to `sections` in place; returns
-        `(results, bounded_by)`."""
+        `(results, bounded_by, injected_passages)`.
+
+        D3 — mid-run steer / inject hooks (both default None → OFF-path is
+        byte-identical to a run without hooks):
+        - `pop_steers`: drained at each boundary; each returned string becomes
+          a new gather leg appended to `gather_tasks` (the index-based while
+          loop naturally picks them up). Emits an observation event so the
+          steer is visible in the activity feed.
+        - `pop_injected_sources`: drained at each boundary; accumulated passages
+          are folded into every subsequent section's candidate set (both the
+          `fallback_passages` path and the vector-store retrieval path when the
+          embedder is available). Returned alongside `results` so `run()` can
+          add them to `carried_passages` for the final report assembly."""
         # 3. Consume results serially (Consumer).
         # LLM work (synthesis) MUST stay a single-depth queue (one at a time).
         # The MERGE point: the leg's `SubQuestionResult` (its independent
@@ -345,8 +419,20 @@ class DeepResearchRun:
         # `ReportSection` is appended to `sections`. No other leg's state
         # touches the leg's accumulated passages / hits / queries — those
         # arrive here as immutable frozen-shape objects only.
+        #
+        # The loop is index-based (not a `for` over the list) so steer hooks
+        # can extend `gather_tasks` in-place and the new entries are consumed
+        # in the same drain pass. When both hooks are None (the OFF-path) the
+        # list is never extended, so the behaviour is byte-identical to the
+        # original `for` loop.
         results: list[SubQuestionResult] = []
-        for _subq, task, subq_id, subq_namespace, leg_context in gather_tasks:
+        _injected_passages: list[RetrievalPassage] = []  # accumulated inject-source passages
+
+        i = 0
+        while i < len(gather_tasks):
+            _subq, task, subq_id, subq_namespace, leg_context = gather_tasks[i]
+            i += 1
+
             if should_cancel is not None and should_cancel():
                 bounded_by = "stopped"
                 for _, t, _, _, _ in gather_tasks:
@@ -360,6 +446,51 @@ class DeepResearchRun:
                         t.cancel()
                     break
 
+            # D3 steer checkpoint — only active when `pop_steers` is installed.
+            # For each returned steer string we spin up a fresh gather leg and
+            # append it to `gather_tasks`; the while-loop drains it naturally.
+            # OFF-path (pop_steers is None): this block is never entered.
+            if pop_steers is not None:
+                steer_budget = max(1, self._bound.max_sources // max(1, len(gather_tasks)))
+                for steer_text in pop_steers():
+                    new_subq = SubQuestion(title=steer_text)
+                    await emit(
+                        "observation",
+                        {
+                            "subquestion": steer_text,
+                            "ok": True,
+                            "detail": (
+                                f"mid-run steer: adding research section '{steer_text}'"
+                            ),
+                        },
+                    )
+                    new_task_tuple = self._start_one_steer_task(
+                        new_subq, steer_budget, emit=emit
+                    )
+                    gather_tasks.append(new_task_tuple)
+
+            # D3 inject-source checkpoint — only active when hook is installed.
+            # Newly-injected passages are accumulated so every subsequent
+            # section can see them. For the embedder path they are upserted
+            # into the current sub-question's namespace so `_retrieve_for_section`
+            # finds them via cosine similarity; InMemoryVectorStore.upsert
+            # deduplicates by passage id, so repeat upserts across sections are
+            # idempotent. OFF-path: block never entered.
+            if pop_injected_sources is not None:
+                new_injected = pop_injected_sources()
+                if new_injected:
+                    _injected_passages.extend(new_injected)
+                    if self._embedder is not None:
+                        try:
+                            vecs = await self._embedder.embed(
+                                [p.text for p in new_injected]
+                            )
+                            await self._vector_store.upsert(
+                                subq_namespace, new_injected, vecs
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass  # fallback_passages path covers it
+
             try:
                 sub_result = await task
             except asyncio.CancelledError:
@@ -368,6 +499,14 @@ class DeepResearchRun:
                 for _, t, _, _, _ in gather_tasks:
                     t.cancel()
                 raise
+
+            # Fold any accumulated injected passages into this section's
+            # candidate set (the fallback_passages path in _retrieve_for_section).
+            # `sub_result` is a mutable dataclass — extending its `passages` list
+            # is safe. This ensures the passages are visible even when the
+            # embedder is unavailable (hermetic tests). OFF-path: no-op.
+            if _injected_passages:
+                sub_result.passages.extend(_injected_passages)
 
             results.append(sub_result)
             if sub_result.bounded_by_rounds and bounded_by is None:
@@ -406,7 +545,7 @@ class DeepResearchRun:
                 "section_done",
                 {"section_id": section.id, "title": section.title, "done": len(sections)},
             )
-        return results, bounded_by
+        return results, bounded_by, _injected_passages
 
     async def run(
         self,
@@ -417,6 +556,8 @@ class DeepResearchRun:
         resume_sections: list[ReportSection] | None = None,
         resume_passages: list[RetrievalPassage] | None = None,
         resume_all_hits: list[Any] | None = None,
+        pop_steers: PopSteersFn = None,
+        pop_injected_sources: PopInjectedSourcesFn = None,
     ) -> ReportFromRun:
         """Execute the run. Returns the assembled report. `emit` is awaited
         between phases so the agent-server can write events to the conversation
@@ -432,7 +573,16 @@ class DeepResearchRun:
         `resume_all_hits`) from a prior stopped run's partial ReportEvent. Their
         sub-questions are skipped — we only gather+synthesize the steps NOT already
         done, then re-run the coherence pass over the full set. This is what makes
-        a resumed Deep Research run continue instead of redoing completed sections."""
+        a resumed Deep Research run continue instead of redoing completed sections.
+
+        D3 mid-run steer / inject:
+        - `pop_steers`: callable that returns any pending steer strings. Called at
+          each section boundary; each string starts a new gather leg. Default None
+          → OFF-path, byte-identical to a run without hooks.
+        - `pop_injected_sources`: callable that returns any pending injected
+          passages (pre-converted from WS frame text). Called at each boundary;
+          passages are folded into subsequent sections' candidate sets. Default
+          None → OFF-path, byte-identical."""
         started = time.monotonic()
         (
             bounded_by,
@@ -450,14 +600,21 @@ class DeepResearchRun:
 
         # ---- per-sub-question: gather → synthesize (a durable checkpoint) ----
         gather_tasks = self._start_gather_tasks(pending, emit=emit)
-        results, bounded_by = await self._drain_and_synthesize(
+        results, bounded_by, injected_passages = await self._drain_and_synthesize(
             gather_tasks,
             sections=sections,
             started=started,
             bounded_by=bounded_by,
             should_cancel=should_cancel,
             emit=emit,
+            pop_steers=pop_steers,
+            pop_injected_sources=pop_injected_sources,
         )
+        # D3: add any injected passages to carried_passages so they participate in
+        # _assemble_report's cited-passage collection (deduped by id there).
+        # OFF-path: injected_passages is always [] when pop_injected_sources is None.
+        if injected_passages:
+            carried_passages = carried_passages + injected_passages
 
         # ---- reduce step: coherence pass produces the executive summary ----
         await emit("phase", {"phase": "coherence"})

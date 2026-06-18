@@ -154,6 +154,24 @@ export interface DeepResearchStream {
   /** Ask a follow-up question on this conversation — sends a steer message
    *  that re-kicks the loop with the report's corpus as grounding. */
   followUp: (question: string) => void;
+  /**
+   * D3 mid-run steer: send a steer string to the running DR engine. The
+   * server routes the `steer` WS frame into the DR queue (not the agent
+   * loop) when a DR run is active; the engine drains it at the next section
+   * boundary and starts a fresh gather leg for the steer topic.
+   *
+   * Only call while `status === "RUNNING"` and the WS is open — the button
+   * is gated in the surface to enforce this.
+   */
+  steer: (text: string) => void;
+  /**
+   * D3 inject-source: fold a plaintext snippet into the DR run's corpus.
+   * The server converts the text to a Passage and makes it available to
+   * subsequent section synthesis. URL extraction is a follow-up (v1: text only).
+   *
+   * Only call while `status === "RUNNING"`.
+   */
+  injectSource: (text: string) => void;
 }
 
 export function useDeepResearchStream(
@@ -197,6 +215,21 @@ export function useDeepResearchStream(
   const followUp = (question: string) => {
     handle.current?.send({ type: "send_message", content: question });
   };
+  // D3: mid-run steer — sends a `steer` frame while a DR run is active.
+  // The server routes it into the DR queue (not the agent loop) and the engine
+  // starts a new gather leg for the steer topic at the next section boundary.
+  // Only functional while status === "RUNNING"; gated in the surface.
+  const steer = (text: string) => {
+    const trimmed = text.trim();
+    if (trimmed) handle.current?.send({ type: "steer", steer_text: trimmed });
+  };
+  // D3: inject-source — sends a plaintext snippet into the DR corpus.
+  // v1: text only; URL extraction is a follow-up.
+  const injectSource = (text: string) => {
+    const trimmed = text.trim();
+    if (trimmed)
+      handle.current?.send({ type: "inject_source", inject_source_text: trimmed });
+  };
 
   const plan = useMemo(() => derivePlan(state.events), [state.events]);
   const progress = useMemo(
@@ -234,5 +267,7 @@ export function useDeepResearchStream(
     cancel,
     resume,
     followUp,
+    steer,
+    injectSource,
   };
 }

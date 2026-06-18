@@ -288,7 +288,7 @@ export interface FileStreamFrame {
 
 export type WSClientFrame =
   | { type: "send_message"; content: string }
-  | { type: "steer"; steer_text: string } // the Steering Wheel: redirect without losing context
+  | { type: "steer"; steer_text: string } // redirect a running agent / DR mid-run steer (routes by context)
   | { type: "confirm"; action_id?: string }
   | { type: "reject"; action_id?: string }
   | { type: "approve_plan" } // approve the pending plan → start building
@@ -296,7 +296,10 @@ export type WSClientFrame =
   | { type: "pick_alternative"; option_id: string } // structured recovery: pick a proposed alternative
   | { type: "cancel" }
   | { type: "resume" } // continue a stopped/incomplete run (explicit, never on open)
-  | { type: "ping" };
+  | { type: "ping" }
+  // D3: inject a plaintext snippet into the DR run's corpus mid-run.
+  // Only active while a DR run is in flight (the server routes by cid presence).
+  | { type: "inject_source"; inject_source_text: string };
 
 /** Which isolation tier backs the sandbox — surfaced so the lower-isolation tier is
  * legible at the point of use (the cost-legible picker, applied to isolation). */

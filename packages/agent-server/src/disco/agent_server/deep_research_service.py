@@ -569,6 +569,30 @@ class DeepResearchService:
         # sub-question/section boundary so Stop actually halts the run.
         flag = asyncio.Event()
         self._rt._cancel_flags[conversation_id] = flag
+
+        # D3: initialise per-cid steer/inject queues on the runtime.
+        # The WS handler enqueues into these; pop_* closures drain them at
+        # each section boundary. Queues are removed in `finally` below so the
+        # presence of a key = "a DR run is currently in flight for this cid".
+        self._rt._dr_steer[conversation_id] = []
+        self._rt._dr_injected_sources[conversation_id] = []
+
+        def pop_steers() -> list[str]:
+            """Drain the steer queue (called at each section boundary)."""
+            queue = self._rt._dr_steer.get(conversation_id, [])
+            if not queue:
+                return []
+            steers, queue[:] = queue[:], []
+            return steers
+
+        def pop_injected_sources() -> list[Any]:
+            """Drain the inject-source queue (called at each section boundary)."""
+            queue = self._rt._dr_injected_sources.get(conversation_id, [])
+            if not queue:
+                return []
+            injected, queue[:] = queue[:], []
+            return injected
+
         try:
             result = await run.run(
                 plan_steps,
@@ -577,6 +601,8 @@ class DeepResearchService:
                 resume_sections=resume_sections,
                 resume_passages=resume_passages,
                 resume_all_hits=resume_all_hits,
+                pop_steers=pop_steers,
+                pop_injected_sources=pop_injected_sources,
             )
         except Exception as exc:  # noqa: BLE001 — surface as ErrorEvent
             from disco.core import ErrorEvent
@@ -591,6 +617,10 @@ class DeepResearchService:
             return
         finally:
             self._rt._cancel_flags.pop(conversation_id, None)
+            # D3: remove per-cid queues so the WS handler knows no DR run is
+            # active for this cid (it tests `cid in _dr_steer` for routing).
+            self._rt._dr_steer.pop(conversation_id, None)
+            self._rt._dr_injected_sources.pop(conversation_id, None)
             # Return the run's transient working set (fetch buffers + ONNX batch
             # temporaries, already freed by the time run.run() returned) back to
             # the OS, so a long-lived server doesn't accumulate a permanent RSS

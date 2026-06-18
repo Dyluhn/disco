@@ -32,7 +32,7 @@ async def _handle_frame(
     A message KICKS the loop (Stage 2) so a real answer streams back."""
     if frame.type == "ping":
         await websocket.send_json(WSServerFrame(type="pong").model_dump(mode="json"))
-    elif frame.type in ("send_message", "steer", "confirm", "reject") and (
+    elif frame.type in ("send_message", "steer", "inject_source", "confirm", "reject") and (
         store.conversation_origin(conversation_id) == "imported"
     ):
         # Imported (untrusted, read-only) conversations refuse every revive path —
@@ -50,9 +50,36 @@ async def _handle_frame(
         if runtime is not None:
             runtime.kick(conversation_id)
     elif frame.type == "steer" and frame.steer_text is not None:
-        await store.append(conversation_id, _user_message(frame.steer_text, steer=True))
-        if runtime is not None:
-            runtime.kick(conversation_id)
+        # D3: when a DR run is in flight for this cid, route the steer into the
+        # DR queue instead of kicking the agent loop. The engine drains the queue
+        # at each section boundary → the steer becomes a new gather leg.
+        # OFF-path (no DR run active): falls through to the original agent-loop kick.
+        if runtime is not None and conversation_id in runtime._dr_steer:
+            runtime._dr_steer[conversation_id].append(frame.steer_text)
+        else:
+            await store.append(conversation_id, _user_message(frame.steer_text, steer=True))
+            if runtime is not None:
+                runtime.kick(conversation_id)
+    elif frame.type == "inject_source" and frame.inject_source_text is not None:
+        # D3: inject a plaintext snippet into the DR run's corpus mid-run.
+        # The text is converted immediately to a Passage so the engine's
+        # pop_injected_sources callback can return typed Passage objects.
+        # URL → Passage extraction is a follow-up (async, requires extraction
+        # provider); only plaintext is accepted in v1.
+        if runtime is not None and conversation_id in runtime._dr_injected_sources:
+            import hashlib as _hashlib
+
+            from disco.retrieval.models import Passage as _RetrievalPassage
+
+            text = frame.inject_source_text.strip()
+            passage_id = "injected-" + _hashlib.sha256(text.encode()).hexdigest()[:12]
+            passage = _RetrievalPassage(
+                id=passage_id,
+                text=text,
+                source_url="user-injected",
+                source_title="User-injected source",
+            )
+            runtime._dr_injected_sources[conversation_id].append(passage)
     elif frame.type == "confirm" and runtime is not None:
         # Approve the pending action: execute exactly it, then resume (Build gate).
         await runtime.confirm(conversation_id)
