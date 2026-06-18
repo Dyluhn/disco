@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict
 
+from disco.core.llm import Requirement
+
 from .anatomy import Tool
 
 
@@ -69,6 +71,10 @@ AGENT_TOOLS = frozenset(
         # line-number-targeted edits — the reliable way to edit LARGE files (any model)
         "file_replace_lines",
         "file_insert_lines",
+        # W4 — anchored str-replace for capable models (ANCHORED_EDIT). Callable by
+        # all agents but WITHHELD from advertised_tools for the weak tier; see
+        # agent_scope() below. Capable models get it via model_caps=ANCHORED_EDIT.
+        "file_str_replace",
         "file_list",
         "shell",
         "shell_exec",
@@ -99,9 +105,35 @@ AGENT_TOOLS = frozenset(
 )
 
 
+# W4: tools withheld from the advertised set for weak-tier (non-ANCHORED_EDIT) models.
+# These remain in AGENT_TOOLS (callable by qualified name) but are hidden from
+# available_tools() so the model's context never sees a tool it can't use well.
+_ANCHORED_EDIT_TOOLS: frozenset[str] = frozenset({"file_str_replace"})
+_WEAK_TIER_ADVERTISED: frozenset[str] = AGENT_TOOLS - _ANCHORED_EDIT_TOOLS
+
+
 def research_scope() -> ToolScope:
     return ToolScope(allowed_tools=RESEARCH_TOOLS, preset="research")
 
 
-def agent_scope() -> ToolScope:
-    return ToolScope(allowed_tools=AGENT_TOOLS, preset="agent")
+def agent_scope(
+    *, model_caps: frozenset[Requirement] = frozenset()
+) -> ToolScope:
+    """Return the ToolScope for an agent surface.
+
+    W4 one-policy-point: `file_str_replace` is in `allowed_tools` for all agents
+    (callable by qualified name) but is only ADVERTISED to models that benchmark
+    well on anchored edits (`Requirement.ANCHORED_EDIT`). The weak tier (default)
+    sees only the whole-file + line-number tools and the W3 syntax gate catches
+    any bad writes. Pass `model_caps` from the model's `ModelEntry.capabilities`
+    to opt a capable model in.
+    """
+    if Requirement.ANCHORED_EDIT in model_caps:
+        # Capable tier: all tools advertised (advertised_tools=None = show all allowed).
+        return ToolScope(allowed_tools=AGENT_TOOLS, preset="agent")
+    # Weak/default tier: withhold file_str_replace from advertised set.
+    return ToolScope(
+        allowed_tools=AGENT_TOOLS,
+        advertised_tools=_WEAK_TIER_ADVERTISED,
+        preset="agent",
+    )

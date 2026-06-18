@@ -7,6 +7,7 @@ instance's jailed workspace (the instance rejects path escapes).
 
 from __future__ import annotations
 
+import json
 import re
 
 from pydantic import BaseModel, Field
@@ -103,6 +104,84 @@ def _norm_ws(s: str) -> str:
     constantly. The replacement still uses the caller's `new` verbatim, so the edit's
     own indentation is whatever the model intended."""
     return "\n".join(ln.strip() for ln in s.strip("\n").splitlines())
+
+
+# ---------------------------------------------------------------------------
+# W3 — syntax gate helpers
+# ---------------------------------------------------------------------------
+
+
+def _syntax_errors(path: str, text: str) -> list[str]:
+    """Return error-kind tokens for `text` parsed as `path`'s type.
+
+    Returns one string per distinct error kind (e.g. "SyntaxError",
+    "JSONDecodeError"). Line numbers and messages are deliberately EXCLUDED
+    from the returned strings so the diff-filter (`introduced = post - pre`)
+    is stable across whole-file rewrites: a pre-existing SyntaxError at line
+    5 stays "SyntaxError" regardless of whether the rewrite moves it to line 1.
+    This prevents false positives where a pre-existing messy file is punished
+    every time it is written.
+
+    Supported: .py (compile), .json (json.loads).
+    Unsupported (tree-sitter not installed): .html/.css/.js/.ts/.tsx/.jsx
+    — those return [] so unsupported-format files are never blocked.
+    """
+    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    if ext == "py":
+        try:
+            compile(text, path, "exec")
+        except SyntaxError:
+            return ["SyntaxError"]
+        return []
+    if ext == "json":
+        try:
+            json.loads(text)
+        except json.JSONDecodeError:
+            return ["JSONDecodeError"]
+        return []
+    # tree-sitter unavailable: html/css/js/ts/tsx/jsx/yaml/yml unsupported → []
+    return []
+
+
+async def _gated_write(
+    ctx: "ToolContext",
+    path: str,
+    new_bytes: bytes,
+    old_text: str | None,
+) -> "ToolOutcome | None":
+    """Write new_bytes to path; auto-revert to old_text if new content introduces
+    syntax errors that were not already present (W3 diff-filter).
+
+    Returns a failure ToolOutcome when new errors are introduced, None otherwise.
+    Callers proceed to their own success outcome when None is returned.
+    The diff-filter compares error-KIND tokens (not messages/line numbers) so
+    pre-existing messy files aren't punished by whole-file rewrites that shift
+    line numbers without changing the nature of the breakage.
+    """
+    assert ctx.sandbox is not None
+    new_text = new_bytes.decode("utf-8", errors="replace")
+    pre = _syntax_errors(path, old_text) if old_text is not None else []
+    post = _syntax_errors(path, new_text)
+    introduced = [e for e in post if e not in pre]
+    await ctx.sandbox.write_file(path, new_bytes)
+    if not introduced:
+        return None
+    if old_text is not None:
+        # AUTO-REVERT: restore previous content so the workspace stays consistent.
+        await ctx.sandbox.write_file(path, old_text.encode("utf-8"))
+        kept = "it was NOT applied (previous content kept)"
+    else:
+        kept = "it was applied (new file; no prior content to revert)"
+    return ToolOutcome(
+        success=False,
+        error="syntax_gate_reverted",
+        content=(
+            f"Your edit to {path} introduced syntax error(s); {kept}: "
+            f"{'; '.join(introduced)}. "
+            "Fix the snippet and try a DIFFERENT edit. "
+            "DO NOT re-run the same failed edit — it will fail identically."
+        ),
+    )
 
 
 class FileReadArgs(BaseModel):
@@ -232,6 +311,12 @@ class FileWriteTool:
 
     async def run(self, args: FileWriteArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
+        # Read existing content once — used by both the F3 guard and the W3 syntax gate.
+        old_text: str | None = None
+        try:
+            old_text = (await ctx.sandbox.read_file(args.path)).decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001 — absent file is fine, that just means "new"
+            old_text = None
         # F3 — read-before-write guard, assist tier ONLY. Refuse the first write
         # to an EXISTING file the agent has not read this conversation; the
         # 2nd attempt is the model's explicit "yes, full-replace" and is allowed.
@@ -247,12 +332,7 @@ class FileWriteTool:
                 and args.path not in state["written"]
                 and args.path not in state["warned"]
             ):
-                try:
-                    await ctx.sandbox.read_file(args.path)
-                    exists = True
-                except Exception:  # noqa: BLE001 — absent file is fine, that just means "new"
-                    exists = False
-                if exists:
+                if old_text is not None:  # file exists (we read it above)
                     state["warned"].add(args.path)
                     return ToolOutcome(
                         success=False,
@@ -264,8 +344,11 @@ class FileWriteTool:
                         ),
                         error="read_before_write",
                     )
+        # W3 — syntax gate: write new bytes; auto-revert if new content introduces errors.
         raw = args.content.encode("utf-8")
-        await ctx.sandbox.write_file(args.path, raw)
+        gated = await _gated_write(ctx, args.path, raw, old_text)
+        if gated is not None:
+            return gated
         if ctx.assist:
             _conv_state(ctx.conversation_id)["written"].add(args.path)
         return ToolOutcome(
@@ -297,12 +380,19 @@ class FileAppendTool:
 
     async def run(self, args: FileAppendArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
+        old_text: str | None = None
+        existing = b""
         try:
             existing = await ctx.sandbox.read_file(args.path)
+            old_text = existing.decode("utf-8", errors="replace")
         except Exception:  # noqa: BLE001 — absent file → start empty
             existing = b""
+            old_text = None
         combined = existing + args.content.encode("utf-8")
-        await ctx.sandbox.write_file(args.path, combined)
+        # W3 — syntax gate: write combined; auto-revert to old if errors introduced.
+        gated = await _gated_write(ctx, args.path, combined, old_text)
+        if gated is not None:
+            return gated
         return ToolOutcome(
             success=True,
             content=f"appended {len(args.content.encode('utf-8'))} bytes to {args.path}",
@@ -442,7 +532,10 @@ class FileEditTool:
                 ),
                 error="no_op_edit",
             )
-        await ctx.sandbox.write_file(args.path, updated.encode("utf-8"))
+        # W3 — syntax gate: write updated; auto-revert to text if errors introduced.
+        gated = await _gated_write(ctx, args.path, updated.encode("utf-8"), text)
+        if gated is not None:
+            return gated
         return ToolOutcome(
             success=True, content=f"edited {args.path} ({how})", artifacts=[args.path]
         )
@@ -510,7 +603,10 @@ class FileReplaceLinesTool:
         out = "\n".join(result)
         if text.endswith("\n"):
             out += "\n"
-        await ctx.sandbox.write_file(args.path, out.encode("utf-8"))
+        # W3 — syntax gate: write result; auto-revert to text if errors introduced.
+        gated = await _gated_write(ctx, args.path, out.encode("utf-8"), text)
+        if gated is not None:
+            return gated
         replaced = max(0, end - args.start_line + 1)
         return ToolOutcome(
             success=True,
@@ -560,9 +656,113 @@ class FileInsertLinesTool:
         out = "\n".join(result)
         if text.endswith("\n"):
             out += "\n"
-        await ctx.sandbox.write_file(args.path, out.encode("utf-8"))
+        # W3 — syntax gate: write result; auto-revert to text if errors introduced.
+        gated = await _gated_write(ctx, args.path, out.encode("utf-8"), text)
+        if gated is not None:
+            return gated
         return ToolOutcome(
             success=True,
             content=f"inserted {len(ins)} lines after line {args.after_line} of {args.path}",
+            artifacts=[args.path],
+        )
+
+
+# ---------------------------------------------------------------------------
+# W4 — capability-gated anchored str-replace (offered to ANCHORED_EDIT models)
+# ---------------------------------------------------------------------------
+
+
+def _occurrence_lines(text: str, needle: str) -> list[int]:
+    """Return 1-based line numbers of every occurrence of needle in text."""
+    results: list[int] = []
+    start = 0
+    while True:
+        idx = text.find(needle, start)
+        if idx == -1:
+            break
+        results.append(text[:idx].count("\n") + 1)
+        start = idx + max(len(needle), 1)
+    return results
+
+
+class FileStrReplaceArgs(BaseModel):
+    path: str = Field(description="Workspace-relative path to edit.")
+    old_str: str = Field(
+        description="Exact text to find (must appear EXACTLY ONCE in the file)."
+    )
+    new_str: str = Field(description="Replacement text.")
+
+
+class FileStrReplaceTool:
+    """W4 — anchored str-replace for capable models (Requirement.ANCHORED_EDIT).
+
+    Clean-room of OpenHands str_replace: reads the whole file, locates ALL
+    occurrences of old_str, requires exactly one (multiple → error with line
+    numbers; zero → whitespace-strip retry, then 'did not appear verbatim').
+    No forgiving normalization — anchored on live disk text.
+    Registry withholds this tool from the weak tier via advertised_tools.
+    """
+
+    definition = ToolDef(
+        name="file_str_replace",
+        description=(
+            "Replace text appearing EXACTLY ONCE in a workspace file. "
+            "Reads the current file and finds ALL occurrences of `old_str`: "
+            "multiple matches → error with line numbers (make `old_str` unique first); "
+            "zero matches (after a whitespace-strip retry) → 'did not appear verbatim'. "
+            "Anchored on live disk text — no forgiving normalization. "
+            "Offered only to capable models (Requirement.ANCHORED_EDIT); "
+            "weak tier should use file_write or file_edit."
+        ),
+        args_model=FileStrReplaceArgs,
+        needs=_FS,
+        runs_in="sandbox",
+    )
+
+    async def run(self, args: FileStrReplaceArgs, ctx: ToolContext) -> ToolOutcome:
+        assert ctx.sandbox is not None
+        text = (await ctx.sandbox.read_file(args.path)).decode("utf-8", errors="replace")
+
+        count = text.count(args.old_str)
+        if count > 1:
+            lines = _occurrence_lines(text, args.old_str)
+            return ToolOutcome(
+                success=False,
+                error="old_str_not_unique",
+                content=(
+                    f"Multiple occurrences ({count}) of `old_str` found in {args.path} "
+                    f"at lines {lines}. Please ensure it is unique before applying."
+                ),
+            )
+
+        if count == 0:
+            # Whitespace-strip retry: one chance with leading/trailing whitespace removed.
+            stripped = args.old_str.strip()
+            if stripped and stripped != args.old_str:
+                retry_count = text.count(stripped)
+                if retry_count == 1:
+                    new_text = text.replace(stripped, args.new_str, 1)
+                    gated = await _gated_write(ctx, args.path, new_text.encode("utf-8"), text)
+                    if gated is not None:
+                        return gated
+                    return ToolOutcome(
+                        success=True,
+                        content=f"replaced in {args.path} (whitespace-stripped match)",
+                        artifacts=[args.path],
+                    )
+            return ToolOutcome(
+                success=False,
+                error="old_str_not_found",
+                content=f"`old_str` did not appear verbatim in {args.path}.",
+            )
+
+        # Exactly one occurrence — apply and pass through W3 gate.
+        new_text = text.replace(args.old_str, args.new_str, 1)
+        gated = await _gated_write(ctx, args.path, new_text.encode("utf-8"), text)
+        if gated is not None:
+            return gated
+        return ToolOutcome(
+            success=True,
+            content=f"replaced in {args.path}",
             artifacts=[args.path],
         )

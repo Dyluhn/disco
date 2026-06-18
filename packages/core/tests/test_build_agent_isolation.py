@@ -197,6 +197,7 @@ _EXPECTED_AGENT_TOOLS = [
     "file_list",
     "file_read",
     "file_replace_lines",
+    "file_str_replace",  # W4 — anchored str-replace; withheld from weak-tier advertised set
     "file_write",
     "image_generate",
     "plan_step",
