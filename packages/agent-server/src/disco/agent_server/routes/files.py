@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 import posixpath
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from disco.core import (
     ConversationStatus,
@@ -29,6 +29,42 @@ from ._common import (
     _reject_if_imported,
     _sanitize_name,
 )
+
+
+# C5 — Content-Security-Policy applied when ?inline=true. sandbox allow-scripts
+# sandboxes the document but permits slide-navigation JS; default-src 'none' blocks
+# all loads; style-src/img-src/font-src permit inline CSS + same-origin/data assets;
+# frame-ancestors 'self' prevents external clickjacking of the artifact URL.
+_INLINE_CSP = (
+    "sandbox allow-scripts; "
+    "default-src 'none'; "
+    "style-src 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "font-src 'self' data:; "
+    "frame-ancestors 'self'"
+)
+
+
+async def _read_artifact_bytes(
+    runtime: Any, conversation_id: str, norm: str
+) -> bytes | None:
+    """Read a declared artifact's bytes: the live sandbox first, then the host
+    ProjectStore snapshot (so a FINISHED run with a reaped sandbox still serves).
+    Returns None if neither source has it. Caller enforces size + 404."""
+    # 1) live sandbox (a running/suspended-but-live conversation)
+    session = runtime.live_session(conversation_id)
+    if session is not None:
+        with contextlib.suppress(Exception):
+            return await session.read_file(norm)
+    # 2) host ProjectStore snapshot (finished run, sandbox reaped)
+    ps = runtime.project_store()
+    if ps is not None and ps.status() == StorageStatus.OK:
+        with contextlib.suppress(Exception):
+            workspace = ps.path_for(conversation_id).resolve()
+            resolved = (workspace / norm).resolve()
+            if resolved.is_relative_to(workspace) and resolved.is_file():
+                return resolved.read_bytes()
+    return None
 
 
 def make_files_router(
@@ -161,25 +197,6 @@ def make_files_router(
             return JSONResponse({"saved": saved, "rejected": rejected}, status_code=413)
         return JSONResponse({"saved": saved, "rejected": rejected}, status_code=200)
 
-    # C5 — Content-Security-Policy applied when ?inline=true is set.
-    # sandbox allow-scripts: sandboxes the document (like a sandboxed iframe) but
-    # permits JavaScript so brand decks can run slide-navigation scripts.
-    # default-src 'none': blocks all resource loads by default.
-    # style-src 'unsafe-inline': permits inline <style> / style= attributes (brand
-    #   HTML decks use inlined CSS; no external stylesheets needed).
-    # img-src 'self' data:: permits same-origin images and data-URI thumbnails only.
-    # font-src 'self' data:: permits same-origin and data-URI embedded fonts (OFL set).
-    # frame-ancestors 'self': the deck may only be framed by this origin — prevents
-    #   clickjacking from an external page embedding the artifact URL directly.
-    _INLINE_CSP = (
-        "sandbox allow-scripts; "
-        "default-src 'none'; "
-        "style-src 'unsafe-inline'; "
-        "img-src 'self' data:; "
-        "font-src 'self' data:; "
-        "frame-ancestors 'self'"
-    )
-
     @router.get("/conversations/{conversation_id}/artifacts/{path:path}")
     async def artifact_file(
         conversation_id: str,
@@ -214,49 +231,29 @@ def make_files_router(
         if norm not in await _declared_artifacts(store, conversation_id):
             raise HTTPException(status_code=404)
 
-        data: bytes | None = None
-        # 1) live sandbox (a running/suspended-but-live conversation)
-        session = runtime.live_session(conversation_id)
-        if session is not None:
-            with contextlib.suppress(Exception):
-                data = await session.read_file(norm)
-        # 2) host ProjectStore snapshot (finished run, sandbox reaped)
-        if data is None:
-            ps = runtime.project_store()
-            if ps is not None and ps.status() == StorageStatus.OK:
-                with contextlib.suppress(Exception):
-                    workspace = ps.path_for(conversation_id).resolve()
-                    resolved = (workspace / norm).resolve()
-                    if resolved.is_relative_to(workspace) and resolved.is_file():
-                        data = resolved.read_bytes()
+        data = await _read_artifact_bytes(runtime, conversation_id, norm)
         if data is None:
             raise HTTPException(status_code=404)
         if len(data) > 50 * 1024 * 1024:  # 50 MB cap
             raise HTTPException(status_code=404)
 
-        basename = posixpath.basename(norm)
-        if inline:
-            # C5: serve HTML inline so a sandboxed iframe can render the artifact.
-            # No allow-same-origin on the caller's iframe sandbox attr → the framed
-            # page cannot reach this instance's APIs even though it runs scripts.
-            return Response(
-                content=data,
-                media_type=media_type,
-                headers={
-                    "Content-Disposition": f'inline; filename="{basename}"',
-                    "X-Content-Type-Options": "nosniff",
-                    "Content-Security-Policy": _INLINE_CSP,
-                    "Cache-Control": "private, no-store",
-                },
-            )
-        return Response(
-            content=data,
-            media_type=media_type,
-            headers={
-                "Content-Disposition": f'attachment; filename="{basename}"',
-                "X-Content-Type-Options": "nosniff",
-                "Cache-Control": "private, no-store",
-            },
-        )
+        return _artifact_response(data, media_type, posixpath.basename(norm), inline)
 
     return router
+
+
+def _artifact_response(data: bytes, media_type: str, basename: str, inline: bool) -> Response:
+    """Build the artifact download Response. inline=True (C5, .html only) serves
+    with Content-Disposition: inline + a strict CSP so a sandboxed iframe can
+    render it without same-origin; default is an attachment download."""
+    disposition = "inline" if inline else "attachment"
+    headers = {
+        "Content-Disposition": f'{disposition}; filename="{basename}"',
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, no-store",
+    }
+    if inline:
+        # No allow-same-origin on the caller's iframe sandbox attr → the framed
+        # page cannot reach this instance's APIs even though it runs scripts.
+        headers["Content-Security-Policy"] = _INLINE_CSP
+    return Response(content=data, media_type=media_type, headers=headers)

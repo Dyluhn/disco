@@ -30,7 +30,7 @@ ALLOW_CLASSES = {
     ("core/loop/engine.py", "AgentLoop"): 1100,
     # C6 wiring added ~42 LOC (per-conversation _artifact_mode dict + delegators
     # + _compose_build_loop branch) — same irreducible-coordinator rationale.
-    ("agent_server/runtime.py", "ConversationRuntime"): 1300,
+    ("agent_server/runtime.py", "ConversationRuntime"): 1320,  # +C6 artifact_mode +P3 last_model delegators
 }
 ALLOW_FUNCS = {
     ("core/loop/engine.py", "run"): 330,            # the agent-loop dispatcher
