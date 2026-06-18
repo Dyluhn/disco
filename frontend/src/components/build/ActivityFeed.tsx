@@ -18,6 +18,7 @@ import {
   ChevronRight,
   Circle,
   Download,
+  File,
   FileSpreadsheet,
   Loader2,
   MessageSquare,
@@ -131,6 +132,38 @@ export function SlidesDownload({
         <span className="block truncate font-mono text-[0.7rem] text-text-faint">
           {slides.filename}
           {n > 0 ? ` · ${fmt} · ${n} slide${n !== 1 ? "s" : ""}` : ` · ${fmt}`}
+        </span>
+      </span>
+      <Download className="size-3.5 shrink-0 text-text-faint" aria-hidden />
+    </a>
+  );
+}
+
+/** F2: An agent-emitted file (via serve(kind="files")) — a real download via the
+ * declared-artifact route. Renders as a first-class download card in the conversation
+ * feed. Only renders when there's a conversation id (no false affordance). */
+export function FileDownload({
+  file,
+  conversationId,
+}: {
+  file: NonNullable<ActivityItem["expandable"]>["file"];
+  conversationId: string;
+}) {
+  if (!file) return null;
+  const href = `${agentHttpBase()}/conversations/${conversationId}/artifacts/${encodeURI(file.filename)}`;
+  return (
+    <a
+      href={href}
+      download
+      className="mt-hair flex items-center gap-inline rounded-card border border-hairline bg-surface-0 px-inline py-hair transition-colors hover:border-hairline-strong"
+    >
+      <File className="size-4 shrink-0 text-accent" aria-hidden />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-ui text-[0.82rem] text-text">
+          {file.title || file.filename}
+        </span>
+        <span className="block truncate font-mono text-[0.7rem] text-text-faint">
+          {file.filename}
         </span>
       </span>
       <Download className="size-3.5 shrink-0 text-text-faint" aria-hidden />
@@ -344,6 +377,11 @@ export function ActivityFeed({
                   button stays absent (no false affordance). */}
               {item.expandable?.slides && conversationId && (
                 <SlidesDownload slides={item.expandable.slides} conversationId={conversationId} />
+              )}
+              {/* F2: an agent-emitted file (via serve(kind="files")) → an honest
+                  download card in the conversation feed. */}
+              {item.expandable?.file && conversationId && (
+                <FileDownload file={item.expandable.file} conversationId={conversationId} />
               )}
               {/* Expandable raw command + output drill-down. */}
               {item.expandable && <ExpandableDetail item={item} />}

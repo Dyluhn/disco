@@ -370,6 +370,7 @@ export function BuildSurface({
               Open 503s. Only show the panel once the run is truly done. */}
           <DeliverablePanel
             deliverable={b.status === "FINISHED" ? deliverable : null}
+            cid={b.cid}
             onOpen={() =>
               b.cid &&
               window.open(
