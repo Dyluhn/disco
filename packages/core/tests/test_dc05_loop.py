@@ -97,7 +97,10 @@ async def test_actionless_breaker_reset():
 
 @pytest.mark.asyncio
 async def test_actionless_breaker_inert_when_plan_complete():
-    """Breaker must not fire when the plan is already complete."""
+    """Breaker must not PAUSE when the plan is already complete — it lands a
+    clean FINISHED instead. B5: with every plan step marked done, the actionless
+    valve recognizes the build as finished at the cap (the model signaled done
+    via noop turns instead of finish()) and terminates FINISHED."""
     agent = ScriptedAgent([
         action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
         action_step("plan_step", {"index": 1, "state": "done"}),
@@ -119,7 +122,9 @@ async def test_actionless_breaker_inert_when_plan_complete():
     state = await loop.run()
     assert state.execution_status == ConversationStatus.FINISHED
     events = await store.get_events(CID)
-    assert _last_status_detail(events) == "noop_limit"
+    # B5: a complete plan finishes cleanly via the completion path, not the
+    # noop backstop — and NEVER PAUSED/actionless.
+    assert _last_status_detail(events) == "completed_via_notify"
 
 
 # ---- valve taxonomy: partial-plan landings (DEFECT-4) --------------------------
