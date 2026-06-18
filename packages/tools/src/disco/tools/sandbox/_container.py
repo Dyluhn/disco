@@ -39,7 +39,12 @@ _DEFAULT_RELOAD_TIMEOUT_S: float = 0.5
 # PUBLISHED_PORTS is ever reachable, and INTERNAL_PORTS (agent-server plumbing,
 # e.g. the BP-08 kernel gateway) are never handed out as user URLs.
 PREVIEW_PORT = 8000
-USER_PORTS: frozenset[int] = frozenset({8000, 3000, 5173, 8080, 5000, 4321})
+# noVNC websockify port — the WebSocket-to-VNC bridge that the frontend's iframe
+# connects to. VNC itself (port 5901) is loopback-bound inside the sandbox and is
+# NOT in USER_PORTS; only the websockify bridge (NOVNC_PORT) is exposed via the
+# existing per-conversation preview proxy (same auth/jail as the dev-server preview).
+NOVNC_PORT = 6080
+USER_PORTS: frozenset[int] = frozenset({8000, 3000, 5173, 8080, 5000, 4321, NOVNC_PORT})
 INTERNAL_PORTS: frozenset[int] = frozenset({8899})
 PUBLISHED_PORTS: frozenset[int] = USER_PORTS | INTERNAL_PORTS
 

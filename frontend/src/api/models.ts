@@ -4,6 +4,7 @@ import type {
   AssignmentsPatch,
   DataSourcesConfig,
   EncodersConfig,
+  LiveBrowserConfig,
   ModelAssignments,
   ModelInfo,
   ModelUpsert,
@@ -269,4 +270,21 @@ export function openRouterUpsert(m: OpenRouterModel): ModelUpsert {
     price_in_per_m: m.price_in_per_m,
     price_out_per_m: m.price_out_per_m,
   };
+}
+
+// ---- live browser (noVNC toggle) -------------------------------------------
+
+let fixtureLiveBrowser: LiveBrowserConfig = { enabled: false };
+
+export async function getLiveBrowserConfig(): Promise<LiveBrowserConfig> {
+  if (isLive()) return apiGet<LiveBrowserConfig>("/api/live-browser/config");
+  await fixtureDelay();
+  return { ...fixtureLiveBrowser };
+}
+
+export async function updateLiveBrowserConfig(cfg: LiveBrowserConfig): Promise<LiveBrowserConfig> {
+  if (isLive()) return apiSend<LiveBrowserConfig>("PUT", "/api/live-browser/config", cfg);
+  await fixtureDelay();
+  fixtureLiveBrowser = { ...cfg };
+  return { ...fixtureLiveBrowser };
 }

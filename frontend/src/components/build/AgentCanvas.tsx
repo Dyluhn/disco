@@ -14,10 +14,11 @@ import { Download, FileCode2, FileSpreadsheet, FileText, Globe, Package, SquareT
 import { cn } from "@/lib/cn";
 import { deriveFiles, deriveSrcDoc, deriveTerminal, deriveLiveSignal } from "@/lib/buildTrace";
 import type { WorkspaceFile } from "@/lib/buildTrace";
-import { agentHttpBase } from "@/api/client";
+import { agentGet, agentHttpBase } from "@/api/client";
 import { useElementSelect } from "@/hooks/useElementSelect";
 import { SelectionOverlay } from "@/components/build/canvas/SelectionOverlay";
 import { SELECTION_AGENT_SCRIPT } from "@/lib/selectionAgent";
+import { useLiveBrowserConfig } from "@/hooks/useModels";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
 type TabId = "browser" | "artifacts" | "console";
@@ -92,20 +93,102 @@ function BrowserPane({
   const [picked, setPicked] = useState<string | null>(null);
   const hero = picked && shots.includes(picked) ? picked : (shots[shots.length - 1] ?? null);
 
+  // Live browser (noVNC) state
+  const { data: liveBrowserCfg } = useLiveBrowserConfig();
+  const liveBrowserEnabled = liveBrowserCfg?.enabled ?? false;
+  const [liveView, setLiveView] = useState<{ url: string; novnc_path: string } | null>(null);
+  const [liveLoading, setLiveLoading] = useState(false);
+  const [liveError, setLiveError] = useState<string | null>(null);
+
+  const toggleLive = async () => {
+    if (liveView) {
+      setLiveView(null);
+      return;
+    }
+    if (!cid) return;
+    setLiveLoading(true);
+    setLiveError(null);
+    try {
+      const data = await agentGet<{ url: string; novnc_path: string; port: number }>(
+        `/conversations/${encodeURIComponent(cid)}/browser/live-url`,
+      );
+      setLiveView({ url: data.url, novnc_path: data.novnc_path });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Failed to start live view";
+      setLiveError(msg);
+    } finally {
+      setLiveLoading(false);
+    }
+  };
+
   const Header =
-    url || driving ? (
+    url || driving || (liveBrowserEnabled && cid) ? (
       <div className="flex shrink-0 items-center justify-between gap-inline border-b border-hairline px-body py-hair">
         <span className="truncate font-mono text-[0.74rem] text-text-faint" title={url ?? undefined}>
           {url ?? "browser"}
         </span>
-        {driving && (
-          <span className="flex shrink-0 items-center gap-hair font-ui text-[0.72rem] text-accent">
-            <span className="size-1.5 animate-pulse rounded-full bg-accent" aria-hidden />
-            driving…
-          </span>
-        )}
+        <div className="flex shrink-0 items-center gap-inline">
+          {driving && (
+            <span className="flex shrink-0 items-center gap-hair font-ui text-[0.72rem] text-accent">
+              <span className="size-1.5 animate-pulse rounded-full bg-accent" aria-hidden />
+              driving…
+            </span>
+          )}
+          {liveBrowserEnabled && cid && (
+            <button
+              type="button"
+              onClick={toggleLive}
+              disabled={liveLoading}
+              aria-pressed={!!liveView}
+              title={liveView ? "Close live view" : "Open live browser view (noVNC)"}
+              className={cn(
+                "flex shrink-0 items-center gap-hair rounded-control border px-inline py-px font-ui text-[0.72rem] transition-colors",
+                liveView
+                  ? "border-accent/50 bg-accent/10 text-accent"
+                  : "border-hairline text-text-faint hover:border-hairline-strong hover:text-text",
+                liveLoading && "opacity-60",
+              )}
+            >
+              <span
+                className={cn(
+                  "size-1.5 rounded-full",
+                  liveView ? "animate-pulse bg-accent" : "bg-text-faint",
+                )}
+                aria-hidden
+              />
+              {liveLoading ? "Starting…" : "Live"}
+            </button>
+          )}
+        </div>
       </div>
     ) : null;
+
+  // When live view is active, show the noVNC iframe instead of screenshots.
+  if (liveView && cid) {
+    const iframeSrc = `${liveView.url}${liveView.novnc_path}`;
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        {Header}
+        {liveError && (
+          <p className="shrink-0 font-ui text-[0.78rem] text-warn px-body py-hair">
+            Live view unavailable: {liveError}
+          </p>
+        )}
+        <div className="flex min-h-0 flex-1 flex-col">
+          <iframe
+            title="Live browser (noVNC)"
+            src={iframeSrc}
+            // allow-same-origin is intentionally absent — the noVNC iframe must
+            // NOT be able to reach this page's JS context (cross-origin isolation).
+            // allow-scripts is needed for noVNC's WebSocket connection.
+            sandbox="allow-scripts allow-forms"
+            className="h-full w-full border-0"
+            data-testid="novnc-iframe"
+          />
+        </div>
+      </div>
+    );
+  }
 
   // No screenshot we can actually load (none captured, or no cid to fetch against)
   // → an honest empty state, never a broken <img>.
@@ -113,6 +196,11 @@ function BrowserPane({
     return (
       <div className="flex h-full min-h-0 flex-col">
         {Header}
+        {liveError && (
+          <p className="shrink-0 font-ui text-[0.78rem] text-warn px-body py-hair">
+            Live view unavailable: {liveError}
+          </p>
+        )}
         <Empty>
           <p className="text-text-muted">
             When the agent uses a browser, the pages it visits show here — a screenshot for each
@@ -131,6 +219,11 @@ function BrowserPane({
   return (
     <div className="flex h-full min-h-0 flex-col">
       {Header}
+      {liveError && (
+        <p className="shrink-0 font-ui text-[0.78rem] text-warn px-body py-hair">
+          Live view unavailable: {liveError}
+        </p>
+      )}
       <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-[oklch(0.15_0.005_260)] p-inline">
         <WorkspaceImage
           key={heroSrc}

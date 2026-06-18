@@ -177,3 +177,9 @@ export interface AssignmentsPatch {
   default_model?: string;
   roles?: Partial<Record<AssignableRole, string>>;
 }
+
+/** Live browser (noVNC) toggle — wire mirror of LiveBrowserSettings. Off by default.
+ * When enabled, a "Live" toggle appears on the Agent canvas browser pane. */
+export interface LiveBrowserConfig {
+  enabled: boolean;
+}

@@ -204,6 +204,22 @@ class McpSettings(BaseModel):
     max_active_schemas: int = 20  # cap; beyond this, tool_search is exposed
 
 
+class LiveBrowserSettings(BaseModel):
+    """[settings] Live browser view (noVNC via Xvfb + x11vnc + websockify).
+    Off by default — opt-in. When enabled, a 'Live' toggle appears on the
+    Agent canvas browser pane. The VNC stack starts lazily (only when the user
+    opens the live view); idle sandboxes cost ~0. View-only by default.
+    gVisor requires the egress allowlist to admit NOVNC_PORT (deferred to D7
+    egress work). Use local or podman backend. VNC is loopback-bound inside
+    the sandbox (127.0.0.1 only, never network).
+
+    P5 live jail acceptance (loopback-bind, per-conv jail, view-only, idle
+    teardown) is HARDWARE-DEFERRED — VM 201 (the gVisor sandbox host) was
+    destroyed. Verify on a real sandbox backend before shipping to production."""
+
+    enabled: bool = False
+
+
 class RouterConfig(BaseModel):
     models: dict[str, ModelEntry]  # key -> entry (the assignable catalogue)
     # the active sandbox backend + connection (settings-driven; agent-server maps it).
@@ -224,6 +240,10 @@ class RouterConfig(BaseModel):
     # MCP (Model Context Protocol) — external tool servers (RP-05).
     # Off by default; the pool is built at agent-server start when enabled.
     mcp: McpSettings = Field(default_factory=McpSettings)
+    # Live browser (noVNC): off by default. When enabled, a 'Live' toggle
+    # appears on the Agent canvas browser pane (P4). The VNC stack spins up
+    # lazily on first open; idle cost is ~0. gVisor needs D7 egress work.
+    live_browser: LiveBrowserSettings = Field(default_factory=LiveBrowserSettings)
     # DF-08: catalogue key of a vision-capable model to escalate image-bearing
     # requests to when the primary model lacks VISION. None → vision guard stays
     # hard (raise NoEligibleModel). Swappable to any vision model in the catalogue

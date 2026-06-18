@@ -273,3 +273,15 @@ class McpConnectionDTO(BaseModel):
     new_description_hash: str | None = None
     approved_at: str | None = None  # ISO-8601
     enabled: bool | None = None
+
+
+class LiveBrowserConfigDTO(BaseModel):
+    """Live browser (noVNC) toggle — the wire mirror of core's LiveBrowserSettings.
+    Off by default; enabling shows a 'Live' toggle on the Agent canvas browser pane.
+    The Xvfb + x11vnc + websockify stack starts lazily on first click; idle cost ~0.
+    VNC is loopback-bound inside the sandbox. gVisor needs D7 egress allowlist update.
+
+    P5 live jail acceptance is HARDWARE-DEFERRED (sandbox VM destroyed). Verify on
+    a real sandbox backend before shipping to production."""
+
+    enabled: bool = False

@@ -29,6 +29,7 @@ from .config.dtos import (
     DataSourcesConfigDTO,
     EncodersConfigDTO,
     ImageGenConfigDTO,
+    LiveBrowserConfigDTO,
     McpConnectionDTO,
     McpServerApproveDTO,
     McpServerConfigDTO,
@@ -50,6 +51,7 @@ from .config.mappers import (
     _encoders_from,
     _entry_from,
     _image_gen_from,
+    _live_browser_from,
     _mcp_live_status,
     _models_from,
     _projects_from,
@@ -328,6 +330,18 @@ class ConfigState:
             )
         )
         return _data_sources_from(self._store.load())
+
+    # Live browser (noVNC) toggle (persisted; agent-server reads per request) ------
+
+    def live_browser_config(self) -> LiveBrowserConfigDTO:
+        return _live_browser_from(self._store.load())
+
+    def update_live_browser_config(self, dto: LiveBrowserConfigDTO) -> LiveBrowserConfigDTO:
+        """Persist the live-browser toggle. Affects the next /browser/live-url call."""
+        from disco.core.llm.config import LiveBrowserSettings
+
+        self._store.save_live_browser(LiveBrowserSettings(enabled=dto.enabled))
+        return _live_browser_from(self._store.load())
 
     # Build-project storage path (persisted; agent-server reads it per request) ---
 

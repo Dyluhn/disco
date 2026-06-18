@@ -6,6 +6,7 @@ import {
   getAssignments,
   getDataSourcesConfig,
   getEncodersConfig,
+  getLiveBrowserConfig,
   getTtsConfig,
   getOpenRouterKeyStatus,
   getSandboxConfig,
@@ -15,6 +16,7 @@ import {
   updateAssignments,
   updateDataSourcesConfig,
   updateEncodersConfig,
+  updateLiveBrowserConfig,
   updateTtsConfig,
   updateModel,
   updateSandboxConfig,
@@ -23,6 +25,7 @@ import type {
   AssignmentsPatch,
   DataSourcesConfig,
   EncodersConfig,
+  LiveBrowserConfig,
   TtsConfig,
   ModelAssignments,
   ModelInfo,
@@ -186,4 +189,23 @@ export function useClearOpenRouterKey() {
 export function findModel(models: ModelInfo[] | undefined, id: string | null): ModelInfo | null {
   if (!models || !id) return null;
   return models.find((m) => m.id === id) ?? null;
+}
+
+// ---- live browser (noVNC) toggle ------------------------------------------
+
+const LIVE_BROWSER_KEY = ["live-browser-config"] as const;
+
+export function useLiveBrowserConfig() {
+  return useQuery<LiveBrowserConfig>({
+    queryKey: LIVE_BROWSER_KEY,
+    queryFn: getLiveBrowserConfig,
+  });
+}
+
+export function useUpdateLiveBrowserConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (cfg: LiveBrowserConfig) => updateLiveBrowserConfig(cfg),
+    onSuccess: (next) => qc.setQueryData(LIVE_BROWSER_KEY, next),
+  });
 }

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import httpx
+import json as _json
 from disco.core.store.sqlite import SqliteEventStore
-from disco.tools.sandbox._container import PREVIEW_PORT, USER_PORTS
+from disco.tools.sandbox._container import NOVNC_PORT, PREVIEW_PORT, USER_PORTS
 from fastapi import APIRouter, Response
+from fastapi.responses import JSONResponse
 
 from ..runtime import ConversationRuntime
 
@@ -14,6 +16,119 @@ def make_preview_router(
     store: SqliteEventStore, runtime: ConversationRuntime | None
 ) -> APIRouter:
     router = APIRouter()
+
+    @router.get("/conversations/{conversation_id}/browser/live-url")
+    async def browser_live_url(conversation_id: str) -> Response:
+        """Lazily start the noVNC live-view stack in the sandbox and return the
+        auth-gated proxy URL. Returns 503 when live browser is disabled in Settings
+        or when no sandbox is running for this conversation.
+
+        Security: the noVNC endpoint is behind the existing per-conversation
+        preview proxy ({cid8}-{NOVNC_PORT}.localhost) — same owner-scoped auth
+        as the dev-server preview. VNC is loopback-bound inside the sandbox.
+
+        P5 live jail acceptance is HARDWARE-DEFERRED (VM 201 destroyed). The
+        security invariants (loopback-bind, per-conv jail, view-only) must be
+        verified on a real sandbox backend before shipping to production."""
+        if runtime is None:
+            return Response("no runtime", status_code=503, media_type="text/plain")
+
+        # Check if live browser is enabled in config
+        try:
+            cfg = runtime._config_store.load()
+            if not cfg.live_browser.enabled:
+                return Response(
+                    _json.dumps({
+                        "reason": "disabled",
+                        "message": "Live browser is off — enable it in Settings → Agent → Live browser.",
+                    }),
+                    status_code=503,
+                    media_type="application/json",
+                )
+        except Exception:
+            return Response("config unavailable", status_code=503, media_type="text/plain")
+
+        cid8 = conversation_id.removeprefix("conv_")[:8]
+
+        # Trigger live_start inside the sandbox via the browser daemon
+        session = runtime.live_session(conversation_id)
+        if session is None:
+            return Response(
+                _json.dumps({
+                    "reason": "no_sandbox",
+                    "message": "No sandbox running for this conversation — start the agent first.",
+                }),
+                status_code=503,
+                media_type="application/json",
+            )
+
+        try:
+            # Check browser daemon health first
+            res = await session.exec_shell(
+                "curl -sf http://127.0.0.1:8901/health",
+                timeout_s=3,
+            )
+            if res.exit_code != 0:
+                return Response(
+                    _json.dumps({
+                        "reason": "no_daemon",
+                        "message": "Browser daemon not running — use the browser tool first.",
+                    }),
+                    status_code=503,
+                    media_type="application/json",
+                )
+
+            # Trigger live_start in the daemon
+            job = _json.dumps({"action": "live_start"})
+            # Escape single quotes for shell safety
+            job_escaped = job.replace("'", "'\"'\"'")
+            res2 = await session.exec_shell(
+                f"curl -s -X POST http://127.0.0.1:8901"
+                f" -H 'Content-Type: application/json'"
+                f" -d '{job_escaped}'",
+                timeout_s=30,
+            )
+            if res2.exit_code != 0:
+                return Response(
+                    _json.dumps({
+                        "reason": "live_start_failed",
+                        "message": "Failed to start live view stack.",
+                    }),
+                    status_code=503,
+                    media_type="application/json",
+                )
+            data = _json.loads(res2.stdout)
+            if not data.get("ok"):
+                msg = data.get("error", "live_start failed")
+                return Response(
+                    _json.dumps({"reason": "live_start_failed", "message": msg}),
+                    status_code=503,
+                    media_type="application/json",
+                )
+        except Exception as e:  # noqa: BLE001
+            return Response(
+                _json.dumps({"reason": "error", "message": str(e)[:120]}),
+                status_code=503,
+                media_type="application/json",
+            )
+
+        # Get the proxy URL for noVNC (same mechanism as the dev-server preview)
+        upstream = await runtime.wake_for_preview(cid8, NOVNC_PORT)
+        if upstream is None:
+            return Response(
+                _json.dumps({
+                    "reason": "no_upstream",
+                    "message": "noVNC port not yet exposed by the sandbox.",
+                }),
+                status_code=503,
+                media_type="application/json",
+            )
+
+        return JSONResponse({
+            "url": upstream,
+            "novnc_path": "/vnc.html?autoconnect=1&view_only=1",
+            "port": NOVNC_PORT,
+        })
 
     @router.get("/conversations/{conversation_id}/preview")
     async def get_preview(conversation_id: str) -> dict:

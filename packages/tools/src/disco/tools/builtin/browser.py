@@ -286,6 +286,14 @@ class BrowserTool:
         daemon_src = daemon_src_path.read_text()
         await ctx.sandbox.write_file(_DAEMON_PATH, daemon_src.encode("utf-8"))
 
+        # Ship live_view.py alongside the daemon so the daemon can import _live_view.
+        live_view_src_path = pathlib.Path(__file__).parent / "live_view.py"
+        if live_view_src_path.exists():
+            live_view_src = live_view_src_path.read_text()
+            await ctx.sandbox.write_file(
+                "/workspace/.pmx/_live_view.py", live_view_src.encode("utf-8")
+            )
+
         await ctx.sessions.exec("__browser", f"python3 {_DAEMON_PATH}", None)
 
         # Poll health (up to 10s)

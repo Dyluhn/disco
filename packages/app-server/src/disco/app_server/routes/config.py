@@ -13,6 +13,7 @@ from ..config.dtos import (
     DataSourcesConfigDTO,
     EncodersConfigDTO,
     ImageGenConfigDTO,
+    LiveBrowserConfigDTO,
     ProjectStorageConfigDTO,
     SandboxConfigDTO,
     TtsConfigDTO,
@@ -81,5 +82,13 @@ def make_config_router(state: ConfigState) -> APIRouter:
                 status_code=400,
                 detail={"reason": exc.reason, "message": exc.detail or exc.reason},
             ) from exc
+
+    @router.get("/api/live-browser/config")
+    async def get_live_browser_config() -> LiveBrowserConfigDTO:
+        return state.live_browser_config()
+
+    @router.put("/api/live-browser/config")
+    async def put_live_browser_config(dto: LiveBrowserConfigDTO) -> LiveBrowserConfigDTO:
+        return state.update_live_browser_config(dto)
 
     return router

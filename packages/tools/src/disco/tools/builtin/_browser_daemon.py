@@ -1,9 +1,23 @@
 import base64
 import json
 import os
+import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from playwright.sync_api import sync_playwright
+
+# _live_view is shipped alongside the daemon by browser.py as
+# /workspace/.pmx/_live_view.py.  The sys.path insert makes it importable
+# without a package install; the try/except keeps unit tests that don't
+# have the sandbox image from failing on import.
+sys.path.insert(0, "/workspace/.pmx")
+try:
+    import _live_view  # type: ignore[import]  # shipped alongside by browser.py
+except ImportError:
+    _live_view = None  # not available (unit tests / missing binary)
+
+# Flag: has the browser been restarted in headed mode for live view?
+_live_headed: bool = False
 
 # Configuration
 PORT = 8901
@@ -30,10 +44,18 @@ class BrowserState:
         self.network_fails = []
         self.screenshot_seq = 0
 
-    def start(self):
+    def start(self, display: str | None = None):
         self.playwright = sync_playwright().start()
         # gVisor is the isolation boundary, hence --no-sandbox is acceptable HERE only.
-        self.browser = self.playwright.chromium.launch(headless=True, args=["--no-sandbox"])
+        if display:
+            import os as _os
+            _os.environ["DISPLAY"] = display
+            self.browser = self.playwright.chromium.launch(
+                headless=False,
+                args=["--no-sandbox", f"--display={display}"],
+            )
+        else:
+            self.browser = self.playwright.chromium.launch(headless=True, args=["--no-sandbox"])
         self.context = self.browser.new_context(viewport={"width": 1280, "height": 800})
         self.page = self.context.new_page()
         self.page.on("console", self._add_console)
@@ -205,11 +227,37 @@ class BrowserHandler(BaseHTTPRequestHandler):
                 "text": "",
                 "screenshot_path": None
             }
+        elif action == "live_start":
+            global _live_headed
+            if _live_view is None:
+                return {"ok": False, "error": "live_view module not available"}
+            # Ensure Xvfb + VNC stack is up
+            ok = _live_view.ensure_live()
+            if not ok:
+                return {"ok": False, "error": "Failed to start live view stack"}
+            # If browser is headless, restart it headed on :1
+            if not _live_headed:
+                if state.browser is not None:
+                    try:
+                        state.browser.close()
+                    except Exception:
+                        pass
+                    try:
+                        state.playwright.stop()
+                    except Exception:
+                        pass
+                state.start(display=":1")
+                _live_headed = True
+            return {"ok": True, "novnc_port": 6080, "display": ":1"}
+        elif action == "live_stop":
+            if _live_view is not None:
+                _live_view.teardown()
+            return {"ok": True}
         else:
             return {"ok": False, "error": f"Unknown action: {action}"}
 
         # Common data for most actions
-        if action != "console_view":
+        if action not in ("console_view", "live_start", "live_stop"):
             elements = self._get_elements(page)
             text = page.evaluate(
                 "() => (document.body.innerText || document.body.textContent || '').trim()"

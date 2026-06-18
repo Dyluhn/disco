@@ -18,6 +18,7 @@ from .dtos import (
     DataSourcesConfigDTO,
     EncodersConfigDTO,
     ImageGenConfigDTO,
+    LiveBrowserConfigDTO,
     ModelDTO,
     ModelUpsert,
     OpenRouterModelDTO,
@@ -249,6 +250,12 @@ def _projects_from(config: RouterConfig) -> ProjectStorageConfigDTO:
         status=validate_root(effective).value,
         effective_root=effective,  # the real directory in use (auto-created if "")
     )
+
+
+def _live_browser_from(config: RouterConfig) -> LiveBrowserConfigDTO:
+    """Wire DTO for the live-browser toggle. Mirrors LiveBrowserSettings."""
+    lb = config.live_browser
+    return LiveBrowserConfigDTO(enabled=lb.enabled)
 
 
 def _mcp_live_status(approval: dict | None) -> str:

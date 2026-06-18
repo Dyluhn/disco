@@ -1,14 +1,30 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AgentCanvas } from "@/components/build/AgentCanvas";
 import type { AgentEvent } from "@/types/agent";
+
+// BrowserPane now uses useLiveBrowserConfig (React Query); provide a client
+// and a stable mock so these structural tests don't depend on a real server.
+vi.mock("@/hooks/useModels", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/hooks/useModels")>();
+  return {
+    ...actual,
+    useLiveBrowserConfig: vi.fn(() => ({ data: { enabled: false }, isLoading: false })),
+  };
+});
+
+function wrap(ui: React.ReactElement) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+}
 
 const fileWrite = (path: string, content: string): AgentEvent =>
   ({ id: `w-${path}`, kind: "action", thought: "", tool_call: { tool_name: "file_write", arguments: { path, content } } }) as AgentEvent;
 
 describe("AgentCanvas — the operator inspector", () => {
   it("renders Browser / Artifacts / Console tabs (not the build IDE's Files/Terminal/Preview)", () => {
-    render(<AgentCanvas events={[]} status="RUNNING" cid="c1" />);
+    wrap(<AgentCanvas events={[]} status="RUNNING" cid="c1" />);
     expect(screen.getByRole("tab", { name: /browser/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /artifacts/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /console/i })).toBeInTheDocument();
@@ -18,7 +34,7 @@ describe("AgentCanvas — the operator inspector", () => {
   });
 
   it("defaults to Browser with an honest empty state when nothing has run", () => {
-    render(<AgentCanvas events={[]} status="RUNNING" cid="c1" />);
+    wrap(<AgentCanvas events={[]} status="RUNNING" cid="c1" />);
     expect(screen.getByRole("tab", { name: /browser/i })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText(/the pages it visits show here/i)).toBeInTheDocument();
     // honest framing: a screenshot reel, not a live video stream
@@ -26,7 +42,7 @@ describe("AgentCanvas — the operator inspector", () => {
   });
 
   it("defaults to Artifacts when files exist but no screenshot", () => {
-    render(<AgentCanvas events={[fileWrite("notes.md", "# hi")]} status="FINISHED" cid="c1" />);
+    wrap(<AgentCanvas events={[fileWrite("notes.md", "# hi")]} status="FINISHED" cid="c1" />);
     expect(screen.getByRole("tab", { name: /artifacts/i })).toHaveAttribute("aria-selected", "true");
   });
 });

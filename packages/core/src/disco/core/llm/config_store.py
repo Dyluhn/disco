@@ -25,6 +25,7 @@ from .config import (
     EncodersSettings,
     ExtractionSettings,
     ImageGenSettings,
+    LiveBrowserSettings,
     ModelEntry,
     ProjectStorageSettings,
     RouterConfig,
@@ -143,6 +144,10 @@ class ConfigStore:
         if extraction.provider == "local":
             extraction = extraction.model_copy(update={"base_url": ""})
         return self.save(self.load().model_copy(update={"extraction": extraction}))
+
+    def save_live_browser(self, live_browser: LiveBrowserSettings) -> RouterConfig:
+        """Persist the live-browser enable toggle. The agent-server reloads per-request."""
+        return self.save(self.load().model_copy(update={"live_browser": live_browser}))
 
     # -- Build-project persistence --------------------------------------------
 
