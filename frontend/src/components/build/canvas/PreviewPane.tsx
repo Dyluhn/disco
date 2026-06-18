@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, MonitorPlay, RotateCw } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -6,6 +6,9 @@ import { deriveFiles, deriveSrcDoc } from "@/lib/buildTrace";
 import { agentHttpBase, previewHostUrl } from "@/api/client";
 import { restartPreview } from "@/api/agent";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
+import { useElementSelect } from "@/hooks/useElementSelect";
+import { SelectionOverlay } from "@/components/build/canvas/SelectionOverlay";
+import { SELECTION_AGENT_SCRIPT } from "@/lib/selectionAgent";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
 /** E2 — detect a Vite/bundler entry HTML by the module-script src it references.
@@ -52,7 +55,23 @@ export function PreviewPane({
   // agent wrote (entry HTML + inlined local css/js), no backend / dev server.
   // After the C5 fix, deriveSrcDoc returns null for server-side (content="") HTML
   // artifacts, so the guards below work correctly.
-  const srcDoc = useMemo(() => deriveSrcDoc(files), [files]);
+  // §4.1 C-EDIT-1: inject the selection agent into trusted (non-untrusted) srcdoc.
+  const srcDoc = useMemo(
+    () => deriveSrcDoc(files, untrusted ? undefined : SELECTION_AGENT_SCRIPT),
+    [files, untrusted],
+  );
+
+  // §4.1 C-EDIT-1: ref + selection state for the srcdoc preview iframe.
+  // allowedOrigin is "null" (the string) — sandboxed iframes without
+  // allow-same-origin always report origin "null" in postMessage events.
+  const srcdocIframeRef = useRef<HTMLIFrameElement | null>(null);
+  const {
+    armed: srcdocArmed,
+    arm: srcdocArm,
+    disarm: srcdocDisarm,
+    selection: srcdocSelection,
+    walkUp: srcdocWalkUp,
+  } = useElementSelect(srcdocIframeRef, "null");
 
   // C5: when no client-side srcDoc is available, check for a server-side .html
   // artifact (slides_generate / deliverable with empty content string).  If found,
@@ -249,15 +268,28 @@ export function PreviewPane({
             Scripted preview is disabled for shared/imported runs (untrusted content).
           </div>
         )}
-        <iframe
-          key={reloadKey}
-          title="Static preview"
-          srcDoc={srcDoc}
-          // untrusted → empty sandbox (no scripts): a script here could reach this
-          // instance's open-CORS APIs. Trusted (your own run) keeps allow-scripts.
-          sandbox={untrusted ? "" : "allow-scripts"}
-          className="min-h-0 flex-1 border-0 bg-white"
-        />
+        {/* §4.1 C-EDIT-1: relative wrapper so SelectionOverlay can be positioned
+            over the iframe via `absolute inset-0`. */}
+        <div className="relative min-h-0 flex-1">
+          <iframe
+            key={reloadKey}
+            ref={srcdocIframeRef}
+            title="Static preview"
+            srcDoc={srcDoc}
+            // untrusted → empty sandbox (no scripts): a script here could reach this
+            // instance's open-CORS APIs. Trusted (your own run) keeps allow-scripts.
+            sandbox={untrusted ? "" : "allow-scripts"}
+            className="h-full w-full border-0 bg-white"
+          />
+          <SelectionOverlay
+            armed={srcdocArmed}
+            untrusted={untrusted}
+            selection={srcdocSelection}
+            onArm={srcdocArm}
+            onDisarm={srcdocDisarm}
+            onWalkUp={srcdocWalkUp}
+          />
+        </div>
       </div>
     );
   }

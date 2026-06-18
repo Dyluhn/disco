@@ -388,8 +388,16 @@ export function deriveFiles(events: AgentEvent[]): WorkspaceFile[] {
  * rel=stylesheet> and <script src> references from sibling files so the iframe
  * renders the real thing as it's built. Returns null when there's no renderable
  * HTML artifact (so the pane falls back to the live-server preview / placeholder).
+ *
+ * @param injectionScript - Optional JavaScript source to inject as the FIRST
+ *   `<script>` inside `<body>` (or appended when no body tag is present).
+ *   Used by the selection overlay (§4.1 / C-EDIT-1) to install the in-frame
+ *   selection agent.  Pass `undefined` for untrusted / no-scripts iframes.
  */
-export function deriveSrcDoc(files: WorkspaceFile[]): string | null {
+export function deriveSrcDoc(
+  files: WorkspaceFile[],
+  injectionScript?: string,
+): string | null {
   if (files.length === 0) return null;
   const byName = new Map<string, string>();
   for (const f of files) {
@@ -422,6 +430,17 @@ export function deriveSrcDoc(files: WorkspaceFile[]): string | null {
       return js != null ? `<script>\n${js}\n</script>` : m;
     },
   );
+  // Inject the selection agent script (§4.1 C-EDIT-1) when provided.
+  // Injected as the first child of <body> so it runs before user scripts and
+  // can intercept events; falls back to appending at the end when no <body>.
+  if (injectionScript) {
+    const tag = `<script>\n${injectionScript}\n</script>`;
+    if (/<body[\s>]/i.test(html)) {
+      html = html.replace(/<body[\s>][^>]*>/i, (m) => `${m}\n${tag}`);
+    } else {
+      html = `${tag}\n${html}`;
+    }
+  }
   return html;
 }
 
