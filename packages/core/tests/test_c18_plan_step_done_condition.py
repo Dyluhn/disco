@@ -76,6 +76,14 @@ class _FakeSandbox:
     async def write_file(self, path: str, data: bytes) -> None:
         self._files[path] = bytes(data)
 
+    async def file_exists(self, path: str) -> bool:
+        """B4 — mirrors the real process/session backend: resolve against the
+        host-side `workspace_path` (this fake plants real files there) and check
+        the FS. The C18 check now calls THIS instead of a literal host path."""
+        from pathlib import Path
+
+        return (Path(self.workspace_path) / path).exists()
+
 
 class _SandboxExecutor:
     """ToolExecutor stub: any `execute()` returns success (so plan_step's
@@ -324,3 +332,182 @@ async def test_c18_no_predicate_emits_no_note(tmp_path):
         and e.tool_result.tool_name == "plan_step"
     ]
     assert len(plan_step_observations) == 1
+
+
+# ---------------------------------------------------------------------------
+# B4 — container backend: workspace_path is None, yet the files are REAL inside
+# the box. The old code fell through to a literal host Path() check (the
+# agent-server cwd), where the container's files don't exist, and emitted a
+# FALSE "NOT met / missing" advisory. The fix asks the sandbox via file_exists.
+# ---------------------------------------------------------------------------
+
+
+class _FakeContainerSandbox:
+    """A CONTAINER-backend sandbox surface: `workspace_path` is None (the host
+    has no view of the box FS), and existence is answered by `file_exists`
+    (which, for a real container, execs `test -f` INSIDE the box). The test
+    controls the in-box file set explicitly so the predicate outcome is
+    deterministic — independent of the agent-server's host cwd."""
+
+    workspace_path = None
+
+    def __init__(self, present: set[str] | None = None) -> None:
+        self._present: set[str] = set(present or ())
+        self.file_exists_calls: list[str] = []
+
+    async def read_file(self, path: str) -> bytes:
+        if path not in self._present:
+            raise FileNotFoundError(path)
+        return b""
+
+    async def write_file(self, path: str, data: bytes) -> None:
+        self._present.add(path)
+
+    async def file_exists(self, path: str) -> bool:
+        # Records the call so the test can prove the sandbox was consulted
+        # (rather than the host FS). Resolution happens "inside the box".
+        self.file_exists_calls.append(path)
+        return path in self._present
+
+
+@pytest.mark.asyncio
+async def test_c18_container_backend_present_file_emits_met_note(tmp_path):
+    """B4 regression: on the container backend (`workspace_path is None`) a file
+    that exists INSIDE the box must yield a `met` note — NOT the old false
+    `missing`. The advisory must consult `sbx.file_exists`, never the host cwd."""
+    # The agent-server cwd does NOT contain `artifact.txt`; only the box does.
+    sbx = _FakeContainerSandbox(present={"artifact.txt"})
+
+    agent = ScriptedAgent(
+        [
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "p",
+                    "steps": [
+                        {
+                            "title": "write artifact",
+                            "done_condition": {
+                                "kind": "file_exists",
+                                "path": "artifact.txt",
+                            },
+                        }
+                    ],
+                },
+            ),
+            action_step("plan_step", {"index": 1, "state": "done"}),
+            finish_step(),
+        ]
+    )
+    loop, store = build_loop(agent, executor=_SandboxExecutor(sbx), conversation_id=CID)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    await loop.send_message("go")
+    await loop.run()
+    await loop.approve_plan()
+    await loop.run()
+
+    events = await store.get_events(CID)
+    notes = _advisory_notes(events)
+    assert len(notes) == 1, f"expected exactly 1 C18 note, got {len(notes)}"
+    note = notes[0]
+    assert "met" in note.message.content
+    assert "NOT met" not in note.message.content, (
+        "B4 regression: a container file that exists was falsely reported missing"
+    )
+    assert note.meta.get("passed") is True
+    # Prove the sandbox was actually consulted (not the host FS).
+    assert sbx.file_exists_calls == ["artifact.txt"]
+
+
+@pytest.mark.asyncio
+async def test_c18_container_backend_absent_file_still_not_met(tmp_path):
+    """B4: the fix must NOT mask genuine absences — a file that is missing INSIDE
+    the box still yields a `NOT met` advisory (no false positives the other way)."""
+    sbx = _FakeContainerSandbox(present=set())  # nothing in the box
+
+    agent = ScriptedAgent(
+        [
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "p",
+                    "steps": [
+                        {
+                            "title": "write artifact",
+                            "done_condition": {
+                                "kind": "file_exists",
+                                "path": "artifact.txt",
+                            },
+                        }
+                    ],
+                },
+            ),
+            action_step("plan_step", {"index": 1, "state": "done"}),
+            finish_step(),
+        ]
+    )
+    loop, store = build_loop(agent, executor=_SandboxExecutor(sbx), conversation_id=CID)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    await loop.send_message("go")
+    await loop.run()
+    await loop.approve_plan()
+    await loop.run()
+
+    events = await store.get_events(CID)
+    notes = _advisory_notes(events)
+    assert len(notes) == 1, f"expected exactly 1 C18 note, got {len(notes)}"
+    assert "NOT met" in notes[0].message.content
+    assert notes[0].meta.get("passed") is False
+    assert sbx.file_exists_calls == ["artifact.txt"]
+
+
+@pytest.mark.asyncio
+async def test_c18_real_workspace_path_escape_still_fails(tmp_path):
+    """The path-escape hard-FAIL is preserved for a backend with a real
+    `workspace_path`: a predicate path resolving OUTSIDE the workspace is a hard
+    FAIL (NOT met), even if `file_exists` would say the (out-of-scope) file is
+    present. The escape check runs BEFORE the sandbox is consulted."""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    # Plant a file OUTSIDE the workspace that the escaping path would reach.
+    (tmp_path / "secret.txt").write_text("x")
+    sbx = _FakeSandbox(str(workspace))
+
+    agent = ScriptedAgent(
+        [
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "p",
+                    "steps": [
+                        {
+                            "title": "escape",
+                            "done_condition": {
+                                "kind": "file_exists",
+                                "path": "../secret.txt",
+                            },
+                        }
+                    ],
+                },
+            ),
+            action_step("plan_step", {"index": 1, "state": "done"}),
+            finish_step(),
+        ]
+    )
+    loop, store = build_loop(agent, executor=_SandboxExecutor(sbx), conversation_id=CID)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    await loop.send_message("go")
+    await loop.run()
+    await loop.approve_plan()
+    await loop.run()
+
+    events = await store.get_events(CID)
+    notes = _advisory_notes(events)
+    assert len(notes) == 1, f"expected exactly 1 C18 note, got {len(notes)}"
+    note = notes[0]
+    assert "NOT met" in note.message.content
+    assert "escapes workspace" in note.message.content
+    assert note.meta.get("passed") is False

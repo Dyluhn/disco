@@ -88,6 +88,15 @@ class Sandbox(Protocol):
     async def write_file(self, path: str, data: bytes) -> None: ...
     async def list_dir(self, path: str) -> list[str]: ...
 
+    async def file_exists(self, path: str) -> bool:
+        """B4 — existence check resolved in the SANDBOX's own namespace. The
+        container backend's files live INSIDE the box (its `workspace_path` is
+        None), so a host-side `Path` check would falsely report a just-written
+        file as missing. C18 asks the sandbox instead. Returns False for a
+        missing file or a path that escapes the workspace jail; never raises on
+        a plain absence."""
+        ...
+
     @property
     def workspace_path(self) -> str | None:
         """The sandbox's workspace root as an absolute path on the HOST filesystem

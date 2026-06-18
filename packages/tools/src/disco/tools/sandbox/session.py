@@ -393,6 +393,13 @@ class SandboxSession:
     async def list_dir(self, path: str) -> list[str]:
         return await self._resilient(lambda i: i.list_dir(path))
 
+    async def file_exists(self, path: str) -> bool:
+        """[B4] Delegate the existence check to the live instance (which resolves
+        in its OWN namespace — host FS for process, inside-the-box for container).
+        Goes through `_resilient`, so a mid-session box death re-creates and
+        raises a clean SandboxError the C18 advisory treats as unverifiable."""
+        return await self._resilient(lambda i: i.file_exists(path))
+
     @property
     def workspace_path(self) -> str | None:
         """W5 — expose the workspace root for C18 / C1c predicate resolution.

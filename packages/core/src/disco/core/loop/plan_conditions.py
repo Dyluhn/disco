@@ -139,7 +139,7 @@ class PlanStepConditions:
         authoritative DoD check at finish time; C18 is the
         per-step advisory trail."""
         if isinstance(predicate, FileExistsPredicate):
-            return self.check_file_exists_for_plan_step(predicate)
+            return await self.check_file_exists_for_plan_step(predicate)
         if isinstance(predicate, CommandExitPredicate):
             return await self.check_command_for_plan_step(predicate)
         if isinstance(predicate, HTTPOkPredicate):
@@ -150,19 +150,40 @@ class PlanStepConditions:
         # rather than a silent pass.
         return (False, f"unsupported predicate kind: {type(predicate).__name__}")
 
-    def check_file_exists_for_plan_step(
+    async def check_file_exists_for_plan_step(
         self, predicate: FileExistsPredicate
     ) -> tuple[bool, str]:
-        """Resolve `predicate.path` against the executor's sandbox workspace
-        root (when available) and check existence. The path-escape check
-        mirrors the C1b evaluator's discipline: a `file_exists` whose
-        resolved path lies outside the workspace is a hard FAIL — the
-        predicate is not silently passed by a coincidental match on an
-        out-of-scope file."""
+        """Check whether `predicate.path` exists, resolved in the SANDBOX's own
+        namespace (not the agent-server host cwd).
+
+        B4 root-cause: the container sandbox backend reports `workspace_path is
+        None` (the host has NO view of the box FS), yet the agent's files are
+        real INSIDE the box. The old code fell through to a literal host
+        `Path(path_str).is_file()` check, which looked in the agent-server cwd,
+        found nothing, and emitted a FALSE "done-condition NOT met / file
+        missing" advisory for files the agent had just written.
+
+        The fix asks the sandbox itself (`await sbx.file_exists(...)`) via duck
+        typing — core never imports `tools`; the `executor.sandbox` object is
+        injected at runtime and we call a method on it. Each backend resolves in
+        its own namespace (host FS for process, inside-the-box for container).
+
+        The path-escape hard-FAIL is preserved whenever a real `workspace_path`
+        is known (process/session backend), mirroring the C1b evaluator's
+        discipline: a `path` resolving outside the workspace is a hard FAIL, not
+        a coincidental pass. For the container backend (`workspace_path is None`)
+        the jail is enforced by the backend's own `file_exists` (`_container_path`
+        rejects escapes → False).
+
+        The literal-`Path` branch survives ONLY for the sandbox-less /
+        fake-executor path (no `file_exists` capability) the tests rely on."""
         from pathlib import Path
         sbx = getattr(self._loop.executor, "sandbox", None)
         workspace = getattr(sbx, "workspace_path", None) if sbx is not None else None
         path_str = predicate.path
+        # Path-escape hard-FAIL when a real host-side workspace root is known.
+        # (Container backends expose workspace_path=None and rely on their own
+        # in-box jail; this branch is the process/session backend's discipline.)
         if workspace:
             try:
                 root = Path(workspace).resolve()
@@ -182,15 +203,23 @@ class PlanStepConditions:
                         False,
                         f"file_exists: path escapes workspace ({path_str})",
                     )
-                if candidate.exists():
-                    return (True, f"file_exists({path_str}): found at {candidate}")
-                return (False, f"file_exists({path_str}): missing (resolved {candidate})")
             except (OSError, ValueError) as exc:
                 return (False, f"file_exists({path_str}): resolve error ({exc})")
-        # No workspace_root: check the literal path. This is the
-        # sandbox-less / fake-executor path used in tests; the result
-        # is just as honest (the predicate names a literal path, we
-        # check the literal path).
+        # B4 — sandbox-aware existence check. ASK THE SANDBOX (duck-typed; no
+        # upward `tools` import) so the path resolves in the box's namespace.
+        # This is the load-bearing fix for the container backend's false
+        # "missing" advisory.
+        if sbx is not None and hasattr(sbx, "file_exists"):
+            try:
+                exists = await sbx.file_exists(path_str)
+            except Exception as exc:  # noqa: BLE001 — advisory; never wedge the loop
+                return (False, f"file_exists({path_str}): check error ({exc})")
+            if exists:
+                return (True, f"file_exists({path_str}): found")
+            return (False, f"file_exists({path_str}): missing")
+        # No sandbox (or a sandbox without the file_exists capability): check the
+        # literal path. This is the sandbox-less / fake-executor path used in
+        # tests; the predicate names a literal path, we check the literal path.
         p = Path(path_str)
         if p.exists():
             return (True, f"file_exists({path_str}): found")

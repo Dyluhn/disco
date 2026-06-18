@@ -71,6 +71,10 @@ class FakeSandboxInstance:
         self._alive()
         return sorted(self._fs)
 
+    async def file_exists(self, path: str) -> bool:
+        self._alive()
+        return path in self._fs
+
     def display_url(self) -> str | None:
         return None
 

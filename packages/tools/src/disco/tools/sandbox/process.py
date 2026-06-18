@@ -102,6 +102,19 @@ class ProcessSandboxInstance:
         self._alive()
         return sorted(p.name for p in self._resolve(path).iterdir())
 
+    async def file_exists(self, path: str) -> bool:
+        """[B4] Workspace-jailed existence check. The process workspace lives on
+        the host FS, so this is a direct `Path.exists()` against the resolved
+        target. A path that escapes the jail is False (not raised — the predicate
+        named an out-of-scope path, which simply does not exist *in* the
+        workspace); a plain absence is False."""
+        self._alive()
+        try:
+            target = self._resolve(path)
+        except SandboxError:
+            return False
+        return target.exists()
+
     @property
     def workspace_path(self) -> str | None:
         """W5 — expose the workspace root for C18 / C1c predicate resolution.

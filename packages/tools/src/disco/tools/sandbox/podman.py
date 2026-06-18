@@ -163,6 +163,21 @@ class PodmanSandboxInstance(ContainerInstance):
             raise SandboxError(f"read_file {path!r}: {err.decode('utf-8', 'replace').strip()}")
         return out
 
+    async def file_exists(self, path: str) -> bool:
+        """[B4] Existence check via the CLI native remote (`test -f` in-container),
+        matching read_file/list_dir's transport (podman-py exec is unusable over
+        the remote API). False on a missing file or a jail-escaping path; a dead
+        container is surfaced as a typed SandboxUnavailableError (→ recreate)."""
+        self._alive()
+        try:
+            target = self._container_path(path)
+        except SandboxError:
+            return False
+        rc, _out, err = await asyncio.to_thread(self._exec, ["test", "-f", target], 30)
+        if rc != 0:
+            self._raise_if_dead(rc, err)
+        return rc == 0
+
     async def list_dir(self, path: str) -> list[str]:
         self._alive()
         target = self._container_path(path)

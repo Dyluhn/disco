@@ -313,6 +313,25 @@ class ContainerInstance:
 
         return await self._guarded(_read)
 
+    async def file_exists(self, path: str) -> bool:
+        """[B4] Existence check INSIDE the container — `test -f` in the box, never
+        a host `Path` check (the host has no view of the container FS; that host
+        check is exactly the C18 false-positive this fixes). A missing file is
+        False (the non-zero `test` exit, not a raise); a path that escapes the
+        workspace jail is False. A genuinely dead box still surfaces through
+        `_guarded` as a typed SandboxError, which C18 treats as unverifiable."""
+        self._alive()
+        try:
+            target = self._container_path(path)
+        except SandboxError:
+            return False
+
+        def _test() -> bool:
+            res = self._container.exec_run(["test", "-f", target])
+            return res[0] == 0
+
+        return await self._guarded(_test)
+
     async def write_file(self, path: str, data: bytes) -> None:
         """Write a workspace file via `cp` (put_archive) — binary-safe."""
         self._alive()

@@ -45,6 +45,35 @@ async def test_file_round_trip_and_escape_rejection():
     await inst.destroy()
 
 
+async def test_process_file_exists_present_absent_and_escape():
+    """B4 — the process backend's `file_exists` is a workspace-jailed existence
+    check: True for a real file, False for a missing one, and False (never
+    raised) for a path that escapes the workspace jail."""
+    svc = ProcessSandboxService()
+    inst = await svc.create(SandboxSpec(), owner_id="local", conversation_id="c")
+    await inst.write_file("dir/present.txt", b"x")
+    assert await inst.file_exists("dir/present.txt") is True
+    assert await inst.file_exists("dir/absent.txt") is False
+    # A jail escape is False, not a raise (the predicate named an out-of-scope
+    # path, which simply does not exist *in* the workspace).
+    assert await inst.file_exists("../../etc/passwd") is False
+    await inst.destroy()
+    # After destroy the instance rejects further calls (lifecycle contract).
+    with pytest.raises(SandboxError):
+        await inst.file_exists("dir/present.txt")
+
+
+async def test_session_file_exists_delegates_to_instance():
+    """B4 — SandboxSession.file_exists delegates to the live instance (drop-in
+    SandboxInstance), resolving in the instance's own namespace."""
+    svc = ProcessSandboxService()
+    session = SandboxSession(svc, owner_id="local", conversation_id="c-fe")
+    await session.write_file("made.txt", b"y")
+    assert await session.file_exists("made.txt") is True
+    assert await session.file_exists("nope.txt") is False
+    await session.destroy()
+
+
 async def test_backend_swap_identical_results_process_vs_fake():
     """The same file tool yields identical observable results on the process
     backend and an in-memory fake — proving no backend leakage (§11.3)."""
