@@ -525,3 +525,74 @@ async def test_kill_switch_revokes_caps_tears_down_sandbox_and_records_stop():
 
     res = await executor.execute(ToolCall(tool_name="shell", arguments={"command": "echo hi"}))
     assert res.success is False and res.structured["kind"] == "sandbox_error"
+
+
+# ---- W4 (§10.8): capability-gated file_str_replace at the build-loop compose --
+#
+# _compose_build_loop passes the BUILD LOOP's driver caps to agent_scope(model_caps),
+# so file_str_replace (the anchored-edit tool) is ADVERTISED only to a driver whose
+# ModelEntry declares ANCHORED_EDIT; weak drivers still don't see it (but it stays
+# callable by qualified name). Caps are resolved from the persisted config store the
+# same way production does — routing is pinned by the injected scripted router.
+
+from disco.core.llm import ConfigStore, Requirement  # noqa: E402
+
+
+def _caps_runtime(store, *, anchored: bool, tmp_path) -> ConversationRuntime:
+    caps = {Requirement.TOOL_CALLING}
+    if anchored:
+        caps.add(Requirement.ANCHORED_EDIT)
+    cfg = RouterConfig(
+        models={
+            "drv": ModelEntry(
+                model_id="drv",
+                provider="fake",
+                base_url="http://driver.invalid/v1",
+                context_window=8192,
+                capabilities=frozenset(caps),
+            )
+        },
+        default_model="drv",
+    )
+    config_store = ConfigStore(tmp_path / "cfg.json", base_factory=lambda: cfg)
+    router = DefaultLLMRouter(cfg, {"fake": _ScriptedProvider([("plan", [_plan(["do it"])])])})
+    return ConversationRuntime(
+        store,
+        router=router,
+        config_store=config_store,
+        sandbox_service=ProcessSandboxService(),
+    )
+
+
+async def _compose_and_get_executor(runtime: ConversationRuntime, store):
+    """Kick a build conversation to the plan gate so _compose_build_loop runs and
+    stores the executor; return it for advertised-set inspection."""
+    store.create_conversation(CID, owner_id="local")
+    runtime.set_surface(CID, "build")
+    await store.append(CID, _user("build a thing"))
+    await _run_to_rest(runtime)
+    return runtime._executors[CID]
+
+
+async def test_build_loop_advertises_file_str_replace_to_anchored_edit_driver(tmp_path):
+    """A driver whose ModelEntry declares ANCHORED_EDIT gets file_str_replace in the
+    executor's ADVERTISED set (the capable tier)."""
+    store = SqliteEventStore(":memory:")
+    runtime = _caps_runtime(store, anchored=True, tmp_path=tmp_path)
+    executor = await _compose_and_get_executor(runtime, store)
+
+    advertised = {t.name for t in executor.available_tools()}
+    assert "file_str_replace" in advertised
+
+
+async def test_build_loop_withholds_file_str_replace_from_weak_driver(tmp_path):
+    """A driver WITHOUT ANCHORED_EDIT never sees file_str_replace advertised (weak/
+    default tier) — but it stays callable by qualified name (advertising is gated,
+    allowed_tools is not)."""
+    store = SqliteEventStore(":memory:")
+    runtime = _caps_runtime(store, anchored=False, tmp_path=tmp_path)
+    executor = await _compose_and_get_executor(runtime, store)
+
+    advertised = {t.name for t in executor.available_tools()}
+    assert "file_str_replace" not in advertised
+    assert "file_str_replace" in executor._scope.allowed_tools

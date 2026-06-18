@@ -50,10 +50,28 @@ class ConfigStore:
     ) -> None:
         self._path = Path(path or disco_env("CONFIG", _DEFAULT_PATH))
         self._base_factory = base_factory
+        # V2/V4 (§2): process-lifetime overlay of the async vision-probe results
+        # (model catalogue key → True/False/None), produced ONCE at server startup
+        # by wiring.probe_all_vision and installed via `apply_vision_probe`. None
+        # until a probe has run — load() then behaves exactly as before (static
+        # table + DRIVER_VISION env). config_store stays httpx-free: the network
+        # probe lives in wiring.py; we only carry the already-computed dict here so
+        # every per-request load() reflects a model server's REAL vision modality
+        # (llama.cpp /props.modalities.vision, OpenRouter input_modalities) over the
+        # static table.
+        self._vision_probe: dict[str, bool | None] | None = None
 
     @property
     def path(self) -> Path:
         return self._path
+
+    def apply_vision_probe(self, results: dict[str, bool | None]) -> None:
+        """V2/V4 (§2): install the startup vision-probe results as a process-lifetime
+        overlay. Every subsequent `load()` passes them to `apply_runtime_capabilities`
+        so a definitive probe (True/False) overrides the static table; a None entry is
+        ignored (falls through to the table) and is harmless. Idempotent; called once
+        from the agent-server lifespan after `wiring.probe_all_vision`."""
+        self._vision_probe = results
 
     def load(self) -> RouterConfig:
         """The persisted config, or the seed if absent/corrupt. A legacy overlay
@@ -72,7 +90,7 @@ class ConfigStore:
                 cfg = base
         else:
             cfg = self._apply_overlay(base, data)  # legacy {default_model, assignments}
-        return apply_runtime_capabilities(cfg)
+        return apply_runtime_capabilities(cfg, probe_results=self._vision_probe)
 
     def save(self, config: RouterConfig) -> RouterConfig:
         """Persist the full config (atomically) and return it."""

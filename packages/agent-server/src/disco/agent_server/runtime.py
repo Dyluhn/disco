@@ -54,7 +54,7 @@ from disco.core.llm import (
 )
 from disco.core.llm.config import RouterConfig
 from disco.core.llm.secrets import OPENROUTER_API_KEY_ENV
-from disco.core.llm.wiring import build_providers
+from disco.core.llm.wiring import build_providers, probe_all_vision
 from disco.core.loop import (
     AgentLoop,
     BlastRadiusConfirm,
@@ -832,6 +832,21 @@ class ConversationRuntime:
         except Exception:  # noqa: BLE001 — best effort; the static config is the fallback
             pass
 
+    async def prewarm_vision_probe(self) -> None:
+        """V2/V4 (§2): run the async network vision probe ONCE at startup and install
+        the results as a process-lifetime overlay on the shared ConfigStore, so every
+        per-request config load reflects a model server's REAL vision modality
+        (llama.cpp `/props.modalities.vision`, OpenRouter `input_modalities`) over the
+        static table. Fail-soft: `probe_all_vision` never raises, and this call is
+        additionally wrapped so a probe failure can NEVER block boot — the overlay is
+        just not installed and load() keeps the static table."""
+        try:
+            self._config_store.apply_vision_probe(
+                await probe_all_vision(self._config_store.load())
+            )
+        except Exception:  # noqa: BLE001 — best effort; the static table is the fallback
+            pass
+
     # ---- persisted settings (B0) — delegators to RuntimeSettings ------------
 
     def _load_overrides(self) -> dict[str, str]:
@@ -1097,9 +1112,21 @@ class ConversationRuntime:
                 # into the fresh instance before the agent retries (bp-13 §2).
                 on_recreate=lambda: self._rehydrate_after_recreate(conversation_id),
             )
+        # W4 (§10.8): advertise `file_str_replace` (the anchored-edit tool) ONLY to a
+        # driver whose ModelEntry declares ANCHORED_EDIT. Resolve the SAME driver key
+        # the build loop's turns use — the model pill reassigns AGENT_DRIVER, so we
+        # re-apply that override as `_router_now` does (not via the router's private
+        # config). Fail-safe to the weak tier (no caps → withheld; W3 syntax gate
+        # still guards writes) on any miss — advertising on a guess is the regression.
+        cfg = self._config_store.load()
+        _driver_key = cfg.model_for(
+            ModelRole.AGENT_DRIVER, override=self._model_override.get(conversation_id)
+        )
+        _driver_entry = cfg.models.get(_driver_key)
+        _driver_caps = _driver_entry.capabilities if _driver_entry is not None else frozenset()
         executor = DefaultToolExecutor(
             build_default_registry(),
-            agent_scope(),
+            agent_scope(model_caps=_driver_caps),
             # SandboxSession is a drop-in SandboxInstance (it implements the
             # protocol at runtime); the `id` attribute differs only in being a
             # property rather than a plain attribute, which trips the
@@ -1124,7 +1151,6 @@ class ConversationRuntime:
         if all_mcp_tools:
             # RP-05c: apply advertised/callable split. Over the cap, only
             # non-MCP tools + tool_search are advertised; all remain callable.
-            cfg = self._config_store.load()
             max_schemas = cfg.mcp.max_active_schemas if cfg.mcp else 20
             _apply_mcp_scope(
                 executor, all_mcp_tools, self._mcp_call_target,
