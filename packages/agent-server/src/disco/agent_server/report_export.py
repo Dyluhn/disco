@@ -49,7 +49,7 @@ from disco.core.brand import (
 )
 from disco.core.brand.tokens import Theme
 
-from .chart_svg import Palette, palette_from_theme, render_chart_svg, render_chart_table
+from disco.core.brand.chart_svg import Palette, palette_from_theme, render_chart_svg, render_chart_table
 
 logger = logging.getLogger(__name__)
 

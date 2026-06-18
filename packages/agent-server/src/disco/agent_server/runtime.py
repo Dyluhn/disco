@@ -23,6 +23,8 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, cast
 
+logger = logging.getLogger(__name__)
+
 from disco.core import (
     DEFAULT_OWNER_ID,
     ConversationStatus,
@@ -519,6 +521,17 @@ class ConversationRuntime:
             self._config_store = config_store
         elif config is not None:
             self._config_store = ConfigStore(base_factory=lambda: config)
+            # P4 footgun guard: a passed `config=` is only the SEED — ConfigStore.load()
+            # prefers an on-disk config file (DISCO_CONFIG / disco-config.json) and
+            # silently shadows the in-process object. Warn once so this doesn't cost
+            # debugging time (it cost a live driver-acceptance debug on 2026-06-18).
+            if self._config_store.path.exists():
+                _LOG.warning(
+                    "ConversationRuntime(config=...) is shadowed by the on-disk config "
+                    "at %s — _router_now reloads from disk per request. Pass config_store= "
+                    "or point DISCO_CONFIG at your file to override routing.",
+                    self._config_store.path,
+                )
         else:
             self._config_store = ConfigStore()
         self._mode = mode

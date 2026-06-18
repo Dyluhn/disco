@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import pytest
-from disco.agent_server.chart_svg import (
+from disco.core.brand.chart_svg import (
     palette_from_theme,
     render_chart_svg,
     render_chart_table,
