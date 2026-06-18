@@ -426,6 +426,28 @@ async def generate_report_audio(
     for i, turn in enumerate(turns):
         voice = voice_a if turn.speaker == "A" else voice_b
         tts_text = _normalize_for_tts(turn.text)
+        # D4 robustness: if the normalizer strips ALL content (e.g. a turn
+        # that is only a code block or citation chips), fall back to the
+        # original text so Kokoro receives something speakable.  An empty
+        # string causes Kokoro to raise `ValueError: need at least one array
+        # to concatenate`, which would abort the whole pipeline — far worse
+        # than synthesising the raw markdown (which Kokoro reads letter by
+        # letter but still produces non-empty audio).
+        if not tts_text.strip():
+            tts_text = turn.text.strip()
+        if not tts_text:
+            # The original turn text is ALSO empty — skip this turn entirely
+            # rather than letting Kokoro crash.  The mixer drops empty turns
+            # gracefully (no phantom silence gap).
+            logger.warning(
+                "TTS: skipping empty turn %d/%d (speaker %s) — both normalized "
+                "and raw text are empty; turn.text=%r",
+                i + 1,
+                len(turns),
+                turn.speaker,
+                turn.text,
+            )
+            continue
         try:
             if is_remote:
                 pcm = await audio_overview._synthesize_remote(
