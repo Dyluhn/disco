@@ -69,6 +69,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential unzip sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
+# noVNC live-browser stack (E6 / noVNC P1). Packages ONLY — no services started in
+# the image (the lazy Xvfb+x11vnc+websockify daemon is P2; the agent-server route +
+# the NOVNC_PORT in tools/sandbox/_container.py USER_PORTS are P3). xvfb = headless X
+# display for a headed browser; x11vnc = VNC server exposing that display; novnc +
+# websockify = the browser-side noVNC client + the WebSocket↔VNC bridge. Late layer
+# keeps the expensive playwright/chromium layer cached.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      xvfb x11vnc novnc websockify \
+    && rm -rf /var/lib/apt/lists/*
+
 # Pre-install the common Python dev tools build agents reach for (pytest, ruff)
 # so a build session does not burn iterations rediscovering
 # `pip install --break-system-packages`. (placed late = cheap layer, keeps the
