@@ -77,12 +77,17 @@ def test_large_file_truncation_guidance():
     sandbox = FakeSandboxInstance(files={"large.py": large_body})
     content = _snapshot_text(sandbox, ["large.py"])
     assert content is not None
-    
-    # Assert specific truncation message is present
-    assert "this file is too large to show in full" in content
-    assert "call file_read on this path to see the full content" in content
-    assert "make targeted changes with file_edit (content-anchored old\\u2192new)" in content or "make targeted changes with file_edit (content-anchored old→new)" in content
-    assert "do NOT call file_write with regenerated content" in content
+
+    # W2 — the oversize marker is now a windowed-view directive (W2 spec §3).
+    # The old "do NOT call file_write" wording is REPLACED by a file_read
+    # offset/limit hint + file_edit, which stops the read-loop without
+    # forbidding writes.
+    assert "more chars" in content           # truncation indicator still present
+    assert "file_read" in content            # windowed-read hint present
+    assert "offset" in content              # offset param named
+    assert "file_edit" in content           # file_edit mentioned
+    # Old "do NOT call file_write" wording MUST be gone (the loop generator)
+    assert "do NOT call file_write" not in content
 
 def test_small_file_no_truncation_guidance():
     # File BELOW the cap
@@ -90,8 +95,7 @@ def test_small_file_no_truncation_guidance():
     sandbox = FakeSandboxInstance(files={"small.py": small_body})
     content = _snapshot_text(sandbox, ["small.py"])
     assert content is not None
-    
-    # Assert truncation message is NOT present
-    assert "this file is too large to show in full" not in content
-    assert "call file_read on this path" not in content
-    assert "make targeted changes with file_edit" not in content
+
+    # Below the cap: no truncation notice of any kind
+    assert "more chars" not in content
+    assert "offset" not in content
