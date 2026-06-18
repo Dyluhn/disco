@@ -56,8 +56,11 @@ async def test_twelve_consecutive_reads_no_reminder_no_withholding():
 
 @pytest.mark.asyncio
 async def test_stuck_escape_still_fires():
-    # script 3 identical action→observation cycles
+    # script 4 identical action→observation cycles. W1 raised the
+    # repeat_action_observation threshold 3→4 (the OpenHands value), so genuine
+    # spam now trips at 4 — the escape must STILL fire, just one cycle later.
     agent = ScriptedAgent([
+        action_step(tool="shell", args={"command": "ls"}),
         action_step(tool="shell", args={"command": "ls"}),
         action_step(tool="shell", args={"command": "ls"}),
         action_step(tool="shell", args={"command": "ls"}),
