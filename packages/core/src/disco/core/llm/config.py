@@ -20,12 +20,19 @@ ids or OpenRouter strings, which are [VERIFY] and filled in at wiring time.
 
 from __future__ import annotations
 
+import logging
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from ..env import disco_env
 from .types import ModelRole, Requirement
+from .vision_table import table_vision
+
+_LOG = logging.getLogger("disco.config")
+
+# Flag to emit the DRIVER_VISION env deprecation warning at most once per process.
+_DRIVER_VISION_DEPRECATION_LOGGED: bool = False
 
 
 class ModelEntry(BaseModel):
@@ -47,6 +54,10 @@ class ModelEntry(BaseModel):
     # slot). `api_key_env` names an env var holding the key, if the server needs one.
     base_url: str | None = None
     api_key_env: str | None = None
+    # V1 (§2): manual vision override pin.  None = derive via the runtime probe
+    # order (probe → env back-compat → static table → False).  True/False =
+    # force the capability, bypassing all probes.  Persisted in disco-config.json.
+    vision: bool | None = None
 
 
 class RoleRouting(BaseModel):
@@ -304,6 +315,8 @@ def default_config() -> RouterConfig:
             family="deberta",
         ),
         # Dormant, assignable OpenRouter overflow (no key → fails loud if assigned).
+        # W4 (§10.8): claude-3.5-sonnet benchmarks well on anchored diff edits
+        # → ANCHORED_EDIT enabled; local/unknown models default to whole-file writes.
         "driver-overflow": ModelEntry(
             model_id="anthropic/claude-3.5-sonnet",
             provider="openrouter",
@@ -316,6 +329,7 @@ def default_config() -> RouterConfig:
                     Requirement.JSON_MODE,
                     Requirement.LONG_CONTEXT,
                     Requirement.VISION,
+                    Requirement.ANCHORED_EDIT,
                 }
             ),
             family="anthropic",
@@ -360,30 +374,82 @@ def default_config() -> RouterConfig:
     )
 
 
-def apply_runtime_capabilities(config: RouterConfig) -> RouterConfig:
-    """[BP-00] Overlay deployment-runtime capabilities onto a loaded config.
+def apply_runtime_capabilities(
+    config: RouterConfig,
+    *,
+    probe_results: dict[str, bool | None] | None = None,
+) -> RouterConfig:
+    """V4 (§2): overlay runtime vision capabilities onto every ModelEntry.
 
-    PMX_DRIVER_VISION describes the LIVE llama-server (is an mmproj loaded right
-    now?), not a user catalogue preference — so it is applied over whatever the
-    persisted file says, in BOTH directions, on every load. Without this, a
-    config file persisted before the vision rollout silently pins the driver
-    text-only (the routing guard then rejects its own driver's images); and a
-    file that persisted VISION keeps advertising it after the deployment loses
-    the mmproj. The env var is authoritative for `driver-local` only.
+    Runs on every config load (ConfigStore) and after a network probe
+    (wiring.py).  config.py never imports httpx — probing is done in
+    wiring.py which passes the results in via ``probe_results``.
+
+    Probe order for each live entry (``base_url is not None``):
+      (1) ``entry.vision`` pin     → overrides everything; True/False forces cap.
+      (2) probe_results[key]       → from wiring.py's async probe; beats the table.
+      (2b) DRIVER_VISION env       → back-compat alias for ``driver-local`` only;
+                                     emits a one-time deprecation log.
+      (3) vision_table.table_vision → static best-effort (Anthropic / OpenAI / Gemini).
+      (4) False                    → fail-safe; never claim unproven vision.
+
+    Returns the SAME config object when nothing changed (identity test stable).
     """
-    entry = config.models.get("driver-local")
-    if entry is None:
+    global _DRIVER_VISION_DEPRECATION_LOGGED
+
+    new_models = dict(config.models)
+    changed = False
+
+    for key, entry in config.models.items():
+        if entry.base_url is None:
+            # NLI cross-encoder and other non-chat backends — leave untouched.
+            continue
+
+        # ---- resolve target vision bool -----------------------------------
+        if entry.vision is not None:
+            # (1) Manual pin: explicit True or False — highest priority.
+            target: bool = entry.vision
+        elif (
+            probe_results is not None
+            and key in probe_results
+            and probe_results[key] is not None
+        ):
+            # (2) Runtime probe result passed in from wiring.py.
+            target = bool(probe_results[key])
+        elif key == "driver-local":
+            # (2b) DRIVER_VISION env back-compat: authoritative only for the
+            # named driver-local entry, where the env reflects whether an
+            # mmproj is loaded RIGHT NOW in the running llama-server.
+            dv = disco_env("DRIVER_VISION")
+            if dv in ("0", "1"):
+                if not _DRIVER_VISION_DEPRECATION_LOGGED:
+                    _LOG.warning(
+                        "DISCO_DRIVER_VISION / PMX_DRIVER_VISION is deprecated "
+                        "for vision detection; use a vision= pin on ModelEntry "
+                        "or the runtime probe in wiring.py instead."
+                    )
+                    _DRIVER_VISION_DEPRECATION_LOGGED = True
+                target = dv == "1"
+            else:
+                # (3) Fall through to the static table.
+                target = table_vision(entry.model_id, entry.family)
+        else:
+            # (3) Static capability table (Anthropic family rule, known OpenAI/Gemini).
+            target = table_vision(entry.model_id, entry.family)
+
+        # ---- apply if different ------------------------------------------
+        has_vision = Requirement.VISION in entry.capabilities
+        if target == has_vision:
+            continue  # already correct; leave the entry untouched
+
+        caps = set(entry.capabilities)
+        if target:
+            caps.add(Requirement.VISION)
+        else:
+            caps.discard(Requirement.VISION)
+        new_models[key] = entry.model_copy(update={"capabilities": frozenset(caps)})
+        changed = True
+
+    if not changed:
         return config
-    vision_on = disco_env("DRIVER_VISION") == "1"
-    if vision_on == (Requirement.VISION in entry.capabilities):
-        return config
-    caps = set(entry.capabilities)
-    if vision_on:
-        caps.add(Requirement.VISION)
-    else:
-        caps.discard(Requirement.VISION)
-    models = {
-        **config.models,
-        "driver-local": entry.model_copy(update={"capabilities": frozenset(caps)}),
-    }
-    return config.model_copy(update={"models": models})
+    return config.model_copy(update={"models": new_models})
