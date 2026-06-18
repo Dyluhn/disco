@@ -10,6 +10,9 @@ PORT = 8901
 WORKSPACE_ROOT = os.environ.get("DISCO_WORKSPACE", os.environ.get("PMX_WORKSPACE", "/workspace"))
 SCREENSHOT_DIR = os.path.join(WORKSPACE_ROOT, ".pmx/screenshots")
 MAX_CONSOLE = 200
+# B7: bound the captured network-failure ring the same way the console is bounded,
+# so a page that hammers a dead endpoint can't grow capture without limit.
+MAX_NETWORK = 100
 MAX_TEXT = 4000
 MAX_ELEMENTS = 120
 # W6: click timeout cut from Playwright's 30s default to a few seconds so a
@@ -23,6 +26,8 @@ class BrowserState:
         self.context = None
         self.page = None
         self.console_logs = []
+        # B7: failed/4xx-5xx network requests are otherwise invisible to the agent.
+        self.network_fails = []
         self.screenshot_seq = 0
 
     def start(self):
@@ -33,19 +38,62 @@ class BrowserState:
         self.page = self.context.new_page()
         self.page.on("console", self._add_console)
         self.page.on("pageerror", self._add_pageerror)
+        # B7: capture failed requests (DNS/connection/abort) and 4xx/5xx responses
+        # so the agent can see *why* a page it is debugging is broken.
+        self.page.on("requestfailed", self._add_request_failed)
+        self.page.on("response", self._add_response)
 
     def _add_console(self, msg):
-        self.console_logs.append({"level": msg.type, "text": msg.text})
+        # B7: keep msg.location ({url, lineNumber, columnNumber}) so the agent gets a
+        # source:line, not just bare text. location is a property; guard defensively.
+        entry = {"level": msg.type, "text": msg.text}
+        location = getattr(msg, "location", None)
+        if location:
+            entry["location"] = location
+        self.console_logs.append(entry)
         if len(self.console_logs) > MAX_CONSOLE:
             self.console_logs.pop(0)
 
     def _add_pageerror(self, err):
-        self.console_logs.append({"level": "error", "text": err.message})
+        # B7: keep err.stack (the most useful field for tracing a crash) alongside
+        # the message instead of dropping it.
+        entry = {"level": "error", "text": err.message}
+        stack = getattr(err, "stack", None)
+        if stack:
+            entry["stack"] = stack
+        self.console_logs.append(entry)
         if len(self.console_logs) > MAX_CONSOLE:
             self.console_logs.pop(0)
 
+    def _add_request_failed(self, request):
+        # B7: a request that never got a response (DNS, refused, aborted, timeout).
+        # request.failure is the error text (or None on some engines).
+        failure = getattr(request, "failure", None)
+        self._record_network({
+            "method": request.method,
+            "url": request.url,
+            "failure": failure or "failed",
+        })
+
+    def _add_response(self, response):
+        # B7: a response that *did* arrive but with an error status (4xx/5xx).
+        status = response.status
+        if status >= 400:
+            self._record_network({
+                "method": response.request.method,
+                "url": response.url,
+                "status": status,
+            })
+
+    def _record_network(self, entry):
+        self.network_fails.append(entry)
+        if len(self.network_fails) > MAX_NETWORK:
+            self.network_fails.pop(0)
+
     def clear_console(self):
         self.console_logs = []
+        # B7: a fresh navigation starts a fresh network-failure ledger.
+        self.network_fails = []
 
 state = BrowserState()
 
@@ -152,6 +200,7 @@ class BrowserHandler(BaseHTTPRequestHandler):
                 "url": page.url,
                 "title": page.title(),
                 "console": state.console_logs,
+                "network": state.network_fails,
                 "elements": [],
                 "text": "",
                 "screenshot_path": None
@@ -178,6 +227,7 @@ class BrowserHandler(BaseHTTPRequestHandler):
                 "url": page.url,
                 "title": page.title(),
                 "console": state.console_logs,
+                "network": state.network_fails,
                 "elements": elements,
                 "text": text,
                 "screenshot_path": screenshot_path,

@@ -39,6 +39,177 @@ async def test_browser_render_observation():
     assert "[END UNTRUSTED WEB CONTENT]" in rendered
     assert "screenshot: .pmx/screenshots/0001-navigate.png" in rendered
 
+class _FakeConsoleMessage:
+    """A Playwright-like ConsoleMessage: .type / .text / .location."""
+
+    def __init__(self, type, text, location=None):
+        self.type = type
+        self.text = text
+        self.location = location or {}
+
+
+class _FakePageError:
+    """A Playwright-like PageError: .message / .stack."""
+
+    def __init__(self, message, stack=None):
+        self.message = message
+        self.stack = stack
+
+
+class _FakeRequest:
+    def __init__(self, method, url, failure=None):
+        self.method = method
+        self.url = url
+        self.failure = failure
+
+
+def _fresh_state():
+    import disco.tools.builtin._browser_daemon as daemon_mod
+
+    return daemon_mod.BrowserState()
+
+
+def test_daemon_add_console_keeps_location():
+    state = _fresh_state()
+    state._add_console(
+        _FakeConsoleMessage(
+            "error",
+            "Uncaught TypeError: x is undefined",
+            {"url": "http://localhost:5173/app.js", "lineNumber": 42, "columnNumber": 7},
+        )
+    )
+    assert state.console_logs[0]["level"] == "error"
+    assert state.console_logs[0]["text"] == "Uncaught TypeError: x is undefined"
+    assert state.console_logs[0]["location"]["url"] == "http://localhost:5173/app.js"
+    assert state.console_logs[0]["location"]["lineNumber"] == 42
+
+
+def test_daemon_add_pageerror_keeps_stack():
+    state = _fresh_state()
+    stack = "Error: boom\n    at foo (app.js:10:5)\n    at bar (app.js:20:3)"
+    state._add_pageerror(_FakePageError("boom", stack))
+    assert state.console_logs[0]["level"] == "error"
+    assert state.console_logs[0]["text"] == "boom"
+    assert state.console_logs[0]["stack"] == stack
+
+
+def test_daemon_add_request_failed_records_network():
+    state = _fresh_state()
+    state._add_request_failed(
+        _FakeRequest("GET", "http://localhost:5173/api/data", "net::ERR_CONNECTION_REFUSED")
+    )
+    assert state.network_fails[0] == {
+        "method": "GET",
+        "url": "http://localhost:5173/api/data",
+        "failure": "net::ERR_CONNECTION_REFUSED",
+    }
+
+
+def test_daemon_network_ring_buffer_bounded():
+    import disco.tools.builtin._browser_daemon as daemon_mod
+
+    state = _fresh_state()
+    for i in range(daemon_mod.MAX_NETWORK + 25):
+        state._add_request_failed(_FakeRequest("GET", f"http://x/{i}", "boom"))
+    assert len(state.network_fails) == daemon_mod.MAX_NETWORK
+
+
+def test_daemon_clear_console_clears_network():
+    state = _fresh_state()
+    state._add_request_failed(_FakeRequest("GET", "http://x/", "boom"))
+    state._add_console(_FakeConsoleMessage("log", "hi"))
+    state.clear_console()
+    assert state.console_logs == []
+    assert state.network_fails == []
+
+
+def test_render_observation_surfaces_stack_source_network_and_logs():
+    tool = BrowserTool()
+    data = {
+        "ok": True,
+        "url": "http://localhost:5173/",
+        "title": "App",
+        "console": [
+            {"level": "log", "text": "boot sequence started"},
+            {"level": "info", "text": "fetching config"},
+            {
+                "level": "error",
+                "text": "Uncaught TypeError: cannot read 'x'",
+                "location": {
+                    "url": "http://localhost:5173/app.js",
+                    "lineNumber": 42,
+                    "columnNumber": 7,
+                },
+                "stack": (
+                    "TypeError: cannot read 'x'\n"
+                    "    at render (app.js:42:7)\n"
+                    "    at mount (app.js:10:3)"
+                ),
+            },
+        ],
+        "network": [
+            {"method": "GET", "url": "http://localhost:5173/api/data", "failure": "net::ERR_FAILED"},
+            {"method": "POST", "url": "http://localhost:5173/api/save", "status": 500},
+        ],
+        "elements": [],
+        "text": "Hello",
+        "screenshot_path": ".pmx/screenshots/0001-navigate.png",
+    }
+    rendered = tool._render_observation(data)
+    # header summary preserved
+    assert "CONSOLE (1 errors, 0 warnings):" in rendered
+    # stack (truncated form) is present
+    assert "at render (app.js:42:7)" in rendered
+    # source:line from location
+    assert "http://localhost:5173/app.js:42:7" in rendered
+    # console.log surfaced because an error is present
+    assert "boot sequence started" in rendered
+    # network failures, both failure-text and status forms
+    assert "NETWORK FAIL: GET http://localhost:5173/api/data -> net::ERR_FAILED" in rendered
+    assert "NETWORK FAIL: POST http://localhost:5173/api/save -> 500" in rendered
+
+
+def test_render_observation_hides_logs_when_no_problems():
+    tool = BrowserTool()
+    data = {
+        "url": "http://localhost:5173/",
+        "title": "App",
+        "console": [
+            {"level": "log", "text": "just a healthy log line"},
+            {"level": "info", "text": "all good"},
+        ],
+        "network": [],
+        "elements": [],
+        "text": "Hello",
+        "screenshot_path": None,
+    }
+    rendered = tool._render_observation(data)
+    # No error/warning → no console block, and the noisy logs are dropped.
+    assert "CONSOLE" not in rendered
+    assert "just a healthy log line" not in rendered
+
+
+def test_render_observation_stack_truncated_to_cap():
+    import disco.tools.builtin.browser as browser_mod
+
+    tool = BrowserTool()
+    stack = "Error: deep\n" + "\n".join(f"    at frame{i} (app.js:{i}:1)" for i in range(40))
+    data = {
+        "url": "http://localhost:5173/",
+        "title": "App",
+        "console": [{"level": "error", "text": "deep", "stack": stack}],
+        "network": [],
+        "elements": [],
+        "text": "Hello",
+        "screenshot_path": None,
+    }
+    rendered = tool._render_observation(data)
+    # Only the first _MAX_STACK_LINES frames are kept, then a truncation marker.
+    assert "at frame0 (app.js:0:1)" in rendered
+    assert f"at frame{browser_mod._MAX_STACK_LINES} (app.js:{browser_mod._MAX_STACK_LINES}:1)" not in rendered
+    assert "stack truncated" in rendered
+
+
 @pytest.mark.asyncio
 async def test_browser_ensure_daemon_restart_on_failure():
     tool = BrowserTool()
