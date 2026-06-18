@@ -151,6 +151,16 @@ def test_disputed_note_citation_is_converted():
 # ---- ④ light / dark ---------------------------------------------------------
 
 
+def test_page_paints_full_sheet_background():
+    """The @page rule must paint the full sheet (incl. margins) or a dark-mode PDF
+    is a dark rectangle floating on white paper (the 'center rectangle' bug)."""
+    from disco.core.brand import print_skeleton_css
+
+    css = print_skeleton_css()
+    page_block = css.split("@page{", 1)[1].split("@top-center", 1)[0]
+    assert "background:var(--bg)" in page_block
+
+
 def test_light_and_dark_html_differ():
     rep = _report_with_chart()
     light = _build_pdf_html(rep, None, resolve_theme("disco", "light"))

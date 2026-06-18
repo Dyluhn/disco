@@ -115,6 +115,11 @@ _PRINT_SKELETON_CSS = """\
 @page{
   size:A4;
   margin:1in 1in 1in 1in;
+  /* Paint the FULL sheet (incl. the margin box) — WeasyPrint only propagates the
+     html/body background to the content area, leaving white margins. Without this
+     a dark-mode PDF is a dark rectangle floating on white paper (and the
+     header/footer in the margins render light-on-white = invisible). */
+  background:var(--bg);
   @top-center{
     content:element(running-header);
     font-family:var(--ui);
