@@ -12,6 +12,7 @@ import type { ComponentType } from "react";
 import { NavLink } from "react-router-dom";
 import { cn } from "@/lib/cn";
 import { useRunningCount } from "@/hooks/useActivity";
+import { useMode } from "@/shell/mode";
 
 interface NavItem {
   to: string;
@@ -50,6 +51,7 @@ interface Props {
  */
 export function NavRail({ collapsed, onToggleCollapse, onNavigate }: Props) {
   const running = useRunningCount();
+  const { setMode } = useMode();
   return (
     <nav
       aria-label="Primary"
@@ -103,7 +105,14 @@ export function NavRail({ collapsed, onToggleCollapse, onNavigate }: Props) {
               <NavLink
                 to={item.to}
                 end={item.end}
-                onClick={onNavigate}
+                onClick={() => {
+                  // "New" is the home/start affordance: reset the surface to the
+                  // default landing mode (Search) so it doesn't pin the user to the
+                  // surface they were last on (e.g. a Build). Other items navigate
+                  // without touching the mode.
+                  if (item.to === "/") setMode("search");
+                  onNavigate?.();
+                }}
                 aria-label={badge > 0 ? `${item.label} (${badge} running)` : item.label}
                 className={({ isActive }) =>
                   cn(

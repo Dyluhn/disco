@@ -11,6 +11,13 @@ vi.mock("@/lib/useTheme", () => ({
   }),
 }));
 
+// Mock the mode context so we can assert the surface-reset behaviour of "New"
+// without standing up a ModeProvider. setMode is a spy shared across the suite.
+const setMode = vi.fn();
+vi.mock("@/shell/mode", () => ({
+  useMode: () => ({ mode: "build", setMode, modes: [] }),
+}));
+
 const renderPalette = () => {
   return render(
     <BrowserRouter>
@@ -20,6 +27,9 @@ const renderPalette = () => {
 };
 
 describe("CommandPalette", () => {
+  beforeEach(() => {
+    setMode.mockClear();
+  });
   it("should open on Ctrl+K", () => {
     renderPalette();
     fireEvent.keyDown(document, { key: "k", ctrlKey: true });
@@ -43,9 +53,17 @@ describe("CommandPalette", () => {
     expect(screen.getByPlaceholderText("Search commands...")).toBeDefined();
     
     fireEvent.keyDown(screen.getByPlaceholderText("Search commands..."), { key: "Escape" });
-    // Radix Dialog handles Escape, but we can check if it's gone from the DOM 
+    // Radix Dialog handles Escape, but we can check if it's gone from the DOM
     // depending on how Portal works in the test environment.
     // In many test setups, we might need to wait or check the open state.
     expect(screen.queryByPlaceholderText("Search commands...")).toBeNull();
+  });
+
+  it("resets the surface to the default search mode when 'New' is invoked", () => {
+    renderPalette();
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    // Click the "New" command (currently on a Build surface, mode === "build").
+    fireEvent.click(screen.getByText("New"));
+    expect(setMode).toHaveBeenCalledWith("search");
   });
 });
