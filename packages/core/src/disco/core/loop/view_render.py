@@ -60,6 +60,62 @@ def overflow_signal(events: list[Event]) -> OverflowSignal:
     return OverflowSignal(difficulty=Difficulty.ROUTINE, consecutive_tool_errors=consecutive)
 
 
+class _SnapshotHalt:
+    """Typed sentinel: a hung read ⇒ wedged sandbox → stop the snapshot.
+    A distinct type (not bare ``object()``) so the caller's isinstance check
+    narrows the read result cleanly to ``bytes | None``."""
+
+
+_SNAPSHOT_READ_HALT = _SnapshotHalt()
+
+
+async def _read_working_file(
+    sbx: Sandbox, path: str, omitted_notes: list[str]
+) -> bytes | _SnapshotHalt | None:
+    """Read one working-set file's raw bytes for the snapshot. Returns the
+    bytes on success; ``None`` to SKIP this file (gone / unreadable / directory
+    / binary — an explanatory note is appended to ``omitted_notes``); or
+    ``_SNAPSHOT_READ_HALT`` to STOP the snapshot (a hung read implies a wedged/
+    dead sandbox — don't hold the conversation lock for timeout×N files, which
+    would block pause/steer/cancel). Raises nothing. Extracted from
+    workspace_snapshot_message to keep that coordinator under the size cap."""
+    try:
+        raw = await asyncio.wait_for(sbx.read_file(path), timeout=_WS_READ_TIMEOUT_S)
+    except TimeoutError:
+        # Degrade to the snapshot collected so far. The sandbox isn't healed
+        # here (a pure projection step); the model's NEXT real action goes
+        # through _execute_and_observe, which detects the dead sandbox.
+        return _SNAPSHOT_READ_HALT
+    except FileNotFoundError:
+        # E4 (T8) — deleted between the action and this read. Surface it (the
+        # model can re-decide whether to re-create); don't silently lose it.
+        omitted_notes.append(f"[file gone: {path}]")
+        return None
+    except PermissionError:
+        # E4 (T8) — sandbox denied the read. Note it so the model knows the path
+        # is in its working set but the snapshot can't show it.
+        omitted_notes.append(f"[unreadable: permission: {path}]")
+        return None
+    except (IsADirectoryError, NotADirectoryError, OSError) as e:
+        # E4 (T8) — a directory slipped into the working set. Note + skip; any
+        # other OSError keeps the prior silent-skip contract.
+        if isinstance(e, IsADirectoryError) or (
+            isinstance(e, OSError) and getattr(e, "errno", None) == 21  # EISDIR
+        ):
+            omitted_notes.append(f"[directory: {path}]")
+        return None
+    except Exception:  # noqa: BLE001 — file gone/unreadable this turn: skip it
+        return None
+    # E4 (T8) — binary sniff. A NUL byte in the first 1KB is a near-certain
+    # binary signal; the snapshot's only value is content the model can act on.
+    # Bounded sample so a huge text file with one stray NUL past the head still
+    # renders via errors="replace".
+    if b"\x00" in raw[:1024]:
+        omitted_notes.append(f"[binary omitted: {path}]")
+        return None
+    return raw
+
+
 async def workspace_snapshot_message(
     sbx: Sandbox | None,
     events: list[Event],
@@ -155,54 +211,11 @@ async def workspace_snapshot_message(
         # View, once in the mirror). Exclude it like `.disco-spill-*`.
         if ".pmx" in path.split("/"):
             continue
-        try:
-            raw = await asyncio.wait_for(
-                sbx.read_file(path), timeout=_WS_READ_TIMEOUT_S
-            )
-        except TimeoutError:
-            # A hung read implies a wedged/dead sandbox. STOP — don't hold the
-            # conversation lock for timeout×N files (that would block pause/steer/
-            # cancel). Degrade to the snapshot collected so far. The sandbox isn't
-            # healed here (this is a pure projection step); the model's NEXT real
-            # action goes through _execute_and_observe, which detects the dead
-            # sandbox and emits the restart notice.
-            break
-        except FileNotFoundError:
-            # E4 (T8) — file was deleted between the action and this read.
-            # Surface that as an explicit note (the model can re-decide
-            # whether to re-create the file); don't silently lose it.
-            omitted_notes.append(f"[file gone: {path}]")
-            continue
-        except PermissionError:
-            # E4 (T8) — the sandbox denied this read. Note it so the
-            # model knows the path exists in its working set but the
-            # snapshot cannot show it (the model can still try file_read).
-            omitted_notes.append(f"[unreadable: permission: {path}]")
-            continue
-        except (IsADirectoryError, NotADirectoryError, OSError) as e:
-            # E4 (T8) — a directory slipped into the working set (e.g. the
-            # model `file_write`d a directory path by mistake). Skip with
-            # a brief note; do not include its binary directory listing.
-            if isinstance(e, IsADirectoryError) or (
-                isinstance(e, OSError) and getattr(e, "errno", None) == 21  # EISDIR
-            ):
-                omitted_notes.append(f"[directory: {path}]")
-                continue
-            # Any other OSError — keep the prior silent-skip behavior
-            # (the existing contract was "file gone/unreadable: skip").
-            continue
-        except Exception:  # noqa: BLE001 — file gone/unreadable this turn: skip it
-            continue
-        # E4 (T8) — binary sniff. A NUL byte in the first 1KB is a near-
-        # certain signal of binary content (text decoders reject it;
-        # editors render garbage; the snapshot's only value is showing
-        # the model something it can act on). Bounded sample (1KB, not
-        # the whole file) so a huge text file with one stray NUL past
-        # the head — e.g. an embedded null in a template — still
-        # renders normally via `errors="replace"`.
-        if b"\x00" in raw[:1024]:
-            omitted_notes.append(f"[binary omitted: {path}]")
-            continue
+        raw = await _read_working_file(sbx, path, omitted_notes)
+        if isinstance(raw, _SnapshotHalt):
+            break  # hung read ⇒ wedged sandbox; degrade to the snapshot so far
+        if raw is None:
+            continue  # gone / unreadable / directory / binary — note already added
         text = raw.decode("utf-8", "replace")
         # W2 — pointer for unchanged known files (tracker mode only).
         # If the tracker is active, this file has been shown in full before,
