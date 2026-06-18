@@ -47,6 +47,21 @@ class TestTableVision:
     def test_anthropic_slash_prefix_is_vision(self):
         assert table_vision("anthropic/claude-3-haiku-20240307") is True
 
+    # Open / multilingual vision-language models (the "-VL" convention + MLLMs).
+    def test_qwen_vl_is_vision(self):
+        assert table_vision("qwen/qwen-2.5-vl-72b-instruct") is True
+        assert table_vision("qwen/qwen3-vl-235b") is True
+
+    def test_internvl_llava_glmv_are_vision(self):
+        assert table_vision("opengvlab/internvl-2.5") is True
+        assert table_vision("liuhaotian/llava-1.6") is True
+        assert table_vision("z-ai/glm-4.6v") is True
+        assert table_vision("thudm/glm-4v") is True
+
+    def test_non_vision_qwen_coder_is_not_vision(self):
+        # The "-vl" rule must NOT match a text-only Qwen coder model.
+        assert table_vision("qwen/qwen-2.5-coder-32b") is False
+
     # OpenAI known-vision patterns
     def test_gpt_4o_is_vision(self):
         assert table_vision("gpt-4o") is True
