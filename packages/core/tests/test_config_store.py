@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from disco.core.llm import ConfigStore, ModelRole, default_config
+from disco.core.llm import ConfigStore, ModelRole, Requirement, default_config
 from disco.core.llm.config import ExtractionSettings, ModelEntry, SearchSettings
 
 
@@ -191,3 +191,29 @@ def test_save_extraction_selfhost_preserves_base_url(tmp_path):
     cfg = store.load()
     assert cfg.extraction.provider == "crawl4ai"
     assert cfg.extraction.base_url == "http://192.168.1.237:11235"
+
+
+# ---- V2/V4 (§2): the startup vision-probe overlay ---------------------------
+
+
+def test_apply_vision_probe_overlay_adds_vision_on_load(tmp_path, monkeypatch):
+    """The process-lifetime probe overlay (installed at startup) makes load() add
+    VISION to a table-text-only driver — the probe beats the static table."""
+    monkeypatch.delenv("PMX_DRIVER_VISION", raising=False)
+    monkeypatch.delenv("DISCO_DRIVER_VISION", raising=False)
+    store = ConfigStore(tmp_path / "cfg.json")  # seed = default catalogue
+    # Baseline: Qwen driver-local is text-only per the static table.
+    assert Requirement.VISION not in store.load().models["driver-local"].capabilities
+
+    store.apply_vision_probe({"driver-local": True})  # what startup installs
+    assert Requirement.VISION in store.load().models["driver-local"].capabilities
+
+
+def test_apply_vision_probe_none_leaves_table_caps(tmp_path, monkeypatch):
+    """A None probe entry (unknown / network miss) is ignored — load() falls through
+    to the static table, never claiming unproven vision."""
+    monkeypatch.delenv("PMX_DRIVER_VISION", raising=False)
+    monkeypatch.delenv("DISCO_DRIVER_VISION", raising=False)
+    store = ConfigStore(tmp_path / "cfg.json")
+    store.apply_vision_probe({"driver-local": None})
+    assert Requirement.VISION not in store.load().models["driver-local"].capabilities
