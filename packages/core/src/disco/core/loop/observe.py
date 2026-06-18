@@ -23,6 +23,7 @@ from ..events import (
     MessageEvent,
     ObservationEvent,
     ToolResult,
+    find_elided_arg_markers,
 )
 from ..llm import LLMContextWindowExceeded
 from ..view import View
@@ -213,6 +214,41 @@ class Observer:
                             content=_f9_pointer,
                         ),
                         action_id=action.id,
+                    )
+                )
+                return
+        # K1 — elision-marker execution guard. A weak model can copy the
+        # `_snip_args` placeholder (rendered into the action history as a context-
+        # saving stand-in for content it already wrote) back into a REAL tool
+        # argument — e.g. a file_write body. Executing that would overwrite real
+        # content with the ~72-byte placeholder (DATA LOSS) and re-feed the marker
+        # into the next read (the reproduced 88× read loop). Reject BEFORE
+        # execution and tell the model to resend the FULL content from the live
+        # CURRENT WORKSPACE snapshot. Catches ALL execution paths (run loop,
+        # confirm, verify, finish) because every one funnels through here.
+        if action.tool_call is not None:
+            _k1_bad = find_elided_arg_markers(action.tool_call.arguments)
+            if _k1_bad:
+                _LOG.info(
+                    "K1 guard: rejected %s — arg(s) %s carry an elision placeholder "
+                    "(call_id=%s)",
+                    action.tool_call.tool_name,
+                    _k1_bad,
+                    action.tool_call.call_id,
+                )
+                await self._loop._emit(
+                    AgentErrorEvent(
+                        error=(
+                            f"Argument(s) {_k1_bad} contain an internal placeholder of "
+                            'the form "<N chars … full content …>", not real content. '
+                            "That marker is a context-saving stand-in for content you "
+                            "ALREADY wrote — it is NOT the content itself, and it was "
+                            "NOT executed. Do not copy it into a tool call. Read the "
+                            "actual current content from the CURRENT WORKSPACE block "
+                            "above (or call file_read) and resend the FULL argument."
+                        ),
+                        action_id=action.id,
+                        tool_call_id=action.tool_call.call_id,
                     )
                 )
                 return

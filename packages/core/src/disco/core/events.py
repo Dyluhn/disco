@@ -11,6 +11,7 @@ without further coordination. Method *bodies* are implementation.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime
 from enum import Enum
@@ -284,14 +285,40 @@ def snip_content(content: str, *, max_chars: int, head: int, tail: int) -> str:
 _ARG_SNIP_CHARS = 1_500
 
 
+# K1 — the elision-marker family. `_snip_args` renders an over-long arg as a
+# placeholder in the action history. A weak model can COPY that placeholder back
+# into a REAL tool argument (e.g. a file_write body), which — if executed — would
+# write the ~72-byte placeholder over real content (DATA LOSS) and re-feed the
+# marker into the next file_read (an 88× read loop, reproduced live). The marker
+# is reworded to point at the live CURRENT WORKSPACE snapshot (never "use
+# file_read", which invites the read loop). The DETECTOR below matches the marker
+# STRUCTURE — `<N chars … {elided|full content} …>` — not the exact wording, so
+# the marker can be reworded freely without the execution guard going blind.
+_ELISION_MARKER_RE = re.compile(r"<\s*\d[\d,]*\s*chars\b[^>]*?\b(?:elided|full content)\b[^>]*>")
+
+
 def _snip_args(arguments: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for k, v in arguments.items():
         if isinstance(v, str) and len(v) > _ARG_SNIP_CHARS:
-            out[k] = f"<{len(v):,} chars elided — already applied; use file_read for the content>"
+            out[k] = (
+                f"<{len(v):,} chars — full content is in the CURRENT WORKSPACE block "
+                "below; do not copy this placeholder into a tool argument>"
+            )
         else:
             out[k] = v
     return out
+
+
+def find_elided_arg_markers(arguments: dict[str, object]) -> list[str]:
+    """K1 execution guard: return the argument keys whose string value carries an
+    elision placeholder (the `_snip_args` marker copied back by a weak model).
+    Empty list ⇒ the arguments are clean and safe to execute. Pure + deterministic."""
+    return [
+        k
+        for k, v in arguments.items()
+        if isinstance(v, str) and _ELISION_MARKER_RE.search(v) is not None
+    ]
 
 
 class ObservationEvent(BaseEvent, LLMConvertible):

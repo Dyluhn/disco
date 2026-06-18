@@ -299,10 +299,11 @@ async def test_assist_off_byte_identical_even_for_confirmed_write():
     assert "written to" not in content
     assert "file_read to recover" not in content
     # The content is the existing snip (long content > _ARG_SNIP_CHARS).
-    # We don't pin the exact string (it could legitimately change if
-    # someone updates the snip shaper), but we pin the SHAPE: it's the
-    # pre-F8 baseline that has been shipping.
-    assert "chars elided" in content
+    # We don't pin the exact string, but we pin the SHAPE: the `_snip_args`
+    # placeholder. K1 reworded it to point at the CURRENT WORKSPACE snapshot
+    # (away from "use file_read", which invited the read loop); the structural
+    # signature is "<N chars … full content …>".
+    assert "chars" in content and "full content" in content
 
 
 async def test_assist_off_renders_full_short_content_unchanged():
