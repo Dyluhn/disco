@@ -23,6 +23,7 @@ and from a standalone live-acceptance script.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 
@@ -88,6 +89,44 @@ def compute_build_metrics(trace_text: str) -> BuildMetrics:
         reread_pressure_thoughts=reread_thoughts,
         browser_30s_timeouts=len(_BROWSER_TIMEOUT_RE.findall(trace_text)),
         action_count=len(_ACTION_RE.findall(trace_text)),
+        reads_by_path=reads_by_path,
+    )
+
+
+def compute_build_metrics_from_events(events: list[tuple[str, dict]]) -> BuildMetrics:
+    """Compute the same BuildMetrics directly from disco.db events — the LIVE
+    acceptance path (no text rendering). `events` is [(kind, payload_dict), …]
+    in seq order. Pure. Mirrors compute_build_metrics' definitions:
+      - file_read_count / reads_by_path: action events with tool_name=='file_read'
+      - reread_pressure_thoughts: action.thought carrying a re-read keyword
+      - browser_30s_timeouts: 'Timeout 30000' occurrences (live in agent_error)
+      - action_count: action events
+    """
+    reads_by_path: dict[str, int] = {}
+    file_read_count = 0
+    action_count = 0
+    reread_thoughts = 0
+    browser_timeouts = 0
+    for kind, p in events:
+        browser_timeouts += json.dumps(p).count("Timeout 30000")
+        if kind != "action":
+            continue
+        action_count += 1
+        tc = p.get("tool_call") or {}
+        if tc.get("tool_name") == "file_read":
+            file_read_count += 1
+            path = (tc.get("arguments") or {}).get("path")
+            if path:
+                reads_by_path[path] = reads_by_path.get(path, 0) + 1
+        thought = (p.get("thought") or "").lower()
+        if any(kw in thought for kw in _REREAD_KEYWORDS):
+            reread_thoughts += 1
+    return BuildMetrics(
+        file_read_count=file_read_count,
+        max_reads_per_path=max(reads_by_path.values(), default=0),
+        reread_pressure_thoughts=reread_thoughts,
+        browser_30s_timeouts=browser_timeouts,
+        action_count=action_count,
         reads_by_path=reads_by_path,
     )
 
