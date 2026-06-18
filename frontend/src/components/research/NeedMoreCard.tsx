@@ -118,7 +118,7 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
     bodyPayload: string | undefined,
   ): Promise<Blob> {
     const res = await fetch(
-      `/api/conversations/${cid}/report/export?fmt=${fmt}`,
+      `${agentHttpBase()}/api/conversations/${cid}/report/export?fmt=${fmt}`,
       {
         method: "POST",
         headers: bodyPayload ? { "Content-Type": "application/json" } : undefined,
