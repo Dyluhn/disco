@@ -80,6 +80,7 @@ from disco.tools import (
     SandboxSpec,
     ToolDef,
     agent_scope,
+    artifact_scope,
     build_default_registry,
 )
 
@@ -482,6 +483,9 @@ class ConversationRuntime:
         # Per-conversation ASSIST tier flag (T1), same B0 sidecar pattern.
         self._assist_path = f"{db_path}.assist.json" if db_path else ""
         self._assist: dict[str, bool] = self._load_assist()
+        # C6: per-conversation artifact_mode flag. In-memory only — set at create
+        # time from the body; artifact sessions are short-lived, no sidecar needed.
+        self._artifact_mode: dict[str, bool] = {}
         # Per-conversation server-side uploads sidecar directory (B0 pattern).
         # DC-07 (2026-06-11): uploads survive sandbox recreation.
         self._uploads_base = f"{db_path}.uploads" if db_path else ""
@@ -897,6 +901,14 @@ class ConversationRuntime:
     def is_assist(self, conversation_id: str) -> bool:
         return self._settings.is_assist(conversation_id)
 
+    # ---- artifact_mode (C6) ------------------------------------------------
+
+    def set_artifact_mode(self, conversation_id: str, on: bool) -> None:
+        self._settings.set_artifact_mode(conversation_id, on)
+
+    def _effective_artifact_mode(self, conversation_id: str) -> bool:
+        return self._settings._effective_artifact_mode(conversation_id)
+
     def driver_models(self) -> dict[str, Any]:
         """The driver-eligible models (live + tool-calling), deduped by underlying model,
         for the Build model picker — with the current default. Cost-legible: provider +
@@ -1124,9 +1136,14 @@ class ConversationRuntime:
         )
         _driver_entry = cfg.models.get(_driver_key)
         _driver_caps = _driver_entry.capabilities if _driver_entry is not None else frozenset()
+        # C6: artifact_mode selects a narrow scope (NO shell/browser/plan-gate);
+        # the W4 anchored-edit heuristic does not apply to the artifact scope
+        # (file_str_replace is excluded from ARTIFACT_TOOLS regardless of caps).
+        _art_mode = self._effective_artifact_mode(conversation_id)
+        _scope = artifact_scope() if _art_mode else agent_scope(model_caps=_driver_caps)
         executor = DefaultToolExecutor(
             build_default_registry(),
-            agent_scope(model_caps=_driver_caps),
+            _scope,
             # SandboxSession is a drop-in SandboxInstance (it implements the
             # protocol at runtime); the `id` attribute differs only in being a
             # property rather than a plain attribute, which trips the
@@ -1182,6 +1199,32 @@ class ConversationRuntime:
             except Exception:
                 pass  # best-effort; WS frame emission is not critical
         self._executors[conversation_id] = executor
+        if _art_mode:
+            # C6: artifact mode — low-friction authoring path:
+            #   • NeverConfirm: artifacts are low-risk; no per-action approval.
+            #   • INTERACTIVE: no plan-gate; the model acts directly on first message.
+            #   • No planning_tools: submit_plan / plan_step are excluded from scope.
+            # Everything else (broker, sandbox, condenser, summarizer, autonomous,
+            # assist) is byte-identical to the normal build loop — only the gate,
+            # mode, and scope differ.
+            return AgentLoop(
+                conversation_id,
+                self._store,
+                agent,
+                executor,
+                router,
+                RuleBasedAnalyzer(),
+                # No per-action approval for artifact ops — confinement + narrow scope
+                # are the blast-radius controls (NeverConfirm mirrors Research surface).
+                NeverConfirm(),
+                LLMSummarizingCondenser(context_window=self._driver_context_window()),
+                RouterSummarizer(router),
+                # INTERACTIVE: no plan-gate; artifact authoring starts immediately.
+                mode=OperatingMode.INTERACTIVE,
+                # No planning_tools (submit_plan/plan_step not in ARTIFACT_TOOLS scope).
+                autonomous=self._effective_autonomous(conversation_id),
+                assist=self._effective_assist(conversation_id),
+            )
         return AgentLoop(
             conversation_id,
             self._store,

@@ -196,3 +196,15 @@ class RuntimeSettings:
 
     def is_assist(self, conversation_id: str) -> bool:
         return self._effective_assist(conversation_id)
+
+    # ---- artifact_mode (C6) ------------------------------------------------
+
+    def set_artifact_mode(self, conversation_id: str, on: bool) -> None:
+        """Mark a conversation as artifact-mode (C6). In-memory only — the flag
+        is set at create time from the body and is not needed to survive a restart
+        (artifact-mode conversations are short-lived authoring sessions)."""
+        self._rt._artifact_mode[conversation_id] = bool(on)
+
+    def _effective_artifact_mode(self, conversation_id: str) -> bool:
+        """True when the conversation was created with artifact_mode=True."""
+        return self._rt._artifact_mode.get(conversation_id, False)

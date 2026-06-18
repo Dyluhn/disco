@@ -21,10 +21,12 @@ from .builtin import build_default_registry
 from .executor import DefaultToolExecutor, validate_args
 from .registry import (
     AGENT_TOOLS,
+    ARTIFACT_TOOLS,
     RESEARCH_TOOLS,
     ToolRegistry,
     ToolScope,
     agent_scope,
+    artifact_scope,
     research_scope,
 )
 from .sandbox import (
@@ -48,6 +50,7 @@ from .secrets import (
 
 __all__ = [
     "AGENT_TOOLS",
+    "ARTIFACT_TOOLS",
     "RESEARCH_TOOLS",
     "Capability",
     "CapabilityBroker",
@@ -73,6 +76,7 @@ __all__ = [
     "ToolRegistry",
     "ToolScope",
     "agent_scope",
+    "artifact_scope",
     "build_default_registry",
     "research_scope",
     "validate_args",

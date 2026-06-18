@@ -111,6 +111,41 @@ AGENT_TOOLS = frozenset(
 _ANCHORED_EDIT_TOOLS: frozenset[str] = frozenset({"file_str_replace"})
 _WEAK_TIER_ADVERTISED: frozenset[str] = AGENT_TOOLS - _ANCHORED_EDIT_TOOLS
 
+# C6: artifact_mode tool scope — a STRICT SUBSET of AGENT_TOOLS with NO shell/browser/
+# plan-gate/code_exec/file_str_replace/delegate_explore. Includes line-edit tools
+# (file_replace_lines / file_insert_lines) so artifacts remain editable post-creation.
+ARTIFACT_TOOLS: frozenset[str] = frozenset(
+    {
+        "file_read",
+        "file_write",
+        "file_append",
+        "file_edit",
+        # line-number-targeted edits — present so artifacts are editable without shell
+        "file_replace_lines",
+        "file_insert_lines",
+        "file_list",
+        "search",
+        "extract",
+        "sheet_generate",
+        "slides_generate",
+        "image_generate",
+        "audio_overview",
+        "think",
+    }
+)
+
+
+def artifact_scope() -> ToolScope:
+    """Return the ToolScope for artifact mode (C6) — NO shell/browser/plan-gate.
+
+    ARTIFACT_TOOLS is a strict subset of AGENT_TOOLS: file writers + asset
+    generators + search/extract + think. Excludes shell*, browser, deploy_preview,
+    server_status, submit_plan, plan_step, code_exec, file_str_replace,
+    delegate_explore. The INTERACTIVE/NeverConfirm loop is low-risk by design;
+    the boundary is the intersection: artifact mode must NOT silently grant
+    shell or browser access."""
+    return ToolScope(allowed_tools=ARTIFACT_TOOLS, preset="artifact")
+
 
 def research_scope() -> ToolScope:
     return ToolScope(allowed_tools=RESEARCH_TOOLS, preset="research")
