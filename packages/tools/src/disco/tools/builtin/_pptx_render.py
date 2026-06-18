@@ -40,9 +40,11 @@ if TYPE_CHECKING:
 from disco.tools.builtin._deck_schema import (
     AuthoredDeck,
     AuthoredSlide,
+    ChartSpec,
     Deck,
     Element,
     Slide,
+    TableSpec,
     lower_deck,
 )
 
@@ -53,7 +55,7 @@ from disco.tools.builtin._deck_schema import (
 # imports them) continues to work.  Internally, render_pptx/render_html convert
 # MinimalDeck → AuthoredDeck → Deck via the C1 lowerer.
 
-LayoutHint = Literal["title", "bullets", "section", "image_right"]
+LayoutHint = Literal["title", "bullets", "section", "image_right", "chart", "table"]
 
 
 @dataclass
@@ -65,6 +67,8 @@ class DeckSlide:
     layout: LayoutHint = "bullets"
     image_url: str | None = None
     notes: str | None = None
+    chart: "ChartSpec | None" = None   # C8: chart data → routes to c8 chart layout
+    table: "TableSpec | None" = None   # C8: table data → routes to c8 table layout
 
 
 @dataclass
@@ -87,6 +91,8 @@ def _minimal_to_authored(deck: MinimalDeck) -> AuthoredDeck:
         "bullets": "bullets",
         "section": "section_header",
         "image_right": "image_right",
+        "chart": "metrics",    # C8: chart → metrics layout
+        "table": "table",      # C8: table → table layout
     }
     slides = []
     for ds in deck.slides:
@@ -96,6 +102,8 @@ def _minimal_to_authored(deck: MinimalDeck) -> AuthoredDeck:
             body=ds.bullets,
             image_prompt=None,  # image_url is a path, not a prompt
             notes=ds.notes,
+            chart=ds.chart,    # C8: propagate chart spec
+            table=ds.table,    # C8: propagate table spec
         ))
     theme_str = f"{deck.theme_name}-{deck.theme_mode}"
     if theme_str not in ("disco-light", "disco-dark", "neutral-light"):
@@ -618,13 +626,21 @@ def _render_pptx_c1(deck: Deck) -> bytes:
         prs_slide = prs.slides.add_slide(blank_layout)
         _set_slide_bg(prs_slide, deck.theme.bg)
 
-        for el in slide.elements:
-            _render_element(prs_slide, el, deck.theme)
+        # C8: chart/table slides delegate to native chart/table shapes
+        if slide.chart is not None:
+            from disco.tools.builtin._c8_chart_layouts import layout_chart_slide_pptx
+            layout_chart_slide_pptx(prs_slide, slide, deck.theme)
+        elif slide.table is not None:
+            from disco.tools.builtin._c8_chart_layouts import layout_table_slide_pptx
+            layout_table_slide_pptx(prs_slide, slide, deck.theme)
+        else:
+            for el in slide.elements:
+                _render_element(prs_slide, el, deck.theme)
 
-        if slide.notes:
-            _ntf = prs_slide.notes_slide.notes_text_frame
-            if _ntf is not None:
-                _ntf.text = slide.notes
+            if slide.notes:
+                _ntf = prs_slide.notes_slide.notes_text_frame
+                if _ntf is not None:
+                    _ntf.text = slide.notes
 
     buf = io.BytesIO()
     prs.save(buf)
@@ -661,9 +677,10 @@ def _render_html_c1(deck: Deck) -> str:  # noqa: C901
         active = ' active' if i == 0 else ''
         bg = theme.surface_1 if slide.layout == "section_header" else theme.bg
 
-        inner = _html_for_c1_slide(slide, theme)
+        inner = _html_for_c1_slide(slide, theme, slide_idx=i)
         sections_html.append(
             f'<section class="slide{active}" id="slide-{i}" '
+            f'data-slide-id="slide-{i}" '
             f'data-layout="{html.escape(slide.layout)}" '
             f'style="background:{html.escape(bg)}">\n{inner}\n</section>'
         )
@@ -715,6 +732,17 @@ body{{background:#000;display:flex;align-items:center;justify-content:center;
 .nav button:hover{{background:var(--surface-1);}}
 .slide-counter{{position:fixed;bottom:1%;left:1%;font-family:var(--ui);
   font-size:.8em;color:var(--text-faint);}}
+/* chart / table layouts (C8) */
+.slide-chart{{width:100%;margin-top:1%;overflow:hidden;}}
+.slide-chart svg{{max-width:100%;height:auto;}}
+.slide-table-wrap{{width:100%;overflow-x:auto;margin-top:1%;}}
+.slide-table{{border-collapse:collapse;width:100%;font-family:var(--reading);font-size:1.4vw;}}
+.slide-table thead th{{background:var(--accent);color:#fff;font-weight:bold;
+  padding:.4em .6em;text-align:left;border:1px solid rgba(255,255,255,0.2);}}
+.slide-table tbody td{{padding:.35em .6em;border:1px solid var(--hairline);
+  color:var(--text);}}
+.slide-table tbody tr:nth-child(even){{background:var(--surface-1);}}
+.slide-table-empty{{font-family:var(--ui);color:var(--text-faint);font-size:1.2vw;margin-top:2%;}}
 </style>
 </head>
 <body>
@@ -750,8 +778,25 @@ body{{background:#000;display:flex;align-items:center;justify-content:center;
 </html>"""
 
 
-def _html_for_c1_slide(slide: Slide, theme: Theme) -> str:
-    """Return inner HTML for a C1 Slide by extracting its text Elements."""
+def _html_for_c1_slide(slide: Slide, theme: Theme, *, slide_idx: int = 0) -> str:
+    """Return inner HTML for a C1 Slide by extracting its text Elements.
+
+    ``slide_idx`` is the 0-based position in the deck; used to stamp
+    ``data-element-id`` attributes so the SelectionOverlay + deckResolver can
+    identify elements in the rendered HTML.
+    """
+    sid = f"slide-{slide_idx}"
+
+    # C8: chart/table slides delegate to specialised HTML generators
+    if slide.chart is not None:
+        from disco.tools.builtin._c8_chart_layouts import html_chart_content
+        inner = html_chart_content(slide.title, slide.chart, theme)
+        return f'<div data-element-id="{sid}:title" data-slide-id="{sid}">{inner}</div>'
+    if slide.table is not None:
+        from disco.tools.builtin._c8_chart_layouts import html_table_content
+        inner = html_table_content(slide.title, slide.table, theme)
+        return f'<div data-element-id="{sid}:title" data-slide-id="{sid}">{inner}</div>'
+
     # Separate text and image elements
     texts = [el for el in slide.elements if el.kind == "text"]
     images = [el for el in slide.elements if el.kind == "image"]
@@ -764,17 +809,34 @@ def _html_for_c1_slide(slide: Slide, theme: Theme) -> str:
 
     layout = slide.layout
 
+    def _title_tag(el: Element, cls: str, tag: str = "h2") -> str:
+        eid = f'{sid}:title'
+        return (
+            f'<{tag} class="{cls}" '
+            f'data-element-id="{eid}" data-slide-id="{sid}">'
+            f'{html.escape(el.text)}</{tag}>'
+        )
+
+    def _sub_tag(el: Element, cls: str) -> str:
+        eid = f'{sid}:subtitle'
+        return (
+            f'<p class="{cls}" '
+            f'data-element-id="{eid}" data-slide-id="{sid}">'
+            f'{html.escape(el.text)}</p>'
+        )
+
+    def _bullet_li(el: Element, bidx: int) -> str:
+        eid = f'{sid}:body:{bidx}'
+        return (
+            f'<li data-element-id="{eid}" data-slide-id="{sid}">'
+            f'{html.escape(el.text.lstrip("• "))}</li>'
+        )
+
     if layout == "title":
         primary = texts_sorted[0] if texts_sorted else None
         rest = texts_sorted[1:]
-        title_html = (
-            f'<h1 class="slide-title">{html.escape(primary.text)}</h1>'
-            if primary else ""
-        )
-        sub_html = (
-            f'<p class="slide-subtitle">{html.escape(rest[0].text)}</p>'
-            if rest else ""
-        )
+        title_html = _title_tag(primary, "slide-title", "h1") if primary else ""
+        sub_html = _sub_tag(rest[0], "slide-subtitle") if rest else ""
         return f'<div class="slide-title-bar"></div>\n{title_html}\n{sub_html}'
 
     if layout == "section_header":
@@ -783,19 +845,16 @@ def _html_for_c1_slide(slide: Slide, theme: Theme) -> str:
         kicker_sorted = sorted(kicker_texts, key=lambda e: e.font_size_pt)
         head_sorted = sorted(head_texts, key=lambda e: e.font_size_pt, reverse=True)
         kicker = f'<p class="slide-section-kicker">{html.escape(kicker_sorted[0].text)}</p>' if kicker_sorted else ""
-        title = f'<h2 class="slide-section-title">{html.escape(head_sorted[0].text)}</h2>' if head_sorted else ""
-        sub = f'<p class="slide-subtitle">{html.escape(head_sorted[1].text)}</p>' if len(head_sorted) > 1 else ""
+        title = _title_tag(head_sorted[0], "slide-section-title", "h2") if head_sorted else ""
+        sub = _sub_tag(head_sorted[1], "slide-subtitle") if len(head_sorted) > 1 else ""
         return f'{kicker}<div class="slide-title-bar"></div>\n{title}\n{sub}'
 
     if layout in ("image_right", "image_left", "full_image"):
-        # Find the main title (largest text)
         title_el = texts_sorted[0] if texts_sorted else None
         body_els = texts_sorted[1:]
 
-        title_html = f'<h2 class="slide-heading">{html.escape(title_el.text)}</h2>' if title_el else ""
-        bullet_items = "".join(
-            f'<li>{html.escape(el.text.lstrip("• "))}</li>' for el in body_els
-        )
+        title_html = _title_tag(title_el, "slide-heading") if title_el else ""
+        bullet_items = "".join(_bullet_li(el, j) for j, el in enumerate(body_els))
         bullets_html = f'<ul class="slide-bullets">{bullet_items}</ul>' if bullet_items else ""
 
         img_html = ""
@@ -831,20 +890,19 @@ def _html_for_c1_slide(slide: Slide, theme: Theme) -> str:
     if layout == "closing":
         primary = texts_sorted[0] if texts_sorted else None
         rest = texts_sorted[1:]
-        title_html = f'<h1 class="slide-title">{html.escape(primary.text)}</h1>' if primary else ""
-        sub_html = f'<p class="slide-subtitle">{html.escape(rest[0].text)}</p>' if rest else ""
+        title_html = _title_tag(primary, "slide-title", "h1") if primary else ""
+        sub_html = _sub_tag(rest[0], "slide-subtitle") if rest else ""
         return f'<div class="slide-title-bar"></div>\n{title_html}\n{sub_html}'
 
     if layout in ("two_column", "comparison"):
-        # Split text elements into two groups
         title_el = next((t for t in texts_sorted if t.bold and t.font_size_pt > 20), None)
         body_els = [t for t in texts if t is not title_el]
         mid = max(1, len(body_els) // 2)
         left_els = body_els[:mid]
         right_els = body_els[mid:]
-        title_html = f'<h2 class="slide-heading">{html.escape(title_el.text)}</h2>' if title_el else ""
-        left_items = "".join(f'<li>{html.escape(e.text.lstrip("• "))}</li>' for e in left_els)
-        right_items = "".join(f'<li>{html.escape(e.text.lstrip("• "))}</li>' for e in right_els)
+        title_html = _title_tag(title_el, "slide-heading") if title_el else ""
+        left_items = "".join(_bullet_li(e, j) for j, e in enumerate(left_els))
+        right_items = "".join(_bullet_li(e, j + len(left_els)) for j, e in enumerate(right_els))
         left_ul = f'<ul class="slide-bullets">{left_items}</ul>'
         right_ul = f'<ul class="slide-bullets">{right_items}</ul>'
         return (
@@ -858,10 +916,8 @@ def _html_for_c1_slide(slide: Slide, theme: Theme) -> str:
     # Default: bullets
     title_el = texts_sorted[0] if texts_sorted else None
     body_els = texts_sorted[1:] if len(texts_sorted) > 1 else []
-    title_html = f'<h2 class="slide-heading">{html.escape(title_el.text)}</h2>' if title_el else ""
-    bullet_items = "".join(
-        f'<li>{html.escape(el.text.lstrip("• "))}</li>' for el in body_els
-    )
+    title_html = _title_tag(title_el, "slide-heading") if title_el else ""
+    bullet_items = "".join(_bullet_li(el, j) for j, el in enumerate(body_els))
     bullets_html = f'<ul class="slide-bullets">{bullet_items}</ul>' if bullet_items else ""
     return f'{title_html}\n<div class="slide-rule"></div>\n{bullets_html}'
 

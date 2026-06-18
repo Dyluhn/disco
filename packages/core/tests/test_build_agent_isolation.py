@@ -188,6 +188,7 @@ _EXPECTED_AGENT_TOOLS = [
     "audio_overview",
     "browser",
     "code_exec",
+    "deck_patch",   # C-EDIT-4: RFC-6902 deck edits
     "delegate_explore",
     "deploy_preview",
     "extract",

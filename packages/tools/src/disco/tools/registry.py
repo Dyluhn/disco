@@ -94,6 +94,8 @@ AGENT_TOOLS = frozenset(
         "slides_generate",
         "audio_overview",
         "image_generate",
+        # C-EDIT-4: deck_patch — targeted RFC-6902 edits to authored deck JSON
+        "deck_patch",
         # C20 — `delegate_explore`: EXECUTION-only. It is NOT a pure read — the
         # call DISPATCHES a subagent (an action that yields an observation), so
         # it does NOT belong in the PLANNING surface. The engine appends it via
@@ -131,6 +133,8 @@ ARTIFACT_TOOLS: frozenset[str] = frozenset(
         "image_generate",
         "audio_overview",
         "think",
+        # C-EDIT-4: deck editing is safe in artifact scope (no shell/browser)
+        "deck_patch",
     }
 )
 

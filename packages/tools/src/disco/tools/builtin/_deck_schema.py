@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -79,19 +79,27 @@ LayoutHint = Literal[
 
 
 class ChartSpec(BaseModel):
-    """Structured chart payload (wired in C8)."""
+    """Structured chart payload (wired in C8).
+
+    Field set frozen by the C4 experiment verdict (docs/slides-experiment-verdict.md §6).
+    labels / series have empty-list defaults so ChartSpec(kind=...) is valid with
+    no data (c8 rendering handles empty data gracefully with a placeholder shape).
+    """
 
     kind: Literal["bar", "line", "pie", "scatter"]
     title: str = ""
-    labels: list[str]
-    series: list[dict]  # [{"name": str, "data": [float]}]
+    labels: list[str] = Field(default_factory=list)
+    series: list[dict] = Field(default_factory=list)   # [{"name": str, "data": [float]}]
 
 
 class TableSpec(BaseModel):
-    """Structured table payload."""
+    """Structured table payload.
 
-    headers: list[str]
-    rows: list[list[str]]
+    headers / rows have empty-list defaults for the same reason as ChartSpec.
+    """
+
+    headers: list[str] = Field(default_factory=list)
+    rows: list[list[str]] = Field(default_factory=list)
 
 
 class AuthoredSlide(BaseModel):
@@ -209,8 +217,11 @@ class Slide:
     id: str
     type: str                   # from AuthoredSlide.type (e.g. "bullets_cont")
     layout: LayoutHint          # resolved, never None
+    title: str = ""             # propagated from AuthoredSlide.title (for c8 duck-typing)
     elements: list[Element] = field(default_factory=list)
     notes: str | None = None
+    chart: Optional["ChartSpec"] = None   # propagated when AuthoredSlide.chart is set
+    table: Optional["TableSpec"] = None   # propagated when AuthoredSlide.table is set
 
 
 @dataclass
@@ -942,9 +953,12 @@ def lower_deck(authored: AuthoredDeck) -> Deck:
         slide = Slide(
             id=_uid(),
             type=aslide.type,
+            title=aslide.title,
             layout=layout,
             elements=elements,
             notes=aslide.notes,
+            chart=aslide.chart,
+            table=aslide.table,
         )
         deck_slides.append(slide)
 
@@ -966,4 +980,201 @@ def lower_deck(authored: AuthoredDeck) -> Deck:
         title=authored.title,
         theme=theme,
         slides=deck_slides,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Layer 3 — editor geometry (percentage-based, consumed by React DeckEditor)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ElementGeometry:
+    """Position + size as percentage of the 16:9 slide canvas (0-100)."""
+
+    x: float
+    y: float
+    w: float
+    h: float
+
+
+@dataclass
+class LoweredElement:
+    """One element as the React editor sees it — percentage geometry + JSON pointer."""
+
+    element_id: str        # e.g. "slide-0:title"
+    slide_id: str          # e.g. "slide-0"
+    kind: str              # "title" | "subtitle" | "bullet" | "chart" | "table" | "image_prompt"
+    content: str           # display text
+    geometry: ElementGeometry
+    font_size_vw: float    # font-size in vw units
+    font_weight: str       # "normal" | "bold"
+    font_style: str        # "normal" | "italic"
+    json_pointer: str      # RFC-6901 path into AuthoredDeck (e.g. "/slides/0/title")
+
+
+@dataclass
+class LoweredSlide:
+    """One slide for the editor — geometry in % coordinates."""
+
+    slide_id: str
+    slide_idx: int
+    layout: str
+    bg_color: str
+    elements: list[LoweredElement] = field(default_factory=list)
+
+
+@dataclass
+class LoweredDeck:
+    """Full lowered deck for the React editor."""
+
+    title: str
+    theme_name: str
+    theme_mode: str
+    slides: list[LoweredSlide] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# lower_deck_for_editor — produce a LoweredDeck from an AuthoredDeck
+# ---------------------------------------------------------------------------
+
+# Percentage constants derived from the EMU layout (author → editor geometry)
+_PCT = 100.0
+
+# Title strip: left=4%, top=6%, width=92%, height=13%
+_E_TITLE_LEFT   = round(_MARGIN / _SLIDE_W * _PCT, 2)        # ≈ 3.75
+_E_TITLE_TOP    = round(_MARGIN / _SLIDE_H * _PCT, 2)        # ≈ 6.67
+_E_TITLE_W      = round(_CW / _SLIDE_W * _PCT, 2)            # ≈ 92.5
+_E_TITLE_H      = round(_TITLE_H / _SLIDE_H * _PCT, 2)       # ≈ 13.33
+
+# Body area: below title+bar
+_E_BODY_TOP     = round(_BODY_TOP / _SLIDE_H * _PCT, 2)      # ≈ 26.7
+_E_BODY_H       = round(_BODY_H / _SLIDE_H * _PCT, 2)        # ≈ 66.7
+_E_BODY_W       = round((_CW - _BODY_INDENT) / _SLIDE_W * _PCT, 2)  # ≈ 88.6
+_E_BODY_LEFT    = round((_MARGIN + _BODY_INDENT) / _SLIDE_W * _PCT, 2)  # ≈ 5.6
+
+# Per-bullet height: ~8% of slide
+_E_BULLET_H     = 8.0
+
+
+def lower_deck_for_editor(authored: AuthoredDeck) -> LoweredDeck:
+    """Lower an AuthoredDeck to a LoweredDeck with percentage geometry for the React editor.
+
+    Produces one LoweredElement per visible authored field (title, body[j], chart,
+    table, image_prompt).  ``notes`` are excluded (not displayed on the slide face).
+    Geometry is expressed as % of the 16:9 canvas so the editor canvas can use
+    ``position:absolute; left: {x}%; top: {y}%; width: {w}%; height: {h}%``.
+    """
+    theme_name, theme_mode = _parse_theme(authored.theme)
+    theme = resolve_theme(theme_name, theme_mode)
+
+    lslides: list[LoweredSlide] = []
+    image_alt: list[int] = [0]
+
+    for si, aslide in enumerate(authored.slides):
+        layout = _infer_layout(aslide, image_alt)
+        slide_id = f"slide-{si}"
+        bg_color = theme.surface_1 if layout == "section_header" else theme.bg
+        elements: list[LoweredElement] = []
+
+        def _add(
+            kind: str,
+            content: str,
+            x: float, y: float, w: float, h: float,
+            fsz: float, fw: str, fi: str,
+            jptr: str,
+        ) -> None:
+            elements.append(LoweredElement(
+                element_id=f"{slide_id}:{kind}" if ":" not in kind else f"{slide_id}:{kind}",
+                slide_id=slide_id,
+                kind=kind.split(":")[-1] if ":" in kind else kind,
+                content=content,
+                geometry=ElementGeometry(x=x, y=y, w=w, h=h),
+                font_size_vw=fsz,
+                font_weight=fw,
+                font_style=fi,
+                json_pointer=jptr,
+            ))
+
+        # Title element (always present)
+        _add(
+            kind="title", content=aslide.title,
+            x=_E_TITLE_LEFT, y=_E_TITLE_TOP, w=_E_TITLE_W, h=_E_TITLE_H,
+            fsz=2.5, fw="bold", fi="normal",
+            jptr=f"/slides/{si}/title",
+        )
+        elements[-1].element_id = f"{slide_id}:title"
+
+        # Subtitle (first body line on title/section/closing slides)
+        if layout in ("title", "section_header", "closing") and aslide.body:
+            sub_top = _E_TITLE_TOP + _E_TITLE_H + 2.0
+            _add(
+                kind="subtitle", content=aslide.body[0],
+                x=_E_TITLE_LEFT, y=sub_top, w=_E_TITLE_W, h=_E_BULLET_H,
+                fsz=1.8, fw="normal", fi="italic",
+                jptr=f"/slides/{si}/body/0",
+            )
+            elements[-1].element_id = f"{slide_id}:subtitle"
+            body_start = 1
+        else:
+            body_start = 0
+
+        # Bullet body lines
+        body_y = _E_BODY_TOP
+        for bj, line in enumerate(aslide.body[body_start:], start=body_start):
+            content_stripped = line.lstrip("• ")
+            _add(
+                kind=f"body:{bj}", content=content_stripped,
+                x=_E_BODY_LEFT, y=body_y, w=_E_BODY_W, h=_E_BULLET_H,
+                fsz=1.6, fw="normal", fi="normal",
+                jptr=f"/slides/{si}/body/{bj}",
+            )
+            elements[-1].element_id = f"{slide_id}:body:{bj}"
+            elements[-1].kind = "bullet"
+            body_y = min(body_y + _E_BULLET_H + 1.0, 90.0)
+
+        # Chart placeholder element
+        if aslide.chart is not None:
+            chart_desc = f"[{aslide.chart.kind} chart] {aslide.chart.title}"
+            _add(
+                kind="chart", content=chart_desc,
+                x=_E_TITLE_LEFT, y=_E_BODY_TOP, w=_E_TITLE_W, h=55.0,
+                fsz=1.4, fw="normal", fi="normal",
+                jptr=f"/slides/{si}/chart",
+            )
+            elements[-1].element_id = f"{slide_id}:chart"
+
+        # Table placeholder element
+        if aslide.table is not None:
+            table_desc = f"[table] {' | '.join(aslide.table.headers[:4])}"
+            _add(
+                kind="table", content=table_desc,
+                x=_E_TITLE_LEFT, y=_E_BODY_TOP, w=_E_TITLE_W, h=55.0,
+                fsz=1.4, fw="normal", fi="normal",
+                jptr=f"/slides/{si}/table",
+            )
+            elements[-1].element_id = f"{slide_id}:table"
+
+        # Image prompt placeholder element
+        if aslide.image_prompt is not None:
+            _add(
+                kind="image_prompt", content=aslide.image_prompt,
+                x=_E_TITLE_LEFT, y=_E_BODY_TOP, w=_E_TITLE_W, h=55.0,
+                fsz=1.4, fw="normal", fi="normal",
+                jptr=f"/slides/{si}/image_prompt",
+            )
+            elements[-1].element_id = f"{slide_id}:image_prompt"
+
+        lslides.append(LoweredSlide(
+            slide_id=slide_id,
+            slide_idx=si,
+            layout=layout,
+            bg_color=bg_color,
+            elements=elements,
+        ))
+
+    return LoweredDeck(
+        title=authored.title,
+        theme_name=theme_name,
+        theme_mode=theme_mode,
+        slides=lslides,
     )

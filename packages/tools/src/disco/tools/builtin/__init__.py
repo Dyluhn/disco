@@ -33,6 +33,7 @@ from .shell_sessions import (
     ShellWaitTool,
     ShellWriteTool,
 )
+from ._deck_patch import DeckPatchTool
 from .slides import SlidesTool
 from .subagent import DelegateExploreTool
 from .system import CodeExecTool, ShellTool
@@ -42,6 +43,7 @@ __all__ = [
     "AudioOverviewTool",
     "BrowserTool",
     "CodeExecTool",
+    "DeckPatchTool",
     "DelegateExploreTool",  # C20: read-only Explore/Plan helper dispatch+join (intercepted by loop)
     "ExtractTool",
     "FileEditTool",
@@ -98,6 +100,7 @@ def build_default_registry() -> ToolRegistry:
         SheetsTool(),  # sheet_generate: write .xlsx with live formulas
         AudioOverviewTool(),  # audio_overview: two-voice TTS from finished report
         SlidesTool(),  # slides_generate: Marp-rendered slide decks (HTML/PDF/PPTX)
+        DeckPatchTool(),  # deck_patch: C-EDIT-4 RFC-6902 JSON Patch + re-render
         ThinkTool(),  # think: NO-OP reasoning scratchpad (avoids prose-into-action degeneration)
         # image_generate: keyless/local image synthesis (PIL procedural; configurable
         # via Settings to use OpenAI-compatible or ComfyUI backends)
