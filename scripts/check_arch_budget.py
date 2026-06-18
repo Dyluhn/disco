@@ -30,12 +30,16 @@ ALLOW_CLASSES = {
     ("core/loop/engine.py", "AgentLoop"): 1100,
     # C6 wiring added ~42 LOC (per-conversation _artifact_mode dict + delegators
     # + _compose_build_loop branch) — same irreducible-coordinator rationale.
-    ("agent_server/runtime.py", "ConversationRuntime"): 1320,  # +C6 artifact_mode +P3 last_model delegators
+    # D3 +8 LOC: two per-cid queue dicts + comments.
+    ("agent_server/runtime.py", "ConversationRuntime"): 1335,  # +C6 artifact_mode +P3 last_model +D3 steer queues
+    # D3 +20 LOC: pop_steers/pop_injected closures + queue init/cleanup.
+    ("agent_server/deep_research_service.py", "DeepResearchService"): 825,  # +D3 steer/inject wiring
 }
 ALLOW_FUNCS = {
     ("core/loop/engine.py", "run"): 330,            # the agent-loop dispatcher
     ("core/loop/engine.py", "__init__"): 240,       # collaborator wiring + comments
-    ("deep_research_service.py", "_execute_deep_research"): 240,  # DR orchestration
+    # D3 +3 LOC: pop_steers/pop_injected params + queue cleanup in finally.
+    ("deep_research_service.py", "_execute_deep_research"): 250,  # +D3 steer/inject orchestration
 }
 
 

@@ -25,8 +25,8 @@
  * subscription, the Build status state machine.
  */
 
-import { Ban, File, FileText, FileType, Loader2, Play, RotateCcw, Settings as SettingsIcon, Square } from "lucide-react";
-import { useCallback, useState } from "react";
+import { Ban, File, FileText, FileType, Loader2, Navigation, Play, RotateCcw, Settings as SettingsIcon, Square } from "lucide-react";
+import { useCallback, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Markdown } from "@/components/Markdown";
 import { PlanPanel } from "@/components/build/PlanPanel";
@@ -71,6 +71,9 @@ const PENDING_BTN =
 export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId }: Props) {
   const r = useDeepResearch(resumeCid, initialLeaderId);
   const started = r.started;
+  // D3 mid-run steer input state. Only rendered while status === "RUNNING".
+  const [steerText, setSteerText] = useState("");
+  const steerInputRef = useRef<HTMLInputElement>(null);
   // RP-07: PDF/DOCX run in the agent-server (weasyprint / pandoc). The buttons are
   // gated on the REAL server capability — never a clickable button that 500s. MD
   // always works; PDF/DOCX enable wherever the server has the toolchain.
@@ -164,9 +167,43 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
             {r.query}
           </h1>
           <div className="flex items-center gap-inline">
-            {/* While running: Stop (pause, keeps partial) + Kill (end, final). */}
+            {/* While running: Stop (pause, keeps partial) + Kill (end, final) +
+                D3 mid-run steer input. The steer input is only rendered while the
+                run is in-flight and the WS is open — no false affordance. */}
             {r.status === "RUNNING" && (
               <>
+                {/* D3 steer: a compact inline input that sends a steer frame.
+                    Submitting adds a new research section to the in-flight run. */}
+                <form
+                  className="flex items-center gap-hair"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const trimmed = steerText.trim();
+                    if (!trimmed) return;
+                    r.steer(trimmed);
+                    setSteerText("");
+                  }}
+                >
+                  <input
+                    ref={steerInputRef}
+                    type="text"
+                    value={steerText}
+                    onChange={(e) => setSteerText(e.target.value)}
+                    placeholder="Add a research angle…"
+                    aria-label="Steer the research: add a new section topic"
+                    className="h-[1.8rem] w-48 rounded-control border border-hairline bg-surface-0 px-inline font-ui text-[0.78rem] text-text placeholder:text-text-faint focus:outline-none focus:ring-1 focus:ring-accent"
+                    data-testid="dr-steer-input"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!steerText.trim()}
+                    aria-label="Send steer"
+                    className={CTRL_BTN}
+                  >
+                    <Navigation className="size-3" aria-hidden />
+                    Steer
+                  </button>
+                </form>
                 <button type="button" onClick={r.stop} className={CTRL_BTN}>
                   <Square className="size-3" aria-hidden />
                   Stop

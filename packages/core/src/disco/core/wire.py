@@ -64,13 +64,22 @@ class WSClientFrame(BaseModel):
         # Structured error recovery: pick one of the alternatives the agent
         # proposed after 4 consecutive failures (see AlternativesEvent).
         "pick_alternative",
+        # D3 Deep Research mid-run inject-source: fold a user-provided text
+        # snippet into the in-flight run's corpus (converted to a Passage by
+        # the WS handler). URL extraction is a follow-up; only plaintext is
+        # accepted in v1. The `steer` frame type is reused for DR steers
+        # (the WS handler routes based on whether a DR run is active).
+        "inject_source",
     ]
     # send_message / request_plan: free text (a user message / the (re)plan instruction).
     content: str | None = None
     # confirm/reject: respond to WAITING_FOR_CONFIRMATION (echoes pending_action_id).
     action_id: str | None = None
     # steer: redirect a running agent without losing context (BoD §13.4).
+    # Also routes to DR mid-run steer when a DR run is active (see ws.py).
     steer_text: str | None = None
+    # inject_source (D3): plaintext snippet to add to the DR run's corpus.
+    inject_source_text: str | None = None
     # sent on (re)connect to request replay of events after this seq.
     last_seq: int | None = None
     # pick_alternative: the id of the AlternativeOption to execute as the next
