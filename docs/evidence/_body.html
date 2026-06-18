@@ -1,0 +1,84 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<style>
+@import "_brand_common.css";
+@page{size:8.5in 11in;margin:0;}
+body{width:8.5in;height:11in;position:relative;}
+.page{position:absolute;inset:0;padding:0.86in 0.92in 0.7in;display:flex;flex-direction:column;}
+.rh{display:flex;justify-content:space-between;align-items:baseline;
+  border-bottom:1px solid var(--hairline);padding-bottom:.12in;}
+.rh .l{font-family:var(--ui);font-weight:600;font-size:8.5pt;letter-spacing:.13em;
+  text-transform:uppercase;color:var(--text-faint);}
+.rh .r{font-family:var(--display);font-weight:600;font-size:11pt;}
+.rh .r .dot{color:var(--accent);}
+.secnum{font-family:var(--ui);font-weight:700;font-size:9.5pt;color:var(--accent);
+  letter-spacing:.04em;margin-top:.4in;}
+h2.sec{font-family:var(--ui);font-weight:700;font-size:21pt;line-height:1.12;
+  letter-spacing:-.012em;color:var(--text);margin:.06in 0 .26in;}
+.body{font-family:var(--reading);font-size:11.4pt;line-height:1.62;color:var(--text);
+  max-width:5.9in;}
+.body p{margin:0 0 .2in;}
+.body .lead::first-line{font-variation-settings:'opsz' 30;}
+.dcap{font-family:var(--display);font-weight:600;
+  font-variation-settings:'opsz' 144;font-size:30pt;line-height:0;
+  color:var(--accent);vertical-align:-.06em;padding-right:.01in;}
+.appendix{margin-top:.4in;border-top:2px solid var(--text);padding-top:.16in;}
+.appendix .h{font-family:var(--ui);font-weight:700;font-size:9pt;letter-spacing:.13em;
+  text-transform:uppercase;color:var(--text-muted);margin-bottom:.12in;}
+.src{display:flex;gap:.14in;font-family:var(--ui);font-size:8.6pt;line-height:1.4;
+  color:var(--text-muted);margin-bottom:.085in;align-items:baseline;}
+.src .id{font-weight:700;color:var(--accent);min-width:.34in;}
+.src .t{color:var(--text);font-weight:500;}
+.src .u{color:var(--text-faint);}
+.spacer{flex:1;}
+.pgfoot{display:flex;justify-content:space-between;font-family:var(--ui);
+  font-size:8.5pt;color:var(--text-faint);border-top:1px solid var(--hairline);
+  padding-top:.1in;margin-top:.24in;letter-spacing:.03em;}
+</style></head>
+<body><div class="page">
+  <div class="rh">
+    <span class="l">The State of HTTP/3 Adoption</span>
+    <span class="wordmark r">Disco<span class="dot">.</span></span>
+  </div>
+
+  <div class="secnum">02 — Transport</div>
+  <h2 class="sec">QUIC&rsquo;s climb to default carriage</h2>
+
+  <div class="body">
+    <p class="lead"><span class="dcap">B</span>y early 2026, HTTP/3 had crossed the line from a frontier
+    experiment into the silent default for a large share of public web traffic.
+    Crawls of the top-ten-million origins put protocol availability near a third
+    of all hostnames <span class="chip">[[3]]</span>, but the volume-weighted
+    picture is far higher: because the busiest properties&mdash;CDNs, search,
+    social, video&mdash;turned QUIC on first, the share of <em>requests</em>
+    served over HTTP/3 now sits well above the share of <em>sites</em> that
+    offer it <span class="chip">[[7]]</span>.</p>
+
+    <p>The asymmetry is the whole story. A single large CDN flipping a default
+    moves more bytes than a million long-tail blogs ever will, which is why
+    edge-network telemetry and origin-crawl telemetry disagree so sharply on
+    the headline number <span class="chip">[[12]]</span>. Both are correct; they
+    are simply counting different things. For an operator deciding whether to
+    invest, the request-weighted figure is the one that predicts user-visible
+    latency wins.</p>
+
+    <p>What still throttles the long tail is operational, not protocol-level.
+    UDP throughput on commodity kernels lags TCP without tuning, middlebox
+    handling of QUIC remains uneven on enterprise egress paths, and many
+    managed hosting stacks simply have not exposed an HTTP/3 toggle to their
+    customers yet <span class="chip">[[19]]</span>. None of these are
+    cryptographic or standards gaps&mdash;they are the unglamorous deployment
+    frictions that always trail a transport change by a few years.</p>
+  </div>
+
+  <div class="spacer"></div>
+
+  <div class="appendix">
+    <div class="h">Sources cited on this page</div>
+    <div class="src"><span class="id">[3]</span><span><span class="t">Web Almanac 2025 &mdash; HTTP chapter</span> &nbsp;<span class="u">httparchive.org/reports/state-of-the-web</span></span></div>
+    <div class="src"><span class="id">[7]</span><span><span class="t">Cloudflare Radar: adoption by request volume</span> &nbsp;<span class="u">radar.cloudflare.com/adoption</span></span></div>
+    <div class="src"><span class="id">[12]</span><span><span class="t">QUIC at the edge &mdash; measurement study, IMC&rsquo;25</span> &nbsp;<span class="u">dl.acm.org/doi/imc25-quic</span></span></div>
+    <div class="src"><span class="id">[19]</span><span><span class="t">Managed-hosting HTTP/3 readiness survey</span> &nbsp;<span class="u">httptoolkit.com/blog/http3-state</span></span></div>
+  </div>
+
+  <div class="pgfoot"><span>Disco Deep Research</span><span>4</span></div>
+</div></body></html>

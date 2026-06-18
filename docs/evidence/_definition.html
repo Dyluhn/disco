@@ -1,0 +1,94 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<style>
+@import "_brand_common.css";
+@page{size:5.5556in 3.4722in;margin:0;}
+body{width:5.5556in;height:3.4722in;position:relative;}
+.sheet{position:absolute;inset:0;padding:.34in .42in;display:flex;flex-direction:column;}
+.lab{font-family:var(--ui);font-weight:600;font-size:6.5pt;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--text-faint);}
+.lab b{color:var(--accent);}
+.row{display:flex;align-items:flex-end;gap:.5in;margin-top:.16in;}
+.col{display:flex;flex-direction:column;gap:.07in;}
+.szlab{font-family:var(--ui);font-weight:600;font-size:5.5pt;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--text-faint);}
+.spacer{flex:1;}
+.foot{display:flex;justify-content:space-between;align-items:baseline;
+  border-top:1px solid var(--hairline);padding-top:.1in;}
+.foot .mk{font-family:var(--display);font-weight:600;font-size:11pt;}
+.foot .mk .dot{color:var(--accent);}
+.foot .note{font-family:var(--ui);font-size:7pt;color:var(--text-faint);letter-spacing:.03em;}
+
+/* ---- the reusable definition mark ---- */
+.defmark{display:inline-block;}
+.defmark .l1{display:flex;align-items:baseline;gap:.42em;flex-wrap:wrap;}
+.defmark .hw{font-family:var(--display);font-weight:600;
+  font-variation-settings:'opsz' 40,'SOFT' 0,'WONK' 0;
+  font-size:2em;letter-spacing:-.014em;color:var(--text);line-height:.95;}
+.defmark .pos{font-family:var(--ui);font-weight:600;font-size:.62em;
+  letter-spacing:.15em;text-transform:uppercase;color:var(--text-faint);}
+.defmark .pos .sep{color:var(--accent);font-weight:700;padding:0 .12em;}
+.defmark .ipa{font-family:var(--ui);font-weight:400;font-size:.66em;
+  letter-spacing:.02em;color:var(--text-faint);}
+.defmark .rule{position:relative;height:1px;background:var(--hairline);
+  margin:.5em 0 .48em;}
+.defmark .rule i{position:absolute;left:0;top:-1px;width:1.5em;height:2px;
+  background:var(--accent);border-radius:1px;}
+.defmark .gloss{font-family:var(--reading);font-style:italic;
+  font-size:1.04em;line-height:1.38;color:var(--text-muted);}
+.defmark .root{font-family:var(--ui);font-weight:400;font-size:.7em;
+  letter-spacing:.01em;color:var(--text-faint);margin-top:.5em;}
+.defmark .root em{font-family:var(--reading);font-style:italic;
+  font-size:1.1em;color:var(--text-muted);}
+/* scale variants driven purely by container font-size */
+.s-lg{font-size:15pt;}
+.s-md{font-size:10pt;}
+.s-sm{font-size:7pt;}
+</style></head>
+<body><div class="sheet">
+  <div class="lab">Brand mark &middot; the <b>disco</b> definition &middot; in-app + export</div>
+
+  <div class="row">
+    <div class="col">
+      <span class="szlab">Masthead</span>
+      <div class="defmark s-lg">
+        <div class="l1"><span class="hw">disco</span>
+          <span class="pos">Latin<span class="sep">&middot;</span>verb</span>
+          <span class="ipa">/&#712;d&#618;s.ko&#720;/</span></div>
+        <div class="rule"><i></i></div>
+        <div class="gloss">&ldquo;I learn; I become acquainted with.&rdquo;</div>
+        <div class="root">from <em>discere</em> &mdash; to learn</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="col">
+      <span class="szlab">Colophon</span>
+      <div class="defmark s-md">
+        <div class="l1"><span class="hw">disco</span>
+          <span class="pos">Latin<span class="sep">&middot;</span>verb</span>
+          <span class="ipa">/&#712;d&#618;s.ko&#720;/</span></div>
+        <div class="rule"><i></i></div>
+        <div class="gloss">&ldquo;I learn; I become acquainted with.&rdquo;</div>
+        <div class="root">from <em>discere</em> &mdash; to learn</div>
+      </div>
+    </div>
+    <div class="col">
+      <span class="szlab">Inline / footer</span>
+      <div class="defmark s-sm">
+        <div class="l1"><span class="hw">disco</span>
+          <span class="pos">Latin<span class="sep">&middot;</span>verb</span>
+          <span class="ipa">/&#712;d&#618;s.ko&#720;/</span></div>
+        <div class="rule"><i></i></div>
+        <div class="gloss">&ldquo;I learn; I become acquainted with.&rdquo;</div>
+        <div class="root">from <em>discere</em> &mdash; to learn</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="spacer"></div>
+  <div class="foot">
+    <span class="mk wordmark">Disco<span class="dot">.</span></span>
+    <span class="note">discere &middot; didic&#299; &mdash; the name is the promise</span>
+  </div>
+</div></body></html>
