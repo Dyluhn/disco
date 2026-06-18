@@ -45,3 +45,9 @@ re-gates from main.
   held symbol-nav discipline manually. Relaunch from repo dir to restore it.
 
 ### Wave 1 — dispatched (Sonnet×4 + Gemini + Pi/MiniMax)
+
+### Wave 1 status (in progress)
+- chart_svg relocation + P4: DONE (`e875249`, wave1-pi-misc) — MiniMax drafted imperatively, I fixed _LOG bug + committed.
+- MiniMax delegation finding: works on IMPERATIVE step-lists, NOT spec docs; drafts ~partial then exits before test/commit. Workflow = MiniMax drafts → I complete+gate+commit.
+- Drafts in worktrees (MiniMax, uncommitted): editor (9 files: selectionBridge/Overlay/agent + iframe wiring), c7img (10 files: image backends + config), attach (2 files). filedelivery: redraft needed.
+- Next: complete each draft lane-by-lane with full gates, then integrate.
