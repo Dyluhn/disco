@@ -44,9 +44,23 @@ export function PreviewPane({
   const { data } = useBuildPreview(cid, active);
   const qc = useQueryClient();
 
+  // C5: separate the file list so we can both derive srcDoc AND detect server-side
+  // HTML artifacts (content="") that deriveSrcDoc now returns null for.
+  const files = useMemo(() => deriveFiles(events), [events]);
+
   // A client-side srcdoc render of the written files — shows the ACTUAL site the
   // agent wrote (entry HTML + inlined local css/js), no backend / dev server.
-  const srcDoc = useMemo(() => deriveSrcDoc(deriveFiles(events)), [events]);
+  // After the C5 fix, deriveSrcDoc returns null for server-side (content="") HTML
+  // artifacts, so the guards below work correctly.
+  const srcDoc = useMemo(() => deriveSrcDoc(files), [files]);
+
+  // C5: when no client-side srcDoc is available, check for a server-side .html
+  // artifact (slides_generate / deliverable with empty content string).  If found,
+  // we can preview it via the ?inline=true route with a sandboxed iframe.
+  const inlineHtmlArtifact = useMemo(
+    () => files.find((f) => !f.content && /\.html$/i.test(f.path)) ?? null,
+    [files],
+  );
   const proxyAvailable = Boolean(data?.available && cid);
 
   // E7 — one-click recovery. Reload the iframe (bump the key); if the live proxy
@@ -241,6 +255,40 @@ export function PreviewPane({
           srcDoc={srcDoc}
           // untrusted → empty sandbox (no scripts): a script here could reach this
           // instance's open-CORS APIs. Trusted (your own run) keeps allow-scripts.
+          sandbox={untrusted ? "" : "allow-scripts"}
+          className="min-h-0 flex-1 border-0 bg-white"
+        />
+      </div>
+    );
+  }
+
+  // C5: server-side HTML artifact → render via ?inline=true.
+  // Uses `src=` (NOT srcdoc) so the browser fetches the file from the agent-server
+  // route which sets a strict CSP (sandbox allow-scripts; no allow-same-origin).
+  // The iframe sandbox here must NOT include allow-same-origin — without it the
+  // framed page cannot reach this instance's open-CORS APIs even if it runs scripts.
+  // This is intentionally distinct from the live-proxy iframe (which keeps
+  // allow-same-origin + allow-forms + allow-popups for dev-server assets).
+  if (inlineHtmlArtifact !== null && cid) {
+    const inlineSrc = `${agentHttpBase()}/conversations/${encodeURIComponent(cid)}/artifacts/${inlineHtmlArtifact.path}?inline=true&r=${reloadKey}`;
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="flex shrink-0 items-center justify-between gap-inline border-b border-hairline px-body py-hair">
+          <span className="truncate font-mono text-[0.74rem] text-text-faint">preview</span>
+          <div className="flex items-center gap-inline">
+            {RefreshButton}
+          </div>
+        </div>
+        {untrusted && (
+          <div className="shrink-0 border-b border-hairline bg-surface-1 px-body py-hair font-ui text-[0.72rem] text-text-faint">
+            Scripted preview is disabled for shared/imported runs (untrusted content).
+          </div>
+        )}
+        <iframe
+          key={reloadKey}
+          title="Artifact preview"
+          src={inlineSrc}
+          // no allow-same-origin: the sandboxed page must not reach this instance's APIs.
           sandbox={untrusted ? "" : "allow-scripts"}
           className="min-h-0 flex-1 border-0 bg-white"
         />

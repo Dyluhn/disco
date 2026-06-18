@@ -48,12 +48,23 @@ export function ExecutionCanvas({
   /** Third-party events (shared/imported run) → harden the preview iframe. */
   untrusted?: boolean;
 }) {
+  // C5: detect any previewable HTML — either a client-side artifact (srcDoc) or
+  // a server-side .html from slides_generate / deliverable (empty content, served
+  // via ?inline=true).  Used for both initial tab selection and the FINISHED auto-switch.
+  function _hasPreviewableHtml(evts: AgentEvent[]): boolean {
+    const files = deriveFiles(evts);
+    return (
+      deriveSrcDoc(files) != null ||
+      files.some((f) => !f.content && /\.html$/i.test(f.path))
+    );
+  }
+
   // Cluster 5: when there's a renderable artifact, Preview is the hero — the
   // user's first instinct should be to WATCH it build, not read logs. Else
   // Terminal if anything ran, else Files.
   const initial: TabId = useMemo(
     () =>
-      deriveSrcDoc(deriveFiles(events)) != null
+      _hasPreviewableHtml(events)
         ? "preview"
         : deriveTerminal(events).length > 0
           ? "terminal"
@@ -79,7 +90,7 @@ export function ExecutionCanvas({
   const wasFinished = useRef(false);
   useEffect(() => {
     const finished = status === "FINISHED";
-    if (finished && !wasFinished.current && deriveSrcDoc(deriveFiles(events)) != null) {
+    if (finished && !wasFinished.current && _hasPreviewableHtml(events)) {
       setTab("preview");
     }
     wasFinished.current = finished;

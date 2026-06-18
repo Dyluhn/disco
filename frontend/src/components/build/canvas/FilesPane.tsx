@@ -73,7 +73,8 @@ export function FilesPane({
       <div className="min-w-0 flex-1 overflow-auto">
         <div className="flex items-center justify-between border-b border-hairline px-body py-hair font-mono text-[0.74rem] text-text-faint">
           <span>{file.path}</span>
-          <span>{file.bytes} B</span>
+          {/* C5: server-side artifacts land with bytes=0 — suppress the misleading "0 B" */}
+          {file.bytes > 0 && <span>{file.bytes} B</span>}
         </div>
         <pre className="overflow-auto whitespace-pre-wrap px-body py-inline font-mono text-[0.78rem] leading-relaxed text-text">
           {file.content || "(empty)"}
