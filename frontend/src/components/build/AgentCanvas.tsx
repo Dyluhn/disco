@@ -8,13 +8,16 @@
  * text, not screenshots), no broken <img> without a conversation to fetch against.
  */
 
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useRef, useState, useEffect } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
 import { Download, FileCode2, FileSpreadsheet, FileText, Globe, Package, SquareTerminal } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { deriveFiles, deriveSrcDoc, deriveTerminal, deriveLiveSignal } from "@/lib/buildTrace";
 import type { WorkspaceFile } from "@/lib/buildTrace";
 import { agentHttpBase } from "@/api/client";
+import { useElementSelect } from "@/hooks/useElementSelect";
+import { SelectionOverlay } from "@/components/build/canvas/SelectionOverlay";
+import { SELECTION_AGENT_SCRIPT } from "@/lib/selectionAgent";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
 type TabId = "browser" | "artifacts" | "console";
@@ -201,7 +204,22 @@ function ArtifactsPane({
   untrusted: boolean;
 }) {
   const files = useMemo(() => deriveFiles(events), [events]);
-  const srcDoc = useMemo(() => deriveSrcDoc(files), [files]);
+  // §4.1 C-EDIT-1: inject selection agent for trusted (non-untrusted) iframes.
+  const srcDoc = useMemo(
+    () => deriveSrcDoc(files, untrusted ? undefined : SELECTION_AGENT_SCRIPT),
+    [files, untrusted],
+  );
+
+  // §4.1 C-EDIT-1: ref + selection state for the artifact preview iframe.
+  const artifactIframeRef = useRef<HTMLIFrameElement | null>(null);
+  const {
+    armed: artifactArmed,
+    arm: artifactArm,
+    disarm: artifactDisarm,
+    selection: artifactSelection,
+    walkUp: artifactWalkUp,
+  } = useElementSelect(artifactIframeRef, "null");
+
   if (files.length === 0)
     return <Empty>Outputs the agent produces — files, spreadsheets, pages — show up here.</Empty>;
   return (
@@ -214,14 +232,26 @@ function ArtifactsPane({
               <span className="font-ui text-text-faint">scripts disabled (untrusted)</span>
             )}
           </div>
-          <iframe
-            title="Artifact preview"
-            srcDoc={srcDoc}
-            // untrusted (shared/imported run) → empty sandbox, no scripts: a script
-            // here could reach this instance's open-CORS APIs. Trusted keeps allow-scripts.
-            sandbox={untrusted ? "" : "allow-scripts"}
-            className="min-h-0 flex-1 border-0 bg-white"
-          />
+          {/* §4.1 C-EDIT-1: relative wrapper for SelectionOverlay positioning. */}
+          <div className="relative min-h-0 flex-1">
+            <iframe
+              ref={artifactIframeRef}
+              title="Artifact preview"
+              srcDoc={srcDoc}
+              // untrusted (shared/imported run) → empty sandbox, no scripts: a script
+              // here could reach this instance's open-CORS APIs. Trusted keeps allow-scripts.
+              sandbox={untrusted ? "" : "allow-scripts"}
+              className="h-full w-full border-0 bg-white"
+            />
+            <SelectionOverlay
+              armed={artifactArmed}
+              untrusted={untrusted}
+              selection={artifactSelection}
+              onArm={artifactArm}
+              onDisarm={artifactDisarm}
+              onWalkUp={artifactWalkUp}
+            />
+          </div>
         </div>
       )}
       <ul className="flex min-h-0 flex-1 flex-col gap-hair overflow-auto p-body">
