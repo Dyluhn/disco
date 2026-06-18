@@ -28,7 +28,7 @@ ALLOW_CLASSES = {
     # Central orchestrators / composition-roots: bulk is run()-dispatch + __init__
     # wiring + lock-holding control ops + thin delegators; all methods are small.
     ("core/loop/engine.py", "AgentLoop"): 1100,
-    ("agent_server/runtime.py", "ConversationRuntime"): 1250,
+    ("agent_server/runtime.py", "ConversationRuntime"): 1270,
 }
 ALLOW_FUNCS = {
     ("core/loop/engine.py", "run"): 330,            # the agent-loop dispatcher

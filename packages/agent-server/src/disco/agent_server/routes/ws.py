@@ -209,7 +209,10 @@ def make_ws_router(
             return
         # Re-scope controls from the UI: the model pill picks the answerer, plus
         # drop-weak and domain-deny.
+        # P3: seed from last-selected when no explicit override is given.
         model_override = body.get("model_override") or None
+        if not model_override and runtime is not None:
+            model_override = runtime.get_last_selected_model()
         drop_weak = bool(body.get("drop_weak"))
         think = bool(body.get("think"))
         domains = body.get("domains_deny") or []

@@ -91,6 +91,7 @@ class RouterAgent:
         temperature: float | None = None,
         assist: bool = False,
         attempt: int = 1,
+        provider_prefs: dict | None = None,
     ) -> AgentStep:
         # B9: Assistant prefill. In PLANNING mode, force
         # the model to start its thought with an honest acknowledgment of
@@ -137,6 +138,9 @@ class RouterAgent:
             # retry of a failed call; the provider reads it to disable thinking
             # on attempt ≥ 2. Default 1 = first try; assist-OFF callers ignore.
             attempt=attempt,
+            # P2 — provider routing escalation (threaded from the driver on
+            # LLMProviderUnavailable retries; None on first/normal calls).
+            provider_prefs=provider_prefs,
         )
         ctx = CallContext(
             conversation_id=self._cid,

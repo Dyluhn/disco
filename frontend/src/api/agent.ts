@@ -79,6 +79,15 @@ export async function listDriverModels(): Promise<DriverModels> {
   return agentGet<DriverModels>("/models");
 }
 
+/** P3 — the globally-persisted last-picked driver model from the agent-server.
+ * Returns null when no pick has ever been made. Fixture: null (no stored pick
+ * offline so the pill falls back to the settings default as before). */
+export async function getLastSelectedModel(): Promise<string | null> {
+  if (!agentLive()) return null;
+  const r = await agentGet<{ model: string | null }>("/models/last-selected");
+  return r.model ?? null;
+}
+
 /** The backend-aware live preview URL for a conversation's sandbox (or why not). */
 export async function getPreview(cid: string): Promise<PreviewInfo> {
   if (!agentLive())

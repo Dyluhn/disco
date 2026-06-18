@@ -65,6 +65,39 @@ class RuntimeSettings:
         if model_id:
             self._rt._model_override[conversation_id] = model_id
             self._rt._save_overrides()
+            # P3: also persist as the last-selected model so new conversations
+            # seed from it by default (server-side, no localStorage).
+            self.set_last_selected_model(model_id)
+
+    # ---- last-selected model (P3) ------------------------------------------
+
+    def get_last_selected_model(self) -> str | None:
+        """Return the last globally-picked driver model, or None if no pick has
+        ever been made. Server-side, per-owner sidecar (B0 pattern)."""
+        path = getattr(self._rt, "_last_model_path", "")
+        if not path or not os.path.exists(path):
+            return None
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            return data.get("model") or None
+        except Exception:  # noqa: BLE001 — corrupt/missing → None, never crash
+            return None
+
+    def set_last_selected_model(self, model_id: str | None) -> None:
+        """Persist the last-picked driver model (atomic temp-file replace, B0 pattern)."""
+        path = getattr(self._rt, "_last_model_path", "")
+        if not path:
+            return
+        import tempfile
+        try:
+            dir_name = os.path.dirname(path)
+            with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
+                json.dump({"model": model_id}, f)
+                tmp_name = f.name
+            os.replace(tmp_name, path)
+        except Exception:  # noqa: BLE001 — best-effort, never fatal
+            pass
 
     # ---- surface map -------------------------------------------------------
 

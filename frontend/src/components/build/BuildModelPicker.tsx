@@ -8,7 +8,7 @@
 import * as Dropdown from "@radix-ui/react-dropdown-menu";
 import { Check, ChevronDown, Cpu } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { useDriverModels } from "@/hooks/useDriverModels";
+import { useDriverModels, useLastSelectedModel } from "@/hooks/useDriverModels";
 import { useToast } from "@/components/Toast";
 import type { DriverModel } from "@/types/agent";
 
@@ -22,10 +22,14 @@ export function BuildModelPicker({
   disabled?: boolean;
 }) {
   const { data } = useDriverModels();
+  const { data: lastSelected } = useLastSelectedModel();
   const toast = useToast();
   const models = data?.models ?? [];
   const defaultId = data?.default ?? null;
-  const effectiveId = value ?? defaultId;
+  // P3: prefer last-selected over the static settings default when null (no
+  // explicit pick for this conversation). Falls through to defaultId if no
+  // last-selected has been persisted yet.
+  const effectiveId = value ?? lastSelected ?? defaultId;
   const current = models.find((m) => m.id === effectiveId);
 
   const local = models.filter((m) => m.provider === "local");
