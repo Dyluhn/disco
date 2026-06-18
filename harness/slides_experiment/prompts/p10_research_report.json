@@ -1,0 +1,8 @@
+{
+  "id": "p10",
+  "category": "research/technical",
+  "description": "academic/research findings presentation",
+  "goal": "Create a 6-slide research presentation on climate tipping points. Slide 1: Title — 'Non-linear Climate Tipping Points: A Systems Analysis'. Slide 2: Background — what are tipping points (definition), why they matter (irreversibility), 3 key examples (AMOC collapse, Amazon dieback, West Antarctic Ice Sheet). Slide 3: Data — chart of global temperature anomaly 1950-2025 with tipping threshold lines at +1.5°C and +2.0°C. Slide 4: Cascade risk — how each tipping point can trigger others (cascade diagram described textually). Slide 5: Policy implications — 3 key findings from IPCC AR6 with specific page citations. Slide 6: Conclusion and Q&A invitation.",
+  "expected_layouts": ["title", "bullets", "chart", "diagram", "citations", "closing"],
+  "stress": "research quality, citations, data visualization, academic tone"
+}

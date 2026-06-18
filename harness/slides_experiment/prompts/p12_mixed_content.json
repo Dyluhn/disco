@@ -1,0 +1,8 @@
+{
+  "id": "p12",
+  "category": "mixed",
+  "description": "mixed content types — tests layout variety selection",
+  "goal": "Create a 6-slide all-hands meeting deck for a 200-person company. Slide 1: Title — 'AllHands — June 2026'. Slide 2: Numbers that matter — ARR $24M (+32% YoY), headcount 212 (+40), customer count 890 (+120), NPS 68 (displayed as big metrics). Slide 3: Two-column layout — Left: 'What we shipped in H1' (5 bullet points of features), Right: 'What customers say about it' (3 short testimonial quotes). Slide 4: Organization update — new VP of Engineering (Sarah Chen, from Google), new Chief of Staff (Marcus Williams, from Stripe). Slide 5: H2 priorities — 3 big themes each with an image concept and 2 bullets. Slide 6: Thank you + open Q&A.",
+  "expected_layouts": ["title", "metrics", "two_column", "announcements", "image_heavy", "closing"],
+  "stress": "layout variety, metrics + quotes + images in same deck"
+}

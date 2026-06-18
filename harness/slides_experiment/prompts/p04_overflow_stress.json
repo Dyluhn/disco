@@ -1,0 +1,8 @@
+{
+  "id": "p04",
+  "category": "overflow-stress",
+  "description": "intentionally dense content to test overflow handling",
+  "goal": "Create a 3-slide deck summarizing the top 10 AI research papers from 2025. Each paper summary must include: title, authors (3-5 names), core contribution (2 sentences), key result (a specific metric), and citation. The three slides are: (1) Papers 1-4 covering language models, (2) Papers 5-7 covering computer vision, (3) Papers 8-10 covering robotics. Pack in as much detail as reasonably fits.",
+  "expected_layouts": ["dense_list", "dense_list", "dense_list"],
+  "stress": "extreme overflow risk — lots of text per slide, should trigger continuation or font reduction"
+}

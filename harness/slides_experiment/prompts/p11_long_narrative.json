@@ -1,0 +1,8 @@
+{
+  "id": "p11",
+  "category": "overflow-stress/narrative",
+  "description": "long narrative requiring good content selection and summarization",
+  "goal": "Create a 4-slide deck summarizing the history of artificial intelligence from 1950 to present. The deck must cover: the Turing Test (1950) and early symbolic AI; the two AI winters (1974-80, 1987-93) and why hype collapsed; the deep learning revolution starting with AlexNet (2012); and the large language model era (GPT-3 2020, ChatGPT 2022, GPT-4 2023, Claude/Gemini 2024). Each era should note 2-3 key figures, 2-3 key breakthroughs, and the societal impact. Include a timeline metaphor.",
+  "expected_layouts": ["title_timeline", "era_1", "era_2", "era_3"],
+  "stress": "content curation under density, narrative thread, timeline structure"
+}

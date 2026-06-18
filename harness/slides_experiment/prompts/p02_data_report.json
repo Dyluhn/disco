@@ -1,0 +1,8 @@
+{
+  "id": "p02",
+  "category": "data-heavy",
+  "description": "quarterly metrics deck with charts",
+  "goal": "Create a 5-slide quarterly business review deck for Q1 2026. Slide 1: Executive summary (revenue $4.2M, +18% YoY, NPS 72). Slide 2: Revenue breakdown by segment — Enterprise $2.8M (67%), SMB $1.0M (24%), Consumer $0.4M (9%) — as a bar chart. Slide 3: Churn analysis — overall 2.1%, down from 3.4% last quarter, with a table showing by segment. Slide 4: Top 3 wins and top 2 losses. Slide 5: Q2 targets and key initiatives.",
+  "expected_layouts": ["title_summary", "chart/bar", "table", "bullets", "metrics"],
+  "stress": "data-heavy, charts, tables, numbers"
+}

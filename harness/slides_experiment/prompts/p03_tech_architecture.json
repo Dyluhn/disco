@@ -1,0 +1,8 @@
+{
+  "id": "p03",
+  "category": "technical",
+  "description": "system architecture overview for engineering audience",
+  "goal": "Create a 5-slide technical architecture overview for a distributed event-streaming platform. Slide 1: Title — 'StreamCore Architecture v2.1'. Slide 2: System components — Kafka brokers (3-node cluster), Flink job manager, Redis cache tier, Postgres sink. Slide 3: Data flow diagram description — producer → topic partitioning → consumer groups → enrichment → sink. Slide 4: Scaling approach — partition-per-region, auto-scaling at 70% consumer lag, cold standby RTO 90s. Slide 5: Observability stack — Prometheus, Grafana dashboards, alert routing via PagerDuty.",
+  "expected_layouts": ["title", "two_column", "diagram_description", "bullets", "bullets"],
+  "stress": "technical detail, jargon, multi-component"
+}

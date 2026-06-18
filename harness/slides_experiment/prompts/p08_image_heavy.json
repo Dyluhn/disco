@@ -1,0 +1,8 @@
+{
+  "id": "p08",
+  "category": "image-heavy",
+  "description": "deck where images are conceptually central to each slide",
+  "goal": "Create a 5-slide visual storytelling deck about the future of urban mobility. Each slide should have a central visual concept (described as an image prompt) and minimal text. Slide 1: Title — 'Cities in Motion 2035'. Slide 2: Self-driving pods replacing cars on city streets (image: futuristic pod vehicles on a quiet city boulevard). Slide 3: Hyperloop connecting cities in 30 minutes (image: sleek hyperloop tube through mountain landscape). Slide 4: Drone delivery eliminating last-mile trucks (image: hundreds of drones in organized sky lanes). Slide 5: Human-centered streets — parks where roads used to be (image: people walking in a former freeway turned green park).",
+  "expected_layouts": ["title", "image_right", "image_left", "image_right", "image_left"],
+  "stress": "image-heavy, image_prompt required on each slide, minimal text"
+}
