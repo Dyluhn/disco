@@ -664,43 +664,35 @@ class ImageGenTool:
         assert ctx.sandbox is not None, (
             "image_generate requires a sandbox instance for the binary file write"
         )
-        ext = "jpg" if fmt == "jpeg" else "png"
-        # Sanitize the user-provided base filename: strip directory
-        # components and force a sane extension. The sandbox instance
-        # already jails paths, but the filename should also be a real
+        # Detect the ACTUAL format from the produced bytes — the remote tiers (OpenAI,
+        # ComfyUI) ignore the requested `fmt` and emit PNG regardless, so trust the bytes,
+        # not the request. This keeps the extension, the magic-bytes check, the on-disk
+        # file, and the reported format all consistent with what was really produced
+        # (so `format="jpeg"` against a PNG-only provider yields an honest .png, not a
+        # rejected request). PNG and JPEG are the only supported deliverable formats.
+        if image_bytes.startswith(_PNG_MAGIC):
+            actual_fmt = "png"
+        elif image_bytes.startswith(_JPEG_MAGIC):
+            actual_fmt = "jpeg"
+        else:
+            return ToolOutcome(
+                success=False,
+                content=(
+                    f"image_generate: backend produced bytes that are neither a PNG nor "
+                    f"a JPEG — refusing to surface a corrupt image as a deliverable. "
+                    f"(backend={backend.name})"
+                ),
+                error="unrecognized_image_format",
+            )
+        ext = "jpg" if actual_fmt == "jpeg" else "png"
+        # Sanitize the user-provided base filename: strip directory components and force a
+        # sane extension. The sandbox jails paths, but the filename should also be a real
         # file basename so the deliverable UI can show it cleanly.
         safe_base = os.path.basename(args.filename)
         if not safe_base or safe_base in {".", ".."}:
             safe_base = "image"
         out_path = f"{safe_base}.{ext}"
         await ctx.sandbox.write_file(out_path, image_bytes)
-
-        # ---- magic-bytes sanity check (the deliverable contract) ------
-        # We re-check the first 8 bytes of what we just wrote — a
-        # defensive cross-check that the on-disk file is actually a
-        # decodable image, not a silently-corrupted container. PNG and
-        # JPEG are the only supported formats today, and both have a
-        # well-known short signature.
-        if fmt == "png" and not image_bytes.startswith(_PNG_MAGIC):
-            return ToolOutcome(
-                success=False,
-                content=(
-                    f"image_generate: backend produced bytes that lack the "
-                    f"PNG signature — refusing to surface a corrupt image "
-                    f"as a deliverable. (backend={backend.name})"
-                ),
-                error="non_png_signature",
-            )
-        if fmt == "jpeg" and not image_bytes.startswith(_JPEG_MAGIC):
-            return ToolOutcome(
-                success=False,
-                content=(
-                    f"image_generate: backend produced bytes that lack the "
-                    f"JPEG SOI marker — refusing to surface a corrupt image "
-                    f"as a deliverable. (backend={backend.name})"
-                ),
-                error="non_jpeg_signature",
-            )
 
         # ---- success: short text summary, image bytes NEVER in content -
         # The model should see size + dimensions + format + seed, NOT the
@@ -722,14 +714,14 @@ class ImageGenTool:
             success=True,
             content=(
                 f"Image written: {len(image_bytes)} bytes to {out_path} "
-                f"({actual_w}x{actual_h} {fmt.upper()}, "
+                f"({actual_w}x{actual_h} {actual_fmt.upper()}, "
                 f"seed={seed}, backend={backend.name})"
             ),
             artifacts=[out_path],
             structured={
                 "path": out_path,
                 "filename_base": safe_base,
-                "format": fmt,
+                "format": actual_fmt,
                 "width": actual_w,
                 "height": actual_h,
                 "seed": seed,
