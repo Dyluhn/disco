@@ -113,7 +113,13 @@ def make_preview_router(
                 media_type="application/json",
             )
 
-        # Get the proxy URL for noVNC (same mechanism as the dev-server preview)
+        # Readiness check ONLY: confirm the sandbox has actually published NOVNC_PORT
+        # (wake_for_preview → port_upstream → expose_port resolves the host mapping).
+        # We deliberately DISCARD the resolved value: it is the raw sandbox host:port
+        # upstream, and handing that to the browser would bypass HostPreviewProxyMiddleware
+        # (cid/owner scoping + the live-browser enabled-gate). With x11vnc -nopw, a leaked
+        # raw URL is enough to watch the session — so the proxy must be the ONLY
+        # browser-visible path. (noVNC BLOCK fix.)
         upstream = await runtime.wake_for_preview(cid8, NOVNC_PORT)
         if upstream is None:
             return Response(
@@ -125,11 +131,62 @@ def make_preview_router(
                 media_type="application/json",
             )
 
+        # Return only the port; the client builds the single-origin proxy URL
+        # ({cid8}-6080.localhost via previewHostUrl), the same path as the dev-server
+        # preview. `ready` lets the client distinguish "go" from a 503 without a URL.
         return JSONResponse({
-            "url": upstream,
+            "ready": True,
             "novnc_path": "/vnc.html?autoconnect=1&view_only=1",
             "port": NOVNC_PORT,
         })
+
+    @router.post("/conversations/{conversation_id}/browser/live-touch")
+    async def browser_live_touch(conversation_id: str) -> Response:
+        """Heartbeat from the open Live pane — refresh the sandbox idle watchdog so an
+        actively-watched session is not reaped after the idle timeout. Best-effort + 200
+        regardless (a missing sandbox/daemon just means nothing to keep alive)."""
+        if runtime is None:
+            return JSONResponse({"ok": True, "note": "no runtime"})
+        session = runtime.live_session(conversation_id)
+        if session is None:
+            return JSONResponse({"ok": True, "note": "no sandbox"})
+        try:
+            job = _json.dumps({"action": "live_touch"})
+            job_escaped = job.replace("'", "'\"'\"'")
+            await session.exec_shell(
+                f"curl -s -X POST http://127.0.0.1:8901"
+                f" -H 'Content-Type: application/json'"
+                f" -d '{job_escaped}'",
+                timeout_s=5,
+            )
+        except Exception:  # noqa: BLE001 — heartbeat is best-effort
+            return JSONResponse({"ok": True, "note": "touch best-effort"})
+        return JSONResponse({"ok": True})
+
+    @router.post("/conversations/{conversation_id}/browser/live-stop")
+    async def browser_live_stop(conversation_id: str) -> Response:
+        """Tear the live-view stack down (Xvfb + x11vnc + websockify) inside the sandbox.
+        The client calls this when the user closes the Live pane / unmounts / disables
+        the feature, so the VNC surface does not linger for the life of the sandbox
+        (the idle watchdog is the backstop; this is the prompt path). Always 200 — a
+        no-op teardown (no sandbox / no daemon) is success, not an error."""
+        if runtime is None:
+            return JSONResponse({"ok": True, "note": "no runtime"})
+        session = runtime.live_session(conversation_id)
+        if session is None:
+            return JSONResponse({"ok": True, "note": "no sandbox"})
+        try:
+            job = _json.dumps({"action": "live_stop"})
+            job_escaped = job.replace("'", "'\"'\"'")
+            await session.exec_shell(
+                f"curl -s -X POST http://127.0.0.1:8901"
+                f" -H 'Content-Type: application/json'"
+                f" -d '{job_escaped}'",
+                timeout_s=10,
+            )
+        except Exception:  # noqa: BLE001 — best-effort teardown; report success regardless
+            return JSONResponse({"ok": True, "note": "teardown best-effort"})
+        return JSONResponse({"ok": True})
 
     @router.get("/conversations/{conversation_id}/preview")
     async def get_preview(conversation_id: str) -> dict:

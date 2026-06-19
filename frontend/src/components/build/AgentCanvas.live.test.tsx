@@ -19,16 +19,19 @@ vi.mock("@/hooks/useModels", async (importOriginal) => {
   };
 });
 
-// Mock agentGet for the live-url call
+// Mock agentGet for the live-url call. The route now returns ONLY {ready, novnc_path,
+// port} — NO raw url — and the client builds the {cid8}-6080.localhost proxy URL via
+// the real previewHostUrl (kept from importOriginal) using agentHttpBase() as the base.
 vi.mock("@/api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api/client")>();
   return {
     ...actual,
     agentGet: vi.fn().mockResolvedValue({
-      url: "http://aabbccdd-6080.localhost:8000",
+      ready: true,
       novnc_path: "/vnc.html?autoconnect=1&view_only=1",
       port: 6080,
     }),
+    agentSend: vi.fn().mockResolvedValue({ ok: true }), // live-stop teardown call
     agentHttpBase: vi.fn(() => "http://localhost:8000"),
   };
 });
@@ -82,8 +85,50 @@ describe("AgentCanvas — Live browser toggle", () => {
       const iframe = screen.getByTestId("novnc-iframe") as HTMLIFrameElement;
       expect(iframe).toBeInTheDocument();
       expect(iframe.src).toContain("view_only=1");
+      // The proxy URL is the {cid8}-6080.localhost single-origin path, NOT a raw host:port.
+      expect(iframe.src).toContain("aabbccdd-6080.localhost");
       // The iframe sandbox must NOT include allow-same-origin (security)
       expect(iframe.getAttribute("sandbox")).not.toContain("allow-same-origin");
     });
+  });
+
+  it("tears down the OWNING conversation's stack when switching conversations while live", async () => {
+    // Regression for the re-review BLOCK: BrowserPane is not keyed by cid, so a
+    // conversation switch must stop the conversation that OPENED the view, never the
+    // now-current cid (else the old VNC stack leaks).
+    const { useLiveBrowserConfig } = await import("@/hooks/useModels");
+    (useLiveBrowserConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { enabled: true },
+      isLoading: false,
+    });
+    const { agentSend } = await import("@/api/client");
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const ui = (cid: string) => (
+      <QueryClientProvider client={qc}>
+        <AgentCanvas events={[]} status="IDLE" cid={cid} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(ui("conv_aabbccdd11223344"));
+
+    const liveBtn = await screen.findByRole("button", { name: /live/i });
+    await userEvent.click(liveBtn);
+    await screen.findByTestId("novnc-iframe");
+    (agentSend as ReturnType<typeof vi.fn>).mockClear();
+
+    // Switch to a DIFFERENT conversation while the live view is open.
+    rerender(ui("conv_bbbbbbbb99887766"));
+
+    await waitFor(() => {
+      // Teardown must target the ORIGINAL (owning) cid, not the new one.
+      expect(agentSend).toHaveBeenCalledWith(
+        "POST",
+        expect.stringContaining("conv_aabbccdd11223344/browser/live-stop"),
+      );
+    });
+    // And never the wrong (newly-current) conversation.
+    expect(agentSend).not.toHaveBeenCalledWith(
+      "POST",
+      expect.stringContaining("conv_bbbbbbbb99887766/browser/live-stop"),
+    );
   });
 });

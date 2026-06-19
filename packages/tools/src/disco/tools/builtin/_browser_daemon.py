@@ -250,6 +250,12 @@ class BrowserHandler(BaseHTTPRequestHandler):
                 state.start(display=":1")
                 _live_headed = True
             return {"ok": True, "novnc_port": 6080, "display": ":1"}
+        elif action == "live_touch":
+            # Heartbeat from the frontend while the live view is open — refresh the idle
+            # watchdog so an actively-watched session is not reaped after 600s.
+            if _live_view is not None:
+                _live_view.touch()
+            return {"ok": True, "live": _live_view.is_live() if _live_view is not None else False}
         elif action == "live_stop":
             if _live_view is not None:
                 _live_view.teardown()
@@ -258,7 +264,7 @@ class BrowserHandler(BaseHTTPRequestHandler):
             return {"ok": False, "error": f"Unknown action: {action}"}
 
         # Common data for most actions
-        if action not in ("console_view", "live_start", "live_stop"):
+        if action not in ("console_view", "live_start", "live_stop", "live_touch"):
             elements = self._get_elements(page)
             text = page.evaluate(
                 "() => (document.body.innerText || document.body.textContent || '').trim()"

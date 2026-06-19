@@ -94,3 +94,212 @@ def test_live_url_route_no_sandbox_returns_503():
             assert body["reason"] == "no_sandbox"
 
     asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# Happy-path + intermediate-failure orchestration (mocked sandbox).
+#
+# These prove the ROUTE's wiring end-to-end WITHOUT a real sandbox backend
+# (the P5 hardware-deferred bit): daemon-health probe → live_start POST →
+# wake_for_preview → 200. They mock the SandboxSession's async exec_shell
+# (the two curls) and runtime.wake_for_preview (the proxy-url resolver), so
+# the orchestration logic in preview.py:browser_live_url is fully exercised.
+# ---------------------------------------------------------------------------
+
+
+def _enabled_app(*, session, upstream):
+    """Build an app whose runtime is enabled, returns `session` for live_session,
+    and `upstream` (str | None) from the async wake_for_preview."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from disco.agent_server.app import create_app
+    from disco.core.llm import ModelEntry
+    from disco.core.llm.config import LiveBrowserSettings, RouterConfig
+    from disco.core.store.sqlite import SqliteEventStore
+
+    entry = ModelEntry(model_id="m", provider="local", context_window=8192)
+    cfg = RouterConfig(
+        models={"m": entry},
+        default_model="m",
+        live_browser=LiveBrowserSettings(enabled=True),
+    )
+    store = MagicMock(spec=SqliteEventStore)
+    runtime = MagicMock()
+    runtime._config_store.load.return_value = cfg
+    runtime.live_session.return_value = session
+    runtime.wake_for_preview = AsyncMock(return_value=upstream)
+    return create_app(store, runtime=runtime)
+
+
+def _shell_result(exit_code: int, stdout: str = ""):
+    from unittest.mock import MagicMock
+
+    res = MagicMock()
+    res.exit_code = exit_code
+    res.stdout = stdout
+    return res
+
+
+def _fake_session(exec_results: list):
+    """A session whose async exec_shell yields `exec_results` in order."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    session = MagicMock()
+    session.exec_shell = AsyncMock(side_effect=exec_results)
+    return session
+
+
+def test_live_url_route_happy_path_returns_200_and_NO_raw_url():
+    """enabled + sandbox + healthy daemon + live_start ok + upstream-ready → 200 with
+    {ready, port, novnc_path} and CRUCIALLY no raw sandbox host:port URL (the BLOCK fix:
+    a raw URL would bypass the cid-scoped auth proxy). Proves the full orchestration."""
+    import asyncio
+
+    import httpx
+
+    # exec_shell #1 = health curl (ok), #2 = live_start POST (ok JSON)
+    session = _fake_session([
+        _shell_result(0, "ok"),
+        _shell_result(0, '{"ok": true, "novnc_port": 6080, "display": ":1"}'),
+    ])
+    # wake_for_preview resolves a RAW upstream (the readiness signal); the route must
+    # NOT leak it to the browser.
+    raw = "http://192.168.1.77:49213"
+    app = _enabled_app(session=session, upstream=raw)
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/conversations/conv_aabbccdd11223344/browser/live-url")
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            assert body["ready"] is True
+            assert body["port"] == 6080
+            # view_only=1 is enforced in the server-returned path, not just the client.
+            assert "view_only=1" in body["novnc_path"]
+            # SECURITY: the raw sandbox host:port must never reach the browser.
+            assert "url" not in body
+            assert raw not in resp.text
+
+    asyncio.run(run())
+
+
+def test_live_stop_route_is_idempotent_200():
+    """POST /browser/live-stop → 200 ok even with no sandbox (teardown is best-effort;
+    a no-op is success, not an error). Proves the close→teardown path exists server-side."""
+    import asyncio
+
+    import httpx
+
+    app = _enabled_app(session=None, upstream=None)
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post("/conversations/conv_aabbccdd11223344/browser/live-stop")
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["ok"] is True
+
+    asyncio.run(run())
+
+
+def test_live_touch_route_is_best_effort_200():
+    """POST /browser/live-touch (the open-pane heartbeat) → 200 ok, even with no
+    sandbox; it refreshes the idle watchdog so an active view is not reaped."""
+    import asyncio
+
+    import httpx
+
+    # With a live session, the touch curl is issued; with none, it's a no-op 200.
+    session = _fake_session([_shell_result(0, '{"ok": true, "live": true}')])
+    app = _enabled_app(session=session, upstream=None)
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post("/conversations/conv_aabbccdd11223344/browser/live-touch")
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["ok"] is True
+
+    asyncio.run(run())
+
+
+def test_port_upstream_gates_novnc_when_disabled():
+    """BLOCKER-2 gate: PreviewService.port_upstream must refuse NOVNC_PORT when the
+    live-browser feature is disabled — even if a stack is listening — so disabling Live
+    closes the proxy surface, not just the button. A normal USER port is unaffected."""
+    from unittest.mock import MagicMock
+
+    from disco.agent_server.preview_service import PreviewService
+    from disco.core.llm import ModelEntry
+    from disco.core.llm.config import LiveBrowserSettings, RouterConfig
+    from disco.tools.sandbox._container import NOVNC_PORT
+
+    entry = ModelEntry(model_id="m", provider="local", context_window=8192)
+
+    def _svc(enabled: bool) -> PreviewService:
+        cfg = RouterConfig(
+            models={"m": entry},
+            default_model="m",
+            live_browser=LiveBrowserSettings(enabled=enabled),
+        )
+        rt = MagicMock()
+        rt._config_store.load.return_value = cfg
+        # A live session whose expose_port would otherwise hand back a URL.
+        sess = MagicMock()
+        sess._service.name = "gvisor"
+        sess.expose_port.return_value = "http://host:40000"
+        executor = MagicMock()
+        executor._sandbox = sess
+        rt._executors = {"conv_aabbccdd11223344": executor}
+        return PreviewService(rt)
+
+    # Disabled → NOVNC_PORT refused (None), even though expose_port would resolve.
+    assert _svc(False).port_upstream("conv_aabbccdd11223344", NOVNC_PORT) is None
+    # Enabled → NOVNC_PORT resolves normally.
+    assert _svc(True).port_upstream("conv_aabbccdd11223344", NOVNC_PORT) == "http://host:40000"
+    # A non-noVNC USER port is never gated by the live-browser flag.
+    assert _svc(False).port_upstream("conv_aabbccdd11223344", 5173) == "http://host:40000"
+
+
+def test_live_url_route_daemon_down_returns_503():
+    """enabled + sandbox but the browser daemon health curl fails → 503 no_daemon
+    (no false 'live' affordance when the agent never started the browser tool)."""
+    import asyncio
+
+    import httpx
+
+    session = _fake_session([_shell_result(7, "")])  # curl exit 7 = connection refused
+    app = _enabled_app(session=session, upstream="unused")
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/conversations/conv_aabbccdd11223344/browser/live-url")
+            assert resp.status_code == 503
+            assert resp.json()["reason"] == "no_daemon"
+
+    asyncio.run(run())
+
+
+def test_live_url_route_no_upstream_returns_503():
+    """Daemon brought the stack up but the proxy hasn't exposed NOVNC_PORT yet →
+    503 no_upstream rather than a 200 pointing at a dead URL (no false affordance)."""
+    import asyncio
+
+    import httpx
+
+    session = _fake_session([
+        _shell_result(0, "ok"),
+        _shell_result(0, '{"ok": true}'),
+    ])
+    app = _enabled_app(session=session, upstream=None)  # wake_for_preview → None
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/conversations/conv_aabbccdd11223344/browser/live-url")
+            assert resp.status_code == 503
+            assert resp.json()["reason"] == "no_upstream"
+
+    asyncio.run(run())

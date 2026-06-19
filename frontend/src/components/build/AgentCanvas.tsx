@@ -14,7 +14,7 @@ import { Download, FileCode2, FileSpreadsheet, FileText, Globe, Package, Present
 import { cn } from "@/lib/cn";
 import { deriveFiles, deriveSrcDoc, deriveTerminal, deriveLiveSignal } from "@/lib/buildTrace";
 import type { WorkspaceFile } from "@/lib/buildTrace";
-import { agentGet, agentHttpBase } from "@/api/client";
+import { agentGet, agentSend, agentHttpBase, previewHostUrl } from "@/api/client";
 import { useElementSelect } from "@/hooks/useElementSelect";
 import { SelectionOverlay } from "@/components/build/canvas/SelectionOverlay";
 import { SELECTION_AGENT_SCRIPT } from "@/lib/selectionAgent";
@@ -131,12 +131,31 @@ function BrowserPane({
   // Live browser (noVNC) state
   const { data: liveBrowserCfg } = useLiveBrowserConfig();
   const liveBrowserEnabled = liveBrowserCfg?.enabled ?? false;
-  const [liveView, setLiveView] = useState<{ url: string; novnc_path: string } | null>(null);
+  // liveView carries the cid that OWNS the stack (`ownerCid`) — BrowserPane is not
+  // keyed by cid, so on a conversation switch we must tear down the conversation that
+  // opened the view, NOT whatever cid is current now (else we stop the wrong sandbox
+  // and leak the old VNC stack).
+  const [liveView, setLiveView] = useState<
+    { url: string; novnc_path: string; ownerCid: string } | null
+  >(null);
   const [liveLoading, setLiveLoading] = useState(false);
   const [liveError, setLiveError] = useState<string | null>(null);
+  // Mirror live state into a ref so the unmount-cleanup effect (empty deps) reads the
+  // latest value without re-subscribing on every change.
+  const liveViewRef = useRef(liveView);
+  liveViewRef.current = liveView;
+
+  // Tell the sandbox to tear the live-view stack down. Best-effort + fire-and-forget:
+  // the user closing the pane should never block on (or error from) the teardown.
+  const stopLiveStack = (conv: string) => {
+    void agentSend("POST", `/conversations/${encodeURIComponent(conv)}/browser/live-stop`).catch(
+      () => {},
+    );
+  };
 
   const toggleLive = async () => {
     if (liveView) {
+      stopLiveStack(liveView.ownerCid); // prompt teardown of the OWNING conversation
       setLiveView(null);
       return;
     }
@@ -144,10 +163,19 @@ function BrowserPane({
     setLiveLoading(true);
     setLiveError(null);
     try {
-      const data = await agentGet<{ url: string; novnc_path: string; port: number }>(
+      const data = await agentGet<{ ready: boolean; novnc_path: string; port: number }>(
         `/conversations/${encodeURIComponent(cid)}/browser/live-url`,
       );
-      setLiveView({ url: data.url, novnc_path: data.novnc_path });
+      // SECURITY: build the single-origin proxy URL client-side ({cid8}-6080.localhost).
+      // The server intentionally never returns a raw sandbox host:port — that would
+      // bypass the auth/cid-scoping proxy. previewHostUrl is the same helper the
+      // dev-server preview uses.
+      const base = previewHostUrl(cid, data.port, agentHttpBase());
+      if (!base) {
+        setLiveError("Preview origin unavailable.");
+        return;
+      }
+      setLiveView({ url: base, novnc_path: data.novnc_path, ownerCid: cid });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Failed to start live view";
       setLiveError(msg);
@@ -155,6 +183,40 @@ function BrowserPane({
       setLiveLoading(false);
     }
   };
+
+  // Tear the OWNING conversation's stack down when the feature is disabled in Settings,
+  // OR when the surface switches to a different conversation while a live view is open
+  // (BrowserPane isn't keyed by cid, so we must stop liveView.ownerCid, not `cid`).
+  useEffect(() => {
+    if (!liveView) return;
+    if (!liveBrowserEnabled || liveView.ownerCid !== cid) {
+      stopLiveStack(liveView.ownerCid);
+      setLiveView(null);
+    }
+  }, [liveBrowserEnabled, liveView, cid]);
+
+  // Heartbeat: while the live view is open, refresh the sandbox idle watchdog so an
+  // ACTIVELY-watched session is never reaped under the user. If the tab is closed /
+  // sleeps / loses the network, the heartbeats stop and the watchdog reaps the stack
+  // (the backstop for an abandoned view that never fired an unmount/close).
+  useEffect(() => {
+    if (!liveView) return;
+    const owner = liveView.ownerCid;
+    const id = setInterval(() => {
+      void agentSend("POST", `/conversations/${encodeURIComponent(owner)}/browser/live-touch`).catch(
+        () => {},
+      );
+    }, 240_000); // 4 min < the 600s server idle timeout
+    return () => clearInterval(id);
+  }, [liveView]);
+
+  useEffect(() => {
+    return () => {
+      // On unmount, stop the live stack this pane started (its owning cid).
+      if (liveViewRef.current) stopLiveStack(liveViewRef.current.ownerCid);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const Header =
     url || driving || (liveBrowserEnabled && cid) ? (

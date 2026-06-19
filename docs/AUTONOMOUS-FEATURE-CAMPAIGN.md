@@ -30,6 +30,31 @@ for approval between waves. Decisions locked with Dylan:
   - **A6 podcast** — pipeline EXISTS (`audio_overview.py`+`report_audio.py`+Kokoro cached). A6.1 RP-09 live
     accept + A6.2 TTS toggle + A6.3 agent-surface "Make a podcast" card.
 
+## noVNC "watch the agent's browser live" — SECURITY-HARDENED (2026-06-19)
+Pre-built P1–P4 (`f6d2b8f`/`ac4edef`) shipped with green gates but had **never had the mandatory
+adversarial review**. Running it returned **BLOCK** (4 blockers + major + minor) — the latent-broken
+pattern. Hardened over 5 gpt-5.5 rounds (BLOCK→BLOCK→BLOCK→BLOCK→**SHIP-WITH-FIXES**), each fix carrying
+a regression test:
+- **B1** route handed the browser a *raw* sandbox `host:port` → bypassed the cid-scoped auth proxy.
+  Now returns `{ready, port}`; client builds `{cid8}-6080.localhost` via `previewHostUrl`.
+- **B2** 6080 stayed proxiable when Live disabled → gated `NOVNC_PORT` in `port_upstream` (the one
+  chokepoint all 3 proxy consumers flow through).
+- **B3** "accept anything listening" could bridge to a foreign non-view-only VNC → fail-closed (reuse
+  only our tracked processes).
+- **B4** teardown couldn't kill `-bg`/`--daemon` children + frontend never stopped → foreground
+  process-groups + `killpg` + **reap** (caught a zombie leak empirically) + `live-stop`/`live-touch`
+  routes + close/disable/conv-switch/unmount hooks (all tied to the **owning cid**) + idle watchdog
+  (restart-safe; tears down partial-death survivors).
+- **MAJOR** websockify loopback unreachable via publish → bind `0.0.0.0:6080`; x11vnc stays
+  `127.0.0.1:5901 -viewonly` (the sensitive layer never leaves the container).
+- **MINOR** Podman mislabeled as supported → corrected Settings copy.
+
+**Live-proof (closed the "P5 hardware-deferred" gap):** built the real `disco-sandbox` image on rootless
+podman, ran the hardened `live_view.py`, and a host Firefox rendered the live view-only stream end-to-end
+(`.harness/evidence/novnc-live/`). P5 was only ever blocked by the *wrong* hardware (destroyed remote VM) —
+the invariants are provable on any container backend. Gates: 46 noVNC py + frontend 30 + pyright/lint/tsc
+clean. gVisor-specific syscall isolation + D7 egress remain genuinely hardware/infra-deferred.
+
 ## §A CAMPAIGN COMPLETE — all 7 features done (2026-06-19)
 A3 · A7 · A6 · A2 · D1 · A5 · A1 · A4 — every §A feature implemented, gated, and committed on
 build-surface-recovery-ux. Two documented stack-dependent live-screenshot gaps remain (A1 click→edit→steer

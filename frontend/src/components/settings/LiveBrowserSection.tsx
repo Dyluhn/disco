@@ -31,8 +31,10 @@ export function LiveBrowserSection() {
           nothing. View-only by default; loopback-bound inside the sandbox.
         </p>
         <p className="mt-hair font-ui text-[0.78rem] text-text-faint">
-          Requires the sandbox image with Xvfb/x11vnc/noVNC/websockify (P1). gVisor backend needs
-          D7 egress allowlist update (deferred). Use local or podman backend.
+          Requires the sandbox image with Xvfb/x11vnc/noVNC/websockify (P1) and the gVisor or
+          local Docker backend. The Podman backend does not expose preview ports yet, so Live is
+          unavailable there (the toggle will report “noVNC port not exposed”). gVisor also needs
+          the D7 egress allowlist update (deferred).
         </p>
       </header>
 

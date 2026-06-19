@@ -22,7 +22,7 @@ from typing import Any
 
 from disco.core import DEFAULT_OWNER_ID
 from disco.tools.projects import StorageStatus
-from disco.tools.sandbox._container import PREVIEW_PORT, USER_PORTS
+from disco.tools.sandbox._container import NOVNC_PORT, PREVIEW_PORT, USER_PORTS
 from disco.tools.sandbox.port_owner import port_owners
 
 
@@ -42,9 +42,25 @@ class PreviewService:
             return matches[0]
         return None
 
+    def _live_browser_enabled(self) -> bool:
+        """Read the live-browser Settings flag; default-deny on any config failure."""
+        try:
+            return bool(self._rt._config_store.load().live_browser.enabled)
+        except Exception:  # noqa: BLE001 — config unavailable ⇒ feature OFF
+            return False
+
     def port_upstream(self, conversation_id: str, port: int) -> str | None:
         """Generalized upstream resolution for any curated USER port (BP-10).
-        expose_port itself refuses non-USER ports — defense stays in the backend."""
+        expose_port itself refuses non-USER ports — defense stays in the backend.
+
+        SECURITY (noVNC BLOCK fix): NOVNC_PORT is a curated USER port so expose_port
+        can map it, but it is ALSO the live-browser surface, which must be closed when
+        the feature is disabled. This is the single chokepoint every proxy consumer
+        (HostPreviewProxyMiddleware, the /port/{port} route, and the /browser/live-url
+        route) flows through — gating here means disabling Live closes the network
+        surface, not merely the button, even if a stale stack is still listening on 6080."""
+        if port == NOVNC_PORT and not self._live_browser_enabled():
+            return None
         executor = self._rt._executors.get(conversation_id)
         session = getattr(executor, "_sandbox", None) if executor is not None else None
         if session is None:
