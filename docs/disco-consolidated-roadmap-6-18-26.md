@@ -1,141 +1,112 @@
-# Disco — consolidated roadmap (reconciled 2026-06-18)
+# Disco — consolidated roadmap: EVERYTHING from here to shipping (reconciled 2026-06-18)
 
-THE single living "what's left" doc. **Reconciled against git + code on 2026-06-18**
-(not against older docs or memory) — every status below cites evidence (commit SHA,
-file, or "verified this session"). Supersedes all archived per-doc lists. When a status
-is uncertain it says so; do not upgrade a `◐`/`verify-live` to `✅` without re-checking.
+THE single living "what's left" doc. **Reconciled against git + code on 2026-06-18** —
+every status cites evidence (commit SHA / file / "verified this session"). Supersedes all
+archived per-doc lists. Confidence is marked per item; do not upgrade a status without
+re-checking the cited evidence.
 
-Legend: ✅ done (evidence) · ◐ partial (gap named) · ○ open · ⬚ blocked/decision-gated ·
-🔎 shipped-in-code but needs a live in-app check before trusting.
+**The ship bar (north-star §8):** a clean **8 GB keyless** box runs `docker compose up`,
+every surface works through the real UI, `disco verify` passes — **green + screenshotted**.
+Everything in §B serves that gate; §A/§E are product + quality beyond the install spine.
 
----
-
-## §0 — Shipped + verified (do not re-litigate)
-Each with commit evidence; UI items still owe a live Firefox screenshot (see §4-note).
-
-**Driver / provider reliability — ✅ DONE** (`14fe27b` P1+P2+P3, `e875249` P4). Provider-
-pref injection, routing-retry, sticky last-picked model, `config=` footgun warning.
-Live-proven on the free model that previously Chutes-errored.
-
-**Slides / artifacts pipeline — ✅ DONE**
-- C4 schema experiment → verdict "loose-hybrid" (`034045a`; `slides-experiment-verdict.md`). **Decision resolved.**
-- C1/C2 deck schema + generator (`1a93bd3`) · C3 native **editable** PPTX via python-pptx + LibreOffice PDF + 16:9 brand HTML (`cbb9101`) · C8 chart/table layouts (`4662978`) · reconcile onto c1c2 (`b200384`).
-- C5 render/preview fixes (`5ca117a`) · C6 `artifact_mode` wired into the build loop (`74019e7`; verified real refs in runtime.py/conversations.py).
-- Export formats: PPTX (native-editable, clean), PDF (from PPTX), HTML. PPTX imports cleanly into Google Slides/PowerPoint — that's the editing-elsewhere path.
-
-**Editor selection plumbing (§4.1/4.2) — ✅ DONE** (`2d18c9d`): schema-independent
-SelectionOverlay + postMessage bridge + in-frame selection agent, mounted in
-AgentCanvas/PreviewPane. (The *edit loop* on top of this is OPEN — see §1.1.)
-
-**Deep-Research polish — ✅ DONE**: F1 keep-searching (`fcb117c`) · DR mid-run
-steer/inject (`fa9e3d9`) · FILE-DELIVERY F1/F2 per-file download + feed card
-(`c804f55`) · F3 cid threading into report renderers (`d12fe4f`, 🔎 verify the download
-actually renders on the Research surface live — truth.md D12 was the gap F3 targets).
-
-**Attach files in the initial box (G1/DR-4) — ✅ DONE** (`99c2058`, merged `235dfa3`).
-
-**noVNC live browser P1–P4 — ✅ DONE** (`f6d2b8f` image, `ac4edef` daemon+route+toggle).
-P5 = open (see §1.7).
-
-**Audio (RP-09) — ✅ DONE** (`f65837b` + **Dylan live-tested days ago**).
-
-**Tailscale runthru B1–B7 + PDF export polish — ✅ DONE** (live-verified earlier today).
-
-**This session (2026-06-18):** merged attach2 · fixed node_modules self-symlink +
-novnc daemon type error (`62625d2`) · restored deck_patch (`e3cd1d4`) + deckResolver
-(`d94ce55`) test suites · pruned 21 stale worktrees · archived 20 superseded plan docs.
+Legend: ✅ done · ◐ partial · ○ open · ⬚ blocked/decision-gated · 🔎 in-code, needs live check.
 
 ---
 
-## §1 — Genuinely open (verified) — the real remaining work
-
-**1.1 Website / app click-to-edit  ○  — THE big one.** *(plan: `surgical-C-trackc-editor.md`)*
-Verified this session: the click-to-highlight is mounted, but the **edit loop is open at
-the last hop**, and the *site* path is missing its foundation:
-  - Nothing stamps the `data-oid` source tags onto built sites → clicking a built-site
-    element yields an empty `SourceRef` (no file/line). The **tag pass (§4.3) doesn't exist.**
-  - The selection never reaches the agent (`useElementSelect` selection feeds only the
-    overlay highlight) → the **source-edit path (§4.4) is unwired.**
-  - The §4.5 `DeckEditor` canvas is mounted nowhere; no `LoweredDeck` backend route.
-  Slides flavor ≈ one wire from working; **website flavor is a real project** (framework-
-  aware build-time tagger + the edit wire + live acceptance). Deck slice plan:
-  `deck-editor-integration-plan-6-18-26.md`. Effort: large.
-
-**1.2 Image generation as a real tool  ○.** Verified: only `_PILProceduralBackend`
-exists; `DiffusersBackend` slot empty. The C7 *seam* is done (`313d357`), real generation
-is not. Need a real backend (`openai-images-compatible` and/or `comfyui` adapter, per the
-§3 decision). Same seam already wired. Effort: high.
-
-**1.3 Iterative research mode toggle  ○.** No implementation commits (verified). Use
-per-claim NLI verdicts to re-research only weak-sourced claims; rewrite weak
-sections/intro/conclusion, preserve strong ones. **Open design problem (needs Dylan):**
-coherence when only some sections are rewritten. Effort: high.
-
-**1.4 DR closing-card → agent handoff  ○.** No commits (verified). On report finish,
-offer agent actions ("Make slides") that seed a Build conversation with the report +
-a pre-approved plan, skip the gate, deliver. Now unblocked (FILE-DELIVERY shipped). Effort: medium.
-
-**1.5 Real two-host podcast  ○.** No commits (verified). Agent-authored dialogue →
-multi-voice TTS → mix → optional video → deliver. **Unblocked now** (FILE-DELIVERY F1-3
-+ RP-09 both done). Effort: high.
-
-**1.6 FILE-DELIVERY F4 — on-demand export from Deep Research  ○.** Deferred: needs a
-DR on-demand-export model, not a workspace DeliverableEvent. Effort: medium.
-
-**1.7 noVNC P5 — live jail / security acceptance  ⬚ hardware-blocked.** The sandbox VM
-was destroyed; re-provision to run it. Code (P1–P4) is in. Prereq: D7 gVisor egress allowlist.
+## §0 — Shipped + verified (evidence; do not re-litigate)
+- **Driver/provider reliability** ✅ `14fe27b` (P1/P2/P3) + `e875249` (P4) — live-proven.
+- **Slides pipeline** ✅ — C4 verdict loose-hybrid `034045a`; C1/C2 `1a93bd3`; C3 native
+  editable PPTX `cbb9101`; C8 charts `4662978`; reconcile `b200384`; C5 `5ca117a`;
+  C6 artifact_mode wired `74019e7` (verified). Export: PPTX(editable)+PDF+HTML.
+- **Editor selection plumbing** §4.1/4.2 ✅ `2d18c9d` (overlay+bridge mounted).
+- **Deep-Research polish** ✅ — F1 `fcb117c`, steer/inject `fa9e3d9`, FILE-DELIVERY
+  F1/F2 `c804f55`, F3 `d12fe4f`.
+- **Attach in initial box** ✅ `99c2058`/`235dfa3` · **noVNC P1–P4** ✅ `f6d2b8f`/`ac4edef`
+  · **RP-09 audio** ✅ `f65837b` + Dylan live-tested · **Tailscale B1–B7** + **PDF export** ✅.
+- **Launch prep already done:** license = **Apache-2.0** (`LICENSE`) · **CI** (`ci.yml` +
+  `e2e-live.yml`) · shipping `tsc`→0 · LAN-IP scrub · `PMX_`→`DISCO_` · model-cache volume
+  + healthcheck · 8 GB RAM-fit work (encoder knobs, ctx 8K, KV quant, OOM error-frame) ·
+  `SECURITY.md` · eval **harness** exists (`retrieval/evaluation.py` + `evals/`) ·
+  **bundled driver model scrapped** (`.env.example`: "NO bundled driver model" → BYO).
+- **This session:** attach2 merge · node_modules/novnc fixes `62625d2` · deck_patch
+  `e3cd1d4` + deckResolver `d94ce55` tests restored · 21 worktrees pruned · 20 docs culled.
 
 ---
 
-## §2 — Launch gates (from `north-star.md`)
-- **Benchmarks / eval suite  ○** (Dylan mandate "before launch"). Rides the shipped
-  `disco verify` surface. Grounding accuracy, agent task success, latency, cost. Med-large.
-- **8 GB keyless + bundled model  ◐.** Encoder knobs + ctx 8K shipped as units (#41/#42);
-  **open:** replace stale Qwen3-4B with a current tool-call-strong small GGUF (framed as a
-  smoke test) + clean-box <8 GB gauntlet pass. Large.
-- **License — AGPL vs Apache  ⬚** (Dylan's call). Trivial once decided.
-- **Release-eng pack  ◐.** Done: `self-host.md`, `provider-matrix.md`, `disco verify`.
-  Open: minimal honest CI, demo gallery, `git tag v0.1.0` + changelog, mobile-responsive
-  pass, `SECURITY.md` (disclosure + threat model). Medium.
+## §A — Product features (open, verified)
+- **A1 Website/app click-to-edit ○** — source-tag pass (§4.3) + selection→agent edit wire
+  (§4.4) + app-builder reuse (§4.6). *Verified: no `data-oid` writer; selection dead-ends.*
+  Plan: `surgical-C-trackc-editor.md`. Effort: large (the differentiator).
+- **A2 In-app deck editor ○** — mount `DeckEditor` + `LoweredDeck` route + patch round-trip
+  (§4.5). Plan: `deck-editor-integration-plan-6-18-26.md`. Effort: med.
+- **A3 Image generation — real backend ○** — replace `_PILProceduralBackend`; the
+  `DiffusersBackend` slot is empty (verified). C7 seam done `313d357`. Effort: high.
+- **A4 Iterative research mode ○** — NLI-verdict-gated re-research of weak claims (no commits).
+  Open design: section-coherence. Effort: high.
+- **A5 DR closing-card → agent handoff ○** — seed Build w/ report + pre-approved plan (no commits).
+- **A6 Real two-host podcast ○** — dialogue → multi-voice TTS → mix → deliver (no commits; unblocked).
+- **A7 FILE-DELIVERY F4 ○** — on-demand DR export (deferred; needs export-on-demand model).
+
+## §B — Launch gates (the ship bar)
+- **B1 Run the clean 8 GB keyless gauntlet → green + screenshot ⬚** — north-star §8, *the*
+  release gate. Pieces landed + VM-proven; the final clean-box end-to-end proof is unrun.
+  Box available (blackbox LXC 199).
+- **B2 Benchmark report ○** — harness exists; run it → grounding accuracy, task success,
+  latency, cost (Dylan's "before launch" mandate).
+- **B3 Keyless-story coherence ○** — with no bundled driver model, define/verify what
+  "keyless" means at launch (BYO-first?) so §8's promise is actually true on the gauntlet.
+- **B4 Release-eng residue ◐** — `git tag v0.1.0` + changelog · demo gallery · mobile-
+  responsive pass. (Done: self-host/provider-matrix/SECURITY/disco verify/CI.)
+- **B5 Lint debt ○** — ruff F821/B904, eslint → 0 (dishonest-green traps).
+
+## §C — Infrastructure / hardware-blocked
+- **C1 noVNC P5 — live jail/security acceptance ⬚** — needs the destroyed VM rebuilt.
+- **C2 D7 gVisor egress allowlist ○** — prereq for P5.
+
+## §D — Verify-live (shipped in code, may be inert — confirm in the running app)
+- **D1 FILE-DELIVERY cid renders the download on the Research surface 🔎** (truth.md D12).
+- **D2 DoD evaluator inert 🔎/○** — verified: `set_dod_spec` has no production caller that
+  *creates* a spec at submit_plan → finish-gate judge likely never runs (truth.md C1a holds).
+- **D3 E8 podman/local egress — live-verify 🔎** (VM-202 class).
+- **D4 UI screenshot acceptance ○** — every UI feature this run (decks, attach, build-surface
+  fixes, noVNC toggle) owes a real Firefox-in-app screenshot; none have it.
+
+## §E — Engine / correctness / debt (reconciled this pass)
+- **E1 Single stable system prompt ○ (unverified)** — stop mutating the tools array per mode
+  (KV-prefix stability). Not re-checked against code this pass.
+- **E2 Auto-spill large observations to disk ○ (unverified).**
+- **E3 `deploy_preview` detached long-running serve ○** — verified deferred/absent; build
+  the real tool w/ a 300 s serve ceiling.
+- **E4 One-feature-per-iteration scope enforcement ○ (unverified).**
+- **E5 Epochal observation masking vs KV stability (HS-06) ⬚** — design-blocked (Dylan call).
+- **E6 Grammar-constrained tool calls (B9) ⬚** — infra-blocked (llama.cpp `--jinja` relaunch).
+- **E7 Rebuild DR-lifecycle harness from real captures ○** · **E8 real-sample backfill for
+  streaming/provider harnesses ○** (test-debt; unverified scope).
+- **E9 UX micro-polish ◐** — `LiveSignalBar` exists; footer-pin + main-feed auto-scroll +
+  Build session-stash persistence + adjustable-plan/visual design-edit not found (likely open).
+- **E10 Root hygiene ○** — **verified open:** `disco.db`, `run_manual{,2-5}.py`, `test_*.py`,
+  `selected.csv`/`sensor_readings.csv`/`tmp_weather.csv`, `validate.py` all in repo root.
+- *Resolved/dropped:* edit-tool demote (line tools deliberately KEPT) · package import cycles
+  (lint-imports: 0 cycles) · split-monoliths + arch/import gates (all done).
+
+## §F — Standing engineering goal
+- **F1 god-function decomposition ○** — functions ≤80 LOC / classes ≤500 (gate only enforces
+  ≤200/≤800). Verified still open. Plan: `god-function-decomposition-plan.md`.
+
+## §G — Decisions still owed by Dylan
+1. Iterative-mode coherence approach (A4) · 2. Benchmark scope/datasets (B2) ·
+3. Image-providers v1 set — confirm `openai-compatible | comfyui` (A3).
+*Resolved: license=Apache-2.0 · slides=loose-hybrid · default driver=sticky · bundled model=scrapped(BYO).*
 
 ---
 
-## §3 — Decisions still needed from Dylan
-1. **Iterative-mode coherence approach** (§1.3) — the unsolved design bit.
-2. **License** — AGPL vs Apache (§2).
-3. **Benchmarks scope** — which metrics/datasets are the launch gate (§2).
-4. **Image providers v1 set** — confirm `openai-images-compatible | comfyui` (+ keyless
-   procedural default) as the real-backend targets (§1.2). The seam already assumes this.
-- *Resolved:* slides A/B/C → loose-hybrid (C4). · default driver → sticky last-pick (shipped).
+## §H — Recommended sequence
+1. **Decide** §G (cheap, unblocks). 2. **Ship gate:** §B1 gauntlet + §B2 benchmarks +
+§B5 lint + §B4 release-eng → first shippable. 3. **Differentiator:** §A1 website click-to-
+edit. 4. **Products:** §A3 image-gen · §A5 handoff · §A6 podcast. 5. **Verify-live §D** as
+the app comes up. 6. **Opportunistic:** §A7, §C, §E, §F.
 
----
-
-## §4 — Engine / correctness / debt backlog (appendix, not launch-blocking, UNVERIFIED)
-Not re-verified this pass — treat as candidates, confirm against code before acting:
-single stable system prompt (KV-prefix stability) · auto-spill large observations ·
-edit-tool hardening residue (demote `file_replace_lines`/`insert_lines`) · deploy_preview
-detached serve ceiling · one-feature-per-iteration scope · epochal masking vs KV (design-
-blocked) · grammar-constrained tool calls (infra-blocked, llama.cpp `--jinja`) · E7
-real-sample DR-lifecycle harness · lint debt (tsc→0, ruff F821/B904, eslint→0) · UX micro-
-polish (auto-scroll, footer LiveSignalBar, session-stash) · root hygiene (move
-`run_manual*`/root `test_*`/CSVs/`disco.db` out of root) · a few transitive import nits.
-
-**Also re-verify (truth.md "wired-but-inert" flags, 2026-06-16 — may now be addressed):**
-DoD evaluator `set_dod_spec` never called outside tests (C1a) · the FILE-DELIVERY cid
-render (D12, §0) · E8 egress live-verify.
-
----
-
-## §5 — Recommended sequence
-1. **Decide** §3 items (cheap, unblock work): license, image-providers set, benchmarks scope.
-2. **Highest value:** §1.1 website click-to-edit — scope the tagger + edit-wire, build, live-accept.
-3. **Unblock products:** §1.2 image-gen real backend · §1.4 DR→agent handoff · §1.5 podcast.
-4. **Launch gates in parallel:** benchmarks · 8 GB bundled-model swap · release-eng residue.
-5. **Opportunistic:** §1.6 F4 · §4 backlog · §1.7 noVNC P5 (when the VM is rebuilt).
-
----
-*Living plan set after the 2026-06-18 cull: this roadmap · `truth.md` (wired-vs-working
-audit) · `surgical-C-trackc-editor.md` + `deck-editor-integration-plan-6-18-26.md` (open
-editor work) · `god-function-decomposition-plan.md` (eng-debt) · `north-star.md` ·
-`product-ideas-2026-06-17.md` · `slides-experiment-verdict.md` · `self-host.md` ·
-`provider-matrix.md` · `design-novnc-live-browser.md` · `architecture.generated.md`.*
+*Living doc set (post-2026-06-18 cull): this roadmap · `truth.md` · `surgical-C-trackc-editor`
+· `deck-editor-integration-plan-6-18-26` · `god-function-decomposition-plan` · `north-star` ·
+`product-ideas-2026-06-17` · `slides-experiment-verdict` · `self-host` · `provider-matrix` ·
+`design-novnc-live-browser` · `architecture.generated`.*
