@@ -148,6 +148,11 @@ async def _declared_artifacts(store: SqliteEventStore, conversation_id: str) -> 
                     fn = s.get("filename")
                     if isinstance(fn, str) and fn:
                         out.add(posixpath.normpath(fn))
+                    # A2.0: the editable AuthoredDeck sidecar (slides C2 path) is a
+                    # reachable artifact so the deck-editor route can read it back.
+                    es = s.get("editable_source")
+                    if isinstance(es, str) and es:
+                        out.add(posixpath.normpath(es))
                 elif tn == "image_generate":
                     p = s.get("path")
                     if isinstance(p, str) and p:

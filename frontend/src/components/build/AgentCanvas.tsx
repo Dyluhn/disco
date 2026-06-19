@@ -10,7 +10,7 @@
 
 import { useMemo, useRef, useState, useEffect } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
-import { Download, FileCode2, FileSpreadsheet, FileText, Globe, Package, SquareTerminal } from "lucide-react";
+import { Download, FileCode2, FileSpreadsheet, FileText, Globe, Package, Presentation, SquareTerminal } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { deriveFiles, deriveSrcDoc, deriveTerminal, deriveLiveSignal } from "@/lib/buildTrace";
 import type { WorkspaceFile } from "@/lib/buildTrace";
@@ -19,9 +19,44 @@ import { useElementSelect } from "@/hooks/useElementSelect";
 import { SelectionOverlay } from "@/components/build/canvas/SelectionOverlay";
 import { SELECTION_AGENT_SCRIPT } from "@/lib/selectionAgent";
 import { useLiveBrowserConfig } from "@/hooks/useModels";
+import { DeckEditorPane } from "@/components/build/DeckEditorPane";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
-type TabId = "browser" | "artifacts" | "console";
+type TabId = "browser" | "artifacts" | "console" | "deck";
+
+/** The base name of the most-recent deck that carries an editable AuthoredDeck
+ * sidecar (A2.0 sets structured.editable_source on the slides_generate C2 path).
+ * That sidecar is what the in-app deck editor reads — its absence means the deck
+ * is a Marp/markdown deck (no editable source), so the Edit Slides tab must not
+ * appear (no false affordance). Latest editable deck wins. Null when none. */
+export function latestEditableDeckBase(events: AgentEvent[]): string | null {
+  // The LATEST render per base decides editability (mirrors the server's
+  // _sidecar_is_current guard): a later non-editable regen of a base (Marp/fallback —
+  // base_name but no editable_source) supersedes its earlier editable sidecar, so the
+  // stale sidecar must NOT be offered (editing it would overwrite the newer deck).
+  const decided = new Set<string>();
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.kind !== "observation") continue;
+    const { tool_name, structured, success } = e.tool_result;
+    if (tool_name !== "slides_generate" || !success || !structured) continue;
+    const editable = structured.editable_source;
+    const baseName = typeof structured.base_name === "string" ? structured.base_name : null;
+    const base =
+      baseName ??
+      (typeof editable === "string" && editable
+        ? editable.replace(/\.authored\.json$/i, "")
+        : null);
+    if (!base || decided.has(base)) continue; // a LATER event already decided this base
+    decided.add(base); // this is the latest render of `base`
+    // The editor route jails the base to a plain name (no "/"); a nested deck like
+    // "reports/q2" is downloadable but NOT editable — don't offer a tab that 404s.
+    if (base.includes("/")) continue;
+    if (typeof editable === "string" && editable) return base; // …and it's editable
+    // else: latest render of this base is non-editable → skip; scan other bases
+  }
+  return null;
+}
 
 /** All screenshot_paths the browser/MCP tools produced, in chronological order
  * (latest last). Real, straight from each observation's structured payload. */
@@ -388,7 +423,7 @@ function ConsolePane({ events }: { events: AgentEvent[] }) {
   );
 }
 
-const TABS: { id: TabId; label: string; icon: typeof Globe }[] = [
+const BASE_TABS: { id: TabId; label: string; icon: typeof Globe }[] = [
   { id: "browser", label: "Browser", icon: Globe },
   { id: "artifacts", label: "Artifacts", icon: Package },
   { id: "console", label: "Console", icon: SquareTerminal },
@@ -420,11 +455,28 @@ export function AgentCanvas({
     [],
   );
   const [tab, setTab] = useState<TabId>(initial);
-  
+
   const hasScreenshots = collectScreenshots(events).length > 0;
   useEffect(() => {
     if (hasScreenshots) setTab("browser");
   }, [hasScreenshots]);
+
+  // A2: the Edit Slides tab appears ONLY when a deck with an editable AuthoredDeck
+  // sidecar exists AND there's a conversation to edit against (no false affordance).
+  const editableDeckBase = useMemo(() => latestEditableDeckBase(events), [events]);
+  const tabs = useMemo(
+    () =>
+      editableDeckBase && cid
+        ? [...BASE_TABS, { id: "deck" as TabId, label: "Edit Slides", icon: Presentation }]
+        : BASE_TABS,
+    [editableDeckBase, cid],
+  );
+
+  // If the editable deck disappears (e.g. events pruned) while its tab is active,
+  // fall back to Artifacts so we never sit on a dead tab.
+  useEffect(() => {
+    if (tab === "deck" && !(editableDeckBase && cid)) setTab("artifacts");
+  }, [tab, editableDeckBase, cid]);
 
   return (
     <Tabs.Root
@@ -433,7 +485,7 @@ export function AgentCanvas({
       className="flex h-full min-h-0 flex-col"
     >
       <Tabs.List className="flex shrink-0 items-center gap-px border-b border-hairline px-inline">
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <Tabs.Trigger
             key={t.id}
             value={t.id}
@@ -458,6 +510,11 @@ export function AgentCanvas({
         <Tabs.Content value="console" className="h-full focus:outline-none">
           <ConsolePane events={events} />
         </Tabs.Content>
+        {editableDeckBase && cid && (
+          <Tabs.Content value="deck" className="h-full focus:outline-none">
+            <DeckEditorPane cid={cid} base={editableDeckBase} />
+          </Tabs.Content>
+        )}
       </div>
     </Tabs.Root>
   );

@@ -26,6 +26,7 @@ from .routes import (
     make_activity_router,
     make_conversations_router,
     make_debug_router,
+    make_deck_editor_router,
     make_export_router,
     make_files_router,
     make_health_router,
@@ -114,6 +115,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     app.include_router(make_conversations_router(store, runtime))
     app.include_router(make_models_router(store, runtime))
     app.include_router(make_files_router(store, runtime))
+    app.include_router(make_deck_editor_router(store, runtime))
     app.include_router(make_preview_router(store, runtime))
     app.include_router(make_sessions_router(store, runtime))
     app.include_router(make_projects_router(store, runtime))

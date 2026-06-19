@@ -296,6 +296,60 @@ describe("DeckEditor — text edit emits replace patch", () => {
   });
 });
 
+// ─── 6b: disableDrag (A2) — text-edit-only, no drag affordance ────────────────
+
+describe("DeckEditor — disableDrag (A2)", () => {
+  it("dragging an element emits NO geometry patch when disableDrag is set", () => {
+    const onPatch = vi.fn<[JsonPatchOp[]], void>();
+    const { container } = render(
+      <DeckEditor deck={makeDeck()} onPatch={onPatch} disableDrag />,
+    );
+    const titleBox = container.querySelector('[data-element-id="slide-0:title"]')!;
+    // Simulate a drag gesture: mousedown on the box, move, mouseup on the window.
+    fireEvent.mouseDown(titleBox, { clientX: 100, clientY: 100 });
+    fireEvent.mouseMove(window, { clientX: 240, clientY: 180 });
+    fireEvent.mouseUp(window, { clientX: 240, clientY: 180 });
+    // The drag-only geometry patch (/__editor_x__ /__editor_y__) must never fire.
+    const geometryCalls = onPatch.mock.calls.filter((c) =>
+      c[0].some((op) => /__editor_[xy]__$/.test(op.path)),
+    );
+    expect(geometryCalls).toHaveLength(0);
+  });
+
+  it("double-click text edit still emits a replace patch when disableDrag is set", () => {
+    const onPatch = vi.fn<[JsonPatchOp[]], void>();
+    const { container } = render(
+      <DeckEditor deck={makeDeck()} onPatch={onPatch} disableDrag />,
+    );
+    const titleBox = container.querySelector('[data-element-id="slide-0:title"]')!;
+    fireEvent.doubleClick(titleBox);
+    const input = container.querySelector('input[type="text"]')!;
+    fireEvent.change(input, { target: { value: "Edited Title" } });
+    fireEvent.blur(input);
+    const patchCall = onPatch.mock.calls.find((c) =>
+      c[0].some(
+        (op) =>
+          op.op === "replace" &&
+          op.path === "/slides/0/title" &&
+          op.value === "Edited Title",
+      ),
+    );
+    expect(patchCall).toBeDefined();
+  });
+
+  it("mousedown selects the element when disableDrag is set", () => {
+    const { container } = render(
+      <DeckEditor deck={makeDeck()} onPatch={vi.fn()} disableDrag />,
+    );
+    const titleBox = container.querySelector('[data-element-id="slide-0:title"]')!;
+    fireEvent.mouseDown(titleBox);
+    // The selection info bar should show, and it must NOT say "drag to move".
+    const info = screen.getByLabelText("Selected element info");
+    expect(info.textContent).toContain("double-click to edit");
+    expect(info.textContent).not.toContain("drag to move");
+  });
+});
+
 // ─── 7: Selection info bar ────────────────────────────────────────────────────
 
 describe("DeckEditor — selection info bar", () => {
