@@ -33,7 +33,7 @@ const OPTIONS: { provider: Provider; Icon: typeof Cpu; label: string; help: stri
     provider: "comfyui",
     Icon: Server,
     label: "Self-hosted (ComfyUI)",
-    help: "Your ComfyUI graph API. Keyless; set its base URL (empty → server default). Posts a workflow to /prompt and polls /history for the result.",
+    help: "Your ComfyUI graph API. Keyless, but the base URL is required — without it, image-gen falls back to procedural. Posts a workflow to /prompt and polls /history.",
   },
   {
     provider: "openai",
@@ -137,7 +137,7 @@ export function ImageGenSection() {
                 <span className="flex items-baseline gap-hair font-ui text-[0.8rem] text-text">
                   Endpoint base URL
                   <span className="font-ui text-[0.72rem] text-text-faint">
-                    {showPaid ? "· /v1/images/generations" : "· ComfyUI host"}
+                    {showPaid ? "· origin — we append /v1/images/generations" : "· ComfyUI host"}
                   </span>
                 </span>
                 <input
@@ -148,8 +148,8 @@ export function ImageGenSection() {
                   onChange={(e) => setBaseUrl(e.target.value)}
                   placeholder={
                     showPaid
-                      ? "https://api.openai.com/v1  (empty = OpenAI default)"
-                      : "http://host:8188  (empty = server default)"
+                      ? "https://api.openai.com  (origin only; empty = OpenAI default)"
+                      : "http://host:8188  (required for ComfyUI)"
                   }
                   className={fieldClass}
                 />

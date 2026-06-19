@@ -4,7 +4,12 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { clearSecret, listSecrets, setSecret, type SecretsList } from "@/api/secrets";
-import { useDataSourcesConfig, useModels, useTtsConfig } from "@/hooks/useModels";
+import {
+  useDataSourcesConfig,
+  useImageGenConfig,
+  useModels,
+  useTtsConfig,
+} from "@/hooks/useModels";
 
 const SECRETS_KEY = ["secrets"] as const;
 
@@ -20,11 +25,13 @@ export function useExpectedKeyNames(): string[] {
   const { data: models } = useModels();
   const { data: ds } = useDataSourcesConfig();
   const { data: tts } = useTtsConfig();
+  const { data: imageGen } = useImageGenConfig();
   const names = new Set<string>();
   for (const m of models ?? []) if (m.api_key_env) names.add(m.api_key_env);
   if (ds?.search_api_key_env) names.add(ds.search_api_key_env);
   if (ds?.extraction_api_key_env) names.add(ds.extraction_api_key_env);
   if (tts?.api_key_env) names.add(tts.api_key_env);
+  if (imageGen?.api_key_env) names.add(imageGen.api_key_env);
   return [...names].filter((n) => n && !RESERVED_ENV.has(n)).sort();
 }
 

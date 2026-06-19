@@ -497,9 +497,13 @@ def select_image_backend() -> ImageBackend:
     if provider == "procedural":
         return _PILProceduralBackend()
 
-    # For openai, we need a key
+    # For openai, we need a key. base_url is the ORIGIN only — _OpenAIImageBackend.generate
+    # appends "/v1/images/generations", so the default must NOT include /v1 (else /v1/v1/…).
+    # Tolerate a user pasting a trailing /v1 or slash by stripping it.
     if provider == "openai":
-        base_url = settings.base_url or "https://api.openai.com/v1"
+        base_url = (settings.base_url or "https://api.openai.com").rstrip("/")
+        if base_url.endswith("/v1"):
+            base_url = base_url[: -len("/v1")]
         api_key_env = settings.api_key_env
 
         # Look up the secret
