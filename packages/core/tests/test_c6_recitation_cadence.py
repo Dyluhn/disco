@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import asyncio
 
-from event_fakes import user_msg, with_seqs
 from disco.core import (
     ActionEvent,
     LLMMessage,
@@ -34,6 +33,7 @@ from disco.core import (
 )
 from disco.core.loop.engine import AgentLoop
 from disco.core.view import _recitation_message
+from event_fakes import user_msg, with_seqs
 from loop_fakes import FakeAnalyzer, FakeExecutor, FakeSummarizer, NeverConfirm, ScriptedAgent
 
 CID = "conv"

@@ -8,11 +8,9 @@ from __future__ import annotations
 
 import stat
 import sys
-
-import pytest
-
 from pathlib import Path
 
+import pytest
 from disco.core.llm import SecretBox, SecretStore
 from disco.core.llm.secrets import _default_secrets_path
 

@@ -55,7 +55,6 @@ synthetic observation are all observable without a full run() loop.
 
 from __future__ import annotations
 
-from event_fakes import user_msg, with_seqs
 from disco.core import (
     ActionEvent,
     Event,
@@ -74,6 +73,7 @@ from disco.core.loop.dedup import (
     _f9_has_successful_observation,
     _f9_path_was_mutated_after,
 )
+from event_fakes import user_msg, with_seqs
 from loop_fakes import (
     FakeAnalyzer,
     FakeExecutor,

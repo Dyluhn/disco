@@ -53,8 +53,8 @@ from disco.core.loop.dedup import (
     collapse_superseded_reads,
 )
 from disco.core.loop.file_state import (
-    FileStateTracker,
     _STALE_NOTICE_SENTINEL,
+    FileStateTracker,
     file_state_notice,
 )
 from disco.core.loop.view_render import (

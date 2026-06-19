@@ -14,7 +14,7 @@ from disco.core import (
     ErrorEvent,
     ToolCall,
 )
-from disco.core.llm import LLMError, ProposedToolCall
+from disco.core.llm import LLMError
 from disco.core.llm.errors import LLMProviderUnavailable
 from disco.core.loop.boundaries import AgentStep
 from loop_fakes import build_loop

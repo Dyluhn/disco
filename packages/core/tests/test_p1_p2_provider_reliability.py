@@ -6,15 +6,12 @@ P2: LLMProviderUnavailable classification + driver routing-retry arm.
 
 from __future__ import annotations
 
-import json
-
 import httpx
 import pytest
 from disco.core.events import LLMMessage
 from disco.core.llm.errors import LLMError, LLMProviderUnavailable, LLMTransientError
 from disco.core.llm.openai_provider import OpenAIProvider
 from disco.core.llm.types import CapabilityProfile, CompletionRequest, ModelRole
-
 
 # ---- helpers ----------------------------------------------------------------
 

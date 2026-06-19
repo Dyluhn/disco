@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from disco.core.loop import signals
 from disco.core import (
     ActionEvent,
     AgentErrorEvent,
     ObservationEvent,
     ToolResult,
 )
+from disco.core.loop import signals
 from loop_fakes import FakeExecutor, ScriptedAgent, action_step, build_loop, finish_step
 
 CID = "conv"
@@ -174,7 +174,6 @@ def test_plan_is_incomplete_helper_recognizes_partial_completion():
     (True, [missing_indices]) — which the FINISHED transition uses to fall back
     to STUCK with a reminder naming the gap."""
     from disco.core import ActionEvent, PlanEvent, ToolCall
-    from disco.core.loop.engine import AgentLoop
 
     # Plan with 3 steps; only step 1 marked done.
     events = [
@@ -192,7 +191,6 @@ def test_plan_is_incomplete_helper_recognizes_partial_completion():
 def test_plan_is_incomplete_helper_passes_when_all_steps_done():
     """When every step is marked done, the gate clears — FINISHED is allowed."""
     from disco.core import ActionEvent, PlanEvent, ToolCall
-    from disco.core.loop.engine import AgentLoop
 
     events = [
         PlanEvent(summary="p", steps=[{"title": "a"}, {"title": "b"}], revision=1),
@@ -213,7 +211,6 @@ def test_plan_is_incomplete_helper_passes_when_all_steps_done():
 def test_plan_is_incomplete_helper_inert_without_plan():
     """No plan at all → no progress signal to gate on → not incomplete. The gate
     is a no-op for non-plan-first flows (Build runs without an explicit plan)."""
-    from disco.core.loop.engine import AgentLoop
 
     incomplete, missing = signals.plan_is_incomplete([])
     assert incomplete is False
@@ -224,7 +221,6 @@ def test_plan_is_incomplete_helper_uses_latest_revision():
     """A re-plan (revision bump) replaces prior — the gate must check completeness
     against the LATEST plan, not the original."""
     from disco.core import ActionEvent, PlanEvent, ToolCall
-    from disco.core.loop.engine import AgentLoop
 
     events = [
         PlanEvent(summary="p1", steps=[{"title": "a"}], revision=1),
@@ -592,7 +588,6 @@ async def test_auto_continue_budget_resets_on_new_user_message():
         MessageEvent,
         StatusEvent,
     )
-    from disco.core.loop.engine import AgentLoop
 
     # Build a synthetic event log: auto_continue fires twice, then a user
     # message arrives, then auto_continue fires once more.
@@ -728,7 +723,6 @@ def test_plan_step_lag_signal_fires_when_work_outpaces_tracker():
     """Auditor: lots of productive actions since approval, < half the steps
     marked done, and no prior lag nudge → soft nudge warranted."""
     from disco.core import ActionEvent, ConversationStatus, PlanEvent, StatusEvent, ToolCall
-    from disco.core.loop.engine import AgentLoop
 
     def act(tool, args=None):
         return ActionEvent(thought="x", tool_call=ToolCall(tool_name=tool, arguments=args or {}))
@@ -754,7 +748,6 @@ def test_plan_step_lag_signal_silent_when_tracker_keeps_up():
     """When at least half the steps are marked done, the tracker is keeping up
     — no nudge."""
     from disco.core import ActionEvent, ConversationStatus, PlanEvent, StatusEvent, ToolCall
-    from disco.core.loop.engine import AgentLoop
 
     def act(tool, args=None):
         return ActionEvent(thought="x", tool_call=ToolCall(tool_name=tool, arguments=args or {}))
@@ -785,7 +778,6 @@ def test_plan_step_lag_signal_fires_once_per_episode():
         StatusEvent,
         ToolCall,
     )
-    from disco.core.loop.engine import AgentLoop
 
     def act(tool, args=None):
         return ActionEvent(thought="x", tool_call=ToolCall(tool_name=tool, arguments=args or {}))
@@ -825,7 +817,6 @@ def test_productive_gate_rejects_read_only_then_finish():
     a build iteration 'finished' after only file_reads with zero edits)."""
     from disco.core import ActionEvent, StatusEvent, ToolCall
     from disco.core.events import ConversationStatus
-    from disco.core.loop.engine import AgentLoop
 
     def _seqd(evs):
         return [e.model_copy(update={"seq": i}) for i, e in enumerate(evs, 1)]

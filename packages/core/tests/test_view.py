@@ -10,16 +10,6 @@ strategy-specific tests are deferred. Here we test the View's tombstone
 
 from __future__ import annotations
 
-from event_fakes import (
-    action,
-    agent_msg,
-    fatal,
-    observation,
-    status,
-    tombstone,
-    user_msg,
-    with_seqs,
-)
 from disco.core import (
     ActionEvent,
     CondensationEvent,
@@ -30,6 +20,16 @@ from disco.core import (
     View,
 )
 from disco.core.view import microcompact, recover_span
+from event_fakes import (
+    action,
+    agent_msg,
+    fatal,
+    observation,
+    status,
+    tombstone,
+    user_msg,
+    with_seqs,
+)
 
 # ---- S3 Microcompact (GAP A) — drop no-op turns -----------------------------
 

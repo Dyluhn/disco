@@ -1,8 +1,8 @@
 import hashlib
 import re
 
-from event_fakes import action, agent_error, observation, user_msg, with_seqs
 from disco.core import DatasourceEvent, KnowledgeEvent, View
+from event_fakes import action, agent_error, observation, user_msg, with_seqs
 
 
 def test_small_old_observation_is_full():

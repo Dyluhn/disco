@@ -18,7 +18,6 @@ from disco.core.llm.prompts import (
     _EXECUTION_DRIVER_PROMPT_SMALL,
 )
 
-
 # ---------------------------------------------------------------------------
 # 1. The constants themselves contain the directives (source of truth check).
 # ---------------------------------------------------------------------------

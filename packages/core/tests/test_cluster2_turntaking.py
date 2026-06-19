@@ -3,7 +3,6 @@ tools, the no-op backstop, and the circuit breaker."""
 
 from __future__ import annotations
 
-from disco.core.loop import signals
 from disco.core import (
     ConversationStatus,
     EventSource,
@@ -11,6 +10,7 @@ from disco.core import (
     ObservationEvent,
     ToolResult,
 )
+from disco.core.loop import signals
 from loop_fakes import AgentStep, FakeExecutor, ScriptedAgent, action_step, build_loop
 
 CID = "conv"
@@ -112,7 +112,6 @@ async def test_talking_without_acting_always_terminates():
 
 def test_consecutive_noops_helper_counts_and_resets():
     from disco.core import LLMMessage
-    from disco.core.loop.engine import AgentLoop
 
     def agent_msg(text):
         return MessageEvent(

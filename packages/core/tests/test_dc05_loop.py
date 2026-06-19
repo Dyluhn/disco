@@ -1,5 +1,4 @@
 import pytest
-from disco.core.loop import signals
 from disco.core import (
     ActionEvent,
     ConversationStatus,
@@ -14,6 +13,7 @@ from disco.core import (
     StatusEvent,
 )
 from disco.core.llm import LLMTransientError, OperatingMode
+from disco.core.loop import signals
 from loop_fakes import ScriptedAgent, action_step, build_loop, finish_step
 
 CID = "conv"
@@ -514,7 +514,6 @@ def test_actions_since_last_resume_resets_at_marker():
     """The gate's counter ignores pre-resume work: a resume marker zeroes it,
     and bookkeeping tools never count."""
     from disco.core import ToolCall
-    from disco.core.loop.engine import AgentLoop
 
     shell = ActionEvent(thought="t", tool_call=ToolCall(tool_name="shell", arguments={}))
     plan = ActionEvent(thought="t", tool_call=ToolCall(tool_name="submit_plan", arguments={}))

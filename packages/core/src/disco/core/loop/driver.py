@@ -130,7 +130,7 @@ class Driver:
 
         return _hook
 
-    async def _pause_driver_unavailable(self) -> tuple[None, "Disp"]:
+    async def _pause_driver_unavailable(self) -> tuple[None, Disp]:
         """Emit the standard PAUSED/driver-unavailable event pair and HALT.
         Called from both the LLMProviderUnavailable and LLMTransientError
         exhaustion paths to keep drive_step within its LOC budget."""

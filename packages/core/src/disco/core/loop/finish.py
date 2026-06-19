@@ -15,9 +15,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, cast
 
-from ..env import disco_env
-
 from ..dod_evaluator import DoDEvaluator
+from ..env import disco_env
 from ..events import (
     ActionEvent,
     AgentErrorEvent,

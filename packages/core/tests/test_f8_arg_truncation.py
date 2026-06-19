@@ -39,7 +39,6 @@ input messages list is never mutated."""
 
 from __future__ import annotations
 
-from event_fakes import user_msg, with_seqs
 from disco.core import (
     ActionEvent,
     AgentErrorEvent,
@@ -55,6 +54,7 @@ from disco.core.loop.dedup import (
     _F8_TRUNCATION_MARKER_TEMPLATE,
     _f8_confirmed_file_writes,
 )
+from event_fakes import user_msg, with_seqs
 from loop_fakes import (
     FakeAnalyzer,
     FakeExecutor,

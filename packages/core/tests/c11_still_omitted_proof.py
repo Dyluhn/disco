@@ -1,10 +1,10 @@
 """C11 evidence script #2 — still-omitted.txt output."""
-from event_fakes import action, agent_msg, observation, tombstone, user_msg, with_seqs
 from disco.core import (
     CondensationEvent,
     View,
 )
 from disco.core.view import microcompact, recover_span
+from event_fakes import action, agent_msg, observation, tombstone, user_msg, with_seqs
 
 
 def main():
