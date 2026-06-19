@@ -1,0 +1,536 @@
+"""Tests for C-EDIT-4 deck_patch tool + §4.3 DeckResolver Python side.
+
+Covers:
+  1. apply_patch: valid RFC-6902 patch mutates a copy, original untouched.
+  2. apply_patch: all six operations (replace/add/remove/test/move/copy).
+  3. apply_patch: bad operation raises PatchError.
+  4. apply_patch: non-existent path raises PatchError.
+  5. apply_patch: array index OOB raises PatchError.
+  6. DeckPatchTool.run: valid patch → writes authored JSON + HTML + PPTX.
+  7. DeckPatchTool.run: schema-violating patch → reverts, workspace unchanged.
+  8. DeckPatchTool.run: file not found → clean failure, no writes.
+  9. DeckPatchTool.run: bad JSON in deck file → clean failure.
+ 10. DeckResolver: element_id maps to the correct deck JSON pointer.
+ 11. DeckResolver: round-trip element_id → json_pointer → path segments.
+ 12. render_html emits data-element-id / data-slide-id on each element.
+ 13. DeckPatchTool registered in AGENT_TOOLS + ARTIFACT_TOOLS.
+ 14. deck_schema: lower_deck produces LoweredSlide with element geometry.
+
+Note: the reconciliation onto the c1c2 schema removed two deckedit-era helpers —
+`lower_to_minimal_deck` (superseded by `lower_deck`; covered in test_deck_schema.py)
+and `strip_element_ids` (the export-path attribute cleaner). The latter is a TRACKED
+REGRESSION: render_html still stamps data-element-id/data-slide-id and slides.py writes
+that HTML as the downloadable artifact with no clean variant. Tests for both removed
+helpers are intentionally not ported (see build-surface-recovery follow-ups).
+"""
+
+from __future__ import annotations
+
+import json
+import tempfile
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from disco.tools.builtin._deck_patch import (
+    DeckPatchArgs,
+    DeckPatchTool,
+    PatchError,
+    apply_patch,
+)
+from disco.tools.builtin._deck_schema import (
+    AuthoredDeck,
+    AuthoredSlide,
+    ChartSpec,
+    LoweredElement,
+    TableSpec,
+    lower_deck_for_editor,
+)
+from disco.tools.builtin._pptx_render import (
+    DeckSlide,
+    MinimalDeck,
+    render_html,
+)
+from disco.tools.registry import AGENT_TOOLS, ARTIFACT_TOOLS, agent_scope, artifact_scope
+
+
+# ─── Fixtures ─────────────────────────────────────────────────────────────────
+
+def _sample_authored_dict() -> dict:
+    """A minimal two-slide AuthoredDeck as a plain dict (the JSON round-trip form)."""
+    return {
+        "title": "Test Deck",
+        "theme": "disco-light",
+        "slides": [
+            {
+                "type": "title",
+                "title": "Welcome",
+                "body": ["A tagline"],
+                "layout_hint": None,
+                "image_prompt": None,
+                "chart": None,
+                "table": None,
+                "notes": None,
+            },
+            {
+                "type": "bullets",
+                "title": "Key Points",
+                "body": ["Bullet A", "Bullet B", "Bullet C"],
+                "layout_hint": None,
+                "image_prompt": None,
+                "chart": None,
+                "table": None,
+                "notes": None,
+            },
+        ],
+    }
+
+
+def _make_tool_ctx(authored_dict: dict) -> tuple[DeckPatchTool, MagicMock]:
+    """Return a (DeckPatchTool, fake_ctx) pair with the authored_dict pre-loaded."""
+    raw = json.dumps(authored_dict, indent=2).encode()
+    ctx = MagicMock()
+    ctx.sandbox = MagicMock()
+    ctx.sandbox.read_file = AsyncMock(return_value=raw)
+    ctx.sandbox.write_file = AsyncMock()
+    return DeckPatchTool(), ctx
+
+
+# ─── 1–5: apply_patch unit tests ──────────────────────────────────────────────
+
+class TestApplyPatch:
+    def test_replace_title(self):
+        doc = {"slides": [{"title": "Old", "body": ["Bullet"]}]}
+        result = apply_patch(doc, [{"op": "replace", "path": "/slides/0/title", "value": "New"}])
+        assert result["slides"][0]["title"] == "New"
+        # Original must be untouched (deep copy)
+        assert doc["slides"][0]["title"] == "Old"
+
+    def test_replace_body_element(self):
+        doc = {"slides": [{"body": ["A", "B", "C"]}]}
+        result = apply_patch(doc, [{"op": "replace", "path": "/slides/0/body/1", "value": "Updated"}])
+        assert result["slides"][0]["body"] == ["A", "Updated", "C"]
+
+    def test_add_append(self):
+        doc = {"slides": [{"body": ["A"]}]}
+        result = apply_patch(doc, [{"op": "add", "path": "/slides/0/body/-", "value": "B"}])
+        assert result["slides"][0]["body"] == ["A", "B"]
+
+    def test_add_to_dict(self):
+        doc = {"a": 1}
+        result = apply_patch(doc, [{"op": "add", "path": "/b", "value": 2}])
+        assert result["b"] == 2
+
+    def test_remove_array_element(self):
+        doc = {"body": ["A", "B", "C"]}
+        result = apply_patch(doc, [{"op": "remove", "path": "/body/1"}])
+        assert result["body"] == ["A", "C"]
+
+    def test_remove_dict_key(self):
+        doc = {"title": "T", "notes": "N"}
+        result = apply_patch(doc, [{"op": "remove", "path": "/notes"}])
+        assert "notes" not in result
+
+    def test_test_pass(self):
+        doc = {"title": "Hello"}
+        result = apply_patch(doc, [{"op": "test", "path": "/title", "value": "Hello"}])
+        assert result["title"] == "Hello"
+
+    def test_test_fail_raises(self):
+        doc = {"title": "Hello"}
+        with pytest.raises(PatchError, match="test failed"):
+            apply_patch(doc, [{"op": "test", "path": "/title", "value": "Wrong"}])
+
+    def test_move(self):
+        doc = {"a": 1, "b": 2}
+        result = apply_patch(doc, [{"op": "move", "from": "/a", "path": "/c"}])
+        assert result["c"] == 1
+        assert "a" not in result
+
+    def test_copy(self):
+        doc = {"a": {"x": 1}}
+        result = apply_patch(doc, [{"op": "copy", "from": "/a", "path": "/b"}])
+        assert result["b"] == {"x": 1}
+        # Must be a distinct object (deep copy)
+        result["b"]["x"] = 99
+        assert result["a"]["x"] == 1
+
+    def test_bad_operation_raises(self):
+        doc = {"title": "T"}
+        with pytest.raises(PatchError, match="Unknown RFC-6902 operation"):
+            apply_patch(doc, [{"op": "frobnicate", "path": "/title", "value": "X"}])
+
+    def test_nonexistent_path_raises(self):
+        doc = {"slides": [{"title": "T"}]}
+        with pytest.raises(PatchError):
+            apply_patch(doc, [{"op": "replace", "path": "/slides/99/title", "value": "X"}])
+
+    def test_array_index_oob_raises(self):
+        doc = {"arr": [1, 2, 3]}
+        with pytest.raises(PatchError):
+            apply_patch(doc, [{"op": "replace", "path": "/arr/5", "value": 99}])
+
+    def test_multiple_ops_applied_in_order(self):
+        doc = {"slides": [{"title": "A", "body": ["X"]}]}
+        patch = [
+            {"op": "replace", "path": "/slides/0/title", "value": "B"},
+            {"op": "add", "path": "/slides/0/body/-", "value": "Y"},
+        ]
+        result = apply_patch(doc, patch)
+        assert result["slides"][0]["title"] == "B"
+        assert result["slides"][0]["body"] == ["X", "Y"]
+
+
+# ─── 6–9: DeckPatchTool.run integration tests ─────────────────────────────────
+
+class TestDeckPatchToolRun:
+    @pytest.mark.asyncio
+    async def test_valid_patch_writes_three_files(self):
+        """A valid patch writes authored JSON + HTML + PPTX to the sandbox."""
+        authored = _sample_authored_dict()
+        tool, ctx = _make_tool_ctx(authored)
+
+        args = DeckPatchArgs(
+            deck_file="my-deck.authored.json",
+            patch=[{"op": "replace", "path": "/slides/0/title", "value": "Updated Welcome"}],
+        )
+        outcome = await tool.run(args, ctx)
+
+        assert outcome.success, f"Expected success, got error: {outcome.error}"
+        # Three writes: authored JSON, HTML, PPTX
+        assert ctx.sandbox.write_file.call_count == 3
+        # The authored JSON content must contain the new title
+        authored_write = ctx.sandbox.write_file.call_args_list[0]
+        written_json = json.loads(authored_write[0][1].decode())
+        assert written_json["slides"][0]["title"] == "Updated Welcome"
+
+    @pytest.mark.asyncio
+    async def test_patch_mutates_only_targeted_element(self):
+        """Patching slide 0's title leaves slide 1 byte-stable."""
+        authored = _sample_authored_dict()
+        original_slide1_title = authored["slides"][1]["title"]
+        tool, ctx = _make_tool_ctx(authored)
+
+        args = DeckPatchArgs(
+            deck_file="deck.authored.json",
+            patch=[{"op": "replace", "path": "/slides/0/title", "value": "New Title"}],
+        )
+        outcome = await tool.run(args, ctx)
+        assert outcome.success
+
+        authored_write = ctx.sandbox.write_file.call_args_list[0]
+        written_json = json.loads(authored_write[0][1].decode())
+        # Slide 1 is unchanged
+        assert written_json["slides"][1]["title"] == original_slide1_title
+
+    @pytest.mark.asyncio
+    async def test_schema_violating_patch_reverts(self):
+        """Setting `slides` to a non-list fails validation; workspace NOT modified."""
+        authored = _sample_authored_dict()
+        tool, ctx = _make_tool_ctx(authored)
+
+        # Remove the title field (required by AuthoredSlide) from slide 0
+        args = DeckPatchArgs(
+            deck_file="deck.authored.json",
+            patch=[{"op": "remove", "path": "/slides/0/title"}],
+        )
+        outcome = await tool.run(args, ctx)
+
+        assert not outcome.success
+        assert "schema" in outcome.error.lower() or "validation" in outcome.error.lower()
+        # No writes should have occurred
+        ctx.sandbox.write_file.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_file_not_found_clean_failure(self):
+        """Missing deck file → clean ToolOutcome(success=False), no write."""
+        tool = DeckPatchTool()
+        ctx = MagicMock()
+        ctx.sandbox = MagicMock()
+        ctx.sandbox.read_file = AsyncMock(side_effect=Exception("no such file"))
+        ctx.sandbox.write_file = AsyncMock()
+
+        args = DeckPatchArgs(
+            deck_file="nonexistent.authored.json",
+            patch=[{"op": "replace", "path": "/title", "value": "X"}],
+        )
+        outcome = await tool.run(args, ctx)
+
+        assert not outcome.success
+        assert "nonexistent.authored.json" in outcome.error
+        ctx.sandbox.write_file.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_bad_json_clean_failure(self):
+        """Malformed JSON in deck file → clean failure, no write."""
+        tool = DeckPatchTool()
+        ctx = MagicMock()
+        ctx.sandbox = MagicMock()
+        ctx.sandbox.read_file = AsyncMock(return_value=b"this is { not json")
+        ctx.sandbox.write_file = AsyncMock()
+
+        args = DeckPatchArgs(
+            deck_file="deck.authored.json",
+            patch=[{"op": "replace", "path": "/title", "value": "X"}],
+        )
+        outcome = await tool.run(args, ctx)
+
+        assert not outcome.success
+        assert "json" in outcome.error.lower()
+        ctx.sandbox.write_file.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_custom_output_filenames(self):
+        """output_html / output_pptx override the default stem-based names."""
+        authored = _sample_authored_dict()
+        tool, ctx = _make_tool_ctx(authored)
+
+        args = DeckPatchArgs(
+            deck_file="deck.authored.json",
+            patch=[{"op": "replace", "path": "/title", "value": "Renamed"}],
+            output_html="custom.html",
+            output_pptx="custom.pptx",
+        )
+        outcome = await tool.run(args, ctx)
+        assert outcome.success
+
+        written_names = [call[0][0] for call in ctx.sandbox.write_file.call_args_list]
+        assert "custom.html" in written_names
+        assert "custom.pptx" in written_names
+
+
+# ─── 10–11: DeckResolver Python side ──────────────────────────────────────────
+
+class TestDeckResolverPython:
+    """
+    The Python-side 'resolver' is the lower_deck_for_editor() mapping from element_id
+    to json_pointer.  These tests prove the round-trip.
+    """
+
+    def test_title_element_id_maps_to_json_pointer(self):
+        deck = AuthoredDeck(
+            title="D",
+            slides=[AuthoredSlide(type="bullets", title="Slide One", body=["A", "B"])],
+        )
+        lowered = lower_deck_for_editor(deck)
+        title_el = next(e for e in lowered.slides[0].elements if e.element_id == "slide-0:title")
+        assert title_el.json_pointer == "/slides/0/title"
+
+    def test_body_element_id_maps_to_json_pointer(self):
+        deck = AuthoredDeck(
+            title="D",
+            slides=[AuthoredSlide(type="bullets", title="S", body=["A", "B", "C"])],
+        )
+        lowered = lower_deck_for_editor(deck)
+        body1 = next(e for e in lowered.slides[0].elements if e.element_id == "slide-0:body:1")
+        assert body1.json_pointer == "/slides/0/body/1"
+
+    def test_element_id_round_trips_via_apply_patch(self):
+        """element_id → json_pointer → apply_patch modifies the right field."""
+        authored = AuthoredDeck(
+            title="D",
+            slides=[AuthoredSlide(type="bullets", title="Original", body=["A", "B"])],
+        )
+        lowered = lower_deck_for_editor(authored)
+
+        # Simulate the editor: find the title element → get its pointer
+        title_el = next(
+            e for e in lowered.slides[0].elements if e.element_id == "slide-0:title"
+        )
+        pointer = title_el.json_pointer  # "/slides/0/title"
+
+        # Apply a patch via that pointer
+        authored_dict = authored.model_dump(mode="json")
+        patched = apply_patch(authored_dict, [{"op": "replace", "path": pointer, "value": "Patched"}])
+        assert patched["slides"][0]["title"] == "Patched"
+
+    def test_multi_slide_element_ids_are_unique(self):
+        deck = AuthoredDeck(
+            title="D",
+            slides=[
+                AuthoredSlide(type="title", title="Slide 0", body=["Sub"]),
+                AuthoredSlide(type="bullets", title="Slide 1", body=["X", "Y"]),
+            ],
+        )
+        lowered = lower_deck_for_editor(deck)
+        all_ids = [e.element_id for s in lowered.slides for e in s.elements]
+        assert len(all_ids) == len(set(all_ids)), "All element_ids must be unique"
+
+    def test_second_slide_json_pointer_uses_index_1(self):
+        deck = AuthoredDeck(
+            title="D",
+            slides=[
+                AuthoredSlide(type="bullets", title="Slide 0", body=["A"]),
+                AuthoredSlide(type="bullets", title="Slide 1", body=["B"]),
+            ],
+        )
+        lowered = lower_deck_for_editor(deck)
+        slide1_title = next(
+            e for e in lowered.slides[1].elements if e.element_id == "slide-1:title"
+        )
+        assert slide1_title.json_pointer == "/slides/1/title"
+
+
+# ─── 12–13: data-element-id in HTML + strip ───────────────────────────────────
+
+class TestHtmlElementIds:
+    def _make_html(self) -> str:
+        deck = MinimalDeck(
+            title="T",
+            slides=[
+                DeckSlide(title="Slide Zero", bullets=["A", "B"], layout="bullets"),
+                DeckSlide(title="Slide One", bullets=[], layout="title"),
+            ],
+        )
+        return render_html(deck)
+
+    def test_data_element_id_on_title(self):
+        html_str = self._make_html()
+        assert 'data-element-id="slide-0:title"' in html_str
+        assert 'data-element-id="slide-1:title"' in html_str
+
+    def test_data_element_id_on_bullets(self):
+        html_str = self._make_html()
+        assert 'data-element-id="slide-0:body:0"' in html_str
+        assert 'data-element-id="slide-0:body:1"' in html_str
+
+    def test_data_slide_id_on_section(self):
+        html_str = self._make_html()
+        assert 'data-slide-id="slide-0"' in html_str
+        assert 'data-slide-id="slide-1"' in html_str
+
+    def test_section_layout_has_element_ids(self):
+        deck = MinimalDeck(
+            title="T",
+            slides=[DeckSlide(title="Section Title", bullets=["Sub"], layout="section")],
+        )
+        html_str = render_html(deck)
+        assert 'data-element-id="slide-0:title"' in html_str
+        # The section sub-text renders as a subtitle element (id ":subtitle"),
+        # not a body bullet — verified against the reconciled c1 render path.
+        assert 'data-element-id="slide-0:subtitle"' in html_str
+
+    def test_image_right_layout_stamps_title_and_body(self):
+        deck = MinimalDeck(
+            title="T",
+            slides=[
+                DeckSlide(
+                    title="Image Slide",
+                    bullets=["Bullet"],
+                    layout="image_right",
+                    image_url=None,
+                )
+            ],
+        )
+        html_str = render_html(deck)
+        assert 'data-element-id="slide-0:title"' in html_str
+        assert 'data-element-id="slide-0:body:0"' in html_str
+        # KNOWN GAP (tracked): render_html does NOT stamp data-element-id on the
+        # image element of image_right/full_image slides — verified true for both
+        # the MinimalDeck compat path and the authored image_prompt path. So images
+        # are selectable in the §4.5 DeckEditor canvas (which lowers separately) but
+        # NOT via the §4.1 in-preview SelectionOverlay. Stamping image ids in
+        # render_html needs live-preview verification before it's wired.
+
+
+# ─── 14: Registry membership ──────────────────────────────────────────────────
+
+class TestRegistryMembership:
+    def test_deck_patch_in_agent_tools(self):
+        assert "deck_patch" in AGENT_TOOLS
+
+    def test_deck_patch_in_artifact_tools(self):
+        assert "deck_patch" in ARTIFACT_TOOLS
+
+    def test_deck_patch_in_agent_scope(self):
+        scope = agent_scope()
+        assert "deck_patch" in scope.allowed_tools
+
+    def test_deck_patch_in_artifact_scope(self):
+        scope = artifact_scope()
+        assert "deck_patch" in scope.allowed_tools
+
+    def test_deck_patch_registered_in_default_registry(self):
+        from disco.tools.builtin import build_default_registry
+        reg = build_default_registry()
+        scope = agent_scope()
+        tool = reg.get("deck_patch", scope=scope)
+        assert tool is not None
+        assert tool.definition.name == "deck_patch"
+
+
+# ─── 15–16: deck_schema lower functions ───────────────────────────────────────
+
+class TestDeckSchema:
+    def test_lower_deck_element_geometry(self):
+        deck = AuthoredDeck(
+            title="D",
+            slides=[AuthoredSlide(type="bullets", title="S", body=["A"])],
+        )
+        lowered = lower_deck_for_editor(deck)
+        assert len(lowered.slides) == 1
+        title_el = next(e for e in lowered.slides[0].elements if e.kind == "title")
+        # Title element must have a non-zero width
+        assert title_el.geometry.w > 0
+        assert title_el.geometry.h > 0
+
+    def test_lower_deck_chart_element(self):
+        deck = AuthoredDeck(
+            title="D",
+            slides=[
+                AuthoredSlide(
+                    type="metrics",
+                    title="Q1",
+                    chart=ChartSpec(
+                        kind="bar",
+                        title="Revenue",
+                        labels=["Jan", "Feb"],
+                        series=[{"name": "Sales", "data": [1.0, 2.0]}],
+                    ),
+                )
+            ],
+        )
+        lowered = lower_deck_for_editor(deck)
+        chart_el = next(
+            (e for e in lowered.slides[0].elements if e.kind == "chart"), None
+        )
+        assert chart_el is not None
+        assert "Revenue" in chart_el.content or "chart" in chart_el.content.lower()
+
+    def test_lower_deck_image_full(self):
+        deck = AuthoredDeck(
+            title="D",
+            slides=[
+                AuthoredSlide(
+                    type="full_image",
+                    title="Visual",
+                    body=[],
+                    image_prompt="A futuristic city",
+                )
+            ],
+        )
+        lowered = lower_deck_for_editor(deck)
+        img_el = next(
+            (e for e in lowered.slides[0].elements if e.kind == "image_prompt"), None
+        )
+        assert img_el is not None
+        assert "futuristic" in img_el.content
+
+    def test_theme_mapping_disco_dark(self):
+        deck = AuthoredDeck(
+            title="D",
+            theme="disco-dark",
+            slides=[AuthoredSlide(type="title", title="T")],
+        )
+        lowered = lower_deck_for_editor(deck)
+        assert lowered.theme_mode == "dark"
+
+    def test_unknown_type_defaults_to_bullets(self):
+        """Custom/unknown slide types must not crash — they fall back to bullets layout."""
+        deck = AuthoredDeck(
+            title="D",
+            slides=[AuthoredSlide(type="custom_era_slide", title="T", body=["X"])],
+        )
+        lowered = lower_deck_for_editor(deck)
+        assert lowered.slides[0].layout == "bullets"
