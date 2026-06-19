@@ -77,7 +77,7 @@ A5 reuses the existing `engine.py:838` autonomous auto-approve (log-honest bypas
 |----|------|-------|------|------|-----|
 | A6.1 | RP-09 live audio acceptance (DR card → real audible MP3, screenshot) | `tests/test_report_audio_live.py`, `NeedMoreCard.tsx:550` | **opus** | — | S |
 | A6.2 | Settings TTS toggle live-verify (off/bundled/off persists + unloads) | `AudioSection.tsx` | fanout | A6.1 | S |
-| A6.3 | podcast option on AGENT/build closing card (only new wiring) | new agent closing-card + `audio_overview` tool | **opus** | A6.1 | M |
+| ~~A6.3~~ | ~~podcast option on AGENT/build closing card~~ — **STRUCK 2026-06-19 (Dylan): podcast is Deep-Research-ONLY; a build deliverable has no narratable report text** | — | — | — | — |
 | A3.1 | **`ImageGenSection.tsx`** Settings UI (3-tier, mirror AudioSection) + hooks | `frontend/.../settings/ImageGenSection.tsx` (new), `useModels.ts`, `SettingsView.tsx:31` | fanout | — | S |
 | A3.2 | live-verify 3 tiers (procedural image; openai/comfyui where key/host live) | `image_gen.py:482` | **opus** | A3.1 | S |
 

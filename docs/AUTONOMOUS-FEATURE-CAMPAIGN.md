@@ -29,6 +29,15 @@ for approval between waves. Decisions locked with Dylan:
   - **A7 DR export** — mostly done (lazy md/pdf/docx `routes/report.py:192`); verify + optional in-feed card.
   - **A6 podcast** — pipeline EXISTS (`audio_overview.py`+`report_audio.py`+Kokoro cached). A6.1 RP-09 live
     accept + A6.2 TTS toggle + A6.3 agent-surface "Make a podcast" card.
+
+### FW-A status (DONE 2026-06-19)
+- **A3 image-gen — DONE, MERGED** `a477eec` (11 gpt-5.5 rounds; honest fallback warning; review #12 PASS).
+- **A7 DR export — DONE** `a05ef68` (verify-task; real md+pdf artifacts/WeasyPrint; fixed 1 stale e2e locator).
+- **A6 podcast — DONE (DR-only).** A6.1 proven: real 25.4s 2-host MP3 from bundled Kokoro (af_heart+af_bella,
+  ffprobe-verified real speech, full-pipeline live test 8/8). A6.2: 4-tier Settings AudioSection screenshot.
+  **A6.3 STRUCK from scope** (Dylan decision 2026-06-19): podcast is intentionally Deep-Research-ONLY — a
+  build deliverable has no narratable report text. No build/agent closing-card podcast. Evidence:
+  `.harness/evidence/a6-podcast/` (audio_overview_podcast.mp3 + proof script).
 - **FW-B:**
   - **D1 file-delivery** prereq (thread run-cid into `AnswerDocument`; `useResearch.ts:73`).
   - **A5 DR→agent handoff** — `NeedMoreCard` button → `createBuildConversation(autonomous=true)` + seeded
