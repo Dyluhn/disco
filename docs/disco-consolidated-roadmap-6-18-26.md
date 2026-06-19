@@ -36,9 +36,9 @@ Legend: ✅ done · ◐ partial · ○ open · ⬚ blocked/decision-gated · �
 ## §A — Product features (open, verified)
 - **A1 Website/app click-to-edit ○** — source-tag pass (§4.3) + selection→agent edit wire
   (§4.4) + app-builder reuse (§4.6). *Verified: no `data-oid` writer; selection dead-ends.*
-  Plan: `surgical-C-trackc-editor.md`. Effort: large (the differentiator).
+  Plan: `archive/surgical-C-trackc-editor.md`. Effort: large (the differentiator).
 - **A2 In-app deck editor ○** — mount `DeckEditor` + `LoweredDeck` route + patch round-trip
-  (§4.5). Plan: `deck-editor-integration-plan-6-18-26.md`. Effort: med.
+  (§4.5). Plan: `archive/deck-editor-integration-plan-6-18-26.md`. Effort: med.
 - **A3 Image generation — real backend ○** — replace `_PILProceduralBackend`; the
   `DiffusersBackend` slot is empty (verified). C7 seam done `313d357`. Effort: high.
 - **A4 Iterative research mode ○** — NLI-verdict-gated re-research of weak claims (no commits).
@@ -91,7 +91,7 @@ Legend: ✅ done · ◐ partial · ○ open · ⬚ blocked/decision-gated · �
 
 ## §F — Standing engineering goal
 - **F1 god-function decomposition ○** — functions ≤80 LOC / classes ≤500 (gate only enforces
-  ≤200/≤800). Verified still open. Plan: `god-function-decomposition-plan.md`.
+  ≤200/≤800). Verified still open. Plan: `archive/god-function-decomposition-plan.md`.
 
 ## §G — Decisions still owed by Dylan
 1. Iterative-mode coherence approach (A4) · 2. Benchmark scope/datasets (B2) ·
@@ -106,7 +106,11 @@ Legend: ✅ done · ◐ partial · ○ open · ⬚ blocked/decision-gated · �
 edit. 4. **Products:** §A3 image-gen · §A5 handoff · §A6 podcast. 5. **Verify-live §D** as
 the app comes up. 6. **Opportunistic:** §A7, §C, §E, §F.
 
-*Living doc set (post-2026-06-18 cull): this roadmap · `truth.md` · `surgical-C-trackc-editor`
-· `deck-editor-integration-plan-6-18-26` · `god-function-decomposition-plan` · `north-star` ·
-`product-ideas-2026-06-17` · `slides-experiment-verdict` · `self-host` · `provider-matrix` ·
-`design-novnc-live-browser` · `architecture.generated`.*
+*SINGLE SOURCE OF TRUTH: **this doc**. The only other file in `docs/` is
+`architecture.generated.md` (auto-generated, required by the `gen_arch_diagram --check`
+gate). Everything else — vision (`north-star`), user/reference docs (`self-host`,
+`provider-matrix`), the `truth.md` audit, the decision record (`slides-experiment-verdict`),
+and the per-feature implementation specs (`surgical-C-trackc-editor`,
+`deck-editor-integration-plan-6-18-26`, `god-function-decomposition-plan`,
+`design-novnc-live-browser`) — now lives under **`docs/archive/`**, referenced by archive
+path where this roadmap points to detail. Restore any with `git mv docs/archive/<f> docs/`.*
