@@ -25,6 +25,7 @@ from __future__ import annotations
 import html
 import importlib.resources
 import io
+import re
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -776,6 +777,43 @@ body{{background:#000;display:flex;align-items:center;justify-content:center;
 </script>
 </body>
 </html>"""
+
+
+# ---------------------------------------------------------------------------
+# strip_element_ids — pure helper: remove editor-only data-* attributes
+# ---------------------------------------------------------------------------
+# Compiled once at import time.  Each pattern matches the attribute AND the
+# single space that separates it from the previous attribute in a tag — the
+# leading ``\s*`` consumes that one space so no double-space gap is left
+# behind.  All other whitespace, text, CSS, JS, and preformatted content is
+# preserved byte-for-byte.
+# Match the two attributes (with their separating leading whitespace) ONLY as
+# start-tag attributes — applied per-tag, never to free text / CSS / JS / <pre>.
+_TAG_RE = re.compile(r"<[^>]+>")
+_STRIP_ELEMENT_ID_RE = re.compile(r'\s+data-element-id="[^"]*"')
+_STRIP_SLIDE_ID_RE = re.compile(r'\s+data-slide-id="[^"]*"')
+
+
+def strip_element_ids(html_str: str) -> str:
+    """Strip ``data-element-id="..."`` and ``data-slide-id="..."`` from *html_str*.
+
+    Pure helper — removes those two attributes ONLY where they appear as start-tag
+    attributes (the leading whitespace separating them from the previous attribute
+    is consumed so no double space is left).  Text, CSS, ``<style>``/``<script>``
+    content, and ``<pre>`` blocks are preserved byte-for-byte even if they happen
+    to contain the literal attribute strings — removal is scoped to ``<...>`` tags
+    only.  Idempotent: a second call is a no-op.
+
+    Note: RESTORED here as a tested utility but NOT yet wired to any export path.
+    ``render_html`` still stamps the attributes so the §4.1 in-preview
+    SelectionOverlay can read them; callers needing a clean downloadable variant
+    must call this explicitly.
+    """
+    def _clean_tag(m: "re.Match[str]") -> str:
+        tag = _STRIP_ELEMENT_ID_RE.sub("", m.group(0))
+        return _STRIP_SLIDE_ID_RE.sub("", tag)
+
+    return _TAG_RE.sub(_clean_tag, html_str)
 
 
 def _html_for_c1_slide(slide: Slide, theme: Theme, *, slide_idx: int = 0) -> str:

@@ -308,8 +308,21 @@ async def test_seed_passages_in_stream_research_answer() -> None:
     fake_reranker.rerank = _rerank
     fake_nli = MagicMock()
     fake_nli.predict = MagicMock(return_value=[])
+    # NOTE: stream_complete is a plain `def` returning an AsyncIterator per the
+    # LLMRouter Protocol (core/llm/routing.py). The caller does
+    # `async for chunk in router.stream_complete(req)` — that iterates the
+    # *return value* directly. An AsyncMock(return_value=<aiter>) wraps the
+    # iterator in a coroutine and reproduces the "coroutine was never awaited"
+    # RuntimeWarning. We assign a real async-generator function so calling
+    # stream_complete yields an async iterator directly.
     fake_router = AsyncMock()
-    fake_router.stream_complete = AsyncMock(return_value=_fake_token_stream())
+
+    async def _fake_token_stream(req: Any) -> AsyncIterator[Any]:
+        chunk = MagicMock()
+        chunk.delta_text = "The answer is 42."
+        yield chunk
+
+    fake_router.stream_complete = _fake_token_stream
 
     frames = []
     async for frame in stream_research_answer(
@@ -325,14 +338,18 @@ async def test_seed_passages_in_stream_research_answer() -> None:
 
     # The seed passage was visible to the reranker
     assert any(p.id == "up_notes_0" for p in captured_candidates)
-
-
-async def _fake_token_stream():
-    """Tiny async generator that yields one token chunk."""
-    from unittest.mock import MagicMock
-    chunk = MagicMock()
-    chunk.delta_text = "The answer is 42."
-    yield chunk
+    # Strengthen: stream_research_answer catches broad exceptions at
+    # streaming.py:514 and emits an {"type":"error", ...} frame, so a green
+    # test today can silently swallow real breakage. Verify the happy-path
+    # frames actually flowed.
+    frame_types = [f.get("type") for f in frames]
+    assert "error" not in frame_types, f"unexpected error frame: {frames}"
+    assert "token" in frame_types, f"no token frame in {frames}"
+    assert "final" in frame_types, f"no final frame in {frames}"
+    assert any(
+        f.get("type") == "state" and f.get("status") == "finished"
+        for f in frames
+    ), f"no finished state frame in {frames}"
 
 
 # ── DR run receives upload passages ───────────────────────────────────────────

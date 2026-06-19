@@ -18,10 +18,12 @@ Covers:
 
 Note: the reconciliation onto the c1c2 schema removed two deckedit-era helpers —
 `lower_to_minimal_deck` (superseded by `lower_deck`; covered in test_deck_schema.py)
-and `strip_element_ids` (the export-path attribute cleaner). The latter is a TRACKED
-REGRESSION: render_html still stamps data-element-id/data-slide-id and slides.py writes
-that HTML as the downloadable artifact with no clean variant. Tests for both removed
-helpers are intentionally not ported (see build-surface-recovery follow-ups).
+and `strip_element_ids` (the export-path attribute cleaner). The latter has been
+RESTORED as a tested utility in ``disco.tools.builtin._pptx_render`` (see
+``TestStripElementIds`` below) but is NOT yet wired to the export path that
+originally called it — ``render_html`` still stamps data-element-id /
+data-slide-id and the slides.py write path emits that HTML as the downloadable
+artifact with no clean variant. The export-side regression remains tracked.
 """
 
 from __future__ import annotations
@@ -51,6 +53,7 @@ from disco.tools.builtin._pptx_render import (
     DeckSlide,
     MinimalDeck,
     render_html,
+    strip_element_ids,
 )
 from disco.tools.registry import AGENT_TOOLS, ARTIFACT_TOOLS, agent_scope, artifact_scope
 
@@ -432,6 +435,161 @@ class TestHtmlElementIds:
         # are selectable in the §4.5 DeckEditor canvas (which lowers separately) but
         # NOT via the §4.1 in-preview SelectionOverlay. Stamping image ids in
         # render_html needs live-preview verification before it's wired.
+
+
+# ─── 12b: strip_element_ids pure helper ───────────────────────────────────────
+
+class TestStripElementIds:
+    """Tests for the pure ``strip_element_ids`` helper.
+
+    This helper is RESTORED here as a tested utility but is NOT yet wired to
+    any export path — see module docstring.  The contract:
+
+    * ONLY ``data-element-id="..."`` and ``data-slide-id="..."`` are removed.
+    * The single space immediately before each removed attribute is consumed
+      along with it (the regex's leading ``\\s*``); no other whitespace is
+      collapsed or modified.
+    * All other text, attributes, CSS, JS, and preformatted content is
+      preserved byte-for-byte.
+    * Idempotent: stripping an already-clean string returns it unchanged.
+    """
+
+    def test_strips_data_element_id(self):
+        html_str = '<h2 data-element-id="slide-0:title">Hi</h2>'
+        out = strip_element_ids(html_str)
+        assert "data-element-id" not in out
+        assert out == "<h2>Hi</h2>"
+
+    def test_strips_data_slide_id(self):
+        html_str = '<section data-slide-id="slide-0">x</section>'
+        out = strip_element_ids(html_str)
+        assert "data-slide-id" not in out
+        assert out == "<section>x</section>"
+
+    def test_strips_both_attrs_in_one_tag(self):
+        html_str = (
+            '<h2 data-element-id="slide-0:title" data-slide-id="slide-0">Hi</h2>'
+        )
+        out = strip_element_ids(html_str)
+        assert "data-element-id" not in out
+        assert "data-slide-id" not in out
+        # No double-space gap left behind — each attr carried its leading space.
+        assert "  " not in out
+        assert out == "<h2>Hi</h2>"
+
+    def test_preserves_plain_id_attribute(self):
+        """The plain ``id="slide-N"`` attribute MUST survive (only data-* is stripped)."""
+        html_str = (
+            '<section class="slide active" id="slide-0" '
+            'data-slide-id="slide-0" data-layout="title" '
+            'data-element-id="slide-0:wrap">x</section>'
+        )
+        out = strip_element_ids(html_str)
+        assert 'id="slide-0"' in out
+        assert 'class="slide active"' in out
+        assert 'data-layout="title"' in out
+        assert "data-element-id" not in out
+        assert "data-slide-id" not in out
+
+    def test_preserves_text_and_titles(self):
+        html_str = (
+            '<h2 data-element-id="slide-0:title" data-slide-id="slide-0">'
+            "My Slide Title</h2>"
+            '<li data-element-id="slide-0:body:0" data-slide-id="slide-0">'
+            "Bullet A</li>"
+        )
+        out = strip_element_ids(html_str)
+        assert "My Slide Title" in out
+        assert "Bullet A" in out
+        # Closing tags preserved.
+        assert "</h2>" in out
+        assert "</li>" in out
+
+    def test_preserves_css_js_and_preformatted_whitespace(self):
+        """CSS / JS / <pre> bodies MUST NOT be collapsed — only the two attrs are touched."""
+        pre = "<pre>  two  spaces   and\n\tnewline</pre>"
+        css = "<style>body  { color: red; } /* keep  spaces */</style>"
+        js = "<script>var x=1;  if (x)  {  go();  }</script>"
+        out = strip_element_ids(pre + css + js)
+        assert out == pre + css + js
+
+    def test_preserves_attr_literals_in_content(self):
+        """The blocker case: the attribute STRINGS appearing inside element text, a
+        <script>, or a <pre> (i.e. NOT as start-tag attributes) MUST survive. A blind
+        whole-document regex corrupts these; removal must be scoped to <...> tags."""
+        html_str = (
+            '<p data-element-id="slide-0:body:0" data-slide-id="slide-0">'
+            'the docs note data-element-id="x" is the editor id</p>'
+            "<script>const s = ' data-slide-id=\"y\" ';</script>"
+            '<pre>sample: data-element-id="z"</pre>'
+        )
+        out = strip_element_ids(html_str)
+        assert "<p>" in out                      # real start-tag attrs removed
+        assert 'data-element-id="x"' in out      # literal in text preserved
+        assert 'data-slide-id="y"' in out        # literal in <script> preserved
+        assert 'data-element-id="z"' in out      # literal in <pre> preserved
+
+    def test_idempotent_on_already_clean_string(self):
+        html_str = "<h2>Hi</h2><p>no attrs here</p>"
+        out = strip_element_ids(html_str)
+        assert out == html_str
+
+    def test_idempotent_double_application(self):
+        html_str = (
+            '<h2 data-element-id="slide-0:title" data-slide-id="slide-0">Hi</h2>'
+            '<li data-element-id="slide-0:body:0" data-slide-id="slide-0">A</li>'
+        )
+        once = strip_element_ids(html_str)
+        twice = strip_element_ids(once)
+        assert once == twice
+        # And a third pass is still a no-op.
+        assert strip_element_ids(twice) == twice
+
+    def test_works_on_real_render_html_output(self):
+        """End-to-end: feed a real ``render_html`` output through the helper."""
+        deck = MinimalDeck(
+            title="T",
+            slides=[
+                DeckSlide(title="Slide Zero", bullets=["A", "B"], layout="bullets"),
+                DeckSlide(title="Slide One", bullets=[], layout="title"),
+            ],
+        )
+        html_str = render_html(deck)
+
+        # Sanity: the rendered HTML still stamps the editor-only attrs.
+        assert "data-element-id" in html_str
+        assert "data-slide-id" in html_str
+
+        out = strip_element_ids(html_str)
+
+        # Both attrs removed.
+        assert "data-element-id" not in out
+        assert "data-slide-id" not in out
+
+        # Slide structure / text preserved: plain id, layout attr, titles, bullets.
+        assert 'id="slide-0"' in out
+        assert 'id="slide-1"' in out
+        assert "Slide Zero" in out
+        assert "Slide One" in out
+        assert ">A<" in out or "A</li>" in out
+        assert 'data-layout="bullets"' in out
+        assert 'data-layout="title"' in out
+
+        # Idempotence holds on the real output too.
+        assert strip_element_ids(out) == out
+
+    def test_does_not_touch_unrelated_data_attributes(self):
+        """Only data-element-id and data-slide-id are removed — other data-* stay."""
+        html_str = (
+            '<div data-foo="bar" data-element-id="slide-0:x" '
+            'data-baz="qux" data-slide-id="slide-0">y</div>'
+        )
+        out = strip_element_ids(html_str)
+        assert "data-element-id" not in out
+        assert "data-slide-id" not in out
+        assert 'data-foo="bar"' in out
+        assert 'data-baz="qux"' in out
+        assert out == '<div data-foo="bar" data-baz="qux">y</div>'
 
 
 # ─── 14: Registry membership ──────────────────────────────────────────────────
