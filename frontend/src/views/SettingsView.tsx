@@ -1,6 +1,7 @@
 import { AudioSection } from "@/components/settings/AudioSection";
 import { DataSourcesSection } from "@/components/settings/DataSourcesSection";
 import { EncoderSection } from "@/components/settings/EncoderSection";
+import { ImageGenSection } from "@/components/settings/ImageGenSection";
 import { LiveBrowserSection } from "@/components/settings/LiveBrowserSection";
 import { McpSection } from "@/components/settings/McpSection";
 import { ModelMatrix } from "@/components/settings/ModelMatrix";
@@ -29,6 +30,7 @@ export function SettingsView() {
         <ProviderKeysSection />
         <EncoderSection />
         <AudioSection />
+        <ImageGenSection />
         <DataSourcesSection />
         <SandboxSection />
         <LiveBrowserSection />

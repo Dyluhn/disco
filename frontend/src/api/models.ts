@@ -4,6 +4,7 @@ import type {
   AssignmentsPatch,
   DataSourcesConfig,
   EncodersConfig,
+  ImageGenConfig,
   LiveBrowserConfig,
   ModelAssignments,
   ModelInfo,
@@ -188,6 +189,27 @@ export async function updateTtsConfig(cfg: TtsConfig): Promise<TtsConfig> {
   await fixtureDelay();
   fixtureTts = { ...cfg };
   return { ...fixtureTts };
+}
+
+// ---- image generation (procedural / comfyui / openai provider tiers) -------
+
+let fixtureImageGen: ImageGenConfig = {
+  provider: "procedural",
+  base_url: "",
+  api_key_env: "",
+};
+
+export async function getImageGenConfig(): Promise<ImageGenConfig> {
+  if (isLive()) return apiGet<ImageGenConfig>("/api/image-gen/config");
+  await fixtureDelay();
+  return { ...fixtureImageGen };
+}
+
+export async function updateImageGenConfig(cfg: ImageGenConfig): Promise<ImageGenConfig> {
+  if (isLive()) return apiSend<ImageGenConfig>("PUT", "/api/image-gen/config", cfg);
+  await fixtureDelay();
+  fixtureImageGen = { ...cfg };
+  return { ...fixtureImageGen };
 }
 
 // ---- data sources (search + extraction provider tiers) ---------------------
