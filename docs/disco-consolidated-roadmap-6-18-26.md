@@ -1,180 +1,141 @@
-# Disco — consolidated roadmap (2026-06-18)
+# Disco — consolidated roadmap (reconciled 2026-06-18)
 
-One ordered view of everything still open, folding together: today's driver plan,
-the `disco-direction-and-decisions-6-17-26.md` master plan (Track C remainder),
-the 6-17 walkthrough/runthru issues, the product-ideas directions, and the
-launch-gate / backlog residue. Supersedes the scattered per-doc lists for
-planning; the detailed surgical specs still live in the source docs (referenced).
+THE single living "what's left" doc. **Reconciled against git + code on 2026-06-18**
+(not against older docs or memory) — every status below cites evidence (commit SHA,
+file, or "verified this session"). Supersedes all archived per-doc lists. When a status
+is uncertain it says so; do not upgrade a `◐`/`verify-live` to `✅` without re-checking.
 
-Status legend: ✅ done · ◐ partial · ○ open · ⬚ blocked/decision-gated.
-
----
-
-## §0 — Already shipped (don't re-litigate)
-The recent campaigns closed the bulk of the 6-15/6-17 backlog. Verified done:
-- **Build-harness campaign** (K1 + Phase 0 + W1–W6 + seams): read-thrash breaker,
-  stale-aware snapshot, syntax-gated writes, capability-gated edits, C18 fix,
-  vision wiring. Plus the **god-file decomposition** (engine.py 6446→1543 LOC).
-- **Deep-Research polish** (DR-1/2/3 + WALK-01..21): live markdown, planning
-  loaders, citation-leak fixes, TTS hygiene + acronyms, recency toggle, branded
-  export template, custom audio player, audio mode dialog, schedule UX, agent
-  slides/sheets steering, artifacts-tab harvest, pause/steer/resume (WALK-18),
-  no-progress breaker (WALK-19).
-- **Tailscale runthru B1–B7** (today): export 404, re-plan enforcement (B2+B6),
-  container file-exists (B4), completed-build finish (B5), New-button surface (B3),
-  verbose browser errors (B7). All live-verified.
-- **PDF export polish** (today): SVG charts, numbered citations, clean cover,
-  light/dark toggle + full-bleed dark fix.
+Legend: ✅ done (evidence) · ◐ partial (gap named) · ○ open · ⬚ blocked/decision-gated ·
+🔎 shipped-in-code but needs a live in-app check before trusting.
 
 ---
 
-## §1 — Active: driver / provider reliability  ○  (plan written, awaiting go)
-Full spec: **`docs/disco-driver-reliability-plan-6-18-26.md`**.
-- **P1** OpenRouter provider-preference injection (`require_parameters`,
-  `allow_fallbacks`) so tool-calling stops hitting the cookie-only Chutes backend.
-- **P2** classify provider rejections + retry with a *routing* change (not the
-  model-blaming "fix your JSON" hint).
-- **P3** no hardcoded default driver — **persist the last-picked model** and seed new
-  conversations from it (Dylan's call).
-- **P4** warn on the `_router_now` `config=` footgun.
-Effort: P1/P2 small-med (core llm), P3 small-med (settings + frontend pill), P4 trivial.
+## §0 — Shipped + verified (do not re-litigate)
+Each with commit evidence; UI items still owe a live Firefox screenshot (see §4-note).
+
+**Driver / provider reliability — ✅ DONE** (`14fe27b` P1+P2+P3, `e875249` P4). Provider-
+pref injection, routing-retry, sticky last-picked model, `config=` footgun warning.
+Live-proven on the free model that previously Chutes-errored.
+
+**Slides / artifacts pipeline — ✅ DONE**
+- C4 schema experiment → verdict "loose-hybrid" (`034045a`; `slides-experiment-verdict.md`). **Decision resolved.**
+- C1/C2 deck schema + generator (`1a93bd3`) · C3 native **editable** PPTX via python-pptx + LibreOffice PDF + 16:9 brand HTML (`cbb9101`) · C8 chart/table layouts (`4662978`) · reconcile onto c1c2 (`b200384`).
+- C5 render/preview fixes (`5ca117a`) · C6 `artifact_mode` wired into the build loop (`74019e7`; verified real refs in runtime.py/conversations.py).
+- Export formats: PPTX (native-editable, clean), PDF (from PPTX), HTML. PPTX imports cleanly into Google Slides/PowerPoint — that's the editing-elsewhere path.
+
+**Editor selection plumbing (§4.1/4.2) — ✅ DONE** (`2d18c9d`): schema-independent
+SelectionOverlay + postMessage bridge + in-frame selection agent, mounted in
+AgentCanvas/PreviewPane. (The *edit loop* on top of this is OPEN — see §1.1.)
+
+**Deep-Research polish — ✅ DONE**: F1 keep-searching (`fcb117c`) · DR mid-run
+steer/inject (`fa9e3d9`) · FILE-DELIVERY F1/F2 per-file download + feed card
+(`c804f55`) · F3 cid threading into report renderers (`d12fe4f`, 🔎 verify the download
+actually renders on the Research surface live — truth.md D12 was the gap F3 targets).
+
+**Attach files in the initial box (G1/DR-4) — ✅ DONE** (`99c2058`, merged `235dfa3`).
+
+**noVNC live browser P1–P4 — ✅ DONE** (`f6d2b8f` image, `ac4edef` daemon+route+toggle).
+P5 = open (see §1.7).
+
+**Audio (RP-09) — ✅ DONE** (`f65837b` + **Dylan live-tested days ago**).
+
+**Tailscale runthru B1–B7 + PDF export polish — ✅ DONE** (live-verified earlier today).
+
+**This session (2026-06-18):** merged attach2 · fixed node_modules self-symlink +
+novnc daemon type error (`62625d2`) · restored deck_patch (`e3cd1d4`) + deckResolver
+(`d94ce55`) test suites · pruned 21 stale worktrees · archived 20 superseded plan docs.
 
 ---
 
-## §2 — Track C: Slides + Artifacts + Editor  ⬚  (gated on the slides decision)
-The largest unbuilt track. Detailed surgical specs already exist in
-`disco-direction-and-decisions-6-17-26.md` §3 (C1–C8) and §4 (4.1–4.6); §1 Brand
-engine is **✅ done** (today's PDF export consumes `disco.core.brand`).
+## §1 — Genuinely open (verified) — the real remaining work
 
-**DECISION GATE — slides architecture (A/B/C).** Still open; Dylan flagged it a
-research question and warned *"we've previously solved issues by making them LESS
-deterministic; not sure more-deterministic (constrained schema) is viable here."*
-Today's slides are Marp (image-per-slide). The plan's **C4 experiment** (15–20
-prompts × emit-strategies × models, blind-scored) must run to **freeze the deck
-schema** before C1/C2 (and the §4 deck-patch schema) can land. → produce
-`docs/slides-experiment-verdict.md`.
+**1.1 Website / app click-to-edit  ○  — THE big one.** *(plan: `surgical-C-trackc-editor.md`)*
+Verified this session: the click-to-highlight is mounted, but the **edit loop is open at
+the last hop**, and the *site* path is missing its foundation:
+  - Nothing stamps the `data-oid` source tags onto built sites → clicking a built-site
+    element yields an empty `SourceRef` (no file/line). The **tag pass (§4.3) doesn't exist.**
+  - The selection never reaches the agent (`useElementSelect` selection feeds only the
+    overlay highlight) → the **source-edit path (§4.4) is unwired.**
+  - The §4.5 `DeckEditor` canvas is mounted nowhere; no `LoweredDeck` backend route.
+  Slides flavor ≈ one wire from working; **website flavor is a real project** (framework-
+  aware build-time tagger + the edit wire + live acceptance). Deck slice plan:
+  `deck-editor-integration-plan-6-18-26.md`. Effort: large.
 
-- **C5 render/preview fixes** ○ — independent of the schema; can land first.
-- **C6 `artifact_mode` flag** ◐ — defined in `routes/_common.py` but **not wired**
-  into `_compose_build_loop` (NeverConfirm + INTERACTIVE + `artifact_scope()`).
-  Small, schema-independent; Dylan confirmed "flag, not a separate surface."
-- **C7 image-gen backends** ○ — see §3 (this is the same work as the image-gen
-  product feature; build the ImageBackend seam once).
-- **C1/C2/C3/C8** ⬚ — deck schema, generator, native **editable** `.pptx`
-  (python-pptx, real text boxes), chart/table layouts. Gated on C4 verdict.
-- **§4 Editor / element-to-agent** ⬚ — selection overlay, postMessage bridge,
-  Deck/Source resolvers, agent edit-loop (`deck_patch`), React deck editor, reuse
-  for the app/site builder. Gated on K1 (done) + C4 verdict + C1–C3.
-Effort: large (~the biggest remaining track). Acceptance is visual + opened files.
+**1.2 Image generation as a real tool  ○.** Verified: only `_PILProceduralBackend`
+exists; `DiffusersBackend` slot empty. The C7 *seam* is done (`313d357`), real generation
+is not. Need a real backend (`openai-images-compatible` and/or `comfyui` adapter, per the
+§3 decision). Same seam already wired. Effort: high.
 
----
+**1.3 Iterative research mode toggle  ○.** No implementation commits (verified). Use
+per-claim NLI verdicts to re-research only weak-sourced claims; rewrite weak
+sections/intro/conclusion, preserve strong ones. **Open design problem (needs Dylan):**
+coherence when only some sections are rewritten. Effort: high.
 
-## §3 — Product directions (from `product-ideas-2026-06-17.md`)
-**Prerequisite cross-cut — FILE-DELIVERY  ○ (blocks 3 of these).** The agent can't
-reliably hand a user a file through the conversation feed (the in-block download +
-DeliverablePanel exist but `cid` isn't threaded on the research surface; no
-first-class "agent emits file → user downloads" on Build/Agent or the DR closing
-card). Wire this first — it unblocks image-gen delivery, the DR→agent handoff, and
-the podcast. Effort: medium (glue over existing primitives).
+**1.4 DR closing-card → agent handoff  ○.** No commits (verified). On report finish,
+offer agent actions ("Make slides") that seed a Build conversation with the report +
+a pre-approved plan, skip the gate, deliver. Now unblocked (FILE-DELIVERY shipped). Effort: medium.
 
-- **Iterative mode toggle ○ (highest novelty, NO prereq).** A toggle beside
-  scope/think: use the per-claim **NLI verdicts** as a signal to re-research only
-  the weak-sourced claims (not a full DR) — fresh searches for weak items, rewrite
-  weak sections + conclusion/intro, preserve strong sections verbatim. ≤5 iters.
-  **Open design problem (needs Dylan):** keeping the report coherent (not "choppy")
-  when only some sections are rewritten. Effort: high; the coherence approach is
-  the unsolved bit.
-- **Image generation as a real tool ○ (blocked by FILE-DELIVERY).** Replace the
-  procedural-PIL placeholder. Design lever (Dylan): the OpenAI
-  `/v1/images/generations` shape is the best compatible boundary (covers paid
-  OpenAI + LocalAI + mimics); add a **ComfyUI** adapter for the dominant local
-  path. So `bundled | openai-images-compatible | comfyui`, each via Settings
-  provider CRUD (encrypted key — infra already shipped). Same seam as C7. Effort: high.
-- **DR closing-card → agent handoff ○ (blocked by FILE-DELIVERY).** On report
-  finish, offer agent actions ("Make slides") that seed a Build/Agent conversation
-  with the report as context + a **pre-approved plan**, skip the approval gate, and
-  deliver the artifact. Generalizes to any closing-card action. Effort: medium.
-- **Real two-host podcast ○ (blocked by FILE-DELIVERY + RP-09 acceptance).**
-  Agent-authored dialogue script → multi-voice TTS → mix → optional video → deliver.
-  Bigger than today's two-voice `report_audio`. First verify RP-09 (below). Effort: high.
+**1.5 Real two-host podcast  ○.** No commits (verified). Agent-authored dialogue →
+multi-voice TTS → mix → optional video → deliver. **Unblocked now** (FILE-DELIVERY F1-3
++ RP-09 both done). Effort: high.
+
+**1.6 FILE-DELIVERY F4 — on-demand export from Deep Research  ○.** Deferred: needs a
+DR on-demand-export model, not a workspace DeliverableEvent. Effort: medium.
+
+**1.7 noVNC P5 — live jail / security acceptance  ⬚ hardware-blocked.** The sandbox VM
+was destroyed; re-provision to run it. Code (P1–P4) is in. Prereq: D7 gVisor egress allowlist.
 
 ---
 
-## §4 — Launch gates (from `north-star.md` / release pack)
-- **Benchmarks / eval suite ○ (Dylan mandate: "before we launch").** A real set:
-  research grounding accuracy, agent task success, latency, cost. Rides the shipped
-  `disco verify` surface. Effort: medium-large.
-- **8 GB keyless path + bundled model ○ (release blocker).** Three sub-items:
-  (a) clean-box gauntlet pass (<8 GB RSS, all surfaces/tiers); (b) lite ONNX encoder
-  tier (e5-small + reranker-tiny; make `DISCO_EMBED_MODEL`/`DISCO_RERANK_MODEL` real
-  knobs; default ctx 32K→8K; optional KV quant → ~4 GB peak); (c) replace the stale
-  Qwen3-4B bundled model with a current-gen tool-call-strong small GGUF, framed
-  honestly as a smoke test. Effort: large.
-- **License decision ○ (Dylan's call: AGPL vs Apache).** Trivial once decided.
-- **Release-eng pack ◐.** Done: `self-host.md`, `provider-matrix.md`, `disco verify`.
-  Open: minimal honest CI, demo gallery, `git tag v0.1.0` + changelog, mobile
-  responsive pass, SECURITY.md §8 (disclosure process + threat model). Effort: medium.
+## §2 — Launch gates (from `north-star.md`)
+- **Benchmarks / eval suite  ○** (Dylan mandate "before launch"). Rides the shipped
+  `disco verify` surface. Grounding accuracy, agent task success, latency, cost. Med-large.
+- **8 GB keyless + bundled model  ◐.** Encoder knobs + ctx 8K shipped as units (#41/#42);
+  **open:** replace stale Qwen3-4B with a current tool-call-strong small GGUF (framed as a
+  smoke test) + clean-box <8 GB gauntlet pass. Large.
+- **License — AGPL vs Apache  ⬚** (Dylan's call). Trivial once decided.
+- **Release-eng pack  ◐.** Done: `self-host.md`, `provider-matrix.md`, `disco verify`.
+  Open: minimal honest CI, demo gallery, `git tag v0.1.0` + changelog, mobile-responsive
+  pass, `SECURITY.md` (disclosure + threat model). Medium.
 
 ---
 
-## §5 — Open polish / search / attach / live
-- **F1 keep-searching on no-answer ○** — bounded reformulate-retry (≤2) when basic
-  research returns 0 grounded claims. (Confirmed absent.) Small.
-- **G1 / DR-4 attach files ○** — UploadComposer in the *initial* box (pre-create cid);
-  uploads → Passages → cited. Steer-attach already works; just absent from the empty
-  state. Medium.
-- **DR mid-run steer / inject sources ○** — stop/resume at section boundary exists;
-  steer + inject don't. Medium.
-- **RP-09 live audio acceptance ○ (#16)** — Kokoro TTS + toggle shipped; the live
-  mixer-robustness acceptance pass is open. Gates the podcast. Small-med.
-- **noVNC live browser ⬚ (#53–57, 5 phases)** — Xvfb/x11vnc/noVNC → lazy desktop
-  service → agent-server route → frontend toggle + Settings gate → live/jail
-  acceptance. Prereq: D7 gVisor egress allowlist. Large; design in
-  `docs/design-novnc-live-browser.md`.
+## §3 — Decisions still needed from Dylan
+1. **Iterative-mode coherence approach** (§1.3) — the unsolved design bit.
+2. **License** — AGPL vs Apache (§2).
+3. **Benchmarks scope** — which metrics/datasets are the launch gate (§2).
+4. **Image providers v1 set** — confirm `openai-images-compatible | comfyui` (+ keyless
+   procedural default) as the real-backend targets (§1.2). The seam already assumes this.
+- *Resolved:* slides A/B/C → loose-hybrid (C4). · default driver → sticky last-pick (shipped).
 
 ---
 
-## §6 — Engine / correctness / debt backlog (not launch-blocking; appendix)
-Lower priority; many are P1/P2 correctness or infra-/design-blocked.
-- Single stable system prompt (stop mutating the tools array per mode — KV-prefix
-  stability) ○ · auto-spill large observations to disk ○ · edit-tool hardening
-  residue (demote `file_replace_lines`/`insert_lines`, fix steering descriptions) ○ ·
-  deploy_preview detached long-running serve (300 s ceiling) ○ · one-feature-per-
-  iteration scope enforcement ○.
-- **Design-blocked (need a Dylan call):** epochal observation masking vs KV stability
-  (HS-06). **Infra-blocked:** grammar-constrained tool calls (llama.cpp `--jinja`
-  relaunch, B9).
-- Test debt: rebuild the DR-lifecycle harness from **real captures** (E7, violates
-  the real-sample-harness rule) · real-sample backfill for streaming/provider
-  harnesses. Lint debt: shipping `tsc`→0, ruff F821/B904, eslint→0.
-- UX micro-polish: main-feed auto-scroll ("highest-leverage polish"), LiveSignalBar
-  pinned to footer, Build session-stash persistence, adjustable-plan/visual design-
-  edit mode. Layering nits: a couple of circular/transitive imports + root hygiene
-  (move `run_manual*.py`, root `test_*.py`, stray CSVs, live `disco.db` out of root).
-- Already DONE here: split-monoliths (engine.py 6446→1543), import-linter gate,
-  arch-budget gate.
+## §4 — Engine / correctness / debt backlog (appendix, not launch-blocking, UNVERIFIED)
+Not re-verified this pass — treat as candidates, confirm against code before acting:
+single stable system prompt (KV-prefix stability) · auto-spill large observations ·
+edit-tool hardening residue (demote `file_replace_lines`/`insert_lines`) · deploy_preview
+detached serve ceiling · one-feature-per-iteration scope · epochal masking vs KV (design-
+blocked) · grammar-constrained tool calls (infra-blocked, llama.cpp `--jinja`) · E7
+real-sample DR-lifecycle harness · lint debt (tsc→0, ruff F821/B904, eslint→0) · UX micro-
+polish (auto-scroll, footer LiveSignalBar, session-stash) · root hygiene (move
+`run_manual*`/root `test_*`/CSVs/`disco.db` out of root) · a few transitive import nits.
+
+**Also re-verify (truth.md "wired-but-inert" flags, 2026-06-16 — may now be addressed):**
+DoD evaluator `set_dod_spec` never called outside tests (C1a) · the FILE-DELIVERY cid
+render (D12, §0) · E8 egress live-verify.
 
 ---
 
-## §7 — Decisions needed from Dylan
-1. **Slides architecture A/B/C** — run the C4 experiment to decide, or pick now?
-   (Blocks all of Track C C1/C2 + §4 deck-patch.)
-2. **Iterative-mode coherence approach** — how to keep a partially-rewritten report
-   from feeling choppy (the unsolved design bit).
-3. **License** — AGPL vs Apache.
-4. **Image providers scope** — confirm `bundled | openai-images-compatible | comfyui`
-   as the v1 adapter set.
-5. **Benchmarks scope** — which metrics/datasets count as the launch gate.
-6. Default driver = sticky last-pick — **DECIDED** (§1 P3).
+## §5 — Recommended sequence
+1. **Decide** §3 items (cheap, unblock work): license, image-providers set, benchmarks scope.
+2. **Highest value:** §1.1 website click-to-edit — scope the tagger + edit-wire, build, live-accept.
+3. **Unblock products:** §1.2 image-gen real backend · §1.4 DR→agent handoff · §1.5 podcast.
+4. **Launch gates in parallel:** benchmarks · 8 GB bundled-model swap · release-eng residue.
+5. **Opportunistic:** §1.6 F4 · §4 backlog · §1.7 noVNC P5 (when the VM is rebuilt).
 
-## §8 — Recommended sequence
-1. **Now:** §1 driver reliability (P1/P2/P4) + P3 sticky pick — small, high daily-use value.
-2. **Unblock cheaply:** §2 C6 `artifact_mode` wiring · §5 F1 keep-searching · §5 RP-09
-   acceptance · §3 FILE-DELIVERY (it gates three product features).
-3. **Decide then build:** §7 slides A/B/C → C4 experiment → Track C C1–C3/C8 → §4 editor.
-4. **Product features (post-FILE-DELIVERY):** iterative mode (start the coherence
-   design) → image-gen tool (= C7) → DR→agent handoff → podcast.
-5. **Launch gates in parallel:** benchmarks, 8 GB keyless + bundled-model swap,
-   license, release-eng pack.
-6. **Backlog (§6):** fold in opportunistically; address design/infra-blocked items
-   when their blocker clears.
+---
+*Living plan set after the 2026-06-18 cull: this roadmap · `truth.md` (wired-vs-working
+audit) · `surgical-C-trackc-editor.md` + `deck-editor-integration-plan-6-18-26.md` (open
+editor work) · `god-function-decomposition-plan.md` (eng-debt) · `north-star.md` ·
+`product-ideas-2026-06-17.md` · `slides-experiment-verdict.md` · `self-host.md` ·
+`provider-matrix.md` · `design-novnc-live-browser.md` · `architecture.generated.md`.*
