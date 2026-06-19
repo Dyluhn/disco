@@ -30,6 +30,15 @@ for approval between waves. Decisions locked with Dylan:
   - **A6 podcast** — pipeline EXISTS (`audio_overview.py`+`report_audio.py`+Kokoro cached). A6.1 RP-09 live
     accept + A6.2 TTS toggle + A6.3 agent-surface "Make a podcast" card.
 
+### FW-B status (DONE 2026-06-19)
+- **A2 in-app deck editor — MERGED** `56f8d94`. Orphaned DeckEditor wired (sidecar persist + GET/PUT route +
+  DeckEditorPane + AgentCanvas tab). 6 gpt-5.5 review rounds, ~13 real defects fixed (each with a test).
+  Live Firefox round-trip screenshot. Follow-up: multi-client edit needs a server per-deck lock.
+- **D1 run-cid threading — DONE** `86de65a`. useResearch exposes runCid → AnswerDocument → in-block sheet/
+  slides downloads wired (appear only with a real cid; no false affordance).
+- **A5 "Build a deck from this report" — DONE** `ddeaed7`. NeedMoreCard button → autonomous build seeded with
+  the serialized report → /build/{cid}, kicked once. Re-seed-on-refresh guard (history-state clear).
+
 ### FW-A status (DONE 2026-06-19)
 - **A3 image-gen — DONE, MERGED** `a477eec` (11 gpt-5.5 rounds; honest fallback warning; review #12 PASS).
 - **A7 DR export — DONE** `a05ef68` (verify-task; real md+pdf artifacts/WeasyPrint; fixed 1 stale e2e locator).
