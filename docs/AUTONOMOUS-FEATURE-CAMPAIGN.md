@@ -30,6 +30,22 @@ for approval between waves. Decisions locked with Dylan:
   - **A6 podcast** — pipeline EXISTS (`audio_overview.py`+`report_audio.py`+Kokoro cached). A6.1 RP-09 live
     accept + A6.2 TTS toggle + A6.3 agent-surface "Make a podcast" card.
 
+## §A CAMPAIGN COMPLETE — all 7 features done (2026-06-19)
+A3 · A7 · A6 · A2 · D1 · A5 · A1 · A4 — every §A feature implemented, gated, and committed on
+build-surface-recovery-ux. Two documented stack-dependent live-screenshot gaps remain (A1 click→edit→steer
+round-trip; A4 iterative RUN) — both need a running agent-server + real build/research, our pre-agreed flag.
+
+### FW-C status (DONE 2026-06-19)
+- **A1 click-to-edit — DONE** (`e561000` keystone stamper + `8c661ff` wiring). Server-stamped preview-edit
+  route + appResolver + EditAffordance + PreviewPane edit-mode. 2 gpt-5.5 rounds (fixed a symlink jail escape +
+  a frame-ancestors CSP). 32 tests. Live editor screenshot done (A2 deck); A1 website round-trip = stack gap.
+
+### FW-D status (DONE 2026-06-19)
+- **A4 iterative research — DONE** (`3cd1ea2` judge + `1d1ace1` loop + `03c4ec3` extractor + `3b46c27` engine
+  glue + `a6f467c` UI toggle). Calibrated LLM judge (the mDeBERTa NLI under-credits → never converges) drives a
+  re-search/re-judge convergence loop; flag-gated, OFF byte-identical. 4 gpt-5.5 rounds (combined-corpus-under-
+  embedder, fresh-evidence-merge, regression-guard, all_hits-audit). Toggle screenshotted live on the DR surface.
+
 ### FW-B status (DONE 2026-06-19)
 - **A2 in-app deck editor — MERGED** `56f8d94`. Orphaned DeckEditor wired (sidecar persist + GET/PUT route +
   DeckEditorPane + AgentCanvas tab). 6 gpt-5.5 review rounds, ~13 real defects fixed (each with a test).
