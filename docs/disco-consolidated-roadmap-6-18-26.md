@@ -14,9 +14,16 @@ Legend: ✅ done · ◐ partial · ○ open · ⬚ blocked/decision-gated · �
 ---
 
 ## How this doc is worked — the v0.1 loop (the operating contract)
+0. **MANDATORY adversarial review by ChatGPT (gpt-5.5, xhigh) at TWO gates, every time:**
+   (a) **every plan** is reviewed by ChatGPT before any code is written — must clear
+   (`VERDICT: PROCEED`) to proceed; (b) **every diff** is reviewed by ChatGPT before it
+   moves on / commits — must clear (`VERDICT: PASS`). Wired + structurally enforced in the
+   harness (`hctl review-plan` gates `run`; `hctl review-diff` gates `commit`). Opus still
+   does its own review; ChatGPT's is an additional, non-skippable gate.
 1. Claude implements the open work in order — **features (§A) → engine polish (§E/§F) →
    UI polish** — checking each item off **here** with evidence (commit/file) as it lands +
-   gates green.
+   gates green. Sequence per item: plan → **ChatGPT plan review** → implement →
+   disco gates → **ChatGPT diff review** → Opus review → commit.
 2. **Dylan tests the running site.**
 3. Dylan surfaces issues + new feature ideas → **discuss before building.**
 4. Claude appends them as a **NEW section immediately after the section just marked
