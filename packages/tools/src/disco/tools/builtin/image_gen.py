@@ -69,13 +69,39 @@ from __future__ import annotations
 
 import hashlib
 import io
+import ipaddress
 import os
+import socket
 from typing import Protocol
+from urllib.parse import urlsplit
 
 import httpx
 from disco.core.llm.config_store import ConfigStore
 from disco.core.llm.secrets import SecretStore
 from pydantic import BaseModel, Field
+
+
+def _is_public_http_url(url: str) -> bool:
+    """SSRF guard: a provider-returned image URL must be http(s) to a PUBLIC host.
+    Rejects loopback / link-local / private (RFC1918) / reserved addresses so a
+    compromised image provider can't make the orchestrator GET internal services."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return False
+    host = parts.hostname
+    try:
+        infos = socket.getaddrinfo(host, parts.port or (443 if parts.scheme == "https" else 80))
+    except OSError:
+        return False
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            return False
+    return bool(infos)
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 
@@ -331,6 +357,11 @@ class _OpenAIImageBackend:
         # the image URL is an unauthenticated CDN link (no Authorization needed).
         image_url = data["data"][0].get("url")
         if image_url:
+            if not _is_public_http_url(image_url):
+                raise ValueError(
+                    "OpenAI images API returned a non-public image URL; refusing to "
+                    "fetch it (SSRF guard). Configure the provider to return b64_json."
+                )
             with httpx.Client(timeout=60.0) as img_client:
                 img_response = img_client.get(image_url)
                 img_response.raise_for_status()
@@ -508,10 +539,11 @@ def select_image_backend() -> ImageBackend:
             base_url = base_url[: -len("/v1")]
         api_key_env = settings.api_key_env
 
-        # Look up the secret
+        # Look up the secret: encrypted SecretStore first, then os.environ — the same
+        # resolution order the TTS paid tier uses (report_audio.py), so an env-configured
+        # key works and the UI's "secret/env-var name" affordance is honest.
         if api_key_env:
-            secrets = SecretStore()
-            api_key = secrets.get_secret(api_key_env)
+            api_key = SecretStore().get_secret(api_key_env) or os.environ.get(api_key_env)
             if api_key:
                 return _OpenAIImageBackend(base_url, api_key)
         # No key available - fall back to procedural

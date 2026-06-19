@@ -31,7 +31,7 @@ export function useExpectedKeyNames(): string[] {
   if (ds?.search_api_key_env) names.add(ds.search_api_key_env);
   if (ds?.extraction_api_key_env) names.add(ds.extraction_api_key_env);
   if (tts?.api_key_env) names.add(tts.api_key_env);
-  if (imageGen?.api_key_env) names.add(imageGen.api_key_env);
+  if (imageGen?.provider === "openai" && imageGen.api_key_env) names.add(imageGen.api_key_env);
   return [...names].filter((n) => n && !RESERVED_ENV.has(n)).sort();
 }
 
