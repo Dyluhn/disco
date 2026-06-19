@@ -303,10 +303,20 @@ class _OpenAIImageBackend:
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
+        # OpenAI Images only accepts a fixed set of sizes (not arbitrary WxH). Snap the
+        # requested dims to the nearest standard by aspect ratio — square / landscape /
+        # portrait — so a 1280x720 request doesn't 400. (1024x1024 is universal across
+        # DALL·E 2/3 and gpt-image-1; 1792 variants are DALL·E 3.)
+        if width > height:
+            size = "1792x1024"
+        elif height > width:
+            size = "1024x1792"
+        else:
+            size = "1024x1024"
         payload = {
             "prompt": prompt,
             "n": 1,
-            "size": f"{width}x{height}",
+            "size": size,
             "response_format": response_format,
         }
 
@@ -575,10 +585,16 @@ class ImageGenTool:
     )
 
     def __init__(self, backend: ImageBackend | None = None) -> None:
-        # Injected backend — tests can swap in a stub; production gets the
-        # procedural default. The deferred diffusers backend, when ready,
-        # is a one-line change at construction.
+        # An EXPLICITLY injected backend (tests) pins the tool to it. In production no
+        # backend is injected (registry passes none), so each run() re-reads the saved
+        # provider via select_image_backend() — config changes are honored on the NEXT
+        # call without a restart, matching the Settings contract (and the TTS tier, which
+        # likewise re-reads config per call rather than snapshotting at registry build).
+        self._injected = backend
         self._backend: ImageBackend = backend or _PILProceduralBackend()
+
+    def _resolve_backend(self) -> ImageBackend:
+        return self._injected if self._injected is not None else select_image_backend()
 
     @property
     def backend_name(self) -> str:
@@ -600,9 +616,13 @@ class ImageGenTool:
                 error="unsupported_format",
             )
 
+        # Re-resolve the backend per call so a provider change saved in Settings is
+        # honored on the NEXT image_generate (no restart, no stale per-conversation cache).
+        backend = self._resolve_backend()
+
         # ---- generate (the backend hands us raw `bytes`) ---------------
         try:
-            image_bytes = self._backend.generate(
+            image_bytes = backend.generate(
                 prompt=args.prompt,
                 width=args.width,
                 height=args.height,
@@ -612,7 +632,7 @@ class ImageGenTool:
         except Exception as e:  # noqa: BLE001 — tool failure surfaces as an observation
             return ToolOutcome(
                 success=False,
-                content=f"image generation failed ({self._backend.name}): {e}",
+                content=f"image generation failed ({backend.name}): {e}",
                 error=f"backend_error: {type(e).__name__}",
             )
 
@@ -623,7 +643,7 @@ class ImageGenTool:
             return ToolOutcome(
                 success=False,
                 content=(
-                    f"backend {self._backend.name!r} returned "
+                    f"backend {backend.name!r} returned "
                     f"{type(image_bytes).__name__}, expected bytes. The "
                     f"binary-write path requires raw bytes — text-mode "
                     f"would corrupt >=0x80 bytes."

@@ -591,7 +591,9 @@ def test_openai_backend_builds_correct_request_shape():
         assert '/v1/images/generations' in str(call_args)
         body = call_args.kwargs.get('json') or call_args[1].get('json')
         assert body['prompt'] == 'a sunset'
-        assert body['size'] == '512x512'
+        # OpenAI only accepts fixed sizes; a square request snaps to 1024x1024
+        # (arbitrary WxH like 512x512 would 400).
+        assert body['size'] == '1024x1024'
         assert body['n'] == 1
         assert body['response_format'] == 'b64_json'
 
