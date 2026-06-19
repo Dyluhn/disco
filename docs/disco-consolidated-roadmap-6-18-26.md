@@ -62,10 +62,18 @@ Legend: ✅ done · ◐ partial · ○ open · ⬚ blocked/decision-gated · �
   Plan: `archive/surgical-C-trackc-editor.md`. Effort: large (the differentiator).
 - **A2 In-app deck editor ○** — mount `DeckEditor` + `LoweredDeck` route + patch round-trip
   (§4.5). Plan: `archive/deck-editor-integration-plan-6-18-26.md`. Effort: med.
-- **A3 Image generation — real backend ○** — replace `_PILProceduralBackend`; the
-  `DiffusersBackend` slot is empty (verified). C7 seam done `313d357`. Effort: high.
-- **A4 Iterative research mode ○** — NLI-verdict-gated re-research of weak claims (no commits).
-  Open design: section-coherence. Effort: high.
+- **A3 Image generation ◐ (DECIDED: verify-only)** — the 3 tiers are ALL built & real:
+  `procedural` (bundled) · `comfyui` (self-host) · `openai`-compatible (paid), via
+  `select_image_backend()` (`image_gen.py:482`), C7 seam `313d357`. **Ship these 3; `DiffusersBackend`
+  stays deferred** (redundant w/ ComfyUI). Remaining = live-verify each tier in the running app
+  + Settings CRUD screenshot. Effort: low.
+- **A4 Iterative research mode ○ (DECIDED: claim-surgical + driver rework)** — per weak/unsupported
+  claim (NLI verdict), targeted re-search; converge at **~80% supported OR 3 rounds**; then a
+  **driver-LLM coherence rework** of the whole report if prose no longer flows. Post-synthesis
+  re-research is greenfield (the existing gather-refine loop is PRE-synthesis). **Prereq:** confirm
+  the verdict gate is true entailment, not `bge-reranker` reframed (else it stops early / never
+  converges). Claims today: `[[text]] [[ids]]` + verdict/score (streaming.py `_verify_claims`).
+  Effort: high.
 - **A5 DR closing-card → agent handoff ○** — seed Build w/ report + pre-approved plan (no commits).
 - **A6 Real two-host podcast ○** — dialogue → multi-voice TTS → mix → deliver (no commits; unblocked).
 - **A7 FILE-DELIVERY F4 ○** — on-demand DR export (deferred; needs export-on-demand model).
@@ -74,8 +82,11 @@ Legend: ✅ done · ◐ partial · ○ open · ⬚ blocked/decision-gated · �
 - **B1 Run the clean 8 GB keyless gauntlet → green + screenshot ⬚** — north-star §8, *the*
   release gate. Pieces landed + VM-proven; the final clean-box end-to-end proof is unrun.
   Box available (blackbox LXC 199).
-- **B2 Benchmark report ○** — harness exists; run it → grounding accuracy, task success,
-  latency, cost (Dylan's "before launch" mandate).
+- **B2 Benchmark report ○ (DECIDED: full 4-metric)** — primitives exist (`evaluation.py`
+  faithfulness scorer, `eval_runner`, DoD evaluator, `obs.py` spans, `DISCO_INSPECT`, `TokenUsage`);
+  MISSING = suites + aggregation. Build: grounding-accuracy suite (10-15 `evals/research/*.yaml`,
+  only `vcrpy.yaml` today) + task-success-rate (3-5 DoD build scenarios) + latency percentiles +
+  cost table. (Dylan's "before launch" mandate.)
 - **B3 Keyless-story coherence ○** — with no bundled driver model, define/verify what
   "keyless" means at launch (BYO-first?) so §8's promise is actually true on the gauntlet.
 - **B4 Release-eng residue ◐** — `git tag v0.1.0` + changelog · demo gallery · mobile-
@@ -121,10 +132,18 @@ Legend: ✅ done · ◐ partial · ○ open · ⬚ blocked/decision-gated · �
 - **F1 god-function decomposition ○** — functions ≤80 LOC / classes ≤500 (gate only enforces
   ≤200/≤800). Verified still open. Plan: `archive/god-function-decomposition-plan.md`.
 
-## §G — Decisions still owed by Dylan
-1. Iterative-mode coherence approach (A4) · 2. Benchmark scope/datasets (B2) ·
-3. Image-providers v1 set — confirm `openai-compatible | comfyui` (A3).
-*Resolved: license=Apache-2.0 · slides=loose-hybrid · default driver=sticky · bundled model=scrapped(BYO).*
+## §G — Decisions (ALL RESOLVED 2026-06-19)
+1. **A4 iterative-mode** → **claim-level surgical patch**: per weak/unsupported claim, targeted
+   re-search; **converge when ~80% of claims are supported OR after 3 search rounds**. THEN a
+   final **driver-LLM coherence rework** pass re-examines the whole report and reworks prose only
+   if it no longer flows. (Surgical where possible; full rework only if stitching reads badly.)
+2. **B2 benchmark** → **full 4-metric**: grounding-accuracy suite (10-15 eval tasks) +
+   task-success-rate (3-5 DoD build scenarios) + latency percentiles (DISCO_INSPECT) + cost table
+   (TokenUsage). Build the missing suites + aggregation.
+3. **A3 image providers** → **ship the current 3** (`procedural`/`comfyui`/`openai`-compatible, all
+   already built & real); **DiffusersBackend stays deferred** (redundant with ComfyUI). A3 is now
+   a **live-verify** task, not a build.
+*Earlier-resolved: license=Apache-2.0 · slides=loose-hybrid · default driver=sticky · bundled model=scrapped(BYO).*
 
 ---
 
