@@ -22,7 +22,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from tool_fakes import FakeSandboxInstance, call
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin import build_default_registry
 from disco.tools.builtin.slides import (
@@ -35,6 +34,7 @@ from disco.tools.registry import agent_scope, research_scope
 from disco.tools.sandbox.base import SandboxSpec
 from disco.tools.sandbox.process import ProcessSandboxInstance
 from disco.tools.secrets import CapabilityBroker
+from tool_fakes import FakeSandboxInstance, call
 
 
 @pytest.fixture

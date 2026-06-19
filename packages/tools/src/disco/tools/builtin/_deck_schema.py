@@ -28,12 +28,11 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from typing import Literal, Optional
-
-from pydantic import BaseModel, Field
+from typing import Literal
 
 from disco.core.brand import resolve_theme
 from disco.core.brand.tokens import Theme
+from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
 # Slide canvas geometry (16:9)
@@ -220,8 +219,8 @@ class Slide:
     title: str = ""             # propagated from AuthoredSlide.title (for c8 duck-typing)
     elements: list[Element] = field(default_factory=list)
     notes: str | None = None
-    chart: Optional["ChartSpec"] = None   # propagated when AuthoredSlide.chart is set
-    table: Optional["TableSpec"] = None   # propagated when AuthoredSlide.table is set
+    chart: ChartSpec | None = None   # propagated when AuthoredSlide.chart is set
+    table: TableSpec | None = None   # propagated when AuthoredSlide.table is set
 
 
 @dataclass

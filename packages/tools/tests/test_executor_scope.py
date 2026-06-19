@@ -5,7 +5,6 @@ sandbox tool → 'sandbox', in_process tool → 'in_process', unregistered → '
 
 from __future__ import annotations
 
-from tool_fakes import FakeSandboxInstance
 from disco.tools import (
     DefaultToolExecutor,
     ToolDef,
@@ -16,6 +15,7 @@ from disco.tools import (
 from disco.tools.anatomy import ToolContext
 from disco.tools.registry import ToolRegistry, ToolScope
 from pydantic import BaseModel
+from tool_fakes import FakeSandboxInstance
 
 
 def _executor(scope=None, sandbox=None):

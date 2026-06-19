@@ -9,6 +9,7 @@ dev server + controlled preview boundary).
 from __future__ import annotations
 
 from ..registry import ToolRegistry
+from ._deck_patch import DeckPatchTool
 from .audio_overview import AudioOverviewTool
 from .browser import BrowserTool
 from .files import (
@@ -33,7 +34,6 @@ from .shell_sessions import (
     ShellWaitTool,
     ShellWriteTool,
 )
-from ._deck_patch import DeckPatchTool
 from .slides import SlidesTool
 from .subagent import DelegateExploreTool
 from .system import CodeExecTool, ShellTool

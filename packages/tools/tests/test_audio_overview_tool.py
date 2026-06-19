@@ -18,12 +18,10 @@ from disco.tools.builtin._audio_mixer import (
     mix_turns_count,
 )
 from disco.tools.builtin.audio_overview import (
+    _build_llm_payload,
     _extract_json,
     _validate_turn_script,
     _validate_turn_script_single,
-    _build_llm_payload,
-    _TURN_SCRIPT_PROMPT,
-    _SINGLE_SCRIPT_PROMPT,
 )
 from disco.tools.registry import agent_scope, research_scope
 from disco.tools.secrets import CapabilityBroker

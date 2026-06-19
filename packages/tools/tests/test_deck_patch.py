@@ -29,12 +29,9 @@ artifact with no clean variant. The export-side regression remains tracked.
 from __future__ import annotations
 
 import json
-import tempfile
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from disco.tools.builtin._deck_patch import (
     DeckPatchArgs,
     DeckPatchTool,
@@ -45,8 +42,6 @@ from disco.tools.builtin._deck_schema import (
     AuthoredDeck,
     AuthoredSlide,
     ChartSpec,
-    LoweredElement,
-    TableSpec,
     lower_deck_for_editor,
 )
 from disco.tools.builtin._pptx_render import (
@@ -56,7 +51,6 @@ from disco.tools.builtin._pptx_render import (
     strip_element_ids,
 )
 from disco.tools.registry import AGENT_TOOLS, ARTIFACT_TOOLS, agent_scope, artifact_scope
-
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
 

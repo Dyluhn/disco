@@ -31,12 +31,11 @@ import json
 import logging
 import os
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import httpx
+from disco.tools.builtin._deck_schema import AuthoredDeck, Deck, lower_deck
 from pydantic import ValidationError
-
-from disco.tools.builtin._deck_schema import AuthoredDeck, AuthoredSlide, Deck, lower_deck
 
 if TYPE_CHECKING:
     from disco.tools.anatomy import ToolContext
@@ -369,8 +368,8 @@ async def _stage_fill(
 
 async def _stage_assets(
     authored: AuthoredDeck,
-    ctx: "ToolContext",
-    backend: "ImageBackend",
+    ctx: ToolContext,
+    backend: ImageBackend,
     filename_base: str,
 ) -> AuthoredDeck:
     """For each slide with image_prompt, generate image bytes and store in sandbox.
@@ -434,8 +433,8 @@ def _outline_to_markdown(outline: AuthoredDeck | None, goal: str) -> str:
 async def generate_deck(
     goal: str,
     filename: str,
-    ctx: "ToolContext",
-    backend: "ImageBackend",
+    ctx: ToolContext,
+    backend: ImageBackend,
     *,
     slide_count: int = 5,
 ) -> tuple[Deck | None, str | None, str | None]:

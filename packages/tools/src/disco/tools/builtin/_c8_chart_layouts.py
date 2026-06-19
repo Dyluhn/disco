@@ -91,7 +91,7 @@ def _set_bg(slide: Any, color: str) -> None:
     slide.background.fill.fore_color.rgb = _rgb(color)
 
 
-def _title_strip(prs_slide: Any, title: str, theme: "Theme") -> int:
+def _title_strip(prs_slide: Any, title: str, theme: Theme) -> int:
     """Render title textbox + accent rule; return y-coord for content area."""
     from pptx.enum.text import PP_ALIGN
     _set_bg(prs_slide, theme.bg)
@@ -163,7 +163,7 @@ def _to_svg_dict(spec: ChartSpec) -> dict[str, Any]:
 # HTML content generators
 # ---------------------------------------------------------------------------
 
-def html_chart_content(title: str, spec: ChartSpec, theme: "Theme") -> str:
+def html_chart_content(title: str, spec: ChartSpec, theme: Theme) -> str:
     """Inner HTML for a chart slide.
 
     Embeds the SVG from render_chart_svg.  Falls back to render_chart_table
@@ -180,7 +180,7 @@ def html_chart_content(title: str, spec: ChartSpec, theme: "Theme") -> str:
     )
 
 
-def html_table_content(title: str, spec: TableSpec, theme: "Theme") -> str:
+def html_table_content(title: str, spec: TableSpec, theme: Theme) -> str:
     """Inner HTML for a table slide — native HTML table, not chart fallback."""
     if not spec.headers:
         return (
@@ -282,7 +282,7 @@ def _add_scatter_chart(
 
 
 def _chart_fallback_pptx_table(
-    prs_slide: Any, spec: ChartSpec, left: int, top: int, w: int, h: int, theme: "Theme"
+    prs_slide: Any, spec: ChartSpec, left: int, top: int, w: int, h: int, theme: Theme
 ) -> None:
     """Fallback: render chart data as a native PPTX table when chart render fails."""
     from pptx.util import Emu, Pt
@@ -322,11 +322,11 @@ def _chart_fallback_pptx_table(
 
 
 def _chart_empty_placeholder(
-    prs_slide: Any, left: int, top: int, w: int, h: int, theme: "Theme"
+    prs_slide: Any, left: int, top: int, w: int, h: int, theme: Theme
 ) -> None:
     """Placeholder box when no chart/table data is available."""
-    from pptx.util import Emu
     from pptx.enum.text import PP_ALIGN
+    from pptx.util import Emu
 
     ph_h = min(h, 914_400)  # cap at 1 in so it doesn't fill the slide
     box = prs_slide.shapes.add_shape(1, Emu(left), Emu(top), Emu(w), Emu(ph_h))
@@ -344,7 +344,7 @@ def _chart_empty_placeholder(
 # PPTX layout — chart slide
 # ---------------------------------------------------------------------------
 
-def layout_chart_slide_pptx(prs_slide: Any, slide: Any, theme: "Theme") -> None:
+def layout_chart_slide_pptx(prs_slide: Any, slide: Any, theme: Theme) -> None:
     """Title-strip + native python-pptx chart.
 
     Supports bar → COLUMN_CLUSTERED, line → LINE, pie → PIE, scatter → XY_SCATTER.
@@ -383,7 +383,7 @@ def layout_chart_slide_pptx(prs_slide: Any, slide: Any, theme: "Theme") -> None:
 # PPTX layout — table slide
 # ---------------------------------------------------------------------------
 
-def layout_table_slide_pptx(prs_slide: Any, slide: Any, theme: "Theme") -> None:
+def layout_table_slide_pptx(prs_slide: Any, slide: Any, theme: Theme) -> None:
     """Title-strip + native python-pptx table (real, editable table shape).
 
     Header row gets accent fill with white text.  Data rows use theme.text.

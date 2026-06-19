@@ -13,7 +13,6 @@ Acceptance:
 
 from __future__ import annotations
 
-from tool_fakes import FakeSandboxInstance, call
 from disco.tools import (
     DefaultToolExecutor,
     agent_scope,
@@ -22,6 +21,7 @@ from disco.tools import (
 from disco.tools.builtin import ThinkTool
 from disco.tools.builtin.think import ThinkArgs
 from disco.tools.secrets import CapabilityBroker
+from tool_fakes import FakeSandboxInstance, call
 
 # ---- Test 1: ack ToolOutcome + no side effect -------------------------------
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 
-from tool_fakes import FakeSandboxInstance, call
 from disco.tools import (
     DefaultToolExecutor,
     ToolContext,
@@ -17,6 +16,7 @@ from disco.tools import (
 from disco.tools.builtin import FileReadTool
 from disco.tools.registry import ToolRegistry, ToolScope
 from pydantic import BaseModel
+from tool_fakes import FakeSandboxInstance, call
 
 
 def _executor(scope=None, sandbox=None):

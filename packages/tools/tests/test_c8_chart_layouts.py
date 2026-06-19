@@ -17,18 +17,14 @@ Proves:
 from __future__ import annotations
 
 import io
-from unittest.mock import MagicMock
 
 import pytest
-
 from disco.tools.builtin._c8_chart_layouts import (
     ChartSpec,
     TableSpec,
     _to_svg_dict,
     html_chart_content,
     html_table_content,
-    layout_chart_slide_pptx,
-    layout_table_slide_pptx,
 )
 from disco.tools.builtin._pptx_render import (
     DeckSlide,
@@ -37,7 +33,6 @@ from disco.tools.builtin._pptx_render import (
     render_html,
     render_pptx,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -289,7 +284,6 @@ def test_html_table_content_escapes_cells():
 def test_pptx_chart_slide_has_chart_or_table_shape():
     """A chart slide should add a chart shape (or table fallback) — NOT just text."""
     from pptx import Presentation
-    from pptx.util import Emu
 
     deck = MinimalDeck(
         title="Chart Deck",

@@ -13,10 +13,10 @@ import os
 import re
 import uuid
 
-from tool_fakes import FakeSandboxInstance
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin.system import ShellTool
 from disco.tools.sandbox.base import ExecResult
+from tool_fakes import FakeSandboxInstance
 
 # ---- fakes -----------------------------------------------------------------
 

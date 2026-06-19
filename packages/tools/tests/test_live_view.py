@@ -1,5 +1,4 @@
 """P2 tests: daemon headed/headless selection logic and live_view ensure_live."""
-import sys
 from unittest.mock import MagicMock, patch
 
 

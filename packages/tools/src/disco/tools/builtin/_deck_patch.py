@@ -88,7 +88,7 @@ def _apply_op(doc: Any, op: dict[str, Any]) -> Any:
         value = op.get("value")
         if not parts:
             if doc != value:
-                raise PatchError(f"test failed: root value mismatch")
+                raise PatchError("test failed: root value mismatch")
             return doc
         parent, last = _get_parent(doc, parts)
         if isinstance(parent, dict):

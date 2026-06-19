@@ -14,7 +14,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-import pytest
 from disco.tools.projects import (
     StorageStatus,
     default_projects_root,
@@ -22,7 +21,6 @@ from disco.tools.projects import (
     validate_root,
 )
 from disco.tools.projects.store import ProjectStore
-
 
 # ── (a) fresh-machine: no configured root, isolated HOME ──────────────────────
 

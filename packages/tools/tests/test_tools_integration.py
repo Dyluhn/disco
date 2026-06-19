@@ -9,7 +9,6 @@ loop's ToolExecutor boundary and the secrets discipline holds end to end.
 
 from __future__ import annotations
 
-from tool_fakes import ScriptedAgent
 from disco.core import (
     ActionEvent,
     ConversationStatus,
@@ -29,6 +28,7 @@ from disco.tools import (
     agent_scope,
     build_default_registry,
 )
+from tool_fakes import ScriptedAgent
 
 SECRET = "PROVIDER-KEY-DO-NOT-LEAK"
 

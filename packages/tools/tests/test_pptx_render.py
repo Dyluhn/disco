@@ -14,11 +14,9 @@ Proves:
 
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from disco.tools.builtin._pptx_render import (
     DeckSlide,
     MinimalDeck,
@@ -27,7 +25,6 @@ from disco.tools.builtin._pptx_render import (
     render_html,
     render_pptx,
 )
-
 
 # ---------------------------------------------------------------------------
 # Sample decks
@@ -104,8 +101,9 @@ def test_pptx_binary_magic_bytes():
 
 def test_pptx_round_trips_via_python_pptx():
     """python-pptx can re-open the rendered bytes without error."""
-    from pptx import Presentation
     import io
+
+    from pptx import Presentation
 
     deck = _sample_deck()
     data = render_pptx(deck)
@@ -120,9 +118,10 @@ def test_pptx_contains_real_text_runs():
     Specifically: at least one TextFrame with the slide title text must be
     present for each slide.  This proves text boxes, not image shapes.
     """
+    import io
+
     from pptx import Presentation
     from pptx.shapes.picture import Picture
-    import io
 
     deck = _sample_deck()
     data = render_pptx(deck)
@@ -153,8 +152,9 @@ def test_pptx_contains_real_text_runs():
 
 def test_pptx_16_9_canvas():
     """Slide dimensions are 12 192 000 × 6 858 000 EMU (16:9)."""
-    from pptx import Presentation
     import io
+
+    from pptx import Presentation
 
     deck = _sample_deck()
     data = render_pptx(deck)
@@ -165,8 +165,9 @@ def test_pptx_16_9_canvas():
 
 def test_pptx_bullets_slide_has_bullet_text():
     """A bullets slide carries each bullet in at least one text run."""
-    from pptx import Presentation
     import io
+
+    from pptx import Presentation
 
     deck = MinimalDeck(
         title="Bullets Test",
@@ -190,8 +191,9 @@ def test_pptx_bullets_slide_has_bullet_text():
 
 def test_pptx_title_layout():
     """Title layout renders the deck title and optional subtitle."""
-    from pptx import Presentation
     import io
+
+    from pptx import Presentation
 
     deck = MinimalDeck(
         title="Title Test",
@@ -215,8 +217,9 @@ def test_pptx_title_layout():
 
 def test_pptx_section_layout():
     """Section layout renders the section title."""
-    from pptx import Presentation
     import io
+
+    from pptx import Presentation
 
     deck = MinimalDeck(
         title="Section Test",
@@ -235,8 +238,9 @@ def test_pptx_section_layout():
 
 def test_pptx_dark_theme():
     """Dark theme renders without error and produces valid bytes."""
-    from pptx import Presentation
     import io
+
+    from pptx import Presentation
 
     data = render_pptx(_dark_deck())
     prs = Presentation(io.BytesIO(data))
@@ -245,8 +249,9 @@ def test_pptx_dark_theme():
 
 def test_pptx_neutral_theme():
     """Neutral theme renders without error."""
-    from pptx import Presentation
     import io
+
+    from pptx import Presentation
 
     data = render_pptx(_neutral_deck())
     prs = Presentation(io.BytesIO(data))
@@ -255,8 +260,9 @@ def test_pptx_neutral_theme():
 
 def test_pptx_with_notes():
     """Speaker notes land in the notes slide text frame."""
-    from pptx import Presentation
     import io
+
+    from pptx import Presentation
 
     deck = MinimalDeck(
         title="Notes Test",
@@ -277,8 +283,9 @@ def test_pptx_with_notes():
 
 def test_pptx_empty_deck():
     """An empty deck (no slides) produces valid 0-slide PPTX."""
-    from pptx import Presentation
     import io
+
+    from pptx import Presentation
 
     deck = MinimalDeck(title="Empty", slides=[])
     data = render_pptx(deck)
@@ -488,8 +495,9 @@ def test_render_deck_returns_both_outputs():
 
 def test_render_deck_pptx_is_valid():
     """render_deck pptx_bytes are a valid OOXML file."""
-    from pptx import Presentation
     import io
+
+    from pptx import Presentation
 
     result = render_deck(_sample_deck())
     prs = Presentation(io.BytesIO(result["pptx_bytes"]))

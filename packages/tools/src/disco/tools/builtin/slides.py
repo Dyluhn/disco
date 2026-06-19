@@ -22,7 +22,6 @@ import html
 import re
 import shlex
 from textwrap import dedent
-
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -379,7 +378,6 @@ class SlidesTool:
     ) -> ToolOutcome:
         """Run the C2 staged generation pipeline.  Falls back to Marp on failure."""
         from disco.tools.builtin._slides_pipeline import generate_deck
-        from disco.tools.builtin._pptx_render import render_pptx, render_html
 
         assert args.goal is not None  # caller-checked
         backend = select_image_backend()
@@ -427,7 +425,7 @@ class SlidesTool:
         self, deck, args: SlidesGenerateArgs, ctx: ToolContext, fmt: str
     ) -> ToolOutcome:
         """Render a C1 Deck to the sandbox and return a ToolOutcome."""
-        from disco.tools.builtin._pptx_render import render_pptx, render_html, convert_to_pdf
+        from disco.tools.builtin._pptx_render import convert_to_pdf, render_html, render_pptx
 
         if ctx.sandbox is None:
             return ToolOutcome(success=False, content="No sandbox available to write the slide deck.")
