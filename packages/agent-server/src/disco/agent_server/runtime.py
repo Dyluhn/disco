@@ -556,6 +556,13 @@ class ConversationRuntime:
         # converts raw text to a Passage immediately on receipt).
         self._dr_steer: dict[str, list[str]] = {}
         self._dr_injected_sources: dict[str, list[Any]] = {}  # list[Passage]
+        # G1/DR-4: per-conversation upload corpus (text files ingested at upload
+        # time → citable Passages for both basic research and DR runs).
+        # Keyed by conversation_id; value is a flat list of Passage objects.
+        # In-process only (cleared on restart); the sandbox sidecar holds the
+        # raw bytes for persistence (the corpus is re-ingested lazily on demand
+        # in a future persistence upgrade).
+        self._upload_passages: dict[str, list[Any]] = {}  # list[Passage]
         # Auto-suspend (lifecycle G): a build session is live only while a UI is
         # watching it. Track open WS connections per conversation; when the last one
         # closes, free the idle sandbox after a grace period (a quick reconnect — or
@@ -1138,6 +1145,19 @@ class ConversationRuntime:
             return 0
         return sum(p.stat().st_size for p in path.iterdir() if p.is_file())
 
+    def add_upload_passages(self, conversation_id: str, passages: list[Any]) -> None:
+        """[G1/DR-4] Append Passages from a text upload to the per-conversation
+        upload corpus. Called by the upload route after parsing .txt/.md/.csv
+        files. The passages are keyed by conversation_id and retrieved at run
+        time to seed basic research (F3) and DR runs (F2)."""
+        bucket = self._upload_passages.setdefault(conversation_id, [])
+        bucket.extend(passages)
+
+    def get_upload_passages(self, conversation_id: str) -> list[Any]:
+        """[G1/DR-4] Return the accumulated upload Passages for this conversation
+        (empty list if none were ingested, e.g. non-text uploads only)."""
+        return list(self._upload_passages.get(conversation_id, []))
+
     def _compose_build_loop(
         self, conversation_id: str, router: DefaultLLMRouter, agent: RouterAgent
     ) -> AgentLoop:
@@ -1322,6 +1342,7 @@ class ConversationRuntime:
         drop_weak: bool = False,
         domains_deny: frozenset[str] = frozenset(),
         think: bool = False,
+        conversation_id: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         return self._dr.research_stream(
             query,
@@ -1329,6 +1350,7 @@ class ConversationRuntime:
             drop_weak=drop_weak,
             domains_deny=domains_deny,
             think=think,
+            conversation_id=conversation_id,
         )
 
     def kick(self, conversation_id: str) -> None:

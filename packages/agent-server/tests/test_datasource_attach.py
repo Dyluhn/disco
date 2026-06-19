@@ -84,6 +84,12 @@ class _FakeRuntime:
     def get_upload_size(self, conversation_id: str) -> int:
         return sum(len(v) for v in self._sidecar.get(conversation_id, {}).values())
 
+    def add_upload_passages(self, conversation_id: str, passages: list) -> None:
+        pass  # G1/DR-4: no-op in this test — corpus not exercised here
+
+    def get_upload_passages(self, conversation_id: str) -> list:
+        return []
+
 
 def _make_client() -> tuple[TestClient, str, SqliteEventStore, _FakeSession]:
     store = SqliteEventStore(":memory:")

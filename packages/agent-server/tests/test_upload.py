@@ -79,6 +79,13 @@ class _FakeRuntime:
     def get_upload_size(self, conversation_id: str) -> int:
         return sum(len(v) for v in self._sidecar.get(conversation_id, {}).values())
 
+    def add_upload_passages(self, conversation_id: str, passages: list) -> None:
+        # G1/DR-4: no-op in the upload tests (corpus ingestion tested separately).
+        pass
+
+    def get_upload_passages(self, conversation_id: str) -> list:
+        return []
+
     async def _rematerialize_uploads(self, conversation_id: str, session: _FakeSession) -> None:
         # Simplified version for testing the interaction.
         uploads = self._sidecar.get(conversation_id, {})

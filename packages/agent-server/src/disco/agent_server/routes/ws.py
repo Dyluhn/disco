@@ -244,6 +244,12 @@ def make_ws_router(
         think = bool(body.get("think"))
         domains = body.get("domains_deny") or []
         domains_deny = frozenset(str(d).strip().lower() for d in domains if str(d).strip())
+        # G1/DR-4: optional conversation_id lets the server load seed passages from
+        # pre-attached text uploads so they compete in the rerank step alongside
+        # live-web content.  None → OFF path (byte-identical to pre-DR-4 code).
+        conversation_id = body.get("conversation_id") or None
+        if conversation_id is not None:
+            conversation_id = str(conversation_id).strip() or None
         try:
             async for frame in runtime.research_stream(
                 query,
@@ -251,6 +257,7 @@ def make_ws_router(
                 drop_weak=drop_weak,
                 domains_deny=domains_deny,
                 think=think,
+                conversation_id=conversation_id,
             ):
                 await websocket.send_json(frame)
         except WebSocketDisconnect:

@@ -204,13 +204,20 @@ class DeepResearchService:
         drop_weak: bool = False,
         domains_deny: frozenset[str] = frozenset(),
         think: bool = False,
+        conversation_id: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream a live grounded answer as the UI's research frames (state →
         token… → final). Composes the shared router with the live retrieval
         providers, honoring the re-scope controls: the pill picks the answerer
         model, `domains_deny` filters discovery, `drop_weak` prunes the answer, and
         `think` runs the answerer in reasoning mode (it thinks, then the answer
-        streams; the reasoning is never emitted as answer tokens)."""
+        streams; the reasoning is never emitted as answer tokens).
+
+        G1/DR-4 F3: when ``conversation_id`` is provided and the conversation has
+        pre-attached upload passages (text files the user uploaded in the initial
+        box), they are threaded into the rerank step as ``seed_passages`` so they
+        compete for ``top_k`` slots alongside live-web content and can be cited.
+        OFF-path (no cid or no uploads): byte-identical to the pre-DR-4 code."""
         from disco.retrieval import RouterQueryRewriter
         from disco.retrieval.streaming import stream_research_answer
 
@@ -219,6 +226,13 @@ class DeepResearchService:
         # composite hands MCP-discovered hits to the SAME GroundingPipeline.
         search, extraction = self._rt._compose_mcp_retrieval(deps)
         router = self._rt._router_now(pick=model_override, enable_thinking=think)
+        # G1/DR-4 F3: load seed passages from the upload corpus for this cid.
+        # Empty list when no text files were attached (the OFF path).
+        seed_passages = (
+            self._rt.get_upload_passages(conversation_id)
+            if conversation_id
+            else []
+        )
         return stream_research_answer(
             query,
             router=router,
@@ -236,6 +250,8 @@ class DeepResearchService:
             domains_deny=domains_deny,
             drop_weak=drop_weak,
             think=think,
+            # G1/DR-4 F3: seed the rerank step with any pre-attached upload passages.
+            seed_passages=seed_passages,
         )
 
     async def _maybe_run_deep_research(self, conversation_id: str) -> None:
@@ -467,6 +483,11 @@ class DeepResearchService:
             n_subquestions=len(plan_steps),
             env=os.environ,
         )
+        # G1/DR-4 F2: load any pre-attached upload passages (text files the user
+        # attached in the initial box before submitting).  Empty when no text
+        # files were uploaded (the OFF path — byte-identical to pre-DR-4 code).
+        upload_passages = self._rt.get_upload_passages(conversation_id)
+
         run = DeepResearchRun(
             query=query,
             router=router,
@@ -478,6 +499,8 @@ class DeepResearchService:
             conversation_id=conversation_id,
             gather_concurrency=gather_cap,
             recency_window=recency_window,
+            # G1/DR-4 F2: seed every gather leg with upload passages.
+            upload_passages=upload_passages or None,
         )
 
         # Emit callback: every engine event becomes an Action/Observation pair

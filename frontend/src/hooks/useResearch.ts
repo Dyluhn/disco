@@ -1,8 +1,10 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { requestResearch } from "@/api/research";
+import { agentLive } from "@/api/client";
 import type { ReScope } from "@/types/grounded";
 import { useResearchStream } from "./useResearchStream";
+import { createBuildConversation } from "@/api/agent";
 
 /** Mutation hook (use[Action]) for submitting / re-scoping a research request.
  * Goes through the data-access layer (`requestResearch`), never transport. */
@@ -20,13 +22,36 @@ export function useResearch() {
   const stream = useResearchStream(scope);
   const action = useReScope();
 
+  // G1/DR-4 F1+F3: pre-create a lightweight "research" conversation on mount so
+  // the UploadComposer can render in the empty state (before the user submits).
+  // On submit, the cid is threaded onto the WS frame so the server loads the
+  // pre-attached upload passages and seeds them into the rerank step.
+  // The /ws/research endpoint is stateless but the cid lets the server look up
+  // the upload corpus keyed upload:{cid}.
+  // OFF: when offline (no VITE_AGENT_BASE), no pre-create fires (fixture mode).
+  const [preCid, setPreCid] = useState<string | null>(null);
+  const preCreate = useMutation({
+    // "research" surface — minimal conversation record, no loop/sandbox.
+    mutationFn: () => createBuildConversation(null, "agent"),
+  });
+
+  useEffect(() => {
+    if (scope !== null || !agentLive()) return; // started or offline: no pre-create
+    if (preCid) return; // already created
+    preCreate.mutate(undefined, { onSuccess: setPreCid });
+  }, [scope]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const submit = useCallback(
     (query: string, opts?: { model_override?: string | null; think?: boolean }) => {
       // The per-conversation lead-model override + Think flag ride along on the
       // request (backend hooks: CallContext.model_override + a think flag).
-      action.mutate({ query, ...opts }, { onSuccess: setScope });
+      // G1/DR-4: thread the pre-created cid so the server can load upload seeds.
+      action.mutate(
+        { query, ...opts, conversation_id: preCid ?? null },
+        { onSuccess: setScope },
+      );
     },
-    [action],
+    [action, preCid],
   );
 
   const reScope = useCallback(
@@ -43,6 +68,9 @@ export function useResearch() {
     submit,
     reScope,
     reset: () => setScope(null),
+    /** G1/DR-4: pre-created cid for the empty-state UploadComposer. null when a
+     *  run is active (the scope is live) or offline (no server). */
+    preCid: scope === null ? preCid : null,
     ...stream,
     // Surface a failed submit/re-scope request (was silent: a failed mutation
     // left the user with an un-disabled button and no message). Distinct from the

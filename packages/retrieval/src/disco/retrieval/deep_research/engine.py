@@ -111,6 +111,7 @@ class DeepResearchRun:
         conversation_id: str = "deep_research",
         gather_concurrency: int | None = None,
         recency_window: Literal["month", "week"] | None = None,
+        upload_passages: list[Any] | None = None,
     ) -> None:
         self._query = query
         self._router = router
@@ -123,6 +124,9 @@ class DeepResearchRun:
         self._namespace = conversation_id
         # DR-3 E2: recency window for time-filtered search + date prompt injection.
         self._recency_window = recency_window
+        # G1/DR-4 F2: pre-attached upload passages to seed every gather leg.
+        # None / [] → OFF path (byte-identical to pre-DR-4 code).
+        self._upload_passages: list[Any] = upload_passages or []
         # RAM-aware peak-memory guard (OOM fix) — applies on EVERY tier, because
         # not OOMing is a correctness guarantee, not a free-tier compensation.
         # Each concurrent gather leg holds its own fetch buffers + extracted
@@ -315,6 +319,9 @@ class DeepResearchRun:
                     remaining_source_budget=subq_budget,
                     leg_context=leg_context,
                     recency_window=self._recency_window,
+                    # G1/DR-4 F2: seed each leg with any pre-attached upload
+                    # passages so they are available during synthesis.
+                    extra_passages=list(self._upload_passages),
                 )
             )
             gather_tasks.append((subq, task, subq_id, subq_namespace, leg_context))
@@ -370,6 +377,8 @@ class DeepResearchRun:
                 remaining_source_budget=source_budget,
                 leg_context=leg_context,
                 recency_window=self._recency_window,
+                # G1/DR-4 F2: seed steer legs with upload passages too.
+                extra_passages=list(self._upload_passages),
             )
         )
         return (subq, task, subq_id, subq_namespace, leg_context)
