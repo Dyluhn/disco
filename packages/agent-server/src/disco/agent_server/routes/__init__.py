@@ -10,6 +10,7 @@ from __future__ import annotations
 from .activity import make_activity_router
 from .conversations import make_conversations_router
 from .debug import make_debug_router
+from .deck_editor import make_deck_editor_router
 from .export import make_export_router
 from .files import make_files_router
 from .health import make_health_router
@@ -28,6 +29,7 @@ __all__ = [
     "make_activity_router",
     "make_conversations_router",
     "make_debug_router",
+    "make_deck_editor_router",
     "make_export_router",
     "make_files_router",
     "make_health_router",

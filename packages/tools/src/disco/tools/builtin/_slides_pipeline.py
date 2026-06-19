@@ -437,14 +437,18 @@ async def generate_deck(
     backend: ImageBackend,
     *,
     slide_count: int = 5,
-) -> tuple[Deck | None, str | None, str | None]:
+) -> tuple[Deck | None, str | None, str | None, str | None]:
     """Run the full C2 generation pipeline.
 
     Returns:
-        (c1_deck, fallback_markdown, error_msg)
+        (c1_deck, fallback_markdown, error_msg, authored_sidecar)
 
-    On success: (Deck, None, None)
-    On fill-stage failure: (None, fallback_markdown_str, error_msg)
+    ``authored_sidecar`` is the ``{filename}.authored.json`` path IFF this run wrote
+    it successfully (else None) — the caller advertises the in-app editor only on a
+    real, fresh sidecar, never a stale leftover from a prior run whose write failed.
+
+    On success: (Deck, None, None, sidecar-or-None)
+    On fill-stage failure: (None, fallback_markdown_str, error_msg, None)
     """
     llm_url, model = _resolve_slides_llm()
     system = _WEAK_SYSTEM if ctx.assist else _CAPABLE_SYSTEM
@@ -457,7 +461,7 @@ async def generate_deck(
     if outline is None:
         _LOG.warning("Outline stage failed: %s", outline_err)
         fallback_md = _outline_to_markdown(None, goal)
-        return None, fallback_md, outline_err
+        return None, fallback_md, outline_err, None
 
     # Stage 2: Fill
     filled, fill_err = await _stage_fill(outline, system, llm_url, model)
@@ -465,7 +469,7 @@ async def generate_deck(
     if filled is None:
         _LOG.warning("Fill stage failed: %s — using outline as fallback", fill_err)
         fallback_md = _outline_to_markdown(outline, goal)
-        return None, fallback_md, fill_err
+        return None, fallback_md, fill_err, None
 
     # Stage 3: Assets (image_prompt → image files in sandbox)
     if ctx.sandbox is not None:
@@ -477,6 +481,22 @@ async def generate_deck(
     except Exception as e:  # noqa: BLE001
         _LOG.warning("lower_deck failed: %s — falling back to Marp", e)
         fallback_md = _outline_to_markdown(filled, goal)
-        return None, fallback_md, str(e)
+        return None, fallback_md, str(e), None
 
-    return deck, None, None
+    # A2.0: persist the editable AuthoredDeck source alongside the renders so the
+    # in-app deck editor (+ deck_patch tool) can read it back. Best-effort: a write
+    # failure here must not sink an otherwise-successful generation — but we report
+    # the sidecar path ONLY when the write actually succeeded, so the caller never
+    # advertises the editor against a stale leftover sidecar from an earlier run.
+    authored_sidecar: str | None = None
+    if ctx.sandbox is not None:
+        sidecar = f"{filename}.authored.json"
+        try:
+            await ctx.sandbox.write_file(
+                sidecar, filled.model_dump_json(indent=2).encode()
+            )
+            authored_sidecar = sidecar
+        except Exception as e:  # noqa: BLE001
+            _LOG.warning("Failed to persist authored.json for %s: %s", filename, e)
+
+    return deck, None, None, authored_sidecar

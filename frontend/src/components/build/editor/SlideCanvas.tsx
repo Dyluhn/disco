@@ -23,6 +23,8 @@ interface SlideCanvasProps {
   onPatch: (patch: JsonPatchOp[]) => void;
   /** Visual scale factor for the canvas (1 = full size). */
   scale?: number;
+  /** A2: disable element drag (text-edit-only) — threaded to each ElementBox. */
+  disableDrag?: boolean;
 }
 
 export function SlideCanvas({
@@ -31,6 +33,7 @@ export function SlideCanvas({
   onSelectElement,
   onPatch,
   scale = 1,
+  disableDrag = false,
 }: SlideCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -79,6 +82,7 @@ export function SlideCanvas({
             canvasHeight={getCanvasDimensions().h}
             onSelect={onSelectElement}
             onPatch={onPatch}
+            disableDrag={disableDrag}
           />
         ))}
       </div>

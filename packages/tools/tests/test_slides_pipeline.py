@@ -332,7 +332,7 @@ async def test_generate_deck_success(tmp_workspace):
     with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
         # Outline call → valid; Fill call → valid
         mock_llm.side_effect = [outline_raw, full_raw]
-        deck, fallback_md, err = await generate_deck(
+        deck, fallback_md, err, _ = await generate_deck(
             "EV battery startup pitch",
             "test-deck",
             ctx,
@@ -358,7 +358,7 @@ async def test_generate_deck_fill_failure_returns_fallback(tmp_workspace):
     with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
         # Outline succeeds; fill fails twice
         mock_llm.side_effect = [outline_raw, "BAD JSON", "STILL BAD"]
-        deck, fallback_md, err = await generate_deck(
+        deck, fallback_md, err, _ = await generate_deck(
             "EV battery startup pitch",
             "test-deck",
             ctx,
@@ -381,7 +381,7 @@ async def test_generate_deck_outline_failure_returns_fallback(tmp_workspace):
 
     with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
         mock_llm.side_effect = ["BAD", "STILL BAD"]
-        deck, fallback_md, err = await generate_deck(
+        deck, fallback_md, err, _ = await generate_deck(
             "test goal", "test-deck", ctx, mock_backend
         )
 
@@ -404,7 +404,7 @@ async def test_generate_deck_image_backend_called_for_image_prompts(tmp_workspac
 
     with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
         mock_llm.side_effect = [outline_raw, full_raw]
-        deck, _, _ = await generate_deck(
+        deck, _, _, _ = await generate_deck(
             "EV battery startup pitch", "test-deck", ctx, mock_backend
         )
 
@@ -449,6 +449,69 @@ async def test_slides_tool_c2_path_on_goal(tmp_workspace):
     assert "ev-pitch.html" in outcome.artifacts
     assert "c3-brand" in outcome.structured.get("renderer", "")
     assert (tmp_workspace / "ev-pitch.html").exists()
+
+
+@pytest.mark.asyncio
+async def test_c2_persists_authored_json_roundtrip(tmp_workspace):
+    """A2.0: a C2 slides_generate writes a valid {base}.authored.json that
+    round-trips AuthoredDeck.model_validate, and structured carries editable_source."""
+    tool = SlidesTool()
+    sbx = _jailed_sandbox(tmp_workspace)
+    ctx = _ctx(sbx)
+
+    outline_raw = json.dumps(_SAMPLE_OUTLINE_JSON)
+    full_raw = json.dumps(_SAMPLE_DECK_JSON)
+
+    mock_backend = MagicMock()
+    mock_backend.generate.return_value = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+
+    with (
+        patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm,
+        patch("disco.tools.builtin.slides.select_image_backend", return_value=mock_backend),
+    ):
+        mock_llm.side_effect = [outline_raw, full_raw]
+        outcome = await tool.run(
+            SlidesGenerateArgs(goal="EV battery startup pitch", filename="ev-deck", format="html"),
+            ctx,
+        )
+
+    assert outcome.success, f"Tool failed: {outcome.error}"
+    # The sidecar must exist and round-trip the schema.
+    sidecar = tmp_workspace / "ev-deck.authored.json"
+    assert sidecar.exists(), "authored.json sidecar was not written"
+    deck = AuthoredDeck.model_validate(json.loads(sidecar.read_text()))
+    assert deck.title == "EV Battery Startup Pitch"
+    assert len(deck.slides) == 5
+    # structured must advertise the editable source for the editor.
+    assert outcome.structured.get("editable_source") == "ev-deck.authored.json"
+
+
+@pytest.mark.asyncio
+async def test_c2_pptx_carries_editable_source(tmp_workspace):
+    """A2.0: the PPTX C2 path also carries editable_source + writes the sidecar."""
+    tool = SlidesTool()
+    sbx = _jailed_sandbox(tmp_workspace)
+    ctx = _ctx(sbx)
+
+    outline_raw = json.dumps(_SAMPLE_OUTLINE_JSON)
+    full_raw = json.dumps(_SAMPLE_DECK_JSON)
+
+    mock_backend = MagicMock()
+    mock_backend.generate.return_value = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+
+    with (
+        patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm,
+        patch("disco.tools.builtin.slides.select_image_backend", return_value=mock_backend),
+    ):
+        mock_llm.side_effect = [outline_raw, full_raw]
+        outcome = await tool.run(
+            SlidesGenerateArgs(goal="EV battery startup pitch", filename="ev-deck-px", format="pptx"),
+            ctx,
+        )
+
+    assert outcome.success, f"Tool failed: {outcome.error}"
+    assert (tmp_workspace / "ev-deck-px.authored.json").exists()
+    assert outcome.structured.get("editable_source") == "ev-deck-px.authored.json"
 
 
 @pytest.mark.asyncio
@@ -598,3 +661,31 @@ async def test_capable_model_gets_capable_prompt(tmp_workspace):
     system_msgs = [m for m in first_call_messages if m.get("role") == "system"]
     assert system_msgs
     assert "AuthoredDeck schema" in system_msgs[0]["content"]  # capable prompt
+
+
+@pytest.mark.asyncio
+async def test_render_c1_deck_gates_editable_source_on_real_sidecar(tmp_workspace):
+    """#4 false-affordance fix: `_render_c1_deck` advertises `editable_source` ONLY
+    when the AuthoredDeck sidecar actually exists on disk. generate_deck writes it
+    best-effort; a swallowed write failure must NOT surface an "Edit Slides" tab that
+    404s on load. Proven BOTH directions."""
+    from disco.tools.builtin._deck_schema import lower_deck
+
+    sbx = _jailed_sandbox(tmp_workspace)
+    ctx = _ctx(sbx)
+    deck = lower_deck(AuthoredDeck.model_validate(_SAMPLE_DECK_JSON))
+    tool = SlidesTool()
+    args = SlidesGenerateArgs(filename="pitch", goal="x", format="html")
+
+    # No fresh sidecar this run (write failed / Marp deck) → editor NOT advertised,
+    # even if a stale pitch.authored.json is lying around on disk.
+    await sbx.write_file("pitch.authored.json", b'{"stale": true}')
+    outcome = await tool._render_c1_deck(deck, args, ctx, "html", editable_source=None)
+    assert outcome.success
+    assert "editable_source" not in (outcome.structured or {})
+
+    # A fresh sidecar written THIS run (generate_deck returned its path) → advertised.
+    outcome2 = await tool._render_c1_deck(
+        deck, args, ctx, "html", editable_source="pitch.authored.json"
+    )
+    assert (outcome2.structured or {}).get("editable_source") == "pitch.authored.json"

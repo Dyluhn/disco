@@ -382,7 +382,7 @@ class SlidesTool:
         assert args.goal is not None  # caller-checked
         backend = select_image_backend()
 
-        c1_deck, fallback_md, err = await generate_deck(
+        c1_deck, fallback_md, err, authored_sidecar = await generate_deck(
             args.goal,
             args.filename,
             ctx,
@@ -391,8 +391,11 @@ class SlidesTool:
         )
 
         if c1_deck is not None:
-            # C2 succeeded — render via C3
-            return await self._render_c1_deck(c1_deck, args, ctx, fmt)
+            # C2 succeeded — render via C3. authored_sidecar is the fresh editable
+            # source (or None if the sidecar write failed) → gates the editor.
+            return await self._render_c1_deck(
+                c1_deck, args, ctx, fmt, editable_source=authored_sidecar
+            )
 
         # C2 failed → fall back to Marp/html fallback with the generated markdown
         if fallback_md:
@@ -422,15 +425,31 @@ class SlidesTool:
         )
 
     async def _render_c1_deck(
-        self, deck, args: SlidesGenerateArgs, ctx: ToolContext, fmt: str
+        self,
+        deck,
+        args: SlidesGenerateArgs,
+        ctx: ToolContext,
+        fmt: str,
+        *,
+        editable_source: str | None = None,
     ) -> ToolOutcome:
-        """Render a C1 Deck to the sandbox and return a ToolOutcome."""
+        """Render a C1 Deck to the sandbox and return a ToolOutcome.
+
+        ``editable_source`` is the ``{name}.authored.json`` path IFF this generation
+        freshly wrote it (from generate_deck). It gates the in-app editor: a swallowed
+        sidecar-write failure → None → no "Edit Slides" affordance, and never an
+        affordance pointing at a stale leftover sidecar (no false affordance)."""
         from disco.tools.builtin._pptx_render import convert_to_pdf, render_html, render_pptx
 
         if ctx.sandbox is None:
             return ToolOutcome(success=False, content="No sandbox available to write the slide deck.")
         sbx = ctx.sandbox
         out_filename = f"{args.filename}.{fmt}"
+
+        # A2: advertise the in-app editor ONLY when THIS run wrote a fresh sidecar.
+        editable: dict[str, str] = (
+            {"editable_source": editable_source} if editable_source else {}
+        )
 
         if fmt == "html":
             html_str = render_html(deck)
@@ -449,6 +468,10 @@ class SlidesTool:
                     "format": "html",
                     "slide_count": len(deck.slides),
                     "renderer": "c3-brand",
+                    # A2.0/A2.2: editable_source (the AuthoredDeck sidecar) is present
+                    # ONLY when the sidecar write actually succeeded — its presence is
+                    # what gates the in-app deck editor tab.
+                    **editable,
                     "slides": [{"type": s.type, "layout": s.layout} for s in deck.slides],
                 },
             )
@@ -489,6 +512,8 @@ class SlidesTool:
                     "format": "pptx",
                     "slide_count": len(deck.slides),
                     "renderer": "pptx-native",
+                    # A2.0/A2.2: present only when the sidecar write actually succeeded.
+                    **editable,
                     "slides": [{"type": s.type, "layout": s.layout} for s in deck.slides],
                 },
             )
@@ -519,6 +544,9 @@ class SlidesTool:
                     "format": "pdf",
                     "slide_count": len(deck.slides),
                     "renderer": "libreoffice",
+                    # A2: a fresh sidecar makes even a pdf-format deck editable (the
+                    # editor re-renders html/pptx; the pdf is flagged stale on save).
+                    **editable,
                 },
             )
 

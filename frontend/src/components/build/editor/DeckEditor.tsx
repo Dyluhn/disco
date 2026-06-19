@@ -44,11 +44,18 @@ interface DeckEditorProps {
    * injection — the envelope carries `element_id` and `slide_id`).
    */
   onElementSelected?: (element: LoweredElement) => void;
+  /**
+   * A2: disable the drag affordance entirely (text-edit-only). The AuthoredDeck
+   * schema has no element geometry, so a drag would emit a patch that always
+   * rejects — rather than silently drop it (a false affordance), the drag handles
+   * are removed and only double-click text editing remains.
+   */
+  disableDrag?: boolean;
 }
 
 // ─── DeckEditor ──────────────────────────────────────────────────────────────
 
-export function DeckEditor({ deck, onPatch, onElementSelected }: DeckEditorProps) {
+export function DeckEditor({ deck, onPatch, onElementSelected, disableDrag = false }: DeckEditorProps) {
   const [activeSlideIdx, setActiveSlideIdx] = useState(0);
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
 
@@ -167,6 +174,7 @@ export function DeckEditor({ deck, onPatch, onElementSelected }: DeckEditorProps
               selectedElementId={selectedElementId}
               onSelectElement={handleSelectElement}
               onPatch={onPatch}
+              disableDrag={disableDrag}
             />
           </div>
         ) : (
@@ -258,7 +266,7 @@ export function DeckEditor({ deck, onPatch, onElementSelected }: DeckEditorProps
                   (e) => e.element_id === selectedElementId,
                 );
                 return el
-                  ? `${el.kind} — double-click to edit, drag to move`
+                  ? `${el.kind} — double-click to edit${disableDrag ? "" : ", drag to move"}`
                   : null;
               })()}
             </span>

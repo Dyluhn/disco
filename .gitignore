@@ -71,3 +71,5 @@ frontend/_*.mjs
 # harness strays — never commit
 /node_modules/
 /workorders/
+frontend/_a2harness*
+frontend/_a2-deck.json

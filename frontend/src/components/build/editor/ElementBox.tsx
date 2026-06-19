@@ -38,6 +38,13 @@ interface ElementBoxProps {
   onSelect: (elementId: string) => void;
   /** Called with a JSON Patch array when the element is mutated (drag/edit). */
   onPatch: (patch: JsonPatchOp[]) => void;
+  /**
+   * A2: when true, the drag affordance is removed entirely — no drag handlers, the
+   * cursor never signals "move". Double-click text editing still works. Used by the
+   * in-app deck editor because the AuthoredDeck schema has no element geometry (a
+   * drag patch would always reject); disabling the affordance avoids a false one.
+   */
+  disableDrag?: boolean;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -55,6 +62,7 @@ export function ElementBox({
   canvasHeight,
   onSelect,
   onPatch,
+  disableDrag = false,
 }: ElementBoxProps) {
   const { element_id, slide_id, kind, content, geometry, font_size_vw, font_weight, font_style, json_pointer } = element;
   const editable = isTextEditable(kind);
@@ -162,6 +170,16 @@ export function ElementBox({
     [editing, geometry, canvasWidth, canvasHeight, element_id, json_pointer, onSelect, onPatch],
   );
 
+  // A2: drag disabled → a plain click selects (no drag state machine, no move cursor).
+  const handleSelectClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (editing) return;
+      e.stopPropagation();
+      onSelect(element_id);
+    },
+    [editing, element_id, onSelect],
+  );
+
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
       if (!editable) return;
@@ -222,7 +240,7 @@ export function ElementBox({
         data-element-id={element_id}
         data-slide-id={slide_id}
         style={{ ...boxStyle, ...borderStyle, cursor: "pointer" }}
-        onMouseDown={handleMouseDown}
+        onMouseDown={disableDrag ? handleSelectClick : handleMouseDown}
         title={kind === "image_prompt" ? `Image: ${content}` : content}
       >
         <span
@@ -247,7 +265,7 @@ export function ElementBox({
       data-element-id={element_id}
       data-slide-id={slide_id}
       style={{ ...boxStyle, ...borderStyle }}
-      onMouseDown={handleMouseDown}
+      onMouseDown={disableDrag ? handleSelectClick : handleMouseDown}
       onDoubleClick={handleDoubleClick}
     >
       {editing ? (
