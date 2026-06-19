@@ -23,6 +23,8 @@ htmlcov
 *.db-shm
 *.db-wal
 disco-config.json
+disco-config.json.*
+*.bak-*
 secrets.json
 *secret*
 .env
