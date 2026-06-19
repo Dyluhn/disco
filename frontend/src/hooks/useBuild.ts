@@ -15,7 +15,14 @@ import { useBuildStream, type BuildSession } from "./useBuildStream";
  * (the /build/:cid or /agent/:cid route), skip the create call and connect to the
  * existing conversation — the WebSocket replays history-then-live, so prior events
  * restore (the stored surface is authoritative; resume never re-sets it). */
-export function useBuild(resumeCid?: string | null, surface: "build" | "agent" = "build") {
+export function useBuild(
+  resumeCid?: string | null,
+  surface: "build" | "agent" = "build",
+  /** A5: a seeded handoff. When the /build/:cid route is opened with a seedTask
+   *  (e.g. "build a deck from this report"), KICK it once instead of a plain resume.
+   *  The conversation was already created (autonomous) by the handoff caller. */
+  seedTask?: string | null,
+) {
   const [session, setSession] = useState<BuildSession | null>(null);
   const [modelId, setModelId] = useState<string | null>(null); // null → server default
   // Create-time choice: run this build headless (no questions, auto-approve plan).
@@ -47,9 +54,17 @@ export function useBuild(resumeCid?: string | null, surface: "build" | "agent" =
   // task label is informational on resume; the loop already has its history.
   useEffect(() => {
     if (resumeCid && (session === null || session.cid !== resumeCid)) {
-      setSession({ cid: resumeCid, task: "(resumed)" });
+      // A5: a seeded handoff (seedTask) KICKS the loop once with the report markdown;
+      // a plain resume just subscribes/replays (view ≠ start). The session guard
+      // (cid !== resumeCid) prevents a re-kick on re-render; a later refresh loses the
+      // router state → plain resume (the build already ran), never a double-seed.
+      setSession(
+        seedTask
+          ? { cid: resumeCid, task: seedTask, kick: true }
+          : { cid: resumeCid, task: "(resumed)" },
+      );
     }
-  }, [resumeCid, session]);
+  }, [resumeCid, session, seedTask]);
 
   const create = useMutation({
     mutationFn: (opts: { modelOverride: string | null; autonomous: boolean }) =>

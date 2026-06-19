@@ -1,5 +1,14 @@
+import { useEffect, useRef } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Navigate, Route, BrowserRouter as Router, Routes, useParams } from "react-router-dom";
+import {
+  Navigate,
+  Route,
+  BrowserRouter as Router,
+  Routes,
+  useLocation,
+  useNavigate,
+  useParams,
+} from "react-router-dom";
 import { BuildSurface } from "@/components/BuildSurface";
 import { AgentSurface } from "@/components/AgentSurface";
 import { ResearchSurface } from "@/components/ResearchSurface";
@@ -33,7 +42,27 @@ function MainSurface() {
  * pinned to a specific conversation id (the project surface's reopen path). */
 function ResumeProject() {
   const { cid } = useParams<{ cid: string }>();
-  return <BuildSurface resumeCid={cid ?? null} />;
+  const location = useLocation();
+  const navigate = useNavigate();
+  // A5: a "Build a deck from this report" handoff navigates here with the serialized
+  // report in router state — BuildSurface seeds+kicks it ONCE. A plain resume (no
+  // state) just reopens the existing build (view ≠ start).
+  //
+  // React Router persists navigation state in window.history.state and RESTORES it on
+  // reload, so we capture the seed on first render (ref) and then CLEAR the history
+  // state — otherwise refreshing /build/:cid would re-kick the same build (duplicate
+  // run). After the clear, a reload sees no state → plain resume.
+  const seedRef = useRef<string | null>(
+    (location.state as { seedTask?: string } | null)?.seedTask ?? null,
+  );
+  useEffect(() => {
+    if ((location.state as { seedTask?: string } | null)?.seedTask) {
+      navigate(location.pathname, { replace: true, state: null });
+    }
+    // run once on mount — the seed is already captured in seedRef
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return <BuildSurface resumeCid={cid ?? null} seedTask={seedRef.current} />;
 }
 
 /** Resume an existing Agent task from /agent/:cid — the same machinery as

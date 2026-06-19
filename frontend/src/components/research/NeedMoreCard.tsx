@@ -15,6 +15,7 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 import { useCallback, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   ArrowDown,
   ChevronDown,
@@ -27,6 +28,7 @@ import {
   Loader2,
   MessageCircleQuestion,
   Mic,
+  Presentation,
   Radio,
   X,
 } from "lucide-react";
@@ -34,6 +36,8 @@ import { cn } from "@/lib/cn";
 // B1/B4: MD and PDF/DOCX non-FSA paths now use inline fetch+blob-URL
 // so we no longer call exportReport / exportReportAsMarkdown from deepResearch.ts.
 import { agentHttpBase } from "@/api/client";
+import { createBuildConversation } from "@/api/agent";
+import { serializeReportToMarkdown } from "@/api/deepResearch";
 import { useExportCapabilities } from "@/hooks/useExportCapabilities";
 import type { MessageEvent, ReportEvent } from "@/types/agent";
 import { ReportFollowUp } from "./ReportFollowUp";
@@ -719,8 +723,30 @@ export function NeedMoreCard({
   const [audioModeOpen, setAudioModeOpen] = useState(false);
 
   const hasFollowUps = followUps.length > 0;
+  const navigate = useNavigate();
+  const [building, setBuilding] = useState(false);
 
   const toggleFollowUp = useCallback(() => setFollowUpOpen((v) => !v), []);
+
+  // A5: hand the finished report off to an AUTONOMOUS build that turns it into a slide
+  // deck. We create the build conversation (autonomous=true → the deck plan auto-
+  // approves for a frictionless "just build it"; per-action risk gates still apply),
+  // then navigate to it with the serialized report as the seed task — BuildSurface
+  // kicks it once. On failure we stay on the card so the user can retry (no dead end).
+  const handleBuildDeck = useCallback(async () => {
+    if (building) return;
+    setBuilding(true);
+    try {
+      const seedTask =
+        "Create a polished slide deck that presents the key findings of this research " +
+        "report. Use the slides_generate tool to produce the deck.\n\n" +
+        serializeReportToMarkdown(report);
+      const newCid = await createBuildConversation(null, "build", true);
+      navigate(`/build/${newCid}`, { state: { seedTask } });
+    } catch {
+      setBuilding(false); // surface stays; the button re-enables for a retry
+    }
+  }, [building, report, navigate]);
 
   // Export button: show include-modal first if follow-ups exist.
   const handleExportClick = useCallback(() => {
@@ -798,6 +824,21 @@ export function NeedMoreCard({
         >
           <Headphones className="size-3.5" aria-hidden />
           Audio Overview
+        </button>
+
+        {/* 4. Build a deck — autonomous handoff: turn this report into slides */}
+        <button
+          type="button"
+          onClick={handleBuildDeck}
+          disabled={building}
+          className={CTRL_BTN}
+        >
+          {building ? (
+            <Loader2 className="size-3.5 animate-spin" aria-hidden />
+          ) : (
+            <Presentation className="size-3.5" aria-hidden />
+          )}
+          {building ? "Starting…" : "Build a deck"}
         </button>
         <AudioSection
           cid={cid}

@@ -13,6 +13,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { NeedMoreCard } from "./NeedMoreCard";
 import type { ReportEvent } from "@/types/agent";
@@ -52,6 +53,18 @@ const _fetchMock = vi.fn().mockResolvedValue({
 });
 vi.stubGlobal("fetch", _fetchMock);
 
+// A5: spy on navigation + the build-conversation create for the "Build a deck" handoff.
+const _navMock = vi.hoisted(() => vi.fn());
+vi.mock("react-router-dom", async (orig) => ({
+  ...(await orig<typeof import("react-router-dom")>()),
+  useNavigate: () => _navMock,
+}));
+const _createBuild = vi.hoisted(() => vi.fn().mockResolvedValue("conv_new_deck"));
+vi.mock("@/api/agent", async (orig) => ({
+  ...(await orig<typeof import("@/api/agent")>()),
+  createBuildConversation: _createBuild,
+}));
+
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
 const STUB_REPORT: ReportEvent = {
@@ -90,13 +103,15 @@ function renderCard(overrides?: Partial<React.ComponentProps<typeof NeedMoreCard
   const onFollowUp = vi.fn();
   const result = render(
     <QueryClientProvider client={qc}>
-      <NeedMoreCard
-        report={STUB_REPORT}
-        cid={STUB_CID}
-        onFollowUp={onFollowUp}
-        followUpBusy={false}
-        {...overrides}
-      />
+      <MemoryRouter>
+        <NeedMoreCard
+          report={STUB_REPORT}
+          cid={STUB_CID}
+          onFollowUp={onFollowUp}
+          followUpBusy={false}
+          {...overrides}
+        />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
   return { ...result, onFollowUp };
@@ -122,6 +137,23 @@ describe("NeedMoreCard", () => {
   it("renders the 'Need More?' heading", () => {
     renderCard();
     expect(screen.getByRole("heading", { name: /Need More/i })).toBeInTheDocument();
+  });
+
+  // A5: the "Build a deck" handoff creates an AUTONOMOUS build conversation and
+  // navigates to it with the serialized report as the seed task.
+  it("A5: 'Build a deck' starts an autonomous build seeded with the report", async () => {
+    const user = userEvent.setup();
+    renderCard();
+
+    await user.click(screen.getByRole("button", { name: /Build a deck/i }));
+
+    await waitFor(() => expect(_createBuild).toHaveBeenCalledWith(null, "build", true));
+    await waitFor(() => expect(_navMock).toHaveBeenCalled());
+    const [path, opts] = _navMock.mock.calls[0] as [string, { state: { seedTask: string } }];
+    expect(path).toBe("/build/conv_new_deck");
+    expect(opts.state.seedTask).toMatch(/slide deck/i);
+    // The serialized report rode along in the seed (the mocked serializer output).
+    expect(opts.state.seedTask).toContain("# Report");
   });
 
   // (b) Ask-Follow-Up toggles the input open/closed repeatedly
