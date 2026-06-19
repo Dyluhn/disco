@@ -701,11 +701,20 @@ class ImageGenTool:
         # both bloat the model's context AND risk any downstream
         # text-mode transport mangling the binary.
         magic_hex = image_bytes[:8].hex()
+        # Report the ACTUAL produced dimensions, not the requested ones: some backends
+        # can't honor arbitrary sizes (the OpenAI tier snaps to 1024x1024), so reporting
+        # args.width/height would be false metadata and silently swallow the aspect ratio.
+        from PIL import Image as _PILImage
+
+        try:
+            actual_w, actual_h = _PILImage.open(io.BytesIO(image_bytes)).size
+        except Exception:  # noqa: BLE001 — fall back to requested dims if decode fails
+            actual_w, actual_h = args.width, args.height
         return ToolOutcome(
             success=True,
             content=(
                 f"Image written: {len(image_bytes)} bytes to {out_path} "
-                f"({args.width}x{args.height} {fmt.upper()}, "
+                f"({actual_w}x{actual_h} {fmt.upper()}, "
                 f"seed={seed}, backend={backend.name})"
             ),
             artifacts=[out_path],
@@ -713,8 +722,8 @@ class ImageGenTool:
                 "path": out_path,
                 "filename_base": safe_base,
                 "format": fmt,
-                "width": args.width,
-                "height": args.height,
+                "width": actual_w,
+                "height": actual_h,
                 "seed": seed,
                 "prompt": args.prompt,
                 "backend": backend.name,
