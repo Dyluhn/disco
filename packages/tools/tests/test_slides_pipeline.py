@@ -23,8 +23,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-from disco.tools.builtin._deck_schema import AuthoredDeck, AuthoredSlide, lower_deck
+from disco.tools.anatomy import ToolContext
+from disco.tools.builtin._deck_schema import AuthoredDeck
 from disco.tools.builtin._slides_pipeline import (
     _CAPABLE_SYSTEM,
     _WEAK_SYSTEM,
@@ -35,11 +35,9 @@ from disco.tools.builtin._slides_pipeline import (
     generate_deck,
 )
 from disco.tools.builtin.slides import SlidesGenerateArgs, SlidesTool
-from disco.tools.anatomy import ToolContext
-from disco.tools.sandbox.process import ProcessSandboxInstance
 from disco.tools.sandbox.base import SandboxSpec
+from disco.tools.sandbox.process import ProcessSandboxInstance
 from disco.tools.secrets import CapabilityBroker
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

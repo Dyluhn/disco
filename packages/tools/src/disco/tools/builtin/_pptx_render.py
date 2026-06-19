@@ -31,7 +31,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from disco.core.brand import resolve_theme
 from disco.core.brand.tokens import Theme
 
 if TYPE_CHECKING:
@@ -68,8 +67,8 @@ class DeckSlide:
     layout: LayoutHint = "bullets"
     image_url: str | None = None
     notes: str | None = None
-    chart: "ChartSpec | None" = None   # C8: chart data → routes to c8 chart layout
-    table: "TableSpec | None" = None   # C8: table data → routes to c8 table layout
+    chart: ChartSpec | None = None   # C8: chart data → routes to c8 chart layout
+    table: TableSpec | None = None   # C8: table data → routes to c8 table layout
 
 
 @dataclass
@@ -200,7 +199,6 @@ def _set_run_style(
 def _add_accent_bar(slide, left: int, top: int, w: int, hex_color: str) -> None:
     """Add a thin horizontal accent rule (0.1 in tall)."""
     from pptx.util import Emu
-    from pptx.enum.shapes import MSO_SHAPE_TYPE
 
     # Use add_shape with RECTANGLE (auto-shape type 1)
     bar = slide.shapes.add_shape(1, Emu(left), Emu(top), Emu(w), Emu(91_440))
@@ -225,7 +223,6 @@ def _layout_title_slide(prs_slide, slide: DeckSlide, theme: Theme) -> None:  # t
     All elements absolutely positioned in EMU on the 16:9 canvas.
     """
     from pptx.enum.text import PP_ALIGN
-    from pptx.util import Emu, Pt
 
     _set_slide_bg(prs_slide, theme.bg)
 
@@ -285,7 +282,6 @@ def _layout_bullets_slide(prs_slide, slide: DeckSlide, theme: Theme) -> None:  #
       Bullets (Newsreader, 20 pt) — below bar, indented
     """
     from pptx.enum.text import PP_ALIGN
-    from pptx.util import Emu, Pt
 
     _set_slide_bg(prs_slide, theme.bg)
 
@@ -343,7 +339,6 @@ def _layout_section_slide(prs_slide, slide: DeckSlide, theme: Theme) -> None:  #
     Renders with surface_1 background to visually separate sections.
     """
     from pptx.enum.text import PP_ALIGN
-    from pptx.util import Emu, Pt
 
     _set_slide_bg(prs_slide, theme.surface_1)
 
@@ -411,7 +406,7 @@ def _layout_image_right_slide(prs_slide, slide: DeckSlide, theme: Theme) -> None
     placeholder box so the layout is correct and C7 can fill it in later.
     """
     from pptx.enum.text import PP_ALIGN
-    from pptx.util import Emu, Pt
+    from pptx.util import Emu
 
     _set_slide_bg(prs_slide, theme.bg)
 
@@ -502,7 +497,6 @@ _MINIMAL_LAYOUT_FNS = {
 
 def _render_element(prs_slide, el: Element, theme: Theme) -> None:  # type: ignore[type-arg]
     """Render one C1 Element to a python-pptx slide shape."""
-    from pptx.util import Emu
 
     if el.kind == "text":
         _render_text_element(prs_slide, el)
@@ -518,7 +512,6 @@ def _render_element(prs_slide, el: Element, theme: Theme) -> None:  # type: igno
 def _render_text_element(prs_slide, el: Element) -> None:  # type: ignore[type-arg]
     """Render a text Element as an absolutely-positioned textbox."""
     from pptx.enum.text import PP_ALIGN
-    from pptx.util import Pt
 
     _ALIGN_MAP = {"LEFT": PP_ALIGN.LEFT, "CENTER": PP_ALIGN.CENTER, "RIGHT": PP_ALIGN.RIGHT}
     tf = _add_textbox(
@@ -593,7 +586,7 @@ def _render_rect_element(prs_slide, el: Element) -> None:  # type: ignore[type-a
 # render_pptx — accepts Deck (C1) or MinimalDeck (compat)
 # ---------------------------------------------------------------------------
 
-def render_pptx(deck: "Deck | MinimalDeck") -> bytes:
+def render_pptx(deck: Deck | MinimalDeck) -> bytes:
     """Render *deck* to native editable .pptx bytes (python-pptx, real text boxes).
 
     Accepts either a C1 ``Deck`` (from ``_deck_schema.lower_deck``) or a
@@ -601,8 +594,6 @@ def render_pptx(deck: "Deck | MinimalDeck") -> bytes:
     ``sandbox.write_file(name, bytes)``.  NEVER call ``.encode()`` on the
     result — it is already binary.
     """
-    from pptx import Presentation
-    from pptx.util import Emu
 
     if isinstance(deck, MinimalDeck):
         # Convert via the C1 path
@@ -652,7 +643,7 @@ def _render_pptx_c1(deck: Deck) -> bytes:
 # render_html — 16:9 brand HTML (accepts Deck or MinimalDeck)
 # ---------------------------------------------------------------------------
 
-def render_html(deck: "Deck | MinimalDeck") -> str:  # noqa: C901
+def render_html(deck: Deck | MinimalDeck) -> str:  # noqa: C901
     """Render *deck* to a self-contained 16:9 brand HTML string.
 
     Accepts a C1 ``Deck`` or a ``MinimalDeck`` (backward-compat shim).
@@ -809,7 +800,7 @@ def strip_element_ids(html_str: str) -> str:
     SelectionOverlay can read them; callers needing a clean downloadable variant
     must call this explicitly.
     """
-    def _clean_tag(m: "re.Match[str]") -> str:
+    def _clean_tag(m: re.Match[str]) -> str:
         tag = _STRIP_ELEMENT_ID_RE.sub("", m.group(0))
         return _STRIP_SLIDE_ID_RE.sub("", tag)
 
@@ -1000,10 +991,10 @@ def _html_for_slide(slide: DeckSlide, theme: Theme) -> str:
             )
         else:
             img_html = (
-                f'<div style="width:46%;height:80%;background:var(--surface-2);'
-                f'border:1px solid var(--hairline);display:flex;align-items:center;'
-                f'justify-content:center;color:var(--text-faint);'
-                f'font-family:var(--ui);font-size:1.2vw;">[image]</div>'
+                '<div style="width:46%;height:80%;background:var(--surface-2);'
+                'border:1px solid var(--hairline);display:flex;align-items:center;'
+                'justify-content:center;color:var(--text-faint);'
+                'font-family:var(--ui);font-size:1.2vw;">[image]</div>'
             )
         return (
             f'<div style="display:flex;gap:4%;width:100%;height:100%;'
@@ -1036,7 +1027,7 @@ def _bullets_html(bullets: list[str]) -> str:
 # convert_to_pdf — LibreOffice headless (sandbox-jailed)
 # ---------------------------------------------------------------------------
 
-async def convert_to_pdf(ctx: "ToolContext", pptx_name: str) -> tuple[bool, str]:
+async def convert_to_pdf(ctx: ToolContext, pptx_name: str) -> tuple[bool, str]:
     """Convert *pptx_name* (workspace-relative) to PDF via ``soffice`` inside the sandbox.
 
     Returns ``(ok, error_message)``.  When ``soffice`` is absent the return is a
@@ -1089,7 +1080,7 @@ async def convert_to_pdf(ctx: "ToolContext", pptx_name: str) -> tuple[bool, str]
 # render_deck — convenience orchestrator
 # ---------------------------------------------------------------------------
 
-def render_deck(deck: "Deck | MinimalDeck") -> dict[str, bytes | str]:
+def render_deck(deck: Deck | MinimalDeck) -> dict[str, bytes | str]:
     """Render *deck* to pptx_bytes + html_str.
 
     Accepts a C1 ``Deck`` or ``MinimalDeck`` (backward-compat shim).

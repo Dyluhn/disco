@@ -3,7 +3,6 @@ security-critical tests. The headline is `test_no_secret_in_the_box`."""
 
 from __future__ import annotations
 
-from tool_fakes import call
 from disco.tools import (
     CapabilityBroker,
     DefaultToolExecutor,
@@ -14,6 +13,7 @@ from disco.tools import (
     build_default_registry,
     research_scope,
 )
+from tool_fakes import call
 
 SENTINEL = "SUPER-SECRET-SENTINEL-9F3A2"
 

@@ -30,11 +30,10 @@ from disco.tools.builtin.files import (
     reset_read_tracker,
 )
 from disco.tools.registry import (
-    AGENT_TOOLS,
     _WEAK_TIER_ADVERTISED,
+    AGENT_TOOLS,
     agent_scope,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fakes

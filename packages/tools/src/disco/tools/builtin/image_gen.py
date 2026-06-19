@@ -73,10 +73,9 @@ import os
 from typing import Protocol
 
 import httpx
-from pydantic import BaseModel, Field
-
 from disco.core.llm.config_store import ConfigStore
 from disco.core.llm.secrets import SecretStore
+from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 

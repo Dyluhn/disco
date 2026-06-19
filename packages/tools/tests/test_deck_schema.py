@@ -15,35 +15,21 @@ Proves:
 
 from __future__ import annotations
 
-import pytest
-
 from disco.tools.builtin._deck_schema import (
+    _CH,
+    _CW,
+    _SLIDE_H,
+    _SLIDE_W,
     AuthoredDeck,
     AuthoredSlide,
     ChartSpec,
     Deck,
-    Element,
-    Slide,
     TableSpec,
-    _chars_per_line,
     _fit_text,
     _infer_layout,
-    _layout_bullets,
-    _layout_closing,
-    _layout_full_image,
-    _layout_image_right,
-    _layout_section_header,
-    _layout_title,
-    _layout_two_column,
     _parse_theme,
     lower_deck,
-    _SLIDE_W,
-    _SLIDE_H,
-    _CW,
-    _CH,
 )
-from disco.core.brand import resolve_theme
-
 
 # ---------------------------------------------------------------------------
 # Sample fixtures
@@ -255,7 +241,7 @@ def test_continuation_slide_has_cont_type():
 
 def test_fit_text_short_content_no_overflow():
     """4 lines of short bullets fit at max font."""
-    from disco.tools.builtin._deck_schema import _SLIDE_W, _BODY_FONT_MAX, _CW, _CH
+    from disco.tools.builtin._deck_schema import _BODY_FONT_MAX, _CH, _CW
     lines = ["Short bullet one", "Short bullet two", "Short bullet three", "Short bullet four"]
     font, fitted, overflow = _fit_text(lines, box_width=float(_CW), box_height=float(_CH))
     assert overflow == []
@@ -459,9 +445,10 @@ def test_all_elements_in_canvas():
 
 def test_lower_deck_renders_to_valid_pptx():
     """A lowered deck can be rendered to a valid .pptx file by C3."""
-    from pptx import Presentation
     import io
+
     from disco.tools.builtin._pptx_render import render_pptx
+    from pptx import Presentation
 
     authored = _sample_authored_deck()
     deck = lower_deck(authored)
@@ -474,9 +461,10 @@ def test_lower_deck_renders_to_valid_pptx():
 
 def test_lower_deck_renders_title_text_in_pptx():
     """Slide titles appear in the .pptx text frames."""
-    from pptx import Presentation
     import io
+
     from disco.tools.builtin._pptx_render import render_pptx
+    from pptx import Presentation
 
     authored = _sample_authored_deck()
     deck = lower_deck(authored)

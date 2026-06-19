@@ -9,9 +9,8 @@ the sandbox/egress/secrets rules are the hard backstops.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
-
 from disco.core.llm import Requirement
+from pydantic import BaseModel, ConfigDict
 
 from .anatomy import Tool
 

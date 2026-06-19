@@ -20,7 +20,6 @@ from pathlib import Path
 
 import openpyxl
 import pytest
-from tool_fakes import FakeSandboxInstance, call
 from disco.tools.anatomy import ToolContext
 from disco.tools.builtin import build_default_registry
 from disco.tools.builtin.sheets import SheetGenerateArgs, SheetsTool
@@ -29,6 +28,7 @@ from disco.tools.registry import agent_scope
 from disco.tools.sandbox.base import SandboxSpec
 from disco.tools.sandbox.process import ProcessSandboxInstance
 from disco.tools.secrets import CapabilityBroker
+from tool_fakes import FakeSandboxInstance, call
 
 
 @pytest.fixture

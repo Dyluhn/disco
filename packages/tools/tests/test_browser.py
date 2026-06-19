@@ -16,7 +16,6 @@ import json
 from typing import Any
 from unittest.mock import AsyncMock
 
-from tool_fakes import FakeSandboxInstance, call
 from disco.core import (
     ActionEvent,
     EventSource,
@@ -33,6 +32,7 @@ from disco.tools.builtin.browser import _FENCE_CLOSE, _FENCE_OPEN, _quarantine
 from disco.tools.executor import DefaultToolExecutor
 from disco.tools.registry import agent_scope
 from disco.tools.sandbox.base import ExecResult
+from tool_fakes import FakeSandboxInstance, call
 
 # A hostile page: active markup, an embedded injection, a link + a form to a bad host.
 EVIL_HTML = """<html><head><title>Breaking News</title></head><body>

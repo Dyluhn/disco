@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-from tool_fakes import FakeSandboxInstance, call
 from disco.tools import (
     DefaultToolExecutor,
     ProcessSandboxService,
@@ -13,6 +12,7 @@ from disco.tools import (
     ToolScope,
     build_default_registry,
 )
+from tool_fakes import FakeSandboxInstance, call
 
 
 async def test_spec_to_instance_carries_ownership():

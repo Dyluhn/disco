@@ -32,10 +32,10 @@ from disco.tools.builtin import ImageGenTool, build_default_registry
 from disco.tools.builtin.image_gen import (
     _PNG_MAGIC,
     ImageGenArgs,
+    _ComfyUIBackend,
+    _OpenAIImageBackend,
     _PILProceduralBackend,
     _prompt_seed,
-    _OpenAIImageBackend,
-    _ComfyUIBackend,
     select_image_backend,
 )
 from disco.tools.registry import agent_scope, research_scope
@@ -407,7 +407,7 @@ async def _run_with(backend, sbx):
 def test_select_image_backend_returns_procedural_by_default(monkeypatch):
     """When no provider is configured (procedural default), the factory
     returns the keyless PIL procedural backend."""
-    from disco.tools.builtin.image_gen import select_image_backend, _PILProceduralBackend
+    from disco.tools.builtin.image_gen import _PILProceduralBackend
 
     # Mock ConfigStore to return procedural provider
     class _MockConfig:
@@ -428,7 +428,7 @@ def test_select_image_backend_returns_procedural_by_default(monkeypatch):
 def test_select_image_backend_falls_back_to_procedural_when_openai_has_no_key(monkeypatch):
     """When openai provider is configured but no API key is available,
     the factory falls back to procedural."""
-    from disco.tools.builtin.image_gen import select_image_backend, _PILProceduralBackend
+    from disco.tools.builtin.image_gen import _PILProceduralBackend
 
     class _MockConfig:
         image_gen = type('obj', (object,), {
@@ -456,7 +456,7 @@ def test_select_image_backend_falls_back_to_procedural_when_openai_has_no_key(mo
 def test_select_image_backend_falls_back_when_comfyui_has_no_url(monkeypatch):
     """When comfyui provider is configured but no base_url is set,
     the factory falls back to procedural."""
-    from disco.tools.builtin.image_gen import select_image_backend, _PILProceduralBackend
+    from disco.tools.builtin.image_gen import _PILProceduralBackend
 
     class _MockConfig:
         image_gen = type('obj', (object,), {
@@ -478,7 +478,6 @@ def test_select_image_backend_falls_back_when_comfyui_has_no_url(monkeypatch):
 def test_select_image_backend_returns_openai_with_key(monkeypatch):
     """When openai provider is configured with a valid API key,
     the factory returns the OpenAI-compatible backend."""
-    from disco.tools.builtin.image_gen import select_image_backend, _OpenAIImageBackend
 
     class _MockConfig:
         image_gen = type('obj', (object,), {
@@ -507,7 +506,6 @@ def test_select_image_backend_returns_openai_with_key(monkeypatch):
 def test_select_image_backend_returns_comfyui_with_url(monkeypatch):
     """When comfyui provider is configured with a base_url,
     the factory returns the ComfyUI backend."""
-    from disco.tools.builtin.image_gen import select_image_backend, _ComfyUIBackend
 
     class _MockConfig:
         image_gen = type('obj', (object,), {
@@ -531,7 +529,7 @@ def test_select_image_backend_returns_comfyui_with_url(monkeypatch):
 def test_select_image_backend_unknown_provider_falls_back(monkeypatch):
     """When an unknown provider is configured, the factory falls back
     to procedural."""
-    from disco.tools.builtin.image_gen import select_image_backend, _PILProceduralBackend
+    from disco.tools.builtin.image_gen import _PILProceduralBackend
 
     class _MockConfig:
         image_gen = type('obj', (object,), {
@@ -558,7 +556,6 @@ def test_openai_backend_builds_correct_request_shape():
     request with the correct payload shape."""
     import base64
     from unittest.mock import MagicMock, patch
-    from disco.tools.builtin.image_gen import _OpenAIImageBackend
 
     # Create a minimal valid PNG (1x1 transparent)
     png_data = base64.b64encode(b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82')
@@ -609,7 +606,7 @@ def test_openai_backend_builds_correct_request_shape():
 def test_openai_backend_raises_on_api_error():
     """The OpenAI-compatible backend raises on API errors."""
     from unittest.mock import MagicMock, patch
-    import httpx
+
     from disco.tools.builtin.image_gen import _OpenAIImageBackend
 
     # Mock the httpx client to raise an error
@@ -647,7 +644,6 @@ def test_openai_backend_raises_on_api_error():
 def test_comfyui_backend_builds_workflow_and_polls():
     """The ComfyUI backend submits a prompt and polls for completion."""
     from unittest.mock import MagicMock, patch
-    from disco.tools.builtin.image_gen import _ComfyUIBackend
 
     # Track call count for polling
     call_count = [0]

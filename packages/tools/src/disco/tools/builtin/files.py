@@ -144,11 +144,11 @@ def _syntax_errors(path: str, text: str) -> list[str]:
 
 
 async def _gated_write(
-    ctx: "ToolContext",
+    ctx: ToolContext,
     path: str,
     new_bytes: bytes,
     old_text: str | None,
-) -> "ToolOutcome | None":
+) -> ToolOutcome | None:
     """Write new_bytes to path; auto-revert to old_text if new content introduces
     syntax errors that were not already present (W3 diff-filter).
 

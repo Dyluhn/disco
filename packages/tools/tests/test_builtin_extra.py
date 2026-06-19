@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from tool_fakes import FakeSandboxInstance, call
 from disco.tools import (
     CapabilityBroker,
     DefaultToolExecutor,
@@ -14,6 +13,7 @@ from disco.tools import (
     validate_args,
 )
 from disco.tools.builtin import FileReadTool
+from tool_fakes import FakeSandboxInstance, call
 
 
 async def test_file_edit_replaces_and_reports_missing():
