@@ -57,9 +57,12 @@ export function useResearch() {
   const reScope = useCallback(
     (partial: Partial<ReScope>) => {
       const next: ReScope = { query: scope?.query ?? "", ...scope, ...partial };
-      action.mutate(next, { onSuccess: setScope });
+      // D1: thread the same run cid so re-scoped results stay under ONE conversation
+      // — its sheet/slides artifacts remain reachable (the download affordance stays
+      // wired, never a 404).
+      action.mutate({ ...next, conversation_id: preCid ?? null }, { onSuccess: setScope });
     },
-    [action, scope],
+    [action, scope, preCid],
   );
 
   return {
@@ -71,6 +74,11 @@ export function useResearch() {
     /** G1/DR-4: pre-created cid for the empty-state UploadComposer. null when a
      *  run is active (the scope is live) or offline (no server). */
     preCid: scope === null ? preCid : null,
+    /** D1: the run's conversation id, RETAINED through the run (unlike preCid, which
+     *  the empty-state gate hides). Threaded into AnswerDocument so in-block sheet /
+     *  slides downloads (which fetch /conversations/{cid}/artifacts/…) appear ONLY
+     *  when they can actually work. null offline → no false affordance. */
+    runCid: preCid,
     ...stream,
     // Surface a failed submit/re-scope request (was silent: a failed mutation
     // left the user with an un-disabled button and no message). Distinct from the

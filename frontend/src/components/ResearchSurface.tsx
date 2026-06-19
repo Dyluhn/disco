@@ -140,6 +140,7 @@ export function ResearchSurface() {
               partial={r.partial}
               streamingBlockId={r.streamingBlockId}
               answer={r.answer}
+              cid={r.runCid}
             />
           )}
 
