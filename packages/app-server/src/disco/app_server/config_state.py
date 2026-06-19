@@ -37,9 +37,9 @@ from .config.dtos import (
     ModelUpsert,
     OpenRouterKeyStatus,
     ProjectStorageConfigDTO,
+    SandboxConfigDTO,
     SecretsListDTO,
     SecretStatus,
-    SandboxConfigDTO,
     SkillCreate,
     SkillDTO,
     SkillPatch,
@@ -89,7 +89,7 @@ class ConfigState:
         store: ConfigStore | None = None,
         secrets: SecretStore | None = None,
         skills: SkillStore | None = None,
-        db_conn: "_ApprovalConn | None" = None,
+        db_conn: _ApprovalConn | None = None,
     ) -> None:
         if store is not None:
             self._store = store
