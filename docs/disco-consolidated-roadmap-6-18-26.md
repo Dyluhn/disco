@@ -74,6 +74,11 @@ Legend: ✅ done · ◐ partial · ○ open · ⬚ blocked/decision-gated · �
 - **B4 Release-eng residue ◐** — `git tag v0.1.0` + changelog · demo gallery · mobile-
   responsive pass. (Done: self-host/provider-matrix/SECURITY/disco verify/CI.)
 - **B5 Lint debt ○** — ruff F821/B904, eslint → 0 (dishonest-green traps).
+- **B6 Production hygiene ○** — strip everything that shouldn't ship in a production app.
+  Verified in root today: `disco.db`, `run_manual{,2-5}.py`, `test_debug/jupyter/probe/
+  pwd/re.py`, `selected.csv`/`sensor_readings.csv`/`tmp_weather.csv`, `validate.py`,
+  stray `disco-config.json.bak-*`. Plus an audit sweep: no dev/debug endpoints exposed,
+  no secrets/keys in the image, demo fixtures honestly labeled (per north-star §2).
 
 ## §C — Infrastructure / hardware-blocked
 - **C1 noVNC P5 — live jail/security acceptance ⬚** — needs the destroyed VM rebuilt.
@@ -100,8 +105,8 @@ Legend: ✅ done · ◐ partial · ○ open · ⬚ blocked/decision-gated · �
   streaming/provider harnesses ○** (test-debt; unverified scope).
 - **E9 UX micro-polish ◐** — `LiveSignalBar` exists; footer-pin + main-feed auto-scroll +
   Build session-stash persistence + adjustable-plan/visual design-edit not found (likely open).
-- **E10 Root hygiene ○** — **verified open:** `disco.db`, `run_manual{,2-5}.py`, `test_*.py`,
-  `selected.csv`/`sensor_readings.csv`/`tmp_weather.csv`, `validate.py` all in repo root.
+- **E10 → moved to §B6.** Root/production hygiene is a launch-prep concern (per Dylan),
+  not engine polish — it lives in the publish phase now.
 - *Resolved/dropped:* edit-tool demote (line tools deliberately KEPT) · package import cycles
   (lint-imports: 0 cycles) · split-monoliths + arch/import gates (all done).
 
@@ -124,8 +129,10 @@ Legend: ✅ done · ◐ partial · ○ open · ⬚ blocked/decision-gated · �
 3. **Engine polish §E + standing §F** (root hygiene, prompt stability, harnesses, god-fn).
 4. **UI polish** (§D4 screenshots, §E9 micro-polish) + clear **verify-live §D** as the app runs.
 5. **— GATE: Dylan declares the feature/engine/UI loop cleared. —**
-6. **THEN publish-readiness §B** — B1 gauntlet + B2 benchmarks + B5 lint + B4 release-eng +
-   B3 keyless-story → v0.1. Plus §C (noVNC P5) when the VM is rebuilt.
+6. **— Dylan: "ready to push towards v0.1." THEN publish-readiness §B** — B1 single-command
+   `docker compose up` gauntlet + B2 benchmarks + B5 lint + B6 production hygiene (strip
+   dev/exposed files) + B4 release-eng + B3 keyless-story → v0.1. Plus §C (noVNC P5) when
+   the VM is rebuilt.
 
 *SINGLE SOURCE OF TRUTH: **this doc**. The only other file in `docs/` is
 `architecture.generated.md` (auto-generated, required by the `gen_arch_diagram --check`
