@@ -326,13 +326,15 @@ class _OpenAIImageBackend:
 
             return base64.b64decode(b64_data)
 
-        # Fallback: try URL format
+        # Fallback: the API returned a URL instead of inline base64 (e.g. DALL·E 3's
+        # default). Fetch it with a FRESH client — the one above is already closed, and
+        # the image URL is an unauthenticated CDN link (no Authorization needed).
         image_url = data["data"][0].get("url")
         if image_url:
-            # Fetch the image
-            img_response = client.get(image_url)
-            img_response.raise_for_status()
-            return img_response.content
+            with httpx.Client(timeout=60.0) as img_client:
+                img_response = img_client.get(image_url)
+                img_response.raise_for_status()
+                return img_response.content
 
         raise ValueError("OpenAI images API returned no image data")
 
