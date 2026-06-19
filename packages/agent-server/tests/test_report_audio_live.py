@@ -34,10 +34,8 @@ real TTS → real mixer → real file.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import importlib
 import os
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -581,8 +579,8 @@ def test_podcast_vs_single_mode_separate_files_real_kokoro(monkeypatch, tmp_path
     """Podcast and single modes for the same report write distinct cache files
     and both are decodable MP3s.  Ensures there is no mode-collision in the
     content-hash cache key."""
-    from disco.tools.builtin import audio_overview as _ao
     from disco.agent_server import report_audio as _ra
+    from disco.tools.builtin import audio_overview as _ao
 
     report = _make_report(_SMALL_REPORT_DICT)
     out_dir = tmp_path / "rrf_both_modes"

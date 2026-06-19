@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import httpx
 import json as _json
+
+import httpx
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.sandbox._container import NOVNC_PORT, PREVIEW_PORT, USER_PORTS
 from fastapi import APIRouter, Response

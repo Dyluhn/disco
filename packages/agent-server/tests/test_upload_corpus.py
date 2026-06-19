@@ -21,7 +21,6 @@ from disco.agent_server import create_app
 from disco.core import SqliteEventStore
 from fastapi.testclient import TestClient
 
-
 # ── minimal fakes ─────────────────────────────────────────────────────────────
 
 
@@ -176,7 +175,6 @@ async def test_ws_research_passes_conversation_id_to_research_stream() -> None:
     """The /ws/research WS endpoint passes conversation_id from the frame body
     to runtime.research_stream so seed_passages can be loaded."""
     from disco.core import SqliteEventStore
-    from disco.retrieval.local_encoders import EncoderUnavailable
 
     store = SqliteEventStore(":memory:")
     seen_kwargs: dict[str, Any] = {}
@@ -277,9 +275,10 @@ async def test_seed_passages_in_stream_research_answer() -> None:
     can appear in the final answer alongside web passages.
     The OFF-path (empty seeds) is byte-identical — tested via the existing
     streaming tests; here we just verify seeds flow through."""
+    from unittest.mock import AsyncMock, MagicMock
+
     from disco.retrieval.models import Passage
     from disco.retrieval.streaming import stream_research_answer
-    from unittest.mock import AsyncMock, MagicMock
 
     seed = Passage(
         id="up_notes_0",
@@ -359,9 +358,10 @@ async def test_seed_passages_in_stream_research_answer() -> None:
 async def test_dr_run_extra_passages_seeded_into_legs() -> None:
     """DeepResearchRun passes upload_passages as extra_passages to each leg
     so they are in the working set from the start."""
-    from disco.retrieval.models import Passage
-    from disco.retrieval.deep_research.engine import DeepResearchRun
     from unittest.mock import AsyncMock, MagicMock
+
+    from disco.retrieval.deep_research.engine import DeepResearchRun
+    from disco.retrieval.models import Passage
 
     upload_p = Passage(
         id="up_seed_0",

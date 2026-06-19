@@ -5,7 +5,6 @@ is HARDWARE-DEFERRED — VM 201 (the gVisor sandbox host) is destroyed. These
 integration tests require a real sandbox backend; run them manually with a live
 podman/local backend when re-provisioned.
 """
-import pytest
 from disco.tools.sandbox._container import NOVNC_PORT, USER_PORTS
 
 
@@ -27,13 +26,13 @@ def test_novnc_port_value():
 def test_live_url_route_disabled_returns_503():
     """When live_browser.enabled=False in config, GET /browser/live-url → 503."""
     import asyncio
-    import json
     from unittest.mock import MagicMock
+
     import httpx
-    from disco.core.store.sqlite import SqliteEventStore
     from disco.agent_server.app import create_app
-    from disco.core.llm.config import RouterConfig, LiveBrowserSettings
     from disco.core.llm import ModelEntry
+    from disco.core.llm.config import LiveBrowserSettings, RouterConfig
+    from disco.core.store.sqlite import SqliteEventStore
 
     # Build a minimal config with live_browser DISABLED
     entry = ModelEntry(model_id="m", provider="local", context_window=8192)
@@ -64,13 +63,13 @@ def test_live_url_route_disabled_returns_503():
 def test_live_url_route_no_sandbox_returns_503():
     """When enabled but no sandbox running, GET /browser/live-url → 503 with no_sandbox reason."""
     import asyncio
-    import json
     from unittest.mock import MagicMock
+
     import httpx
-    from disco.core.store.sqlite import SqliteEventStore
     from disco.agent_server.app import create_app
-    from disco.core.llm.config import RouterConfig, LiveBrowserSettings
     from disco.core.llm import ModelEntry
+    from disco.core.llm.config import LiveBrowserSettings, RouterConfig
+    from disco.core.store.sqlite import SqliteEventStore
 
     entry = ModelEntry(model_id="m", provider="local", context_window=8192)
     cfg = RouterConfig(

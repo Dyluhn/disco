@@ -9,11 +9,6 @@
 from __future__ import annotations
 
 import pytest
-from disco.core.brand.chart_svg import (
-    palette_from_theme,
-    render_chart_svg,
-    render_chart_table,
-)
 from disco.agent_server.report_export import (
     _build_pdf_html,
     _cover_subtitle_text,
@@ -23,6 +18,11 @@ from disco.agent_server.report_export import (
 )
 from disco.core import EventSource, ReportEvent, ReportSection
 from disco.core.brand import resolve_theme
+from disco.core.brand.chart_svg import (
+    palette_from_theme,
+    render_chart_svg,
+    render_chart_table,
+)
 
 _LIGHT = resolve_theme("disco", "light")
 _PAL = palette_from_theme(_LIGHT)

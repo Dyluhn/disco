@@ -19,7 +19,6 @@ and a local container sandbox (rootless Podman socket + disco-sandbox:base).
 from __future__ import annotations
 
 import asyncio
-import os
 
 from disco.agent_server import ConversationRuntime
 from disco.core import (

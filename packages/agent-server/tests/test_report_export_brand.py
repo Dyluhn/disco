@@ -22,9 +22,7 @@ import pytest
 from disco.agent_server import ConversationRuntime, create_app
 from disco.agent_server.report_export import (
     _build_pdf_html,
-    _markdown_to_html,
     export_report,
-    pdf_available,
     serialize_docx,
     serialize_markdown,
     serialize_pdf,
@@ -37,7 +35,6 @@ from disco.core import (
 )
 from disco.core.brand import resolve_theme
 from fastapi.testclient import TestClient
-
 
 # ---- Fixtures ----------------------------------------------------------------
 

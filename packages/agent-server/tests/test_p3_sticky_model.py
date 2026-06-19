@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import pytest
 from disco.agent_server import ConversationRuntime, create_app
 from disco.core import DEFAULT_OWNER_ID, SqliteEventStore
 from disco.core.llm import ConfigStore, SecretBox, SecretStore

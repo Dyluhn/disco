@@ -14,9 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
-import re
-from unittest.mock import AsyncMock, MagicMock
-
+from unittest.mock import MagicMock
 
 # ── D1: [[pid]] double-bracket citation format ─────────────────────────────────
 
@@ -25,13 +23,12 @@ def test_follow_up_citation_uses_double_bracket():
     """The grounding-block builder (used for follow-up answers) must emit
     [[pid]] (double-bracket) so the renderer produces a citation chip, not raw
     text like '[p0]'."""
-    from disco.agent_server import report_audio as _ra  # noqa: F401 — ensure importable
-
     # The actual citation builder lives in deep_research_service._handle_follow_up.
     # Rather than invoking the full agent loop, we verify the f-string at the
     # exact call site produces double-bracket output by importing the module and
     # checking the string template.
     import disco.agent_server.deep_research_service as drsvc
+    from disco.agent_server import report_audio as _ra  # noqa: F401 — ensure importable
 
     source = drsvc.__file__
     with open(source) as fh:
@@ -225,7 +222,6 @@ def test_ddgs_none_filter_passes_no_timelimit(monkeypatch):
 def test_searxng_month_passes_time_range(monkeypatch):
     """time_filter='month' must include time_range='month' in the SearXNG
     request params (NOT 'day' — spec says avoid 'day')."""
-    import httpx
 
     from disco.retrieval.live import SearxngSearchProvider
 

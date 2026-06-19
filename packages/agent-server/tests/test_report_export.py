@@ -501,13 +501,15 @@ def test_endpoint_md_export_with_follow_up_seqs(
 ) -> None:
     """Export endpoint with follow_up_seqs in the JSON body includes Q&A section."""
     import asyncio
+
     from disco.core import (
         ConversationStatus,
-        EventSource as _ES,
         LLMMessage,
         MessageEvent,
-        ReportEvent as RE,
         StatusEvent,
+    )
+    from disco.core import (
+        EventSource as _ES,
     )
 
     cid = _create_conversation(client_with_runtime)

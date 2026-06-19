@@ -31,7 +31,6 @@ from ._common import (
     _sanitize_name,
 )
 
-
 # C5 — Content-Security-Policy applied when ?inline=true. sandbox allow-scripts
 # sandboxes the document but permits slide-navigation JS; default-src 'none' blocks
 # all loads; style-src/img-src/font-src permit inline CSS + same-origin/data assets;

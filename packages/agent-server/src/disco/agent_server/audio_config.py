@@ -34,10 +34,11 @@ SPEACHES_URL: str = os.environ.get("SPEACHES_URL", _SPEACHES_DEFAULT).rstrip("/"
 
 import json
 
+
 def _resolve_llm_config() -> tuple[str, str, str | None]:
     try:
         config_path = os.environ.get("DISCO_CONFIG") or os.environ.get("PMX_CONFIG") or "disco-config.json"
-        with open(config_path, "r", encoding="utf-8") as f:
+        with open(config_path, encoding="utf-8") as f:
             config = json.load(f)
         key = config.get("assignments", {}).get("rag_answerer") or config.get("default_model")
         model_info = config["models"][key]

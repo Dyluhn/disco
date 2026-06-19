@@ -37,7 +37,6 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 import markdown as _md
-
 from disco.core import ReportEvent
 from disco.core.brand import (
     definition_mark_html,
@@ -47,9 +46,13 @@ from disco.core.brand import (
     theme_css_vars,
     wordmark_html,
 )
+from disco.core.brand.chart_svg import (
+    Palette,
+    palette_from_theme,
+    render_chart_svg,
+    render_chart_table,
+)
 from disco.core.brand.tokens import Theme
-
-from disco.core.brand.chart_svg import Palette, palette_from_theme, render_chart_svg, render_chart_table
 
 logger = logging.getLogger(__name__)
 

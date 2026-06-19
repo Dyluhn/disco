@@ -12,8 +12,8 @@ import pytest
 from disco.agent_server.runtime import _apply_mcp_scope
 from disco.core import SecurityRisk, ToolCall
 from disco.tools import DefaultToolExecutor, agent_scope, build_default_registry
-from disco.tools.registry import _WEAK_TIER_ADVERTISED
 from disco.tools.anatomy import ToolDef
+from disco.tools.registry import _WEAK_TIER_ADVERTISED
 from pydantic import BaseModel
 
 # ---- fakes ------------------------------------------------------------------

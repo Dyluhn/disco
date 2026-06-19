@@ -20,7 +20,6 @@ from disco.core.llm import DefaultLLMRouter, OperatingMode
 from disco.core.loop import RouterAgent
 from disco.tools import AGENT_TOOLS, ARTIFACT_TOOLS
 
-
 # ---------------------------------------------------------------------------
 # ARTIFACT_TOOLS boundary guard (no import of runtime needed)
 # ---------------------------------------------------------------------------
@@ -205,7 +204,7 @@ def test_artifact_mode_invalid_value_422():
     app = create_app(store, runtime=rt)
     client = TestClient(app)
 
-    resp = client.post(
+    client.post(
         "/conversations",
         json={"surface": "agent", "artifact_mode": "yes"},
     )

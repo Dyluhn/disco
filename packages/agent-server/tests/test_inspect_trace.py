@@ -12,7 +12,6 @@ and REST route are all real.
 
 from __future__ import annotations
 
-import pytest
 from disco.agent_server import ConversationRuntime, create_app
 from disco.core import (
     EventSource,

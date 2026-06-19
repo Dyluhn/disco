@@ -24,13 +24,10 @@ from __future__ import annotations
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-import pytest
+from disco.agent_server.routes.preview import make_preview_router
 from disco.core import SqliteEventStore
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
-from disco.agent_server.routes.preview import make_preview_router
-
 
 # ---------------------------------------------------------------------------
 # Fake runtime — tracks wake_for_preview calls; preview_upstream NOT present

@@ -34,10 +34,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-
 from disco.core import ReportEvent
-
-from .audio_config import LLM_API_KEY_ENV, LLM_URL, SILENCE_MS_DEFAULT
 
 # The audio_overview tool is in a different package; import its helpers as-is
 # (they're pure functions / async coroutines; none depend on ToolContext or a
@@ -51,6 +48,8 @@ from .audio_config import LLM_API_KEY_ENV, LLM_URL, SILENCE_MS_DEFAULT
 # binds the name in our namespace at import time).
 from disco.tools.builtin import audio_overview
 from disco.tools.builtin._audio_mixer import encode_mp3, mix_pcm
+
+from .audio_config import LLM_API_KEY_ENV, LLM_URL, SILENCE_MS_DEFAULT
 
 logger = logging.getLogger(__name__)
 

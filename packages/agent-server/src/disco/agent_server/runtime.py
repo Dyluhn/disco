@@ -41,9 +41,8 @@ from disco.core import (
     render_skills_for_prompt,
 )
 from disco.core.env import disco_env
-from disco.core.inspect import inspect_enabled
+from disco.core.inspect import inspect_enabled, routing_sink_for
 from disco.core.inspect import install as install_inspect
-from disco.core.inspect import routing_sink_for
 from disco.core.llm import (
     ConfigStore,
     DefaultLLMRouter,

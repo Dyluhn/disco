@@ -34,7 +34,6 @@ from disco.core import (
 from disco.core.llm import TtsSettings
 from fastapi.testclient import TestClient
 
-
 # ---- helpers --------------------------------------------------------------
 
 
@@ -678,7 +677,7 @@ def test_normalize_empty_turn_falls_back_to_raw_text(
     # Record what text the local synth receives.
     received_texts: list[str] = []
 
-    async def _recording_local(text: str, voice: str) -> "np.ndarray":  # noqa: ANN001
+    async def _recording_local(text: str, voice: str) -> np.ndarray:  # noqa: ANN001
         received_texts.append(text)
         return _fake_pcm()
 
@@ -724,8 +723,8 @@ def test_all_empty_turns_skipped_gracefully(
       {"speaker": "B", "text": "That makes it robust across different scoring systems."}
     ]"""
 
-    from disco.tools.builtin import audio_overview as _ao
     from disco.agent_server import report_audio as _ra
+    from disco.tools.builtin import audio_overview as _ao
 
     original_llm = _ao._call_llm
     original_normalize = _ra._normalize_for_tts
