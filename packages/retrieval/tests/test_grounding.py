@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from research_fakes import FakeNLI, FakeRouter
 from disco.retrieval import (
     CrossEncoderNLIVerifier,
     GroundingPipeline,
@@ -10,6 +9,7 @@ from disco.retrieval import (
     RetrievalResult,
     extract_claims,
 )
+from research_fakes import FakeNLI, FakeRouter
 
 
 def _passages():

@@ -15,14 +15,11 @@ to stay hermetic (no network, no real LLM, no real embedder/NLI).
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 from disco.core.llm import (
-    CallContext,
     CompletionRequest,
     CompletionResponse,
     LLMRouter,
@@ -33,7 +30,6 @@ from disco.retrieval.deep_research import (
     DeepResearchRun,
     DepthTier,
 )
-from disco.retrieval.deep_research.decompose import SubQuestion
 from disco.retrieval.engine import DefaultRetrievalEngine
 from disco.retrieval.models import (
     ExtractedDoc,

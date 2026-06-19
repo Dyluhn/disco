@@ -3,7 +3,6 @@ couple of NLI edges — shipped paths not hit by the scenario tests."""
 
 from __future__ import annotations
 
-from research_fakes import FakeExtractionProvider, FakeRouter, FakeSearchProvider
 from disco.retrieval import (
     CrossEncoderNLIVerifier,
     DefaultCorpusService,
@@ -16,6 +15,7 @@ from disco.retrieval import (
     RetrievalRequest,
     RouterQueryRewriter,
 )
+from research_fakes import FakeExtractionProvider, FakeRouter, FakeSearchProvider
 
 
 async def test_engine_retrieves_from_space_corpus():

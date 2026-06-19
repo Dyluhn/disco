@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from research_fakes import FakeExtractionProvider, FakeRewriter, FakeSearchProvider, hit
 from disco.retrieval import (
     DefaultRetrievalEngine,
     LexicalReranker,
     RetrievalRequest,
     reciprocal_rank_fusion,
 )
+from research_fakes import FakeExtractionProvider, FakeRewriter, FakeSearchProvider, hit
 
 
 def _engine(search, *, docs, failing=None, rewriter=None):
