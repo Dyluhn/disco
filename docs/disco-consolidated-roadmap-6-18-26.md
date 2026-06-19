@@ -99,8 +99,19 @@ Legend: ✅ done · ◐ partial · ○ open · ⬚ blocked/decision-gated · �
   no secrets/keys in the image, demo fixtures honestly labeled (per north-star §2).
 
 ## §C — Infrastructure / hardware-blocked
-- **C1 noVNC P5 — live jail/security acceptance ⬚** — needs the destroyed VM rebuilt.
-- **C2 D7 gVisor egress allowlist ○** — prereq for P5.
+- **C1 noVNC P5 — live jail/security acceptance ✅ (2026-06-19)** — VM 201 is BACK (reach via
+  `ssh 100.81.82.115`). Built the current image under `--runtime=runsc` and accepted ON REAL gVisor:
+  stack starts under syscall interception, x11vnc serves RFB 003.008, vnc.html 200, 5901→127.0.0.1
+  loopback + 6080→0.0.0.0 + `-viewonly` hold, teardown reaps, host Firefox rendered the live stream
+  (`4.19.0-gvisor` kernel in-frame). Evidence: `.harness/evidence/novnc-live/novnc-p5-gvisor.png`.
+  **Deploy step still open:** rebuild VM 201's base sandbox image (`pmx-sandbox:base`, pre-noVNC) with
+  the current Dockerfile so production live-browser works there.
+- **C2 D7 gVisor egress allowlist ◐** — already implemented (filtered-egress proxy sidecar). Found
+  ORTHOGONAL to noVNC P5: the live browser runs OPEN egress + the noVNC port is inbound, so it never
+  gated P5. A focused allowlist live-re-verify on gVisor remains optional.
+- **C3 Default slides template = PDF design ✅ (2026-06-19, `7a1ce4d`)** — deck/PPTX now carries the
+  PDF's brand marks (Disco. wordmark every slide + disco-Latin·verb colophon on cover), render-time
+  chrome in `_pptx_render.py` (PPTX+HTML), gated on `theme.branded`. gpt-5.5 SHIP-WITH-FIXES.
 
 ## §D — Verify-live (shipped in code, may be inert — confirm in the running app)
 - **D1 FILE-DELIVERY cid renders the download on the Research surface 🔎** (truth.md D12).
