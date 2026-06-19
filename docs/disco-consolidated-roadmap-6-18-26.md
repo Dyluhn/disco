@@ -13,6 +13,22 @@ Legend: ✅ done · ◐ partial · ○ open · ⬚ blocked/decision-gated · �
 
 ---
 
+## How this doc is worked — the v0.1 loop (the operating contract)
+1. Claude implements the open work in order — **features (§A) → engine polish (§E/§F) →
+   UI polish** — checking each item off **here** with evidence (commit/file) as it lands +
+   gates green.
+2. **Dylan tests the running site.**
+3. Dylan surfaces issues + new feature ideas → **discuss before building.**
+4. Claude appends them as a **NEW section immediately after the section just marked
+   complete** (the doc grows in worked order; never lose the trail).
+5. Work the new section → mark off → repeat (2–5).
+6. **Publish-readiness (§B launch gates) is LAST.** Do NOT start §B until Dylan says the
+   feature/engine/UI loop is cleared.
+7. The loop ends only when **Dylan declares v0.1 complete.** Until then, "done" on an item
+   means implemented + gated + (for UI) screenshotted — never "ready to publish."
+
+---
+
 ## §0 — Shipped + verified (evidence; do not re-litigate)
 - **Driver/provider reliability** ✅ `14fe27b` (P1/P2/P3) + `e875249` (P4) — live-proven.
 - **Slides pipeline** ✅ — C4 verdict loose-hybrid `034045a`; C1/C2 `1a93bd3`; C3 native
@@ -100,11 +116,16 @@ Legend: ✅ done · ◐ partial · ○ open · ⬚ blocked/decision-gated · �
 
 ---
 
-## §H — Recommended sequence
-1. **Decide** §G (cheap, unblocks). 2. **Ship gate:** §B1 gauntlet + §B2 benchmarks +
-§B5 lint + §B4 release-eng → first shippable. 3. **Differentiator:** §A1 website click-to-
-edit. 4. **Products:** §A3 image-gen · §A5 handoff · §A6 podcast. 5. **Verify-live §D** as
-the app comes up. 6. **Opportunistic:** §A7, §C, §E, §F.
+## §H — Sequence (per the §loop: features/polish FIRST, publish LAST)
+1. **Decide** §G (cheap; unblocks features).
+2. **Features §A** — A1 website click-to-edit (differentiator) → A2 deck editor → A3 image-
+   gen backend → A5 handoff → A6 podcast → A4 iterative mode → A7 F4. *(Dylan tests between;
+   surfaced issues get a new section after the completed one.)*
+3. **Engine polish §E + standing §F** (root hygiene, prompt stability, harnesses, god-fn).
+4. **UI polish** (§D4 screenshots, §E9 micro-polish) + clear **verify-live §D** as the app runs.
+5. **— GATE: Dylan declares the feature/engine/UI loop cleared. —**
+6. **THEN publish-readiness §B** — B1 gauntlet + B2 benchmarks + B5 lint + B4 release-eng +
+   B3 keyless-story → v0.1. Plus §C (noVNC P5) when the VM is rebuilt.
 
 *SINGLE SOURCE OF TRUTH: **this doc**. The only other file in `docs/` is
 `architecture.generated.md` (auto-generated, required by the `gen_arch_diagram --check`
