@@ -180,9 +180,9 @@ export function ProviderKeysSection() {
         Provider API keys
       </h3>
       <p className="font-ui text-[0.82rem] text-text-muted">
-        Store any provider's API key encrypted at rest — paid models, web search, extraction, or
-        TTS. Enter the env-var name the provider reads (its <code className="font-mono text-[0.78rem] text-text">api_key_env</code>, set in its section
-        above) and the key. It's encrypted with <code className="font-mono text-[0.78rem] text-text">DISCO_SECRET_KEY</code> and the plaintext never touches disk.
+        Store any provider's API key encrypted at rest — paid models, web search, extraction,
+        TTS, or image generation. Enter the env-var name the provider reads (its <code className="font-mono text-[0.78rem] text-text">api_key_env</code>, set in its section)
+        and the key. It's encrypted with <code className="font-mono text-[0.78rem] text-text">DISCO_SECRET_KEY</code> and the plaintext never touches disk.
       </p>
 
       {/* Stored-but-undecryptable: DISCO_SECRET_KEY changed/lost since save. Loud,

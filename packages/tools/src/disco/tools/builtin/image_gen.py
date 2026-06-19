@@ -69,39 +69,13 @@ from __future__ import annotations
 
 import hashlib
 import io
-import ipaddress
 import os
-import socket
 from typing import Protocol
-from urllib.parse import urlsplit
 
 import httpx
 from disco.core.llm.config_store import ConfigStore
 from disco.core.llm.secrets import SecretStore
 from pydantic import BaseModel, Field
-
-
-def _is_public_http_url(url: str) -> bool:
-    """SSRF guard: a provider-returned image URL must be http(s) to a PUBLIC host.
-    Rejects loopback / link-local / private (RFC1918) / reserved addresses so a
-    compromised image provider can't make the orchestrator GET internal services."""
-    try:
-        parts = urlsplit(url)
-    except ValueError:
-        return False
-    if parts.scheme not in ("http", "https") or not parts.hostname:
-        return False
-    host = parts.hostname
-    try:
-        infos = socket.getaddrinfo(host, parts.port or (443 if parts.scheme == "https" else 80))
-    except OSError:
-        return False
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
-            return False
-    return bool(infos)
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 
@@ -352,21 +326,16 @@ class _OpenAIImageBackend:
 
             return base64.b64decode(b64_data)
 
-        # Fallback: the API returned a URL instead of inline base64 (e.g. DALL·E 3's
-        # default). Fetch it with a FRESH client — the one above is already closed, and
-        # the image URL is an unauthenticated CDN link (no Authorization needed).
-        image_url = data["data"][0].get("url")
-        if image_url:
-            if not _is_public_http_url(image_url):
-                raise ValueError(
-                    "OpenAI images API returned a non-public image URL; refusing to "
-                    "fetch it (SSRF guard). Configure the provider to return b64_json."
-                )
-            with httpx.Client(timeout=60.0) as img_client:
-                img_response = img_client.get(image_url)
-                img_response.raise_for_status()
-                return img_response.content
-
+        # We request response_format="b64_json" so a compliant provider returns inline
+        # bytes (above). We deliberately do NOT fetch a provider-returned `url`: doing so
+        # would GET an attacker-influenced URL from the orchestrator host (SSRF), and a
+        # DNS-rebinding host defeats any pre-flight IP check. Fail loud instead.
+        if data["data"][0].get("url"):
+            raise ValueError(
+                "OpenAI images API returned a URL instead of inline b64_json. Disco "
+                "does not fetch provider URLs (SSRF risk). Use a provider that honors "
+                "response_format=b64_json (OpenAI gpt-image-1 / DALL·E do)."
+            )
         raise ValueError("OpenAI images API returned no image data")
 
 
@@ -439,7 +408,8 @@ class _ComfyUIBackend:
             },
             "7": {
                 "inputs": {
-                    "model_name": "flux1-dev.safetensors",
+                    # CheckpointLoaderSimple's field is `ckpt_name` (outputs MODEL[0], CLIP[1], VAE[2]).
+                    "ckpt_name": "flux1-dev.safetensors",
                 },
                 "class_type": "CheckpointLoaderSimple",
                 "_meta": {"title": "Load Checkpoint"},
@@ -453,9 +423,19 @@ class _ComfyUIBackend:
                 "class_type": "EmptyLatentImage",
                 "_meta": {"title": "Empty Latent Image"},
             },
-            "9": {
+            # VAEDecode turns KSampler's LATENT (5,0) into an IMAGE using the checkpoint's
+            # VAE (7,2). SaveImage needs decoded `images`, not raw `samples`.
+            "10": {
                 "inputs": {
                     "samples": ["5", 0],
+                    "vae": ["7", 2],
+                },
+                "class_type": "VAEDecode",
+                "_meta": {"title": "VAE Decode"},
+            },
+            "9": {
+                "inputs": {
+                    "images": ["10", 0],
                     "filename_prefix": "disco-image",
                 },
                 "class_type": "SaveImage",
