@@ -6,6 +6,7 @@ import {
   getAssignments,
   getDataSourcesConfig,
   getEncodersConfig,
+  getImageGenConfig,
   getLiveBrowserConfig,
   getTtsConfig,
   getOpenRouterKeyStatus,
@@ -16,6 +17,7 @@ import {
   updateAssignments,
   updateDataSourcesConfig,
   updateEncodersConfig,
+  updateImageGenConfig,
   updateLiveBrowserConfig,
   updateTtsConfig,
   updateModel,
@@ -25,6 +27,7 @@ import type {
   AssignmentsPatch,
   DataSourcesConfig,
   EncodersConfig,
+  ImageGenConfig,
   LiveBrowserConfig,
   TtsConfig,
   ModelAssignments,
@@ -103,6 +106,20 @@ export function useUpdateTtsConfig() {
   return useMutation({
     mutationFn: (cfg: TtsConfig) => updateTtsConfig(cfg),
     onSuccess: (next) => qc.setQueryData(TTS_KEY, next),
+  });
+}
+
+const IMAGE_GEN_KEY = ["image-gen-config"] as const;
+
+export function useImageGenConfig() {
+  return useQuery<ImageGenConfig>({ queryKey: IMAGE_GEN_KEY, queryFn: getImageGenConfig });
+}
+
+export function useUpdateImageGenConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (cfg: ImageGenConfig) => updateImageGenConfig(cfg),
+    onSuccess: (next) => qc.setQueryData(IMAGE_GEN_KEY, next),
   });
 }
 

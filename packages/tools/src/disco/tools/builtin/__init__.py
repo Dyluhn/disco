@@ -103,8 +103,9 @@ def build_default_registry() -> ToolRegistry:
         DeckPatchTool(),  # deck_patch: C-EDIT-4 RFC-6902 JSON Patch + re-render
         ThinkTool(),  # think: NO-OP reasoning scratchpad (avoids prose-into-action degeneration)
         # image_generate: keyless/local image synthesis (PIL procedural; configurable
-        # via Settings to use OpenAI-compatible or ComfyUI backends)
-        ImageGenTool(backend=select_image_backend()),
+        # via Settings to use OpenAI-compatible or ComfyUI backends). No backend pinned
+        # here — the tool re-reads the saved provider per call (config honored live).
+        ImageGenTool(),
         # C20: read-only Explore/Plan helper dispatch+join (intercepted by loop)
         DelegateExploreTool(),
     ):

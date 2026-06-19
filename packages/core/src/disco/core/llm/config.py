@@ -191,6 +191,9 @@ class ImageGenSettings(BaseModel):
     provider: Literal["procedural", "comfyui", "openai"] = "procedural"
     base_url: str = ""  # for comfyui (self-host) / openai-compatible endpoint; empty → default
     api_key_env: str = ""  # secrets key name for openai (never the key itself)
+    # openai: the image model id (e.g. "gpt-image-1", "dall-e-3"); empty → provider default.
+    # comfyui: the checkpoint filename to load (empty → the built-in workflow's default).
+    model: str = ""
 
 
 class McpSettings(BaseModel):

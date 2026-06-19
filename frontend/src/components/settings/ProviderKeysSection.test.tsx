@@ -59,6 +59,10 @@ function installFetch() {
     if (method === "GET" && url === "/api/tts/config") {
       return jsonResponse({ api_key_env: ttsKeyEnv });
     }
+    if (method === "GET" && url === "/api/image-gen/config") {
+      // useExpectedKeyNames() now also reads image-gen; procedural carries no key.
+      return jsonResponse({ provider: "procedural", base_url: "", api_key_env: "", model: "" });
+    }
     if (method === "PUT" && url.startsWith("/api/secrets/")) {
       const name = decodeURIComponent(url.split("/api/secrets/")[1]);
       names.push(name);

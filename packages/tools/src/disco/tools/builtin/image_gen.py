@@ -282,9 +282,10 @@ class _OpenAIImageBackend:
     name = "openai-compatible"
     is_remote = True
 
-    def __init__(self, base_url: str, api_key: str | None) -> None:
+    def __init__(self, base_url: str, api_key: str | None, *, model: str = "") -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
+        self._model = model
 
     def generate(
         self,
@@ -303,12 +304,21 @@ class _OpenAIImageBackend:
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
-        payload = {
+        # OpenAI Images only accepts a fixed set of sizes (not arbitrary WxH), and those
+        # sets DIFFER by model — DALL·E 3 does 1792x1024 / 1024x1792 while gpt-image-1 does
+        # 1536x1024 / 1024x1536. The ONLY size common to DALL·E 2/3 and gpt-image-1 is
+        # 1024x1024, so use it unconditionally: a request never 400s on the configured
+        # model. (The requested width/height are still reported in the deliverable summary.)
+        payload: dict[str, object] = {
             "prompt": prompt,
             "n": 1,
-            "size": f"{width}x{height}",
+            "size": "1024x1024",
             "response_format": response_format,
         }
+        # Pin the model when configured (e.g. "gpt-image-1", "dall-e-3"); empty → the
+        # provider's default. Optional because many OpenAI-compatible servers expose one model.
+        if self._model:
+            payload["model"] = self._model
 
         with httpx.Client(timeout=60.0) as client:
             response = client.post(
@@ -326,14 +336,16 @@ class _OpenAIImageBackend:
 
             return base64.b64decode(b64_data)
 
-        # Fallback: try URL format
-        image_url = data["data"][0].get("url")
-        if image_url:
-            # Fetch the image
-            img_response = client.get(image_url)
-            img_response.raise_for_status()
-            return img_response.content
-
+        # We request response_format="b64_json" so a compliant provider returns inline
+        # bytes (above). We deliberately do NOT fetch a provider-returned `url`: doing so
+        # would GET an attacker-influenced URL from the orchestrator host (SSRF), and a
+        # DNS-rebinding host defeats any pre-flight IP check. Fail loud instead.
+        if data["data"][0].get("url"):
+            raise ValueError(
+                "OpenAI images API returned a URL instead of inline b64_json. Disco "
+                "does not fetch provider URLs (SSRF risk). Use a provider that honors "
+                "response_format=b64_json (OpenAI gpt-image-1 / DALL·E do)."
+            )
         raise ValueError("OpenAI images API returned no image data")
 
 
@@ -351,8 +363,11 @@ class _ComfyUIBackend:
     name = "comfyui"
     is_remote = True
 
-    def __init__(self, base_url: str) -> None:
+    def __init__(self, base_url: str, *, model: str = "") -> None:
         self._base_url = base_url.rstrip("/")
+        # The checkpoint filename to load in the built-in workflow. Empty → the default
+        # below. This must name a checkpoint that EXISTS on the target ComfyUI install.
+        self._ckpt = model or "flux1-dev.safetensors"
 
     def generate(
         self,
@@ -406,7 +421,8 @@ class _ComfyUIBackend:
             },
             "7": {
                 "inputs": {
-                    "model_name": "flux1-dev.safetensors",
+                    # CheckpointLoaderSimple's field is `ckpt_name` (outputs MODEL[0], CLIP[1], VAE[2]).
+                    "ckpt_name": self._ckpt,
                 },
                 "class_type": "CheckpointLoaderSimple",
                 "_meta": {"title": "Load Checkpoint"},
@@ -420,9 +436,19 @@ class _ComfyUIBackend:
                 "class_type": "EmptyLatentImage",
                 "_meta": {"title": "Empty Latent Image"},
             },
-            "9": {
+            # VAEDecode turns KSampler's LATENT (5,0) into an IMAGE using the checkpoint's
+            # VAE (7,2). SaveImage needs decoded `images`, not raw `samples`.
+            "10": {
                 "inputs": {
                     "samples": ["5", 0],
+                    "vae": ["7", 2],
+                },
+                "class_type": "VAEDecode",
+                "_meta": {"title": "VAE Decode"},
+            },
+            "9": {
+                "inputs": {
+                    "images": ["10", 0],
                     "filename_prefix": "disco-image",
                 },
                 "class_type": "SaveImage",
@@ -497,17 +523,22 @@ def select_image_backend() -> ImageBackend:
     if provider == "procedural":
         return _PILProceduralBackend()
 
-    # For openai, we need a key
+    # For openai, we need a key. base_url is the ORIGIN only — _OpenAIImageBackend.generate
+    # appends "/v1/images/generations", so the default must NOT include /v1 (else /v1/v1/…).
+    # Tolerate a user pasting a trailing /v1 or slash by stripping it.
     if provider == "openai":
-        base_url = settings.base_url or "https://api.openai.com/v1"
+        base_url = (settings.base_url or "https://api.openai.com").rstrip("/")
+        if base_url.endswith("/v1"):
+            base_url = base_url[: -len("/v1")]
         api_key_env = settings.api_key_env
 
-        # Look up the secret
+        # Look up the secret: encrypted SecretStore first, then os.environ — the same
+        # resolution order the TTS paid tier uses (report_audio.py), so an env-configured
+        # key works and the UI's "secret/env-var name" affordance is honest.
         if api_key_env:
-            secrets = SecretStore()
-            api_key = secrets.get_secret(api_key_env)
+            api_key = SecretStore().get_secret(api_key_env) or os.environ.get(api_key_env)
             if api_key:
-                return _OpenAIImageBackend(base_url, api_key)
+                return _OpenAIImageBackend(base_url, api_key, model=settings.model)
         # No key available - fall back to procedural
         return _PILProceduralBackend()
 
@@ -515,7 +546,7 @@ def select_image_backend() -> ImageBackend:
     if provider == "comfyui":
         base_url = settings.base_url
         if base_url:
-            return _ComfyUIBackend(base_url)
+            return _ComfyUIBackend(base_url, model=settings.model)
         # No URL configured - fall back to procedural
         return _PILProceduralBackend()
 
@@ -557,14 +588,22 @@ class ImageGenTool:
     )
 
     def __init__(self, backend: ImageBackend | None = None) -> None:
-        # Injected backend — tests can swap in a stub; production gets the
-        # procedural default. The deferred diffusers backend, when ready,
-        # is a one-line change at construction.
+        # An EXPLICITLY injected backend (tests) pins the tool to it. In production no
+        # backend is injected (registry passes none), so each run() re-reads the saved
+        # provider via select_image_backend() — config changes are honored on the NEXT
+        # call without a restart, matching the Settings contract (and the TTS tier, which
+        # likewise re-reads config per call rather than snapshotting at registry build).
+        self._injected = backend
         self._backend: ImageBackend = backend or _PILProceduralBackend()
+
+    def _resolve_backend(self) -> ImageBackend:
+        return self._injected if self._injected is not None else select_image_backend()
 
     @property
     def backend_name(self) -> str:
-        return self._backend.name
+        # Report the LIVE backend (re-resolved from config), not the constructor default,
+        # so this stays consistent with what run() actually uses per call.
+        return self._resolve_backend().name
 
     async def run(self, args: ImageGenArgs, ctx: ToolContext) -> ToolOutcome:
         # Resolve the seed. The procedural backend needs an int; if the model
@@ -582,9 +621,13 @@ class ImageGenTool:
                 error="unsupported_format",
             )
 
+        # Re-resolve the backend per call so a provider change saved in Settings is
+        # honored on the NEXT image_generate (no restart, no stale per-conversation cache).
+        backend = self._resolve_backend()
+
         # ---- generate (the backend hands us raw `bytes`) ---------------
         try:
-            image_bytes = self._backend.generate(
+            image_bytes = backend.generate(
                 prompt=args.prompt,
                 width=args.width,
                 height=args.height,
@@ -594,7 +637,7 @@ class ImageGenTool:
         except Exception as e:  # noqa: BLE001 — tool failure surfaces as an observation
             return ToolOutcome(
                 success=False,
-                content=f"image generation failed ({self._backend.name}): {e}",
+                content=f"image generation failed ({backend.name}): {e}",
                 error=f"backend_error: {type(e).__name__}",
             )
 
@@ -605,7 +648,7 @@ class ImageGenTool:
             return ToolOutcome(
                 success=False,
                 content=(
-                    f"backend {self._backend.name!r} returned "
+                    f"backend {backend.name!r} returned "
                     f"{type(image_bytes).__name__}, expected bytes. The "
                     f"binary-write path requires raw bytes — text-mode "
                     f"would corrupt >=0x80 bytes."
@@ -623,43 +666,35 @@ class ImageGenTool:
         assert ctx.sandbox is not None, (
             "image_generate requires a sandbox instance for the binary file write"
         )
-        ext = "jpg" if fmt == "jpeg" else "png"
-        # Sanitize the user-provided base filename: strip directory
-        # components and force a sane extension. The sandbox instance
-        # already jails paths, but the filename should also be a real
+        # Detect the ACTUAL format from the produced bytes — the remote tiers (OpenAI,
+        # ComfyUI) ignore the requested `fmt` and emit PNG regardless, so trust the bytes,
+        # not the request. This keeps the extension, the magic-bytes check, the on-disk
+        # file, and the reported format all consistent with what was really produced
+        # (so `format="jpeg"` against a PNG-only provider yields an honest .png, not a
+        # rejected request). PNG and JPEG are the only supported deliverable formats.
+        if image_bytes.startswith(_PNG_MAGIC):
+            actual_fmt = "png"
+        elif image_bytes.startswith(_JPEG_MAGIC):
+            actual_fmt = "jpeg"
+        else:
+            return ToolOutcome(
+                success=False,
+                content=(
+                    f"image_generate: backend produced bytes that are neither a PNG nor "
+                    f"a JPEG — refusing to surface a corrupt image as a deliverable. "
+                    f"(backend={backend.name})"
+                ),
+                error="unrecognized_image_format",
+            )
+        ext = "jpg" if actual_fmt == "jpeg" else "png"
+        # Sanitize the user-provided base filename: strip directory components and force a
+        # sane extension. The sandbox jails paths, but the filename should also be a real
         # file basename so the deliverable UI can show it cleanly.
         safe_base = os.path.basename(args.filename)
         if not safe_base or safe_base in {".", ".."}:
             safe_base = "image"
         out_path = f"{safe_base}.{ext}"
         await ctx.sandbox.write_file(out_path, image_bytes)
-
-        # ---- magic-bytes sanity check (the deliverable contract) ------
-        # We re-check the first 8 bytes of what we just wrote — a
-        # defensive cross-check that the on-disk file is actually a
-        # decodable image, not a silently-corrupted container. PNG and
-        # JPEG are the only supported formats today, and both have a
-        # well-known short signature.
-        if fmt == "png" and not image_bytes.startswith(_PNG_MAGIC):
-            return ToolOutcome(
-                success=False,
-                content=(
-                    f"image_generate: backend produced bytes that lack the "
-                    f"PNG signature — refusing to surface a corrupt image "
-                    f"as a deliverable. (backend={self._backend.name})"
-                ),
-                error="non_png_signature",
-            )
-        if fmt == "jpeg" and not image_bytes.startswith(_JPEG_MAGIC):
-            return ToolOutcome(
-                success=False,
-                content=(
-                    f"image_generate: backend produced bytes that lack the "
-                    f"JPEG SOI marker — refusing to surface a corrupt image "
-                    f"as a deliverable. (backend={self._backend.name})"
-                ),
-                error="non_jpeg_signature",
-            )
 
         # ---- success: short text summary, image bytes NEVER in content -
         # The model should see size + dimensions + format + seed, NOT the
@@ -668,23 +703,32 @@ class ImageGenTool:
         # both bloat the model's context AND risk any downstream
         # text-mode transport mangling the binary.
         magic_hex = image_bytes[:8].hex()
+        # Report the ACTUAL produced dimensions, not the requested ones: some backends
+        # can't honor arbitrary sizes (the OpenAI tier snaps to 1024x1024), so reporting
+        # args.width/height would be false metadata and silently swallow the aspect ratio.
+        from PIL import Image as _PILImage
+
+        try:
+            actual_w, actual_h = _PILImage.open(io.BytesIO(image_bytes)).size
+        except Exception:  # noqa: BLE001 — fall back to requested dims if decode fails
+            actual_w, actual_h = args.width, args.height
         return ToolOutcome(
             success=True,
             content=(
                 f"Image written: {len(image_bytes)} bytes to {out_path} "
-                f"({args.width}x{args.height} {fmt.upper()}, "
-                f"seed={seed}, backend={self._backend.name})"
+                f"({actual_w}x{actual_h} {actual_fmt.upper()}, "
+                f"seed={seed}, backend={backend.name})"
             ),
             artifacts=[out_path],
             structured={
                 "path": out_path,
                 "filename_base": safe_base,
-                "format": fmt,
-                "width": args.width,
-                "height": args.height,
+                "format": actual_fmt,
+                "width": actual_w,
+                "height": actual_h,
                 "seed": seed,
                 "prompt": args.prompt,
-                "backend": self._backend.name,
+                "backend": backend.name,
                 "bytes": len(image_bytes),
                 # Hex of the first 8 bytes (the magic) — useful for the
                 # deliverable panel to render a thumbnail / sanity-check

@@ -208,6 +208,38 @@ async def test_image_generate_writes_byte_identical_png_to_sandbox():
 
 
 @pytest.mark.asyncio
+async def test_imagegen_tool_resolves_backend_per_call(monkeypatch):
+    """With no injected backend (the production path), ImageGenTool re-reads the
+    configured provider via select_image_backend() on EVERY run() — so a provider
+    saved in Settings is honored on the next call — and the deliverable metadata
+    reports the LIVE backend, not the procedural constructor default."""
+
+    class _FakeLive:
+        name = "fake-live"
+        is_remote = True
+
+        def generate(self, *, prompt: str, width: int, height: int, seed: int, fmt: str) -> bytes:
+            # Return a real, decodable PNG so the tool's magic-bytes + decode gate passes.
+            return _PILProceduralBackend().generate(
+                prompt=prompt, width=width, height=height, seed=seed, fmt=fmt
+            )
+
+    import disco.tools.builtin.image_gen as ig
+
+    monkeypatch.setattr(ig, "select_image_backend", lambda: _FakeLive())
+    sbx = _FakeSandbox()
+    out = await ImageGenTool().run(  # NO injected backend → must re-select per call
+        ImageGenArgs(prompt="a tree", filename="t", width=16, height=16, format="png"),
+        _ctx(sbx),
+    )
+    assert out.success is True
+    assert out.structured is not None
+    assert out.structured["backend"] == "fake-live", (
+        "ImageGenTool().run() must report the per-call selected backend, not the default"
+    )
+
+
+@pytest.mark.asyncio
 async def test_image_generate_does_not_leak_bytes_into_text_content():
     """Brief: 'Leak the image bytes into the text context' is on the
     must-not-do list. The image bytes must NEVER appear in `content` (the
@@ -434,7 +466,8 @@ def test_select_image_backend_falls_back_to_procedural_when_openai_has_no_key(mo
         image_gen = type('obj', (object,), {
             'provider': 'openai',
             'base_url': 'https://api.openai.com/v1',
-            'api_key_env': 'OPENAI_API_KEY'
+            'api_key_env': 'OPENAI_API_KEY',
+            'model': ''
         })()
 
     class _MockStore:
@@ -483,7 +516,8 @@ def test_select_image_backend_returns_openai_with_key(monkeypatch):
         image_gen = type('obj', (object,), {
             'provider': 'openai',
             'base_url': 'https://api.openai.com/v1',
-            'api_key_env': 'OPENAI_API_KEY'
+            'api_key_env': 'OPENAI_API_KEY',
+            'model': ''
         })()
 
     class _MockStore:
@@ -511,7 +545,8 @@ def test_select_image_backend_returns_comfyui_with_url(monkeypatch):
         image_gen = type('obj', (object,), {
             'provider': 'comfyui',
             'base_url': 'http://localhost:8188',
-            'api_key_env': ''
+            'api_key_env': '',
+            'model': ''
         })()
 
     class _MockStore:
@@ -591,7 +626,9 @@ def test_openai_backend_builds_correct_request_shape():
         assert '/v1/images/generations' in str(call_args)
         body = call_args.kwargs.get('json') or call_args[1].get('json')
         assert body['prompt'] == 'a sunset'
-        assert body['size'] == '512x512'
+        # OpenAI only accepts fixed sizes; a square request snaps to 1024x1024
+        # (arbitrary WxH like 512x512 would 400).
+        assert body['size'] == '1024x1024'
         assert body['n'] == 1
         assert body['response_format'] == 'b64_json'
 

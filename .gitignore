@@ -66,4 +66,8 @@ disco-config.json.*
 # orchestration scratch (review output, lane diffs, screenshot helper)
 .review/
 *.diff
-frontend/_shot.mjs
+frontend/_*.mjs
+
+# harness strays — never commit
+/node_modules/
+/workorders/

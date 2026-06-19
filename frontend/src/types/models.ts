@@ -126,6 +126,19 @@ export interface TtsConfig {
   voice_b?: string;
 }
 
+/** Image generation provider — the wire mirror of the app-server's ImageGenConfigDTO
+ * (the universal three-tier pattern). `procedural` (bundled Pillow, keyless default) |
+ * `comfyui` (self-hosted graph API via `base_url`, keyless) | `openai` (paid
+ * OpenAI-compatible /v1/images/generations via `base_url` + `api_key_env` naming the
+ * secret, never the key itself). */
+export interface ImageGenConfig {
+  provider: "procedural" | "comfyui" | "openai";
+  base_url?: string;
+  api_key_env?: string;
+  /** openai: image model id (e.g. "gpt-image-1"); comfyui: checkpoint filename. */
+  model?: string;
+}
+
 /** Universal web-data providers (§B). Each slot has three tiers; the bundled
  * defaults (ddgs / local) need no key. `*_api_key_env` is the NAME of an env var
  * holding a paid key — never the key itself. Mirror of DataSourcesConfigDTO. */
