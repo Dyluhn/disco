@@ -19,7 +19,7 @@ import asyncio
 import hashlib
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from disco.core import ReportEvent, ReportSection
 from disco.core.llm import CallContext, LLMRouter
@@ -28,9 +28,12 @@ from ..engine import RetrievalEngine
 from ..models import Passage as RetrievalPassage
 from ..ranking import Embedder
 from ..vectorstore import VectorStore
+from .claims import extract_section_claims
 from .decompose import SubQuestion
 from .depth import DepthBound, DepthTier, bounds_for
 from .gather import GatherLegContext, SubQuestionResult, gather_for_subquestion
+from .iterate import run_iterative_refinement
+from .judge import ClaimVerdict, _Completer, judge_claims
 from .synthesis import coherence_pass, synthesize_section
 
 # Callable types for mid-run steer / inject hooks (D3).
@@ -112,6 +115,7 @@ class DeepResearchRun:
         gather_concurrency: int | None = None,
         recency_window: Literal["month", "week"] | None = None,
         upload_passages: list[Any] | None = None,
+        iterative: bool = False,
     ) -> None:
         self._query = query
         self._router = router
@@ -127,6 +131,10 @@ class DeepResearchRun:
         # G1/DR-4 F2: pre-attached upload passages to seed every gather leg.
         # None / [] → OFF path (byte-identical to pre-DR-4 code).
         self._upload_passages: list[Any] = upload_passages or []
+        # A4.4: iterative-research flag. When False (the default) NOTHING new
+        # runs — the judge/refine loop is never entered, so a standard run is
+        # byte-identical. Gated on this flag at the single call site in `run()`.
+        self._iterative = iterative
         # RAM-aware peak-memory guard (OOM fix) — applies on EVERY tier, because
         # not OOMing is a correctness guarantee, not a free-tier compensation.
         # Each concurrent gather leg holds its own fetch buffers + extracted
@@ -333,6 +341,7 @@ class DeepResearchRun:
         source_budget: int,
         *,
         emit: EmitFn,
+        extra_passages: list[Any] | None = None,
     ) -> tuple[
         SubQuestion,
         asyncio.Task[SubQuestionResult],
@@ -348,7 +357,15 @@ class DeepResearchRun:
         `max_sources` amount). The semaphore from the parent run is NOT
         re-installed here — steer legs are created sequentially at a section
         boundary, never in a burst, so peak-memory contention is the same as
-        a single normal leg."""
+        a single normal leg.
+
+        `extra_passages` (A4.4) seeds the leg's corpus. It defaults to
+        `self._upload_passages` (the D3 steer behaviour — unchanged), but the
+        iterative-refine path passes a section's ORIGINAL cited passages instead
+        so a re-search leg sees the COMBINED corpus (fresh evidence + the
+        section's prior sources) when it re-synthesizes."""
+        if extra_passages is None:
+            extra_passages = list(self._upload_passages)
         subq_hash = hashlib.sha256(subq.title.encode()).hexdigest()[:8]
         subq_namespace = f"{self._namespace}/{subq_hash}"
         subq_id = f"s{subq_hash}"
@@ -377,8 +394,9 @@ class DeepResearchRun:
                 remaining_source_budget=source_budget,
                 leg_context=leg_context,
                 recency_window=self._recency_window,
-                # G1/DR-4 F2: seed steer legs with upload passages too.
-                extra_passages=list(self._upload_passages),
+                # G1/DR-4 F2: seed steer legs with upload passages by default;
+                # the A4.4 refine path overrides this with a section's originals.
+                extra_passages=extra_passages,
             )
         )
         return (subq, task, subq_id, subq_namespace, leg_context)
@@ -625,6 +643,25 @@ class DeepResearchRun:
         if injected_passages:
             carried_passages = carried_passages + injected_passages
 
+        # ---- A4.4 iterative refinement (gated; OFF-path byte-identical) ----
+        # When `self._iterative` is False (the default) this block is never
+        # entered — the judge/refine loop never runs, nothing new is emitted,
+        # and `sections` is exactly what `_drain_and_synthesize` produced.
+        if self._iterative:
+            sections, refine_passages, refine_hits = await self._iterative_refine(
+                sections, results, carried_passages, emit
+            )
+            # Fold the refine legs' fresh passages into the report's passage set so
+            # a section's fresh `[[id]]` citations resolve to source cards in
+            # `_assemble_report` (deduped by id there). OFF-path: never reached.
+            if refine_passages:
+                carried_passages = carried_passages + refine_passages
+            # Fold the refine legs' discovered urls into carried_hits so the report's
+            # all-searched audit trail stays the COMPLETE discovery set (deduped in
+            # _assemble_report).
+            if refine_hits:
+                carried_hits = carried_hits + refine_hits
+
         # ---- reduce step: coherence pass produces the executive summary ----
         await emit("phase", {"phase": "coherence"})
         summary = await coherence_pass(
@@ -692,5 +729,147 @@ class DeepResearchRun:
             bounded_by=bounded_by,
             depth_tier=self._depth,
         )
+
+    async def _iterative_refine(
+        self,
+        sections: list[ReportSection],
+        results: list[SubQuestionResult],
+        carried_passages: list[RetrievalPassage],
+        emit: EmitFn,
+    ) -> tuple[list[ReportSection], list[RetrievalPassage], list[Any]]:
+        """A4.4 — the iterative-research loop, wired to the real engine.
+
+        Consumes the A4.0/A4.1/A4.2 core: judge every section's claims, re-search
+        the weak ones (seeded with that section's ORIGINAL passages so re-synthesis
+        sees the COMBINED corpus), re-synthesize, and re-judge — up to the loop's
+        round cap, stopping once enough claims are SUPPORTED. Only reached when
+        `self._iterative` is True; the OFF path never calls this.
+
+        Returns `(refined_sections, fresh_passages)`. `fresh_passages` are the
+        passages the refine legs newly gathered; `run()` folds them into the
+        report's passage set so a section's fresh `[[id]]` citations resolve to
+        source cards (without them, `_assemble_report` could not see them)."""
+        # Index every passage we have by id (across all sub-results + carried).
+        # `passages_by_id_obj` keeps the Passage objects (to re-seed a re-search
+        # leg's corpus); `passages_text` is the {id: text} the judge/extractor need.
+        passages_by_id_obj: dict[str, RetrievalPassage] = {}
+        for r in results:
+            for p in r.passages:
+                passages_by_id_obj.setdefault(p.id, p)
+        for p in carried_passages:
+            passages_by_id_obj.setdefault(p.id, p)
+        passages_text = {pid: p.text for pid, p in passages_by_id_obj.items()}
+        # Passages the refine legs newly gather — returned so they reach the final
+        # report (so fresh `[[id]]` citations resolve to source cards). Keyed by id
+        # to dedup across rounds; insertion order preserved for stable assembly.
+        fresh_passages: dict[str, RetrievalPassage] = {}
+        # Refine legs also DISCOVER urls; collect their all_hits so the report's
+        # "All-Searched" audit trail stays the COMPLETE discovery set (else iterative
+        # runs would silently omit the refine legs' searches).
+        fresh_hits: list[Any] = []
+
+        async def judge_section(sec: ReportSection) -> list[ClaimVerdict]:
+            claims = extract_section_claims(sec.markdown, passages_text)
+            # The judge's `_Completer` protocol requires the `context=` kwarg the
+            # public `LLMRouter` Protocol omits but the concrete DefaultLLMRouter
+            # accepts (same omission gather.py/synthesis.py cast around). The cast
+            # is a typing-only narrowing — identity at runtime.
+            return await judge_claims(claims, router=cast(_Completer, self._router))
+
+        async def refine_section(
+            sec: ReportSection, weak: list[ClaimVerdict]
+        ) -> ReportSection:
+            # Seed the re-search leg with the section's ORIGINAL cited passages so
+            # re-synthesis sees the COMBINED corpus (fresh evidence + originals) —
+            # this is how the combined-corpus requirement is met without any
+            # per-section context retention in the loop.
+            orig = [
+                passages_by_id_obj[i]
+                for i in sec.cited_passage_ids
+                if i in passages_by_id_obj
+            ]
+            # Build a targeted sub-question: the section topic + its weak claims.
+            weak_titles = " | ".join(v.claim for v in weak[:3])
+            title = f"{sec.title}: verify — {weak_titles}" if weak_titles else sec.title
+            new_subq = SubQuestion(title=title)
+            # One fresh gather leg, seeded with `orig` (NOT the upload passages).
+            steer_budget = max(1, self._bound.max_sources // max(1, len(sections)))
+            _subq, task, _sid, namespace, leg_context = self._start_one_steer_task(
+                new_subq, steer_budget, emit=emit, extra_passages=orig
+            )
+            # Defect-1 fix (combined corpus under an embedder): the gather leg only
+            # upserts its FRESH passages into `namespace`, and `_retrieve_for_section`
+            # queries that namespace when an embedder is present — so the seeded
+            # `orig` (which rides only in `SubQuestionResult.passages`, the
+            # embedder-absent fallback path) would be DROPPED from re-synthesis.
+            # Upsert `orig` into the same namespace here so the namespace query
+            # returns orig+fresh — the true COMBINED corpus. No-op when there is no
+            # embedder (synthesis then uses the fallback passages, which include
+            # `orig` already), and it touches only the refine leg's namespace.
+            if self._embedder is not None and orig:
+                try:
+                    _orig_vecs = await self._embedder.embed([p.text for p in orig])
+                    await self._vector_store.upsert(namespace, orig, _orig_vecs)
+                except Exception:  # noqa: BLE001 — fallback path still carries orig
+                    pass
+            try:
+                new_result = await task
+            except Exception:  # noqa: BLE001 — a failed re-search must not regress
+                return sec
+            try:
+                new_section = await synthesize_section(
+                    new_result,
+                    router=self._router,
+                    embedder=self._embedder,
+                    vector_store=self._vector_store,
+                    namespace=namespace,
+                    nli=self._nli,
+                    section_id=sec.id,
+                    top_k_for_section=self._bound.rerank_top_k,
+                    emit=emit,
+                    leg_context=leg_context,
+                    recency_window=self._recency_window,
+                )
+            except Exception:  # noqa: BLE001 — never let a synth failure regress
+                return sec
+            # Keep the section's heading stable (the leg's title was a probe).
+            new_section = new_section.model_copy(update={"title": sec.title})
+            # If the re-search produced an empty/degraded section, keep the
+            # original so the loop's no-improvement break fires (never regress).
+            if not new_section.cited_passage_ids or "[[" not in new_section.markdown:
+                return sec
+            # Defect-2 fix (fresh evidence must not be discarded): merge the refine
+            # leg's passages into the shared index so (i) the NEXT judge round can
+            # see fresh-cited claims (extract_section_claims skips ids with no text,
+            # so without this a fresh citation vanishes and the section scores as
+            # vacuously "converged"), and (ii) `fresh_passages` carries them out to
+            # the final report so `_assemble_report` resolves the new `[[id]]`
+            # citations to source cards.
+            for p in new_result.passages:
+                if p.id not in passages_by_id_obj:
+                    passages_by_id_obj[p.id] = p
+                passages_text.setdefault(p.id, p.text)
+                fresh_passages.setdefault(p.id, p)
+            # The refine leg's discovered urls join the report's all-searched set.
+            fresh_hits.extend(getattr(new_result, "all_hits", None) or [])
+            return new_section
+
+        await emit("phase", {"phase": "iterate"})
+        res = await run_iterative_refinement(
+            sections,
+            judge_section=judge_section,
+            refine_section=refine_section,
+            emit=emit,
+        )
+        await emit(
+            "phase",
+            {
+                "phase": "iterate",
+                "rounds": res.rounds,
+                "supported": res.final_supported,
+                "converged": res.converged,
+            },
+        )
+        return res.sections, list(fresh_passages.values()), fresh_hits
 
 

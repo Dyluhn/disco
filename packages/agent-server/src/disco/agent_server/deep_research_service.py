@@ -132,6 +132,24 @@ class DeepResearchService:
         if tier and tier in {t.value for t in DepthTier}:
             self._rt._depth[conversation_id] = tier
 
+    # ── A4.4 iterative research toggle ────────────────────────────────────────
+
+    def _iterative_for(self, conversation_id: str) -> bool:
+        """Whether iterative refinement is enabled for this conversation. Stored
+        in `_iterative` per cid (set at submit time by the UI's toggle). Defaults
+        to False — the standard non-iterative run, byte-identical to before."""
+        if not hasattr(self._rt, "_iterative"):
+            return False
+        return bool(self._rt._iterative.get(conversation_id, False))
+
+    def set_iterative(self, conversation_id: str, enabled: bool) -> None:
+        """Pin the iterative-research toggle for this conversation (set at submit
+        time by the UI). Stored in memory; recovery falls to the default (False)
+        after restart, which is the safe OFF path."""
+        if not hasattr(self._rt, "_iterative"):
+            self._rt._iterative = {}
+        self._rt._iterative[conversation_id] = bool(enabled)
+
     # ── DR-3 recency window (E2) ──────────────────────────────────────────────
 
     def set_recency(self, conversation_id: str, window: str | None) -> None:
@@ -501,6 +519,8 @@ class DeepResearchService:
             recency_window=recency_window,
             # G1/DR-4 F2: seed every gather leg with upload passages.
             upload_passages=upload_passages or None,
+            # A4.4: per-cid iterative-research toggle (default False → OFF path).
+            iterative=self._iterative_for(conversation_id),
         )
 
         # Emit callback: every engine event becomes an Action/Observation pair

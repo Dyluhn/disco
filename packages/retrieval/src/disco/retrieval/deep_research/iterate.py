@@ -78,9 +78,20 @@ async def run_iterative_refinement(
             if not weak:
                 continue
             new_sec = await refine_section(sec, weak)
-            if new_sec is not sec:
-                work[i] = new_sec
-                refined_any = True
+            if new_sec is sec:
+                continue
+            # Accept the refined section ONLY if it does not regress: judge the
+            # candidate and keep it just when its SUPPORTED fraction is at least
+            # the original section's. A worse refine is dropped (original kept)
+            # and counted as no-improvement, so the loop can break instead of
+            # swapping in a degraded section. This re-uses the injected judge so
+            # the loop stays pure (the engine supplies the real grounding check).
+            orig_supported = fraction_supported(verdicts[i])
+            new_supported = fraction_supported(await judge_section(new_sec))
+            if new_supported < orig_supported:
+                continue
+            work[i] = new_sec
+            refined_any = True
         if not refined_any:
             # Nothing could be improved this round → further rounds won't help.
             break

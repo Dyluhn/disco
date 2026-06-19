@@ -112,3 +112,53 @@ async def test_only_weak_sections_are_refined() -> None:
     assert id(strong) not in refined
     assert id(weak) in refined
     assert res.converged is True
+
+
+@pytest.mark.asyncio
+async def test_regressing_refine_is_rejected_original_kept() -> None:
+    """Defect-3 regression guard: a refine that produces a WORSE section (lower
+    SUPPORTED fraction) must be DROPPED — the original is kept and the round
+    counts as no-improvement, so the loop breaks instead of swapping in a
+    degraded section."""
+    original = Sec(5, 5)  # 0.5 supported
+
+    async def refine_worse(sec: Sec, weak: list[ClaimVerdict]) -> Sec:
+        # Returns a NEW (distinct) section that is strictly worse: 0.2 supported.
+        return Sec(2, 8)
+
+    res = await run_iterative_refinement(
+        [original],
+        judge_section=_judge,
+        refine_section=refine_worse,
+        max_rounds=3,
+        target=0.8,
+    )
+    # The worse candidate was rejected → the original section is still in place.
+    assert res.sections[0] is original
+    # Rejection counts as no-improvement → the loop breaks on round 1.
+    assert res.rounds == 1
+    assert res.converged is False
+    assert res.final_supported == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_non_regressing_refine_is_accepted() -> None:
+    """The dual of the rejection guard: a refine that does NOT regress (equal or
+    better SUPPORTED fraction) is accepted — proving the gate is a regression
+    guard, not a blanket rejection."""
+    original = Sec(5, 5)  # 0.5 supported
+
+    async def refine_equal_then_better(sec: Sec, weak: list[ClaimVerdict]) -> Sec:
+        # Strictly better candidate (0.9) — must be accepted.
+        return Sec(9, 1)
+
+    res = await run_iterative_refinement(
+        [original],
+        judge_section=_judge,
+        refine_section=refine_equal_then_better,
+        max_rounds=3,
+        target=0.8,
+    )
+    assert res.sections[0] is not original
+    assert res.converged is True
+    assert res.final_supported == pytest.approx(0.9)
