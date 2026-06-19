@@ -301,6 +301,7 @@ class ConfigState:
                 provider=dto.provider,
                 base_url=dto.base_url.strip(),
                 api_key_env=dto.api_key_env.strip(),
+                model=dto.model.strip(),
             )
         )
         return _image_gen_from(self._store.load())

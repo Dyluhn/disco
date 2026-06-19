@@ -203,6 +203,7 @@ def _image_gen_from(config: RouterConfig) -> ImageGenConfigDTO:
         provider=i.provider,
         base_url=i.base_url,
         api_key_env=i.api_key_env,
+        model=i.model,
     )
 
 

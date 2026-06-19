@@ -135,6 +135,8 @@ export interface ImageGenConfig {
   provider: "procedural" | "comfyui" | "openai";
   base_url?: string;
   api_key_env?: string;
+  /** openai: image model id (e.g. "gpt-image-1"); comfyui: checkpoint filename. */
+  model?: string;
 }
 
 /** Universal web-data providers (§B). Each slot has three tiers; the bundled

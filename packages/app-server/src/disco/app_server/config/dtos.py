@@ -175,6 +175,7 @@ class ImageGenConfigDTO(BaseModel):
     provider: Literal["procedural", "comfyui", "openai"] = "procedural"
     base_url: str = ""
     api_key_env: str = ""
+    model: str = ""  # openai: image model id; comfyui: checkpoint filename; empty → default
 
 
 class DataSourcesConfigDTO(BaseModel):

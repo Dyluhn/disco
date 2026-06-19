@@ -466,7 +466,8 @@ def test_select_image_backend_falls_back_to_procedural_when_openai_has_no_key(mo
         image_gen = type('obj', (object,), {
             'provider': 'openai',
             'base_url': 'https://api.openai.com/v1',
-            'api_key_env': 'OPENAI_API_KEY'
+            'api_key_env': 'OPENAI_API_KEY',
+            'model': ''
         })()
 
     class _MockStore:
@@ -515,7 +516,8 @@ def test_select_image_backend_returns_openai_with_key(monkeypatch):
         image_gen = type('obj', (object,), {
             'provider': 'openai',
             'base_url': 'https://api.openai.com/v1',
-            'api_key_env': 'OPENAI_API_KEY'
+            'api_key_env': 'OPENAI_API_KEY',
+            'model': ''
         })()
 
     class _MockStore:
@@ -543,7 +545,8 @@ def test_select_image_backend_returns_comfyui_with_url(monkeypatch):
         image_gen = type('obj', (object,), {
             'provider': 'comfyui',
             'base_url': 'http://localhost:8188',
-            'api_key_env': ''
+            'api_key_env': '',
+            'model': ''
         })()
 
     class _MockStore:

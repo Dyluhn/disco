@@ -282,9 +282,10 @@ class _OpenAIImageBackend:
     name = "openai-compatible"
     is_remote = True
 
-    def __init__(self, base_url: str, api_key: str | None) -> None:
+    def __init__(self, base_url: str, api_key: str | None, *, model: str = "") -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
+        self._model = model
 
     def generate(
         self,
@@ -308,12 +309,16 @@ class _OpenAIImageBackend:
         # 1536x1024 / 1024x1536. The ONLY size common to DALL·E 2/3 and gpt-image-1 is
         # 1024x1024, so use it unconditionally: a request never 400s on the configured
         # model. (The requested width/height are still reported in the deliverable summary.)
-        payload = {
+        payload: dict[str, object] = {
             "prompt": prompt,
             "n": 1,
             "size": "1024x1024",
             "response_format": response_format,
         }
+        # Pin the model when configured (e.g. "gpt-image-1", "dall-e-3"); empty → the
+        # provider's default. Optional because many OpenAI-compatible servers expose one model.
+        if self._model:
+            payload["model"] = self._model
 
         with httpx.Client(timeout=60.0) as client:
             response = client.post(
@@ -358,8 +363,11 @@ class _ComfyUIBackend:
     name = "comfyui"
     is_remote = True
 
-    def __init__(self, base_url: str) -> None:
+    def __init__(self, base_url: str, *, model: str = "") -> None:
         self._base_url = base_url.rstrip("/")
+        # The checkpoint filename to load in the built-in workflow. Empty → the default
+        # below. This must name a checkpoint that EXISTS on the target ComfyUI install.
+        self._ckpt = model or "flux1-dev.safetensors"
 
     def generate(
         self,
@@ -414,7 +422,7 @@ class _ComfyUIBackend:
             "7": {
                 "inputs": {
                     # CheckpointLoaderSimple's field is `ckpt_name` (outputs MODEL[0], CLIP[1], VAE[2]).
-                    "ckpt_name": "flux1-dev.safetensors",
+                    "ckpt_name": self._ckpt,
                 },
                 "class_type": "CheckpointLoaderSimple",
                 "_meta": {"title": "Load Checkpoint"},
@@ -530,7 +538,7 @@ def select_image_backend() -> ImageBackend:
         if api_key_env:
             api_key = SecretStore().get_secret(api_key_env) or os.environ.get(api_key_env)
             if api_key:
-                return _OpenAIImageBackend(base_url, api_key)
+                return _OpenAIImageBackend(base_url, api_key, model=settings.model)
         # No key available - fall back to procedural
         return _PILProceduralBackend()
 
@@ -538,7 +546,7 @@ def select_image_backend() -> ImageBackend:
     if provider == "comfyui":
         base_url = settings.base_url
         if base_url:
-            return _ComfyUIBackend(base_url)
+            return _ComfyUIBackend(base_url, model=settings.model)
         # No URL configured - fall back to procedural
         return _PILProceduralBackend()
 

@@ -33,7 +33,7 @@ const OPTIONS: { provider: Provider; Icon: typeof Cpu; label: string; help: stri
     provider: "comfyui",
     Icon: Server,
     label: "Self-hosted (ComfyUI)",
-    help: "Your ComfyUI graph API. Keyless, but the base URL is required — without it, image-gen falls back to procedural. Posts a workflow to /prompt and polls /history.",
+    help: "Your ComfyUI graph API. Keyless, but the base URL is REQUIRED (without it, image-gen falls back to procedural). It posts a built-in text→image workflow — set Checkpoint to a model file that exists on your ComfyUI (empty → flux1-dev.safetensors).",
   },
   {
     provider: "openai",
@@ -49,10 +49,12 @@ export function ImageGenSection() {
 
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKeyEnv, setApiKeyEnv] = useState("");
+  const [model, setModel] = useState("");
   useEffect(() => {
     if (data) {
       setBaseUrl(data.base_url ?? "");
       setApiKeyEnv(data.api_key_env ?? "");
+      setModel(data.model ?? "");
     }
   }, [data]);
 
@@ -61,16 +63,18 @@ export function ImageGenSection() {
   // Switching provider preserves the current field drafts so edits aren't lost.
   const selectProvider = (provider: Provider) => {
     if (!data || provider === active) return;
-    save.mutate({ provider, base_url: baseUrl, api_key_env: apiKeyEnv });
+    save.mutate({ provider, base_url: baseUrl, api_key_env: apiKeyEnv, model });
   };
 
   const fieldsDirty =
     !!data &&
-    (baseUrl !== (data.base_url ?? "") || apiKeyEnv !== (data.api_key_env ?? ""));
+    (baseUrl !== (data.base_url ?? "") ||
+      apiKeyEnv !== (data.api_key_env ?? "") ||
+      model !== (data.model ?? ""));
 
   const saveFields = () => {
     if (!data) return;
-    save.mutate({ provider: data.provider, base_url: baseUrl, api_key_env: apiKeyEnv });
+    save.mutate({ provider: data.provider, base_url: baseUrl, api_key_env: apiKeyEnv, model });
   };
 
   const showUrl = data?.provider === "comfyui" || data?.provider === "openai";
@@ -151,6 +155,21 @@ export function ImageGenSection() {
                       ? "https://api.openai.com  (origin only; empty = OpenAI default)"
                       : "http://host:8188  (required for ComfyUI)"
                   }
+                  className={fieldClass}
+                />
+              </label>
+              <label className="flex flex-col gap-hair">
+                <span className="flex items-baseline gap-hair font-ui text-[0.8rem] text-text">
+                  {showPaid ? "Model" : "Checkpoint"}
+                  <span className="font-ui text-[0.72rem] text-text-faint">
+                    {showPaid ? "· empty = provider default" : "· must exist on your ComfyUI"}
+                  </span>
+                </span>
+                <input
+                  spellCheck={false}
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder={showPaid ? "gpt-image-1" : "flux1-dev.safetensors"}
                   className={fieldClass}
                 />
               </label>

@@ -197,6 +197,7 @@ let fixtureImageGen: ImageGenConfig = {
   provider: "procedural",
   base_url: "",
   api_key_env: "",
+  model: "",
 };
 
 export async function getImageGenConfig(): Promise<ImageGenConfig> {
