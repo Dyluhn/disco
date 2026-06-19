@@ -7,7 +7,6 @@ the "openrouter" slot reserved for its dedicated route.
 from __future__ import annotations
 
 import pytest
-
 from disco.app_server import create_app
 from disco.app_server.config_state import ConfigState
 from disco.core import SkillStore, SqliteEventStore
