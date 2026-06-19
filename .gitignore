@@ -60,6 +60,9 @@ disco.db-*
 disco.db.*.json
 # local model-swap backup of the live config
 *.gemma-bak
+# numbered backups of the secret-bearing config (e.g. disco-config.json.bak-1781588447)
+disco-config.json.*
+*.bak-*
 # orchestration scratch (review output, lane diffs, screenshot helper)
 .review/
 *.diff
