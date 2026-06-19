@@ -242,6 +242,7 @@ class BrowserHandler(BaseHTTPRequestHandler):
                         state.browser.close()
                     except Exception:
                         pass
+                if state.playwright is not None:
                     try:
                         state.playwright.stop()
                     except Exception:
