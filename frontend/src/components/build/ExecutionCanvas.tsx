@@ -40,6 +40,7 @@ export function ExecutionCanvas({
   cid,
   streamingFile = null,
   untrusted = false,
+  onSteer,
 }: {
   events: AgentEvent[];
   status: ConversationStatus;
@@ -47,6 +48,9 @@ export function ExecutionCanvas({
   streamingFile?: StreamingFile | null;
   /** Third-party events (shared/imported run) → harden the preview iframe. */
   untrusted?: boolean;
+  /** A1.4 — steer the agent from the preview-pane click-to-edit affordance.
+   * Undefined when steering isn't available (no conversation / static view). */
+  onSteer?: (text: string) => void;
 }) {
   // C5: detect any previewable HTML — either a client-side artifact (srcDoc) or
   // a server-side .html from slides_generate / deliverable (empty content, served
@@ -170,7 +174,13 @@ export function ExecutionCanvas({
           />
         </Tabs.Content>
         <Tabs.Content value="preview" className="h-full focus:outline-none">
-          <PreviewPane status={status} cid={cid} events={events} untrusted={untrusted} />
+          <PreviewPane
+            status={status}
+            cid={cid}
+            events={events}
+            untrusted={untrusted}
+            onSteer={onSteer}
+          />
         </Tabs.Content>
         <Tabs.Content value="cockpit" className="h-full focus:outline-none">
           <CockpitPane

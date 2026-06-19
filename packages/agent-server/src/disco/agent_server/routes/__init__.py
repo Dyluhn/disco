@@ -17,6 +17,7 @@ from .health import make_health_router
 from .mcp import make_mcp_router
 from .models import make_models_router
 from .preview import make_preview_router
+from .preview_edit import make_preview_edit_router
 from .projects import make_projects_router
 from .report import make_report_router
 from .schedules import make_schedules_router
@@ -36,6 +37,7 @@ __all__ = [
     "make_mcp_router",
     "make_models_router",
     "make_preview_router",
+    "make_preview_edit_router",
     "make_projects_router",
     "make_report_router",
     "make_schedules_router",

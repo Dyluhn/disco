@@ -3,10 +3,33 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { configDefaults, defineConfig } from "vitest/config";
 
+// A1 — the in-frame selection-agent IIFE has a SINGLE source of truth: the
+// co-located agent-server package asset `selection_agent.js`. The frontend reads
+// the very same bytes via a `?raw` import (selectionAgent.ts) so the script the
+// browser runs and the script the preview-edit route injects can never drift.
+// The file lives outside `frontend/src`, so it is aliased here and allowed
+// through Vite's dev-server filesystem jail below.
+const SELECTION_AGENT_JS = resolve(
+  __dirname,
+  "../packages/agent-server/src/disco/agent_server/selection_agent.js",
+);
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
-    alias: { "@": resolve(__dirname, "src") },
+    alias: [
+      // Regex form so the alias matches `@selection-agent-script` AND preserves
+      // any query suffix (`?raw`) — a plain string alias matches the whole id
+      // (including the query) and would miss `@selection-agent-script?raw`.
+      {
+        find: /^@selection-agent-script(\?.*)?$/,
+        replacement: `${SELECTION_AGENT_JS}$1`,
+      },
+      { find: "@", replacement: resolve(__dirname, "src") },
+    ],
+  },
+  server: {
+    fs: { allow: [resolve(__dirname, ".."), __dirname] },
   },
   test: {
     environment: "jsdom",

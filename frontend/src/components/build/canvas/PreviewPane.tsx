@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, MonitorPlay, RotateCw } from "lucide-react";
+import { ExternalLink, MonitorPlay, Pencil, RotateCw } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { deriveFiles, deriveSrcDoc } from "@/lib/buildTrace";
 import { agentHttpBase, previewHostUrl } from "@/api/client";
@@ -8,7 +8,9 @@ import { restartPreview } from "@/api/agent";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
 import { useElementSelect } from "@/hooks/useElementSelect";
 import { SelectionOverlay } from "@/components/build/canvas/SelectionOverlay";
+import { EditAffordance } from "@/components/build/canvas/EditAffordance";
 import { SELECTION_AGENT_SCRIPT } from "@/lib/selectionAgent";
+import { formatEditSteer, parseOid } from "@/lib/resolvers/appResolver";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
 /** E2 — detect a Vite/bundler entry HTML by the module-script src it references.
@@ -28,6 +30,7 @@ export function PreviewPane({
   cid,
   events,
   untrusted = false,
+  onSteer,
 }: {
   status: ConversationStatus;
   cid: string | null;
@@ -36,6 +39,9 @@ export function PreviewPane({
    * `allow-scripts` from the static-preview iframe — with open-CORS no-auth APIs,
    * a script in that frame could fetch this instance's endpoints. */
   untrusted?: boolean;
+  /** A1.4 — steer the agent from the click-to-edit affordance. When undefined,
+   * the Edit toggle is hidden (no false affordance: nothing to steer). */
+  onSteer?: (text: string) => void;
 }) {
   // Keep the backend preview active through FINISHED/STUCK too (UI 2.2): the
   // pane shouldn't go MORE dead at the moment of completion.
@@ -71,7 +77,49 @@ export function PreviewPane({
     disarm: srcdocDisarm,
     selection: srcdocSelection,
     walkUp: srcdocWalkUp,
+    resetSelection: srcdocResetSelection,
   } = useElementSelect(srcdocIframeRef, "null");
+
+  // A1.6 — the entry HTML's workspace path (same pick as deriveSrcDoc: index.html,
+  // else any *.html with real client-side content). Used to build the preview-edit
+  // URL that the iframe loads in Edit mode (server-stamped + selection-injected).
+  const entryHtmlPath = useMemo(() => {
+    const withContent = files.filter((f) => f.content && /\.html$/i.test(f.path));
+    return (
+      withContent.find((f) => /(^|\/)index\.html$/i.test(f.path))?.path ??
+      withContent[0]?.path ??
+      null
+    );
+  }, [files]);
+
+  // A1.4/A1.6 — Edit mode is only offered when there's a real steer wire, a real
+  // entry HTML to stamp, a conversation, and the run is trusted. Otherwise no
+  // toggle is shown (no false affordance).
+  const canEdit = Boolean(onSteer && entryHtmlPath && cid && !untrusted);
+  const [editMode, setEditMode] = useState(false);
+  // The current source-kind selection that carries a real (stamped) file:line —
+  // the only case the inline edit box appears for. A deck/non-source/blank-oid
+  // selection keeps the existing inspect-only behaviour.
+  const sourceRef = useMemo(() => {
+    const ref = srcdocSelection?.selection_ref;
+    if (!ref || ref.kind !== "source") return null;
+    return parseOid(ref.oid);
+  }, [srcdocSelection]);
+  // The server-stamped, selection-injected edit URL for the entry HTML. The
+  // iframe's `key={reloadKey}` already forces a fresh load on Refresh, so no
+  // cache-buster query is needed here.
+  const editSrc =
+    cid && entryHtmlPath
+      ? `${agentHttpBase()}/conversations/${encodeURIComponent(cid)}/preview-edit/${entryHtmlPath}`
+      : null;
+
+  function applyEdit(instruction: string) {
+    if (!onSteer || !sourceRef) return;
+    const steerText = formatEditSteer(sourceRef, instruction);
+    if (steerText === null) return; // blank instruction → no-op
+    onSteer(steerText);
+    srcdocResetSelection();
+  }
 
   // C5: when no client-side srcDoc is available, check for a server-side .html
   // artifact (slides_generate / deliverable with empty content string).  If found,
@@ -246,12 +294,37 @@ export function PreviewPane({
 
   // The renderable HTML artifact → show the real site now, no server needed.
   if (srcDoc != null) {
+    // A1.6 — Edit mode swaps the client-side `srcDoc` for the server-stamped,
+    // selection-injected preview-edit route (`src=`). data-oid stamping needs the
+    // line-aware server parser, so click-to-edit only works against that route.
+    const showEdit = editMode && canEdit && editSrc !== null;
     return (
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex shrink-0 items-center justify-between gap-inline border-b border-hairline px-body py-hair">
-          <span className="truncate font-mono text-[0.74rem] text-text-faint">preview</span>
+          <span className="truncate font-mono text-[0.74rem] text-text-faint">
+            {showEdit ? "edit" : "preview"}
+          </span>
           <div className="flex items-center gap-inline">
             {RefreshButton}
+            {/* A1.4 — Edit toggle (only when steering + a stampable entry exist). */}
+            {canEdit && (
+              <button
+                type="button"
+                onClick={() => {
+                  // Leaving edit mode disarms any in-flight selection so a stale
+                  // edit box can't survive the iframe swap.
+                  if (editMode) srcdocDisarm();
+                  setEditMode((v) => !v);
+                }}
+                aria-pressed={showEdit}
+                className={cn(
+                  "flex items-center gap-hair font-ui text-[0.74rem] transition-colors",
+                  showEdit ? "text-accent" : "text-text-muted hover:text-text",
+                )}
+              >
+                <Pencil className="size-3" aria-hidden /> Edit
+              </button>
+            )}
             {proxyAvailable && (
               <button
                 type="button"
@@ -268,16 +341,27 @@ export function PreviewPane({
             Scripted preview is disabled for shared/imported runs (untrusted content).
           </div>
         )}
+        {showEdit && (
+          <div className="shrink-0 border-b border-hairline bg-surface-1 px-body py-hair font-ui text-[0.72rem] text-text-faint">
+            Edit mode: click an element, then describe the change — the agent edits the source.
+          </div>
+        )}
         {/* §4.1 C-EDIT-1: relative wrapper so SelectionOverlay can be positioned
             over the iframe via `absolute inset-0`. */}
         <div className="relative min-h-0 flex-1">
           <iframe
-            key={reloadKey}
+            // Bump the key when switching modes so the iframe (and its in-frame
+            // selection agent) re-initialise for the new document.
+            key={`${reloadKey}-${showEdit ? "edit" : "view"}`}
             ref={srcdocIframeRef}
-            title="Static preview"
-            srcDoc={srcDoc}
+            title={showEdit ? "Editable preview" : "Static preview"}
+            // Edit mode loads the server-stamped route by URL; view mode renders
+            // the client-assembled srcDoc. Both keep the SAME ref + overlay.
+            {...(showEdit ? { src: editSrc } : { srcDoc })}
             // untrusted → empty sandbox (no scripts): a script here could reach this
             // instance's open-CORS APIs. Trusted (your own run) keeps allow-scripts.
+            // No allow-same-origin in either mode → the frame reports origin "null"
+            // (matches useElementSelect(..., "null")) and can't reach this instance.
             sandbox={untrusted ? "" : "allow-scripts"}
             className="h-full w-full border-0 bg-white"
           />
@@ -289,6 +373,18 @@ export function PreviewPane({
             onDisarm={srcdocDisarm}
             onWalkUp={srcdocWalkUp}
           />
+          {/* A1.4 — inline edit box. Appears ONLY for a source-kind selection that
+              carries a real stamped file:line; a deck/non-source/blank selection
+              shows nothing here (no false affordance). */}
+          {showEdit && sourceRef !== null && srcdocSelection !== null && (
+            <EditAffordance
+              file={sourceRef.file}
+              line={sourceRef.line}
+              rect={srcdocSelection.rect}
+              onApply={applyEdit}
+              onCancel={srcdocResetSelection}
+            />
+          )}
         </div>
       </div>
     );
