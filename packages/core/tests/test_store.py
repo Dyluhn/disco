@@ -10,8 +10,8 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from event_fakes import action, user_msg
 from disco.core import SqliteEventStore
+from event_fakes import action, user_msg
 from pydantic import ValidationError
 
 CID = "conv_test"

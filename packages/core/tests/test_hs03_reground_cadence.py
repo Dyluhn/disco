@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import asyncio
 
-from event_fakes import user_msg, with_seqs
 from disco.core import (
     ActionEvent,
     ConversationStatus,
@@ -57,6 +56,7 @@ from disco.core.loop.messages import (
     _HS03_REGROUND_SENTINEL,
     _hs03_reground_message,
 )
+from event_fakes import user_msg, with_seqs
 from loop_fakes import (
     FakeAnalyzer,
     FakeExecutor,

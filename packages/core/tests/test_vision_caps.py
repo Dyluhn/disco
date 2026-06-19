@@ -11,20 +11,19 @@ Covers:
 
 from __future__ import annotations
 
-import pytest
-import httpx
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from disco.core.llm.vision_table import table_vision
+import httpx
+import pytest
 from disco.core.llm.config import (
     ModelEntry,
     RouterConfig,
     apply_runtime_capabilities,
     default_config,
 )
-from disco.core.llm.types import Requirement, OperatingMode, ModelRole
 from disco.core.llm.prompts import DriverPrompts
-
+from disco.core.llm.types import ModelRole, OperatingMode, Requirement
+from disco.core.llm.vision_table import table_vision
 
 # ===========================================================================
 # V3 — table_vision static rules
@@ -303,7 +302,7 @@ class TestProbeVision:
     @pytest.mark.asyncio
     async def test_llamacpp_props_vision_true(self):
         """llama.cpp /props with modalities.vision=true → probe returns True."""
-        from disco.core.llm.wiring import probe_vision, _VISION_PROBE_CACHE
+        from disco.core.llm.wiring import _VISION_PROBE_CACHE, probe_vision
 
         _VISION_PROBE_CACHE.clear()  # reset memo for test isolation
 
@@ -325,7 +324,7 @@ class TestProbeVision:
     @pytest.mark.asyncio
     async def test_llamacpp_props_vision_false(self):
         """llama.cpp /props with modalities.vision=false → probe returns False."""
-        from disco.core.llm.wiring import probe_vision, _VISION_PROBE_CACHE
+        from disco.core.llm.wiring import _VISION_PROBE_CACHE, probe_vision
 
         _VISION_PROBE_CACHE.clear()
 
@@ -346,7 +345,7 @@ class TestProbeVision:
     @pytest.mark.asyncio
     async def test_openrouter_input_modalities_image_gives_true(self):
         """OpenRouter model with input_modalities including 'image' → True."""
-        from disco.core.llm.wiring import probe_vision, _VISION_PROBE_CACHE
+        from disco.core.llm.wiring import _VISION_PROBE_CACHE, probe_vision
 
         _VISION_PROBE_CACHE.clear()
 
@@ -379,7 +378,7 @@ class TestProbeVision:
     @pytest.mark.asyncio
     async def test_openrouter_text_only_model_gives_false(self):
         """OpenRouter model with only 'text' modality → False."""
-        from disco.core.llm.wiring import probe_vision, _VISION_PROBE_CACHE
+        from disco.core.llm.wiring import _VISION_PROBE_CACHE, probe_vision
 
         _VISION_PROBE_CACHE.clear()
 
@@ -412,7 +411,7 @@ class TestProbeVision:
     @pytest.mark.asyncio
     async def test_network_error_returns_none_no_raise(self):
         """A network error during the probe must return None and never raise."""
-        from disco.core.llm.wiring import probe_vision, _VISION_PROBE_CACHE
+        from disco.core.llm.wiring import _VISION_PROBE_CACHE, probe_vision
 
         _VISION_PROBE_CACHE.clear()
 
@@ -429,7 +428,7 @@ class TestProbeVision:
     @pytest.mark.asyncio
     async def test_probe_result_is_memoized(self):
         """Second call with the same (base_url, model_id) returns the cached result."""
-        from disco.core.llm.wiring import probe_vision, _VISION_PROBE_CACHE
+        from disco.core.llm.wiring import _VISION_PROBE_CACHE, probe_vision
 
         _VISION_PROBE_CACHE.clear()
 
@@ -457,7 +456,7 @@ class TestProbeVision:
     @pytest.mark.asyncio
     async def test_probe_all_vision_returns_dict_keyed_by_model_key(self):
         """probe_all_vision returns model-key → vision result dict."""
-        from disco.core.llm.wiring import probe_all_vision, _VISION_PROBE_CACHE
+        from disco.core.llm.wiring import _VISION_PROBE_CACHE, probe_all_vision
 
         _VISION_PROBE_CACHE.clear()
 

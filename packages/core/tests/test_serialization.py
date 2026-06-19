@@ -8,15 +8,6 @@ and forward-compatibility.
 from __future__ import annotations
 
 import pytest
-from event_fakes import (
-    action,
-    agent_error,
-    fatal,
-    observation,
-    status,
-    tombstone,
-    user_msg,
-)
 from disco.core import (
     ConversationStatus,
     EventAdapter,
@@ -25,6 +16,15 @@ from disco.core import (
     event_from_json_dict,
     event_to_json_dict,
     migrate_event,
+)
+from event_fakes import (
+    action,
+    agent_error,
+    fatal,
+    observation,
+    status,
+    tombstone,
+    user_msg,
 )
 from pydantic import ValidationError
 

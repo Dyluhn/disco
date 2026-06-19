@@ -20,7 +20,6 @@ from disco.core.llm.prompts import (
     _PLANNING_DRIVER_PROMPT,
 )
 
-
 # ---------------------------------------------------------------------------
 # 1. Agent planning prompt contains capability-awareness sentinels
 # ---------------------------------------------------------------------------

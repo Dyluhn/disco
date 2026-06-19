@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import random
 
-from event_fakes import action, fatal, status, user_msg, with_seqs
 from disco.core import ConversationState, ConversationStatus
+from event_fakes import action, fatal, status, user_msg, with_seqs
 
 CID = "conv"
 

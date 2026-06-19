@@ -49,7 +49,6 @@ from disco.core.loop.messages import (
     _HS03_REGROUND_SENTINEL,
     _PLAN_EXPLORE_READ_CAP,
     _REPLAN_FRAMING,
-    _hs03_reground_message,
 )
 from loop_fakes import (
     FakeAnalyzer,

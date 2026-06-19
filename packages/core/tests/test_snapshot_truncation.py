@@ -16,6 +16,7 @@ from loop_fakes import (
     finish_step,
 )
 
+
 class FakeSandboxInstance:
     def __init__(self, *, files=None, raises=None):
         self._files = dict(files or {})

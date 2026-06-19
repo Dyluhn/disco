@@ -72,7 +72,7 @@ def font_face_css() -> str:
 """
 
 
-def theme_css_vars(theme: "Theme") -> str:  # noqa: F821 — imported at call site
+def theme_css_vars(theme: Theme) -> str:  # noqa: F821 — imported at call site
     """Emit a ``:root { --var: value; }`` block from a Theme object.
 
     Var names match the evidence CSS and the frontend theme.css so mockup
@@ -80,7 +80,6 @@ def theme_css_vars(theme: "Theme") -> str:  # noqa: F821 — imported at call si
     When ``theme.branded`` is False, ``--accent`` is set to ``--text`` colour
     (no chroma) per the neutral-parity spec.
     """
-    from .tokens import Theme
 
     t: Theme = theme  # type narrowing
     # Accent rationing: neutral theme uses text-muted for accent (no chroma).

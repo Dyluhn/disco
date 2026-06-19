@@ -1,5 +1,4 @@
 """C11 evidence script #1 — recover.txt output."""
-from event_fakes import action, agent_msg, observation, tombstone, user_msg, with_seqs
 from disco.core import (
     ActionEvent,
     CondensationEvent,
@@ -8,6 +7,7 @@ from disco.core import (
     View,
 )
 from disco.core.view import microcompact, recover_span
+from event_fakes import action, agent_msg, observation, tombstone, user_msg, with_seqs
 
 
 def show(label, evs):

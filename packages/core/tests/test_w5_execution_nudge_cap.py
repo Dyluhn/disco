@@ -13,20 +13,14 @@ from __future__ import annotations
 
 import pytest
 from disco.core import (
-    ConversationStatus,
     MessageEvent,
-    NoOpCondenser,
-    SqliteEventStore,
     StatusEvent,
     ToolResult,
 )
 from disco.core.events import EventSource
 from disco.core.llm import OperatingMode, ToolSpec
-from disco.core.loop import AgentLoop, NeverConfirm
 from loop_fakes import (
-    FakeAnalyzer,
     FakeExecutor,
-    FakeSummarizer,
     ScriptedAgent,
     action_step,
     build_loop,

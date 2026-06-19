@@ -14,10 +14,8 @@ Covers:
 from __future__ import annotations
 
 import pytest
-
 from disco.core.brand import (
     THEMES,
-    Theme,
     definition_mark_html,
     font_face_css,
     print_skeleton_css,
@@ -26,7 +24,6 @@ from disco.core.brand import (
     wordmark_html,
 )
 from disco.core.brand.tokens import DISCO_DARK, DISCO_LIGHT, NEUTRAL_LIGHT
-
 
 # ---------------------------------------------------------------------------
 # 1. resolve_theme

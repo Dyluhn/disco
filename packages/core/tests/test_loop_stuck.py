@@ -6,12 +6,11 @@ event_content_eq) + loop integration (STUCK then resume on a new message).
 
 from __future__ import annotations
 
-from event_fakes import action, agent_error, agent_msg, observation, user_msg
 from disco.core import ConversationStatus, EventSource, MessageEvent, StatusEvent
-from disco.core.loop import signals
-from disco.core.loop import StuckDetector, StuckThresholds
+from disco.core.loop import StuckDetector, StuckThresholds, signals
 from disco.core.loop.control import Disp
 from disco.core.loop.stuck import repeated_verify_no_progress
+from event_fakes import action, agent_error, agent_msg, observation, user_msg
 from loop_fakes import ScriptedAgent, action_step, build_loop, finish_step
 
 CID = "conv"
@@ -299,7 +298,6 @@ def test_c7_stuck_escape_attempt_count_helper():
     has happened, and the count must equal the number of `stuck_escape`
     markers in the event log. This is the rotation key — a wrong count
     would make the pool selection non-deterministic under a fixed seed."""
-    from disco.core.loop.engine import AgentLoop
 
     # No events: count is 0.
     assert signals.stuck_escape_attempt_count([]) == 0

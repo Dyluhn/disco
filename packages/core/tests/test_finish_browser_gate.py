@@ -1,5 +1,4 @@
 import pytest
-from event_fakes import action, with_seqs
 from disco.core import (
     MessageEvent,
     NoOpCondenser,
@@ -17,6 +16,7 @@ from disco.core.loop.engine import (
     _last_productive_seq,
     _latest_browser_error,
 )
+from event_fakes import action, with_seqs
 from loop_fakes import (
     FakeAnalyzer,
     FakeExecutor,

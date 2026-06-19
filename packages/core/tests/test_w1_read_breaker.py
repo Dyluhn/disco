@@ -13,15 +13,14 @@ owned by another worker and already correct.
 
 from __future__ import annotations
 
-from event_fakes import action, observation, user_msg
 from disco.core import (
     ActionEvent,
-    event_content_eq,
     ToolCall,
+    event_content_eq,
 )
 from disco.core.loop import StuckDetector, StuckThresholds
-from disco.core.loop.stuck import _WAIT_POLL_TOOLS, _PLAN_META_TOOLS
-
+from disco.core.loop.stuck import _PLAN_META_TOOLS, _WAIT_POLL_TOOLS
+from event_fakes import action, observation, user_msg
 
 # ---------------------------------------------------------------------------
 # helpers

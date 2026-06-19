@@ -10,7 +10,6 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
-from event_fakes import action, agent_error, agent_msg, status, user_msg, with_seqs
 from disco.core import (
     ConversationStatus,
     EventFilter,
@@ -19,6 +18,7 @@ from disco.core import (
     SqliteEventStore,
     View,
 )
+from event_fakes import action, agent_error, agent_msg, status, user_msg, with_seqs
 
 CID = "conv_filters"
 
