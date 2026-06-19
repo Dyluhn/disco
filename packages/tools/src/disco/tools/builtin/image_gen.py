@@ -303,20 +303,15 @@ class _OpenAIImageBackend:
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
-        # OpenAI Images only accepts a fixed set of sizes (not arbitrary WxH). Snap the
-        # requested dims to the nearest standard by aspect ratio — square / landscape /
-        # portrait — so a 1280x720 request doesn't 400. (1024x1024 is universal across
-        # DALL·E 2/3 and gpt-image-1; 1792 variants are DALL·E 3.)
-        if width > height:
-            size = "1792x1024"
-        elif height > width:
-            size = "1024x1792"
-        else:
-            size = "1024x1024"
+        # OpenAI Images only accepts a fixed set of sizes (not arbitrary WxH), and those
+        # sets DIFFER by model — DALL·E 3 does 1792x1024 / 1024x1792 while gpt-image-1 does
+        # 1536x1024 / 1024x1536. The ONLY size common to DALL·E 2/3 and gpt-image-1 is
+        # 1024x1024, so use it unconditionally: a request never 400s on the configured
+        # model. (The requested width/height are still reported in the deliverable summary.)
         payload = {
             "prompt": prompt,
             "n": 1,
-            "size": size,
+            "size": "1024x1024",
             "response_format": response_format,
         }
 
@@ -684,7 +679,7 @@ class ImageGenTool:
                 content=(
                     f"image_generate: backend produced bytes that lack the "
                     f"PNG signature — refusing to surface a corrupt image "
-                    f"as a deliverable. (backend={self._backend.name})"
+                    f"as a deliverable. (backend={backend.name})"
                 ),
                 error="non_png_signature",
             )
@@ -694,7 +689,7 @@ class ImageGenTool:
                 content=(
                     f"image_generate: backend produced bytes that lack the "
                     f"JPEG SOI marker — refusing to surface a corrupt image "
-                    f"as a deliverable. (backend={self._backend.name})"
+                    f"as a deliverable. (backend={backend.name})"
                 ),
                 error="non_jpeg_signature",
             )
@@ -711,7 +706,7 @@ class ImageGenTool:
             content=(
                 f"Image written: {len(image_bytes)} bytes to {out_path} "
                 f"({args.width}x{args.height} {fmt.upper()}, "
-                f"seed={seed}, backend={self._backend.name})"
+                f"seed={seed}, backend={backend.name})"
             ),
             artifacts=[out_path],
             structured={
@@ -722,7 +717,7 @@ class ImageGenTool:
                 "height": args.height,
                 "seed": seed,
                 "prompt": args.prompt,
-                "backend": self._backend.name,
+                "backend": backend.name,
                 "bytes": len(image_bytes),
                 # Hex of the first 8 bytes (the magic) — useful for the
                 # deliverable panel to render a thumbnail / sanity-check
