@@ -9,7 +9,6 @@ provider key never reaches the tool observations or the answer (tool §6).
 
 from __future__ import annotations
 
-from research_fakes import FakeExtractionProvider, FakeRouter, FakeSearchProvider, hit
 from disco.core import ConversationStatus, SqliteEventStore, ToolCall
 from disco.core.llm import OperatingMode
 from disco.core.loop import AgentLoop, AgentStep, NeverConfirm, NullSecurityAnalyzer
@@ -28,6 +27,7 @@ from disco.tools import (
     build_default_registry,
     research_scope,
 )
+from research_fakes import FakeExtractionProvider, FakeRouter, FakeSearchProvider, hit
 
 SENTINEL_KEY = "SEARXNG-PROVIDER-KEY-DO-NOT-LEAK"
 CID = "conv"

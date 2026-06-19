@@ -6,7 +6,6 @@ Research-surface composition — the shippable form of the §8.5 in-test wiring.
 
 from __future__ import annotations
 
-from research_fakes import FakeExtractionProvider, FakeRouter, FakeSearchProvider, hit
 from disco.core import ToolCall
 from disco.retrieval import (
     CrossEncoderNLIVerifier,
@@ -23,6 +22,7 @@ from disco.tools import (
     build_default_registry,
     research_scope,
 )
+from research_fakes import FakeExtractionProvider, FakeRouter, FakeSearchProvider, hit
 
 KEY = "FIRECRAWL-KEY-DO-NOT-LEAK"
 

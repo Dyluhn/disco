@@ -19,11 +19,9 @@ from __future__ import annotations
 
 import pytest
 from disco.core.llm import CompletionResponse, StreamChunk, TokenUsage
-from disco.retrieval import LexicalReranker, Passage, SearchHit
+from disco.retrieval import LexicalReranker
 from disco.retrieval.streaming import stream_research_answer
-
 from research_fakes import FakeExtractionProvider, FakeNLI, FakeSearchProvider, hit
-
 
 # ---------------------------------------------------------------------------
 # Fakes specific to this test module

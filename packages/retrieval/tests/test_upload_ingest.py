@@ -11,8 +11,8 @@ Covers:
 
 from __future__ import annotations
 
-import sys
 import os
+import sys
 
 # Add the agent-server package to path so we can import uploads_ingest.
 sys.path.insert(
@@ -21,7 +21,6 @@ sys.path.insert(
 )
 
 from disco.agent_server.uploads_ingest import parse_upload_to_doc  # noqa: E402
-
 
 CID = "conv_test123"
 

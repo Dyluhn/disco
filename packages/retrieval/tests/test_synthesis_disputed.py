@@ -12,9 +12,7 @@ Behavioral contract after the fix:
 
 from __future__ import annotations
 
-import pytest
 from disco.retrieval.deep_research.synthesis import _SECTION_PROMPT, _extract_disputed_notes
-
 
 # ---------------------------------------------------------------------------
 # C3 — vacuous hedges must be excluded
