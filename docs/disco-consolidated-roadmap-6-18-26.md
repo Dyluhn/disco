@@ -64,9 +64,10 @@ Legend: ✅ done · ◐ partial · ○ open · ⬚ blocked/decision-gated · �
   (§4.5). Plan: `archive/deck-editor-integration-plan-6-18-26.md`. Effort: med.
 - **A3 Image generation ◐ (DECIDED: verify-only)** — the 3 tiers are ALL built & real:
   `procedural` (bundled) · `comfyui` (self-host) · `openai`-compatible (paid), via
-  `select_image_backend()` (`image_gen.py:482`), C7 seam `313d357`. **Ship these 3; `DiffusersBackend`
-  stays deferred** (redundant w/ ComfyUI). Remaining = live-verify each tier in the running app
-  + Settings CRUD screenshot. Effort: low.
+  `select_image_backend()` (`image_gen.py:482`), C7 seam `313d357`. **Ship these 3; in-process
+  `DiffusersBackend` SCRAPPED** (Dylan 2026-06-19 — multi-GB weights would break the 8 GB ship target;
+  ComfyUI is the local-GPU path). Stub references removed from `image_gen.py`. Remaining = live-verify
+  each tier in the running app + Settings CRUD screenshot. Effort: low.
 - **A4 Iterative research mode ○ (DECIDED: claim-surgical + driver rework)** — per weak/unsupported
   claim (NLI verdict), targeted re-search; converge at **~80% supported OR 3 rounds**; then a
   **driver-LLM coherence rework** of the whole report if prose no longer flows. Post-synthesis
@@ -152,8 +153,8 @@ Legend: ✅ done · ◐ partial · ○ open · ⬚ blocked/decision-gated · �
    task-success-rate (3-5 DoD build scenarios) + latency percentiles (DISCO_INSPECT) + cost table
    (TokenUsage). Build the missing suites + aggregation.
 3. **A3 image providers** → **ship the current 3** (`procedural`/`comfyui`/`openai`-compatible, all
-   already built & real); **DiffusersBackend stays deferred** (redundant with ComfyUI). A3 is now
-   a **live-verify** task, not a build.
+   already built & real); **in-process DiffusersBackend SCRAPPED** (Dylan 2026-06-19; ComfyUI covers
+   local GPU). A3 is now a **live-verify** task, not a build.
 *Earlier-resolved: license=Apache-2.0 · slides=loose-hybrid · default driver=sticky · bundled model=scrapped(BYO).*
 
 ---

@@ -4,18 +4,18 @@ a deliverable artifact.
 
 Backend design
 --------------
-The tool is structured around a `ImageBackend` protocol so a real
-diffusers/Stable-Diffusion backend can be slotted in without touching the
-tool. Today the *default* backend is `_PILProceduralBackend` — a deterministic
-procedural pattern generator built on Pillow (no network, no API key, no
-optional model deps). It is the "keyless" baseline per the universal-providers
-tiers; the live `diffusers`+`torch` wire is **deferred** (neither is installed
-in this environment; importing them would force a multi-GB model download at
-tool-import time and break the package's headless build).
+The tool is structured around an `ImageBackend` protocol with THREE tiers, the
+same universal bundled/self-host/paid pattern the rest of the stack uses:
+- `_PILProceduralBackend`: the keyless DEFAULT — a deterministic procedural
+  pattern generator built on Pillow (no network, no API key, no model deps).
+- `_ComfyUIBackend`: Self-hosted ComfyUI graph API (real diffusion on your own
+  GPU box; keyless).
+- `_OpenAIImageBackend`: OpenAI-compatible /v1/images/generations API (paid).
 
-The system also supports two additional backends configured via Settings:
-- `_OpenAIImageBackend`: OpenAI-compatible /v1/images/generations API (paid)
-- `_ComfyUIBackend`: Self-hosted ComfyUI graph API (self-hosted, keyless)
+Real diffusion runs out-of-process (ComfyUI or a paid API), NOT in-process: an
+in-process `diffusers`+`torch` backend was deliberately SCRAPPED — it would pin
+multi-GB of weights to the app process and break the 8 GB keyless ship target,
+and ComfyUI already gives a local-GPU path without that cost.
 
 The `select_image_backend()` factory reads from ConfigStore and chooses the
 appropriate backend based on the saved provider setting. Falls back to procedural
@@ -28,9 +28,8 @@ binary image, so the tool's full surface (binary write → deliverable emission
 → magic-bytes check) is exercised end-to-end without an external dependency.
 A small geometric pattern, seeded from the prompt (with an optional explicit
 seed), satisfies the binary-safe-write contract and is visibly distinct across
-seeds — enough for a focused test, and the same interface a real model would
-speak. The deferred `DiffusersBackend` slot is left empty by design; tests do
-not require it.
+seeds. For photoreal / subject-accurate images, point the tool at ComfyUI or a
+paid API in Settings.
 
 Binary safety
 -------------
@@ -109,9 +108,9 @@ class ImageGenArgs(BaseModel):
         min_length=1,
         max_length=1024,
         description=(
-            "Text description of the image to generate. Used as a seed for the "
-            "keyless local backend (deterministic per prompt). The live diffusers "
-            "backend (deferred) would consume it as the conditioning prompt."
+            "Text description of the image to generate. Seeds the keyless "
+            "procedural backend (deterministic per prompt); consumed as the "
+            "conditioning prompt by the ComfyUI / OpenAI tiers when configured."
         ),
     )
     filename: str = Field(
@@ -152,9 +151,9 @@ class ImageGenArgs(BaseModel):
 
 class ImageBackend(Protocol):
     """The interface a real image-gen backend must speak. The tool only
-    depends on this shape — the implementation is injected at runtime, so
-    `DiffusersBackend` (deferred) can replace `_PILProceduralBackend` without
-    touching the tool's `run()` body."""
+    depends on this shape — the implementation is injected at runtime, so any
+    new provider backend can replace `_PILProceduralBackend` without touching
+    the tool's `run()` body."""
 
     name: str  # surfaced in the deliverable summary ("backend": "pil-procedural")
     is_remote: bool  # network-bound? (False for both current backends)
@@ -195,12 +194,11 @@ class _PILProceduralBackend:
     (PNG encoding is deterministic for the same input array + same PIL
     build), which is what the round-trip test asserts.
 
-    NOTE — this is NOT a generative model. It exists so the binary-safe
-    write path and deliverable emission are exercised end-to-end without
-    shipping diffusers/torch. The real `DiffusersBackend` (Stable Diffusion
-    XL or similar) is the deferred replacement; it speaks the same
-    `ImageBackend` protocol, so swapping it in is a one-line registration
-    change in `__init__.py`.
+    NOTE — this is NOT a generative model; it's the keyless DEFAULT that
+    guarantees `image_generate` always produces a valid image file offline.
+    For photoreal / subject-accurate output, configure the ComfyUI (self-host)
+    or OpenAI-compatible (paid) tier in Settings — both speak the same
+    `ImageBackend` protocol and route through this same binary write path.
     """
 
     name = "pil-procedural"
@@ -560,29 +558,27 @@ def select_image_backend() -> ImageBackend:
 class ImageGenTool:
     """Generate an image from a text prompt and write it to the workspace
     as a binary deliverable. The default backend is keyless/local (PIL
-    procedural); the live model backend is deferred."""
+    procedural); real diffusion comes from the ComfyUI or OpenAI-compatible
+    tier configured in Settings."""
 
     definition = ToolDef(
         name="image_generate",
         description=(
             "Generate an image from a text prompt and save it to the workspace "
-            "as a binary deliverable. The default backend is local and keyless "
-            "(procedural pattern, seeded from the prompt) — no network, no "
-            "API key. The output is a real, valid image file (PNG by default) "
-            "written to disk and surfaced in the deliverables panel. Use a "
-            "fixed `seed` for reproducible results; the same prompt + same "
-            "seed yields the byte-identical image every time. Format: 'png' "
-            "(lossless, default) or 'jpeg' (smaller). NOTE: the live "
-            "diffusers-based generative backend is deferred; the current "
-            "default renders a deterministic procedural pattern that proves "
-            "the binary-safe write + deliverable path end-to-end."
+            "as a binary deliverable (PNG by default), surfaced in the "
+            "deliverables panel. IMPORTANT: the keyless default backend renders "
+            "a deterministic PROCEDURAL PATTERN seeded from the prompt — it is "
+            "NOT photoreal or subject-accurate (asking for 'a cat' yields an "
+            "abstract pattern, not a cat). Photoreal generation requires the "
+            "ComfyUI (self-host) or OpenAI-compatible (paid) tier configured in "
+            "Settings → Image generation. Use a fixed `seed` for reproducible "
+            "results. Format: 'png' (lossless, default) or 'jpeg' (smaller)."
         ),
         args_model=ImageGenArgs,
         needs=frozenset({Capability.FILESYSTEM}),
         # Low risk on the local backend (no network, no model, no shell). The
-        # deferred diffusers tier, if/when wired in, would want a Medium
-        # static hint and the runtime would still route through the same
-        # binary write path.
+        # remote tiers (ComfyUI/OpenAI) are network-bound but route through the
+        # same binary write path.
         runs_in="sandbox",
         read_only=False,
     )

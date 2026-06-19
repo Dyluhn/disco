@@ -13,10 +13,10 @@ Acceptance (per the D9 brief):
   * Image bytes NEVER appear in the ToolOutcome text content (the brief's
     "leak into the text context" guardrail).
 
-Backend note: the live `diffusers`+`torch` Stable-Diffusion wire is DEFERRED
-(neither package is installed in this env; importing them would force a
-multi-GB model download). The default backend is `_PILProceduralBackend`
-(keyless, local, no network), which is sufficient to prove the
+Backend note: in-process `diffusers`+`torch` Stable-Diffusion was SCRAPPED
+(it would pin multi-GB of weights to the app process and break the 8 GB ship
+target; ComfyUI gives the local-GPU path out-of-process). The default backend
+is `_PILProceduralBackend` (keyless, local, no network), which proves the
 binary-write + deliverable + magic-bytes contract end-to-end.
 """
 
@@ -394,7 +394,7 @@ def test_image_generate_tool_def_is_sandbox_and_mutating():
     assert d.runs_in == "sandbox"
     assert d.read_only is False
     # Filesystem capability only — the procedural backend needs no
-    # network. The deferred diffusers tier would want NETWORK too.
+    # network. The remote tiers (ComfyUI/OpenAI) are network-bound.
     assert "filesystem" in {c.value for c in d.needs}
 
 
