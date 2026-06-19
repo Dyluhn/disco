@@ -42,6 +42,7 @@ import { DeepProgressStrip } from "./DeepProgressStrip";
 import { asGroundedAnswer, DeepReportView } from "./DeepReportView";
 import { DepthTierSelector, type Tier } from "./DepthTierSelector";
 import { RecencySelector } from "./RecencySelector";
+import { IterativeToggle } from "./IterativeToggle";
 import { TieredSourcePanel } from "./TieredSourcePanel";
 import { NeedMoreCard } from "./NeedMoreCard";
 import { FollowUpStatus } from "./FollowUpStatus";
@@ -134,6 +135,7 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
                   <div className="flex items-center gap-inline">
                     <DepthTierSelector value={r.depthTier as Tier} onChange={r.setDepthTier} />
                     <RecencySelector value={r.recencyWindow} onChange={r.setRecencyWindow} />
+                    <IterativeToggle value={r.iterative} onChange={r.setIterative} />
                     {/* G1/DR-4: UploadComposer in the empty state. The preCid is
                         created eagerly on mount so this renders immediately.
                         Only shown when a live cid is available (no false affordance). */}

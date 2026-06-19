@@ -122,3 +122,29 @@ def test_create_conversation_applies_depth_tier():
         "/conversations", json={"owner_id": "local", "surface": "deep_research"}
     ).json()["conversation_id"]
     assert runtime._depth_for(cid_def) == DepthTier.STANDARD_DEEP
+
+
+def test_create_conversation_applies_iterative():
+    """A4: the POST /conversations `iterative` flag must reach the runtime — it
+    flows UI→request→set_iterative exactly like depth_tier→set_depth. Default OFF."""
+    store = SqliteEventStore(":memory:")
+    runtime = _runtime(store, "x")
+    client = TestClient(create_app(store, runtime=runtime))
+
+    cid_on = client.post(
+        "/conversations",
+        json={"owner_id": "local", "surface": "deep_research", "iterative": True},
+    ).json()["conversation_id"]
+    assert runtime._iterative_for(cid_on) is True
+
+    cid_off = client.post(
+        "/conversations",
+        json={"owner_id": "local", "surface": "deep_research", "iterative": False},
+    ).json()["conversation_id"]
+    assert runtime._iterative_for(cid_off) is False
+
+    # omitted → the OFF default still applies
+    cid_def = client.post(
+        "/conversations", json={"owner_id": "local", "surface": "deep_research"}
+    ).json()["conversation_id"]
+    assert runtime._iterative_for(cid_def) is False

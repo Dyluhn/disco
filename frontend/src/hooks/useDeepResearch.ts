@@ -47,6 +47,10 @@ export function useDeepResearch(
   // the run to a different model silently).
   const [leaderId, setLeaderId] = useState<string | null>(initialLeaderId ?? null);
   const [depthTier, setDepthTier] = useState<Tier>("standard_deep");
+  // A4: iterative grounding toggle — false = standard run, true = re-search
+  // weakly-grounded claims + re-check (up to 3 rounds). Flows into submit's
+  // create frame as `iterative`, read by the runtime's set_iterative path.
+  const [iterative, setIterative] = useState(false);
   // DR-3: recency filter — null = off (any time), "month"/"week" = date-bounded.
   const [recencyWindow, setRecencyWindow] = useState<"month" | "week" | null>(null);
   // fix-c #4: PDF/DOCX export runs on the server (WeasyPrint / pandoc) and can
@@ -65,7 +69,7 @@ export function useDeepResearch(
   const preCreate = useMutation({ mutationFn: createDeepResearchConversation });
   // Track which depth/recency combo the current preCid was created for so we
   // only re-create when they actually change (not on every render).
-  const preCidSettingsRef = useRef<{ depthTier: Tier; recencyWindow: "month" | "week" | null } | null>(null);
+  const preCidSettingsRef = useRef<{ depthTier: Tier; iterative: boolean; recencyWindow: "month" | "week" | null } | null>(null);
 
   useEffect(() => {
     // Don't pre-create on the resume path (we already have a cid) or when
@@ -74,16 +78,17 @@ export function useDeepResearch(
     const alreadyMatchesCurrent =
       preCidSettingsRef.current !== null &&
       preCidSettingsRef.current.depthTier === depthTier &&
+      preCidSettingsRef.current.iterative === iterative &&
       preCidSettingsRef.current.recencyWindow === recencyWindow;
     if (alreadyMatchesCurrent) return;
-    preCidSettingsRef.current = { depthTier, recencyWindow };
+    preCidSettingsRef.current = { depthTier, iterative, recencyWindow };
     preCreate.mutate(
       // query is intentionally empty — no USER message is sent at pre-create
       // time; the cid is just a lightweight conversation record for uploads.
-      { query: "", depthTier, recencyWindow },
+      { query: "", depthTier, iterative, recencyWindow },
       { onSuccess: setPreCid },
     );
-  }, [resumeCid, session, depthTier, recencyWindow]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [resumeCid, session, depthTier, iterative, recencyWindow]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const stream = useDeepResearchStream(session);
 
@@ -125,7 +130,7 @@ export function useDeepResearch(
         return;
       }
       create.mutate(
-        { query: trimmed, leaderId, depthTier, recencyWindow },
+        { query: trimmed, leaderId, depthTier, iterative, recencyWindow },
         {
           // kick:true — this is the ONLY path that starts the run.
           onSuccess: (cid) =>
@@ -133,7 +138,7 @@ export function useDeepResearch(
         },
       );
     },
-    [create, leaderId, depthTier, recencyWindow, preCid],
+    [create, leaderId, depthTier, iterative, recencyWindow, preCid],
   );
 
   // fix-c #5: the bounded-by "Run on exhaustive tier" button used to call
@@ -147,14 +152,14 @@ export function useDeepResearch(
       if (!q) return;
       setDepthTier("exhaustive");
       create.mutate(
-        { query: q, leaderId, depthTier: "exhaustive" },
+        { query: q, leaderId, depthTier: "exhaustive", iterative },
         {
           onSuccess: (cid) =>
             setSession({ cid, query: q, depthTier: "exhaustive", kick: true }),
         },
       );
     },
-    [create, leaderId],
+    [create, leaderId, iterative],
   );
 
   // Stop = pause (cooperative; the engine halts at the next checkpoint and keeps
@@ -295,6 +300,8 @@ export function useDeepResearch(
     setLeaderId,
     depthTier,
     setDepthTier,
+    iterative,
+    setIterative,
     recencyWindow,
     setRecencyWindow,
     submit,

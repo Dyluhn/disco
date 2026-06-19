@@ -57,6 +57,20 @@ describe("Deep Research surface — full lifecycle", () => {
     expect(screen.getByRole("button", { name: /Depth tier: Standard-deep/i })).toBeInTheDocument();
   });
 
+  it("A4: renders the iterative-grounding toggle on the DR scope, default OFF, and toggling flips it ON", async () => {
+    const user = userEvent.setup();
+    renderSurface();
+    const toggle = screen.getByRole("button", { name: /Iterative grounding/i });
+    expect(toggle).toBeInTheDocument();
+    // default OFF — the value flows into submit's create frame as iterative:false
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await user.click(toggle);
+    // toggling ON flips the controlled state (which threads into the request)
+    expect(
+      screen.getByRole("button", { name: /Iterative grounding/i }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("after submit, shows the plan gate with editable sub-questions", async () => {
     const user = userEvent.setup();
     renderSurface();

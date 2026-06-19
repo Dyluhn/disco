@@ -69,6 +69,10 @@ def make_conversations_router(
             # every DR run defaulted to standard_deep regardless of the UI picker.
             if body.depth_tier:
                 runtime.set_depth(conversation_id, body.depth_tier)
+            # A4: iterative grounding toggle (no-op for other surfaces). False ⇒
+            # leave the default-OFF; True ⇒ enable the re-search/re-check loop.
+            if body.iterative:
+                runtime.set_iterative(conversation_id, True)
             # DR-3 E2: recency window for time-filtered search + prompt injection.
             if body.recency_window is not None:
                 runtime.set_recency(conversation_id, body.recency_window)

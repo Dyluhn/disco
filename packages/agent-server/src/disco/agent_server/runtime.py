@@ -1327,6 +1327,12 @@ class ConversationRuntime:
     def set_depth(self, conversation_id: str, tier: str | None) -> None:
         return self._dr.set_depth(conversation_id, tier)
 
+    def _iterative_for(self, conversation_id: str) -> bool:
+        return self._dr._iterative_for(conversation_id)
+
+    def set_iterative(self, conversation_id: str, enabled: bool) -> None:
+        return self._dr.set_iterative(conversation_id, enabled)
+
     def set_recency(self, conversation_id: str, window: str | None) -> None:
         return self._dr.set_recency(conversation_id, window)
 

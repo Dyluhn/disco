@@ -89,6 +89,10 @@ class CreateConversationBody(BaseModel):
     # depth picker sends it here; the runtime reads it via _depth_for. Without
     # wiring it through, every run silently used the standard_deep default.
     depth_tier: str | None = None
+    # A4: Deep Research iterative grounding. When True the engine re-searches
+    # weakly-grounded claims and re-checks (up to 3 rounds). The UI's toggle sends
+    # it here; the runtime reads it via _iterative_for. False ⇒ standard run.
+    iterative: bool = False
     # --- Shared schema points pre-seeded for the runthru-v2 fan-out (each is wired
     # by its owning wave; default = OFF / byte-identical to today until wired). ---
     # DR-3 (Track B §11.4): bias research toward recent sources. None ⇒ no change.

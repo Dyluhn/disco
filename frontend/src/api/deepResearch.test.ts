@@ -8,7 +8,11 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { exportReport, serializeReportToMarkdown } from "@/api/deepResearch";
+import {
+  createDeepResearchConversation,
+  exportReport,
+  serializeReportToMarkdown,
+} from "@/api/deepResearch";
 import * as clientModule from "@/api/client";
 import type { ReportEvent } from "@/types/agent";
 
@@ -88,6 +92,42 @@ describe("exportReport", () => {
 
     await expect(exportReport("conv_any", "md")).rejects.toThrow(/exportReportAsMarkdown/);
     expect(stub).not.toHaveBeenCalled();
+  });
+});
+
+// ---- A4: createDeepResearchConversation threads `iterative` into the create frame ----
+
+describe("createDeepResearchConversation — A4 iterative grounding", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("sends iterative:true when the toggle is ON (mirrors depth_tier flow)", async () => {
+    vi.spyOn(clientModule, "agentLive").mockReturnValue(true);
+    const send = vi
+      .spyOn(clientModule, "agentSend")
+      .mockResolvedValue({ conversation_id: "conv_iter" } as never);
+
+    await createDeepResearchConversation({ query: "q", iterative: true });
+
+    const [, path, body] = send.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(path).toBe("/conversations");
+    expect(body.surface).toBe("deep_research");
+    expect(body.iterative).toBe(true);
+  });
+
+  it("defaults iterative:false when the toggle is omitted (byte-identical OFF)", async () => {
+    vi.spyOn(clientModule, "agentLive").mockReturnValue(true);
+    const send = vi
+      .spyOn(clientModule, "agentSend")
+      .mockResolvedValue({ conversation_id: "conv_noiter" } as never);
+
+    await createDeepResearchConversation({ query: "q" });
+
+    const [, , body] = send.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(body.iterative).toBe(false);
+    // and it still carries the depth_tier default — proving we mirror, not replace
+    expect(body.depth_tier).toBe("standard_deep");
   });
 });
 

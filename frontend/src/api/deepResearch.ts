@@ -28,6 +28,9 @@ export interface DeepResearchSubmit {
   leaderId?: string | null;
   /** Depth tier (quick / standard_deep / exhaustive). Defaults to standard_deep. */
   depthTier?: "quick" | "standard_deep" | "exhaustive";
+  /** A4: iterative grounding — re-search weakly-grounded claims + re-check (up to
+   * 3 rounds). Defaults to false (the standard non-iterative run). */
+  iterative?: boolean;
   /** DR-3 recency filter: "month" = past 30 days, "week" = past 7 days, null = off. */
   recencyWindow?: "month" | "week" | null;
 }
@@ -57,6 +60,9 @@ export async function createDeepResearchConversation(
       // (the backend tolerates the extra field — Pydantic ignores when not
       // declared, and where it IS declared it gets persisted as the run's tier).
       depth_tier: opts.depthTier ?? "standard_deep",
+      // A4: iterative grounding toggle — read by the runtime's set_iterative path.
+      // Defaults to false (the standard non-iterative run).
+      iterative: opts.iterative ?? false,
       // DR-3: recency_window is optional; omit (undefined) when null/off so the
       // backend receives no field rather than explicit null (cleaner log).
       ...(opts.recencyWindow != null ? { recency_window: opts.recencyWindow } : {}),
