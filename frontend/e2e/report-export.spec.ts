@@ -17,7 +17,9 @@ test.describe("Deep Research → export controls", () => {
     const input = page.getByPlaceholder(/ask a research question/i);
     await input.fill("What is the current state of solid-state battery commercialization?");
     await input.press("Enter");
-    await page.getByRole("button", { name: /approve & build/i }).click();
+    // DR's plan gate overrides the shared PlanPanel label to "Approve research plan"
+    // (DeepResearchSurface.tsx approveLabel) — distinct from the Build surface's "Approve & build".
+    await page.getByRole("button", { name: /approve research plan/i }).click();
 
     // Report assembled → export controls appear.
     const md = page.getByRole("button", { name: /^MD$/ });
