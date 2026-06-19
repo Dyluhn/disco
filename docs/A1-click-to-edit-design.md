@@ -42,6 +42,31 @@ The edit affordance appears only on a `kind:'source'` selection carrying a real 
 non-stamped element (no data-oid) → no edit affordance (walk-up still works). Live React preview (no
 stamping in v1) → the existing inspect/select works but the "edit here" affordance is gated off (honest).
 
+## CORRECTED architecture (after gpt-5.5 plan review #1 — BLOCK on the wiring)
+The review found the original "stamp in files.py ?inline=true" wiring **broken**: the static-site preview is
+CLIENT-assembled (`PreviewPane` → `deriveSrcDoc(files)` → `<iframe srcDoc>`), NOT server-served; the inline
+`/artifacts` route is used only for empty-content/declared artifacts, is jailed to DECLARED artifacts (a
+plain `file_write` index.html isn't declared), and its CSP is `default-src 'none'` (an injected selection
+script wouldn't even run). The STAMPER (A1.1, committed `e561000`) is correct + reusable; only the wiring
+changes. Corrected keystone wiring:
+- **A1.1b (NEW route):** `GET /conversations/{cid}/preview-edit/{path}` — a preview-specific JAILED route
+  (jail to the workspace, like the live-preview proxy, NOT the declared-artifact allowlist). It: reads the
+  workspace HTML; resolves/inlines sibling css/js (server-side, mirroring `deriveSrcDoc`) OR lets relative
+  refs resolve through the same route; calls `stamp_oids`; injects `SELECTION_AGENT_SCRIPT` with a
+  **nonce**; returns under a tailored CSP (`default-src 'self'`; `script-src 'nonce-…'`; frame-ancestors the
+  app) so the selection agent runs but the page can't exfiltrate. The agent's actual source files stay
+  UNSTAMPED (serve-time only).
+- **A1.6 (PreviewPane edit-mode):** an "Edit" toggle switches the preview iframe from `srcDoc=deriveSrcDoc`
+  to `src={preview-edit-url}` (server-stamped + selection-injected). SelectionOverlay + useElementSelect
+  mount the same way they already do.
+- Resolver nuance (review advisory): `resolveRef()` walks UP to the nearest ancestor `data-oid`, so a
+  dynamically-inserted child resolves to its stamped parent. For STATIC HTML every element is stamped so
+  this is fine; the edit affordance additionally requires `oid.file` to be a real workspace file.
+
+**STATUS:** A1.1 stamper DONE+committed (`e561000`). Remaining (the substantial wiring): the preview-edit
+route + CSP + selection injection (A1.1b), `appResolver` (A1.2), the edit→steer affordance (A1.4), the
+PreviewPane edit-mode toggle (A1.6), and a real Firefox screenshot of the click→edit→steer round-trip.
+
 ## Gates
 basedpyright 0 · lint-imports · arch · pytest (stamper) · typecheck:build 0 · vitest (appResolver + the
 edit affordance) · eslint 0 · REAL Firefox screenshot of the click→edit→steer round-trip on a static site.
