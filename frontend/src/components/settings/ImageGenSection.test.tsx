@@ -77,4 +77,24 @@ describe("ImageGenSection — A3 image-gen provider settings", () => {
     // truthful affordance: the base URL is required (not "empty → default")
     expect(screen.getByPlaceholderText(/required for ComfyUI/i)).toBeInTheDocument();
   });
+
+  it("warns that a remote tier selected without its required config falls back to procedural", async () => {
+    // openai persisted but no api_key_env → runtime silently uses procedural; the UI must say so.
+    vi.unstubAllGlobals();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url === "/api/image-gen/config"
+          ? jsonResponse({ provider: "openai", base_url: "", api_key_env: "", model: "" })
+          : (() => {
+              throw new Error(`unexpected fetch: ${url}`);
+            })(),
+      ),
+    );
+    render(createElement(ImageGenSection), { wrapper: makeWrapper() });
+    // The warning is a role="status" element with the distinct "until then" phrasing —
+    // NOT the static ComfyUI help text (which also contains "falls back to procedural").
+    const warning = await screen.findByRole("status");
+    expect(warning).toHaveTextContent(/until then.*falls back to procedural/i);
+  });
 });

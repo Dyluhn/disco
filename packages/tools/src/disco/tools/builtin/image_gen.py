@@ -601,7 +601,9 @@ class ImageGenTool:
 
     @property
     def backend_name(self) -> str:
-        return self._backend.name
+        # Report the LIVE backend (re-resolved from config), not the constructor default,
+        # so this stays consistent with what run() actually uses per call.
+        return self._resolve_backend().name
 
     async def run(self, args: ImageGenArgs, ctx: ToolContext) -> ToolOutcome:
         # Resolve the seed. The procedural backend needs an int; if the model

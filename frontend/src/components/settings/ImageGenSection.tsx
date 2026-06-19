@@ -80,6 +80,16 @@ export function ImageGenSection() {
   const showUrl = data?.provider === "comfyui" || data?.provider === "openai";
   const showPaid = data?.provider === "openai";
 
+  // Honesty: select_image_backend() silently falls back to procedural when a remote tier
+  // is selected without its required config (comfyui w/o base_url, openai w/o a stored key).
+  // Warn so the UI never claims a remote provider is active when procedural is what runs.
+  const fallbackWarning =
+    data?.provider === "comfyui" && !(data.base_url ?? "").trim()
+      ? "Set a base URL below — until then, image generation silently falls back to procedural."
+      : data?.provider === "openai" && !(data.api_key_env ?? "").trim()
+        ? "Set the API key env var below and store that key in Provider API keys — until then, image generation falls back to procedural."
+        : null;
+
   const fieldClass =
     "rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60";
 
@@ -133,6 +143,12 @@ export function ImageGenSection() {
               </button>
             );
           })}
+
+          {fallbackWarning && (
+            <p className="font-ui text-[0.8rem] text-warn" role="status">
+              ⚠ {fallbackWarning}
+            </p>
+          )}
 
           {/* Contextual fields — endpoint (self-host/paid) + key env (paid only). */}
           {showUrl && (

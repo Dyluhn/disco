@@ -67,3 +67,7 @@ disco-config.json.*
 .review/
 *.diff
 frontend/_shot.mjs
+
+# harness strays — never commit
+/node_modules/
+/workorders/
