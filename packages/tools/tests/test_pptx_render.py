@@ -508,3 +508,92 @@ def test_render_deck_html_is_16_9():
     """render_deck html_str is a 16:9 HTML deck."""
     result = render_deck(_sample_deck())
     assert "56.25vw" in result["html_str"]
+
+
+# ---------------------------------------------------------------------------
+# Default-template brand chrome (mirrors the PDF report: running wordmark on
+# every slide + the definition-mark colophon on the cover). Gated on
+# theme.branded.
+# ---------------------------------------------------------------------------
+
+from disco.tools.builtin._deck_schema import (  # noqa: E402
+    AuthoredDeck,
+    AuthoredSlide,
+    lower_deck,
+)
+
+
+def _branded_deck(theme: str = "disco-light") -> AuthoredDeck:
+    return AuthoredDeck(
+        title="Brand Test",
+        theme=theme,
+        slides=[
+            AuthoredSlide(type="title", title="Cover", body=["A subtitle"]),
+            AuthoredSlide(type="bullets", title="Content", body=["one", "two"]),
+            AuthoredSlide(type="section_header", title="Divider", body=["lead"]),
+        ],
+    )
+
+
+def _pptx_slide_texts(pptx_bytes: bytes) -> list[list[str]]:
+    import io
+
+    from pptx import Presentation
+
+    prs = Presentation(io.BytesIO(pptx_bytes))
+    out = []
+    for s in prs.slides:
+        out.append([sh.text_frame.text for sh in s.shapes if sh.has_text_frame])
+    return out
+
+
+def test_pptx_wordmark_on_every_branded_slide():
+    """The 'Disco' running wordmark must appear on EVERY slide of a branded deck."""
+    texts = _pptx_slide_texts(render_pptx(lower_deck(_branded_deck())))
+    assert len(texts) == 3
+    for slide_texts in texts:
+        assert any("Disco" in t for t in slide_texts), slide_texts
+
+
+def test_pptx_colophon_only_on_cover():
+    """The 'disco — Latin·verb' colophon rides ONLY the cover/title slide."""
+    texts = _pptx_slide_texts(render_pptx(lower_deck(_branded_deck())))
+    cover = " ".join(texts[0])
+    assert "acquainted with" in cover and "discere" in cover
+    for slide_texts in texts[1:]:
+        joined = " ".join(slide_texts)
+        assert "acquainted with" not in joined
+
+
+def test_pptx_no_brand_marks_when_unbranded():
+    """The neutral theme is unbranded → no wordmark, no colophon (clean canvas)."""
+    texts = _pptx_slide_texts(render_pptx(lower_deck(_branded_deck(theme="neutral"))))
+    flat = " ".join(t for slide in texts for t in slide)
+    assert "Disco" not in flat
+    assert "acquainted with" not in flat
+
+
+def test_html_brand_marks_branded_vs_neutral():
+    """HTML mirrors PPTX: brand-wordmark on every slide, brand-colophon on the
+    cover only; neither under the neutral (unbranded) theme."""
+    html_branded = render_html(lower_deck(_branded_deck()))
+    # one wordmark div per slide (3 slides); match the element, not the CSS rule
+    assert html_branded.count('class="brand-wordmark"') == 3
+    # exactly one colophon div (the cover)
+    assert html_branded.count('class="brand-colophon"') == 1
+    assert "I become acquainted with" in html_branded
+
+    html_neutral = render_html(lower_deck(_branded_deck(theme="neutral")))
+    assert 'class="brand-wordmark"' not in html_neutral
+    assert 'class="brand-colophon"' not in html_neutral
+
+
+def test_html_brand_chrome_is_pointer_events_none():
+    """Brand chrome must not intercept editor clicks — the SelectionOverlay resolves
+    from event.target upward, and these nodes carry no data-element-id. pointer-events:
+    none lets clicks fall through to the underlying slide element."""
+    css = render_html(lower_deck(_branded_deck()))
+    # Both brand layers opt out of pointer events.
+    assert ".brand-wordmark{" in css.replace("\n", "") or "brand-wordmark" in css
+    # The rule block carries pointer-events:none for both classes.
+    assert css.count("pointer-events:none") >= 2

@@ -208,6 +208,100 @@ def _add_accent_bar(slide, left: int, top: int, w: int, hex_color: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Brand marks — the default Disco template chrome that mirrors the PDF report:
+#   • a small "Disco." wordmark on every slide (the PDF's running header), and
+#   • the "disco — Latin · verb" definition-mark colophon on the cover/title
+#     slide (the PDF cover's signature).
+# Drawn at RENDER time (not as deck Elements) so the HTML title/bullet
+# heuristics in _html_for_c1_slide stay untouched. Gated on theme.branded, so
+# the neutral theme renders clean — exactly like serialize_pdf's brand gate.
+# ---------------------------------------------------------------------------
+
+_BRAND_DOT = 50_000  # ~0.055in accent dot on the wordmark
+
+
+def _draw_wordmark(prs_slide, theme: Theme) -> None:  # type: ignore[type-arg]
+    """Small 'Disco' + accent dot in the top margin band — the PDF running wordmark.
+
+    Kept ENTIRELY ABOVE the title strip (titles start at _MARGIN = 0.5in): the box
+    bottom must stay < _MARGIN so a long, right-reaching title never collides with it."""
+    from pptx.enum.text import PP_ALIGN
+    from pptx.util import Emu
+
+    dot = _BRAND_DOT
+    box_w = 1_500_000
+    box_h = 259_080            # 0.283in
+    top = 91_440              # 0.1in  → bottom 0.383in, clear of the 0.5in title line
+    right = _SLIDE_W - _MARGIN
+    text_box_right = right - dot - 36_576  # leave room for the trailing dot
+    tf = _add_textbox(prs_slide, text_box_right - box_w, top, box_w, box_h)
+    para = tf.paragraphs[0]
+    para.alignment = PP_ALIGN.RIGHT
+    run = para.add_run()
+    _set_run_style(run, "Disco", _first_font(theme.font_display), 10.0, theme.text_faint)
+    # Accent dot, aligned with the small wordmark text baseline.
+    dot_top = top + 60_000
+    d = prs_slide.shapes.add_shape(1, Emu(right - dot), Emu(dot_top), Emu(dot), Emu(dot))
+    d.fill.solid()
+    d.fill.fore_color.rgb = _rgb_from_hex(theme.accent)
+    d.line.fill.background()
+
+
+def _draw_cover_colophon(prs_slide, theme: Theme) -> None:  # type: ignore[type-arg]
+    """The 'disco — Latin · verb' definition mark at the bottom of the cover/title
+    slide — the PDF cover's signature colophon (headword + POS + gloss + etymology)."""
+    from pptx.enum.text import PP_ALIGN
+
+    top = int(_SLIDE_H * 0.74)
+    # Short accent rule above the mark.
+    _add_accent_bar(prs_slide, _MARGIN, top, 640_080, theme.accent)
+
+    # Headword "disco" + part-of-speech / IPA on one line (two runs, two styles).
+    hw_top = top + 140_000
+    tf = _add_textbox(prs_slide, _MARGIN, hw_top, _CW, 360_000)
+    para = tf.paragraphs[0]
+    para.alignment = PP_ALIGN.LEFT
+    r_hw = para.add_run()
+    _set_run_style(r_hw, "disco   ", _first_font(theme.font_display), 16.0, theme.text)
+    r_pos = para.add_run()
+    _set_run_style(
+        r_pos, "LATIN · VERB    /ˈdɪs.koː/",
+        _first_font(theme.font_ui), 8.5, theme.text_faint,
+    )
+
+    # Italic gloss.
+    gloss_top = hw_top + 430_000
+    tf2 = _add_textbox(prs_slide, _MARGIN, gloss_top, _CW, 330_000)
+    r_gloss = tf2.paragraphs[0].add_run()
+    _set_run_style(
+        r_gloss, "“I learn; I become acquainted with.”",
+        _first_font(theme.font_reading), 12.0, theme.text_muted, italic=True,
+    )
+
+    # Etymology root.
+    root_top = gloss_top + 365_000
+    tf3 = _add_textbox(prs_slide, _MARGIN, root_top, _CW, 300_000)
+    r_root = tf3.paragraphs[0].add_run()
+    _set_run_style(
+        r_root, "from discere — to learn",
+        _first_font(theme.font_ui), 8.5, theme.text_faint,
+    )
+
+
+def _draw_brand_marks(prs_slide, slide: Slide, theme: Theme) -> None:  # type: ignore[type-arg]
+    """Apply the default-template brand chrome to a rendered slide (no-op when the
+    theme is unbranded). The colophon rides only the cover/title slide."""
+    if not theme.branded:
+        return
+    _draw_wordmark(prs_slide, theme)
+    # Gate the colophon on the RESOLVED layout (not the authored type) so only a
+    # true rendered title cover gets it — e.g. type="title"+layout_hint="closing"
+    # must NOT, and the cover slide always does.
+    if slide.layout == "title":
+        _draw_cover_colophon(prs_slide, theme)
+
+
+# ---------------------------------------------------------------------------
 # Per-layout PPTX render functions (each ≤ 200 LOC — arch budget)
 # ---------------------------------------------------------------------------
 
@@ -634,6 +728,11 @@ def _render_pptx_c1(deck: Deck) -> bytes:
                 if _ntf is not None:
                     _ntf.text = slide.notes
 
+        # Default-template brand chrome (wordmark on every slide; colophon on the
+        # cover) — applied after content so it overlays cleanly. Chart/table slides
+        # get the wordmark too (theme-gated inside).
+        _draw_brand_marks(prs_slide, slide, deck.theme)
+
     buf = io.BytesIO()
     prs.save(buf)
     return buf.getvalue()
@@ -656,6 +755,28 @@ def render_html(deck: Deck | MinimalDeck) -> str:  # noqa: C901
     return _render_html_c1(deck)
 
 
+def _brand_marks_html(slide: Slide, theme: Theme) -> str:
+    """The default-template brand chrome for one HTML slide — the 'Disco.' wordmark
+    (every slide) + the 'disco — Latin · verb' colophon on the cover/title slide.
+    Mirrors _draw_brand_marks for PPTX. Empty when the theme is unbranded."""
+    if not theme.branded:
+        return ""
+    wordmark = '<div class="brand-wordmark">Disco<span class="dot">.</span></div>'
+    if slide.layout != "title":
+        return wordmark
+    colophon = (
+        '<div class="brand-colophon">'
+        '<div class="bc-l1"><span class="bc-hw">disco</span>'
+        '<span class="bc-pos">Latin&nbsp;·&nbsp;verb</span>'
+        '<span class="bc-ipa">/ˈdɪs.koː/</span></div>'
+        '<div class="bc-rule"></div>'
+        '<div class="bc-gloss">“I learn; I become acquainted with.”</div>'
+        '<div class="bc-root">from <em>discere</em> — to learn</div>'
+        '</div>'
+    )
+    return wordmark + colophon
+
+
 def _render_html_c1(deck: Deck) -> str:  # noqa: C901
     """Render a C1 Deck to a self-contained 16:9 brand HTML string."""
     from disco.core.brand.css import font_face_css, theme_css_vars
@@ -670,11 +791,12 @@ def _render_html_c1(deck: Deck) -> str:  # noqa: C901
         bg = theme.surface_1 if slide.layout == "section_header" else theme.bg
 
         inner = _html_for_c1_slide(slide, theme, slide_idx=i)
+        brand = _brand_marks_html(slide, theme)
         sections_html.append(
             f'<section class="slide{active}" id="slide-{i}" '
             f'data-slide-id="slide-{i}" '
             f'data-layout="{html.escape(slide.layout)}" '
-            f'style="background:{html.escape(bg)}">\n{inner}\n</section>'
+            f'style="background:{html.escape(bg)}">\n{inner}\n{brand}\n</section>'
         )
 
     slides_joined = "\n".join(sections_html)
@@ -735,6 +857,21 @@ body{{background:#000;display:flex;align-items:center;justify-content:center;
   color:var(--text);}}
 .slide-table tbody tr:nth-child(even){{background:var(--surface-1);}}
 .slide-table-empty{{font-family:var(--ui);color:var(--text-faint);font-size:1.2vw;margin-top:2%;}}
+/* default-template brand chrome (mirrors the PDF report) */
+.brand-wordmark{{position:absolute;top:3.5%;right:4%;font-family:var(--display);
+  font-weight:600;font-size:1.15vw;color:var(--text-faint);letter-spacing:-.01em;
+  pointer-events:none;}}
+.brand-wordmark .dot{{color:var(--accent);}}
+.brand-colophon{{position:absolute;left:4%;bottom:7%;max-width:60%;pointer-events:none;}}
+.brand-colophon .bc-rule{{width:7%;height:2px;background:var(--accent);margin:.7vw 0;}}
+.bc-l1{{display:flex;align-items:baseline;gap:.7vw;}}
+.bc-hw{{font-family:var(--display);font-size:1.7vw;color:var(--text);}}
+.bc-pos{{font-family:var(--ui);font-size:.78vw;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--text-faint);}}
+.bc-ipa{{font-family:var(--mono);font-size:.78vw;color:var(--text-faint);}}
+.bc-gloss{{font-family:var(--reading);font-style:italic;font-size:1.2vw;
+  color:var(--text-muted);}}
+.bc-root{{font-family:var(--ui);font-size:.8vw;color:var(--text-faint);margin-top:.3vw;}}
 </style>
 </head>
 <body>
