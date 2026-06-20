@@ -347,25 +347,179 @@ class _OpenAIImageBackend:
         raise ValueError("OpenAI images API returned no image data")
 
 
+# A light, universally-helpful SDXL/SD negative for the built-in default graph.
+# (FLUX and other shapes that don't want a negative use the workflow_json override.)
+_DEFAULT_COMFY_NEGATIVE = "lowres, blurry, jpeg artifacts, watermark, text, signature"
+
+# Diffusion models render garbage below their native resolution. The image_generate
+# tool defaults to 64x64 (fine for the procedural pattern, useless for SDXL), so any
+# sub-512 request is snapped up to a sane square; everything is rounded to a multiple
+# of 8 (SDXL/SD latent constraint). Reported dimensions come from the PRODUCED bytes
+# (run() re-reads PIL size), so this snap never lies about the result.
+_COMFY_MIN_DIMENSION = 512
+_COMFY_DEFAULT_DIMENSION = 1024
+
+
+def _comfy_snap_dim(value: int) -> int:
+    v = value if value >= _COMFY_MIN_DIMENSION else _COMFY_DEFAULT_DIMENSION
+    return max(_COMFY_MIN_DIMENSION, (v // 8) * 8)
+
+
 class _ComfyUIBackend:
     """Self-hosted ComfyUI graph API backend.
 
-    Connects to a local/network ComfyUI instance via its REST API.
-    Uses the /prompt endpoint to queue a generation and polls /history
-    until the image is ready, then fetches it.
+    Connects to a local/network ComfyUI instance via its REST API. Submits a
+    graph to `/prompt`, polls `/history/{id}` until the image is ready, then
+    fetches it from `/view`. Keyless (assumes local/network access), but needs
+    a running ComfyUI.
 
-    This is a SELF-HOSTED backend: it's keyless (assumes local/network
-    access) but requires a ComfyUI instance to be running.
+    The graph is DATA, not code. Real installs differ in shape:
+    - SDXL / SD1.5 / Pony / Illustrious embed CLIP + VAE in the checkpoint
+      (`CheckpointLoaderSimple` → MODEL[0], CLIP[1], VAE[2]).
+    - FLUX / SD3 use a separate dual-CLIP loader + `UNETLoader` + a standalone VAE.
+    So there is NO single hardcoded graph that works everywhere. This backend:
+    - ships a correct **SDXL/SD default** (covers the overwhelming majority of
+      local checkpoints, incl. Illustrious-XL), and
+    - accepts a power-user **workflow_json template** (a ComfyUI "Save (API Format)"
+      export) with `%prompt%`, `%negative%`, `%seed%`, `%width%`, `%height%`,
+      `%ckpt%` tokens, which makes ANY model shape work without code changes.
     """
 
     name = "comfyui"
     is_remote = True
 
-    def __init__(self, base_url: str, *, model: str = "") -> None:
+    def __init__(self, base_url: str, *, model: str = "", workflow_json: str = "") -> None:
         self._base_url = base_url.rstrip("/")
-        # The checkpoint filename to load in the built-in workflow. Empty → the default
-        # below. This must name a checkpoint that EXISTS on the target ComfyUI install.
-        self._ckpt = model or "flux1-dev.safetensors"
+        # The checkpoint filename for the DEFAULT graph. No bogus default: an
+        # invented name (the old "flux1-dev.safetensors") is a false affordance —
+        # it 404s on a box that doesn't have that exact file. Empty → fail loud
+        # with a Settings pointer (unless a workflow_json template pins its own).
+        self._ckpt = model.strip()
+        self._workflow_json = workflow_json.strip()
+
+    def _build_workflow(
+        self, *, prompt: str, negative: str, width: int, height: int, seed: int
+    ) -> dict:
+        """Return the ComfyUI graph to submit: the user's template (token-substituted)
+        when configured, else the built-in SDXL/SD default."""
+        if self._workflow_json:
+            # If the template references the checkpoint via %ckpt% but no Checkpoint is
+            # set, fail HERE with the Settings pointer rather than substituting "" and
+            # letting ComfyUI 404 on an empty model name deep in the graph.
+            if "%ckpt%" in self._workflow_json and not self._ckpt:
+                raise ValueError(
+                    "Your custom workflow uses %ckpt% but no checkpoint is set "
+                    "(Settings → Image generation → Checkpoint)."
+                )
+            return self._render_template(
+                prompt=prompt, negative=negative, width=width, height=height, seed=seed
+            )
+        if not self._ckpt:
+            raise ValueError(
+                "ComfyUI provider needs a checkpoint filename that exists on your "
+                "ComfyUI install (Settings → Image generation → Checkpoint), or a "
+                "custom workflow (API format) that pins its own model."
+            )
+        # The PROVEN-WORKING SDXL/SD graph (live-verified on the R9700, 2026-06-19):
+        # CLIP + VAE from the checkpoint, positive+negative encode, KSampler
+        # euler_ancestral / cfg 6 / 26 steps / normal, VAE decode, save.
+        return {
+            "1": {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": {"ckpt_name": self._ckpt},
+                "_meta": {"title": "Load Checkpoint"},
+            },
+            "2": {
+                "class_type": "CLIPTextEncode",
+                "inputs": {"text": prompt, "clip": ["1", 1]},
+                "_meta": {"title": "Positive"},
+            },
+            "3": {
+                "class_type": "CLIPTextEncode",
+                "inputs": {"text": negative, "clip": ["1", 1]},
+                "_meta": {"title": "Negative"},
+            },
+            "4": {
+                "class_type": "EmptyLatentImage",
+                "inputs": {"width": width, "height": height, "batch_size": 1},
+                "_meta": {"title": "Empty Latent Image"},
+            },
+            "5": {
+                "class_type": "KSampler",
+                "inputs": {
+                    "seed": seed,
+                    "steps": 26,
+                    "cfg": 6.0,
+                    "sampler_name": "euler_ancestral",
+                    "scheduler": "normal",
+                    "denoise": 1.0,
+                    "model": ["1", 0],
+                    "positive": ["2", 0],
+                    "negative": ["3", 0],
+                    "latent_image": ["4", 0],
+                },
+                "_meta": {"title": "KSampler"},
+            },
+            "6": {
+                "class_type": "VAEDecode",
+                "inputs": {"samples": ["5", 0], "vae": ["1", 2]},
+                "_meta": {"title": "VAE Decode"},
+            },
+            "7": {
+                "class_type": "SaveImage",
+                "inputs": {"images": ["6", 0], "filename_prefix": "disco-image"},
+                "_meta": {"title": "Save Image"},
+            },
+        }
+
+    def _render_template(
+        self, *, prompt: str, negative: str, width: int, height: int, seed: int
+    ) -> dict:
+        """Substitute the placeholder tokens in a user-supplied ComfyUI API-format
+        graph and parse it. String tokens (`%prompt%`, `%negative%`, `%ckpt%`) are
+        JSON-escaped and substituted INSIDE the template's existing quotes; numeric
+        tokens (`%seed%`, `%width%`, `%height%`) are substituted where a bare number
+        is expected. We substitute on the raw text (not a parsed tree) so a token can
+        appear at any node, then json.loads the result and fail loud if it's malformed."""
+        import json
+        import re
+
+        def esc(s: str) -> str:
+            # json.dumps wraps in quotes + escapes; strip the outer quotes so the
+            # escaped body lands inside the template's own "..." — a prompt with
+            # quotes/newlines/backslashes can't break out of its string or inject nodes.
+            return json.dumps(s)[1:-1]
+
+        subs = {
+            "prompt": esc(prompt),
+            "negative": esc(negative),
+            "ckpt": esc(self._ckpt),
+            "seed": str(int(seed)),
+            "width": str(int(width)),
+            "height": str(int(height)),
+        }
+        # SINGLE pass: re.sub never re-scans its own replacements, so a prompt that
+        # literally contains another token (e.g. the text "%seed%") is NOT re-substituted.
+        # A naive chained .replace() would bleed the seed into such a prompt.
+        rendered = re.sub(
+            r"%(prompt|negative|ckpt|seed|width|height)%",
+            lambda m: subs[m.group(1)],
+            self._workflow_json,
+        )
+        try:
+            graph = json.loads(rendered)
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"ComfyUI custom workflow is not valid JSON after token substitution: {e}. "
+                "Paste a ComfyUI 'Save (API Format)' export and use the %prompt%, %seed%, "
+                "%width%, %height%, %negative%, %ckpt% tokens."
+            ) from e
+        if not isinstance(graph, dict) or not graph:
+            raise ValueError(
+                "ComfyUI custom workflow must be a non-empty JSON object of nodes "
+                "(ComfyUI 'Save (API Format)' shape)."
+            )
+        return graph
 
     def generate(
         self,
@@ -376,83 +530,17 @@ class _ComfyUIBackend:
         seed: int,
         fmt: str,
     ) -> bytes:
-        # Build a minimal ComfyUI workflow for text-to-image
-        # This is a basic implementation - real workflows may be more complex
-        workflow = {
-            "3": {
-                "inputs": {
-                    "text": prompt,
-                    "clip": ["4", 0],
-                },
-                "class_type": "CLIPTextEncode",
-                "_meta": {"title": "CLIP Text Encode"},
-            },
-            "4": {
-                "inputs": {
-                    "clip_name": "t5xxl_fp8_e4m3fn.safetensors",
-                },
-                "class_type": "CLIPLoader",
-                "_meta": {"title": "CLIP Loader"},
-            },
-            "5": {
-                "inputs": {
-                    "seed": seed,
-                    "steps": 20,
-                    "cfg": 8.0,
-                    "sampler_name": "euler",
-                    "scheduler": "normal",
-                    "positive": ["3", 0],
-                    "negative": ["6", 0],
-                    "model": ["7", 0],
-                    "latent_image": ["8", 0],
-                },
-                "class_type": "KSampler",
-                "_meta": {"title": "KSampler"},
-            },
-            "6": {
-                "inputs": {
-                    "text": "",
-                    "clip": ["4", 0],
-                },
-                "class_type": "CLIPTextEncode",
-                "_meta": {"title": "CLIP Text Encode"},
-            },
-            "7": {
-                "inputs": {
-                    # CheckpointLoaderSimple's field is `ckpt_name` (outputs MODEL[0], CLIP[1], VAE[2]).
-                    "ckpt_name": self._ckpt,
-                },
-                "class_type": "CheckpointLoaderSimple",
-                "_meta": {"title": "Load Checkpoint"},
-            },
-            "8": {
-                "inputs": {
-                    "width": width,
-                    "height": height,
-                    "batch_size": 1,
-                },
-                "class_type": "EmptyLatentImage",
-                "_meta": {"title": "Empty Latent Image"},
-            },
-            # VAEDecode turns KSampler's LATENT (5,0) into an IMAGE using the checkpoint's
-            # VAE (7,2). SaveImage needs decoded `images`, not raw `samples`.
-            "10": {
-                "inputs": {
-                    "samples": ["5", 0],
-                    "vae": ["7", 2],
-                },
-                "class_type": "VAEDecode",
-                "_meta": {"title": "VAE Decode"},
-            },
-            "9": {
-                "inputs": {
-                    "images": ["10", 0],
-                    "filename_prefix": "disco-image",
-                },
-                "class_type": "SaveImage",
-                "_meta": {"title": "Save Image"},
-            },
-        }
+        # Snap sub-native dimensions up so a real diffusion model doesn't render
+        # garbage from the tool's 64x64 procedural default.
+        gen_w = _comfy_snap_dim(width)
+        gen_h = _comfy_snap_dim(height)
+        workflow = self._build_workflow(
+            prompt=prompt,
+            negative=_DEFAULT_COMFY_NEGATIVE,
+            width=gen_w,
+            height=gen_h,
+            seed=seed,
+        )
 
         with httpx.Client(timeout=120.0) as client:
             # Submit the prompt
@@ -476,22 +564,30 @@ class _ComfyUIBackend:
                 if prompt_id in history:
                     # Check if outputs exist
                     outputs = history[prompt_id].get("outputs", {})
-                    for node_id, node_output in outputs.items():
-                        if "images" in node_output:
-                            images = node_output["images"]
-                            if images:
-                                image_info = images[0]
-                                # Fetch the actual image
-                                img_response = client.get(
-                                    f"{self._base_url}/view",
-                                    params={
-                                        "filename": image_info["filename"],
-                                        "subfolder": image_info["subfolder"],
-                                        "type": image_info["type"],
-                                    },
-                                )
-                                img_response.raise_for_status()
-                                return img_response.content
+                    # Custom graphs can emit BOTH preview/temp images (PreviewImage,
+                    # type="temp") and final saved images (SaveImage, type="output").
+                    # Collect every produced image, then prefer a real saved "output"
+                    # over a "temp" preview so we return the final render, not a thumbnail.
+                    all_images = [
+                        img
+                        for node_output in outputs.values()
+                        for img in node_output.get("images", [])
+                    ]
+                    if all_images:
+                        image_info = next(
+                            (i for i in all_images if i.get("type") == "output"),
+                            all_images[0],
+                        )
+                        img_response = client.get(
+                            f"{self._base_url}/view",
+                            params={
+                                "filename": image_info["filename"],
+                                "subfolder": image_info.get("subfolder", ""),
+                                "type": image_info.get("type", "output"),
+                            },
+                        )
+                        img_response.raise_for_status()
+                        return img_response.content
 
                     # Generation completed but no images yet - wait a bit more
                     if history[prompt_id].get("status"):
@@ -544,7 +640,11 @@ def select_image_backend() -> ImageBackend:
     if provider == "comfyui":
         base_url = settings.base_url
         if base_url:
-            return _ComfyUIBackend(base_url, model=settings.model)
+            return _ComfyUIBackend(
+                base_url,
+                model=settings.model,
+                workflow_json=settings.workflow_json,
+            )
         # No URL configured - fall back to procedural
         return _PILProceduralBackend()
 

@@ -204,6 +204,7 @@ def _image_gen_from(config: RouterConfig) -> ImageGenConfigDTO:
         base_url=i.base_url,
         api_key_env=i.api_key_env,
         model=i.model,
+        workflow_json=i.workflow_json,
     )
 
 

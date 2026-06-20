@@ -78,6 +78,41 @@ describe("ImageGenSection — A3 image-gen provider settings", () => {
     expect(screen.getByPlaceholderText(/required for ComfyUI/i)).toBeInTheDocument();
   });
 
+  it("shows the ComfyUI custom-workflow textarea and PUTs workflow_json on save", async () => {
+    // Start with comfyui already active (base_url set) so the contextual fields render.
+    vi.unstubAllGlobals();
+    lastPut = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, opts?: RequestInit) => {
+        if (url !== "/api/image-gen/config") throw new Error(`unexpected fetch: ${url}`);
+        if (opts?.method === "PUT") {
+          const body = JSON.parse(String(opts.body));
+          lastPut = { url, body };
+          return jsonResponse(body);
+        }
+        return jsonResponse({
+          provider: "comfyui",
+          base_url: "http://host:8188",
+          api_key_env: "",
+          model: "sd_xl.safetensors",
+          workflow_json: "",
+        });
+      }),
+    );
+    render(createElement(ImageGenSection), { wrapper: makeWrapper() });
+
+    const textarea = await screen.findByPlaceholderText(/Save \(API Format\)/i);
+    const graph = '{ "1": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": "%ckpt%" } } }';
+    fireEvent.change(textarea, { target: { value: graph } });
+    fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
+
+    await waitFor(() => expect(lastPut).not.toBeNull());
+    const body = lastPut!.body as { provider: string; workflow_json: string };
+    expect(body.provider).toBe("comfyui");
+    expect(body.workflow_json).toBe(graph);
+  });
+
   it("warns that a remote tier selected without its required config falls back to procedural", async () => {
     // openai persisted but no api_key_env → runtime silently uses procedural; the UI must say so.
     vi.unstubAllGlobals();

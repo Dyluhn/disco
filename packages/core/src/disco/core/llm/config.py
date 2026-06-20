@@ -192,8 +192,13 @@ class ImageGenSettings(BaseModel):
     base_url: str = ""  # for comfyui (self-host) / openai-compatible endpoint; empty → default
     api_key_env: str = ""  # secrets key name for openai (never the key itself)
     # openai: the image model id (e.g. "gpt-image-1", "dall-e-3"); empty → provider default.
-    # comfyui: the checkpoint filename to load (empty → the built-in workflow's default).
+    # comfyui: the checkpoint filename to load (required; must exist on the install).
     model: str = ""
+    # comfyui ONLY: an optional ComfyUI "Save (API Format)" graph that overrides the
+    # built-in SDXL default. Empty → the built-in default graph (CLIP+VAE from the
+    # checkpoint). Tokens substituted per call: %prompt% %negative% %seed% %width%
+    # %height% %ckpt%. Lets FLUX / SD3 / custom shapes work without code changes.
+    workflow_json: str = ""
 
 
 class McpSettings(BaseModel):

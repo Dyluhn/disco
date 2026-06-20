@@ -33,7 +33,7 @@ const OPTIONS: { provider: Provider; Icon: typeof Cpu; label: string; help: stri
     provider: "comfyui",
     Icon: Server,
     label: "Self-hosted (ComfyUI)",
-    help: "Your ComfyUI graph API. Keyless, but the base URL is REQUIRED (without it, image-gen falls back to procedural). It posts a built-in text→image workflow — set Checkpoint to a model file that exists on your ComfyUI (empty → flux1-dev.safetensors).",
+    help: "Your ComfyUI graph API. Keyless, but the base URL is REQUIRED (without it, image-gen falls back to procedural). Ships a built-in SDXL/SD workflow — set Checkpoint to a model file that exists on your ComfyUI. For FLUX / SD3 / custom graphs, paste a 'Save (API Format)' workflow below.",
   },
   {
     provider: "openai",
@@ -50,11 +50,13 @@ export function ImageGenSection() {
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKeyEnv, setApiKeyEnv] = useState("");
   const [model, setModel] = useState("");
+  const [workflowJson, setWorkflowJson] = useState("");
   useEffect(() => {
     if (data) {
       setBaseUrl(data.base_url ?? "");
       setApiKeyEnv(data.api_key_env ?? "");
       setModel(data.model ?? "");
+      setWorkflowJson(data.workflow_json ?? "");
     }
   }, [data]);
 
@@ -63,22 +65,62 @@ export function ImageGenSection() {
   // Switching provider preserves the current field drafts so edits aren't lost.
   const selectProvider = (provider: Provider) => {
     if (!data || provider === active) return;
-    save.mutate({ provider, base_url: baseUrl, api_key_env: apiKeyEnv, model });
+    save.mutate({
+      provider,
+      base_url: baseUrl,
+      api_key_env: apiKeyEnv,
+      model,
+      workflow_json: workflowJson,
+    });
   };
 
   const fieldsDirty =
     !!data &&
     (baseUrl !== (data.base_url ?? "") ||
       apiKeyEnv !== (data.api_key_env ?? "") ||
-      model !== (data.model ?? ""));
+      model !== (data.model ?? "") ||
+      workflowJson !== (data.workflow_json ?? ""));
 
   const saveFields = () => {
     if (!data) return;
-    save.mutate({ provider: data.provider, base_url: baseUrl, api_key_env: apiKeyEnv, model });
+    save.mutate({
+      provider: data.provider,
+      base_url: baseUrl,
+      api_key_env: apiKeyEnv,
+      model,
+      workflow_json: workflowJson,
+    });
   };
 
   const showUrl = data?.provider === "comfyui" || data?.provider === "openai";
   const showPaid = data?.provider === "openai";
+  const showComfy = data?.provider === "comfyui";
+
+  // A local "is the pasted workflow even valid JSON?" check so the user gets an
+  // honest hint BEFORE the agent's next image-gen fails server-side. Empty = use
+  // the built-in default (not an error). Tokens are substituted at gen time, so a
+  // template with %seed% etc. won't parse here — only flag clearly-broken braces.
+  const workflowJsonError = (() => {
+    const t = workflowJson.trim();
+    if (!t) return null;
+    // Numeric tokens are substituted as BARE numbers, so they must NOT sit inside
+    // quotes — `"seed": "%seed%"` would send `"123"` (a string) and ComfyUI rejects it.
+    // Catch that here since the parse-probe below would otherwise mask it.
+    if (/"\s*%(seed|width|height)%\s*"/.test(t))
+      return "Numeric tokens (%seed% %width% %height%) must be UNQUOTED, e.g. \"seed\": %seed% — not \"%seed%\".";
+    // Strip the substitution tokens to a parseable stand-in before validating shape.
+    const probe = t
+      .replace(/%seed%|%width%|%height%/g, "0")
+      .replace(/%prompt%|%negative%|%ckpt%/g, "x");
+    try {
+      const parsed = JSON.parse(probe);
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+        return "Workflow must be a JSON object of nodes (ComfyUI 'Save (API Format)').";
+      return null;
+    } catch {
+      return "Not valid JSON yet — paste a ComfyUI 'Save (API Format)' export.";
+    }
+  })();
 
   // Honesty: select_image_backend() silently falls back to procedural when a remote tier
   // is selected without its required config (comfyui w/o base_url, openai w/o a stored key).
@@ -178,17 +220,52 @@ export function ImageGenSection() {
                 <span className="flex items-baseline gap-hair font-ui text-[0.8rem] text-text">
                   {showPaid ? "Model" : "Checkpoint"}
                   <span className="font-ui text-[0.72rem] text-text-faint">
-                    {showPaid ? "· empty = provider default" : "· must exist on your ComfyUI"}
+                    {showPaid ? "· empty = provider default" : "· required; must exist on your ComfyUI"}
                   </span>
                 </span>
                 <input
                   spellCheck={false}
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
-                  placeholder={showPaid ? "gpt-image-1" : "flux1-dev.safetensors"}
+                  placeholder={showPaid ? "gpt-image-1" : "sd_xl_base_1.0.safetensors"}
                   className={fieldClass}
                 />
               </label>
+              {showComfy && (
+                <label className="flex flex-col gap-hair">
+                  <span className="flex items-baseline gap-hair font-ui text-[0.8rem] text-text">
+                    Custom workflow
+                    <span className="font-ui text-[0.72rem] text-text-faint">
+                      · optional — empty = built-in SDXL graph
+                    </span>
+                  </span>
+                  <textarea
+                    spellCheck={false}
+                    rows={6}
+                    value={workflowJson}
+                    onChange={(e) => setWorkflowJson(e.target.value)}
+                    placeholder={
+                      '{ "1": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": "%ckpt%" } }, ... }\n' +
+                      "Paste a ComfyUI 'Save (API Format)' export. Tokens: %prompt% %negative% %seed% %width% %height% %ckpt%"
+                    }
+                    className={cn(fieldClass, "resize-y leading-snug")}
+                  />
+                  <span className="font-ui text-[0.72rem] text-text-faint">
+                    Overrides the default graph so FLUX / SD3 / custom shapes work. Tokens are
+                    substituted per generation: string tokens{" "}
+                    <code className="font-mono">%prompt%</code> <code className="font-mono">%negative%</code>{" "}
+                    <code className="font-mono">%ckpt%</code> go inside quotes; numeric tokens{" "}
+                    <code className="font-mono">%seed%</code> <code className="font-mono">%width%</code>{" "}
+                    <code className="font-mono">%height%</code> go UNQUOTED (e.g.{" "}
+                    <code className="font-mono">"seed": %seed%</code>).
+                  </span>
+                  {workflowJsonError && (
+                    <span className="font-ui text-[0.76rem] text-warn" role="status">
+                      ⚠ {workflowJsonError}
+                    </span>
+                  )}
+                </label>
+              )}
               {showPaid && (
                 <label className="flex flex-col gap-hair">
                   <span className="flex items-baseline gap-hair font-ui text-[0.8rem] text-text">

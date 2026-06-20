@@ -302,6 +302,9 @@ class ConfigState:
                 base_url=dto.base_url.strip(),
                 api_key_env=dto.api_key_env.strip(),
                 model=dto.model.strip(),
+                # Only meaningful for comfyui; .strip() trims edge whitespace but
+                # preserves the JSON body (internal newlines/indent untouched).
+                workflow_json=dto.workflow_json.strip(),
             )
         )
         return _image_gen_from(self._store.load())

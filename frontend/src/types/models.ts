@@ -137,6 +137,10 @@ export interface ImageGenConfig {
   api_key_env?: string;
   /** openai: image model id (e.g. "gpt-image-1"); comfyui: checkpoint filename. */
   model?: string;
+  /** comfyui ONLY: optional ComfyUI "Save (API Format)" graph overriding the built-in
+   * SDXL default. Empty → built-in default. Tokens: %prompt% %negative% %seed% %width%
+   * %height% %ckpt%. Lets FLUX / SD3 / custom shapes work without code changes. */
+  workflow_json?: string;
 }
 
 /** Universal web-data providers (§B). Each slot has three tiers; the bundled

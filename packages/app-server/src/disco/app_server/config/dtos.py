@@ -176,6 +176,10 @@ class ImageGenConfigDTO(BaseModel):
     base_url: str = ""
     api_key_env: str = ""
     model: str = ""  # openai: image model id; comfyui: checkpoint filename; empty → default
+    # comfyui ONLY: optional ComfyUI "Save (API Format)" graph overriding the built-in
+    # SDXL default. Empty → built-in default. Tokens: %prompt% %negative% %seed% %width%
+    # %height% %ckpt%. Lets FLUX / SD3 / custom shapes work without code changes.
+    workflow_json: str = ""
 
 
 class DataSourcesConfigDTO(BaseModel):

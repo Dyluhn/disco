@@ -569,7 +569,8 @@ def test_select_image_backend_returns_comfyui_with_url(monkeypatch):
             'provider': 'comfyui',
             'base_url': 'http://localhost:8188',
             'api_key_env': '',
-            'model': ''
+            'model': 'sd_xl.safetensors',
+            'workflow_json': '{"1": {"class_type": "X"}}'
         })()
 
     class _MockStore:
@@ -582,6 +583,9 @@ def test_select_image_backend_returns_comfyui_with_url(monkeypatch):
     assert isinstance(backend, _ComfyUIBackend)
     assert backend.name == "comfyui"
     assert backend.is_remote is True
+    # The factory forwards BOTH the checkpoint and the custom workflow template.
+    assert backend._ckpt == 'sd_xl.safetensors'
+    assert backend._workflow_json == '{"1": {"class_type": "X"}}'
 
 
 def test_select_image_backend_unknown_provider_falls_back(monkeypatch):
@@ -748,7 +752,9 @@ def test_comfyui_backend_builds_workflow_and_polls():
     mock_client.get.side_effect = lambda url, **kwargs: mock_get(url, **kwargs)
 
     with patch('disco.tools.builtin.image_gen.httpx.Client', return_value=mock_client):
-        backend = _ComfyUIBackend(base_url='http://localhost:8188')
+        backend = _ComfyUIBackend(
+            base_url='http://localhost:8188', model='sd_xl_base_1.0.safetensors'
+        )
 
         result = backend.generate(
             prompt='a sunset',
@@ -763,8 +769,163 @@ def test_comfyui_backend_builds_workflow_and_polls():
         call_args = mock_client.post.call_args
         assert '/prompt' in str(call_args)
 
+        # The submitted default graph is the SDXL/SD shape: CLIP comes from the
+        # checkpoint (CheckpointLoaderSimple), NOT a separate FLUX T5 CLIPLoader.
+        submitted = (call_args.kwargs.get('json') or call_args[1].get('json'))['prompt']
+        class_types = {node['class_type'] for node in submitted.values()}
+        assert 'CheckpointLoaderSimple' in class_types
+        assert 'CLIPLoader' not in class_types  # the old FLUX-frankenstein node is gone
+        assert 'VAEDecode' in class_types and 'SaveImage' in class_types
+        # The configured checkpoint is wired into the loader.
+        ckpt_nodes = [n for n in submitted.values() if n['class_type'] == 'CheckpointLoaderSimple']
+        assert ckpt_nodes[0]['inputs']['ckpt_name'] == 'sd_xl_base_1.0.safetensors'
+
         # Verify polling happened
         assert mock_client.get.call_count >= 2
 
         # Verify we got image data
         assert result == b'\x89PNG\r\n\x1a\n' + b'fake png data'
+
+
+def test_comfyui_default_graph_requires_a_checkpoint():
+    """Without a checkpoint (and no custom workflow), the default graph can't name a
+    model to load — fail loud with a Settings pointer rather than 404 on a bogus default."""
+    backend = _ComfyUIBackend(base_url='http://localhost:8188', model='')
+    with pytest.raises(ValueError, match="checkpoint"):
+        backend.generate(prompt='x', width=1024, height=1024, seed=1, fmt='png')
+
+
+def test_comfyui_snaps_subnative_dimensions_up():
+    """The tool defaults to 64x64 (fine for the procedural pattern, garbage for SDXL).
+    The ComfyUI backend snaps sub-512 requests up to 1024 and rounds to a multiple of 8."""
+    from disco.tools.builtin.image_gen import _comfy_snap_dim
+
+    assert _comfy_snap_dim(64) == 1024  # tool default → native square
+    assert _comfy_snap_dim(500) == 1024  # below the 512 floor → snap up
+    assert _comfy_snap_dim(512) == 512  # at the floor, kept
+    assert _comfy_snap_dim(1024) == 1024
+    assert _comfy_snap_dim(1023) == 1016  # rounded down to a multiple of 8
+    assert _comfy_snap_dim(1536) == 1536
+
+
+def test_comfyui_template_substitutes_tokens_and_is_injection_safe():
+    """A custom workflow_json template substitutes the tokens with correct types and
+    JSON-escapes string tokens so a hostile prompt can't break out of its string or
+    inject/drop nodes."""
+    template = (
+        '{'
+        '"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "%ckpt%"}},'
+        '"2": {"class_type": "CLIPTextEncode", "inputs": {"text": "%prompt%", "clip": ["1", 1]}},'
+        '"3": {"class_type": "CLIPTextEncode", "inputs": {"text": "%negative%", "clip": ["1", 1]}},'
+        '"4": {"class_type": "EmptyLatentImage", "inputs": {"width": %width%, "height": %height%, "batch_size": 1}},'
+        '"5": {"class_type": "KSampler", "inputs": {"seed": %seed%, "model": ["1", 0]}}'
+        '}'
+    )
+    backend = _ComfyUIBackend(
+        base_url='http://localhost:8188', model='my-ckpt.safetensors', workflow_json=template
+    )
+
+    # A hostile prompt full of JSON-breaking characters + an injected-node attempt.
+    hostile = 'a cat", "EVIL": {"class_type": "X"}, "z": "\nline\\two'
+    graph = backend._render_template(
+        prompt=hostile, negative='lowres', width=768, height=1024, seed=12345
+    )
+
+    # Exactly the template's 5 nodes — no injected "EVIL"/"z" nodes leaked in.
+    assert set(graph) == {'1', '2', '3', '4', '5'}
+    # The prompt round-trips verbatim as a STRING value (not parsed as JSON structure).
+    assert graph['2']['inputs']['text'] == hostile
+    assert graph['3']['inputs']['text'] == 'lowres'
+    assert graph['1']['inputs']['ckpt_name'] == 'my-ckpt.safetensors'
+    # Numeric tokens are real ints, not quoted strings.
+    assert graph['5']['inputs']['seed'] == 12345
+    assert isinstance(graph['5']['inputs']['seed'], int)
+    assert graph['4']['inputs']['width'] == 768
+    assert isinstance(graph['4']['inputs']['width'], int)
+
+
+def test_comfyui_template_prompt_containing_a_token_is_not_re_substituted():
+    """Single-pass substitution: a prompt that literally contains another token (e.g.
+    the text '%seed%') must survive verbatim — a naive chained .replace() would bleed
+    the seed value into the prompt on a later pass."""
+    template = (
+        '{"2": {"class_type": "CLIPTextEncode", "inputs": {"text": "%prompt%"}},'
+        '"5": {"class_type": "KSampler", "inputs": {"seed": %seed%}}}'
+    )
+    backend = _ComfyUIBackend(
+        base_url='http://localhost:8188', model='c.safetensors', workflow_json=template
+    )
+    graph = backend._render_template(
+        prompt="render seed %seed% and %width%px please",
+        negative="",
+        width=512,
+        height=512,
+        seed=98765,
+    )
+    assert graph['2']['inputs']['text'] == "render seed %seed% and %width%px please"
+    assert graph['5']['inputs']['seed'] == 98765
+
+
+def test_comfyui_template_using_ckpt_token_requires_a_checkpoint():
+    """A custom workflow that references %ckpt% but has no Checkpoint set fails with the
+    Settings pointer BEFORE submitting (not a confusing empty-model 404 inside ComfyUI)."""
+    backend = _ComfyUIBackend(
+        base_url='http://localhost:8188',
+        model='',
+        workflow_json='{"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "%ckpt%"}}}',
+    )
+    with pytest.raises(ValueError, match="Checkpoint"):
+        backend.generate(prompt='x', width=1024, height=1024, seed=1, fmt='png')
+
+
+def test_comfyui_prefers_output_image_over_temp_preview():
+    """When a graph emits both a temp PREVIEW and a final OUTPUT image, the backend
+    fetches the saved OUTPUT, not the thumbnail."""
+    from unittest.mock import MagicMock, patch
+
+    fetched = {}
+
+    def mock_call(url, **kwargs):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        if '/prompt' in str(url):
+            resp.json.return_value = {'prompt_id': 'p1'}
+        elif '/history/p1' in str(url):
+            resp.json.return_value = {
+                'p1': {
+                    'outputs': {
+                        # preview node first (temp), final saved node second (output)
+                        '8': {'images': [{'filename': 'prev.png', 'subfolder': '', 'type': 'temp'}]},
+                        '9': {'images': [{'filename': 'final.png', 'subfolder': '', 'type': 'output'}]},
+                    }
+                }
+            }
+        elif '/view' in str(url):
+            fetched['params'] = kwargs.get('params')
+            resp.content = b'\x89PNG\r\n\x1a\n' + b'final-bytes'
+        return resp
+
+    client = MagicMock()
+    client.__enter__ = MagicMock(return_value=client)
+    client.__exit__ = MagicMock(return_value=False)
+    client.post.side_effect = mock_call
+    client.get.side_effect = mock_call
+
+    with patch('disco.tools.builtin.image_gen.httpx.Client', return_value=client):
+        backend = _ComfyUIBackend(base_url='http://localhost:8188', model='m.safetensors')
+        result = backend.generate(prompt='x', width=1024, height=1024, seed=1, fmt='png')
+
+    assert fetched['params']['filename'] == 'final.png'
+    assert fetched['params']['type'] == 'output'
+    assert result == b'\x89PNG\r\n\x1a\n' + b'final-bytes'
+
+
+def test_comfyui_template_malformed_json_raises_clearly():
+    """A template that isn't valid JSON after substitution fails loud with guidance."""
+    backend = _ComfyUIBackend(
+        base_url='http://localhost:8188',
+        model='c.safetensors',
+        workflow_json='{ this is not json %seed%',
+    )
+    with pytest.raises(ValueError, match="API Format|valid JSON"):
+        backend.generate(prompt='x', width=1024, height=1024, seed=1, fmt='png')
