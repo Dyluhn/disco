@@ -10,6 +10,23 @@
 
 import { BuildSurface } from "@/components/BuildSurface";
 
-export function AgentSurface({ resumeCid }: { resumeCid?: string | null } = {}) {
-  return <BuildSurface resumeCid={resumeCid} framing="agent" />;
+export function AgentSurface({
+  resumeCid,
+  seedTask,
+  seedContext,
+}: {
+  resumeCid?: string | null;
+  // runthru-v2 #7: the report→slides handoff seeds the AGENT surface; forward the
+  // seed task/context to BuildSurface so the deck job actually starts.
+  seedTask?: string | null;
+  seedContext?: string | null;
+} = {}) {
+  return (
+    <BuildSurface
+      resumeCid={resumeCid}
+      framing="agent"
+      seedTask={seedTask}
+      seedContext={seedContext}
+    />
+  );
 }

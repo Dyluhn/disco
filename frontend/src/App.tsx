@@ -78,10 +78,35 @@ function ResumeProject() {
 
 /** Resume an existing Agent task from /agent/:cid — the same machinery as
  * ResumeProject, agent framing. The stored surface stays "agent"; resume never
- * re-sets it (the WS just replays history-then-live). */
+ * re-sets it (the WS just replays history-then-live).
+ *
+ * runthru-v2 #7: the "Build a deck" report→slides handoff now targets the AGENT
+ * surface (task framing, not software-dev), so ResumeAgent must capture the
+ * seedTask/seedContext from router state + seed-kick ONCE, exactly like
+ * ResumeProject — otherwise it landed here without ever starting the deck job. */
 function ResumeAgent() {
   const { cid } = useParams<{ cid: string }>();
-  return <AgentSurface resumeCid={cid ?? null} />;
+  const location = useLocation();
+  const navigate = useNavigate();
+  const seedRef = useRef<string | null>(
+    (location.state as { seedTask?: string } | null)?.seedTask ?? null,
+  );
+  const seedContextRef = useRef<string | null>(
+    (location.state as { seedContext?: string } | null)?.seedContext ?? null,
+  );
+  useEffect(() => {
+    if ((location.state as { seedTask?: string } | null)?.seedTask) {
+      navigate(location.pathname, { replace: true, state: null });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return (
+    <AgentSurface
+      resumeCid={cid ?? null}
+      seedTask={seedRef.current}
+      seedContext={seedContextRef.current}
+    />
+  );
 }
 
 /** Resume an existing Deep Research run from /deep/:cid — opens the Deep
