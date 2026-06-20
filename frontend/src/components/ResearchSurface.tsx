@@ -74,16 +74,12 @@ export function ResearchSurface() {
               busy={r.submitting}
               autoFocus
               {...clusterProps}
-              footer={
-                /* G1/DR-4: UploadComposer in the research empty state. The preCid
-                   is pre-created on mount; its attached text files seed the rerank
-                   step via seed_passages. No false affordance — only render when
-                   the cid is ready (agentLive path only). */
-                r.preCid ? (
-                  <div className="flex items-center gap-inline">
-                    <UploadComposer cid={r.preCid} />
-                  </div>
-                ) : undefined
+              extraControls={
+                /* runthru-v2 #9: UploadComposer is now INLINE in the pill row (like
+                   the DR surface), not a `footer` block BELOW the cards. Always
+                   rendered (UploadComposer self-disables when cid is null) so it
+                   doesn't flicker out during the brief pre-create window. */
+                <UploadComposer cid={r.preCid} />
               }
             />
             {r.submitError && (

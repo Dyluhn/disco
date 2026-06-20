@@ -137,10 +137,11 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
                   <DepthTierSelector value={r.depthTier as Tier} onChange={r.setDepthTier} />
                   <RecencySelector value={r.recencyWindow} onChange={r.setRecencyWindow} />
                   <IterativeToggle value={r.iterative} onChange={r.setIterative} />
-                  {/* G1/DR-4: UploadComposer in the empty state. The preCid is
-                      created eagerly on mount so this renders immediately.
-                      Only shown when a live cid is available (no false affordance). */}
-                  {r.preCid && <UploadComposer cid={r.preCid} />}
+                  {/* G1/DR-4 + runthru-v2 #9: UploadComposer always rendered (it
+                      self-disables when cid is null) so the attach affordance does
+                      NOT vanish during the brief preCid re-create window on a
+                      settings change — it just dims until the new cid resolves. */}
+                  <UploadComposer cid={r.preCid} />
                 </>
               }
             />
