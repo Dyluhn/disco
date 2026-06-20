@@ -3,14 +3,43 @@
 from __future__ import annotations
 
 import json as _json
+import mimetypes
 
 import httpx
 from disco.core.store.sqlite import SqliteEventStore
+from disco.tools.projects import StorageStatus
 from disco.tools.sandbox._container import NOVNC_PORT, PREVIEW_PORT, USER_PORTS
+from disco.tools.sandbox.base import strip_redundant_workspace_prefix
 from fastapi import APIRouter, Response
 from fastapi.responses import JSONResponse
 
 from ..runtime import ConversationRuntime
+
+
+def _serve_static_from_snapshot(
+    runtime: ConversationRuntime, conversation_id: str, rel_path: str
+) -> Response | None:
+    """runthru-v2: serve a FINISHED build's static site DIRECTLY from the host
+    ProjectStore snapshot when the sandbox can't be woken (build finished + reaped,
+    or the configured backend is unavailable). The built files already sit on disk
+    at projects/{cid}/workspace/ — returning a 503 for a file we HAVE is the bug the
+    user hit ("preview not available" on a completed app). Jailed to the snapshot
+    workspace (mirrors files.py), normalizes a redundant 'workspace/' prefix."""
+    try:
+        ps = runtime.project_store()
+        if ps is None or ps.status() != StorageStatus.OK:
+            return None
+        ws = ps.path_for(conversation_id).resolve()
+    except Exception:  # noqa: BLE001 — no snapshot → caller falls back to 503
+        return None
+    rel = strip_redundant_workspace_prefix(rel_path or "").strip("/") or "index.html"
+    target = (ws / rel).resolve()
+    if target.is_dir():
+        target = (target / "index.html").resolve()
+    if not (target.is_relative_to(ws) and target.is_file()):
+        return None
+    ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+    return Response(content=target.read_bytes(), media_type=ctype)
 
 
 def make_preview_router(
@@ -221,6 +250,12 @@ def make_preview_router(
         cid8 = conversation_id.removeprefix("conv_")[:8]
         upstream = await runtime.wake_for_preview(cid8, PREVIEW_PORT)
         if upstream is None:
+            # runthru-v2: the sandbox can't be woken (finished build / backend
+            # unavailable), but the built static site may already be on the host
+            # snapshot — serve it directly instead of a 503 for a file we have.
+            served = _serve_static_from_snapshot(runtime, conversation_id, path)
+            if served is not None:
+                return served
             return Response("preview not available", status_code=503, media_type="text/plain")
         try:
             async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
