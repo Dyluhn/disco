@@ -39,6 +39,8 @@ import { agentHttpBase } from "@/api/client";
 import { createBuildConversation } from "@/api/agent";
 import { serializeReportToMarkdown } from "@/api/deepResearch";
 import { useExportCapabilities } from "@/hooks/useExportCapabilities";
+import { useTemplates } from "@/hooks/useTemplates";
+import { TemplatePicker } from "./TemplatePicker";
 import type { MessageEvent, ReportEvent } from "@/types/agent";
 import { ReportFollowUp } from "./ReportFollowUp";
 import { AudioPlayer } from "./AudioPlayer";
@@ -111,9 +113,12 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
   const exportCaps = useExportCapabilities();
   const [exporting, setExporting] = useState<"md" | "pdf" | "docx" | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
-  // ④: PDF appearance theme. Threaded into the export POST body as `mode`
-  // (server accepts "light" | "dark"; disco/dark theme exists). Default light.
-  const [pdfMode, setPdfMode] = useState<"light" | "dark">("light");
+  // Export template — a brand theme spin. Threaded into the POST body as `theme`
+  // (registry name) + `mode` (split from the chosen catalogue entry). Default =
+  // Disco light; MD ignores it (byte-identical regardless).
+  const templates = useTemplates();
+  const [templateId, setTemplateId] = useState("disco-light");
+  const tpl = templates.find((t) => t.id === templateId) ?? templates[0];
   const fsa = hasFSA();
 
   const hasFollowUps = Boolean(followUpSeqs && followUpSeqs.length > 0);
@@ -154,9 +159,10 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
     // B1: always route through the server endpoint so follow-ups are included
     // regardless of FSA availability.  (The server endpoint is idempotent —
     // no extra cost over the client-side serializer.)
-    // ④: include `mode` so PDF appearance carries through; server ignores it for MD.
-    const exportBody: { follow_up_seqs?: number[]; mode: "light" | "dark" } = {
-      mode: pdfMode,
+    // Include theme+mode so PDF carries the chosen template; server ignores for MD.
+    const exportBody: { follow_up_seqs?: number[]; theme: string; mode: string } = {
+      theme: tpl.name,
+      mode: tpl.mode,
     };
     if (hasFollowUps) exportBody.follow_up_seqs = followUpSeqs;
     const bodyPayload = JSON.stringify(exportBody);
@@ -185,16 +191,17 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
     } finally {
       setExporting(null);
     }
-  }, [report.query, cid, fsa, hasFollowUps, followUpSeqs, baseFilename, pdfMode]);
+  }, [report.query, cid, fsa, hasFollowUps, followUpSeqs, baseFilename, tpl]);
 
   const handleFmt = useCallback(
     async (fmt: "pdf" | "docx") => {
       setExporting(fmt);
       setExportError(null);
       // B2: include follow_ups for DOCX too (remove the old fmt!=="docx" guard).
-      // ④: thread `mode` so PDF honours the Light/Dark choice; ignored for DOCX.
-      const exportBody: { follow_up_seqs?: number[]; mode: "light" | "dark" } = {
-        mode: pdfMode,
+      // Thread theme+mode so PDF honours the chosen template; ignored for DOCX.
+      const exportBody: { follow_up_seqs?: number[]; theme: string; mode: string } = {
+        theme: tpl.name,
+        mode: tpl.mode,
       };
       if (hasFollowUps) exportBody.follow_up_seqs = followUpSeqs;
       const bodyPayload = JSON.stringify(exportBody);
@@ -230,7 +237,7 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
         setExporting(null);
       }
     },
-    [cid, fsa, hasFollowUps, followUpSeqs, baseFilename, pdfMode],
+    [cid, fsa, hasFollowUps, followUpSeqs, baseFilename, tpl],
   );
 
   return (
@@ -340,36 +347,16 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
               )}
             </button>
 
-            {/* ④ PDF appearance — Light/Dark, only where PDF export is real */}
+            {/* PDF template — the brand-theme spin, only where PDF export is real */}
             {exportCaps.pdf && (
-              <div className="flex items-center justify-between gap-inline px-inline">
-                <span className="font-ui text-[0.74rem] text-text-faint">
-                  PDF appearance
-                </span>
-                <div
-                  role="group"
-                  aria-label="PDF appearance"
-                  className="flex overflow-hidden rounded-control border border-hairline"
-                >
-                  {(["light", "dark"] as const).map((m) => (
-                    <button
-                      key={m}
-                      type="button"
-                      onClick={() => setPdfMode(m)}
-                      aria-pressed={pdfMode === m}
-                      disabled={exporting !== null}
-                      className={cn(
-                        "px-inline py-hair font-ui text-[0.74rem] capitalize transition-colors",
-                        pdfMode === m
-                          ? "bg-accent/10 text-accent"
-                          : "text-text-muted hover:text-text",
-                      )}
-                    >
-                      {m}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <TemplatePicker
+                templates={templates}
+                value={templateId}
+                onChange={setTemplateId}
+                disabled={exporting !== null}
+                label="PDF template"
+                id="pdf-template"
+              />
             )}
 
             {/* DOCX — gated on server capability */}

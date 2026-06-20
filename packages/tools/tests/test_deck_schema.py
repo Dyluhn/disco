@@ -493,3 +493,24 @@ def test_lower_deck_renders_to_valid_html():
     assert "56.25vw" in html_str  # 16:9 ratio
     assert "ArrowRight" in html_str  # keyboard nav
     assert html_str.count('<section class="slide') == len(deck.slides)
+
+
+def test_lower_deck_theme_override_rethemes_without_mutating_authored() -> None:
+    """The slide-deck template selector path: theme_override re-themes at render
+    time, the authored deck's own theme is untouched, and an unknown id raises."""
+    import pytest
+
+    from disco.core.brand import resolve_theme
+    from disco.tools.builtin._deck_schema import AuthoredDeck, AuthoredSlide, lower_deck
+
+    authored = AuthoredDeck(
+        title="T", theme="disco-light",
+        slides=[AuthoredSlide(type="title", title="Hi", body=["x"])],
+    )
+    base = lower_deck(authored)
+    over = lower_deck(authored, theme_override="midnight-dark")
+    assert base.theme == resolve_theme("disco", "light")
+    assert over.theme == resolve_theme("midnight", "dark")
+    assert authored.theme == "disco-light"  # authored sidecar NOT mutated
+    with pytest.raises(ValueError):
+        lower_deck(authored, theme_override="bogus-template")

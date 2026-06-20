@@ -588,3 +588,29 @@ def test_endpoint_md_export_without_follow_up_seqs_byte_identical(
     assert r1.content == r2.content, "Empty follow_up_seqs must be byte-identical to no-body"
     # And both must equal the captured baseline
     assert r1.content == CAPTURED_MARKDOWN.encode("utf-8")
+
+
+def test_templates_endpoint_lists_catalog() -> None:
+    """GET /api/templates returns the shared catalogue with the Disco default."""
+    import asyncio
+    from unittest.mock import MagicMock
+
+    import httpx
+    from disco.agent_server.app import create_app
+    from disco.core.store.sqlite import SqliteEventStore
+
+    store = MagicMock(spec=SqliteEventStore)
+    app = create_app(store, runtime=None)
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            r = await c.get("/api/templates")
+            assert r.status_code == 200
+            tpls = r.json()["templates"]
+            ids = {t["id"] for t in tpls}
+            assert "disco-light" in ids and "ink-light" in ids and "midnight-dark" in ids
+            disco = next(t for t in tpls if t["id"] == "disco-light")
+            assert disco["default"] is True
+            assert disco["accent"].startswith("#") and disco["label"]
+    asyncio.run(run())

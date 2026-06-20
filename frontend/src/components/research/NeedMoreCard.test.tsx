@@ -32,6 +32,12 @@ const _caps = vi.hoisted(() => ({
 vi.mock("@/hooks/useExportCapabilities", () => ({
   useExportCapabilities: () => _caps.current,
 }));
+vi.mock("@/hooks/useTemplates", () => ({
+  useTemplates: () => [
+    { id: "disco-light", name: "disco", mode: "light", label: "Disco", description: "Default", accent: "#4077a3", bg: "#fcfcfa", default: true },
+    { id: "midnight-dark", name: "midnight", mode: "dark", label: "Midnight", description: "Dark", accent: "#d9a441", bg: "#0d1017", default: false },
+  ],
+}));
 
 vi.mock("@/api/deepResearch", () => ({
   exportReportAsMarkdown: vi.fn(),
@@ -415,8 +421,8 @@ describe("NeedMoreCard", () => {
     resolveHang({ ok: true, json: vi.fn().mockResolvedValue({ mp3_url: "/test.mp3" }) });
   });
 
-  // (i) ④ PDF appearance toggle threads `mode` into the export POST body.
-  describe("PDF appearance (Light/Dark) toggle", () => {
+  // (i) The PDF template selector threads `theme` + `mode` into the export POST body.
+  describe("PDF template selector", () => {
     const findExportCall = () =>
       _fetchMock.mock.calls.find(([url]) =>
         String(url).includes("/report/export?fmt=pdf"),
@@ -436,7 +442,7 @@ describe("NeedMoreCard", () => {
       });
     }
 
-    it("defaults to Light and POSTs mode:light when exporting PDF", async () => {
+    it("defaults to Disco and POSTs theme:disco mode:light when exporting PDF", async () => {
       _caps.current = { md: true, pdf: true, docx: true };
       stubBlobAndUrl();
       const user = userEvent.setup();
@@ -445,22 +451,20 @@ describe("NeedMoreCard", () => {
       await user.click(screen.getByRole("button", { name: /Export as/i }));
       const dialog = await screen.findByRole("dialog");
 
-      // Toggle present and defaulting to Light (no Dark selection made).
-      const group = within(dialog).getByRole("group", { name: /PDF appearance/i });
-      expect(within(group).getByRole("button", { name: /^Light$/i })).toHaveAttribute(
-        "aria-pressed",
-        "true",
-      );
+      // The template picker is present and defaults to Disco (disco-light).
+      const select = within(dialog).getByLabelText(/PDF template/i) as HTMLSelectElement;
+      expect(select.value).toBe("disco-light");
 
       await user.click(within(dialog).getByRole("button", { name: /PDF/i }));
 
       await waitFor(() => expect(findExportCall()).toBeTruthy());
       const [, init] = findExportCall()!;
       const body = JSON.parse((init as RequestInit).body as string);
+      expect(body.theme).toBe("disco");
       expect(body.mode).toBe("light");
     });
 
-    it("selecting Dark then exporting PDF POSTs mode:dark", async () => {
+    it("selecting Midnight then exporting PDF POSTs theme:midnight mode:dark", async () => {
       _caps.current = { md: true, pdf: true, docx: true };
       stubBlobAndUrl();
       const user = userEvent.setup();
@@ -469,32 +473,28 @@ describe("NeedMoreCard", () => {
       await user.click(screen.getByRole("button", { name: /Export as/i }));
       const dialog = await screen.findByRole("dialog");
 
-      // Select Dark.
-      const group = within(dialog).getByRole("group", { name: /PDF appearance/i });
-      await user.click(within(group).getByRole("button", { name: /^Dark$/i }));
-      expect(within(group).getByRole("button", { name: /^Dark$/i })).toHaveAttribute(
-        "aria-pressed",
-        "true",
-      );
+      // Pick the Midnight (dark) template.
+      const select = within(dialog).getByLabelText(/PDF template/i);
+      await user.selectOptions(select, "midnight-dark");
 
-      // Export PDF.
       await user.click(within(dialog).getByRole("button", { name: /PDF/i }));
 
       await waitFor(() => expect(findExportCall()).toBeTruthy());
       const [, init] = findExportCall()!;
       const body = JSON.parse((init as RequestInit).body as string);
+      expect(body.theme).toBe("midnight");
       expect(body.mode).toBe("dark");
     });
 
-    it("hides the appearance toggle when PDF export is unavailable", async () => {
-      // Default caps: pdf:false → no toggle (no dead control).
+    it("hides the template picker when PDF export is unavailable", async () => {
+      // Default caps: pdf:false → no picker (no dead control).
       const user = userEvent.setup();
       renderCard();
 
       await user.click(screen.getByRole("button", { name: /Export as/i }));
       const dialog = await screen.findByRole("dialog");
       expect(
-        within(dialog).queryByRole("group", { name: /PDF appearance/i }),
+        within(dialog).queryByLabelText(/PDF template/i),
       ).not.toBeInTheDocument();
     });
   });

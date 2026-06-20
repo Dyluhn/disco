@@ -26,12 +26,26 @@ Public surface:
 
 from .css import font_face_css, print_skeleton_css, theme_css_vars
 from .mark import definition_mark_html, wordmark_html
-from .tokens import THEMES, Theme, resolve_theme
+from .tokens import (
+    TEMPLATE_CATALOG,
+    THEMES,
+    TemplateInfo,
+    Theme,
+    is_valid_template,
+    list_templates,
+    parse_template_id,
+    resolve_theme,
+)
 
 __all__ = [
     "Theme",
     "THEMES",
     "resolve_theme",
+    "TemplateInfo",
+    "TEMPLATE_CATALOG",
+    "list_templates",
+    "parse_template_id",
+    "is_valid_template",
     "font_face_css",
     "theme_css_vars",
     "print_skeleton_css",

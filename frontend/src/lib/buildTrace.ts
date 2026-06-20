@@ -54,6 +54,8 @@ export interface ActivityItem {
       format?: "html" | "pdf" | "pptx";
       slide_count?: number;
       slides?: { title?: string; content?: string }[];
+      base?: string; // deck base name (no ext) — for the /deck/export template re-render
+      editable?: boolean; // has an authored sidecar → template re-render is available
     };
     // F2: an agent-emitted file (via serve(kind="files")). Downloadable via the
     // declared-artifact route. Rendered as a first-class download card in the feed.
@@ -151,9 +153,33 @@ export function deriveActivity(
         format?: "html" | "pdf" | "pptx";
         slide_count?: number;
         slides?: { title?: string; content?: string }[];
+        base?: string;
+        editable?: boolean;
       };
     }
   >();
+  // Editability is decided by the LATEST render PER BASE (declared artifacts
+  // accumulate forever, so a later non-editable Marp regen supersedes an older
+  // editable sidecar). Pre-scan to record, per base, whether the most recent
+  // slides_generate still advertised an editable sidecar — mirrors the backend's
+  // _sidecar_is_current rule so a superseded card never shows the template picker.
+  const latestEditableByBase = new Map<string, boolean>();
+  for (const e of events) {
+    if (
+      e.kind === "observation" &&
+      e.tool_result.tool_name === "slides_generate" &&
+      e.tool_result.success
+    ) {
+      const s = e.tool_result.structured;
+      const b = typeof s?.base_name === "string" ? s.base_name : undefined;
+      if (b) {
+        latestEditableByBase.set(
+          b,
+          typeof s?.editable_source === "string" && s.editable_source.length > 0,
+        );
+      }
+    }
+  }
   for (const e of events) {
     if (e.kind === "observation") {
       const struct = e.tool_result.structured;
@@ -191,6 +217,15 @@ export function deriveActivity(
               slides: Array.isArray(struct?.slides)
                 ? (struct!.slides as { title?: string; content?: string }[])
                 : undefined,
+              // An editable deck carries an authored sidecar (editable_source) — only
+              // then can the slide-deck template selector re-render via /deck/export.
+              // Gate on the LATEST render per base (not this event), so a card whose
+              // base was later re-rendered non-editable drops the picker (no 404 affordance).
+              base: typeof struct?.base_name === "string" ? struct.base_name : undefined,
+              editable:
+                typeof struct?.base_name === "string"
+                  ? latestEditableByBase.get(struct.base_name) === true
+                  : false,
             }
           : undefined;
       observationByActionId.set(e.action_id, {

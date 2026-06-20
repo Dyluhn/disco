@@ -111,6 +111,76 @@ def make_deck_editor_router(
         lowered = lower_deck_for_editor(authored)
         return dataclasses.asdict(lowered)
 
+    @router.get("/conversations/{conversation_id}/deck/export")
+    async def export_deck_with_template(
+        conversation_id: str,
+        path: str = Query(..., description="Deck base name (no extension)."),
+        template: str = Query("disco-light", description="Template id, '{name}-{mode}'."),
+        fmt: str = Query("pptx", description="'pptx' or 'html'."),
+    ) -> Any:
+        """Render the deck with a chosen TEMPLATE and return it as a download.
+
+        Pure render-on-demand from the stored ``{base}.authored.json`` (live session
+        OR host snapshot via ``_read_artifact_bytes``) — re-themed via the lower_deck
+        ``theme_override`` WITHOUT mutating the sidecar. Needs no live session, so the
+        slide-deck template selector works on finished decks too (mirrors the PDF
+        export's render-from-stored-data path). 400 on an unknown template / fmt."""
+        from fastapi import Response
+
+        from disco.core.brand import is_valid_template
+        from disco.tools.builtin._deck_schema import AuthoredDeck, lower_deck
+        from disco.tools.builtin._pptx_render import render_html, render_pptx
+
+        base = _jail_base(path)
+        authored_rel = f"{base}.authored.json"
+        if runtime is None:
+            raise HTTPException(status_code=404)
+        if authored_rel not in await _declared_artifacts(store, conversation_id):
+            raise HTTPException(status_code=404)
+        # The sidecar must be the CURRENT render of this base — declared artifacts
+        # accumulate forever, so a later non-editable (Marp/fallback) regeneration
+        # of the same base supersedes the editable one. Rendering the stale sidecar
+        # would export a deck the user already replaced. (Mirrors GET/PUT.)
+        if not await _sidecar_is_current(store, conversation_id, base):
+            raise HTTPException(status_code=404)
+        # STRICT template validation against the gallery catalogue (400 on an id
+        # outside it — e.g. "ink-dark", which resolve_theme would silently light-fall-back).
+        if not is_valid_template(template):
+            raise HTTPException(status_code=400, detail=f"Unknown template {template!r}")
+        if fmt not in ("pptx", "html"):
+            raise HTTPException(status_code=400, detail="fmt must be 'pptx' or 'html'")
+
+        raw = await _read_artifact_bytes(runtime, conversation_id, authored_rel)
+        if raw is None:
+            raise HTTPException(status_code=404)
+        try:
+            authored = AuthoredDeck.model_validate(json.loads(raw))
+        except Exception as exc:  # noqa: BLE001 — malformed sidecar → 404
+            raise HTTPException(status_code=404) from exc
+
+        try:
+            deck = lower_deck(authored, theme_override=template)
+            if fmt == "html":
+                body: bytes = render_html(deck).encode("utf-8")
+                media = "text/html; charset=utf-8"
+                ext = "html"
+            else:
+                body = render_pptx(deck)
+                media = (
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                )
+                ext = "pptx"
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=422, detail={"reason": "render_failed", "message": str(exc)}
+            ) from exc
+
+        return Response(
+            content=body,
+            media_type=media,
+            headers={"Content-Disposition": f'attachment; filename="{base}.{ext}"'},
+        )
+
     @router.put("/conversations/{conversation_id}/deck/editor")
     async def patch_deck(
         conversation_id: str,

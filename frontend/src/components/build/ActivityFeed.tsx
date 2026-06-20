@@ -29,6 +29,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { agentHttpBase } from "@/api/client";
+import { useTemplates } from "@/hooks/useTemplates";
+import { TemplatePicker } from "@/components/research/TemplatePicker";
 import type { ActivityItem } from "@/lib/buildTrace";
 
 function ScreenshotThumbnail({
@@ -114,28 +116,50 @@ export function SlidesDownload({
   slides: NonNullable<ActivityItem["expandable"]>["slides"];
   conversationId: string;
 }) {
+  const templates = useTemplates();
+  const [templateId, setTemplateId] = useState("disco-light");
   if (!slides) return null;
-  const href = `${agentHttpBase()}/conversations/${conversationId}/artifacts/${encodeURI(slides.filename)}`;
   const n = slides.slide_count ?? slides.slides?.length ?? 0;
-  const fmt = (slides.format || "html").toUpperCase();
+  // An editable deck (authored sidecar) can be re-rendered with any template at
+  // download time via /deck/export — pure render-on-demand, no live sandbox needed.
+  // A non-editable deck (Marp) keeps the baked artifact link (no false affordance).
+  const editable = Boolean(slides.editable && slides.base);
+  const staticHref = `${agentHttpBase()}/conversations/${conversationId}/artifacts/${encodeURI(slides.filename)}`;
+  const href = editable
+    ? `${agentHttpBase()}/conversations/${conversationId}/deck/export` +
+      `?path=${encodeURIComponent(slides.base!)}` +
+      `&template=${encodeURIComponent(templateId)}&fmt=pptx`
+    : staticHref;
+  const fmt = (editable ? "pptx" : slides.format || "html").toUpperCase();
   return (
-    <a
-      href={href}
-      download
-      className="mt-hair flex items-center gap-inline rounded-card border border-hairline bg-surface-0 px-inline py-hair transition-colors hover:border-hairline-strong"
-    >
-      <MonitorPlay className="size-4 shrink-0 text-accent" aria-hidden />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate font-ui text-[0.82rem] text-text">
-          {slides.title || slides.filename}
+    <div className="mt-hair flex flex-col gap-hair">
+      <a
+        href={href}
+        download
+        className="flex items-center gap-inline rounded-card border border-hairline bg-surface-0 px-inline py-hair transition-colors hover:border-hairline-strong"
+      >
+        <MonitorPlay className="size-4 shrink-0 text-accent" aria-hidden />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-ui text-[0.82rem] text-text">
+            {slides.title || slides.filename}
+          </span>
+          <span className="block truncate font-mono text-[0.7rem] text-text-faint">
+            {slides.filename}
+            {n > 0 ? ` · ${fmt} · ${n} slide${n !== 1 ? "s" : ""}` : ` · ${fmt}`}
+          </span>
         </span>
-        <span className="block truncate font-mono text-[0.7rem] text-text-faint">
-          {slides.filename}
-          {n > 0 ? ` · ${fmt} · ${n} slide${n !== 1 ? "s" : ""}` : ` · ${fmt}`}
-        </span>
-      </span>
-      <Download className="size-3.5 shrink-0 text-text-faint" aria-hidden />
-    </a>
+        <Download className="size-3.5 shrink-0 text-text-faint" aria-hidden />
+      </a>
+      {editable && (
+        <TemplatePicker
+          templates={templates}
+          value={templateId}
+          onChange={setTemplateId}
+          label="Template"
+          id={`deck-template-${slides.base}`}
+        />
+      )}
+    </div>
   );
 }
 

@@ -152,13 +152,17 @@ def test_neutral_system_fonts() -> None:
     assert "Schibsted" not in t.font_ui
 
 
-def test_themes_dict_has_four_entries() -> None:
-    """Four entries: disco × 2 + neutral × 2."""
-    assert len(THEMES) == 4
+def test_themes_dict_has_all_template_entries() -> None:
+    """disco × 2 + neutral × 2 + the four template spins (ink/sepia/signal/midnight)."""
+    assert len(THEMES) == 8
     assert ("disco", "light") in THEMES
     assert ("disco", "dark") in THEMES
     assert ("neutral", "light") in THEMES
     assert ("neutral", "dark") in THEMES
+    assert ("ink", "light") in THEMES
+    assert ("sepia", "light") in THEMES
+    assert ("signal", "light") in THEMES
+    assert ("midnight", "dark") in THEMES
 
 
 def test_all_theme_fields_non_empty() -> None:
@@ -417,3 +421,42 @@ def test_theme_is_frozen_dataclass() -> None:
     t = resolve_theme("disco", "light")
     with pytest.raises(Exception):
         t.bg = "#000000"  # type: ignore[misc]
+
+
+def test_template_catalog_ids_resolve_and_have_a_single_default() -> None:
+    """Every catalogue entry's id must resolve to a registered theme, and exactly
+    one entry is the default (disco-light)."""
+    from disco.core.brand import list_templates, parse_template_id, resolve_theme
+
+    cat = list_templates()
+    assert len(cat) >= 6
+    defaults = [t for t in cat if t.default]
+    assert len(defaults) == 1 and defaults[0].id == "disco-light"
+    for t in cat:
+        name, mode = parse_template_id(t.id)
+        resolve_theme(name, mode)  # must not raise
+        assert t.accent.startswith("#") and t.bg.startswith("#")
+
+
+def test_parse_template_id_splits_name_and_mode() -> None:
+    from disco.core.brand import parse_template_id
+
+    assert parse_template_id("midnight-dark") == ("midnight", "dark")
+    assert parse_template_id("ink-light") == ("ink", "light")
+    assert parse_template_id("neutral") == ("neutral", "light")  # bare → light
+    # A hyphenated name with a non-mode tail stays whole (defensive).
+    assert parse_template_id("disco-light") == ("disco", "light")
+
+
+def test_is_valid_template_enforces_catalogue() -> None:
+    """is_valid_template accepts only gallery ids — stricter than resolve_theme,
+    which would light-fall-back an unknown mode (ink-dark)."""
+    from disco.core.brand import is_valid_template
+
+    assert is_valid_template("disco-light")
+    assert is_valid_template("midnight-dark")
+    assert is_valid_template("ink-light")
+    # Modes that aren't in the gallery must be REJECTED (not silently light-mapped).
+    assert not is_valid_template("ink-dark")
+    assert not is_valid_template("midnight-light")
+    assert not is_valid_template("vaporwave-light")

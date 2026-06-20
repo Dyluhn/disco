@@ -1,7 +1,10 @@
-"""Report-export capabilities probe (RP-07)."""
+"""Report-export capabilities probe (RP-07) + the shared template catalogue."""
 
 from __future__ import annotations
 
+import dataclasses
+
+from disco.core.brand import list_templates
 from disco.core.store.sqlite import SqliteEventStore
 from fastapi import APIRouter
 
@@ -26,5 +29,13 @@ def make_export_router(
         # no container) can't, so docx is gated on a real container backend.
         docx_ok = backend in ("local", "gvisor", "podman")
         return {"md": True, "pdf": pdf_available(), "docx": docx_ok}
+
+    @router.get("/api/templates")
+    async def templates_route() -> dict:
+        """The export-template gallery, shared by the DR-report PDF export and the
+        slide-deck export selectors. One source of truth (core.brand catalogue) so the
+        two surfaces never drift. Each entry carries `id`, `label`, `description`, and
+        an `accent`/`bg` swatch."""
+        return {"templates": [dataclasses.asdict(t) for t in list_templates()]}
 
     return router

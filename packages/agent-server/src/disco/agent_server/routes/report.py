@@ -125,13 +125,15 @@ async def _resolve_export_payload(
     Raises HTTPException(404) when no report exists, (400) on a serializer error
     or unknown theme.
     """
-    # Validate the theme early so callers get a clear 400 before any I/O.
-    from disco.core.brand import resolve_theme as _resolve_theme
+    # Validate the theme early so callers get a clear 400 before any I/O. Validate
+    # against the GALLERY catalogue ("{theme}-{mode}") — stricter than resolve_theme,
+    # which would silently light-fall-back an unknown mode (e.g. theme=ink mode=dark).
+    from disco.core.brand import is_valid_template as _is_valid_template
 
-    try:
-        _resolve_theme(theme, mode)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not _is_valid_template(f"{theme}-{mode}"):
+        raise HTTPException(
+            status_code=400, detail=f"Unknown template {theme!r}/{mode!r}"
+        )
 
     # md/pdf ALWAYS serialize inline so theme/mode (and any follow-ups) are honored.
     # The runtime.export_report path below does NOT thread theme/mode — routing

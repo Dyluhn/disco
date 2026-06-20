@@ -30,7 +30,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Literal
 
-from disco.core.brand import resolve_theme
+from disco.core.brand import parse_template_id, resolve_theme
 from disco.core.brand.tokens import Theme
 from pydantic import BaseModel, Field
 
@@ -163,7 +163,18 @@ class AuthoredDeck(BaseModel):
     """A complete deck as the LLM authors it."""
 
     title: str
-    theme: Literal["disco-light", "disco-dark", "neutral"] = "disco-light"
+    # The deck's base template. The user can override it at export time via the
+    # template selector; this is the agent's authoring-time default.
+    theme: Literal[
+        "disco-light",
+        "disco-dark",
+        "ink-light",
+        "sepia-light",
+        "signal-light",
+        "midnight-dark",
+        "neutral",
+        "neutral-light",
+    ] = "disco-light"
     slides: list[AuthoredSlide]
 
 
@@ -249,17 +260,11 @@ def _first_font(stack: str) -> str:
 
 
 def _parse_theme(theme_str: str) -> tuple[str, str]:
-    """Split 'disco-light' → ('disco', 'light').
-
-    The verdict doc calls out resolve_theme's TWO-arg signature; callers must
-    split the compound string rather than passing it directly.
-    """
-    if theme_str == "disco-light":
-        return "disco", "light"
-    if theme_str == "disco-dark":
-        return "disco", "dark"
-    # "neutral" → neutral/light
-    return "neutral", "light"
+    """Split a "{name}-{mode}" template id → (name, mode). Delegates to the brand
+    catalogue's generalized parser so ANY registered template (disco/ink/sepia/
+    signal/midnight/neutral…) works as a deck theme, not just the original three.
+    resolve_theme takes two args, so callers split rather than pass the compound."""
+    return parse_template_id(theme_str)
 
 
 # ---------------------------------------------------------------------------
@@ -918,12 +923,16 @@ _LAYOUT_FNS: dict[str, object] = {
 _MAX_CONT_DEPTH = 3  # maximum continuation-slide nesting
 
 
-def lower_deck(authored: AuthoredDeck) -> Deck:
+def lower_deck(authored: AuthoredDeck, *, theme_override: str | None = None) -> Deck:
     """Lower an AuthoredDeck to a Deck of precisely-positioned Elements.
 
     This is a PURE function: same input → structurally equivalent output
     (ids differ because they are UUIDs, but all positions / text / layout
     decisions are deterministic).
+
+    ``theme_override`` ("{name}-{mode}" template id) re-themes the deck at render
+    time WITHOUT mutating the authored sidecar — this is the slide-deck template
+    selector's render-on-demand path. None → use the deck's authored theme.
 
     Overflow rules:
       - ``_fit_text`` steps font from max to min.
@@ -934,7 +943,7 @@ def lower_deck(authored: AuthoredDeck) -> Deck:
         (they do not appear on the visible slide face).
       - Maximum continuation depth: 3 (prevents catastrophic infinite split).
     """
-    theme_name, theme_mode = _parse_theme(authored.theme)
+    theme_name, theme_mode = _parse_theme(theme_override or authored.theme)
     theme = resolve_theme(theme_name, theme_mode)
 
     deck_slides: list[Slide] = []
