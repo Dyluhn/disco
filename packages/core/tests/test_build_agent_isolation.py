@@ -24,8 +24,17 @@ Contract being guarded
 from __future__ import annotations
 
 from disco.core.llm import DriverPrompts, ModelRole, OperatingMode
-from disco.core.llm.prompts import _EXECUTION_DRIVER_PROMPT, _PLANNING_DRIVER_PROMPT
+from disco.core.llm.prompts import (
+    _AGENT_PLANNING_CAPABILITY_BLOCK,
+    _EXECUTION_DRIVER_PROMPT,
+    _PLANNING_DRIVER_PROMPT,
+)
 from disco.tools.registry import AGENT_TOOLS
+
+# [R6] The capability block now applies to BOTH flavors' PLANNING prompt (the build
+# planner hides write tools too). So build PLANNING = base constant + this block;
+# build EXECUTION is still the bare constant (the block is planning-only).
+_BUILD_PLANNING = _PLANNING_DRIVER_PROMPT + _AGENT_PLANNING_CAPABILITY_BLOCK
 
 # ---------------------------------------------------------------------------
 # 1. Build-flavor PLANNING prompt is byte-stable
@@ -33,18 +42,18 @@ from disco.tools.registry import AGENT_TOOLS
 
 
 def test_build_planning_prompt_equals_constant():
-    """flavor='build' planning output == _PLANNING_DRIVER_PROMPT, byte for byte."""
+    """flavor='build' planning output == _BUILD_PLANNING, byte for byte."""
     dp = DriverPrompts(flavor="build")
     got = dp.system_prompt(
         model_family="qwen",
         mode=OperatingMode.PLANNING,
         role=ModelRole.AGENT_DRIVER,
     )
-    assert got == _PLANNING_DRIVER_PROMPT
+    assert got == _BUILD_PLANNING
 
 
 def test_default_planning_prompt_equals_constant():
-    """No-arg DriverPrompts() planning output == _PLANNING_DRIVER_PROMPT.
+    """No-arg DriverPrompts() planning output == _BUILD_PLANNING.
 
     Callers that never pass flavor must see the same build-stable prompt."""
     dp = DriverPrompts()
@@ -53,7 +62,7 @@ def test_default_planning_prompt_equals_constant():
         mode=OperatingMode.PLANNING,
         role=ModelRole.AGENT_DRIVER,
     )
-    assert got == _PLANNING_DRIVER_PROMPT
+    assert got == _BUILD_PLANNING
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +136,7 @@ def test_agent_flavor_diverges_from_build_in_both_phases():
     assert "autonomous build agent" in build_plan
     assert "autonomous task agent" in agent_plan
     # Build path is still the constant — agent flavor didn't touch it.
-    assert build_plan == _PLANNING_DRIVER_PROMPT
+    assert build_plan == _BUILD_PLANNING
 
     # Execution phase
     build_exec = build_dp.system_prompt(
@@ -165,7 +174,7 @@ def test_constructing_agent_flavor_does_not_mutate_module_constants():
             mode=OperatingMode.PLANNING,
             role=ModelRole.AGENT_DRIVER,
         )
-        == _PLANNING_DRIVER_PROMPT
+        == _BUILD_PLANNING
     )
     assert (
         dp.system_prompt(

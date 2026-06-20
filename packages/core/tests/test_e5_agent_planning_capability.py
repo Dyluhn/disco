@@ -7,9 +7,11 @@ the model may falsely deny owning a browser, shell, slides generator, etc.
 This guard verifies:
   1. The agent-flavor planning prompt contains the capability-awareness block
      (specifically the sentinel phrases 'browser' and 'locked until approval').
-  2. The build-flavor planning prompt does NOT contain those phrases — the block
-     is agent-only and must not bleed into the Build surface.
-  3. The build-flavor output is still byte-identical to _PLANNING_DRIVER_PROMPT.
+  2. [R6] The build-flavor planning prompt ALSO contains the block — the build
+     planner hides write tools (read_only=False) the same way, so a build-flavor
+     plan (e.g. the DR→slides handoff) otherwise insists it "can't use
+     slides_generate". Previously the block was agent-only; R6 applies it to both.
+  3. The build-flavor output is _PLANNING_DRIVER_PROMPT + the capability block.
 """
 
 from __future__ import annotations
@@ -78,53 +80,56 @@ def test_agent_planning_prompt_mentions_execution_tools():
 
 
 # ---------------------------------------------------------------------------
-# 2. Build planning prompt does NOT contain capability-awareness text
+# 2. [R6] Build planning prompt ALSO contains the capability block
 # ---------------------------------------------------------------------------
 
 
-def test_build_planning_prompt_does_not_contain_capability_block():
-    """Build-flavor planning prompt must NOT contain 'locked until approval' —
-    the capability block is agent-only."""
+def test_build_planning_prompt_contains_capability_block():
+    """[R6] Build-flavor planning prompt MUST contain 'locked until approval' —
+    the build planner hides write tools too, so it needs the same hint or it
+    refuses tools like slides_generate during planning."""
     dp = DriverPrompts(flavor="build")
     got = dp.system_prompt(
         model_family="qwen",
         mode=OperatingMode.PLANNING,
         role=ModelRole.AGENT_DRIVER,
     )
-    assert "locked until approval" not in got, (
-        "capability block must not appear in the build-flavor planning prompt"
+    assert "locked until approval" in got, (
+        "[R6] capability block must appear in the build-flavor planning prompt"
     )
+    assert "slides_generate" in got, "[R6] build planner must know about slides_generate"
 
 
-def test_default_planning_prompt_does_not_contain_capability_block():
-    """Default (no flavor arg) planning prompt must NOT contain 'locked until approval'."""
+def test_default_planning_prompt_contains_capability_block():
+    """[R6] Default (no flavor arg) planning prompt MUST contain the capability block."""
     dp = DriverPrompts()
     got = dp.system_prompt(
         model_family="qwen",
         mode=OperatingMode.PLANNING,
         role=ModelRole.AGENT_DRIVER,
     )
-    assert "locked until approval" not in got, (
-        "capability block must not appear in the default (build) planning prompt"
+    assert "locked until approval" in got, (
+        "[R6] capability block must appear in the default (build) planning prompt"
     )
 
 
 # ---------------------------------------------------------------------------
-# 3. Build-flavor byte-stability is preserved after the E5 change
+# 3. [R6] Build-flavor planning = constant + capability block
 # ---------------------------------------------------------------------------
 
 
-def test_build_planning_prompt_still_byte_identical_to_constant():
-    """After E5: build-flavor planning output is still _PLANNING_DRIVER_PROMPT,
-    byte for byte.  The capability block is agent-only and must not perturb build."""
+def test_build_planning_prompt_is_constant_plus_block():
+    """[R6] Build-flavor planning output is _PLANNING_DRIVER_PROMPT followed by the
+    capability block (the block now applies to all flavors; only the agent identity
+    swap 'build agent'→'task agent' distinguishes agent from build planning)."""
     dp = DriverPrompts(flavor="build")
     got = dp.system_prompt(
         model_family="qwen",
         mode=OperatingMode.PLANNING,
         role=ModelRole.AGENT_DRIVER,
     )
-    assert got == _PLANNING_DRIVER_PROMPT, (
-        "E5 change must not alter build-flavor planning output"
+    assert got == _PLANNING_DRIVER_PROMPT + _AGENT_PLANNING_CAPABILITY_BLOCK, (
+        "[R6] build planning must be the base constant + the capability block"
     )
 
 

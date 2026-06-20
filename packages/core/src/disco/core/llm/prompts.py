@@ -409,9 +409,10 @@ _AUTONOMOUS_PROMPT_PREFIX = (
 # file_read, file_list, ask_user, clarify, submit_plan, think).  Without this
 # block the model may falsely deny owning a browser, shell, slides generator,
 # etc. — because those tools are literally absent from its tool list.  Appending
-# this note to the AGENT-flavor planning prompt lets the model plan steps that
-# use execution tools freely while the engine gate stays closed until approval.
-# MUST NOT appear in the build-flavor prompt — build uses only _PLANNING_DRIVER_PROMPT.
+# this note to the planning prompt lets the model plan steps that use execution
+# tools freely while the engine gate stays closed until approval. [R6] Applied to
+# BOTH build and agent flavors — the build planner hides write tools too, so a
+# build-flavor plan (e.g. the DR→slides handoff) otherwise refuses slides_generate.
 _AGENT_PLANNING_CAPABILITY_BLOCK = (
     "\n\nEXECUTION TOOLS — available AFTER plan approval (NOT callable yet — locked until approval):\n"
     "Once the user approves your plan the engine unlocks the full execution tool-set.  "
@@ -481,16 +482,18 @@ class DriverPrompts:
             planning_prompt = planning_prompt.replace(
                 "autonomous build agent", "autonomous task agent"
             )
-            # [E5] Tell the planning model about execution tools it will gain on
-            # approval so it doesn't falsely deny owning browser/shell/slides/etc.
-            # Appended ONLY here — the build-flavor path never touches this block.
-            planning_prompt = planning_prompt + _AGENT_PLANNING_CAPABILITY_BLOCK
             execution_prompt = execution_prompt.replace(
                 "autonomous build agent", "autonomous task agent"
             )
             execution_prompt_small = execution_prompt_small.replace(
                 "autonomous build agent", "autonomous task agent"
             )
+        # [E5/R6] Tell the planning model about execution tools it gains on approval
+        # so it doesn't falsely deny owning browser/shell/slides/etc. The planner hides
+        # write tools (read_only=False) from the PLANNING schema for BOTH the build and
+        # agent flavors, so BOTH need this hint — appending it agent-only made build-flavor
+        # plans (e.g. the DR→slides handoff) insist they "can't use slides_generate".
+        planning_prompt = planning_prompt + _AGENT_PLANNING_CAPABILITY_BLOCK
         self._planning = planning_prompt
         self._execution = execution_prompt
         # [C21] Tightened execution prompt for small open models. Selected ONLY
