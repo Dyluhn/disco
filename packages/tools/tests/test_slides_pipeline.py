@@ -27,9 +27,12 @@ from disco.tools.anatomy import ToolContext
 from disco.tools.builtin._deck_schema import AuthoredDeck
 from disco.tools.builtin._slides_pipeline import (
     _CAPABLE_SYSTEM,
+    _VALID_THEMES,
     _WEAK_SYSTEM,
+    _coerce_known_theme_aliases,
     _extract_json_object,
     _parse_authored_deck,
+    _retry_msg,
     _stage_fill,
     _stage_outline,
     generate_deck,
@@ -775,3 +778,87 @@ def test_resolve_llm_key_reads_reserved_openrouter_slot(monkeypatch):
     assert sp._resolve_llm_key(OPENROUTER_API_KEY_ENV) == "sk-or-reserved"
     # a non-OpenRouter name does NOT fall back to the reserved slot
     assert sp._resolve_llm_key("SOME_OTHER_KEY") is None
+
+
+# ---------------------------------------------------------------------------
+# Theme validation + coercion (#5a fix)
+# ---------------------------------------------------------------------------
+
+
+def test_valid_themes_derived_from_schema():
+    """_VALID_THEMES is derived from AuthoredDeck — must contain exactly 8 values."""
+    assert len(_VALID_THEMES) == 8
+    assert "disco-light" in _VALID_THEMES
+    assert "disco-dark" in _VALID_THEMES
+    assert "ink-light" in _VALID_THEMES
+    assert "sepia-light" in _VALID_THEMES
+    assert "signal-light" in _VALID_THEMES
+    assert "midnight-dark" in _VALID_THEMES
+    assert "neutral" in _VALID_THEMES
+    assert "neutral-light" in _VALID_THEMES
+
+
+def test_parse_invalid_theme_fails_validation():
+    """theme='dark-research' is not a known alias and must fail pydantic validation."""
+    data = dict(_SAMPLE_DECK_JSON, theme="dark-research")
+    deck, err = _parse_authored_deck(json.dumps(data))
+    assert deck is None
+    assert err  # schema validation error mentioning the bad value
+
+
+def test_retry_msg_contains_all_valid_themes():
+    """_retry_msg(err) includes all 8 valid theme strings so the model can self-correct."""
+    data = dict(_SAMPLE_DECK_JSON, theme="dark-research")
+    _, err = _parse_authored_deck(json.dumps(data))
+    msg = _retry_msg(err)
+    for theme in _VALID_THEMES:
+        assert theme in msg, f"_retry_msg missing valid theme: {theme!r}"
+    # The specific error must also appear so the model knows what went wrong.
+    assert err in msg
+
+
+def test_coerce_dark_alias():
+    """theme='dark' is a known alias — coerced to 'disco-dark' before validation."""
+    data = dict(_SAMPLE_DECK_JSON, theme="dark")
+    deck, err = _parse_authored_deck(json.dumps(data))
+    assert deck is not None, f"Expected 'dark' alias coercion to succeed but got: {err}"
+    assert deck.theme == "disco-dark"
+
+
+def test_coerce_light_alias():
+    """theme='light' is a known alias — coerced to 'disco-light' before validation."""
+    data = dict(_SAMPLE_DECK_JSON, theme="light")
+    deck, err = _parse_authored_deck(json.dumps(data))
+    assert deck is not None, f"Expected 'light' alias coercion to succeed but got: {err}"
+    assert deck.theme == "disco-light"
+
+
+def test_coerce_unknown_alias_is_not_coerced():
+    """An arbitrary invalid value is left as-is (not coerced) so validation rejects it."""
+    data = {"theme": "corporate"}
+    result = _coerce_known_theme_aliases(data)
+    assert result["theme"] == "corporate"  # unchanged — not in _THEME_ALIASES
+
+
+@pytest.mark.parametrize("theme", [
+    "disco-light", "disco-dark", "ink-light", "sepia-light",
+    "signal-light", "midnight-dark", "neutral", "neutral-light",
+])
+def test_all_8_valid_themes_parse(theme):
+    """Each of the 8 Literal theme values passes _parse_authored_deck successfully."""
+    data = dict(_SAMPLE_DECK_JSON, theme=theme)
+    deck, err = _parse_authored_deck(json.dumps(data))
+    assert deck is not None, f"Valid theme {theme!r} failed: {err}"
+    assert deck.theme == theme
+
+
+def test_capable_system_lists_all_valid_themes():
+    """_CAPABLE_SYSTEM mentions every one of the 8 valid theme values."""
+    for theme in _VALID_THEMES:
+        assert theme in _CAPABLE_SYSTEM, f"_CAPABLE_SYSTEM missing theme: {theme!r}"
+
+
+def test_weak_system_lists_all_valid_themes():
+    """_WEAK_SYSTEM mentions every one of the 8 valid theme values."""
+    for theme in _VALID_THEMES:
+        assert theme in _WEAK_SYSTEM, f"_WEAK_SYSTEM missing theme: {theme!r}"

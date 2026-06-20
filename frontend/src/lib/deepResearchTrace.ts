@@ -273,8 +273,14 @@ const VERB: Record<string, (a: Record<string, unknown>) => string> = {
     if (p === "coherence") return `Drafting the executive summary`;
     return `Phase: ${p}`;
   },
-  search: (a) => `Searching: "${a.query ?? ""}"`,
-  synthesize_section: (a) => `Writing section: ${a.section ?? ""}`,
+  search: (a) =>
+    a.label != null
+      ? `Iterating on section "${a.label}"`
+      : `Searching: "${a.query ?? ""}"`,
+  synthesize_section: (a) =>
+    a.label != null
+      ? `Rewriting section: ${a.label}`
+      : `Writing section: ${a.section ?? ""}`,
 };
 
 function plainLabel(toolName: string, args: Record<string, unknown>): string {

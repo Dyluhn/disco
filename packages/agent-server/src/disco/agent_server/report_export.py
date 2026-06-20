@@ -472,15 +472,18 @@ def serialize_pdf(
     """
     resolved = resolve_theme(theme, mode)
     weasyprint = _lazy_import_weasyprint()
+    # _build_pdf_html already injects all brand CSS as an inline <style> block;
+    # passing the same CSS again as a WeasyPrint stylesheet doubled every rule
+    # and @font-face declaration, causing glitchy PDF output.  We rely solely
+    # on the inline CSS here and pass only font_config so WeasyPrint's Pango
+    # engine picks up the embedded OFL font families.
     doc_html = _build_pdf_html(report, follow_ups, resolved)
     try:
         from weasyprint.text.fonts import FontConfiguration
 
         font_config = FontConfiguration()
-        brand_css_str = font_face_css() + theme_css_vars(resolved) + print_skeleton_css()
-        css = weasyprint.CSS(string=brand_css_str, font_config=font_config)
         wp_doc = weasyprint.HTML(string=doc_html)
-        pdf = wp_doc.write_pdf(stylesheets=[css], font_config=font_config)
+        pdf = wp_doc.write_pdf(font_config=font_config)
         assert pdf is not None  # target not provided → bytes
         return pdf
     except Exception as exc:

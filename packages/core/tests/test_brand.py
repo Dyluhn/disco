@@ -191,39 +191,45 @@ def test_font_face_css_contains_families() -> None:
     assert "Newsreader" in css
 
 
-def test_font_face_css_uses_file_urls() -> None:
+def test_font_face_css_uses_data_uris() -> None:
+    """src must be base64 data-URIs — not file:// (blocked over http) or bare paths."""
     css = font_face_css()
-    # All src references must use absolute file:// URLs (WeasyPrint requires this)
-    assert "file://" in css
+    assert "data:font/ttf;base64," in css
     assert "url(" in css
+    # Regression guard: no file:// URLs must survive (browsers block them over http)
+    assert "file://" not in css
 
 
-def test_font_face_css_weight_ranges() -> None:
+def test_font_face_css_no_weight_ranges() -> None:
+    """WeasyPrint rejects variable-font weight-range syntax (e.g. '100 900').
+    Every @font-face must use a single numeric font-weight value."""
     css = font_face_css()
-    # Fraunces: 100 900; Schibsted: 300 900; Newsreader: 200 800
-    assert "100 900" in css
-    assert "300 900" in css
-    assert "200 800" in css
+    # No two-integer space-separated weight ranges
+    assert "100 900" not in css
+    assert "300 900" not in css
+    assert "200 800" not in css
+    # Single-weight values must be present
+    assert "font-weight:400" in css.replace(" ", "")
 
 
 def test_font_face_css_ttf_files_exist() -> None:
-    """Every TTF referenced by font_face_css() must exist on disk."""
-    import re
+    """Every bundled TTF must exist on disk (data-URI encoding reads from disk)."""
     from pathlib import Path
 
-    css = font_face_css()
-    urls = re.findall(r"url\('file://([^']+)'\)", css)
-    assert len(urls) > 0, "No file:// URLs found in font_face_css()"
-    for url in urls:
-        p = Path(url)
+    from disco.core.brand.css import _FONT_FILES, _font_dir
+
+    d = _font_dir()
+    for fname in _FONT_FILES:
+        p = Path(d / fname)
         assert p.exists(), f"Bundled font not found: {p}"
 
 
 def test_font_face_css_italic_variants() -> None:
+    """Italic faces must be present (embedded as data-URIs, filenames not visible)."""
     css = font_face_css()
-    assert "FrauncesItalic" in css
-    assert "NewsreaderItalic" in css
-    assert "font-style:italic" in css
+    # Filenames are not present in data-URI output; count italic @font-face blocks
+    # by counting font-style:italic declarations (2: Fraunces italic + Newsreader italic).
+    assert css.count("font-style:italic") >= 2
 
 
 # ---------------------------------------------------------------------------

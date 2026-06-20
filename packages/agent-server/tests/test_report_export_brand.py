@@ -363,14 +363,18 @@ def test_export_report_unknown_theme_raises() -> None:
 
 
 def test_build_pdf_html_fontface_present() -> None:
-    """Bundled @font-face declarations are embedded in the HTML <style>."""
+    """Bundled @font-face declarations are embedded in the HTML <style> as
+    base64 data-URIs (not file:// — browsers block those over http, and
+    WeasyPrint rejects them when base_url is an http URL)."""
     report = _make_sample_report()
     theme = resolve_theme("disco", "light")
     html = _build_pdf_html(report, None, theme)
     assert "@font-face" in html
     assert "Fraunces" in html
     assert "Newsreader" in html
-    assert "file://" in html
+    # data-URI embedding — no file:// paths (would be blocked over http)
+    assert "data:font/ttf;base64," in html
+    assert "file://" not in html
 
 
 # ---- 10. >30 sources → 2-col ------------------------------------------------

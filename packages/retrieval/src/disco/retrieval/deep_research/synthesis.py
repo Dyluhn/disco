@@ -335,10 +335,13 @@ async def synthesize_section(
         fallback_passages=sub_result.passages,
         top_k=top_k_for_section,
     )
-    await emit(
-        "synthesize_section",
-        {"section": sub_result.subq.title, "passages_used": len(passages)},
-    )
+    _synth_payload: dict[str, object] = {
+        "section": sub_result.subq.title,
+        "passages_used": len(passages),
+    }
+    if sub_result.subq.label is not None:
+        _synth_payload["label"] = sub_result.subq.label
+    await emit("synthesize_section", _synth_payload)
     if not passages:
         return ReportSection(
             id=section_id,

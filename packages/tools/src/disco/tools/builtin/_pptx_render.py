@@ -616,6 +616,10 @@ def _render_text_element(prs_slide, el: Element) -> None:  # type: ignore[type-a
     p = tf.paragraphs[0]
     p.alignment = _ALIGN_MAP.get(el.align, PP_ALIGN.LEFT)
     run = p.add_run()
+    # NOTE: python-pptx only stores the font *name* in the slide XML (e.g.
+    # "Fraunces"). PPTX viewers (PowerPoint, LibreOffice) render it only if the
+    # font is installed on the host OS. The base64 data-URI embedding in
+    # font_face_css() fixes HTML/PDF output; PPTX fonts are NOT fixed here.
     _set_run_style(
         run, el.text,
         el.font_name or "Helvetica",

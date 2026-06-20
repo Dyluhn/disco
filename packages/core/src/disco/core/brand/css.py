@@ -2,9 +2,11 @@
 
 Three functions consumed by report_export.py (and the future deck renderer in tools):
 
-  font_face_css()             — @font-face blocks referencing bundled TTFs via
-                                absolute file:// URLs so WeasyPrint can resolve
-                                them without a base_url.
+  font_face_css()             — @font-face blocks embedding bundled TTFs as
+                                base64 data-URIs so they work both in browsers
+                                served over http (file:// is blocked by CORS)
+                                and in WeasyPrint (which rejects file:// from
+                                an http context and rejects weight-range syntax).
 
   theme_css_vars(theme)       — :root { --var: value; … } block directly from a
                                 Theme object.  Same var names as the evidence CSS
@@ -25,6 +27,7 @@ WeasyPrint drop-cap constraint (LOCKED):
 
 from __future__ import annotations
 
+import base64
 import importlib.resources
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -42,34 +45,78 @@ def _font_dir() -> Path:
     return Path(str(pkg / "fonts"))
 
 
-def font_face_css() -> str:
-    """Emit @font-face blocks referencing the bundled OFL TTFs.
+def _b64_font(name: str) -> str:
+    """Return a base64-encoded data-URI for a bundled TTF file.
 
-    Weights and styles match the weight RANGES in _brand_common.css:3-12:
-      - Fraunces: 100–900 upright + italic
-      - Schibsted Grotesk: 300–900 upright (no italic in bundle)
-      - Newsreader: 200–800 upright + italic
-
-    ``src: url(file://…)`` absolute paths so WeasyPrint resolves without a
-    ``base_url``.  The font-family names match the Theme.font_* stacks.
+    Cached at module load time (populated lazily on first call to
+    font_face_css()) so repeated CSS builds don't re-read the files.
     """
+    return _FONT_B64_CACHE[name]
+
+
+# Lazily populated on first call — avoids reading 5 TTFs at import time while
+# still amortising the I/O across the process lifetime.
+_FONT_B64_CACHE: dict[str, str] = {}
+
+_FONT_FILES = [
+    "Fraunces.ttf",
+    "FrauncesItalic.ttf",
+    "SchibstedGrotesk.ttf",
+    "Newsreader.ttf",
+    "NewsreaderItalic.ttf",
+]
+
+
+def _ensure_font_cache() -> None:
+    """Populate _FONT_B64_CACHE if not already done."""
+    if _FONT_B64_CACHE:
+        return
     d = _font_dir()
+    for fname in _FONT_FILES:
+        raw = (d / fname).read_bytes()
+        _FONT_B64_CACHE[fname] = (
+            "data:font/ttf;base64," + base64.b64encode(raw).decode("ascii")
+        )
 
-    def _url(name: str) -> str:
-        return f"file://{(d / name).as_posix()}"
 
-    return f"""\
-@font-face{{font-family:'Fraunces';font-weight:100 900;
-  src:url('{_url("Fraunces.ttf")}') format('truetype');}}
-@font-face{{font-family:'Fraunces';font-weight:100 900;font-style:italic;
-  src:url('{_url("FrauncesItalic.ttf")}') format('truetype');}}
-@font-face{{font-family:'Schibsted Grotesk';font-weight:300 900;
-  src:url('{_url("SchibstedGrotesk.ttf")}') format('truetype');}}
-@font-face{{font-family:'Newsreader';font-weight:200 800;
-  src:url('{_url("Newsreader.ttf")}') format('truetype');}}
-@font-face{{font-family:'Newsreader';font-weight:200 800;font-style:italic;
-  src:url('{_url("NewsreaderItalic.ttf")}') format('truetype');}}
-"""
+def font_face_css() -> str:
+    """Emit @font-face blocks embedding the bundled OFL TTFs as base64 data-URIs.
+
+    Each font is encoded once (module-level cache) and emitted as:
+        src: url('data:font/ttf;base64,<...>') format('truetype')
+
+    This approach works for:
+      - Browsers served over http/https — file:// src is blocked by browsers
+        when the page is served over http (mixed-content / CORS restriction).
+      - WeasyPrint — file:// paths are rejected when WeasyPrint's base_url is
+        an http URL, and WeasyPrint also rejects the variable-font weight-range
+        syntax ``font-weight: 100 900``.
+
+    Single-weight values per face (not ranges) are used because WeasyPrint
+    only accepts a single numeric value in @font-face font-weight.
+    The font-family names match the Theme.font_* stacks.
+
+    NOTE — PPTX: python-pptx only stores the font *name* in the slide XML;
+    PPTX viewers need the font installed on the host OS to render it correctly.
+    The data-URI approach here only affects HTML/PDF output.
+    """
+    _ensure_font_cache()
+
+    def _uri(name: str) -> str:
+        return _FONT_B64_CACHE[name]
+
+    return (
+        f"@font-face{{font-family:'Fraunces';font-weight:400;"
+        f"src:url('{_uri('Fraunces.ttf')}') format('truetype');}}\n"
+        f"@font-face{{font-family:'Fraunces';font-weight:400;font-style:italic;"
+        f"src:url('{_uri('FrauncesItalic.ttf')}') format('truetype');}}\n"
+        f"@font-face{{font-family:'Schibsted Grotesk';font-weight:400;"
+        f"src:url('{_uri('SchibstedGrotesk.ttf')}') format('truetype');}}\n"
+        f"@font-face{{font-family:'Newsreader';font-weight:400;"
+        f"src:url('{_uri('Newsreader.ttf')}') format('truetype');}}\n"
+        f"@font-face{{font-family:'Newsreader';font-weight:400;font-style:italic;"
+        f"src:url('{_uri('NewsreaderItalic.ttf')}') format('truetype');}}\n"
+    )
 
 
 def theme_css_vars(theme: Theme) -> str:  # noqa: F821 — imported at call site

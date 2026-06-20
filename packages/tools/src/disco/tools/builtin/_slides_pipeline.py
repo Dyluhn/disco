@@ -31,7 +31,7 @@ import json
 import logging
 import os
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, get_args
 
 import httpx
 from disco.tools.builtin._deck_schema import AuthoredDeck, Deck, lower_deck
@@ -42,6 +42,12 @@ if TYPE_CHECKING:
     from disco.tools.builtin.image_gen import ImageBackend
 
 _LOG = logging.getLogger("disco.tools.slides_pipeline")
+
+# Derive the valid theme set from the single source of truth — the Literal on
+# AuthoredDeck.theme.  Every prompt and the retry message reference this tuple
+# so they stay in sync with the schema automatically.
+_VALID_THEMES: tuple[str, ...] = get_args(AuthoredDeck.model_fields["theme"].annotation)
+_VALID_THEMES_STR = " | ".join(f'"{t}"' for t in _VALID_THEMES)
 
 # ---------------------------------------------------------------------------
 # LLM endpoint resolution (ConfigStore-based; no agent_server import)
@@ -126,7 +132,8 @@ or after.
 AuthoredDeck schema:
 {
   "title": "Deck title",
-  "theme": "disco-light" | "disco-dark" | "neutral",
+  "theme": "disco-light" | "disco-dark" | "ink-light" | "sepia-light"
+           | "signal-light" | "midnight-dark" | "neutral" | "neutral-light",
   "slides": [AuthoredSlide, ...]
 }
 
@@ -156,6 +163,10 @@ Rules:
 _WEAK_SYSTEM = """\
 You are an expert slide-deck designer.  Generate a slide deck as valid JSON.
 Output ONLY valid JSON — no markdown fences, no prose.
+
+The "theme" field MUST be one of these exact strings:
+"disco-light" | "disco-dark" | "ink-light" | "sepia-light"
+| "signal-light" | "midnight-dark" | "neutral" | "neutral-light"
 
 Copy this exact structure and fill it in with the requested content:
 
@@ -229,11 +240,18 @@ Return the COMPLETE AuthoredDeck JSON with ALL fields filled in.
 Output ONLY valid JSON.
 """
 
-_RETRY_MSG = (
-    "Your previous response was not valid JSON or did not match the AuthoredDeck schema.\n\n"
-    "Please fix all errors and output ONLY valid JSON matching the AuthoredDeck schema.\n"
-    "No markdown, no prose — only the raw JSON object."
-)
+def _retry_msg(err: str) -> str:
+    """Build a targeted retry prompt that names the specific parse error and
+    lists ALL valid theme values.  The theme enum is the most common mismatch
+    (models hallucinate values like ``"dark-research"`` when only shown 3 of the
+    8 valid strings) so we call it out explicitly on every retry."""
+    return (
+        "Your previous response was not valid JSON or did not match the AuthoredDeck schema.\n\n"
+        f"Error detail: {err}\n\n"
+        f'The "theme" field MUST be exactly one of: {_VALID_THEMES_STR}\n\n'
+        "Please fix all errors and output ONLY valid JSON matching the AuthoredDeck schema.\n"
+        "No markdown, no prose — only the raw JSON object."
+    )
 
 # ---------------------------------------------------------------------------
 # LLM call helper
@@ -275,6 +293,31 @@ async def _call_llm(
 
 
 # ---------------------------------------------------------------------------
+# Theme alias coercion (SAFE — known shorthands only)
+# ---------------------------------------------------------------------------
+
+# Only these canonical shorthands are coerced.  Unknown/invalid values (e.g.
+# ``"dark-research"``, ``"corporate"``) are left as-is so pydantic rejects them
+# and the retry (which lists the full enum) corrects the model.
+_THEME_ALIASES: dict[str, str] = {
+    "dark": "disco-dark",
+    "light": "disco-light",
+}
+
+
+def _coerce_known_theme_aliases(data: dict) -> dict:
+    """Coerce a known legacy theme shorthand to the canonical Literal value.
+
+    Returns a shallow copy with ``theme`` remapped when the value is a key in
+    ``_THEME_ALIASES``; otherwise returns ``data`` unchanged.
+    """
+    theme = data.get("theme")
+    if isinstance(theme, str) and theme in _THEME_ALIASES:
+        data = {**data, "theme": _THEME_ALIASES[theme]}
+    return data
+
+
+# ---------------------------------------------------------------------------
 # JSON extraction + AuthoredDeck validation
 # ---------------------------------------------------------------------------
 
@@ -309,12 +352,19 @@ def _extract_json_object(text: str) -> str:
 
 
 def _parse_authored_deck(raw: str) -> tuple[AuthoredDeck | None, str]:
-    """Parse raw LLM output as an AuthoredDeck.  Returns (deck, error_msg)."""
+    """Parse raw LLM output as an AuthoredDeck.  Returns (deck, error_msg).
+
+    Applies ``_coerce_known_theme_aliases`` BEFORE pydantic validation to
+    silently fix short-hand aliases (``"dark"`` → ``"disco-dark"`` etc.).
+    Unknown invalid theme strings are left for pydantic to reject; the caller
+    should then pass ``_retry_msg(err)`` so the model sees the full enum.
+    """
     extracted = _extract_json_object(raw)
     try:
         data = json.loads(extracted)
     except json.JSONDecodeError as e:
         return None, f"JSON parse error: {e}"
+    data = _coerce_known_theme_aliases(data)
     try:
         deck = AuthoredDeck.model_validate(data)
     except (ValidationError, Exception) as e:
@@ -354,9 +404,10 @@ async def _stage_outline(
     if deck is not None:
         return deck, raw, ""
 
-    # One retry
+    # One retry — include the specific error + full theme enum so the model
+    # can self-correct a theme mismatch (the most common parse failure).
     messages.append({"role": "assistant", "content": raw})
-    messages.append({"role": "user", "content": _RETRY_MSG})
+    messages.append({"role": "user", "content": _retry_msg(err)})
     try:
         raw2 = await _call_llm(messages, llm_url, model, api_key=api_key)
     except Exception as e:  # noqa: BLE001
@@ -398,9 +449,10 @@ async def _stage_fill(
     if deck is not None:
         return deck, ""
 
-    # One retry
+    # One retry — include the specific error + full theme enum so the model
+    # can self-correct a theme mismatch (the most common parse failure).
     messages.append({"role": "assistant", "content": raw})
-    messages.append({"role": "user", "content": _RETRY_MSG})
+    messages.append({"role": "user", "content": _retry_msg(err)})
     try:
         raw2 = await _call_llm(messages, llm_url, model, api_key=api_key)
     except Exception as e:  # noqa: BLE001

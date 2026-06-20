@@ -529,3 +529,72 @@ async def test_fresh_refine_evidence_is_judged_and_in_report_under_embedder() ->
         "fresh refine passage pq1 missing from the report — its citation could "
         "not resolve to a source card (Defect-2 not fixed)"
     )
+
+
+# ---- #8a: iterative activity-feed label fix -----------------------------------
+
+
+async def test_iterative_refine_events_carry_short_label() -> None:
+    """#8a: search + synthesize_section events emitted during the iterative
+    REFINE leg must carry a 'label' field equal to the original section title
+    (short), while the 'query'/'section' fields still hold the full verbose
+    claim-digest string (for search quality).
+
+    Non-iterative legs must NOT carry a 'label' field — the OFF path is
+    byte-identical.
+    """
+    search, engine = _build_engine()
+    section_title = "What is X?"
+    router = _JudgeScriptedRouter(
+        {
+            "query_rewriter": ["SUFFICIENT\nnone"] * 6,
+            "rag_answerer": [
+                "X is established by the data [[p0]].",
+                "X is established by stronger fresh data [[p0]].",
+                "This report surveys X.",
+            ],
+            "judge": ["UNSUPPORTED", "SUPPORTED"],
+        }
+    )
+    run = DeepResearchRun(
+        query="the state of X",
+        router=router,
+        retrieval_engine=engine,
+        embedder=None,
+        vector_store=InMemoryVectorStore(),
+        nli=_FakeNLI(),
+        depth=DepthTier.STANDARD_DEEP,
+        conversation_id="conv_label_check",
+        iterative=True,
+    )
+    captured, emit = _collect_events()
+    await run.run([section_title], emit=emit)
+
+    # The refine leg must have fired (pre-condition for a meaningful label check).
+    assert len(search.calls) > 1, "refine leg did not fire — label test is vacuous"
+
+    search_events = [(k, p) for k, p in captured if k == "search"]
+    synth_events = [(k, p) for k, p in captured if k == "synthesize_section"]
+    iter_searches = [p for k, p in search_events if p.get("label") is not None]
+    iter_synths = [p for k, p in synth_events if p.get("label") is not None]
+    plain_searches = [p for k, p in search_events if p.get("label") is None]
+
+    # Exactly one iterative search event (the refine leg).
+    assert len(iter_searches) >= 1, "no search event with 'label' from the refine leg"
+    refine_s = iter_searches[0]
+    # Label is the short section title.
+    assert refine_s["label"] == section_title, (
+        f"expected label={section_title!r}, got {refine_s['label']!r}"
+    )
+    # Query still holds the full verbose claim digest (not truncated).
+    assert "verify" in refine_s["query"] or len(refine_s["query"]) >= len(section_title), (
+        f"query was unexpectedly short — search quality may be degraded: {refine_s['query']!r}"
+    )
+
+    # Iterative synth event also carries the label.
+    assert len(iter_synths) >= 1, "no synthesize_section event with 'label' from refine leg"
+    assert iter_synths[0]["label"] == section_title
+
+    # The initial (non-iterative) search must NOT have a label.
+    assert len(plain_searches) >= 1, "no label-free search event (initial gather missing)"
+    assert all(p.get("label") is None for p in plain_searches)

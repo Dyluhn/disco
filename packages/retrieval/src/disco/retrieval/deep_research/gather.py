@@ -252,15 +252,15 @@ async def gather_for_subquestion(
         # retrieval engine's own concern, not ours.
         query = current_queries[0]
         result.issued_queries.append(query)
-        await emit(
-            "search",
-            {
-                "subquestion": subq.title,
-                "query": query,
-                "round": round_idx + 1,
-                "rounds_max": bound.max_rounds_per_subq,
-            },
-        )
+        _search_payload: dict[str, object] = {
+            "subquestion": subq.title,
+            "query": query,
+            "round": round_idx + 1,
+            "rounds_max": bound.max_rounds_per_subq,
+        }
+        if subq.label is not None:
+            _search_payload["label"] = subq.label
+        await emit("search", _search_payload)
         try:
             req = RetrievalRequest(
                 query=query,

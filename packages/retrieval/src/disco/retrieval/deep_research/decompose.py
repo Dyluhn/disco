@@ -32,9 +32,16 @@ from disco.core.llm import (
 class SubQuestion:
     """One sub-question / section of the plan. `title` is what the user sees
     in the plan-approval gate AND what the synthesis renders as a section
-    heading on the final report — same string serves both."""
+    heading on the final report — same string serves both.
+
+    ``label`` is an optional short user-visible label for activity-feed events.
+    When set (e.g. during iterative refinement), the emit layer uses it instead
+    of ``title`` so the feed shows a concise string like
+    ``Iterating on section "…"`` rather than a 500-char claim digest.
+    The search query and synthesis prompt always use ``title`` (full fidelity)."""
 
     title: str
+    label: str | None = None
 
     def to_plan_step(self) -> dict[str, str]:
         """The shape the agent's `submit_plan` tool ingests as one step."""

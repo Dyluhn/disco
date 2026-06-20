@@ -789,9 +789,12 @@ class DeepResearchRun:
                 if i in passages_by_id_obj
             ]
             # Build a targeted sub-question: the section topic + its weak claims.
+            # `title` is the FULL verbose query (section topic + claim digest) used
+            # for the actual search and synthesis prompt — preserves search quality.
+            # `label` is the SHORT user-visible string shown in the activity feed.
             weak_titles = " | ".join(v.claim for v in weak[:3])
             title = f"{sec.title}: verify — {weak_titles}" if weak_titles else sec.title
-            new_subq = SubQuestion(title=title)
+            new_subq = SubQuestion(title=title, label=sec.title)
             # One fresh gather leg, seeded with `orig` (NOT the upload passages).
             steer_budget = max(1, self._bound.max_sources // max(1, len(sections)))
             _subq, task, _sid, namespace, leg_context = self._start_one_steer_task(
