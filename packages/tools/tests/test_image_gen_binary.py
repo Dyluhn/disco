@@ -929,3 +929,190 @@ def test_comfyui_template_malformed_json_raises_clearly():
     )
     with pytest.raises(ValueError, match="API Format|valid JSON"):
         backend.generate(prompt='x', width=1024, height=1024, seed=1, fmt='png')
+
+
+# ---- ImageRouter / OpenAI-compatible endpoint + format handling -------------
+
+
+def _webp_bytes() -> bytes:
+    import io as _io
+
+    from PIL import Image
+    buf = _io.BytesIO()
+    Image.new("RGB", (32, 24), (200, 120, 40)).save(buf, format="WEBP")
+    return buf.getvalue()
+
+
+def test_openai_backend_endpoint_full_url_vs_origin():
+    """A bare origin gets /v1/images/generations appended; a base_url that already
+    names the images route (ImageRouter's /v1/openai/...) is used verbatim."""
+    from disco.tools.builtin.image_gen import _OpenAIImageBackend
+
+    origin = _OpenAIImageBackend("https://api.openai.com", "k")
+    assert origin._endpoint() == "https://api.openai.com/v1/images/generations"
+
+    ir = _OpenAIImageBackend("https://api.imagerouter.io/v1/openai/images/generations", "k")
+    assert ir._endpoint() == "https://api.imagerouter.io/v1/openai/images/generations"
+
+
+def test_openai_backend_posts_to_imagerouter_path_and_normalizes_webp():
+    """Against an ImageRouter-style full URL the backend POSTs to that exact path and
+    normalizes the WEBP b64 it returns into a PNG deliverable (Disco's contract)."""
+    import base64
+    from unittest.mock import MagicMock, patch
+
+    from disco.tools.builtin.image_gen import _PNG_MAGIC, _OpenAIImageBackend
+
+    webp_b64 = base64.b64encode(_webp_bytes()).decode()
+    captured = {}
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"data": [{"b64_json": webp_b64}]}
+    mock_response.raise_for_status = MagicMock()
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+
+    def _post(url, **kw):
+        captured["url"] = url
+        return mock_response
+
+    mock_client.post.side_effect = _post
+
+    with patch("disco.tools.builtin.image_gen.httpx.Client", return_value=mock_client):
+        be = _OpenAIImageBackend(
+            "https://api.imagerouter.io/v1/openai/images/generations", "k", model="test/test"
+        )
+        out = be.generate(prompt="a fox", width=1024, height=1024, seed=1, fmt="png")
+
+    assert captured["url"] == "https://api.imagerouter.io/v1/openai/images/generations"
+    # WEBP from the provider → PNG bytes out (the deliverable contract holds)
+    assert out.startswith(_PNG_MAGIC), "webp response was not normalized to PNG"
+
+
+# ---- OpenRouter image backend (chat-completions + modalities) ---------------
+
+
+def test_openrouter_backend_parses_data_url_image():
+    """OpenRouter returns the image as a base64 data URL at
+    choices[0].message.images[0].image_url.url — the backend decodes + PNG-normalizes it,
+    and POSTs to /chat/completions with modalities:[image,text]."""
+    import base64
+    import io as _io
+    from unittest.mock import MagicMock, patch
+
+    from disco.tools.builtin.image_gen import _PNG_MAGIC, _OpenRouterImageBackend
+    from PIL import Image
+
+    buf = _io.BytesIO()
+    Image.new("RGB", (8, 8), (20, 200, 90)).save(buf, format="PNG")
+    data_url = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+    captured = {}
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json.return_value = {
+        "choices": [{"message": {"images": [{"image_url": {"url": data_url}}]}}]
+    }
+    client = MagicMock()
+    client.__enter__ = MagicMock(return_value=client)
+    client.__exit__ = MagicMock(return_value=False)
+
+    def _post(url, json=None, headers=None):
+        captured["url"] = url
+        captured["body"] = json
+        captured["auth"] = headers.get("Authorization")
+        return resp
+
+    client.post.side_effect = _post
+    with patch("disco.tools.builtin.image_gen.httpx.Client", return_value=client):
+        be = _OpenRouterImageBackend("https://openrouter.ai/api/v1", "sk-or", model="g/img")
+        out = be.generate(prompt="a leaf", width=1024, height=1024, seed=1, fmt="png")
+
+    assert captured["url"] == "https://openrouter.ai/api/v1/chat/completions"
+    assert captured["body"]["modalities"] == ["image", "text"]
+    assert captured["body"]["model"] == "g/img"
+    assert captured["auth"] == "Bearer sk-or"
+    assert out.startswith(_PNG_MAGIC)
+
+
+def test_openrouter_backend_refuses_remote_url_ssrf():
+    """A remote http(s) image URL (not an inline data URL) is refused, never fetched."""
+    from unittest.mock import MagicMock, patch
+
+    from disco.tools.builtin.image_gen import _OpenRouterImageBackend
+
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json.return_value = {
+        "choices": [{"message": {"images": [{"image_url": {"url": "https://evil.example/x.png"}}]}}]
+    }
+    client = MagicMock()
+    client.__enter__ = MagicMock(return_value=client)
+    client.__exit__ = MagicMock(return_value=False)
+    client.post.return_value = resp
+    with patch("disco.tools.builtin.image_gen.httpx.Client", return_value=client):
+        be = _OpenRouterImageBackend("https://openrouter.ai/api/v1", "sk-or")
+        with pytest.raises(ValueError, match="SSRF"):
+            be.generate(prompt="x", width=512, height=512, seed=1, fmt="png")
+
+
+def test_select_image_backend_openrouter_uses_reserved_slot(monkeypatch):
+    """provider=openrouter resolves the OpenRouter key from the reserved 'openrouter'
+    SecretStore slot and returns the OpenRouter image backend."""
+    from disco.tools.builtin.image_gen import _OpenRouterImageBackend
+
+    class _Cfg:
+        image_gen = type("o", (object,), {
+            "provider": "openrouter", "base_url": "", "api_key_env": "",
+            "model": "google/gemini-2.5-flash-image", "workflow_json": "",
+        })()
+
+    monkeypatch.setattr("disco.tools.builtin.image_gen.ConfigStore", lambda: type("S", (), {"load": lambda s: _Cfg()})())
+
+    class _Secret:
+        def get_openrouter_key(self):
+            return "sk-or-reserved"
+    monkeypatch.setattr("disco.tools.builtin.image_gen.SecretStore", lambda: _Secret())
+
+    be = select_image_backend()
+    assert isinstance(be, _OpenRouterImageBackend)
+    assert be.name == "openrouter-image"
+    assert be._model == "google/gemini-2.5-flash-image"
+    assert be._api_key == "sk-or-reserved"
+
+
+def test_select_openrouter_ignores_stale_base_url(monkeypatch):
+    """SECURITY: a stale base_url left from another provider must NOT be used for
+    OpenRouter (it would send the OpenRouter Bearer key to the wrong host)."""
+    from disco.tools.builtin.image_gen import _OpenRouterImageBackend
+
+    class _Cfg:
+        image_gen = type("o", (object,), {
+            "provider": "openrouter", "base_url": "https://evil.example/v1",
+            "api_key_env": "", "model": "g/img", "workflow_json": "",
+        })()
+
+    monkeypatch.setattr("disco.tools.builtin.image_gen.ConfigStore",
+                        lambda: type("S", (), {"load": lambda s: _Cfg()})())
+    monkeypatch.setattr("disco.tools.builtin.image_gen.SecretStore",
+                        lambda: type("K", (), {"get_openrouter_key": lambda s: "sk-or"})())
+    be = select_image_backend()
+    assert isinstance(be, _OpenRouterImageBackend)
+    assert be._base_url == "https://openrouter.ai/api/v1", "stale base_url was NOT ignored"
+
+
+def test_normalize_rejects_oversized_blob():
+    from disco.tools.builtin.image_gen import _MAX_IMAGE_BYTES, _normalize_to_png_or_jpeg
+
+    with pytest.raises(ValueError, match="too large"):
+        _normalize_to_png_or_jpeg(b"\x00" * (_MAX_IMAGE_BYTES + 1))
+
+
+def test_openai_endpoint_ignores_query_string_false_positive():
+    """A base_url with a query string mentioning the images path is NOT treated as a
+    full endpoint — the standard suffix is appended to the (parsed) origin path."""
+    from disco.tools.builtin.image_gen import _OpenAIImageBackend
+
+    be = _OpenAIImageBackend("https://proxy.example/api?next=/images/generations", "k")
+    assert be._endpoint() == "https://proxy.example/api?next=/images/generations/v1/images/generations"

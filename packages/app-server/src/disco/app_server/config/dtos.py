@@ -172,7 +172,7 @@ class ImageGenConfigDTO(BaseModel):
     Wire mirror of core's ImageGenSettings — the agent-server honors it on the
     next image-gen call. NOT an LLM-router role assignment."""
 
-    provider: Literal["procedural", "comfyui", "openai"] = "procedural"
+    provider: Literal["procedural", "comfyui", "openai", "openrouter"] = "procedural"
     base_url: str = ""
     api_key_env: str = ""
     model: str = ""  # openai: image model id; comfyui: checkpoint filename; empty → default

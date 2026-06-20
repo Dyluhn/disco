@@ -91,6 +91,45 @@ _JPEG_MAGIC = b"\xff\xd8\xff"
 
 _SUPPORTED_FORMATS: frozenset[str] = frozenset({"png", "jpeg"})
 
+
+# Hard caps on an untrusted provider image blob (remote APIs return arbitrary bytes).
+# A 40 MB encoded ceiling and a 4096x4096 pixel ceiling bound both transport size and
+# decode/re-encode memory, so a decompression bomb can't OOM the orchestrator.
+_MAX_IMAGE_BYTES = 40 * 1024 * 1024
+_MAX_IMAGE_PIXELS = 4096 * 4096
+
+
+def _normalize_to_png_or_jpeg(raw: bytes) -> bytes:
+    """Return `raw` unchanged if it's already PNG/JPEG, else decode it (e.g. WEBP,
+    which ImageRouter returns by default) and re-encode as PNG. Keeps the deliverable
+    contract (PNG/JPEG only) for any provider without a provider-specific request field.
+
+    Hardened against a hostile/oversized provider response: rejects blobs over
+    `_MAX_IMAGE_BYTES` and images over `_MAX_IMAGE_PIXELS` BEFORE the expensive
+    convert/decode (PIL reads the header dimensions without decompressing pixels).
+    Genuinely-undecodable bytes are returned unchanged so the caller's magic-bytes guard
+    rejects them with its clear error rather than masking the failure."""
+    if len(raw) > _MAX_IMAGE_BYTES:
+        raise ValueError(
+            f"provider image is too large ({len(raw)} bytes > {_MAX_IMAGE_BYTES}) — refusing"
+        )
+    if raw.startswith(_PNG_MAGIC) or raw.startswith(_JPEG_MAGIC):
+        return raw
+    from PIL import Image
+
+    try:
+        img = Image.open(io.BytesIO(raw))  # lazy: reads header (size) without decoding
+    except Exception:  # noqa: BLE001 — undecodable → let the magic-bytes guard reject it
+        return raw
+    w, h = img.size
+    if w * h > _MAX_IMAGE_PIXELS:
+        raise ValueError(
+            f"provider image dimensions too large ({w}x{h} > {_MAX_IMAGE_PIXELS}px) — refusing"
+        )
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, format="PNG")
+    return buf.getvalue()
+
 # A small, bounded size cap. The procedural backend renders pixel-by-pixel
 # (cheap) and any real model backend will respect it. Keeps a misbehaving
 # call from rendering a 16384x16384 texture and OOMing the box.
@@ -266,15 +305,22 @@ class _PILProceduralBackend:
 
 
 class _OpenAIImageBackend:
-    """OpenAI-compatible /v1/images/generations API backend.
+    """OpenAI-compatible images API backend (OpenAI, ImageRouter, Together, Azure …).
 
-    Connects to any OpenAI-compatible endpoint (OpenAI, Azure OpenAI,
-    local LLM servers with vision support, etc.). Uses the `api_key_env`
-    to look up the secret from the encrypted store. Never logs or echoes
-    the key — only presence/absence is surfaced in error messages.
+    Posts to `{base_url}/v1/images/generations` for a bare origin, OR to `base_url`
+    verbatim when it already names the full endpoint path (e.g. ImageRouter's
+    `https://api.imagerouter.io/v1/openai/images/generations`, which has an extra
+    `/openai/` segment that the default suffix can't express). Uses `api_key_env`
+    to look up the secret from the encrypted store. Never logs or echoes the key —
+    only presence/absence is surfaced in error messages.
 
-    This is a PAID backend: it requires an API key to be configured via
-    Settings. Without a key, it falls back to procedural.
+    Whatever container the provider returns (PNG, JPEG, or — like ImageRouter's
+    default — WEBP) is normalized to PNG bytes so the deliverable contract
+    (PNG/JPEG only) holds for every provider without sending a provider-specific
+    `output_format` field that a different provider might 400 on.
+
+    This is a PAID backend: it requires an API key to be configured via Settings.
+    Without a key, it falls back to procedural.
     """
 
     name = "openai-compatible"
@@ -284,6 +330,18 @@ class _OpenAIImageBackend:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._model = model
+
+    def _endpoint(self) -> str:
+        # A configured base_url whose PATH already ends at the images route (incl.
+        # ImageRouter's `/v1/openai/images/generations`) is used verbatim; a bare origin
+        # gets the standard OpenAI suffix appended. Match on the parsed path suffix, not
+        # a raw substring, so a query string like `?next=/images/generations` can't
+        # masquerade as a full endpoint.
+        from urllib.parse import urlsplit
+
+        if urlsplit(self._base_url).path.rstrip("/").endswith("/images/generations"):
+            return self._base_url
+        return f"{self._base_url}/v1/images/generations"
 
     def generate(
         self,
@@ -320,7 +378,7 @@ class _OpenAIImageBackend:
 
         with httpx.Client(timeout=60.0) as client:
             response = client.post(
-                f"{self._base_url}/v1/images/generations",
+                self._endpoint(),
                 json=payload,
                 headers=headers,
             )
@@ -332,7 +390,8 @@ class _OpenAIImageBackend:
         if b64_data:
             import base64
 
-            return base64.b64decode(b64_data)
+            raw = base64.b64decode(b64_data)
+            return _normalize_to_png_or_jpeg(raw)
 
         # We request response_format="b64_json" so a compliant provider returns inline
         # bytes (above). We deliberately do NOT fetch a provider-returned `url`: doing so
@@ -345,6 +404,93 @@ class _OpenAIImageBackend:
                 "response_format=b64_json (OpenAI gpt-image-1 / DALL·E do)."
             )
         raise ValueError("OpenAI images API returned no image data")
+
+
+class _OpenRouterImageBackend:
+    """OpenRouter image generation via the /chat/completions endpoint.
+
+    OpenRouter does NOT expose an OpenAI `/v1/images/generations` route — image
+    models are driven through chat completions with `modalities: ["image","text"]`,
+    and the result comes back as a base64 data URL at
+    `choices[0].message.images[0].image_url.url`. This is a distinct wire shape from
+    `_OpenAIImageBackend`, hence its own backend.
+
+    PAID: every OpenRouter image model is paid (no free tier), so the account needs
+    credits. Uses the OpenRouter key (the reserved "openrouter" SecretStore slot /
+    DISCO_OPENROUTER_API_KEY) — the same key the LLM router uses. Returned bytes are
+    normalized to PNG. A provider-returned http(s) URL (not an inline data URL) is
+    REFUSED, never fetched (SSRF), matching the OpenAI backend's stance.
+    """
+
+    name = "openrouter-image"
+    is_remote = True
+
+    def __init__(self, base_url: str, api_key: str | None, *, model: str = "") -> None:
+        self._base_url = (base_url or "https://openrouter.ai/api/v1").rstrip("/")
+        self._api_key = api_key
+        # Default to the cheapest current image model so it works once credits exist.
+        self._model = model or "google/gemini-2.5-flash-image"
+
+    def generate(
+        self,
+        *,
+        prompt: str,
+        width: int,
+        height: int,
+        seed: int,
+        fmt: str,
+    ) -> bytes:
+        import base64
+
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        # OpenRouter attribution headers (recommended, not required).
+        headers["HTTP-Referer"] = "https://disco.local"
+        headers["X-Title"] = "Disco"
+
+        payload: dict[str, object] = {
+            "model": self._model,
+            "messages": [{"role": "user", "content": prompt}],
+            "modalities": ["image", "text"],
+        }
+
+        with httpx.Client(timeout=120.0) as client:
+            response = client.post(
+                f"{self._base_url}/chat/completions",
+                json=payload,
+                headers=headers,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        try:
+            images = data["choices"][0]["message"].get("images") or []
+        except (KeyError, IndexError, TypeError) as e:
+            raise ValueError(f"OpenRouter response had no choices/message: {e}") from e
+        if not images:
+            raise ValueError(
+                "OpenRouter returned no image — the model may not support image output, "
+                "or the account is out of credits (every OpenRouter image model is paid)."
+            )
+
+        url = images[0].get("image_url", {}).get("url", "")
+        if url.startswith("data:"):
+            # data:image/png;base64,<...> — split off the b64 payload and decode.
+            try:
+                b64 = url.split(",", 1)[1]
+            except IndexError as e:
+                raise ValueError("OpenRouter data URL was malformed (no comma)") from e
+            return _normalize_to_png_or_jpeg(base64.b64decode(b64))
+
+        # A remote http(s) URL is attacker-influenced: GETting it from the orchestrator
+        # host is SSRF (DNS-rebinding defeats a pre-flight IP check). Refuse, never fetch.
+        if url.startswith("http"):
+            raise ValueError(
+                "OpenRouter returned a remote image URL instead of an inline data URL. "
+                "Disco does not fetch provider URLs (SSRF risk)."
+            )
+        raise ValueError("OpenRouter image had no usable image_url data")
 
 
 # A light, universally-helpful SDXL/SD negative for the built-in default graph.
@@ -634,6 +780,30 @@ def select_image_backend() -> ImageBackend:
             if api_key:
                 return _OpenAIImageBackend(base_url, api_key, model=settings.model)
         # No key available - fall back to procedural
+        return _PILProceduralBackend()
+
+    # For openrouter image gen, the key is the OpenRouter key (reserved "openrouter"
+    # SecretStore slot, the same one the LLM router uses), NOT a user-named api_key_env.
+    if provider == "openrouter":
+        from disco.core.llm.secrets import (
+            OPENROUTER_API_KEY_ENV,
+            OPENROUTER_API_KEY_ENV_LEGACY,
+        )
+
+        api_key = (
+            SecretStore().get_openrouter_key()
+            or os.environ.get(OPENROUTER_API_KEY_ENV)
+            or os.environ.get(OPENROUTER_API_KEY_ENV_LEGACY)
+        )
+        if api_key:
+            # SECURITY: pin the OpenRouter origin. The UI exposes NO endpoint field for
+            # this tier, so any persisted base_url can only be stale config left over from
+            # another provider — and we must never send the OpenRouter Bearer key to an
+            # unintended host. Ignore settings.base_url entirely.
+            return _OpenRouterImageBackend(
+                "https://openrouter.ai/api/v1", api_key, model=settings.model
+            )
+        # No OpenRouter key stored - fall back to procedural
         return _PILProceduralBackend()
 
     # For comfyui, we need a base_url

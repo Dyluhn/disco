@@ -20,7 +20,7 @@ import { Check, Cloud, Cpu, Loader2, Server } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useImageGenConfig, useUpdateImageGenConfig } from "@/hooks/useModels";
 
-type Provider = "procedural" | "comfyui" | "openai";
+type Provider = "procedural" | "comfyui" | "openai" | "openrouter";
 
 const OPTIONS: { provider: Provider; Icon: typeof Cpu; label: string; help: string }[] = [
   {
@@ -39,7 +39,13 @@ const OPTIONS: { provider: Provider; Icon: typeof Cpu; label: string; help: stri
     provider: "openai",
     Icon: Cloud,
     label: "Paid API (OpenAI-compatible)",
-    help: "A vendor like OpenAI gpt-image-1 / DALL·E via /v1/images/generations. Set the base URL and the secret/env-var name holding your key (never the key here).",
+    help: "A vendor like OpenAI gpt-image-1 / DALL·E via /v1/images/generations (or ImageRouter's full /v1/openai/... URL). Set the base URL and the secret/env-var name holding your key (never the key here).",
+  },
+  {
+    provider: "openrouter",
+    Icon: Cloud,
+    label: "OpenRouter (image models)",
+    help: "Image models via OpenRouter chat-completions (modalities:[image,text]) using your existing OpenRouter key from Provider API keys. PAID — every OpenRouter image model costs credits (no free tier). Set Model to an image model id; cheapest is google/gemini-2.5-flash-image.",
   },
 ];
 
@@ -95,6 +101,9 @@ export function ImageGenSection() {
   const showUrl = data?.provider === "comfyui" || data?.provider === "openai";
   const showPaid = data?.provider === "openai";
   const showComfy = data?.provider === "comfyui";
+  const showOpenRouter = data?.provider === "openrouter";
+  // The contextual fields panel renders for any remote tier (comfyui/openai/openrouter).
+  const showFields = showUrl || showOpenRouter;
 
   // A local "is the pasted workflow even valid JSON?" check so the user gets an
   // honest hint BEFORE the agent's next image-gen fails server-side. Empty = use
@@ -192,42 +201,65 @@ export function ImageGenSection() {
             </p>
           )}
 
-          {/* Contextual fields — endpoint (self-host/paid) + key env (paid only). */}
-          {showUrl && (
+          {/* Contextual fields — endpoint (self-host/paid) + model + key env (paid). */}
+          {showFields && (
             <div className="mt-hair flex flex-col gap-inline rounded-card border border-hairline bg-surface-1/40 px-body py-inline">
-              <label className="flex flex-col gap-hair">
-                <span className="flex items-baseline gap-hair font-ui text-[0.8rem] text-text">
-                  Endpoint base URL
-                  <span className="font-ui text-[0.72rem] text-text-faint">
-                    {showPaid ? "· origin — we append /v1/images/generations" : "· ComfyUI host"}
+              {showOpenRouter && (
+                <p className="font-ui text-[0.78rem] leading-relaxed text-text-faint">
+                  Uses your <strong className="text-text">OpenRouter key</strong> from{" "}
+                  <em>Provider API keys</em> — store it there if you haven't, or image
+                  generation falls back to the procedural placeholder. Every OpenRouter image
+                  model is <strong className="text-text">paid</strong>; add credits at
+                  openrouter.ai/settings/credits.
+                </p>
+              )}
+              {showUrl && (
+                <label className="flex flex-col gap-hair">
+                  <span className="flex items-baseline gap-hair font-ui text-[0.8rem] text-text">
+                    Endpoint base URL
+                    <span className="font-ui text-[0.72rem] text-text-faint">
+                      {showPaid
+                        ? "· origin (we append /v1/images/generations) OR a full endpoint URL"
+                        : "· ComfyUI host"}
+                    </span>
                   </span>
-                </span>
-                <input
-                  type="url"
-                  inputMode="url"
-                  spellCheck={false}
-                  value={baseUrl}
-                  onChange={(e) => setBaseUrl(e.target.value)}
-                  placeholder={
-                    showPaid
-                      ? "https://api.openai.com  (origin only; empty = OpenAI default)"
-                      : "http://host:8188  (required for ComfyUI)"
-                  }
-                  className={fieldClass}
-                />
-              </label>
+                  <input
+                    type="url"
+                    inputMode="url"
+                    spellCheck={false}
+                    value={baseUrl}
+                    onChange={(e) => setBaseUrl(e.target.value)}
+                    placeholder={
+                      showPaid
+                        ? "https://api.openai.com  — or ImageRouter's full URL https://api.imagerouter.io/v1/openai/images/generations"
+                        : "http://host:8188  (required for ComfyUI)"
+                    }
+                    className={fieldClass}
+                  />
+                </label>
+              )}
               <label className="flex flex-col gap-hair">
                 <span className="flex items-baseline gap-hair font-ui text-[0.8rem] text-text">
-                  {showPaid ? "Model" : "Checkpoint"}
+                  {showComfy ? "Checkpoint" : "Model"}
                   <span className="font-ui text-[0.72rem] text-text-faint">
-                    {showPaid ? "· empty = provider default" : "· required; must exist on your ComfyUI"}
+                    {showComfy
+                      ? "· required; must exist on your ComfyUI"
+                      : showOpenRouter
+                        ? "· an OpenRouter image model id"
+                        : "· empty = provider default"}
                   </span>
                 </span>
                 <input
                   spellCheck={false}
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
-                  placeholder={showPaid ? "gpt-image-1" : "sd_xl_base_1.0.safetensors"}
+                  placeholder={
+                    showComfy
+                      ? "sd_xl_base_1.0.safetensors"
+                      : showOpenRouter
+                        ? "google/gemini-2.5-flash-image"
+                        : "gpt-image-1"
+                  }
                   className={fieldClass}
                 />
               </label>

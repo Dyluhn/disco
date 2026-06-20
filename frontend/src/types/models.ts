@@ -132,7 +132,7 @@ export interface TtsConfig {
  * OpenAI-compatible /v1/images/generations via `base_url` + `api_key_env` naming the
  * secret, never the key itself). */
 export interface ImageGenConfig {
-  provider: "procedural" | "comfyui" | "openai";
+  provider: "procedural" | "comfyui" | "openai" | "openrouter";
   base_url?: string;
   api_key_env?: string;
   /** openai: image model id (e.g. "gpt-image-1"); comfyui: checkpoint filename. */

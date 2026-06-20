@@ -188,9 +188,12 @@ class ImageGenSettings(BaseModel):
     The provider is persisted; the agent-server honors it on the next image-gen call.
     This is NOT an LLM-router role assignment."""
 
-    provider: Literal["procedural", "comfyui", "openai"] = "procedural"
+    provider: Literal["procedural", "comfyui", "openai", "openrouter"] = "procedural"
     base_url: str = ""  # for comfyui (self-host) / openai-compatible endpoint; empty → default
     api_key_env: str = ""  # secrets key name for openai (never the key itself)
+    # openrouter: image gen via /chat/completions (modalities:[image,text]); paid, uses
+    # the OpenRouter key (reserved "openrouter" slot). base_url → openrouter.ai default;
+    # model → an image model id (e.g. "google/gemini-2.5-flash-image"). No api_key_env.
     # openai: the image model id (e.g. "gpt-image-1", "dall-e-3"); empty → provider default.
     # comfyui: the checkpoint filename to load (required; must exist on the install).
     model: str = ""
