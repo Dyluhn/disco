@@ -113,6 +113,12 @@ Legend: ✅ done · ◐ partial · ○ open · ⬚ blocked/decision-gated · �
 - **C3 Default slides template = PDF design ✅ (2026-06-19, `7a1ce4d`)** — deck/PPTX now carries the
   PDF's brand marks (Disco. wordmark every slide + disco-Latin·verb colophon on cover), render-time
   chrome in `_pptx_render.py` (PPTX+HTML), gated on `theme.branded`. gpt-5.5 SHIP-WITH-FIXES.
+- **C4 Template gallery + per-export selector ✅ (2026-06-19, `127012c`)** — 4 new brand themes
+  (ink/sepia/signal/midnight) + `TEMPLATE_CATALOG`/`is_valid_template` + `GET /api/templates`; PDF
+  ExportModal + slide-deck SlidesDownload both get a `TemplatePicker`; new render-on-demand
+  `GET /deck/export` (re-themes via `lower_deck(theme_override=)`, no sidecar mutation, finished-deck
+  safe). gpt-5.5 SHIP-WITH-FIXES (stale-sidecar / strict-validation / neutral-id all fixed). Disco =
+  default. Gallery: `.harness/evidence/templates/`. See [[disco-export-templates]].
 
 ## §D — Verify-live (shipped in code, may be inert — confirm in the running app)
 - **D1 FILE-DELIVERY cid renders the download on the Research surface 🔎** (truth.md D12).
