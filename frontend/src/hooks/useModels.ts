@@ -173,10 +173,16 @@ const OR_KEY_KEY = ["openrouter-key"] as const;
 
 /** The live OpenRouter catalogue. `enabled` gates the fetch to when the browse
  * dialog opens (don't pull hundreds of models on settings load). */
-export function useOpenRouterModels(enabled: boolean) {
+export function useOpenRouterModels(
+  enabled: boolean,
+  opts?: { allModalities?: boolean },
+) {
+  // A distinct cache key for the `all` variant so the image-gen picker (which needs
+  // image-output generators) never collides with the LLM browser's text-only fetch.
+  const all = !!opts?.allModalities;
   return useQuery<OpenRouterModel[]>({
-    queryKey: OR_MODELS_KEY,
-    queryFn: listOpenRouterModels,
+    queryKey: all ? [...OR_MODELS_KEY, "all"] : OR_MODELS_KEY,
+    queryFn: () => listOpenRouterModels({ allModalities: all }),
     enabled,
     staleTime: 10 * 60 * 1000, // the catalogue changes slowly; cache 10 min
   });

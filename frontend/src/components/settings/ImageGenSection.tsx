@@ -18,7 +18,24 @@
 import { useEffect, useState } from "react";
 import { Check, Cloud, Cpu, Loader2, Server } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { useImageGenConfig, useUpdateImageGenConfig } from "@/hooks/useModels";
+import {
+  useImageGenConfig,
+  useOpenRouterModels,
+  useUpdateImageGenConfig,
+} from "@/hooks/useModels";
+
+/** Honest price label for an OpenRouter IMAGE model. The dual chat+image models
+ *  (Gemini/GPT) bill the generated image as OUTPUT tokens, so $/Mtok is the real
+ *  cost — shown like the LLM browser. The dedicated generators (FLUX/Recraft/Seedream)
+ *  bill PER IMAGE, which OpenRouter's /models endpoint reports as 0/0 (no static token
+ *  price) — so we must NOT render "Free" (a false price tag); point the user at the
+ *  source instead. `pricing.image` is deliberately NOT surfaced: it means different
+ *  things per model (per-input-image-token for vision vs per-output-image), so a
+ *  confident number there would mislead. */
+const orPrice = (m: { price_in_per_m: number; price_out_per_m: number }): string =>
+  m.price_in_per_m > 0 || m.price_out_per_m > 0
+    ? `$${m.price_in_per_m.toFixed(2)} in / $${m.price_out_per_m.toFixed(2)} out /Mtok`
+    : "pricing on openrouter.ai";
 
 type Provider = "procedural" | "comfyui" | "openai" | "openrouter";
 
@@ -52,6 +69,10 @@ const OPTIONS: { provider: Provider; Icon: typeof Cpu; label: string; help: stri
 export function ImageGenSection() {
   const { data, isLoading } = useImageGenConfig();
   const save = useUpdateImageGenConfig();
+  // Live OpenRouter catalogue, fetched only while the OpenRouter tier is active —
+  // filtered to image-OUTPUT models so the model field becomes a priced picker.
+  const orModels = useOpenRouterModels(data?.provider === "openrouter", { allModalities: true });
+  const imageModels = (orModels.data ?? []).filter((m) => m.image_output);
 
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKeyEnv, setApiKeyEnv] = useState("");
@@ -245,23 +266,57 @@ export function ImageGenSection() {
                     {showComfy
                       ? "· required; must exist on your ComfyUI"
                       : showOpenRouter
-                        ? "· an OpenRouter image model id"
+                        ? "· $/Mtok where OpenRouter prices by token; per-image generators show pricing on OpenRouter"
                         : "· empty = provider default"}
                   </span>
                 </span>
-                <input
-                  spellCheck={false}
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  placeholder={
-                    showComfy
-                      ? "sd_xl_base_1.0.safetensors"
-                      : showOpenRouter
-                        ? "google/gemini-2.5-flash-image"
-                        : "gpt-image-1"
-                  }
-                  className={fieldClass}
-                />
+                {showOpenRouter && imageModels.length > 0 ? (
+                  // Priced picker — filtered to OpenRouter image-output models, like the
+                  // LLM model browser. Falls back to the text input below if the live
+                  // catalogue is unavailable (offline / 502), so config still works.
+                  <select
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    className={fieldClass}
+                  >
+                    <option value="">Select an image model…</option>
+                    {/* Keep a currently-saved id selectable even if it's not in the live
+                        catalogue (a custom/renamed/removed model) — never silently hide it. */}
+                    {model && !imageModels.some((m) => m.id === model) && (
+                      <option value={model}>{model} · (current)</option>
+                    )}
+                    {imageModels.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.id} · {orPrice(m)}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    spellCheck={false}
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    placeholder={
+                      showComfy
+                        ? "sd_xl_base_1.0.safetensors"
+                        : showOpenRouter
+                          ? "google/gemini-2.5-flash-image"
+                          : "gpt-image-1"
+                    }
+                    className={fieldClass}
+                  />
+                )}
+                {showOpenRouter && orModels.isLoading && (
+                  <span className="font-ui text-[0.72rem] text-text-faint">
+                    Loading the OpenRouter image catalogue…
+                  </span>
+                )}
+                {showOpenRouter && !orModels.isLoading && imageModels.length === 0 && (
+                  <span className="font-ui text-[0.72rem] text-text-faint">
+                    Couldn't load the live catalogue — type an image model id (e.g.
+                    google/gemini-2.5-flash-image).
+                  </span>
+                )}
               </label>
               {showComfy && (
                 <label className="flex flex-col gap-hair">

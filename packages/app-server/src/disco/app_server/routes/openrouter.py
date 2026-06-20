@@ -8,7 +8,7 @@ trio manages the encrypted key stored in `ConfigState`.
 from __future__ import annotations
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from ..config.dtos import (
     OpenRouterKeyBody,
@@ -25,12 +25,24 @@ def make_openrouter_router(state: ConfigState) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/models/openrouter")
-    async def get_openrouter_models() -> list[OpenRouterModelDTO]:
+    async def get_openrouter_models(
+        modalities: str | None = Query(
+            None,
+            description=(
+                "Pass 'all' to include non-text output models (image generators like "
+                "FLUX/Recraft/Seedream). OpenRouter's /models defaults to text-output only, "
+                "so the image-gen picker needs this; the LLM browser omits it."
+            ),
+        ),
+    ) -> list[OpenRouterModelDTO]:
         # Public endpoint (no key needed to list). Proxied so the browser avoids
         # CORS and gets a normalized shape. Adding a model reuses POST /api/models.
+        url = _OPENROUTER_MODELS_URL
+        if modalities == "all":
+            url = f"{url}?output_modalities=all"
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
-                resp = await client.get(_OPENROUTER_MODELS_URL)
+                resp = await client.get(url)
                 resp.raise_for_status()
                 data = resp.json().get("data", [])
         except (httpx.HTTPError, ValueError) as exc:

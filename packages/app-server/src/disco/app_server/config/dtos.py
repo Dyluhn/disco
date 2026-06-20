@@ -56,6 +56,10 @@ class OpenRouterModelDTO(BaseModel):
     price_in_per_m: float
     price_out_per_m: float
     capabilities: list[str]
+    # True when the model can OUTPUT images (architecture.output_modalities ∋ "image")
+    # — lets the image-gen picker filter the catalogue to image-generation models.
+    # Image output bills as completion tokens, so price_out_per_m is the cost driver.
+    image_output: bool = False
 
 
 class OpenRouterKeyStatus(BaseModel):

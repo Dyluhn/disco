@@ -123,6 +123,7 @@ def normalize_openrouter(data: list[dict]) -> list[OpenRouterModelDTO]:
                 price_in_per_m=_price(pricing.get("prompt")),
                 price_out_per_m=_price(pricing.get("completion")),
                 capabilities=caps,
+                image_output="image" in (arch.get("output_modalities") or []),
             )
         )
     return out

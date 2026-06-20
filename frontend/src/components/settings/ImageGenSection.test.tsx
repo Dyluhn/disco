@@ -133,3 +133,47 @@ describe("ImageGenSection — A3 image-gen provider settings", () => {
     expect(warning).toHaveTextContent(/until then.*falls back to procedural/i);
   });
 });
+
+describe("ImageGenSection — OpenRouter priced image-model picker", () => {
+  it("shows a priced picker of image-output models and PUTs the chosen model", async () => {
+    vi.spyOn(clientModule, "isLive").mockReturnValue(true);
+    let lastPutLocal: { url: string; body: unknown } | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, opts?: RequestInit) => {
+        if (url === "/api/image-gen/config") {
+          if (opts?.method === "PUT") {
+            const body = JSON.parse(String(opts.body));
+            lastPutLocal = { url, body };
+            return jsonResponse(body);
+          }
+          return jsonResponse({ provider: "openrouter", base_url: "", api_key_env: "", model: "" });
+        }
+        if (url.startsWith("/api/models/openrouter")) {
+          return jsonResponse([
+            { id: "some/text-llm", name: "Text", context_length: 128000, price_in_per_m: 1, price_out_per_m: 2, capabilities: ["tool_calling"] },
+            { id: "google/gemini-2.5-flash-image", name: "Gemini Flash Image", context_length: 32768, price_in_per_m: 0.3, price_out_per_m: 2.5, capabilities: ["vision"], image_output: true },
+            { id: "black-forest-labs/flux.2-flex", name: "FLUX.2 Flex", context_length: 0, price_in_per_m: 0, price_out_per_m: 0, capabilities: [], image_output: true },
+          ]);
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+    render(createElement(ImageGenSection), { wrapper: makeWrapper() });
+
+    // the priced picker appears (a <select>) and lists ONLY the image-output models
+    const picker = await screen.findByRole("combobox");
+    const opts = Array.from(picker.querySelectorAll("option")).map((o) => o.textContent);
+    expect(opts.some((t) => /gemini-2\.5-flash-image.*\$0\.30.*\$2\.50.*Mtok/.test(t ?? ""))).toBe(true);
+    expect(opts.some((t) => /text-llm/.test(t ?? ""))).toBe(false); // text model filtered out
+    // A per-image generator with no token price must NOT be labelled "Free" (false price tag).
+    const flux = opts.find((t) => /flux\.2-flex/.test(t ?? "")) ?? "";
+    expect(flux).toMatch(/pricing on openrouter\.ai/);
+    expect(flux).not.toMatch(/Free/);
+
+    fireEvent.change(picker, { target: { value: "google/gemini-2.5-flash-image" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
+    await waitFor(() => expect(lastPutLocal).not.toBeNull());
+    expect((lastPutLocal!.body as { model: string }).model).toBe("google/gemini-2.5-flash-image");
+  });
+});

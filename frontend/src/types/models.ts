@@ -51,6 +51,8 @@ export interface OpenRouterModel {
   price_in_per_m: number;
   price_out_per_m: number;
   capabilities: Capability[];
+  /** Model can OUTPUT images — lets the image-gen picker filter to image models. */
+  image_output?: boolean;
 }
 
 /** Status of the encrypted-at-rest OpenRouter API key. */
