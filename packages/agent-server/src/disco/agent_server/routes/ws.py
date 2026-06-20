@@ -17,7 +17,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
 from ..runtime import ConversationRuntime
-from ._common import _user_message
+from ._common import _context_message, _user_message
 
 
 async def _handle_frame(
@@ -46,6 +46,12 @@ async def _handle_frame(
             ).model_dump(mode="json")
         )
     elif frame.type == "send_message" and frame.content is not None:
+        # R3: an optional large `context` (e.g. a full DR report) is stored as a
+        # HIDDEN ENVIRONMENT message FIRST, then the short visible user message —
+        # so the model receives the report while the history shows only the
+        # one-line "Make slides for …" instead of the whole report dumped inline.
+        if frame.context:
+            await store.append(conversation_id, _context_message(frame.context))
         await store.append(conversation_id, _user_message(frame.content))
         if runtime is not None:
             runtime.kick(conversation_id)

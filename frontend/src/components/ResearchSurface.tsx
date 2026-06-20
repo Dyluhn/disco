@@ -1,6 +1,7 @@
 import { Square } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useResearch } from "@/hooks/useResearch";
+import { useLastSelectedModel } from "@/hooks/useDriverModels";
 import type { ScopeId } from "@/shell/mode";
 import { UploadComposer } from "@/components/build/BuildSurface";
 import { AnswerDocument } from "./AnswerDocument";
@@ -19,13 +20,21 @@ export function ResearchSurface() {
 
   // Per-conversation controls (Prompt 3C): the lead-model override (null = use
   // the Settings default) and the Think flag. Session-local; ride along on submit.
-  const [leaderId, setLeaderId] = useState<string | null>(null);
+  // R9: `undefined` = UNTOUCHED (seed the display from the sticky last-selected
+  // pick); `null` = the user EXPLICITLY chose "Settings default"; a string = an
+  // explicit model. The undefined sentinel is what lets a pick control every
+  // surface (untouched shows last-selected) WITHOUT trapping the user — clearing
+  // back to the default still works (null is respected, not re-hydrated).
+  const [leaderId, setLeaderId] = useState<string | null | undefined>(undefined);
   const [scope, setScope] = useState<ScopeId>("standard");
   const [think, setThink] = useState(false);
 
+  const { data: lastSelected } = useLastSelectedModel();
+  const effectiveLeaderId = leaderId === undefined ? (lastSelected ?? null) : leaderId;
+
   const submit = useCallback(
-    (query: string) => r.submit(query, { model_override: leaderId, think }),
-    [r, leaderId, think],
+    (query: string) => r.submit(query, { model_override: effectiveLeaderId, think }),
+    [r, effectiveLeaderId, think],
   );
 
   // Scope dispatch: Deep Research has its own surface (own conversation model,
@@ -39,11 +48,11 @@ export function ResearchSurface() {
     // fix-c #2: forward the leader-pick from the standard scope — without it,
     // switching search→deep-research silently dropped the user-selected model
     // and the deep surface fell back to the default.
-    return <DeepResearchSurface onScopeChange={setScope} initialLeaderId={leaderId} />;
+    return <DeepResearchSurface onScopeChange={setScope} initialLeaderId={effectiveLeaderId} />;
   }
 
   const clusterProps = {
-    leaderId,
+    leaderId: effectiveLeaderId,
     onLeaderChange: setLeaderId,
     scope,
     onScopeChange: setScope,

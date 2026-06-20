@@ -724,12 +724,21 @@ export function NeedMoreCard({
     if (building) return;
     setBuilding(true);
     try {
-      const seedTask =
-        "Create a polished slide deck that presents the key findings of this research " +
-        "report. Use the slides_generate tool to produce the deck.\n\n" +
+      // R3: keep the VISIBLE handoff message short (a one-liner the chat history
+      // shows), and pass the full report as hidden `seedContext` — stored as an
+      // ENVIRONMENT message the model receives but the user doesn't see as a
+      // screen-filling bubble. The "Deep research report …" framing also guarantees
+      // the hidden message can't be mistaken for a ⚠/upload notice (which would surface).
+      const q = (report.query || "").trim();
+      const seedTask = q
+        ? `Make slides for the deep research report: "${q}"`
+        : "Make slides for the deep research report.";
+      const seedContext =
+        "Deep research report to turn into a polished slide deck " +
+        "(use the slides_generate tool):\n\n" +
         serializeReportToMarkdown(report);
       const newCid = await createBuildConversation(null, "build", true);
-      navigate(`/build/${newCid}`, { state: { seedTask } });
+      navigate(`/build/${newCid}`, { state: { seedTask, seedContext } });
     } catch {
       setBuilding(false); // surface stays; the button re-enables for a retry
     }

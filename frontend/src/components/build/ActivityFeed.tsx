@@ -31,6 +31,7 @@ import { cn } from "@/lib/cn";
 import { agentHttpBase } from "@/api/client";
 import { useTemplates } from "@/hooks/useTemplates";
 import { TemplatePicker } from "@/components/research/TemplatePicker";
+import { rendererLabel } from "@/lib/slidesRenderer";
 import type { ActivityItem } from "@/lib/buildTrace";
 
 function ScreenshotThumbnail({
@@ -131,6 +132,9 @@ export function SlidesDownload({
       `&template=${encodeURIComponent(templateId)}&fmt=pptx`
     : staticHref;
   const fmt = (editable ? "pptx" : slides.format || "html").toUpperCase();
+  // R7: be honest about a DEGRADED fallback deck (Marp CLI unavailable) vs a real
+  // structured render — otherwise the user can't tell a real deck from "HTML fake slides".
+  const rl = rendererLabel(slides.renderer);
   return (
     <div className="mt-hair flex flex-col gap-hair">
       <a
@@ -150,6 +154,12 @@ export function SlidesDownload({
         </span>
         <Download className="size-3.5 shrink-0 text-text-faint" aria-hidden />
       </a>
+      {!rl.real && (
+        <p className="flex items-center gap-hair font-ui text-[0.7rem] text-unsupported">
+          <AlertTriangle className="size-3 shrink-0" aria-hidden />
+          Built with {rl.long} — not the full structured deck.
+        </p>
+      )}
       {editable && (
         <TemplatePicker
           templates={templates}

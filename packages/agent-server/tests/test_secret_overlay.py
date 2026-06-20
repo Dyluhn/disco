@@ -11,7 +11,7 @@ from __future__ import annotations
 from disco.agent_server import ConversationRuntime
 from disco.core import SqliteEventStore
 from disco.core.llm import ConfigStore, SecretBox, SecretStore
-from disco.core.llm.secrets import OPENROUTER_API_KEY_ENV
+from disco.core.llm.secrets import OPENROUTER_API_KEY_ENV, OPENROUTER_API_KEY_ENV_LEGACY
 
 
 def _runtime(tmp_path) -> ConversationRuntime:
@@ -33,8 +33,10 @@ def test_overlay_puts_every_stored_key_into_the_env(tmp_path):
     # generic keys overlay onto their own env-var name
     assert env["OPENAI_API_KEY"] == "sk-openai-STORED"
     assert env["DISCO_SEARCH_API_KEY"] == "tvly-STORED"
-    # the reserved openrouter slot maps to the OpenRouter env-var name
+    # the reserved openrouter slot maps to the OpenRouter env-var name — under BOTH
+    # the canonical and legacy names, so config entries declaring either resolve the key
     assert env[OPENROUTER_API_KEY_ENV] == "sk-or-v1-STORED"
+    assert env[OPENROUTER_API_KEY_ENV_LEGACY] == "sk-or-v1-STORED"  # PMX_OPENROUTER_API_KEY
     # the literal "openrouter" slot name is NOT leaked as an env var
     assert "openrouter" not in env
 

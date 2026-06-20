@@ -76,8 +76,14 @@ export function BuildSurface({
   resumeCid,
   framing = "build",
   seedTask,
-}: { resumeCid?: string | null; framing?: BuildFraming; seedTask?: string | null } = {}) {
-  const b = useBuild(resumeCid, framing, seedTask);
+  seedContext,
+}: {
+  resumeCid?: string | null;
+  framing?: BuildFraming;
+  seedTask?: string | null;
+  seedContext?: string | null;
+} = {}) {
+  const b = useBuild(resumeCid, framing, seedTask, seedContext);
   const copy = FRAMING[framing];
 
   // BP-15: fetch the real sandbox backend name from the server state endpoint.

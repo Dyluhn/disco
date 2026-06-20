@@ -106,7 +106,11 @@ export type AnswerBlock =
       /** Per-slide preview, threaded for in-block navigation. Empty array is
        *  valid (the viewer degrades to a "slide N of M" counter). */
       slides: { title?: string; content?: string }[];
-      renderer: "marp" | "fallback";
+      // Backend renderer provenance: "c3-brand"/"pptx-native"/"libreoffice" = real
+      // structured render; "marp" = real (image-based PPTX); "fallback" = degraded
+      // HTML (Marp CLI unavailable). A string (not a closed union) so a new backend
+      // renderer never silently mislabels — SlidesBlock maps it honestly.
+      renderer: string;
     };
 
 export interface GroundedAnswer {

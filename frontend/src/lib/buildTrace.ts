@@ -56,6 +56,7 @@ export interface ActivityItem {
       slides?: { title?: string; content?: string }[];
       base?: string; // deck base name (no ext) — for the /deck/export template re-render
       editable?: boolean; // has an authored sidecar → template re-render is available
+      renderer?: string; // R7: backend renderer provenance (c3-brand/pptx-native/libreoffice/marp = real; fallback = degraded HTML)
     };
     // F2: an agent-emitted file (via serve(kind="files")). Downloadable via the
     // declared-artifact route. Rendered as a first-class download card in the feed.
@@ -226,6 +227,9 @@ export function deriveActivity(
                 typeof struct?.base_name === "string"
                   ? latestEditableByBase.get(struct.base_name) === true
                   : false,
+              // R7: surface the real renderer so the deck card can be honest about
+              // real-vs-fallback instead of mislabeling every deck "Marp-rendered".
+              renderer: typeof struct?.renderer === "string" ? struct.renderer : undefined,
             }
           : undefined;
       observationByActionId.set(e.action_id, {

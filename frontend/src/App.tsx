@@ -55,6 +55,11 @@ function ResumeProject() {
   const seedRef = useRef<string | null>(
     (location.state as { seedTask?: string } | null)?.seedTask ?? null,
   );
+  // R3: the full report rides along as hidden seedContext (an ENVIRONMENT message),
+  // captured here the same way so the visible handoff message stays a one-liner.
+  const seedContextRef = useRef<string | null>(
+    (location.state as { seedContext?: string } | null)?.seedContext ?? null,
+  );
   useEffect(() => {
     if ((location.state as { seedTask?: string } | null)?.seedTask) {
       navigate(location.pathname, { replace: true, state: null });
@@ -62,7 +67,13 @@ function ResumeProject() {
     // run once on mount — the seed is already captured in seedRef
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  return <BuildSurface resumeCid={cid ?? null} seedTask={seedRef.current} />;
+  return (
+    <BuildSurface
+      resumeCid={cid ?? null}
+      seedTask={seedRef.current}
+      seedContext={seedContextRef.current}
+    />
+  );
 }
 
 /** Resume an existing Agent task from /agent/:cid — the same machinery as

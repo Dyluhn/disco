@@ -127,24 +127,21 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
               onScopeChange={onScopeChange ?? (() => {})}
               think={false}
               onThinkChange={() => {}}
-              footer={
-                // fix-c #3: depth selector + hint now sit INSIDE the input
-                // card (via QueryInput's `footer` slot), not as a sibling
-                // <div> floating below the card border.
-                <div className="flex items-center justify-between gap-inline">
-                  <div className="flex items-center gap-inline">
-                    <DepthTierSelector value={r.depthTier as Tier} onChange={r.setDepthTier} />
-                    <RecencySelector value={r.recencyWindow} onChange={r.setRecencyWindow} />
-                    <IterativeToggle value={r.iterative} onChange={r.setIterative} />
-                    {/* G1/DR-4: UploadComposer in the empty state. The preCid is
-                        created eagerly on mount so this renders immediately.
-                        Only shown when a live cid is available (no false affordance). */}
-                    {r.preCid && <UploadComposer cid={r.preCid} />}
-                  </div>
-                  <p className="font-ui text-[0.74rem] text-text-faint">
-                    Deep runs take minutes. The leader pill picks the driver model.
-                  </p>
-                </div>
+              extraControls={
+                // R10: Depth/Recency/Iterative now sit INLINE in the same pill row
+                // as the model/scope cluster (via QueryInput's `extraControls`),
+                // not a full-width footer block that grew the card and reflowed the
+                // centered layout. The hint paragraph is dropped (it was layout bulk;
+                // the leader pill already names the driver model).
+                <>
+                  <DepthTierSelector value={r.depthTier as Tier} onChange={r.setDepthTier} />
+                  <RecencySelector value={r.recencyWindow} onChange={r.setRecencyWindow} />
+                  <IterativeToggle value={r.iterative} onChange={r.setIterative} />
+                  {/* G1/DR-4: UploadComposer in the empty state. The preCid is
+                      created eagerly on mount so this renders immediately.
+                      Only shown when a live cid is available (no false affordance). */}
+                  {r.preCid && <UploadComposer cid={r.preCid} />}
+                </>
               }
             />
             {r.submitError && (

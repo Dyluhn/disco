@@ -155,11 +155,17 @@ describe("NeedMoreCard", () => {
 
     await waitFor(() => expect(_createBuild).toHaveBeenCalledWith(null, "build", true));
     await waitFor(() => expect(_navMock).toHaveBeenCalled());
-    const [path, opts] = _navMock.mock.calls[0] as [string, { state: { seedTask: string } }];
+    const [path, opts] = _navMock.mock.calls[0] as [
+      string,
+      { state: { seedTask: string; seedContext: string } },
+    ];
     expect(path).toBe("/build/conv_new_deck");
-    expect(opts.state.seedTask).toMatch(/slide deck/i);
-    // The serialized report rode along in the seed (the mocked serializer output).
-    expect(opts.state.seedTask).toContain("# Report");
+    // R3: the VISIBLE seed is a short one-liner (not the whole report dumped inline).
+    expect(opts.state.seedTask).toMatch(/make slides for the deep research report/i);
+    expect(opts.state.seedTask).not.toContain("# Report");
+    // The serialized report rides along as HIDDEN seedContext (an ENVIRONMENT message).
+    expect(opts.state.seedContext).toContain("# Report");
+    expect(opts.state.seedContext).toMatch(/slides_generate/);
   });
 
   // (b) Ask-Follow-Up toggles the input open/closed repeatedly

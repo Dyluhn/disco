@@ -1,5 +1,7 @@
 import { useState } from "react";
-import { ChevronLeft, ChevronRight, MonitorPlay } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, MonitorPlay } from "lucide-react";
+import { cn } from "@/lib/cn";
+import { rendererLabel } from "@/lib/slidesRenderer";
 import { SlidesDownload } from "../build/ActivityFeed";
 
 /**
@@ -42,7 +44,7 @@ export function SlidesBlockComponent({
    *  array → the viewer degrades to a "slide N of M" counter (still
    *  navigable, just no content body). */
   slides: { title?: string; content?: string }[];
-  renderer: "marp" | "fallback";
+  renderer?: string;
   /** The conversation id (cid) — when present, the in-block download
    *  resolves against the declared-artifact route. ABSENT = no download,
    *  no false affordance. */
@@ -51,6 +53,7 @@ export function SlidesBlockComponent({
   // Total slide count prefers the explicit `slide_count` (authoritative —
   // comes from the slides backend's split), then falls back to the inline
   // `slides` array length. Always ≥ 1 so the counter never reads "0 / 0".
+  const rl = rendererLabel(renderer);
   const total = Math.max(slide_count || 0, slides.length, 1);
   const [index, setIndex] = useState(0);
   const safeIndex = Math.min(Math.max(index, 0), total - 1);
@@ -63,6 +66,7 @@ export function SlidesBlockComponent({
     format,
     slide_count: total,
     slides,
+    renderer, // R7: thread provenance so the nested download warns honestly on fallback
   };
   const goPrev = () => setIndex((i) => (i - 1 + total) % total);
   const goNext = () => setIndex((i) => (i + 1) % total);
@@ -135,7 +139,7 @@ export function SlidesBlockComponent({
         ) : (
           <p className="font-ui text-[0.82rem] italic text-text-faint">
             Slide {safeIndex + 1} of {total} ({(format || "html").toUpperCase()} ·{" "}
-            {renderer === "fallback" ? "fallback renderer" : "Marp-rendered"}).{" "}
+            {rl.short}).{" "}
             {cid
               ? "Download above to view the rendered slide."
               : "Open the deck in the build surface to view the rendered slide."}
@@ -143,13 +147,22 @@ export function SlidesBlockComponent({
         )}
       </div>
 
-      {/* Provenance + renderer hint */}
+      {/* Provenance + renderer hint — R7: warn honestly on the degraded fallback */}
       <div className="flex items-start gap-hair border-t border-hairline px-body py-inline">
-        <MonitorPlay className="mt-px size-3.5 shrink-0 text-text-faint" aria-hidden />
-        <p className="font-ui text-[0.74rem] leading-snug text-text-faint">
+        {rl.real ? (
+          <MonitorPlay className="mt-px size-3.5 shrink-0 text-text-faint" aria-hidden />
+        ) : (
+          <AlertTriangle className="mt-px size-3.5 shrink-0 text-unsupported" aria-hidden />
+        )}
+        <p
+          className={cn(
+            "font-ui text-[0.74rem] leading-snug",
+            rl.real ? "text-text-faint" : "text-unsupported",
+          )}
+        >
           Saved to the workspace as{" "}
           <span className="font-mono text-text-muted">{filename}</span>. Rendered by{" "}
-          {renderer === "fallback" ? "the HTML fallback renderer" : "Marp"}.
+          {rl.long}.
         </p>
       </div>
     </div>

@@ -33,6 +33,10 @@ function localUserMessage(content: string): MessageEvent {
 export interface BuildSession {
   cid: string;
   task: string;
+  /** R3: optional large context (the full DR report) sent as the send_message
+   *  frame's hidden `context` — stored as an ENVIRONMENT message the model reads
+   *  but the user doesn't see, so the visible `task` stays a short one-liner. */
+  context?: string | null;
   /** Whether subscribing should ALSO start the run (send the task). Only a fresh
    *  `submit()` sets this true — opening an existing build (resume / History) is a
    *  safe read (subscribe + replay only), never `send_message`. (Command–Query
@@ -257,7 +261,12 @@ export function useBuildStream(session: BuildSession | null): BuildStream {
     handle.current = h;
     // View ≠ start: only a fresh submit kicks the loop. Opening an existing build
     // (resume / History) is a safe read — subscribe + replay only.
-    if (session.kick) h.send({ type: "send_message", content: session.task });
+    if (session.kick)
+      h.send({
+        type: "send_message",
+        content: session.task,
+        ...(session.context ? { context: session.context } : {}),
+      });
     return () => h.cancel();
   }, [session]);
 

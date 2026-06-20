@@ -14,6 +14,7 @@ from disco.core import (
     LLMMessage,
     MessageEvent,
 )
+from disco.core.env import disco_env
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import StorageStatus
 from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile
@@ -33,16 +34,27 @@ from ._common import (
 
 # C5 — Content-Security-Policy applied when ?inline=true. sandbox allow-scripts
 # sandboxes the document but permits slide-navigation JS; default-src 'none' blocks
-# all loads; style-src/img-src/font-src permit inline CSS + same-origin/data assets;
-# frame-ancestors 'self' prevents external clickjacking of the artifact URL.
+# all loads; style-src/img-src/font-src permit inline CSS + same-origin/data assets.
+# frame-ancestors limits who may EMBED the artifact (anti-clickjacking). 'self' covers
+# the production same-origin case (frontend + agent-server behind one origin). In DEV
+# the Vite UI (:5173) is a DIFFERENT origin from the agent-server (:8000), so the
+# PreviewPane iframe was blocked ("permission") — R8. We allow the configured frontend
+# origin(s) explicitly (NOT a blanket `*`, which would re-open cross-site clickjacking).
+# DISCO_PREVIEW_FRAME_ANCESTORS = space-separated extra origins; the default covers the
+# standard local dev + loopback hosts (override to add a tunnel/tailnet origin).
+_DEFAULT_PREVIEW_ANCESTORS = (
+    "http://localhost:5173 http://127.0.0.1:5173 "
+    "http://localhost:8000 http://127.0.0.1:8000"
+)
 _INLINE_CSP = (
     "sandbox allow-scripts; "
     "default-src 'none'; "
     "style-src 'unsafe-inline'; "
     "img-src 'self' data:; "
     "font-src 'self' data:; "
-    "frame-ancestors 'self'"
-)
+    "frame-ancestors 'self' "
+    + disco_env("PREVIEW_FRAME_ANCESTORS", _DEFAULT_PREVIEW_ANCESTORS).strip()
+).strip()
 
 
 async def _read_artifact_bytes(

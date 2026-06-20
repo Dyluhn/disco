@@ -25,6 +25,11 @@ interface Props {
    *  hint) INSIDE the card border with the submit button, instead of as a
    *  sibling <div> floating below it. */
   footer?: React.ReactNode;
+  /** R10: secondary controls rendered INLINE in the same flex-wrap pill row as
+   *  the model/scope/think cluster (same size + register). Used by the Deep
+   *  Research surface for Depth/Recency/Iterative so selecting DR doesn't add a
+   *  new full-width row that grows the card and reflows the centered layout. */
+  extraControls?: React.ReactNode;
 }
 
 /**
@@ -47,6 +52,7 @@ export function QueryInput({
   onThinkChange,
   showControls = true,
   footer,
+  extraControls,
 }: Props) {
   const [value, setValue] = useState("");
   const canSend = !!value.trim() && !busy;
@@ -91,6 +97,7 @@ export function QueryInput({
               <ThinkToggle value={think} onChange={onThinkChange} />
             </>
           )}
+          {extraControls}
         </div>
 
         {/* the primary action (item B) — ALWAYS the solid primary-action color so

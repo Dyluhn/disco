@@ -69,7 +69,7 @@ export function useDeepResearch(
   const preCreate = useMutation({ mutationFn: createDeepResearchConversation });
   // Track which depth/recency combo the current preCid was created for so we
   // only re-create when they actually change (not on every render).
-  const preCidSettingsRef = useRef<{ depthTier: Tier; iterative: boolean; recencyWindow: "month" | "week" | null } | null>(null);
+  const preCidSettingsRef = useRef<{ depthTier: Tier; iterative: boolean; recencyWindow: "month" | "week" | null; leaderId: string | null } | null>(null);
 
   useEffect(() => {
     // Don't pre-create on the resume path (we already have a cid) or when
@@ -79,16 +79,44 @@ export function useDeepResearch(
       preCidSettingsRef.current !== null &&
       preCidSettingsRef.current.depthTier === depthTier &&
       preCidSettingsRef.current.iterative === iterative &&
-      preCidSettingsRef.current.recencyWindow === recencyWindow;
+      preCidSettingsRef.current.recencyWindow === recencyWindow &&
+      preCidSettingsRef.current.leaderId === leaderId;
     if (alreadyMatchesCurrent) return;
-    preCidSettingsRef.current = { depthTier, iterative, recencyWindow };
+    // R9: include leaderId so the pre-created cid carries the user's model pick.
+    // Without it the preCid submit path ran the DR on the backend default/last-
+    // selected instead of the chosen model. Changing the model re-creates the
+    // preCid (same as depth/recency) so the run's model always matches the UI.
+    const requested = { depthTier, iterative, recencyWindow, leaderId };
+    preCidSettingsRef.current = requested;
+    // R1 FIX: flush the STALE preCid immediately. Otherwise a submit() during the
+    // in-flight re-create window would reuse the old cid (created with the PREVIOUS
+    // settings — e.g. iterative:false), so toggling Iterative ON silently ran a
+    // standard research. With preCid null, submit() falls through to create.mutate
+    // which always carries the CURRENT settings.
+    setPreCid(null);
     preCreate.mutate(
       // query is intentionally empty — no USER message is sent at pre-create
       // time; the cid is just a lightweight conversation record for uploads.
-      { query: "", depthTier, iterative, recencyWindow },
-      { onSuccess: setPreCid },
+      { query: "", leaderId, depthTier, iterative, recencyWindow },
+      {
+        // Guard against an out-of-order resolve: only adopt this cid if its
+        // settings are STILL the current ones (a newer toggle hasn't superseded
+        // it while this create was in flight).
+        onSuccess: (cid) => {
+          const cur = preCidSettingsRef.current;
+          if (
+            cur &&
+            cur.depthTier === requested.depthTier &&
+            cur.iterative === requested.iterative &&
+            cur.recencyWindow === requested.recencyWindow &&
+            cur.leaderId === requested.leaderId
+          ) {
+            setPreCid(cid);
+          }
+        },
+      },
     );
-  }, [resumeCid, session, depthTier, iterative, recencyWindow]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [resumeCid, session, depthTier, iterative, recencyWindow, leaderId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const stream = useDeepResearchStream(session);
 

@@ -54,7 +54,7 @@ from disco.core.llm import (
     SecretStore,
 )
 from disco.core.llm.config import RouterConfig
-from disco.core.llm.secrets import OPENROUTER_API_KEY_ENV
+from disco.core.llm.secrets import OPENROUTER_API_KEY_ENV, OPENROUTER_API_KEY_ENV_LEGACY
 from disco.core.llm.wiring import build_providers, probe_all_vision
 from disco.core.loop import (
     AgentLoop,
@@ -649,7 +649,15 @@ class ConversationRuntime:
             value = self._secret_store.get_secret(name)
             if not value:
                 continue
-            env[OPENROUTER_API_KEY_ENV if name == "openrouter" else name] = value
+            if name == "openrouter":
+                # Overlay under BOTH the canonical and legacy env names: existing
+                # disco-config.json entries still declare api_key_env="PMX_OPENROUTER_API_KEY",
+                # so build_providers resolves the legacy name. Without this the stored key
+                # never attaches → anonymous OpenRouter calls → paid models 402 "no credits".
+                env[OPENROUTER_API_KEY_ENV] = value
+                env[OPENROUTER_API_KEY_ENV_LEGACY] = value
+            else:
+                env[name] = value
 
     def _resolve_secret(self, name: str | None) -> str | None:
         """A provider key by its api_key_env var name: the encrypted store wins,

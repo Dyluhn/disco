@@ -116,6 +116,19 @@ def _user_message(content: str, *, steer: bool = False) -> MessageEvent:
     )
 
 
+def _context_message(content: str) -> MessageEvent:
+    """R3: a hidden ENVIRONMENT message carrying large context (e.g. a full DR
+    report) that the MODEL receives but the USER doesn't see as a chat bubble.
+    EventSource.ENVIRONMENT is filtered out of the build feed (buildTrace) except
+    ⚠-prefixed / 'User uploaded:' ones, so this stays hidden — used to keep the
+    DR→slides handoff message short ("Make slides for …") instead of dumping the
+    whole report into the visible history."""
+    return MessageEvent(
+        source=EventSource.ENVIRONMENT,
+        message=LLMMessage(role="user", content=content),
+    )
+
+
 def _reject_if_imported(store: SqliteEventStore, conversation_id: str) -> None:
     """Imported share-bundle conversations are READ-ONLY — they hold untrusted
     third-party events, so reviving them would feed an attacker's content to the

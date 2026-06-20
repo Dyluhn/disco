@@ -22,6 +22,10 @@ export function useBuild(
    *  (e.g. "build a deck from this report"), KICK it once instead of a plain resume.
    *  The conversation was already created (autonomous) by the handoff caller. */
   seedTask?: string | null,
+  /** R3: optional large context (the full DR report) sent as a hidden
+   *  ENVIRONMENT message alongside the short seedTask, so the model receives it
+   *  but the chat history isn't flooded with the whole report. */
+  seedContext?: string | null,
 ) {
   const [session, setSession] = useState<BuildSession | null>(null);
   const [modelId, setModelId] = useState<string | null>(null); // null → server default
@@ -60,11 +64,11 @@ export function useBuild(
       // router state → plain resume (the build already ran), never a double-seed.
       setSession(
         seedTask
-          ? { cid: resumeCid, task: seedTask, kick: true }
+          ? { cid: resumeCid, task: seedTask, context: seedContext ?? null, kick: true }
           : { cid: resumeCid, task: "(resumed)" },
       );
     }
-  }, [resumeCid, session, seedTask]);
+  }, [resumeCid, session, seedTask, seedContext]);
 
   const create = useMutation({
     mutationFn: (opts: { modelOverride: string | null; autonomous: boolean }) =>

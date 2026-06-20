@@ -85,3 +85,9 @@ class WSClientFrame(BaseModel):
     # pick_alternative: the id of the AlternativeOption to execute as the next
     # action (the loop pulls its ToolCall and injects it as the resume action).
     option_id: str | None = None
+    # send_message (R3): optional LARGE context (e.g. a full DR report) that the
+    # MODEL should receive but the USER should NOT see as a giant chat bubble. The
+    # WS handler stores it as a hidden EventSource.ENVIRONMENT message BEFORE the
+    # short visible user `content`, so the model gets the full report while the
+    # history shows only "Make slides for the deep research report: …".
+    context: str | None = None
