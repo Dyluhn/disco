@@ -108,6 +108,16 @@ class SendMessageBody(BaseModel):
     content: str
 
 
+class UpdateSettingsBody(BaseModel):
+    """Patch a PRE-CREATED conversation's pre-kick settings (runthru-v2 ROOT-1).
+    The build surface pre-creates a cid on mount with defaults; the user's later
+    model pick / autonomous choice is applied here right before the loop is kicked
+    (the loop caches the model at first kick). None = leave unchanged."""
+
+    model_override: str | None = None
+    autonomous: bool | None = None
+
+
 def _user_message(content: str, *, steer: bool = False) -> MessageEvent:
     return MessageEvent(
         source=EventSource.USER,

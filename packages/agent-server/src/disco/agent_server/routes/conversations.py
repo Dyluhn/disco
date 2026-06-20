@@ -18,6 +18,7 @@ from ._common import (
     _WORKSPACE_PREFIXES,
     CreateConversationBody,
     SendMessageBody,
+    UpdateSettingsBody,
     _reject_if_imported,
     _user_message,
 )
@@ -58,7 +59,9 @@ def make_conversations_router(
         # pin the driver model if the picker chose one.
         if runtime is not None:
             runtime.set_surface(conversation_id, body.surface)
-            runtime.set_model_override(conversation_id, _resolve_model(body.model_override, runtime))
+            runtime.set_model_override(
+                conversation_id, _resolve_model(body.model_override, runtime)
+            )
             if body.autonomous:
                 runtime.set_autonomous(conversation_id, True)
             # Weak-model assist tier: None ⇒ leave the model-derived default;
@@ -85,6 +88,31 @@ def make_conversations_router(
             "surface": body.surface,
             "sandbox_backend": runtime.sandbox_backend_name() if runtime is not None else None,
         }
+
+    @router.patch("/conversations/{conversation_id}/settings")
+    async def update_settings(conversation_id: str, body: UpdateSettingsBody) -> dict:
+        """runthru-v2 ROOT-1: apply the user's model pick / autonomous choice to a
+        PRE-CREATED conversation right before the kick. The build surface pre-creates
+        a cid on mount with defaults, then the user picks a model; without this the
+        pick was dropped and the run used the default (local Qwen) instead. The loop
+        caches the driver model at first kick, so this MUST be 409 if a loop already
+        started — we do not silently no-op (that's the bug we're fixing)."""
+        if runtime is None:
+            raise HTTPException(status_code=503, detail="runtime not available")
+        _reject_if_imported(store, conversation_id)
+        if conversation_id in runtime._loops:
+            raise HTTPException(
+                status_code=409,
+                detail={"reason": "loop_already_started",
+                        "hint": "the driver model is fixed once the run begins"},
+            )
+        if body.model_override is not None:
+            runtime.set_model_override(
+                conversation_id, _resolve_model(body.model_override, runtime)
+            )
+        if body.autonomous is not None:
+            runtime.set_autonomous(conversation_id, body.autonomous)
+        return {"ok": True, "model_override": runtime._model_override.get(conversation_id)}
 
     @router.post("/conversations/{conversation_id}/messages")
     async def post_message(conversation_id: str, body: SendMessageBody) -> dict:

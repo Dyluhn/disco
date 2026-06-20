@@ -66,6 +66,22 @@ export async function createBuildConversation(
   return res.conversation_id;
 }
 
+/** runthru-v2 ROOT-1: apply the user's model pick (and autonomous choice) to a
+ * PRE-CREATED conversation right before the kick. The build surface pre-creates a
+ * cid on mount with defaults, so without this the picker's value was dropped and the
+ * run used the default model (local Qwen) instead of what the user chose. The server
+ * 409s if the loop already started (the model is fixed once a run begins). */
+export async function patchConversationSettings(
+  conversationId: string,
+  settings: { modelOverride?: string | null; autonomous?: boolean },
+): Promise<void> {
+  if (!agentLive()) return;
+  await agentSend("PATCH", `/conversations/${conversationId}/settings`, {
+    model_override: settings.modelOverride ?? null,
+    ...(settings.autonomous !== undefined ? { autonomous: settings.autonomous } : {}),
+  });
+}
+
 /** The driver-eligible models for the Build chat picker (+ the default). Offline → a
  * small fixture so the picker renders in tests/screenshots. */
 export async function listDriverModels(): Promise<DriverModels> {

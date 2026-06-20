@@ -6,7 +6,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { createBuildConversation, killConversation } from "@/api/agent";
+import {
+  createBuildConversation,
+  killConversation,
+  patchConversationSettings,
+} from "@/api/agent";
 import { agentLive } from "@/api/client";
 import { useBuildStream, type BuildSession } from "./useBuildStream";
 
@@ -76,11 +80,19 @@ export function useBuild(
   });
 
   const submit = useCallback(
-    (task: string) => {
+    async (task: string) => {
       const trimmed = task.trim();
       if (!trimmed) return;
       // G1/DR-4: use pre-created cid if available so uploads survive.
       if (preCid) {
+        // runthru-v2 ROOT-1: the preCid was created on mount with DEFAULT settings,
+        // so apply the user's CURRENT model pick + autonomous choice to it BEFORE the
+        // kick (the loop caches the model at kick). Without this the build ran on the
+        // default local model regardless of the picker. await so the patch lands first.
+        await patchConversationSettings(preCid, {
+          modelOverride: modelId,
+          autonomous: autonomousChoice,
+        });
         setSession({ cid: preCid, task: trimmed, kick: true });
         setPreCid(null);
         return;
