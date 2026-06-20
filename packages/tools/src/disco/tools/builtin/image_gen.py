@@ -708,12 +708,29 @@ class ImageGenTool:
             actual_w, actual_h = _PILImage.open(io.BytesIO(image_bytes)).size
         except Exception:  # noqa: BLE001 — fall back to requested dims if decode fails
             actual_w, actual_h = args.width, args.height
+
+        # The procedural backend ALWAYS "succeeds" (it emits a valid PNG), so without
+        # an explicit signal the agent can't tell it isn't really connected to a
+        # generative model — and will retry the same prompt expecting a photo it can
+        # never get. Make the placeholder nature UNMISTAKABLE in the observation and
+        # tell the agent NOT to retry. (The remote tiers raise/fail loudly instead, so
+        # this note only rides the keyless procedural default.)
+        is_placeholder = backend.name == "pil-procedural"
+        placeholder_note = (
+            " — NOTE: this is an ABSTRACT PROCEDURAL PLACEHOLDER, not a depiction of "
+            "the prompt: no real image-generation backend is connected. Retrying will "
+            "NOT change this. Use it only as decorative/background art; for real or "
+            "photoreal images a ComfyUI (self-host) or OpenAI-compatible (paid) backend "
+            "must be configured in Settings → Image generation."
+            if is_placeholder
+            else ""
+        )
         return ToolOutcome(
             success=True,
             content=(
                 f"Image written: {len(image_bytes)} bytes to {out_path} "
                 f"({actual_w}x{actual_h} {actual_fmt.upper()}, "
-                f"seed={seed}, backend={backend.name})"
+                f"seed={seed}, backend={backend.name}){placeholder_note}"
             ),
             artifacts=[out_path],
             structured={
@@ -725,6 +742,10 @@ class ImageGenTool:
                 "seed": seed,
                 "prompt": args.prompt,
                 "backend": backend.name,
+                # The agent (and the UI) can branch on these: a placeholder is NOT a
+                # real generation, and retrying won't connect a backend.
+                "placeholder": is_placeholder,
+                "backend_connected": not is_placeholder,
                 "bytes": len(image_bytes),
                 # Hex of the first 8 bytes (the magic) — useful for the
                 # deliverable panel to render a thumbnail / sanity-check

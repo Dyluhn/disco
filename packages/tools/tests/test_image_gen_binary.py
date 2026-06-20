@@ -237,6 +237,29 @@ async def test_imagegen_tool_resolves_backend_per_call(monkeypatch):
     assert out.structured["backend"] == "fake-live", (
         "ImageGenTool().run() must report the per-call selected backend, not the default"
     )
+    # A real (non-procedural) backend is "connected" — not a placeholder, no anti-retry note.
+    assert out.structured["placeholder"] is False
+    assert out.structured["backend_connected"] is True
+    assert "PROCEDURAL PLACEHOLDER" not in out.content
+
+
+@pytest.mark.asyncio
+async def test_procedural_result_flags_placeholder_and_says_do_not_retry() -> None:
+    """The keyless procedural default ALWAYS emits a valid PNG, so the agent needs an
+    explicit signal that it isn't really connected — else it retries forever. The
+    result must flag placeholder=True/backend_connected=False and tell it NOT to retry."""
+    sbx = _FakeSandbox()
+    out = await ImageGenTool(backend=_PILProceduralBackend()).run(
+        ImageGenArgs(prompt="a photo of a cat", filename="cat", format="png"),
+        _ctx(sbx),
+    )
+    assert out.success is True
+    assert out.structured is not None
+    assert out.structured["placeholder"] is True
+    assert out.structured["backend_connected"] is False
+    # The agent-visible content must name it a placeholder and warn off retrying.
+    assert "PLACEHOLDER" in out.content.upper()
+    assert "not change" in out.content.lower() or "do not retry" in out.content.lower()
 
 
 @pytest.mark.asyncio
