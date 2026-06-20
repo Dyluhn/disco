@@ -79,6 +79,16 @@ Legend: ✅ done · ◐ partial · ○ open · ⬚ blocked/decision-gated · �
 - **A6 Real two-host podcast ○** — dialogue → multi-voice TTS → mix → deliver (no commits; unblocked).
 - **A7 FILE-DELIVERY F4 ○** — on-demand DR export (deferred; needs export-on-demand model).
 
+## §T — Test-surfaced issues (Dylan runthru 2026-06-20) — TRACED, awaiting go
+Live DR→slides test surfaced 10 issues, all root-caused (file:line + minimal fix) in **`docs/dylans-runthru-6-20-26.md`**.
+⚠ FIRST: the "stall"/"no credits"/"loaded over and over" are largely ONE external cause — the **OpenRouter key hit its
+TOTAL spend limit** (per-key cap, separate from account credits; raise it at openrouter.ai → keys). Disco-side fixes
+make it fail gracefully + honestly. Clusters: **R3/R6** DR→slides handoff (giant prompt+history; plan-mode tool hint),
+**R2/R4** engine auth-error handling (skip requery, distinct `auth_error`, gate Resume, local fallback), **R5/R9**
+model/key wiring (overlay both env names; seed picker from last-selected — override is already global server-side),
+**R1/R10** frontend (iterative preCid race 1-liner; DR options inline not reflowing), **R7/R8** slides integrity
+(surface real-vs-fallback `renderer` honestly; CSP frontend-origin for cross-port deck view). Build order in the doc.
+
 ## §B — Launch gates (the ship bar)
 - **B1 Run the clean 8 GB keyless gauntlet → green + screenshot ⬚** — north-star §8, *the*
   release gate. Pieces landed + VM-proven; the final clean-box end-to-end proof is unrun.
@@ -98,6 +108,23 @@ Legend: ✅ done · ◐ partial · ○ open · ⬚ blocked/decision-gated · �
   pwd/re.py`, `selected.csv`/`sensor_readings.csv`/`tmp_weather.csv`, `validate.py`,
   stray `disco-config.json.bak-*`. Plus an audit sweep: no dev/debug endpoints exposed,
   no secrets/keys in the image, demo fixtures honestly labeled (per north-star §2).
+
+## §S — Security hardening campaign (codex-APPROVED; implement AFTER the feature/engine/UI loop, alongside §B publish)
+**Full plan: `docs/disco-security-fix-campaign.md`** — DO NOT re-derive; that doc is the source of truth.
+- **Origin ✅** — 7-round Opus 4.8 + codex gpt-5.5 convergence audit (2026-06-20): **38 findings (8 Critical, 17 High,
+  10 Medium, 3 Low)**, converged on ~5 root causes. Both reviewers independently certified no new confidentiality/control
+  root survives the planned fixes.
+- **Plan status ✅ codex-APPROVED** — iterative codex plan-review loop CONVERGED (r1 BLOCK → r2 SWF → r3 BLOCK → r4 SWF →
+  r5 SWF; 2 consecutive not-BLOCK; ~34 review findings all folded in). codex r5: "coverage complete; ready to start Wave 1."
+  All design decisions resolved (auth = HttpOnly host-only cookie + CSRF + WS-Origin; egress = per-instance net +
+  host-enforced block of all non-global + tailnet `100.64/10` + host IPs + loopback-publish; secret-ref allowlist +
+  fail-closed; app-server settings admin-only; layered/isolation-scoped egress posture).
+- **6 waves, roots-first ○ (NOT STARTED — gated on the feature loop):** W1 auth/CORS keystone → W2 egress chokepoint +
+  secret-ref → W3 host-execution cluster → W4 MCP approval integrity → W5 sandbox isolation/DoS → W6 output sinks + lows.
+  Each wave: build → gpt-5.5 review → REAL-exploit verify (prove open, prove closed) → commit. Post-campaign re-audit.
+- **Sequencing:** Dylan's call — runs after §A/§E/§F features + UI polish are cleared, folded into the §B publish phase
+  (security-hardening is part of "ready to ship," not a mid-feature interruption). The current no-auth surface is an
+  accepted risk ONLY on Dylan's private 3-device tailnet in the interim (still a launch blocker for any shared deploy).
 
 ## §C — Infrastructure / hardware-blocked
 - **C1 noVNC P5 — live jail/security acceptance ✅ (2026-06-19)** — VM 201 is BACK (reach via
@@ -173,10 +200,12 @@ Legend: ✅ done · ◐ partial · ○ open · ⬚ blocked/decision-gated · �
 3. **Engine polish §E + standing §F** (root hygiene, prompt stability, harnesses, god-fn).
 4. **UI polish** (§D4 screenshots, §E9 micro-polish) + clear **verify-live §D** as the app runs.
 5. **— GATE: Dylan declares the feature/engine/UI loop cleared. —**
-6. **— Dylan: "ready to push towards v0.1." THEN publish-readiness §B** — B1 single-command
-   `docker compose up` gauntlet + B2 benchmarks + B5 lint + B6 production hygiene (strip
-   dev/exposed files) + B4 release-eng + B3 keyless-story → v0.1. Plus §C (noVNC P5) when
-   the VM is rebuilt.
+6. **— Dylan: "ready to push towards v0.1." THEN publish-readiness §B + §S** — **§S security
+   hardening campaign (codex-approved, 6 waves roots-first; `docs/disco-security-fix-campaign.md`)**
+   runs in this phase, before/with the launch gates (no-auth + egress are launch blockers for any
+   shared deploy). Plus B1 single-command `docker compose up` gauntlet + B2 benchmarks + B5 lint +
+   B6 production hygiene (strip dev/exposed files) + B4 release-eng + B3 keyless-story → v0.1. Plus
+   §C (noVNC P5) when the VM is rebuilt.
 
 *SINGLE SOURCE OF TRUTH: **this doc**. The only other file in `docs/` is
 `architecture.generated.md` (auto-generated, required by the `gen_arch_diagram --check`
