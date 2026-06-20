@@ -287,7 +287,10 @@ export interface FileStreamFrame {
 }
 
 export type WSClientFrame =
-  | { type: "send_message"; content: string }
+  // R3: optional `context` carries large hidden context (e.g. a full DR report)
+  // that the model receives as an ENVIRONMENT message but the user doesn't see;
+  // the visible `content` stays a short one-liner.
+  | { type: "send_message"; content: string; context?: string }
   | { type: "steer"; steer_text: string } // redirect a running agent / DR mid-run steer (routes by context)
   | { type: "confirm"; action_id?: string }
   | { type: "reject"; action_id?: string }
