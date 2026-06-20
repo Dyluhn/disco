@@ -25,6 +25,8 @@ from ..events import (
     StatusEvent,
 )
 from ..llm import (
+    BudgetExceeded,
+    LLMAuthError,
     LLMContextWindowExceeded,
     LLMError,
     LLMProviderUnavailable,
@@ -497,7 +499,12 @@ class Driver:
                 except LLMError as e:
                     # DEFECT-6: Provider 4xx "rejected request" must not be
                     # terminal; enter requery path with a hint.
-                    if requery_count < 2:
+                    # R2: but a TERMINAL provider error (bad/exhausted key, hit
+                    # key/budget cap) can't be fixed by asking the model to
+                    # rephrase — skip the requery and surface it immediately,
+                    # so a capped OpenRouter key fails fast + honestly instead of
+                    # wasting two more doomed round-trips.
+                    if not isinstance(e, (LLMAuthError, BudgetExceeded)) and requery_count < 2:
                         requery_count += 1
                         _LOG.warning(f"Provider rejected request: {e}, requerying...")
                         transient_messages.append(LLMMessage(
@@ -526,6 +533,11 @@ class Driver:
             # to the client). This is conversation-fatal: the brain itself
             # failed, so there is no observation to feed back. The typed
             # classification (the exception class) is preserved in the detail.
-            await self._loop._emit(ErrorEvent(code="model_error", detail=_describe_llm_error(e)))
+            # R2: distinguish a TERMINAL auth/budget failure (bad/exhausted key,
+            # hit key-limit/cost-cap) from a generic model error, so the UI can
+            # show honest "check your key / credits / spend limit" guidance instead
+            # of implying a transient glitch worth retrying.
+            code = "auth_error" if isinstance(e, (LLMAuthError, BudgetExceeded)) else "model_error"
+            await self._loop._emit(ErrorEvent(code=code, detail=_describe_llm_error(e)))
             return None, Disp.HALT
         return step, Disp.FALLTHROUGH

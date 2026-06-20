@@ -14,7 +14,7 @@ from disco.core import (
     ErrorEvent,
     ToolCall,
 )
-from disco.core.llm import LLMError
+from disco.core.llm import LLMAuthError, LLMError
 from disco.core.llm.errors import LLMProviderUnavailable
 from disco.core.loop.boundaries import AgentStep
 from loop_fakes import build_loop
@@ -171,3 +171,36 @@ async def test_provider_unavailable_cap_leads_to_pause():
     # No ErrorEvent (it's a provider outage, not a model error)
     events = await store.get_events(CID)
     assert not any(isinstance(e, ErrorEvent) for e in events)
+
+
+async def test_terminal_auth_error_skips_requery_and_emits_auth_error():
+    """R2: a TERMINAL provider auth/budget error (e.g. OpenRouter 'Key limit
+    exceeded (total limit)') must NOT be requeried — asking the model to rephrase
+    cannot fix a bad/capped key — and must surface a DISTINCT `auth_error` code so
+    the UI shows honest key/credits guidance instead of a generic, retry-implying
+    'model_error'."""
+
+    class _AuthErrorAgent:
+        def __init__(self):
+            self.calls = 0
+
+        async def step(self, view, tools, *, mode, overflow_signal, on_stream=None,
+                       temperature=None, assist=False, attempt=1, provider_prefs=None):
+            self.calls += 1
+            raise LLMAuthError("Key limit exceeded (total limit)", provider="openrouter")
+
+    agent = _AuthErrorAgent()
+    loop, store = build_loop(agent)
+
+    await loop.send_message("go")
+    state = await loop.run()
+
+    # Exactly ONE call — NO requery (a plain LLMError would have produced 2+).
+    assert agent.calls == 1, f"terminal auth error must not requery (got {agent.calls} calls)"
+    # ERROR status + a DISTINCT auth_error code carrying the provider's real message.
+    assert state.execution_status == ConversationStatus.ERROR
+    events = await store.get_events(CID)
+    errs = [e for e in events if isinstance(e, ErrorEvent)]
+    assert errs, "expected an ErrorEvent for the terminal auth failure"
+    assert errs[-1].code == "auth_error", f"expected auth_error, got {errs[-1].code!r}"
+    assert "Key limit exceeded" in (errs[-1].detail or "")
