@@ -25,7 +25,13 @@ import time
 import uuid
 from pathlib import Path
 
-from .base import ExecResult, SandboxError, SandboxInstance, SandboxSpec
+from .base import (
+    ExecResult,
+    SandboxError,
+    SandboxInstance,
+    SandboxSpec,
+    strip_redundant_workspace_prefix,
+)
 
 
 class ProcessSandboxInstance:
@@ -47,6 +53,7 @@ class ProcessSandboxInstance:
 
     def _resolve(self, path: str) -> Path:
         """Resolve `path` within the workspace; reject escapes (../, absolute)."""
+        path = strip_redundant_workspace_prefix(path)  # ROOT-2: workspace/foo → foo
         target = (self._workspace / path).resolve()
         if target != self._workspace and self._workspace not in target.parents:
             raise SandboxError(f"path escapes workspace: {path!r}")

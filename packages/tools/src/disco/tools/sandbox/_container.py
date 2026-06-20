@@ -19,7 +19,13 @@ import time
 from typing import Any
 
 from ..anatomy import Capability
-from .base import ExecResult, SandboxError, SandboxSpec, SandboxUnavailableError
+from .base import (
+    ExecResult,
+    SandboxError,
+    SandboxSpec,
+    SandboxUnavailableError,
+    strip_redundant_workspace_prefix,
+)
 
 # Exit codes the `timeout` coreutil reports when it fires (SIGTERM / then SIGKILL).
 TIMEOUT_EXIT_CODES = frozenset({124, 137})
@@ -267,6 +273,7 @@ class ContainerInstance:
     def _container_path(self, path: str) -> str:
         """Resolve `path` to an absolute path INSIDE the workspace, rejecting escapes
         (../, absolute). File ops go through the container, so this is the only jail."""
+        path = strip_redundant_workspace_prefix(path)  # ROOT-2: workspace/foo → foo
         target = posixpath.normpath(posixpath.join(self._ws, path))
         if target != self._ws and not target.startswith(self._ws + "/"):
             raise SandboxError(f"path escapes workspace: {path!r}")

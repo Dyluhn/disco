@@ -190,15 +190,14 @@ export function PreviewPane({
   // app, e.g. Vite) is one click away via the toggle / Open, and is used
   // automatically when there's no renderable file to show.
   //
-  // E2 — exception for bundler entries: an index.html that references Vite
-  // /bundler module scripts (`<script type="module" src="/src/...">`,
-  // `/@vite/client`) is UNRUNNABLE as a srcdoc — the iframe can't resolve
-  // `/src/main.tsx` or the Vite virtual modules. When a live proxy is available
-  // for that case, default straight to the live server so the user sees the
-  // real running app, not a broken srcdoc. Static HTML still defaults to
-  // "rendered" (the srcdoc DOES render that). The user can always toggle.
+  // runthru-v2 #4: when a live preview server is available, DEFAULT TO LIVE — it
+  // serves the real built site (correct asset resolution for css/js subpaths, which
+  // the srcdoc can't do reliably, and which is why the preview showed only a few
+  // stray lines/emojis). Previously only bundler-entry HTML defaulted to live and
+  // static sites fell to the broken srcdoc. The user can still toggle to "rendered".
+  // (Pairs with ROOT-2: files now land at the workspace root the server serves.)
   const [mode, setMode] = useState<"rendered" | "live">(() =>
-    proxyAvailable && srcDoc != null && isBundlerEntryHtml(srcDoc) ? "live" : "rendered",
+    proxyAvailable ? "live" : "rendered",
   );
   const showLive = proxyAvailable && (mode === "live" || srcDoc == null);
 
