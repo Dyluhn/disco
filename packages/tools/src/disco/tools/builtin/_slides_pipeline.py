@@ -48,11 +48,15 @@ _LOG = logging.getLogger("disco.tools.slides_pipeline")
 # ---------------------------------------------------------------------------
 
 
-def _resolve_slides_llm() -> tuple[str, str]:
-    """Return (base_url, model_id) for the slides generation LLM.
+def _resolve_slides_llm() -> tuple[str, str, str | None]:
+    """Return (base_url, model_id, api_key) for the slides generation LLM.
 
     Uses the AGENT_DRIVER model from ConfigStore.  Falls back to env vars
-    LLM_URL / LLM_MODEL, then to a hardcoded local default.
+    LLM_URL / LLM_MODEL, then to a hardcoded local default. The api_key is
+    resolved from the entry's `api_key_env` (encrypted SecretStore first, then
+    os.environ) so a REMOTE driver (OpenRouter / any paid OpenAI-compatible
+    endpoint) authenticates — without it the deck author silently 401s on every
+    non-local driver. Local keyless endpoints resolve to None (no auth header).
 
     This mirrors audio_config.py's approach without importing from agent_server.
     """
@@ -64,12 +68,49 @@ def _resolve_slides_llm() -> tuple[str, str]:
         model_key = cfg.model_for(ModelRole.AGENT_DRIVER)
         entry = cfg.models.get(model_key)
         if entry and entry.base_url:
-            return entry.base_url.rstrip("/"), entry.model_id
+            return entry.base_url.rstrip("/"), entry.model_id, _resolve_llm_key(entry.api_key_env)
     except Exception:  # noqa: BLE001
         pass
     url = os.environ.get("LLM_URL", "http://localhost:18080/v1").rstrip("/")
     model = os.environ.get("LLM_MODEL", "local-model")
-    return url, model
+    # An explicit env override may still want a key (e.g. LLM_API_KEY_ENV names it).
+    return url, model, _resolve_llm_key(os.environ.get("LLM_API_KEY_ENV"))
+
+
+def _resolve_llm_key(api_key_env: str | None) -> str | None:
+    """Resolve the named secret for the deck-author LLM. Never logs the value.
+
+    Mirrors the agent-server's canonical resolution (runtime._overlay_stored_secrets):
+    the OpenRouter driver key is stored in the RESERVED "openrouter" SecretStore slot
+    (set by the dedicated /api OpenRouter route), NOT under its env-var name — so a
+    plain get_secret(api_key_env) misses it. Order: exact named secret → reserved
+    openrouter slot (when api_key_env is the OpenRouter var) → exact env → legacy
+    PMX_OPENROUTER_API_KEY env. Returns None if nothing is configured."""
+    if not api_key_env:
+        return None
+    try:
+        from disco.core.llm.secrets import (
+            OPENROUTER_API_KEY_ENV,
+            OPENROUTER_API_KEY_ENV_LEGACY,
+            SecretStore,
+        )
+
+        store = SecretStore()
+        key = store.get_secret(api_key_env)
+        if key:
+            return key
+        if api_key_env in (OPENROUTER_API_KEY_ENV, OPENROUTER_API_KEY_ENV_LEGACY):
+            key = store.get_openrouter_key()  # the reserved "openrouter" slot
+            if key:
+                return key
+        env_val = os.environ.get(api_key_env)
+        if env_val:
+            return env_val
+        if api_key_env == OPENROUTER_API_KEY_ENV:
+            return os.environ.get(OPENROUTER_API_KEY_ENV_LEGACY)
+        return None
+    except Exception:  # noqa: BLE001
+        return os.environ.get(api_key_env)
 
 
 # ---------------------------------------------------------------------------
@@ -204,21 +245,29 @@ async def _call_llm(
     llm_url: str,
     model: str,
     *,
+    api_key: str | None = None,
     temperature: float = 0.7,
     max_tokens: int = 8192,
 ) -> str:
-    """Call the OpenAI-compatible /chat/completions endpoint.  Returns raw text."""
+    """Call the OpenAI-compatible /chat/completions endpoint.  Returns raw text.
+
+    Sends a Bearer Authorization header when `api_key` is provided so a remote
+    driver (OpenRouter / paid endpoint) authenticates; local keyless endpoints
+    pass api_key=None and send no auth header (unchanged)."""
     payload = {
         "model": model,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
         resp = await client.post(
             f"{llm_url}/chat/completions",
             json=payload,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -284,6 +333,7 @@ async def _stage_outline(
     system_prompt: str,
     llm_url: str,
     model: str,
+    api_key: str | None = None,
 ) -> tuple[AuthoredDeck | None, str, str]:
     """Generate a minimal outline deck (type+title per slide).
 
@@ -296,7 +346,7 @@ async def _stage_outline(
         )},
     ]
     try:
-        raw = await _call_llm(messages, llm_url, model)
+        raw = await _call_llm(messages, llm_url, model, api_key=api_key)
     except Exception as e:  # noqa: BLE001
         return None, "", f"LLM outline call failed: {e}"
 
@@ -308,7 +358,7 @@ async def _stage_outline(
     messages.append({"role": "assistant", "content": raw})
     messages.append({"role": "user", "content": _RETRY_MSG})
     try:
-        raw2 = await _call_llm(messages, llm_url, model)
+        raw2 = await _call_llm(messages, llm_url, model, api_key=api_key)
     except Exception as e:  # noqa: BLE001
         return None, raw, f"Outline retry failed: {e}"
 
@@ -328,6 +378,7 @@ async def _stage_fill(
     system_prompt: str,
     llm_url: str,
     model: str,
+    api_key: str | None = None,
 ) -> tuple[AuthoredDeck | None, str]:
     """Fill body/notes/image_prompt for each slide in the outline.
 
@@ -339,7 +390,7 @@ async def _stage_fill(
         {"role": "user", "content": _FILL_USER_TMPL.format(outline_json=outline_json)},
     ]
     try:
-        raw = await _call_llm(messages, llm_url, model)
+        raw = await _call_llm(messages, llm_url, model, api_key=api_key)
     except Exception as e:  # noqa: BLE001
         return None, f"LLM fill call failed: {e}"
 
@@ -351,7 +402,7 @@ async def _stage_fill(
     messages.append({"role": "assistant", "content": raw})
     messages.append({"role": "user", "content": _RETRY_MSG})
     try:
-        raw2 = await _call_llm(messages, llm_url, model)
+        raw2 = await _call_llm(messages, llm_url, model, api_key=api_key)
     except Exception as e:  # noqa: BLE001
         return None, f"Fill retry failed: {e}"
 
@@ -371,39 +422,49 @@ async def _stage_assets(
     ctx: ToolContext,
     backend: ImageBackend,
     filename_base: str,
-) -> AuthoredDeck:
-    """For each slide with image_prompt, generate image bytes and store in sandbox.
+) -> dict[int, bytes]:
+    """For each slide with image_prompt, generate the image, write it to the sandbox
+    as a standalone artifact, AND return {authored_slide_index: image_bytes}.
 
-    Returns a new AuthoredDeck with image_prompt-bearing slides unchanged
-    (the image path is stored on the lowered Element in lower_deck output);
-    here we write the images to the sandbox so the renderer can find them.
-
-    The image file name is stored in a parallel dict returned for use in the
-    render step.  Because AuthoredDeck is immutable at the Pydantic level,
-    we don't mutate slides — the renderer picks up the file by convention:
-    "{filename_base}_img_{i}.png" where i is the slide index.
+    The returned map is handed to ``lower_deck(image_assets=...)`` so the generated
+    picture is embedded directly into the rendered deck (C7 wire) — previously the
+    bytes were written to disk but never reached the renderer, so every image slide
+    fell back to the ``[image]`` placeholder. The on-disk copy is kept too (a
+    browsable artifact + back-compat for any path-based consumer).
     """
+    import hashlib
+
+    assets: dict[int, bytes] = {}
     for i, slide in enumerate(authored.slides):
         if not slide.image_prompt:
             continue
         img_name = f"{filename_base}_img_{i}.png"
-        import hashlib
         h = hashlib.sha256(slide.image_prompt.encode("utf-8")).digest()
         seed = int.from_bytes(h[:4], "big", signed=False)
 
         try:
             img_bytes = backend.generate(
                 prompt=slide.image_prompt,
-                width=512,
-                height=384,
+                # 16:9 landscape, both dims >= the ComfyUI 512 floor so a real
+                # diffusion backend doesn't snap 384 up to 1024 and hand back a
+                # distorted portrait for a slide that wants a wide image.
+                width=1024,
+                height=576,
                 seed=seed,
                 fmt="png",
             )
+            # Only embed real raster bytes — a backend that returns something other
+            # than PNG/JPEG (mis-config, error blob) must fall back to the [image]
+            # placeholder, not a broken data-URI / corrupt add_picture.
+            if not (img_bytes.startswith(b"\x89PNG\r\n\x1a\n") or img_bytes[:3] == b"\xff\xd8\xff"):
+                _LOG.warning("Slide %d image is not PNG/JPEG — skipping embed", i)
+                continue
+            assets[i] = img_bytes
             if ctx.sandbox is not None:
                 await ctx.sandbox.write_file(img_name, img_bytes)
         except Exception as e:  # noqa: BLE001
             _LOG.warning("Image generation failed for slide %d: %s", i, e)
-    return authored
+    return assets
 
 
 # ---------------------------------------------------------------------------
@@ -450,12 +511,12 @@ async def generate_deck(
     On success: (Deck, None, None, sidecar-or-None)
     On fill-stage failure: (None, fallback_markdown_str, error_msg, None)
     """
-    llm_url, model = _resolve_slides_llm()
+    llm_url, model, api_key = _resolve_slides_llm()
     system = _WEAK_SYSTEM if ctx.assist else _CAPABLE_SYSTEM
 
     # Stage 1: Outline
     outline, _raw_outline, outline_err = await _stage_outline(
-        goal, slide_count, system, llm_url, model
+        goal, slide_count, system, llm_url, model, api_key
     )
 
     if outline is None:
@@ -464,20 +525,21 @@ async def generate_deck(
         return None, fallback_md, outline_err, None
 
     # Stage 2: Fill
-    filled, fill_err = await _stage_fill(outline, system, llm_url, model)
+    filled, fill_err = await _stage_fill(outline, system, llm_url, model, api_key)
 
     if filled is None:
         _LOG.warning("Fill stage failed: %s — using outline as fallback", fill_err)
         fallback_md = _outline_to_markdown(outline, goal)
         return None, fallback_md, fill_err, None
 
-    # Stage 3: Assets (image_prompt → image files in sandbox)
+    # Stage 3: Assets (image_prompt → image bytes + sandbox files)
+    image_assets: dict[int, bytes] = {}
     if ctx.sandbox is not None:
-        filled = await _stage_assets(filled, ctx, backend, filename)
+        image_assets = await _stage_assets(filled, ctx, backend, filename)
 
-    # Stage 4: Lower to C1 Deck
+    # Stage 4: Lower to C1 Deck (carry generated image bytes so they embed — C7)
     try:
-        deck = lower_deck(filled)
+        deck = lower_deck(filled, image_assets=image_assets)
     except Exception as e:  # noqa: BLE001
         _LOG.warning("lower_deck failed: %s — falling back to Marp", e)
         fallback_md = _outline_to_markdown(filled, goal)

@@ -329,9 +329,33 @@ class DeckPatchTool:
                 ),
             )
 
-        # ── 4. Re-render deterministically via C1 path ────────────────────────
+        # ── 4. Determine the deck stem (needed to reload image assets) ────────
+        stem = args.deck_file
+        if stem.endswith(".authored.json"):
+            stem = stem[: -len(".authored.json")]
+        elif "." in stem:
+            stem = stem.rsplit(".", 1)[0]
+
+        # ── 4b. Reload generated images so an EDIT preserves them ─────────────
+        # The C7 image bytes live on the rendered Element, not in the authored
+        # sidecar — so a naive re-lower drops them back to the [image] placeholder
+        # (a false affordance: "edit your deck" silently deletes its images). The
+        # images are still on disk as "{stem}_img_{i}.png"; reload them by the same
+        # convention _stage_assets wrote, keyed by authored-slide index.
+        image_assets: dict[int, bytes] = {}
+        for i, slide in enumerate(authored_deck.slides):
+            if not slide.image_prompt:
+                continue
+            try:
+                data = await ctx.sandbox.read_file(f"{stem}_img_{i}.png")
+            except Exception:  # noqa: BLE001 — missing asset → placeholder, never crash
+                continue
+            if data and (data.startswith(b"\x89PNG\r\n\x1a\n") or data[:3] == b"\xff\xd8\xff"):
+                image_assets[i] = data
+
+        # ── 4c. Re-render deterministically via C1 path ───────────────────────
         try:
-            deck = lower_deck(authored_deck)       # AuthoredDeck → C1 Deck
+            deck = lower_deck(authored_deck, image_assets=image_assets)  # AuthoredDeck → C1
             html_str = render_html(deck)           # Deck → HTML string
             pptx_bytes = render_pptx(deck)         # Deck → PPTX bytes
         except Exception as exc:
@@ -342,11 +366,6 @@ class DeckPatchTool:
             )
 
         # ── 5. Determine output filenames ─────────────────────────────────────
-        stem = args.deck_file
-        if stem.endswith(".authored.json"):
-            stem = stem[: -len(".authored.json")]
-        elif "." in stem:
-            stem = stem.rsplit(".", 1)[0]
 
         authored_out = args.deck_file  # overwrite in place
         html_out = args.output_html or f"{stem}.html"

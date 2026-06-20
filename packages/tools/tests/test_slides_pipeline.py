@@ -689,3 +689,89 @@ async def test_render_c1_deck_gates_editable_source_on_real_sidecar(tmp_workspac
         deck, args, ctx, "html", editable_source="pitch.authored.json"
     )
     assert (outcome2.structured or {}).get("editable_source") == "pitch.authored.json"
+
+
+# ---- remote-driver auth (deck author can use a paid/remote LLM) --------------
+
+
+@pytest.mark.asyncio
+async def test_call_llm_sends_bearer_when_api_key_present():
+    """_call_llm sends Authorization: Bearer when an api_key is given (so a remote
+    driver authenticates), and omits it for a keyless local endpoint."""
+    from disco.tools.builtin._slides_pipeline import _call_llm
+
+    captured: dict = {}
+
+    def fake_client(*a, **k):
+        client = MagicMock()
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+
+        async def _post(url, json=None, headers=None):
+            captured["headers"] = headers
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            resp.json = MagicMock(return_value={"choices": [{"message": {"content": "{}"}}]})
+            return resp
+
+        client.post = _post
+        return client
+
+    with patch("disco.tools.builtin._slides_pipeline.httpx.AsyncClient", fake_client):
+        await _call_llm([{"role": "user", "content": "hi"}], "https://openrouter.ai/api/v1",
+                        "m", api_key="sk-secret")
+        assert captured["headers"].get("Authorization") == "Bearer sk-secret"
+
+        captured.clear()
+        await _call_llm([{"role": "user", "content": "hi"}], "http://localhost:18080/v1", "m")
+        assert "Authorization" not in captured["headers"]
+
+
+def test_resolve_slides_llm_resolves_remote_key(monkeypatch):
+    """_resolve_slides_llm returns the AGENT_DRIVER entry's resolved api_key so the
+    deck author authenticates to a remote endpoint (the gap that 401'd paid drivers)."""
+    from disco.tools.builtin import _slides_pipeline as sp
+
+    monkeypatch.setenv("MY_OR_KEY", "sk-live-123")
+
+    class _Entry:
+        base_url = "https://openrouter.ai/api/v1"
+        model_id = "some/model:free"
+        api_key_env = "MY_OR_KEY"
+
+    class _Cfg:
+        models = {"driver": _Entry()}
+
+        def model_for(self, _role):
+            return "driver"
+
+    class _Store:
+        def load(self):
+            return _Cfg()
+
+    monkeypatch.setattr("disco.core.llm.ConfigStore", lambda: _Store())
+    url, model, key = sp._resolve_slides_llm()
+    assert url == "https://openrouter.ai/api/v1"
+    assert model == "some/model:free"
+    assert key == "sk-live-123"
+
+
+def test_resolve_llm_key_reads_reserved_openrouter_slot(monkeypatch):
+    """The OpenRouter driver key lives in the RESERVED 'openrouter' SecretStore slot,
+    not under its env-var name — _resolve_llm_key must find it there (the canonical
+    UI path), else a UI-configured OpenRouter author silently 401s."""
+    from disco.tools.builtin import _slides_pipeline as sp
+    from disco.core.llm.secrets import OPENROUTER_API_KEY_ENV
+
+    monkeypatch.delenv(OPENROUTER_API_KEY_ENV, raising=False)
+
+    class _Store:
+        def get_secret(self, name):
+            return None  # NOT stored under the env-var name
+        def get_openrouter_key(self):
+            return "sk-or-reserved"  # the reserved "openrouter" slot
+
+    monkeypatch.setattr("disco.core.llm.secrets.SecretStore", lambda: _Store())
+    assert sp._resolve_llm_key(OPENROUTER_API_KEY_ENV) == "sk-or-reserved"
+    # a non-OpenRouter name does NOT fall back to the reserved slot
+    assert sp._resolve_llm_key("SOME_OTHER_KEY") is None

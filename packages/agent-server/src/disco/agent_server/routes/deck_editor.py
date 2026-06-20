@@ -71,6 +71,26 @@ def _jail_base(base: str) -> str:
     return norm
 
 
+async def _reload_deck_image_assets(
+    runtime: ConversationRuntime, conversation_id: str, base: str, authored: Any
+) -> dict[int, bytes]:
+    """Reload the generated per-slide images so a re-render (template export / UI edit)
+    re-embeds them instead of dropping image slides back to the [image] placeholder.
+
+    C7 image bytes live on the rendered Element, not in the authored sidecar, so any
+    route that re-lowers from the sidecar must reload them. They persist on disk as
+    "{base}_img_{i}.png" (the convention _stage_assets wrote), keyed by authored-slide
+    index. Missing/invalid assets are skipped → that slide renders the placeholder."""
+    assets: dict[int, bytes] = {}
+    for i, slide in enumerate(getattr(authored, "slides", []) or []):
+        if getattr(slide, "image_prompt", None) is None:
+            continue
+        data = await _read_artifact_bytes(runtime, conversation_id, f"{base}_img_{i}.png")
+        if data and (data.startswith(b"\x89PNG\r\n\x1a\n") or data[:3] == b"\xff\xd8\xff"):
+            assets[i] = data
+    return assets
+
+
 class DeckPatchBody(BaseModel):
     patch: list[dict[str, Any]]
 
@@ -158,8 +178,9 @@ def make_deck_editor_router(
         except Exception as exc:  # noqa: BLE001 — malformed sidecar → 404
             raise HTTPException(status_code=404) from exc
 
+        image_assets = await _reload_deck_image_assets(runtime, conversation_id, base, authored)
         try:
-            deck = lower_deck(authored, theme_override=template)
+            deck = lower_deck(authored, theme_override=template, image_assets=image_assets)
             if fmt == "html":
                 body: bytes = render_html(deck).encode("utf-8")
                 media = "text/html; charset=utf-8"
@@ -244,9 +265,13 @@ def make_deck_editor_router(
                 detail={"reason": "schema_invalid", "message": str(exc)},
             ) from exc
 
-        # Re-render deterministically via the C1 path.
+        # Re-render deterministically via the C1 path. Reload the generated images
+        # (C7) so an edit preserves them instead of reverting image slides to [image].
+        image_assets = await _reload_deck_image_assets(
+            runtime, conversation_id, base, authored_deck
+        )
         try:
-            deck = lower_deck(authored_deck)
+            deck = lower_deck(authored_deck, image_assets=image_assets)
             html_str = render_html(deck)
             pptx_bytes = render_pptx(deck)
         except Exception as exc:  # noqa: BLE001

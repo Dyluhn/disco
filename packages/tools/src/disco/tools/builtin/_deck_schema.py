@@ -214,6 +214,10 @@ class Element:
     # ---- image fields -------------------------------------------------------
     image_prompt: str | None = None  # C7 wire: generate from this prompt
     image_path: str | None = None    # file path if already generated
+    # C7 wire: the generated image BYTES, carried on the element so the renderer
+    # embeds them directly (BytesIO → add_picture / data-URI) without resolving a
+    # path against the sandbox — works identically for local + container sandboxes.
+    image_bytes: bytes | None = None
 
     # ---- shape fields -------------------------------------------------------
     fill_hex: str = "#2563eb"
@@ -923,7 +927,12 @@ _LAYOUT_FNS: dict[str, object] = {
 _MAX_CONT_DEPTH = 3  # maximum continuation-slide nesting
 
 
-def lower_deck(authored: AuthoredDeck, *, theme_override: str | None = None) -> Deck:
+def lower_deck(
+    authored: AuthoredDeck,
+    *,
+    theme_override: str | None = None,
+    image_assets: dict[int, bytes] | None = None,
+) -> Deck:
     """Lower an AuthoredDeck to a Deck of precisely-positioned Elements.
 
     This is a PURE function: same input → structurally equivalent output
@@ -933,6 +942,12 @@ def lower_deck(authored: AuthoredDeck, *, theme_override: str | None = None) -> 
     ``theme_override`` ("{name}-{mode}" template id) re-themes the deck at render
     time WITHOUT mutating the authored sidecar — this is the slide-deck template
     selector's render-on-demand path. None → use the deck's authored theme.
+
+    ``image_assets`` (C7 wire) maps an AUTHORED-slide index → generated image bytes.
+    The image element lowered from that slide carries the bytes so the renderer
+    embeds the real picture instead of the ``[image]`` placeholder. None → no
+    images generated yet (the re-theme / editor paths), so placeholders render as
+    before.
 
     Overflow rules:
       - ``_fit_text`` steps font from max to min.
@@ -949,7 +964,7 @@ def lower_deck(authored: AuthoredDeck, *, theme_override: str | None = None) -> 
     deck_slides: list[Slide] = []
     image_alt: list[int] = [0]  # alternating image side counter
 
-    def _lower_slide(aslide: AuthoredSlide, depth: int) -> None:
+    def _lower_slide(aslide: AuthoredSlide, depth: int, orig_index: int | None = None) -> None:
         if depth > _MAX_CONT_DEPTH:
             return  # guard: discard overflow beyond depth cap
 
@@ -957,6 +972,14 @@ def lower_deck(authored: AuthoredDeck, *, theme_override: str | None = None) -> 
 
         layout_fn = _LAYOUT_FNS.get(layout, _layout_bullets)
         elements, overflow_body = layout_fn(aslide, theme)  # type: ignore[operator]
+
+        # C7 wire: attach generated image bytes to this slide's image element(s).
+        # Only the ORIGINAL slide (depth==0) carries an image_prompt; continuations
+        # are text-only, so orig_index is None for them and nothing is attached.
+        if image_assets and orig_index is not None and orig_index in image_assets:
+            for el in elements:
+                if el.kind == "image":
+                    el.image_bytes = image_assets[orig_index]
 
         slide = Slide(
             id=_uid(),
@@ -980,8 +1003,8 @@ def lower_deck(authored: AuthoredDeck, *, theme_override: str | None = None) -> 
             )
             _lower_slide(cont, depth + 1)
 
-    for aslide in authored.slides:
-        _lower_slide(aslide, depth=0)
+    for orig_index, aslide in enumerate(authored.slides):
+        _lower_slide(aslide, depth=0, orig_index=orig_index)
 
     return Deck(
         id=_uid(),
