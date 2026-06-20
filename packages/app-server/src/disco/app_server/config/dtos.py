@@ -58,8 +58,11 @@ class OpenRouterModelDTO(BaseModel):
     capabilities: list[str]
     # True when the model can OUTPUT images (architecture.output_modalities ∋ "image")
     # — lets the image-gen picker filter the catalogue to image-generation models.
-    # Image output bills as completion tokens, so price_out_per_m is the cost driver.
     image_output: bool = False
+    # USD per MILLION image-output tokens — the real image-generation cost. The
+    # /models catalogue reports 0 for the dedicated generators (FLUX/Recraft/…); this
+    # is enriched from each model's /endpoints `image_output` rate (×1e6). 0 = unknown.
+    image_price_per_m: float = 0.0
 
 
 class OpenRouterKeyStatus(BaseModel):

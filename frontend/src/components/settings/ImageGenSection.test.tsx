@@ -152,8 +152,8 @@ describe("ImageGenSection — OpenRouter priced image-model picker", () => {
         if (url.startsWith("/api/models/openrouter")) {
           return jsonResponse([
             { id: "some/text-llm", name: "Text", context_length: 128000, price_in_per_m: 1, price_out_per_m: 2, capabilities: ["tool_calling"] },
-            { id: "google/gemini-2.5-flash-image", name: "Gemini Flash Image", context_length: 32768, price_in_per_m: 0.3, price_out_per_m: 2.5, capabilities: ["vision"], image_output: true },
-            { id: "black-forest-labs/flux.2-flex", name: "FLUX.2 Flex", context_length: 0, price_in_per_m: 0, price_out_per_m: 0, capabilities: [], image_output: true },
+            { id: "google/gemini-2.5-flash-image", name: "Gemini Flash Image", context_length: 32768, price_in_per_m: 0.3, price_out_per_m: 2.5, capabilities: ["vision"], image_output: true, image_price_per_m: 30 },
+            { id: "black-forest-labs/flux.2-flex", name: "FLUX.2 Flex", context_length: 0, price_in_per_m: 0, price_out_per_m: 0, capabilities: [], image_output: true, image_price_per_m: 14.65 },
           ]);
         }
         throw new Error(`unexpected fetch: ${url}`);
@@ -161,15 +161,17 @@ describe("ImageGenSection — OpenRouter priced image-model picker", () => {
     );
     render(createElement(ImageGenSection), { wrapper: makeWrapper() });
 
-    // the priced picker appears (a <select>) and lists ONLY the image-output models
+    // the priced picker appears (a <select>) and lists ONLY the image-output models,
+    // each showing the real per-image-token cost ($X /M img-tok) enriched from /endpoints.
     const picker = await screen.findByRole("combobox");
     const opts = Array.from(picker.querySelectorAll("option")).map((o) => o.textContent);
-    expect(opts.some((t) => /gemini-2\.5-flash-image.*\$0\.30.*\$2\.50.*Mtok/.test(t ?? ""))).toBe(true);
+    expect(opts.some((t) => /gemini-2\.5-flash-image.*\$30\.00 \/M img-tok/.test(t ?? ""))).toBe(true);
     expect(opts.some((t) => /text-llm/.test(t ?? ""))).toBe(false); // text model filtered out
-    // A per-image generator with no token price must NOT be labelled "Free" (false price tag).
+    // The dedicated per-image generator (FLUX, catalogue token-price 0/0) shows its real
+    // enriched image price — NOT "Free" and NOT the "pricing on openrouter.ai" fallback.
     const flux = opts.find((t) => /flux\.2-flex/.test(t ?? "")) ?? "";
-    expect(flux).toMatch(/pricing on openrouter\.ai/);
-    expect(flux).not.toMatch(/Free/);
+    expect(flux).toMatch(/\$14\.65 \/M img-tok/);
+    expect(flux).not.toMatch(/Free|pricing on openrouter/);
 
     fireEvent.change(picker, { target: { value: "google/gemini-2.5-flash-image" } });
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));

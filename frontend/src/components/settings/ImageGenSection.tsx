@@ -24,18 +24,26 @@ import {
   useUpdateImageGenConfig,
 } from "@/hooks/useModels";
 
-/** Honest price label for an OpenRouter IMAGE model. The dual chat+image models
- *  (Gemini/GPT) bill the generated image as OUTPUT tokens, so $/Mtok is the real
- *  cost — shown like the LLM browser. The dedicated generators (FLUX/Recraft/Seedream)
- *  bill PER IMAGE, which OpenRouter's /models endpoint reports as 0/0 (no static token
- *  price) — so we must NOT render "Free" (a false price tag); point the user at the
- *  source instead. `pricing.image` is deliberately NOT surfaced: it means different
- *  things per model (per-input-image-token for vision vs per-output-image), so a
- *  confident number there would mislead. */
-const orPrice = (m: { price_in_per_m: number; price_out_per_m: number }): string =>
-  m.price_in_per_m > 0 || m.price_out_per_m > 0
-    ? `$${m.price_in_per_m.toFixed(2)} in / $${m.price_out_per_m.toFixed(2)} out /Mtok`
-    : "pricing on openrouter.ai";
+/** Honest price label for an OpenRouter IMAGE model, from real OpenRouter data:
+ *  - image_price_per_m (the /endpoints `image_output` rate ×1e6) is the actual
+ *    image-generation cost → "$X /M img-tok". Shown first for every image model,
+ *    incl. the dedicated generators (FLUX/Recraft/Seedream) the catalogue zeroes out.
+ *  - else the text token price (some dual chat+image models) → "$in/$out /Mtok".
+ *  - else (genuinely no price reported) "pricing on openrouter.ai" — never "Free",
+ *    which would be a false tag on a paid model. (Per-IMAGE $ isn't shown: OpenRouter
+ *    bills per image-token and tokens-per-image varies, so a per-image figure would be
+ *    an invented number.) */
+const orPrice = (m: {
+  price_in_per_m: number;
+  price_out_per_m: number;
+  image_price_per_m?: number;
+}): string => {
+  if (m.image_price_per_m && m.image_price_per_m > 0)
+    return `$${m.image_price_per_m.toFixed(2)} /M img-tok`;
+  if (m.price_in_per_m > 0 || m.price_out_per_m > 0)
+    return `$${m.price_in_per_m.toFixed(2)} in / $${m.price_out_per_m.toFixed(2)} out /Mtok`;
+  return "pricing on openrouter.ai";
+};
 
 type Provider = "procedural" | "comfyui" | "openai" | "openrouter";
 
@@ -266,7 +274,7 @@ export function ImageGenSection() {
                     {showComfy
                       ? "· required; must exist on your ComfyUI"
                       : showOpenRouter
-                        ? "· $/Mtok where OpenRouter prices by token; per-image generators show pricing on OpenRouter"
+                        ? "· $/M image-tokens (the real image-gen cost, from OpenRouter)"
                         : "· empty = provider default"}
                   </span>
                 </span>
