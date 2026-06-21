@@ -487,14 +487,15 @@ async def test_ask_user_without_options_pauses_as_free_form_question():
 # ---- auto-continue (the harness re-runs the loop instead of freezing) -------
 
 
-async def test_finished_with_incomplete_plan_auto_continues_then_lands_finished():
-    """The core 'never freeze' behavior: when the agent declares finished but
-    the plan isn't fully marked done, the loop DOES NOT land in STUCK. It
-    re-runs itself up to AUTO_CONTINUE_CAP times, injecting a continuation
-    prompt each time. If the model still won't progress, the run lands
-    FINISHED with a partial-plan detail — the user sees a clean ending and
-    can steer if more work is wanted. Critically: the user is NEVER required
-    to type something just to keep the loop moving."""
+async def test_finished_with_unmarked_plan_lands_finished_cleanly():
+    """runthru-v2 (#3): plan-step bookkeeping no longer gates finish. When the
+    agent declares finished AFTER doing real work, the loop lands FINISHED
+    immediately — even if plan steps were never marked done. EVERY model tier
+    under-reports per-step progress, so the old auto-continue-on-incomplete-plan
+    bounce (≈3× rework, then FINISHED:partial_plan) was removed; completion is
+    gated by the real verify gates (execution-nudge / DoD), not bookkeeping.
+    Critically: still NO STUCK freeze AND now no bookkeeping bounce — the model
+    did productive work (a shell action), so the execution gate is satisfied."""
     # Pre-seed: plan with 2 steps, only step 1 done, then RUNNING. The agent
     # script repeatedly emits finish_step (model claims done despite step 2
     # being unmarked).
@@ -558,8 +559,7 @@ async def test_finished_with_incomplete_plan_auto_continues_then_lands_finished(
     # Critical: the run did NOT land in STUCK. The user is not forced to type
     # something to break the freeze — the harness drove the loop forward.
     assert state.execution_status == ConversationStatus.FINISHED
-    # The auto-continue StatusEvents fire exactly cap-many times before the
-    # FINISHED:partial_plan landing.
+    # NO auto-continue bounce — finish is no longer gated on plan_step marks.
     auto_continues = [
         e
         for e in events
@@ -567,14 +567,14 @@ async def test_finished_with_incomplete_plan_auto_continues_then_lands_finished(
         and e.detail
         and e.detail.startswith("auto_continue:plan_incomplete")
     ]
-    assert len(auto_continues) == loop._auto_continue_cap
-    # And the terminal FINISHED carries the honest partial-plan detail.
+    assert auto_continues == []
+    # Clean FINISHED — NOT the old "partial_plan" bookkeeping taxonomy.
     terminal = next(
         e
         for e in reversed(events)
         if isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED
     )
-    assert terminal.detail == "partial_plan"
+    assert terminal.detail != "partial_plan"
 
 
 async def test_auto_continue_budget_resets_on_new_user_message():

@@ -88,11 +88,11 @@ async def test_actionless_breaker_reset():
     await loop.approve_plan()
 
     state = await loop.run()
-    # Plan has 1 step not done; auto-continue fires (shell = productive action),
-    # eventually landing FINISHED partial_plan.
+    # runthru-v2 (#3): plan-step bookkeeping no longer gates finish. The model did
+    # productive work (shell), so it lands FINISHED cleanly — no partial_plan bounce.
     assert state.execution_status == ConversationStatus.FINISHED
     events = await store.get_events(CID)
-    assert _last_status_detail(events) == "partial_plan"
+    assert _last_status_detail(events) != "partial_plan"
 
 
 @pytest.mark.asyncio
@@ -131,8 +131,11 @@ async def test_actionless_breaker_inert_when_plan_complete():
 
 
 @pytest.mark.asyncio
-async def test_valve_auto_continue_zero_actions_pauses():
-    """Auto-continue cap hit with zero real actions in the run segment → PAUSED partial_plan."""
+async def test_finish_incomplete_plan_lands_finished_no_bounce():
+    """runthru-v2 (#3): a finish with an incomplete plan no longer bounces.
+    Plan-step bookkeeping does NOT gate finish — the run lands FINISHED cleanly,
+    with no PAUSED/partial_plan taxonomy and no 'finishing was blocked' nudge.
+    Real incompleteness is caught by the verify gates, not a bookkeeping proxy."""
     store = SqliteEventStore(":memory:")
     await store.append(
         CID,
@@ -142,29 +145,29 @@ async def test_valve_auto_continue_zero_actions_pauses():
     await store.append(
         CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
     )
-    # No non-bookkeeping ActionEvents → actions_since_last_resume == 0.
 
     agent = ScriptedAgent([finish_step()])   # repeats forever
     loop, _ = build_loop(agent, store=store)
     loop._auto_continue_cap = 3
 
     state = await loop.run()
-    assert state.execution_status == ConversationStatus.PAUSED
+    assert state.execution_status == ConversationStatus.FINISHED
     events = await store.get_events(CID)
-    assert _last_status_detail(events) == "partial_plan"
+    assert _last_status_detail(events) != "partial_plan"
     msgs = [
         e for e in events
         if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
     ]
-    assert any(
+    assert not any(
         "finishing was blocked" in (m.message.content if m.message else "")
         for m in msgs
     )
 
 
 @pytest.mark.asyncio
-async def test_valve_auto_continue_with_actions_finishes():
-    """Auto-continue cap hit WITH real actions in the run segment → FINISHED partial_plan."""
+async def test_finish_with_actions_and_incomplete_plan_finishes_cleanly():
+    """runthru-v2 (#3): productive work + finish with an unmarked plan → FINISHED
+    cleanly (no partial_plan bounce). Bookkeeping never gates finish."""
     store = SqliteEventStore(":memory:")
     await store.append(
         CID,
@@ -183,7 +186,7 @@ async def test_valve_auto_continue_with_actions_finishes():
     state = await loop.run()
     assert state.execution_status == ConversationStatus.FINISHED
     events = await store.get_events(CID)
-    assert _last_status_detail(events) == "partial_plan"
+    assert _last_status_detail(events) != "partial_plan"
 
 
 # ---- knowledge dedup (×179 CSV bloat) ------------------------------------------
@@ -447,12 +450,10 @@ async def test_real_action_resets_intercept_streak():
     assert "actionless" not in statuses
     deliverables = [e for e in events if isinstance(e, DeliverableEvent)]
     assert len(deliverables) == 3  # pa, pb, pc — the dup suppressed
-    # Lands via the finish path (partial_plan taxonomy), not a valve trip.
-    assert state.execution_status in (
-        ConversationStatus.FINISHED,
-        ConversationStatus.PAUSED,
-    )
-    assert _last_status_detail(events) == "partial_plan"
+    # Lands via the finish path (clean FINISHED), not a valve trip. runthru-v2
+    # (#3): no partial_plan bounce — bookkeeping no longer gates finish.
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert _last_status_detail(events) != "partial_plan"
 
 
 # ---- post-resume serve gate (Phase-B re-run #3 defect, 2026-06-10) --------------

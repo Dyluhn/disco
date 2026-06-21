@@ -870,102 +870,19 @@ class FinishGate:
                         message=LLMMessage(role="assistant", content=step.thought),
                     )
                 )
-            # AUTO-CONTINUE GATE — when the agent declares finished
-            # but the plan still has incomplete steps, DO NOT land
-            # in STUCK and freeze. The user shouldn't have to poke
-            # the loop to keep going. Instead, inject a continuation
-            # prompt and re-run automatically, up to AUTO_CONTINUE_CAP
-            # times per user message. Only after the cap (typically
-            # 3) do we fall through to FINISHED with a "soft" detail
-            # so the user sees a clean ending rather than a freeze.
-            #
-            # The cap resets when the user sends a new message —
-            # each fresh prompt gets its own auto-continue budget.
-            incomplete, missing = signals.plan_is_incomplete(events)
-            if incomplete:
-                attempts = signals.auto_continue_attempts(events)
-                if attempts < self._loop._auto_continue_cap:
-                    await self._loop._emit(
-                        MessageEvent(
-                            source=EventSource.ENVIRONMENT,
-                            message=LLMMessage(
-                                role="user",
-                                content=(
-                                    "<system-reminder>\n"
-                                    "You declared the work finished, but plan "
-                                    f"steps {missing} are not yet marked done. "
-                                    "Keep working: either complete the remaining "
-                                    "steps and mark them via "
-                                    "plan_step(idx, 'done'), OR — if a step is "
-                                    "structurally wrong now — call "
-                                    "propose_plan_update to revise the plan. "
-                                    "Do not declare finished again until every "
-                                    "step is marked done. The user will see this "
-                                    "as the agent automatically continuing.\n"
-                                    "</system-reminder>"
-                                ),
-                            ),
-                        )
-                    )
-                    await self._loop._emit(
-                        StatusEvent(
-                            status=ConversationStatus.RUNNING,
-                            detail=f"auto_continue:plan_incomplete:{attempts + 1}",
-                        )
-                    )
-                    return Disp.CONTINUE
-                # Cap hit. Land FINISHED with a "partial" detail
-                # rather than STUCK; the user sees a clean ending
-                # and can steer if more work is needed. STUCK is
-                # reserved for genuine confusion (stuck detector),
-                # not for "model couldn't quite finish the bookkeeping".
-                actions_since = signals.actions_since_last_resume(events)
-                if actions_since == 0:
-                    await self._loop._emit(
-                        MessageEvent(
-                            source=EventSource.ENVIRONMENT,
-                            message=LLMMessage(
-                                role="user",
-                                content=(
-                                    "<system-reminder>\n⚠ finishing was"
-                                    " blocked: plan steps remain undone and"
-                                    " no work happened in this run segment."
-                                    "\n</system-reminder>"
-                                ),
-                            )
-                        )
-                    )
-                    await self._loop._emit(
-                        StatusEvent(
-                            status=ConversationStatus.PAUSED,
-                            detail="partial_plan",
-                        )
-                    )
-                else:
-                    await self._loop._emit(
-                        MessageEvent(
-                            source=EventSource.ENVIRONMENT,
-                            message=LLMMessage(
-                                role="user",
-                                content=(
-                                    "<system-reminder>\n"
-                                    f"After {self._loop._auto_continue_cap} auto-continues, "
-                                    f"plan steps {missing} are still not marked done. "
-                                    "Landing the run as FINISHED with partial-plan "
-                                    "detail — the user can review and steer if more "
-                                    "work is needed.\n"
-                                    "</system-reminder>"
-                                ),
-                            ),
-                        )
-                    )
-                    await self._loop._emit(
-                        StatusEvent(
-                            status=ConversationStatus.FINISHED,
-                            detail="partial_plan",
-                        )
-                    )
-                return Disp.HALT
+            # runthru-v2 (#3): "done" is driven by the REAL finish gate —
+            # `_stop_allowed` plus the DoD/verify gates already run in
+            # `handle_finish_path` (gate_execution_nudge, gate_browser_verify,
+            # finish_dod_gate) — NOT by plan_step bookkeeping. EVERY model tier
+            # (Qwen 27B through DeepSeek/GPT/Claude) under-reports per-step
+            # progress, so gating finish on "all steps marked done" bounced
+            # genuinely-complete builds up to the auto-continue cap (≈3×),
+            # burning rework (a chunk of the "too slow" complaint) and leaving
+            # the run looking half-done. The plan is now an explanation marked
+            # done when the build actually finishes; per-step progress (capable
+            # models only, via the declarative update_plan_progress tool) is
+            # advisory UI and never gates anything. Real incompleteness is still
+            # caught by the verify gates above, not by a bookkeeping proxy.
             await self._loop._emit(StatusEvent(status=ConversationStatus.FINISHED))
             return Disp.HALT
         await self._loop._emit(
