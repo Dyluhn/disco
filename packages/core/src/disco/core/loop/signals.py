@@ -30,7 +30,9 @@ if TYPE_CHECKING:
 # Plan/meta tools that mutate bookkeeping state but do no real work. Excluded
 # from "did the agent act?" accounting everywhere (valve taxonomy + the
 # actionless streak) so a model can't look productive by shuffling plan state.
-_BOOKKEEPING_TOOLS = frozenset({"submit_plan", "propose_plan_update", "plan_step", "finish"})
+_BOOKKEEPING_TOOLS = frozenset(
+    {"submit_plan", "propose_plan_update", "plan_step", "update_plan_progress", "finish"}
+)
 
 # The tool names that don't count as "productive work" for the execution gate:
 # meta tools + READ-ONLY/inspection tools that don't change workspace state. The
@@ -43,6 +45,7 @@ _NON_PRODUCTIVE_TOOLS = frozenset(
     {
         "submit_plan",
         "plan_step",
+        "update_plan_progress",  # declarative progress snapshot — pure UI signal, no work
         "ask_user",
         "propose_plan_update",
         "notify_user",

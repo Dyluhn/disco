@@ -9,7 +9,7 @@ import type { AgentEvent, ConversationStatus, PlanStep, SecurityRisk } from "@/t
 
 // Plan-mode meta tools are control signals, not workspace work — they never appear
 // as Activity items or Terminal entries; their effect shows in the capstone tracker.
-const META_TOOLS = new Set(["submit_plan", "plan_step"]);
+const META_TOOLS = new Set(["submit_plan", "plan_step", "update_plan_progress"]);
 
 export interface ActivityItem {
   id: string;
@@ -654,13 +654,15 @@ export function deriveBuildProgress(
 ): Map<number, StepState> {
   const progress = new Map<number, StepState>();
   // The latest plan supersedes prior ones; only count snapshots after it (a re-plan
-  // starts a fresh checklist).
+  // starts a fresh checklist). Capture its step COUNT to bound the snapshot.
   let latestPlanIdx = -1;
   let latestRev = -1;
+  let nSteps = 0;
   events.forEach((e, i) => {
     if (e.kind === "plan" && e.revision >= latestRev) {
       latestRev = e.revision;
       latestPlanIdx = i;
+      nSteps = Array.isArray(e.steps) ? e.steps.length : 0;
     }
   });
   // Declarative: the LAST update_plan_progress action wins — it's the full picture.
@@ -678,17 +680,22 @@ export function deriveBuildProgress(
   for (const s of steps) {
     const idx = Number(s?.index);
     const st = String(s?.state);
-    if (!Number.isFinite(idx)) continue;
+    // Bound to the CURRENT plan's range. A malformed or stale index (e.g. index 99
+    // on a 3-step plan, or a leftover from a longer prior plan) must NOT create a
+    // phantom step or inflate the done-count into a lying checklist (a snapshot of
+    // [{index:99,state:"done"}] would otherwise render "1/3" with every real step
+    // pending). Out-of-range / non-integer indices are dropped.
+    if (!Number.isInteger(idx) || idx < 1 || (nSteps > 0 && idx > nSteps)) continue;
     if (st === "done" || st === "active" || st === "pending") progress.set(idx, st as StepState);
   }
-  // Terminal reconciliation, so the checklist never spins on a stopped run:
-  //  • FINISHED (passed the real finish gate) → an in-progress step reads as done.
-  //  • STUCK/ERROR/IDLE (stopped without completing) → "active" reads as stalled,
-  //    honestly showing work that was underway when the loop halted.
-  if (status === "FINISHED") {
-    for (const [idx, st] of progress) {
-      if (st === "active") progress.set(idx, "done");
-    }
+  // Terminal reconciliation:
+  //  • FINISHED — the build passed the real finish gate, so the deliverable is
+  //    complete: EVERY plan step reads done. This also stops a stale early snapshot
+  //    from showing e.g. "2/3" (with no Done signal) after the build actually
+  //    finished — the model isn't required to send a final 100%-done snapshot.
+  //  • STUCK/ERROR/IDLE (stopped without completing) → "active" reads as stalled.
+  if (status === "FINISHED" && nSteps > 0) {
+    for (let i = 1; i <= nSteps; i++) progress.set(i, "done");
   } else if (status === "STUCK" || status === "ERROR" || status === "IDLE") {
     for (const [idx, st] of progress) {
       if (st === "active") progress.set(idx, "stalled");

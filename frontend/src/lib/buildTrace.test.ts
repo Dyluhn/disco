@@ -322,16 +322,26 @@ describe("deriveBuildProgress — declarative full-state snapshot (#3)", () => {
     expect(deriveBuildProgress(events, "RUNNING").size).toBe(0);
   });
 
-  it("on FINISHED, a lingering active step reads as done (no spinner on a done build)", () => {
+  it("on FINISHED, ALL plan steps read done — a stale partial snapshot can't show 2/3", () => {
+    // model sent an early snapshot (only step 1 done) then finished without a final 100%.
+    const events = [planEvent(1, 3), progressEvent("p1", [{ index: 1, state: "done" }])];
+    const p = deriveBuildProgress(events, "FINISHED");
+    expect(p.get(1)).toBe("done");
+    expect(p.get(2)).toBe("done");
+    expect(p.get(3)).toBe("done"); // not left "pending" → no "2/3 with no Done" lie
+  });
+
+  it("drops out-of-range / malformed indices (no lying checklist from a bad snapshot)", () => {
     const events = [
-      planEvent(1, 2),
+      planEvent(1, 3),
       progressEvent("p1", [
-        { index: 1, state: "done" },
-        { index: 2, state: "active" },
+        { index: 99, state: "done" }, // > nSteps
+        { index: 0, state: "done" }, // < 1
       ]),
     ];
-    const p = deriveBuildProgress(events, "FINISHED");
-    expect(p.get(2)).toBe("done");
+    // both dropped → empty map → BuildSurface falls back to the honest status chip,
+    // NOT a "1/3" checklist with every real step pending.
+    expect(deriveBuildProgress(events, "RUNNING").size).toBe(0);
   });
 
   it("on STUCK, a lingering active step reads as stalled (honest about halted work)", () => {

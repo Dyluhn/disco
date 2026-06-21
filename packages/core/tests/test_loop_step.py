@@ -830,10 +830,25 @@ def test_productive_gate_rejects_read_only_then_finish():
         tool_call=ToolCall(tool_name="file_write", arguments={"path": "i.html", "content": "x"}),
     )
 
+    # runthru-v2 (#3): the declarative progress tool is pure bookkeeping — calling
+    # it after approval must NOT look like real work (else approve→update_plan_progress
+    # →finish would land FINISHED with zero workspace mutation, bypassing the gate).
+    upp = ActionEvent(
+        thought="report progress",
+        tool_call=ToolCall(
+            tool_name="update_plan_progress",
+            arguments={"steps": [{"index": 1, "state": "done"}]},
+        ),
+    )
+
     # only reads after approval → NOT productive (finish would be refused)
     assert signals.productive_action_since_approval(_seqd([approved, rd, rd])) is False
+    # progress-snapshot-only after approval → NOT productive (the #3 regression)
+    assert signals.productive_action_since_approval(_seqd([approved, upp, upp])) is False
     # a write after approval → productive (finish allowed)
     assert signals.productive_action_since_approval(_seqd([approved, rd, wr])) is True
+    # a write still counts even if a progress snapshot follows it
+    assert signals.productive_action_since_approval(_seqd([approved, wr, upp])) is True
     # no plan-approval marker → gate inert (don't block)
     assert signals.productive_action_since_approval(_seqd([rd])) is True
 
