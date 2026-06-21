@@ -113,6 +113,7 @@ from .runtime_settings import RuntimeSettings
 from .schedule_service import ScheduleService
 from .sessions_service import SessionsService
 from .share_service import ShareService
+from .title_service import TitleService
 
 # WALK-18 — max seconds resume waits for a cooperatively-cancelled loop task to
 # wind down before hard-cancelling it (a cooperative Stop already persisted the
@@ -463,6 +464,10 @@ class ConversationRuntime:
         # runtime; the stateless service reaches them via a back-ref. Constructed
         # FIRST because the _load_* calls in this __init__ route through it.
         self._settings = RuntimeSettings(self)
+        # Auto-titling: derive a short display title from the first user message so
+        # History/Projects show real names, not a wall of "(untitled)". Fire-and-forget
+        # from kick(); uses the cheap SUMMARIZER role; idempotent + non-blocking.
+        self._title_service = TitleService(self._store, self._router_now)
         self._override_path = f"{db_path}.overrides.json" if db_path else ""
         self._model_override: dict[str, str] = self._load_overrides()
         # Per-conversation surface ("research" | "build" | "deep_research"); set at
@@ -1401,6 +1406,10 @@ class ConversationRuntime:
         FINISHED. Failures are reported as ambient system-reminder events on
         the conversation log (the user + model both see them), never as
         exceptions that crash the task."""
+        # Auto-title from the first user message (idempotent, detached, no-op once
+        # titled). Placed here because kick() is the single chokepoint every user
+        # message flows through — covers WS + REST send_message + first-kick alike.
+        self._title_service.schedule(conversation_id)
         existing = self._tasks.get(conversation_id)
         if existing is not None and not existing.done():
             return  # already running; the new message is picked up at the next step
@@ -1520,6 +1529,10 @@ class ConversationRuntime:
         return await self._dr._execute_deep_research(
             conversation_id, plan, resume_from=resume_from
         )
+
+    def title_service(self) -> TitleService:
+        """Public accessor for the auto-titler (used by the projects backfill route)."""
+        return self._title_service
 
     def project_store(self) -> ProjectStore:
         """Public accessor for the live project store (used by the agent-server's

@@ -252,6 +252,31 @@ class SqliteEventStore:
         )
         self._conn.commit()
 
+    async def update_title(self, conversation_id: str, title: str) -> None:
+        """Set a conversation's display title (the History/Projects label).
+
+        Used by the auto-title service to replace the `'(untitled)'` default with a
+        model-summarized title derived from the first user message. Overwrites the
+        stored title unconditionally — the 'only when unset' gate lives in the caller
+        (so a future user-supplied rename can also use this path). No-op on an unknown
+        id (UPDATE of zero rows)."""
+        async with self._write_lock:
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE conversations SET title = ? WHERE conversation_id = ?",
+                    (title, conversation_id),
+                )
+
+    async def get_title(self, conversation_id: str) -> str | None:
+        """The stored title (None if unset / unknown id). Cheap point-read used by
+        the auto-title service to stay idempotent (skip already-titled conversations)."""
+        cur = self._conn.execute(
+            "SELECT title FROM conversations WHERE conversation_id = ?",
+            (conversation_id,),
+        )
+        row = cur.fetchone()
+        return row["title"] if row else None
+
     # ---- DoD spec (C1a: storage + accessor + immutability) -------------------
     # The DoD spec lives in a sibling table to `conversations` and `events`,
     # OUTSIDE the agent-editable event stream. There is NO agent tool that

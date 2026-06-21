@@ -60,6 +60,24 @@ def make_projects_router(
             )
         return {"projects": projects, "status": status.value, "root": str(ps.root or "")}
 
+    @router.post("/api/projects/backfill-titles")
+    async def backfill_titles(
+        owner_id: str = Query(default=DEFAULT_OWNER_ID),
+    ) -> dict:
+        """Maintenance: title any conversations still showing ``(untitled)`` — those
+        created before auto-titling existed, or where the live title-gen failed.
+        Re-runnable + idempotent (already-titled conversations are skipped). Uses the
+        same SUMMARIZER-role model as the live auto-titler, with the first-message
+        fallback. Returns ``{cid: title}`` for the ones it named."""
+        if runtime is None:
+            return {"titled": {}, "scanned": 0, "status": "no-runtime"}
+        summaries = await store.list_conversation_summaries(
+            owner_id=owner_id, limit=500, cursor=None
+        )
+        untitled = [s.conversation_id for s in summaries if not s.title]
+        titled = await runtime.title_service().backfill(untitled)
+        return {"titled": titled, "count": len(titled), "scanned": len(untitled)}
+
     @router.get("/api/projects/{conversation_id}/download")
     async def download_project(conversation_id: str) -> StreamingResponse:
         """Stream a zip of the project's workspace. 404 with a specific reason
