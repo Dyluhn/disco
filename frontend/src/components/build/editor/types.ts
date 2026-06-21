@@ -43,6 +43,23 @@ export interface LoweredDeck {
   theme_mode: string;
 }
 
+/**
+ * One measured overlay spec — derived by querying `[data-element-id]` rects inside
+ * the WYSIWYG iframe and joining against the lowered-deck element map for the
+ * json_pointer. Positions are in px relative to the iframe container.
+ */
+export interface OverlaySpec {
+  /** e.g. "slide-0:title" — the iframe's data-element-id value */
+  element_id: string;
+  /** RFC-6901 path into the AuthoredDeck for this element */
+  json_pointer: string;
+  kind: LoweredElement["kind"];
+  /** Current text content (from the LoweredDeck, NOT the iframe DOM) */
+  content: string;
+  /** Measured position relative to the iframe container (px). Zero-rect before first measurement. */
+  rect: { left: number; top: number; width: number; height: number };
+}
+
 /** One RFC-6902 JSON Patch operation. */
 export interface JsonPatchOp {
   op: "replace" | "add" | "remove" | "test" | "move" | "copy";

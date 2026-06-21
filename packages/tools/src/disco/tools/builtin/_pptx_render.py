@@ -978,15 +978,19 @@ def _html_for_c1_slide(slide: Slide, theme: Theme, *, slide_idx: int = 0) -> str
     """
     sid = f"slide-{slide_idx}"
 
-    # C8: chart/table slides delegate to specialised HTML generators
+    # C8: chart/table slides delegate to specialised HTML generators. The wrapper
+    # carries ONLY data-slide-id (slide nav) — NOT a data-element-id. The whole
+    # chart/table is not an editable TEXT element; stamping it `{sid}:title` made the
+    # in-app editor overlay a title-edit box over the entire chart (a false affordance
+    # writing /slides/N/title). Charts/tables are edited via their own tools.
     if slide.chart is not None:
         from disco.tools.builtin._c8_chart_layouts import html_chart_content
         inner = html_chart_content(slide.title, slide.chart, theme)
-        return f'<div data-element-id="{sid}:title" data-slide-id="{sid}">{inner}</div>'
+        return f'<div data-slide-id="{sid}">{inner}</div>'
     if slide.table is not None:
         from disco.tools.builtin._c8_chart_layouts import html_table_content
         inner = html_table_content(slide.title, slide.table, theme)
-        return f'<div data-element-id="{sid}:title" data-slide-id="{sid}">{inner}</div>'
+        return f'<div data-slide-id="{sid}">{inner}</div>'
 
     # Separate text and image elements
     texts = [el for el in slide.elements if el.kind == "text"]

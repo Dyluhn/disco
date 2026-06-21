@@ -427,6 +427,70 @@ def test_put_rollback_restores_the_corrupted_failed_target() -> None:
     )
 
 
+# ---- GET /deck/editor/render (inline HTML, no attachment) ------------------
+
+
+def test_render_returns_200_html_no_attachment() -> None:
+    """The inline render route returns text/html, has data-element-id stamps, and
+    does NOT set Content-Disposition: attachment (it is an inline view, not a download)."""
+    session = _Session(_AUTHORED)
+    client, store = _client(session)
+    cid = _create(client)
+    _declare_editable_slides(store, cid)
+
+    r = client.get(f"/conversations/{cid}/deck/editor/render?path=deck")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("text/html")
+    # No attachment header — the inline render must not trigger a download.
+    cd = r.headers.get("content-disposition", "")
+    assert "attachment" not in cd, f"Unexpected attachment header: {cd!r}"
+    # The render stamps data-element-id on editable elements (required for overlay measurement).
+    assert 'data-element-id=' in r.text
+    # Slide sections carry data-slide-id so the editor can toggle the active slide.
+    assert 'data-slide-id=' in r.text
+
+
+def test_render_undeclared_404() -> None:
+    """A render request for an undeclared deck → 404 (mirrors GET /editor)."""
+    session = _Session(_AUTHORED)
+    client, store = _client(session)
+    cid = _create(client)
+    r = client.get(f"/conversations/{cid}/deck/editor/render?path=deck")
+    assert r.status_code == 404
+
+
+def test_render_superseded_sidecar_404() -> None:
+    """A later non-editable render supersedes the sidecar → inline render also 404."""
+    session = _Session(_AUTHORED)
+    client, store = _client(session)
+    cid = _create(client)
+    _declare_editable_slides(store, cid)
+    _declare_marp_slides(store, cid)  # supersedes the editable render
+    r = client.get(f"/conversations/{cid}/deck/editor/render?path=deck")
+    assert r.status_code == 404
+
+
+def test_render_invalid_template_400() -> None:
+    """An unknown template id → 400 (not silently treated as the default)."""
+    session = _Session(_AUTHORED)
+    client, store = _client(session)
+    cid = _create(client)
+    _declare_editable_slides(store, cid)
+    r = client.get(f"/conversations/{cid}/deck/editor/render?path=deck&template=does-not-exist")
+    assert r.status_code == 400
+
+
+def test_render_uses_deck_own_theme_when_no_template() -> None:
+    """When template is omitted the route uses the deck's own theme (no 400)."""
+    session = _Session(_AUTHORED)
+    client, store = _client(session)
+    cid = _create(client)
+    _declare_editable_slides(store, cid)
+    r = client.get(f"/conversations/{cid}/deck/editor/render?path=deck")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+
+
 def test_put_no_pdf_means_not_stale() -> None:
     """No prior PDF export → nothing to go stale → pdf_stale False."""
     session = _Session(_AUTHORED)

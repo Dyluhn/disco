@@ -18,6 +18,8 @@ import { DeckEditorPane } from "./DeckEditorPane";
 vi.mock("@/api/agent", () => ({
   getDeckForEditor: vi.fn(),
   patchDeck: vi.fn(),
+  // getDeckRenderHtml: return empty string so the iframe renders (non-fatal if it fails).
+  getDeckRenderHtml: vi.fn().mockResolvedValue(""),
 }));
 
 import { getDeckForEditor, patchDeck } from "@/api/agent";

@@ -1,88 +1,255 @@
 /**
- * SlideCanvas — renders one slide as a 16:9 canvas with positioned ElementBoxes.
+ * SlideCanvas — 16:9 iframe substrate + transparent overlay layer for the WYSIWYG editor.
  *
- * Each `LoweredElement` in `slide.elements[]` is rendered as an absolutely-
- * positioned `ElementBox`. The canvas itself is a `position:relative` container
- * that maintains the 16:9 aspect ratio via `padding-top: 56.25%`.
+ * Architecture (§5d):
+ *  - Visual layer: `<iframe srcDoc={renderHtml}>` fills the 16:9 container. The iframe
+ *    shows the REAL rendered deck (brand fonts, accent, bg, chrome). We drive which slide
+ *    is active by toggling `.slide.active` inside the iframe DOM (no `allow-scripts` —
+ *    the iframe's own navigation script is disabled; the editor owns navigation).
+ *  - Edit layer: `<ElementBox>` overlays, TRANSPARENT, positioned from measured
+ *    `getBoundingClientRect()` values. Only elements stamped with `data-element-id` in
+ *    the render HTML get overlays. Clicks/double-clicks land on the overlays, not the
+ *    iframe.
  *
- * `data-slide-id` is stamped on the canvas div so the selection overlay can
- * identify the slide boundary when walking up.
+ * Measurement lifecycle:
+ *  1. On mount: initialize zero-rect overlays from the elementMap for the active slide
+ *     so overlay DOM nodes exist immediately (required for jsdom tests).
+ *  2. On iframe `onLoad`: toggle active slide in iframe DOM, measure rects, update specs.
+ *  3. On `activeSlideId` change: reset to zero-rect, then measure.
+ *  4. On container resize (ResizeObserver, debounced 120 ms): re-measure.
+ *  5. Guard: if measurement returns 0 elements (jsdom / iframe not yet ready), keep the
+ *     zero-rect initial specs so DOM nodes remain accessible for tests.
  *
  * @module SlideCanvas
  */
 
-import { useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ElementBox } from "./ElementBox";
-import type { JsonPatchOp, LoweredSlide } from "./types";
+import type { JsonPatchOp, LoweredElement, OverlaySpec } from "./types";
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+export interface ElementMapEntry {
+  json_pointer: string;
+  kind: LoweredElement["kind"];
+  content: string;
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+// Only TEXT elements are overlay-editable. Charts/tables/images/chrome are shown by
+// the iframe (the real render) and are NOT given an editable overlay — a click-to-edit
+// box over a chart that wrote `/slides/N/title` would be a false affordance. Their
+// selection lives in the LayersPanel, not as a spatial overlay.
+const EDITABLE_KINDS = new Set<LoweredElement["kind"]>(["title", "subtitle", "bullet"]);
+
+/**
+ * Build zero-rect overlay specs for the active slide's EDITABLE text elements.  These
+ * are the initial placeholders shown before the iframe loads + rects are measured —
+ * they ensure DOM nodes exist in tests even when jsdom cannot render the iframe srcdoc.
+ */
+function buildZeroSpecs(
+  elementMap: Map<string, ElementMapEntry>,
+  activeSlideId: string,
+): OverlaySpec[] {
+  const prefix = activeSlideId + ":";
+  const specs: OverlaySpec[] = [];
+  for (const [eid, entry] of elementMap) {
+    if (eid.startsWith(prefix) && EDITABLE_KINDS.has(entry.kind)) {
+      specs.push({
+        element_id: eid,
+        json_pointer: entry.json_pointer,
+        kind: entry.kind,
+        content: entry.content,
+        rect: { left: 0, top: 0, width: 0, height: 0 },
+      });
+    }
+  }
+  return specs;
+}
+
+// ─── Props ───────────────────────────────────────────────────────────────────
 
 interface SlideCanvasProps {
-  slide: LoweredSlide;
-  /** The element_id of the currently selected element, or null. */
+  /** srcDoc for the iframe — the full rendered deck HTML from render_html(). */
+  renderHtml: string | null;
+  /** The slide currently shown in the editor. Drives the iframe's .slide.active toggle. */
+  activeSlideId: string;
+  /** element_id → {json_pointer, kind, content} from the LoweredDeck. */
+  elementMap: Map<string, ElementMapEntry>;
   selectedElementId: string | null;
   onSelectElement: (elementId: string) => void;
   onPatch: (patch: JsonPatchOp[]) => void;
-  /** Visual scale factor for the canvas (1 = full size). */
-  scale?: number;
-  /** A2: disable element drag (text-edit-only) — threaded to each ElementBox. */
-  disableDrag?: boolean;
 }
 
+// ─── SlideCanvas ─────────────────────────────────────────────────────────────
+
 export function SlideCanvas({
-  slide,
+  renderHtml,
+  activeSlideId,
+  elementMap,
   selectedElementId,
   onSelectElement,
   onPatch,
-  scale = 1,
-  disableDrag = false,
 }: SlideCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // We need the canvas px dimensions for drag-to-% conversion.
-  // These are read lazily from the DOM on drag start — no ResizeObserver overhead.
-  const getCanvasDimensions = (): { w: number; h: number } => {
-    const el = containerRef.current;
-    if (!el) return { w: 1600, h: 900 };
-    const rect = el.getBoundingClientRect();
-    return { w: rect.width, h: rect.height };
-  };
+  // Start with zero-rect overlays so DOM nodes exist immediately (tests / pre-load state).
+  const [overlaySpecs, setOverlaySpecs] = useState<OverlaySpec[]>(() =>
+    buildZeroSpecs(elementMap, activeSlideId),
+  );
+
+  /**
+   * Core measurement function: toggle the active slide class inside the iframe DOM,
+   * then querySelectorAll('[data-element-id]') and measure each rect relative to the
+   * iframe container.  Only elements whose element_id is in the elementMap get an
+   * overlay.  If measurement yields 0 specs (iframe not yet ready / jsdom), we keep
+   * the existing zero-rect specs intact so tests can still find the DOM nodes.
+   */
+  const measure = useCallback((): void => {
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    const doc = iframe.contentDocument;
+    if (!doc || !doc.body) return;
+
+    // Find the active slide's section in the iframe. If absent, the iframe content
+    // isn't ready yet (e.g. jsdom doesn't render srcdoc) — bail and KEEP the zero-rect
+    // specs so DOM nodes stay alive for tests.
+    const activeSection = doc.querySelector<HTMLElement>(
+      `[data-slide-id="${activeSlideId}"]`,
+    );
+    if (!activeSection) return;
+
+    // We own slide nav (no allow-scripts): show only the active section.
+    doc.querySelectorAll(".slide").forEach((el) => el.classList.remove("active"));
+    activeSection.classList.add("active");
+
+    // Measure ONLY this slide's stamped EDITABLE text elements. getBoundingClientRect
+    // from contentDocument is already iframe-VIEWPORT-relative, which equals the overlay
+    // container's coordinate space (both are inset:0 in the same box) — so use the rect
+    // DIRECTLY; subtracting the parent-page iframe offset would double-shift it.
+    const stamped = activeSection.querySelectorAll<HTMLElement>("[data-element-id]");
+    const newSpecs: OverlaySpec[] = [];
+    stamped.forEach((el) => {
+      const eid = el.getAttribute("data-element-id");
+      if (!eid) return;
+      const entry = elementMap.get(eid);
+      if (!entry || !EDITABLE_KINDS.has(entry.kind)) return; // non-text → no overlay
+      const r = el.getBoundingClientRect();
+      newSpecs.push({
+        element_id: eid,
+        json_pointer: entry.json_pointer,
+        kind: entry.kind,
+        content: entry.content,
+        rect: { left: r.left, top: r.top, width: r.width, height: r.height },
+      });
+    });
+
+    // Active section found ⇒ iframe is ready ⇒ this measured set is AUTHORITATIVE
+    // (set even if empty — clears stale zero-rect overlays from a prior slide or a
+    // non-text slide so they can't linger as off-screen focusable buttons).
+    setOverlaySpecs(newSpecs);
+  }, [activeSlideId, elementMap]);
+
+  // Debounced wrapper for the ResizeObserver (avoids thrashing on rapid resize).
+  const debouncedMeasure = useMemo(
+    () => () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = setTimeout(measure, 120);
+    },
+    [measure],
+  );
+
+  // When the active slide changes: reset to zero-rect for the new slide, then measure.
+  useEffect(() => {
+    setOverlaySpecs(buildZeroSpecs(elementMap, activeSlideId));
+    measure(); // no-op if iframe not yet ready; onLoad handles that case
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSlideId, elementMap]); // intentionally omit `measure` to avoid double-run
+
+  // Wire ResizeObserver for responsive re-measurement.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(debouncedMeasure);
+    observer.observe(container);
+    return () => {
+      observer.disconnect();
+      // Also drop any pending debounced measure so a resize scheduled before a slide
+      // change can't later fire stale measurement against the new closure.
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
+  }, [debouncedMeasure]);
+
+  // Clean up the debounce timer on unmount.
+  useEffect(
+    () => () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    },
+    [],
+  );
+
+  const handleIframeLoad = useCallback(() => {
+    measure();
+  }, [measure]);
 
   return (
     /*
-     * Outer wrapper: maintains 16:9 via padding-top trick, clips overflow.
-     * `position:relative` is the layout parent for ElementBox absolute positions.
+     * 16:9 container via padding-top trick.  The iframe fills it absolutely.
+     * The overlay div sits on top (pointer-events:none on the container; each
+     * ElementBox restores pointer-events:auto for its own area).
      */
     <div
       ref={containerRef}
-      data-slide-id={slide.slide_id}
       style={{
         position: "relative",
         width: "100%",
-        paddingTop: "56.25%",   // 9/16 = 56.25 %
-        background: slide.bg_color,
+        paddingTop: "56.25%", // 9 / 16 = 0.5625
+        background: "#111",
+        borderRadius: "4px",
         overflow: "hidden",
-        transform: scale !== 1 ? `scale(${scale})` : undefined,
-        transformOrigin: "top left",
-        flexShrink: 0,
       }}
-      aria-label={`Slide ${slide.slide_idx + 1}`}
+      aria-label={`Slide ${activeSlideId}`}
     >
-      {/* Absolute-fill inner layer: this is what ElementBox positions against */}
+      {/* ── Visual layer: the real rendered deck in an iframe ──────────────── */}
+      <iframe
+        ref={iframeRef}
+        srcDoc={renderHtml ?? ""}
+        // allow-same-origin: lets the parent read contentDocument for measurement.
+        // No allow-scripts: the iframe's own slide-nav script is disabled; we own nav.
+        sandbox="allow-same-origin"
+        onLoad={handleIframeLoad}
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          border: "none",
+        }}
+        title="Slide preview"
+      />
+
+      {/* ── Overlay layer: transparent click-to-edit ElementBox hotspots ──── */}
       <div
         style={{
           position: "absolute",
           inset: 0,
+          pointerEvents: "none", // clicks on empty areas fall through to the iframe
         }}
       >
-        {slide.elements.map((el) => (
+        {overlaySpecs.map((spec) => (
           <ElementBox
-            key={el.element_id}
-            element={el}
-            selected={selectedElementId === el.element_id}
-            canvasWidth={getCanvasDimensions().w}
-            canvasHeight={getCanvasDimensions().h}
+            key={spec.element_id}
+            elementId={spec.element_id}
+            jsonPointer={spec.json_pointer}
+            kind={spec.kind}
+            content={spec.content}
+            rect={spec.rect}
+            selected={selectedElementId === spec.element_id}
             onSelect={onSelectElement}
             onPatch={onPatch}
-            disableDrag={disableDrag}
           />
         ))}
       </div>

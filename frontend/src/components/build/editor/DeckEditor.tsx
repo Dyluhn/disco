@@ -1,72 +1,100 @@
 /**
- * DeckEditor — §4.5 React deck editor over the positional deck schema.
- *
- * Renders a `LoweredDeck` (the positioned representation produced by
- * `_deck_schema.lower_deck()`) as an interactive canvas of slide elements.
+ * DeckEditor — §5d WYSIWYG deck editor: real iframe substrate + measured overlays.
  *
  * Architecture:
- *  - `SlideCanvas` renders one active slide with each `LoweredElement` as an
- *    `ElementBox` (drag/resize/edit-text).
- *  - `LayersPanel` provides a non-spatial element list (walk-up + keyboard nav).
- *  - Mutations (drag / text-edit) emit RFC-6902 JSON Patch arrays via `onPatch`.
- *    The patch path matches the `json_pointer` field on each `LoweredElement` —
- *    the SAME vocabulary the `deck_patch` agent tool uses — so human and agent
- *    edits flow through ONE mutation route.
- *  - The editor stamps `data-element-id` / `data-slide-id` on all rendered
- *    elements so the §4.1 `SelectionOverlay` also works inside the editor
- *    (the overlay substrate is iframe-independent).
+ *  - Visual layer: `SlideCanvas` renders `<iframe srcDoc={renderHtml}>` (the real
+ *    brand HTML from render_html()) inside a 16:9 container. The iframe shows Fraunces
+ *    fonts, accent colours, chrome — an actual SLIDE, not a wireframe.
+ *  - Edit layer: `SlideCanvas` overlays transparent `<ElementBox>` boxes measured from
+ *    the iframe's `data-element-id` elements (getBoundingClientRect, relative to the
+ *    iframe container). Clicking selects; double-clicking opens an editable input.
+ *  - Write-back: UNCHANGED from A2. Each ElementBox carries the element's `json_pointer`
+ *    (from `GET /deck/editor`). On text commit → PUT /deck/editor patch (via `onPatch`).
+ *    After each PUT the parent re-fetches both the LoweredDeck AND the render HTML so
+ *    the iframe reflects the edit.
  *
- * Acceptance gate: select a deck element → emit a `replace` patch on its
- * `json_pointer` → the caller invokes `deck_patch` → re-rendered deck updates.
- * Visual acceptance (the actual API call + re-render) is the integrator's step.
+ * `disableDrag` is always true in production (the AuthoredDeck schema has no element
+ * geometry — drag would emit patches that always reject). The prop is kept for
+ * API compatibility.
  *
  * @module DeckEditor
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { LayersPanel } from "./LayersPanel";
 import { SlideCanvas } from "./SlideCanvas";
+import type { ElementMapEntry } from "./SlideCanvas";
 import type { JsonPatchOp, LoweredDeck, LoweredElement } from "./types";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface DeckEditorProps {
-  /** The lowered deck (geometry computed from the authoring schema). */
+  /** The lowered deck — source of element_id → json_pointer mapping. */
   deck: LoweredDeck;
   /**
-   * Called whenever an element is mutated via drag or text-edit.
+   * The inline HTML string from GET /deck/editor/render — injected as the iframe srcDoc.
+   * Null while loading or when the render endpoint is unavailable (degrades gracefully:
+   * overlays still exist at zero-rect positions, the canvas shows an empty background).
+   */
+  renderHtml: string | null;
+  /**
+   * Called whenever an element is mutated via text-edit.
    * The patch array uses the element's `json_pointer` — e.g.:
    *   [{op:"replace", path:"/slides/0/title", value:"New Title"}]
    */
   onPatch: (patch: JsonPatchOp[]) => void;
   /**
-   * Called when the user explicitly selects an element (for the agent context
-   * injection — the envelope carries `element_id` and `slide_id`).
+   * Called when the user explicitly selects an element (for agent context injection).
    */
   onElementSelected?: (element: LoweredElement) => void;
   /**
-   * A2: disable the drag affordance entirely (text-edit-only). The AuthoredDeck
-   * schema has no element geometry, so a drag would emit a patch that always
-   * rejects — rather than silently drop it (a false affordance), the drag handles
-   * are removed and only double-click text editing remains.
+   * A2/§5d: drag is unsupported (the AuthoredDeck schema has no element geometry).
+   * The prop is accepted but ignored — drag was never wired in the overlay model.
    */
   disableDrag?: boolean;
 }
 
 // ─── DeckEditor ──────────────────────────────────────────────────────────────
 
-export function DeckEditor({ deck, onPatch, onElementSelected, disableDrag = false }: DeckEditorProps) {
+export function DeckEditor({
+  deck,
+  renderHtml,
+  onPatch,
+  onElementSelected,
+}: DeckEditorProps) {
   const [activeSlideIdx, setActiveSlideIdx] = useState(0);
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
 
   const activeSlide = deck.slides[activeSlideIdx] ?? null;
 
+  /**
+   * Build a flat element_id → {json_pointer, kind, content} map from ALL slides.
+   * SlideCanvas uses this to join the iframe's stamped elements to their json_pointers.
+   * Re-computed whenever the deck changes (after a patch round-trip).
+   */
+  const elementMap = useMemo((): Map<string, ElementMapEntry> => {
+    const map = new Map<string, ElementMapEntry>();
+    for (const slide of deck.slides) {
+      for (const el of slide.elements) {
+        map.set(el.element_id, {
+          json_pointer: el.json_pointer,
+          kind: el.kind,
+          content: el.content,
+        });
+      }
+    }
+    return map;
+  }, [deck]);
+
   const handleSelectElement = useCallback(
     (elementId: string) => {
       setSelectedElementId(elementId);
       if (onElementSelected) {
+        // Look up the element in the active slide first, fall back to all slides.
         const slide = deck.slides[activeSlideIdx];
-        const el = slide?.elements.find((e) => e.element_id === elementId);
+        const el =
+          slide?.elements.find((e) => e.element_id === elementId) ??
+          deck.slides.flatMap((s) => s.elements).find((e) => e.element_id === elementId);
         if (el) onElementSelected(el);
       }
     },
@@ -78,11 +106,10 @@ export function DeckEditor({ deck, onPatch, onElementSelected, disableDrag = fal
     setSelectedElementId(null); // clear element selection when switching slides
   }, []);
 
-  // Deselect on canvas background click
+  // Deselect on background click (outside any overlay ElementBox).
   const handleBackgroundClick = useCallback((e: React.MouseEvent) => {
     const target = e.target as Element;
-    // Only deselect if the click landed on the canvas itself (not an ElementBox)
-    if (!target.hasAttribute("data-element-id")) {
+    if (!target.hasAttribute("data-element-id") && !target.closest("[data-element-id]")) {
       setSelectedElementId(null);
     }
   }, []);
@@ -131,7 +158,6 @@ export function DeckEditor({ deck, onPatch, onElementSelected, disableDrag = fal
             aria-label={`Slide ${i + 1}`}
             title={`Slide ${i + 1}`}
           >
-            {/* Thumbnail label */}
             <span
               style={{
                 position: "absolute",
@@ -165,16 +191,14 @@ export function DeckEditor({ deck, onPatch, onElementSelected, disableDrag = fal
         aria-label="Slide canvas"
       >
         {activeSlide ? (
-          <div
-            style={{ width: "100%", maxWidth: "900px" }}
-            data-slide-id={activeSlide.slide_id}
-          >
+          <div style={{ width: "100%", maxWidth: "900px" }}>
             <SlideCanvas
-              slide={activeSlide}
+              renderHtml={renderHtml}
+              activeSlideId={activeSlide.slide_id}
+              elementMap={elementMap}
               selectedElementId={selectedElementId}
               onSelectElement={handleSelectElement}
               onPatch={onPatch}
-              disableDrag={disableDrag}
             />
           </div>
         ) : (
@@ -189,7 +213,7 @@ export function DeckEditor({ deck, onPatch, onElementSelected, disableDrag = fal
           </div>
         )}
 
-        {/* Slide counter / prev-next navigation */}
+        {/* Prev/next navigation */}
         {deck.slides.length > 0 && (
           <div
             style={{
@@ -241,8 +265,8 @@ export function DeckEditor({ deck, onPatch, onElementSelected, disableDrag = fal
           </div>
         )}
 
-        {/* Selected element info */}
-        {selectedElementId && activeSlide && (
+        {/* Selected element info bar */}
+        {selectedElementId && (
           <div
             style={{
               background: "white",
@@ -257,17 +281,17 @@ export function DeckEditor({ deck, onPatch, onElementSelected, disableDrag = fal
             aria-live="polite"
             aria-label="Selected element info"
           >
-            <strong>Selected:</strong>{" "}
-            {selectedElementId}
+            <strong>Selected:</strong> {selectedElementId}
             {" · "}
             <span style={{ color: "#666" }}>
               {(() => {
-                const el = activeSlide.elements.find(
-                  (e) => e.element_id === selectedElementId,
-                );
-                return el
-                  ? `${el.kind} — double-click to edit${disableDrag ? "" : ", drag to move"}`
-                  : null;
+                const entry = elementMap.get(selectedElementId);
+                if (!entry) return null;
+                const editable =
+                  entry.kind === "title" ||
+                  entry.kind === "subtitle" ||
+                  entry.kind === "bullet";
+                return editable ? `${entry.kind} — double-click to edit` : entry.kind;
               })()}
             </span>
           </div>

@@ -192,6 +192,35 @@ export interface DeckPatchResult {
   pdf_stale?: boolean;
 }
 
+/** A2.2: fetch the inline HTML render of a deck for the WYSIWYG editor iframe substrate.
+ *
+ * The render includes `data-element-id` + `data-slide-id` stamps on editable elements,
+ * which the editor overlay system uses to measure positions and wire click-to-edit.
+ * Offline → a minimal slide HTML so the editor shows something in tests/screenshots. */
+export async function getDeckRenderHtml(
+  cid: string,
+  base: string,
+  template?: string,
+): Promise<string> {
+  if (!agentLive()) {
+    // Minimal fixture: one active slide with a stamped title element.
+    return (
+      `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">` +
+      `<style>.slide{display:none}.slide.active{display:flex}</style></head>` +
+      `<body><div class="deck">` +
+      `<section class="slide active" data-slide-id="slide-0" id="slide-0">` +
+      `<h2 data-element-id="slide-0:title" data-slide-id="slide-0">Sample Title</h2>` +
+      `</section></div></body></html>`
+    );
+  }
+  const params = new URLSearchParams({ path: base });
+  if (template) params.set("template", template);
+  const url = `${agentHttpBase()}/conversations/${encodeURIComponent(cid)}/deck/editor/render?${params}`;
+  const res = await fetch(url, { headers: { accept: "text/html" } });
+  if (!res.ok) throw new Error(`Deck render fetch failed: ${res.status}`);
+  return res.text();
+}
+
 /** A2.3: apply an RFC-6902 patch to the deck, re-render, and return the new
  * server-authoritative LoweredDeck. Throws ApiError on failure — notably 409
  * (no live sandbox: the build's workspace is suspended) and 422 (rejected patch);

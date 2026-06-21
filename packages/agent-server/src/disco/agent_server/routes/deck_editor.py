@@ -131,6 +131,58 @@ def make_deck_editor_router(
         lowered = lower_deck_for_editor(authored)
         return dataclasses.asdict(lowered)
 
+    @router.get("/conversations/{conversation_id}/deck/editor/render")
+    async def get_deck_render_inline(
+        conversation_id: str,
+        path: str = Query(..., description="Deck base name (no extension)."),
+        template: str | None = Query(None, description="Template id, e.g. 'disco-light'."),
+    ) -> Any:
+        """Return the INLINE HTML render of the deck for the WYSIWYG editor iframe substrate.
+
+        Identical render path to GET /deck/export?fmt=html but WITHOUT
+        ``Content-Disposition: attachment``, so the frontend can ``fetch()`` it and
+        inject it as an iframe ``srcDoc``. The live render reads the stored authored
+        sidecar + optional theme override — same jailing and staleness guards as the
+        export and PUT routes. Template defaults to the deck's own theme when omitted."""
+        from disco.core.brand import is_valid_template
+        from disco.tools.builtin._deck_schema import AuthoredDeck, lower_deck
+        from disco.tools.builtin._pptx_render import render_html
+        from fastapi import Response
+
+        base = _jail_base(path)
+        authored_rel = f"{base}.authored.json"
+        if runtime is None:
+            raise HTTPException(status_code=404)
+        if authored_rel not in await _declared_artifacts(store, conversation_id):
+            raise HTTPException(status_code=404)
+        if not await _sidecar_is_current(store, conversation_id, base):
+            raise HTTPException(status_code=404)
+        if template is not None and not is_valid_template(template):
+            raise HTTPException(status_code=400, detail=f"Unknown template {template!r}")
+
+        raw = await _read_artifact_bytes(runtime, conversation_id, authored_rel)
+        if raw is None:
+            raise HTTPException(status_code=404)
+        try:
+            authored = AuthoredDeck.model_validate(json.loads(raw))
+        except Exception as exc:  # noqa: BLE001 — malformed sidecar → 404
+            raise HTTPException(status_code=404) from exc
+
+        image_assets = await _reload_deck_image_assets(runtime, conversation_id, base, authored)
+        try:
+            deck = lower_deck(authored, theme_override=template, image_assets=image_assets)
+            html_str = render_html(deck)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=422, detail={"reason": "render_failed", "message": str(exc)}
+            ) from exc
+
+        # Return as inline text/html — NO Content-Disposition: attachment.
+        return Response(
+            content=html_str.encode("utf-8"),
+            media_type="text/html; charset=utf-8",
+        )
+
     @router.get("/conversations/{conversation_id}/deck/export")
     async def export_deck_with_template(
         conversation_id: str,
@@ -145,11 +197,10 @@ def make_deck_editor_router(
         ``theme_override`` WITHOUT mutating the sidecar. Needs no live session, so the
         slide-deck template selector works on finished decks too (mirrors the PDF
         export's render-from-stored-data path). 400 on an unknown template / fmt."""
-        from fastapi import Response
-
         from disco.core.brand import is_valid_template
         from disco.tools.builtin._deck_schema import AuthoredDeck, lower_deck
         from disco.tools.builtin._pptx_render import render_html, render_pptx
+        from fastapi import Response
 
         base = _jail_base(path)
         authored_rel = f"{base}.authored.json"
