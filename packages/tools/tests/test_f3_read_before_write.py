@@ -1,19 +1,24 @@
-"""F3 — gated read-before-write guard on file_write.
+"""F1 — read-before-rewrite guard on file_write (all tiers).
 
-When `ctx.assist` is True (weak-model assist tier), `file_write` refuses the
-FIRST write to an existing file the agent has not read in this conversation,
-returning a prescriptive hint. The 2nd write attempt is allowed (the model's
-explicit "yes, full-replace"). A NEW (nonexistent) file is always allowed; a
-file the agent has already read or written is always allowed.
+FileWriteTool refuses a write to an EXISTING file if there has been no
+successful FileReadTool.run call on that path since the path's last
+successful mutation in this conversation. A NEW (nonexistent) file is
+always allowed. The only escape is a real file_read (sets the
+read-since-write bit); there is no second-attempt bypass (the old F3
+"warned" escape hatch is removed).
 
-When `ctx.assist` is False (capable-model path), the guard is a true no-op —
-behavior is byte-identical to the pre-F3 file_write (the gate is never
-consulted, so no read, no state lookup, no extra branch beyond the `if`).
+ALL mutators (file_write, file_append, file_edit, file_replace_lines,
+file_insert_lines, file_str_replace) clear the read-since-write bit on
+success, so a write after any mutation without a new read is refused.
 
-These tests cover BOTH the unit-tool layer (FileWriteTool / FileReadTool
-directly, with a fake sandbox) and a thin executor-level smoke that the
-DefaultToolExecutor passes `ctx.assist` through (via model_policy.assist) and
-that the assist-OFF branch is exercised end-to-end.
+The guard applies to ALL tiers (ctx.assist=True AND ctx.assist=False).
+
+Tracker keys are CANONICALIZED via strip_redundant_workspace_prefix so
+'/workspace/foo' and 'workspace/foo' collapse to the same entry as 'foo'.
+
+These tests cover the unit-tool layer (FileWriteTool / FileReadTool and
+the other mutators directly, with a fake sandbox) plus a thin
+executor-level smoke for the DefaultToolExecutor path.
 """
 
 from __future__ import annotations
@@ -22,8 +27,18 @@ import pytest
 from disco.core.llm import ModelExecutionPolicy
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin.files import (
+    FileAppendArgs,
+    FileAppendTool,
+    FileEditArgs,
+    FileEditTool,
+    FileInsertLinesArgs,
+    FileInsertLinesTool,
     FileReadArgs,
     FileReadTool,
+    FileReplaceLinesArgs,
+    FileReplaceLinesTool,
+    FileStrReplaceArgs,
+    FileStrReplaceTool,
     FileWriteArgs,
     FileWriteTool,
     reset_read_tracker,
@@ -36,23 +51,36 @@ from disco.tools.registry import ToolRegistry, ToolScope
 
 class _FakeSandbox:
     """In-memory sandbox for the read-before-write tests. Tracks writes so the
-    test can assert that a refused file_write did NOT touch the workspace."""
+    test can assert that a refused file_write did NOT touch the workspace.
+    Mirrors the real sandbox's path normalization: strip_redundant_workspace_prefix
+    is applied to all paths so 'workspace/foo.py' and '/workspace/foo.py' and
+    'foo.py' all resolve to the same in-memory entry (matching real backends)."""
 
     def __init__(self, existing: dict[str, bytes] | None = None) -> None:
-        self._fs: dict[str, bytes] = dict(existing or {})
+        from disco.tools.sandbox.base import strip_redundant_workspace_prefix as _strip
+
+        self._fs: dict[str, bytes] = {_strip(k): v for k, v in (existing or {}).items()}
         self.writes: list[tuple[str, bytes]] = []
+        self._strip = _strip
 
     async def read_file(self, path: str) -> bytes:
-        if path not in self._fs:
+        key = self._strip(path)
+        if key not in self._fs:
             raise FileNotFoundError(f"no such file: {path}")
-        return self._fs[path]
+        return self._fs[key]
 
     async def write_file(self, path: str, data: bytes) -> None:
-        self._fs[path] = data
+        key = self._strip(path)
+        self._fs[key] = data
         self.writes.append((path, data))
 
 
-def _ctx_for(sbx: _FakeSandbox, *, assist: bool, conv_id: str = "conv-f3") -> ToolContext:
+def _ctx(
+    sbx: _FakeSandbox,
+    *,
+    assist: bool = False,
+    conv_id: str = "conv-f1",
+) -> ToolContext:
     return ToolContext(
         sandbox=sbx,
         workspace_path=".",
@@ -73,177 +101,363 @@ def _clear_tracker():
     reset_read_tracker()
 
 
-# --- assist ON: the gate fires ------------------------------------------------
+# --- new file: always allowed ------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_assist_on_first_write_to_unread_existing_file_refused():
-    """The headline F3 case: a weak model attempts to overwrite a file it
-    never read. The first attempt is refused with a prescriptive hint, and the
-    workspace is untouched."""
+async def test_new_file_always_allowed():
+    """A brand-new (nonexistent) file never trips the guard — there is no prior
+    content to ground on. No file_read required."""
+    sbx = _FakeSandbox(existing={})
+    out = await FileWriteTool().run(
+        FileWriteArgs(path="brand_new.py", content="print('hi')\n"),
+        _ctx(sbx),
+    )
+    assert out.success is True
+    assert sbx._fs["brand_new.py"] == b"print('hi')\n"
+
+
+@pytest.mark.asyncio
+async def test_new_file_always_allowed_assist_on():
+    """New-file exemption holds for assist=True too."""
+    sbx = _FakeSandbox(existing={})
+    out = await FileWriteTool().run(
+        FileWriteArgs(path="new.py", content="x = 1\n"),
+        _ctx(sbx, assist=True),
+    )
+    assert out.success is True
+    assert sbx._fs["new.py"] == b"x = 1\n"
+
+
+# --- create → 2nd write without read → refused ------------------------------
+
+
+@pytest.mark.asyncio
+async def test_second_write_without_read_refused():
+    """The thrash-repro: create a file (allowed) → file_write the SAME path
+    again WITHOUT a read → REFUSED with a read-first message."""
+    sbx = _FakeSandbox(existing={})
+    ctx = _ctx(sbx)
+    # First write: new file → allowed
+    first = await FileWriteTool().run(
+        FileWriteArgs(path="main.js", content="const x = 1;\n"), ctx
+    )
+    assert first.success is True
+    # Second write without read → refused
+    second = await FileWriteTool().run(
+        FileWriteArgs(path="main.js", content="const x = 2;\n"), ctx
+    )
+    assert second.success is False
+    assert second.error == "read_before_write"
+    assert "main.js" in second.content
+    assert "file_read" in second.content
+    # workspace is unchanged from first write
+    assert sbx._fs["main.js"] == b"const x = 1;\n"
+
+
+@pytest.mark.asyncio
+async def test_second_write_without_read_refused_assist_off():
+    """Guard fires for assist=False (capable-model tier) — no longer exempt."""
+    sbx = _FakeSandbox(existing={})
+    ctx = _ctx(sbx, assist=False)
+    await FileWriteTool().run(FileWriteArgs(path="x.py", content="v1\n"), ctx)
+    second = await FileWriteTool().run(FileWriteArgs(path="x.py", content="v2\n"), ctx)
+    assert second.success is False
+    assert second.error == "read_before_write"
+    assert sbx._fs["x.py"] == b"v1\n"
+
+
+@pytest.mark.asyncio
+async def test_preexisting_file_refused_without_read_assist_off():
+    """A file that pre-existed before any write in this conversation is also
+    guarded — the guard fires whenever the file exists and hasn't been read."""
     sbx = _FakeSandbox({"config.py": b"OLD = 1\n"})
     out = await FileWriteTool().run(
         FileWriteArgs(path="config.py", content="NEW = 99\n"),
-        _ctx_for(sbx, assist=True),
+        _ctx(sbx, assist=False),
     )
     assert out.success is False
     assert out.error == "read_before_write"
     assert "config.py" in out.content
-    assert "read" in out.content.lower()  # the hint mentions file_read
-    assert "second attempt" in out.content.lower()  # the 2nd-attempt escape hatch
-    assert sbx.writes == []  # workspace untouched on refusal
-    # disk still has the original bytes
     assert sbx._fs["config.py"] == b"OLD = 1\n"
 
 
 @pytest.mark.asyncio
-async def test_assist_on_second_write_to_unread_file_allowed():
-    """The model takes the hint: rather than reading, it re-issues the write
-    (explicit "yes, full-replace"). The 2nd attempt goes through and the
-    workspace reflects the new bytes."""
+async def test_preexisting_file_refused_without_read_assist_on():
+    """Same guard fires for assist=True on a pre-existing file."""
     sbx = _FakeSandbox({"config.py": b"OLD = 1\n"})
-    ctx = _ctx_for(sbx, assist=True)
-    first = await FileWriteTool().run(
-        FileWriteArgs(path="config.py", content="NEW = 99\n"), ctx
+    out = await FileWriteTool().run(
+        FileWriteArgs(path="config.py", content="NEW = 99\n"),
+        _ctx(sbx, assist=True),
     )
-    assert first.success is False  # refused
-    second = await FileWriteTool().run(
-        FileWriteArgs(path="config.py", content="NEW = 99\n"), ctx
-    )
-    assert second.success is True
-    assert sbx._fs["config.py"] == b"NEW = 99\n"
-    assert ("config.py", b"NEW = 99\n") in sbx.writes
+    assert out.success is False
+    assert out.error == "read_before_write"
+    assert sbx._fs["config.py"] == b"OLD = 1\n"
+    # workspace untouched
+    assert sbx.writes == []
+
+
+# --- read lifts the guard ----------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_assist_on_read_lifts_the_guard():
-    """A file_read between attempts lifts the warning: the write goes through
-    on the very next try (no 2nd-attempt gamble needed). This is the happy
-    path the guard is designed to encourage."""
-    sbx = _FakeSandbox({"config.py": b"OLD = 1\n"})
-    ctx = _ctx_for(sbx, assist=True)
-    first = await FileWriteTool().run(
-        FileWriteArgs(path="config.py", content="NEW = 99\n"), ctx
-    )
-    assert first.success is False  # refused
-    # model reads the file to see what's there
-    read_out = await FileReadTool().run(
-        FileReadArgs(path="config.py"), ctx
-    )
+async def test_read_lifts_the_guard():
+    """Create file → file_read → file_write SUCCEEDS (the happy grounded path).
+    After the write the bit is cleared: a 3rd write without a new read fails."""
+    sbx = _FakeSandbox(existing={})
+    ctx = _ctx(sbx)
+    # Create the file
+    await FileWriteTool().run(FileWriteArgs(path="x.js", content="v1\n"), ctx)
+    # Read it
+    read_out = await FileReadTool().run(FileReadArgs(path="x.js"), ctx)
     assert read_out.success is True
-    # now the write is allowed on the FIRST attempt
-    second = await FileWriteTool().run(
-        FileWriteArgs(path="config.py", content="NEW = 99\n"), ctx
-    )
+    # Now write — allowed
+    second = await FileWriteTool().run(FileWriteArgs(path="x.js", content="v2\n"), ctx)
     assert second.success is True
-    assert sbx._fs["config.py"] == b"NEW = 99\n"
+    assert sbx._fs["x.js"] == b"v2\n"
+    # 3rd write without a new read → refused again
+    third = await FileWriteTool().run(FileWriteArgs(path="x.js", content="v3\n"), ctx)
+    assert third.success is False
+    assert third.error == "read_before_write"
+    assert sbx._fs["x.js"] == b"v2\n"
 
 
 @pytest.mark.asyncio
-async def test_assist_on_new_file_always_allowed():
-    """A NEW (nonexistent) file never trips the guard — the guard is only
-    about clobbering EXISTING unread files (SmallCode's exact semantic)."""
-    sbx = _FakeSandbox(existing={})  # empty workspace
+async def test_read_of_preexisting_file_lifts_guard():
+    """Reading a pre-existing file (not yet touched this conversation) lifts
+    the guard and the subsequent write succeeds."""
+    sbx = _FakeSandbox({"app.py": b"old body\n"})
+    ctx = _ctx(sbx)
+    await FileReadTool().run(FileReadArgs(path="app.py"), ctx)
     out = await FileWriteTool().run(
-        FileWriteArgs(path="fresh.py", content="print('hi')\n"),
-        _ctx_for(sbx, assist=True),
+        FileWriteArgs(path="app.py", content="new body\n"), ctx
     )
     assert out.success is True
-    assert sbx._fs["fresh.py"] == b"print('hi')\n"
+    assert sbx._fs["app.py"] == b"new body\n"
+
+
+# --- all mutators clear the read bit ----------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_assist_on_previously_read_file_always_allowed():
-    """A file the agent already read in this conversation can be overwritten
-    on the first try (no need for the 2nd-attempt escape hatch)."""
-    sbx = _FakeSandbox({"x.py": b"old body\n"})
-    ctx = _ctx_for(sbx, assist=True)
-    # read first
-    await FileReadTool().run(FileReadArgs(path="x.py"), ctx)
-    # then write — allowed
+async def test_file_append_clears_read_bit():
+    """file_append is a successful mutation: a write after it without a read
+    is refused (even if a read preceded the append)."""
+    sbx = _FakeSandbox(existing={})
+    ctx = _ctx(sbx)
+    # Create file, read it (bit set), then append
+    await FileWriteTool().run(FileWriteArgs(path="log.txt", content="line1\n"), ctx)
+    await FileReadTool().run(FileReadArgs(path="log.txt"), ctx)
+    append_out = await FileAppendTool().run(
+        FileAppendArgs(path="log.txt", content="line2\n"), ctx
+    )
+    assert append_out.success is True
+    # Now file_write without a new read → refused (append cleared the bit)
+    write_out = await FileWriteTool().run(
+        FileWriteArgs(path="log.txt", content="overwrite\n"), ctx
+    )
+    assert write_out.success is False
+    assert write_out.error == "read_before_write"
+    assert sbx._fs["log.txt"] == b"line1\nline2\n"
+
+
+@pytest.mark.asyncio
+async def test_file_edit_clears_read_bit():
+    """file_edit is a successful mutation: a write after it without a read
+    is refused."""
+    sbx = _FakeSandbox({"a.py": b"x = 1\n"})
+    ctx = _ctx(sbx)
+    # Read (bit set), then edit
+    await FileReadTool().run(FileReadArgs(path="a.py"), ctx)
+    edit_out = await FileEditTool().run(
+        FileEditArgs(path="a.py", old="x = 1", new="x = 2"), ctx
+    )
+    assert edit_out.success is True
+    # Write without a new read → refused
+    write_out = await FileWriteTool().run(
+        FileWriteArgs(path="a.py", content="x = 99\n"), ctx
+    )
+    assert write_out.success is False
+    assert write_out.error == "read_before_write"
+    assert b"x = 2" in sbx._fs["a.py"]
+
+
+@pytest.mark.asyncio
+async def test_file_replace_lines_clears_read_bit():
+    """file_replace_lines is a successful mutation: a write after it without a
+    read is refused."""
+    sbx = _FakeSandbox({"a.py": b"x = 1\ny = 2\n"})
+    ctx = _ctx(sbx)
+    await FileReadTool().run(FileReadArgs(path="a.py"), ctx)
+    replace_out = await FileReplaceLinesTool().run(
+        FileReplaceLinesArgs(path="a.py", start_line=2, end_line=2, new_text="y = 99"),
+        ctx,
+    )
+    assert replace_out.success is True
+    write_out = await FileWriteTool().run(
+        FileWriteArgs(path="a.py", content="overwrite\n"), ctx
+    )
+    assert write_out.success is False
+    assert write_out.error == "read_before_write"
+
+
+@pytest.mark.asyncio
+async def test_file_insert_lines_clears_read_bit():
+    """file_insert_lines is a successful mutation: a write after it without a
+    read is refused."""
+    sbx = _FakeSandbox({"a.py": b"x = 1\n"})
+    ctx = _ctx(sbx)
+    await FileReadTool().run(FileReadArgs(path="a.py"), ctx)
+    insert_out = await FileInsertLinesTool().run(
+        FileInsertLinesArgs(path="a.py", after_line=1, text="y = 2"), ctx
+    )
+    assert insert_out.success is True
+    write_out = await FileWriteTool().run(
+        FileWriteArgs(path="a.py", content="overwrite\n"), ctx
+    )
+    assert write_out.success is False
+    assert write_out.error == "read_before_write"
+
+
+@pytest.mark.asyncio
+async def test_file_str_replace_clears_read_bit():
+    """file_str_replace is a successful mutation: a write after it without a
+    read is refused."""
+    sbx = _FakeSandbox({"a.py": b"x = 1\n"})
+    ctx = _ctx(sbx)
+    await FileReadTool().run(FileReadArgs(path="a.py"), ctx)
+    replace_out = await FileStrReplaceTool().run(
+        FileStrReplaceArgs(path="a.py", old_str="x = 1", new_str="x = 42"), ctx
+    )
+    assert replace_out.success is True
+    write_out = await FileWriteTool().run(
+        FileWriteArgs(path="a.py", content="overwrite\n"), ctx
+    )
+    assert write_out.success is False
+    assert write_out.error == "read_before_write"
+
+
+# --- path alias collapse -----------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_path_alias_collapse_workspace_prefix():
+    """'/workspace/x.py' and 'workspace/x.py' collapse to the same tracker key
+    as 'x.py'. A read under one alias lifts the guard for writes under the other."""
+    sbx = _FakeSandbox({"x.py": b"original\n"})
+    ctx = _ctx(sbx)
+    # Read via prefixed path
+    read_out = await FileReadTool().run(FileReadArgs(path="workspace/x.py"), ctx)
+    assert read_out.success is True
+    # Write via the bare path — should be allowed because aliases collapse
+    write_out = await FileWriteTool().run(
+        FileWriteArgs(path="x.py", content="new\n"), ctx
+    )
+    assert write_out.success is True
+    # Write again (bit cleared by the write) — refused even with abs path
+    sbx._fs["x.py"] = b"new\n"  # sandbox updated
+    write_out2 = await FileWriteTool().run(
+        FileWriteArgs(path="/workspace/x.py", content="newer\n"), ctx
+    )
+    assert write_out2.success is False
+    assert write_out2.error == "read_before_write"
+
+
+@pytest.mark.asyncio
+async def test_path_alias_abs_prefix_read_lifts_bare_write():
+    """A file_read via '/workspace/foo.py' lifts the guard for a file_write
+    on 'foo.py' (and vice versa) — they map to the same canonical key."""
+    sbx = _FakeSandbox({"foo.py": b"old\n"})
+    ctx = _ctx(sbx)
+    # Read the absolute form
+    await FileReadTool().run(FileReadArgs(path="/workspace/foo.py"), ctx)
+    # Write the bare form — allowed
     out = await FileWriteTool().run(
-        FileWriteArgs(path="x.py", content="new body\n"), ctx
+        FileWriteArgs(path="foo.py", content="new\n"), ctx
     )
     assert out.success is True
-    assert sbx._fs["x.py"] == b"new body\n"
+    assert sbx._fs["foo.py"] == b"new\n"
+
+
+# --- no second-attempt bypass ------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_assist_on_per_conversation_isolation():
-    """Tracking is per-conversation: writes in conv A do NOT lift a warning
-    for the same file in conv B. (Two different agents, two different sessions
-    — the guard is not a global lock.)"""
+async def test_no_second_attempt_bypass():
+    """The old F3 'second write is allowed' escape hatch is GONE. Two consecutive
+    file_write calls on an existing file without an intervening file_read are
+    BOTH refused. Only a real file_read lifts the guard."""
+    sbx = _FakeSandbox({"cfg.py": b"OLD\n"})
+    ctx = _ctx(sbx)
+    first = await FileWriteTool().run(
+        FileWriteArgs(path="cfg.py", content="ATTEMPT_1\n"), ctx
+    )
+    assert first.success is False
+    assert first.error == "read_before_write"
+    # Second attempt — still refused (no bypass)
+    second = await FileWriteTool().run(
+        FileWriteArgs(path="cfg.py", content="ATTEMPT_2\n"), ctx
+    )
+    assert second.success is False
+    assert second.error == "read_before_write"
+    # workspace unchanged
+    assert sbx._fs["cfg.py"] == b"OLD\n"
+    assert sbx.writes == []
+
+
+# --- per-conversation isolation ----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_per_conversation_isolation():
+    """Tracking is per-conversation: a read in conv A does NOT lift the guard
+    for the same file in conv B."""
     sbx_a = _FakeSandbox({"x.py": b"old\n"})
     sbx_b = _FakeSandbox({"x.py": b"old\n"})
-    ctx_a = _ctx_for(sbx_a, assist=True, conv_id="conv-A")
-    ctx_b = _ctx_for(sbx_b, assist=True, conv_id="conv-B")
-    # conv A: 1st write refused, 2nd allowed
-    out_a1 = await FileWriteTool().run(
-        FileWriteArgs(path="x.py", content="A\n"), ctx_a
-    )
-    assert out_a1.success is False
-    # conv B has its own state — 1st write is also refused (NOT lifted by A)
-    out_b1 = await FileWriteTool().run(
-        FileWriteArgs(path="x.py", content="B\n"), ctx_b
-    )
-    assert out_b1.success is False  # NOT lifted by A's writes
-    # conv A: 2nd attempt now allowed
-    out_a2 = await FileWriteTool().run(
-        FileWriteArgs(path="x.py", content="A\n"), ctx_a
-    )
-    assert out_a2.success is True
-    assert sbx_a._fs["x.py"] == b"A\n"
-    assert sbx_b._fs["x.py"] == b"old\n"  # conv B's file still untouched
+    ctx_a = _ctx(sbx_a, conv_id="conv-A")
+    ctx_b = _ctx(sbx_b, conv_id="conv-B")
+    # conv A: read lifts guard
+    await FileReadTool().run(FileReadArgs(path="x.py"), ctx_a)
+    out_a = await FileWriteTool().run(FileWriteArgs(path="x.py", content="A\n"), ctx_a)
+    assert out_a.success is True
+    # conv B: guard still active (conv A's read doesn't help)
+    out_b = await FileWriteTool().run(FileWriteArgs(path="x.py", content="B\n"), ctx_b)
+    assert out_b.success is False
+    assert out_b.error == "read_before_write"
+    assert sbx_b._fs["x.py"] == b"old\n"
 
 
-# --- assist OFF: byte-identical to pre-F3 ------------------------------------
+# --- executor-level smoke: the guard is reachable end-to-end ----------------
 
 
 @pytest.mark.asyncio
-async def test_assist_off_first_write_to_unread_existing_file_allowed():
-    """Gate OFF — a 1st write to an existing, unread file is allowed.
-    Crucially the gate is NEVER consulted, so the result is byte-identical
-    to the pre-F3 file_write (success, no hint, no error, content written)."""
-    sbx = _FakeSandbox({"config.py": b"OLD = 1\n"})
-    out = await FileWriteTool().run(
-        FileWriteArgs(path="config.py", content="NEW = 99\n"),
-        _ctx_for(sbx, assist=False),
+async def test_executor_refuses_blind_write_to_existing_file():
+    """DefaultToolExecutor with any model_policy → file_write to an existing
+    unread file hits the F1 gate. Guard is no longer assist-gated."""
+    sbx = _FakeSandbox({"x.py": b"old\n"})
+    reg = ToolRegistry()
+    reg.register(FileWriteTool())
+    reg.register(FileReadTool())
+    ex = DefaultToolExecutor(
+        reg,
+        ToolScope(allowed_tools=frozenset({"file_write", "file_read"})),
+        sandbox=sbx,
+        model_policy=ModelExecutionPolicy.standard(),  # assist=False
     )
-    assert out.success is True
-    assert out.error is None
-    assert "wrote" in out.content
-    assert sbx._fs["config.py"] == b"NEW = 99\n"
-    assert ("config.py", b"NEW = 99\n") in sbx.writes
+    from disco.core import ToolCall
+
+    result = await ex.execute(
+        ToolCall(tool_name="file_write", arguments={"path": "x.py", "content": "new\n"})
+    )
+    assert result.success is False
+    assert "x.py" in result.content
+    assert "file_read" in result.content
+    assert sbx._fs["x.py"] == b"old\n"  # untouched
 
 
 @pytest.mark.asyncio
-async def test_assist_off_never_consults_tracker_state():
-    """Even after the tracker has 'warned' a path (a prior assist-ON refusal),
-    assist OFF must allow the write without lifting or clearing the warning.
-    This proves the assist-OFF branch does not interact with the tracker at
-    all (the check is guarded, not just optional)."""
-    # pre-populate tracker state as if a prior assist-ON session had warned
-    from disco.tools.builtin import files as _files
-
-    _files._read_state.setdefault("conv-f3", {"read": set(), "written": set(), "warned": set()})
-    _files._read_state["conv-f3"]["warned"].add("config.py")
-    sbx = _FakeSandbox({"config.py": b"OLD = 1\n"})
-    out = await FileWriteTool().run(
-        FileWriteArgs(path="config.py", content="NEW = 99\n"),
-        _ctx_for(sbx, assist=False, conv_id="conv-f3"),
-    )
-    assert out.success is True  # assist OFF never consults tracker
-    assert sbx._fs["config.py"] == b"NEW = 99\n"
-
-
-# --- executor-level smoke: ctx.assist flows through --------------------------
-
-
-@pytest.mark.asyncio
-async def test_executor_assist_on_refuses_via_default_tool_executor():
-    """End-to-end: DefaultToolExecutor with weak model_policy → file_write hits the
-    F3 gate and returns a failure ToolResult. Verifies the gate is reachable
-    from the production call path, not just the tool's .run() surface."""
+async def test_executor_assist_on_refuses_blind_write():
+    """Same guard fires with weak model_policy (assist=True)."""
     sbx = _FakeSandbox({"x.py": b"old\n"})
     reg = ToolRegistry()
     reg.register(FileWriteTool())
@@ -260,31 +474,6 @@ async def test_executor_assist_on_refuses_via_default_tool_executor():
         ToolCall(tool_name="file_write", arguments={"path": "x.py", "content": "new\n"})
     )
     assert result.success is False
-    assert "x.py" in result.content
-    assert "read" in result.content.lower()
-    assert sbx._fs["x.py"] == b"old\n"  # untouched
-
-
-@pytest.mark.asyncio
-async def test_executor_assist_off_writes_through_byte_identically():
-    """End-to-end: DefaultToolExecutor with standard model_policy → file_write goes
-    through unchanged. No hint, no error, content lands on disk — proves the
-    assist-OFF path is the pre-F3 code path byte-for-byte."""
-    sbx = _FakeSandbox({"x.py": b"old\n"})
-    reg = ToolRegistry()
-    reg.register(FileWriteTool())
-    reg.register(FileReadTool())
-    ex = DefaultToolExecutor(
-        reg,
-        ToolScope(allowed_tools=frozenset({"file_write", "file_read"})),
-        sandbox=sbx,
-        model_policy=ModelExecutionPolicy.standard(),
-    )
-    from disco.core import ToolCall
-
-    result = await ex.execute(
-        ToolCall(tool_name="file_write", arguments={"path": "x.py", "content": "new\n"})
-    )
-    assert result.success is True
-    assert result.error is None
-    assert sbx._fs["x.py"] == b"new\n"
+    assert result.content is not None
+    assert "file_read" in result.content
+    assert sbx._fs["x.py"] == b"old\n"

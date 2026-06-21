@@ -251,23 +251,31 @@ def test_permission_error_emits_unreadable_note():
 
 def test_preamble_contains_silent_context_instruction_and_existing_guidance():
     """The snapshot preamble must tell the model NOT to narrate or acknowledge
-    the block, and must still contain the #28 anti-clobber guidance (the
-    'authoritative' / 'trust THIS' / 'file_write' / 'AVOID line-number edits'
-    lines that the weak-model-reliability fix depends on)."""
+    the block, and must contain the anti-clobber guidance (the 'authoritative' /
+    'trust THIS' / 'file_write' / 'file_read' lines) and the F1 read-before-
+    rewrite directive. The old 'AVOID line-number edits' instruction is REMOVED
+    because it conflicts with the read-before-rewrite gate (F1 order)."""
     sandbox = FakeSandboxInstance(files={"app.py": b"x = 1\n"})
     content = _snapshot_text(sandbox, ["app.py"])
     assert content is not None
 
-    # New: don't-narrate instruction must be present
+    # Don't-narrate instruction must be present
     assert "SILENT CONTEXT" in content, "preamble must include SILENT CONTEXT marker"
     assert "do NOT" in content or "Do NOT" in content, (
         "preamble must instruct the model not to narrate the snapshot"
     )
 
-    # Existing #28 anti-clobber lines must remain intact
+    # Anti-clobber lines must remain intact
     assert "authoritative" in content, "preamble must still say 'authoritative'"
     assert "trust THIS" in content, "preamble must still say 'trust THIS over your memory'"
     assert "file_write" in content, "preamble must still reference file_write"
-    assert "AVOID line-number edits" in content, (
-        "preamble must still contain the AVOID line-number edits warning"
+
+    # F1: read-before-rewrite guidance must be present
+    assert "file_read" in content, (
+        "preamble must tell the model to call file_read before a full rewrite"
+    )
+
+    # Old 'AVOID line-number edits' instruction is gone — F1 prefers targeted edits
+    assert "AVOID line-number edits" not in content, (
+        "preamble must NOT tell the model to avoid line-number edits (conflicts with F1)"
     )

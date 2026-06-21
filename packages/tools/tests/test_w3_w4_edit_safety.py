@@ -21,6 +21,8 @@ from disco.tools.builtin.files import (
     FileEditTool,
     FileInsertLinesArgs,
     FileInsertLinesTool,
+    FileReadArgs,
+    FileReadTool,
     FileReplaceLinesArgs,
     FileReplaceLinesTool,
     FileStrReplaceArgs,
@@ -83,12 +85,16 @@ def _clear_tracker():
 @pytest.mark.asyncio
 async def test_w3_write_bad_python_over_good_file_reverted():
     """W3 headline: writing syntactically broken Python over a good file
-    → auto-revert to old content + failure outcome."""
+    → auto-revert to old content + failure outcome.
+    Note: file_read is required first (F1 gate) to prove we've seen the content."""
     good = b"x = 1\n"
     sbx = _FakeSandbox({"foo.py": good})
+    ctx = _ctx(sbx)
+    # F1: read first so the write is allowed to reach the W3 gate.
+    await FileReadTool().run(FileReadArgs(path="foo.py"), ctx)
     out = await FileWriteTool().run(
         FileWriteArgs(path="foo.py", content="def broken(\n"),
-        _ctx(sbx),
+        ctx,
     )
     assert out.success is False
     assert out.error == "syntax_gate_reverted"
@@ -120,9 +126,11 @@ async def test_w3_write_bad_python_new_file_applied_and_flagged():
 async def test_w3_write_good_python_passes():
     """W3: writing syntactically valid Python passes the gate."""
     sbx = _FakeSandbox({"foo.py": b"x = 1\n"})
+    ctx = _ctx(sbx)
+    await FileReadTool().run(FileReadArgs(path="foo.py"), ctx)
     out = await FileWriteTool().run(
         FileWriteArgs(path="foo.py", content="x = 2\ny = 3\n"),
-        _ctx(sbx),
+        ctx,
     )
     assert out.success is True
     assert sbx._fs["foo.py"] == b"x = 2\ny = 3\n"
@@ -133,9 +141,11 @@ async def test_w3_write_unparseable_type_written_normally():
     """W3: a file type we don't parse (.md, .txt, .sh) bypasses the gate —
     never block what we can't parse."""
     sbx = _FakeSandbox({"README.md": b"# old\n"})
+    ctx = _ctx(sbx)
+    await FileReadTool().run(FileReadArgs(path="README.md"), ctx)
     out = await FileWriteTool().run(
         FileWriteArgs(path="README.md", content="this is {{{{ badly formed"),
-        _ctx(sbx),
+        ctx,
     )
     assert out.success is True
     assert sbx._fs["README.md"] == b"this is {{{{ badly formed"
@@ -147,11 +157,13 @@ async def test_w3_write_preexisting_syntax_error_not_counted():
     The gate only counts NEWLY-introduced errors."""
     bad_py = b"def broken(\n"
     sbx = _FakeSandbox({"foo.py": bad_py})
+    ctx = _ctx(sbx)
+    await FileReadTool().run(FileReadArgs(path="foo.py"), ctx)
     # Rewrite with DIFFERENT broken code — still has a SyntaxError, but it
     # was already there: the gate should NOT revert.
     out = await FileWriteTool().run(
         FileWriteArgs(path="foo.py", content="class also_broken(\n"),
-        _ctx(sbx),
+        ctx,
     )
     assert out.success is True  # pre-existing SyntaxError is not counted
     assert sbx._fs["foo.py"] == b"class also_broken(\n"
@@ -161,9 +173,11 @@ async def test_w3_write_preexisting_syntax_error_not_counted():
 async def test_w3_write_bad_json_over_good_json_reverted():
     """W3: writing invalid JSON over a valid JSON file → reverted."""
     sbx = _FakeSandbox({"cfg.json": b'{"key": 1}\n'})
+    ctx = _ctx(sbx)
+    await FileReadTool().run(FileReadArgs(path="cfg.json"), ctx)
     out = await FileWriteTool().run(
         FileWriteArgs(path="cfg.json", content="{bad json"),
-        _ctx(sbx),
+        ctx,
     )
     assert out.success is False
     assert out.error == "syntax_gate_reverted"

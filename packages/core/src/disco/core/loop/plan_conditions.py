@@ -228,20 +228,72 @@ class PlanStepConditions:
     async def check_command_for_plan_step(
         self, predicate: CommandExitPredicate
     ) -> tuple[bool, str]:
-        """Run `predicate.cmd` in a fresh subprocess against the workspace
-        root and compare to `predicate.expect_exit` (default 0). Tight
-        timeout to keep the loop responsive. Failures (deny, timeout,
-        wrong exit) are surfaced with the reason in the note."""
+        """Run `predicate.cmd` against `predicate.expect_exit` (default 0). Tight
+        timeout to keep the loop responsive. Failures (timeout, wrong exit) are
+        surfaced with the reason in the note. Advisory-only — never wedges the loop.
+
+        When a sandbox with `exec_shell` is available (container backends that
+        report `workspace_path is None`), the command runs INSIDE THE BOX via
+        `await sbx.exec_shell(...)`, resolving against the agent's own filesystem.
+        This is the load-bearing fix: the prior code used `cwd=None` on the host
+        when `workspace_path` was None, evaluating against the agent-server cwd
+        instead of the box — a false advisory.
+
+        Timeout caveat: if `ExecResult.timed_out` is True, the result is always
+        treated as a FAILURE even when `exit_code == expect_exit` (e.g. 124). A
+        host-subprocess timeout cannot pass today; a sandbox timeout must not
+        accidentally pass either. The reason is surfaced in the advisory note.
+
+        The host-`subprocess` branch is kept ONLY as the fallback for sandbox-less
+        / fake-executor paths (mirroring the `file_exists` fallback design). The
+        5 s timeout is preserved for both paths."""
+        timeout = 5.0
+        sbx = getattr(self._loop.executor, "sandbox", None)
+
+        # Sandbox-aware path: execute the predicate command INSIDE THE BOX so it
+        # resolves against the agent's filesystem, not the host's. Duck-typed; no
+        # upward `tools` import (core never imports tools).
+        if sbx is not None and hasattr(sbx, "exec_shell"):
+            try:
+                result = await sbx.exec_shell(predicate.cmd, timeout_s=int(timeout))
+            except Exception as exc:  # noqa: BLE001 — advisory; never wedge the loop
+                return (
+                    False,
+                    f"command({predicate.cmd!r}): sandbox exec error "
+                    f"({type(exc).__name__}: {exc})",
+                )
+            # Timeout caveat: timed_out=True is always a non-pass, even when
+            # exit_code coincidentally matches expect_exit (e.g. 124 from SIGKILL).
+            # Surface the reason so the user can see what actually happened.
+            if getattr(result, "timed_out", False):
+                return (
+                    False,
+                    f"command({predicate.cmd!r}): timed out in sandbox after {timeout}s "
+                    f"(exit_code={result.exit_code}, expect={predicate.expect_exit})",
+                )
+            if result.exit_code == predicate.expect_exit:
+                return (
+                    True,
+                    f"command({predicate.cmd!r}): exited {result.exit_code} "
+                    f"as expected (sandbox)",
+                )
+            return (
+                False,
+                f"command({predicate.cmd!r}): exited {result.exit_code}, "
+                f"expected {predicate.expect_exit} (sandbox)",
+            )
+
+        # Fallback: no sandbox (or a sandbox without exec_shell) — run on the host.
+        # This is the sandbox-less / fake-executor path the tests rely on.
         import asyncio
         import subprocess
         from pathlib import Path
-        sbx = getattr(self._loop.executor, "sandbox", None)
+
         workspace = getattr(sbx, "workspace_path", None) if sbx is not None else None
         cwd = str(Path(workspace).resolve()) if workspace else None
         # 5s is plenty for a per-step done-condition probe — the C1c
         # gate uses the same default. C18 is advisory so we DON'T hang
         # the loop on a stuck command.
-        timeout = 5.0
 
         def _run() -> subprocess.CompletedProcess[str]:
             return subprocess.run(

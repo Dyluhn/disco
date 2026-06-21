@@ -13,6 +13,7 @@ import re
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..sandbox.base import strip_redundant_workspace_prefix
 
 _FS = frozenset({Capability.FILESYSTEM})
 
@@ -54,27 +55,29 @@ _PRESSURE_DIRECTIVE = (
 # ("  123\t<code>"). file_edit strips it defensively so a paste-back still matches.
 _LINENO_PREFIX = re.compile(r"(?m)^\s*\d+\t")
 
-# Per-conversation read-before-write tracker for the assist gate (F3).
-# Structure: {conv_id: {"read": set[str], "written": set[str], "warned": set[str]}}
-#   read:    paths the agent has successfully file_read in this conversation
-#   written: paths the agent has successfully file_write'd in this conversation
-#   warned:  paths we refused a file_write on — the 2nd-attempt escape hatch
-#            (SmallCode read_tracker.js pattern: first untracked write to an
-#            existing file refused, a read lifts it, second write allowed).
+# Per-conversation read-before-rewrite tracker (F1).
+# Structure: {conv_id: {"read_since_write": set[str]}}
+#   read_since_write: canonical paths (workspace-prefix-stripped) for which a
+#     successful FileReadTool.run has occurred since the path's last successful
+#     mutation (file_write / file_append / file_edit / file_replace_lines /
+#     file_insert_lines / file_str_replace) in this conversation.
+#     A write to a path that (a) EXISTS on disk AND (b) is NOT in this set is
+#     REFUSED — the model must file_read the file first.
+#     A NEW file (does not exist yet) is always allowed.
 # Module-level so it's per-process; the per-conversation key keeps state
-# isolated between agents/sessions. The tracker is consulted only when
-# `ctx.assist` is True; the assist-OFF path is byte-identical to pre-F3.
+# isolated between agents/sessions. Applies to ALL model tiers (not gated on
+# ctx.assist) — the thrash root-cause hits capable models too.
 _read_state: dict[str, dict[str, set[str]]] = {}
 
 
 def reset_read_tracker() -> None:
-    """Clear all per-conversation read/write state. Tests only; not part of the
-    tool API."""
+    """Clear all per-conversation read-since-write state. Tests only; not part
+    of the tool API."""
     _read_state.clear()
 
 
 def clear_conversation_read_state(conv_id: str) -> None:
-    """Remove the F3 tracker entry for a single conversation.
+    """Remove the F1 tracker entry for a single conversation.
 
     Called by DefaultToolExecutor.kill() so the module-level dict does not
     grow unbounded in long-running processes (each killed executor cleans up
@@ -89,9 +92,16 @@ def clear_conversation_read_state(conv_id: str) -> None:
 def _conv_state(conv_id: str) -> dict[str, set[str]]:
     s = _read_state.get(conv_id)
     if s is None:
-        s = {"read": set(), "written": set(), "warned": set()}
+        s = {"read_since_write": set()}
         _read_state[conv_id] = s
     return s
+
+
+def _canonical(path: str) -> str:
+    """Canonical tracker key: strip leading workspace prefixes so 'workspace/foo'
+    and '/workspace/foo' collapse to the same entry as 'foo'. One level only —
+    'src/workspace/x' is untouched."""
+    return strip_redundant_workspace_prefix(path)
 
 
 def _number_lines(text: str, start: int = 1) -> str:
@@ -229,11 +239,14 @@ class FileReadTool:
     async def run(self, args: FileReadArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None  # sandbox tools always receive an instance
         data = await ctx.sandbox.read_file(args.path)
-        # Mark this path as "seen" so a subsequent file_write on it is allowed
-        # on the first try (the read-before-write guard's happy path). Only
-        # tracked under the assist gate — the capable-model path never looks.
-        if ctx.assist:
-            _conv_state(ctx.conversation_id)["read"].add(args.path)
+        # F1 — set the read-since-write bit for this path so a subsequent
+        # file_write is allowed (the happy path: read → write). Applies to ALL
+        # tiers (not gated on ctx.assist) — the thrash root-cause hits capable
+        # models too, and the guard must be symmetric. The internal
+        # ctx.sandbox.read_file() calls inside _gated_write and each mutator's
+        # own read do NOT go through this method, so they do NOT set the bit —
+        # only an explicit model-issued file_read counts as grounding evidence.
+        _conv_state(ctx.conversation_id)["read_since_write"].add(_canonical(args.path))
         text = data.decode("utf-8", errors="replace")
         lines = text.splitlines()
         total = len(lines)
@@ -324,46 +337,44 @@ class FileWriteTool:
 
     async def run(self, args: FileWriteArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
-        # Read existing content once — used by both the F3 guard and the W3 syntax gate.
+        # Read existing content once — used by both the F1 guard and the W3 syntax gate.
         old_text: str | None = None
         try:
             old_text = (await ctx.sandbox.read_file(args.path)).decode("utf-8", errors="replace")
         except Exception:  # noqa: BLE001 — absent file is fine, that just means "new"
             old_text = None
-        # F3 — read-before-write guard, assist tier ONLY. Refuse the first write
-        # to an EXISTING file the agent has not read this conversation; the
-        # 2nd attempt is the model's explicit "yes, full-replace" and is allowed.
-        # Clobbering an unread existing file is the silent-data-loss path the
-        # weak-model tier keeps stepping into. A NEW (nonexistent) file is
-        # always allowed (creating from scratch has no prior bytes to lose).
-        # The whole branch is gated on `ctx.assist`; the capable-model path is
-        # byte-identical to pre-F3 (no tracker lookup, no extra read).
-        if ctx.assist:
-            state = _conv_state(ctx.conversation_id)
-            if (
-                args.path not in state["read"]
-                and args.path not in state["written"]
-                and args.path not in state["warned"]
-            ):
-                if old_text is not None:  # file exists (we read it above)
-                    state["warned"].add(args.path)
-                    return ToolOutcome(
-                        success=False,
-                        content=(
-                            f"file_write refused: {args.path} already exists and you have not "
-                            f"read it in this conversation. file_read it first (to see what is "
-                            f"there) or issue a second attempt with file_write to force a full "
-                            f"replace."
-                        ),
-                        error="read_before_write",
-                    )
+        # F1 — read-before-rewrite guard (ALL tiers, no assist gate). Refuse a
+        # file_write to an EXISTING file if there has been no successful
+        # file_read of it since the path's last successful mutation in this
+        # conversation. A NEW (nonexistent) file is always allowed — there is no
+        # prior content to ground on. The old F3 "second untracked write forces
+        # replace" escape hatch is REMOVED; the only way past this refusal is an
+        # actual file_read (which sets the read-since-write bit), or using a
+        # targeted edit tool (file_replace_lines / file_insert_lines / file_edit)
+        # which does not require a full-rewrite guard because it operates on
+        # specific lines anchored to the current content.
+        if old_text is not None:  # file exists (we read it above)
+            canonical = _canonical(args.path)
+            if canonical not in _conv_state(ctx.conversation_id)["read_since_write"]:
+                return ToolOutcome(
+                    success=False,
+                    error="read_before_write",
+                    content=(
+                        f"file_write refused: {args.path} already exists and has not been "
+                        f"read since the last write to it. Read it first "
+                        f"(file_read) to ground your edit in the current content, or use a "
+                        f"targeted edit (file_replace_lines / file_insert_lines / file_edit) "
+                        f"instead of rewriting the whole file from memory."
+                    ),
+                )
         # W3 — syntax gate: write new bytes; auto-revert if new content introduces errors.
         raw = args.content.encode("utf-8")
         gated = await _gated_write(ctx, args.path, raw, old_text)
         if gated is not None:
             return gated
-        if ctx.assist:
-            _conv_state(ctx.conversation_id)["written"].add(args.path)
+        # F1 — clear the read-since-write bit: the file has been mutated, so the
+        # next file_write must be preceded by another file_read.
+        _conv_state(ctx.conversation_id)["read_since_write"].discard(_canonical(args.path))
         return ToolOutcome(
             success=True, content=f"wrote {len(raw)} bytes to {args.path}", artifacts=[args.path]
         )
@@ -406,6 +417,8 @@ class FileAppendTool:
         gated = await _gated_write(ctx, args.path, combined, old_text)
         if gated is not None:
             return gated
+        # F1 — file_append is a successful mutation: clear the read-since-write bit.
+        _conv_state(ctx.conversation_id)["read_since_write"].discard(_canonical(args.path))
         return ToolOutcome(
             success=True,
             content=f"appended {len(args.content.encode('utf-8'))} bytes to {args.path}",
@@ -549,6 +562,8 @@ class FileEditTool:
         gated = await _gated_write(ctx, args.path, updated.encode("utf-8"), text)
         if gated is not None:
             return gated
+        # F1 — file_edit is a successful mutation: clear the read-since-write bit.
+        _conv_state(ctx.conversation_id)["read_since_write"].discard(_canonical(args.path))
         return ToolOutcome(
             success=True, content=f"edited {args.path} ({how})", artifacts=[args.path]
         )
@@ -620,6 +635,8 @@ class FileReplaceLinesTool:
         gated = await _gated_write(ctx, args.path, out.encode("utf-8"), text)
         if gated is not None:
             return gated
+        # F1 — file_replace_lines is a successful mutation: clear the read-since-write bit.
+        _conv_state(ctx.conversation_id)["read_since_write"].discard(_canonical(args.path))
         replaced = max(0, end - args.start_line + 1)
         return ToolOutcome(
             success=True,
@@ -673,6 +690,8 @@ class FileInsertLinesTool:
         gated = await _gated_write(ctx, args.path, out.encode("utf-8"), text)
         if gated is not None:
             return gated
+        # F1 — file_insert_lines is a successful mutation: clear the read-since-write bit.
+        _conv_state(ctx.conversation_id)["read_since_write"].discard(_canonical(args.path))
         return ToolOutcome(
             success=True,
             content=f"inserted {len(ins)} lines after line {args.after_line} of {args.path}",
@@ -758,6 +777,10 @@ class FileStrReplaceTool:
                     gated = await _gated_write(ctx, args.path, new_text.encode("utf-8"), text)
                     if gated is not None:
                         return gated
+                    # F1 — successful mutation: clear the read-since-write bit.
+                    _conv_state(ctx.conversation_id)["read_since_write"].discard(
+                        _canonical(args.path)
+                    )
                     return ToolOutcome(
                         success=True,
                         content=f"replaced in {args.path} (whitespace-stripped match)",
@@ -774,6 +797,8 @@ class FileStrReplaceTool:
         gated = await _gated_write(ctx, args.path, new_text.encode("utf-8"), text)
         if gated is not None:
             return gated
+        # F1 — successful mutation: clear the read-since-write bit.
+        _conv_state(ctx.conversation_id)["read_since_write"].discard(_canonical(args.path))
         return ToolOutcome(
             success=True,
             content=f"replaced in {args.path}",

@@ -144,4 +144,7 @@ def test_tool_context_has_no_secret_field():
         "sessions",
         "kernel",
         "assist",  # T1: weak-model-assist gate flag (a bool, not a secret)
+        # ROOT-5: (base_url, model_id, api_key_env) — the conversation's effective driver
+        # endpoint. The api_key_env is the env-var NAME, NOT the secret value (§6 holds).
+        "driver_llm",
     }

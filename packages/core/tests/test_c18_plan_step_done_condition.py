@@ -34,6 +34,9 @@ Tests use only fakes (no real model, no real container) — same pattern as
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from dataclasses import field as _dc_field
+
 import pytest
 from disco.core import (
     ActionEvent,
@@ -511,3 +514,194 @@ async def test_c18_real_workspace_path_escape_still_fails(tmp_path):
     assert "NOT met" in note.message.content
     assert "escapes workspace" in note.message.content
     assert note.meta.get("passed") is False
+
+
+# ---------------------------------------------------------------------------
+# F-2 — container backend: command predicate ran on the HOST (cwd=None), not
+# in the box. Fix: when sbx has `exec_shell`, run the predicate INSIDE THE BOX.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _FakeExecResult:
+    """Minimal duck-type of tools.sandbox.base.ExecResult for these tests.
+    Uses only the fields the C18 evaluator reads: exit_code and timed_out."""
+
+    exit_code: int
+    stdout: str = _dc_field(default="")
+    stderr: str = _dc_field(default="")
+    timed_out: bool = _dc_field(default=False)
+
+
+class _FakeContainerSandboxWithExecShell:
+    """Container backend (workspace_path=None) that exposes exec_shell. Records
+    every call so tests can prove exec_shell — not host subprocess — was used.
+    The outcome is controlled by the _FakeExecResult passed at construction."""
+
+    workspace_path = None
+
+    def __init__(self, result: _FakeExecResult) -> None:
+        self._result = result
+        self.exec_shell_calls: list[tuple[str, int]] = []
+
+    async def exec_shell(self, cmd: str, *, timeout_s: int) -> _FakeExecResult:
+        self.exec_shell_calls.append((cmd, timeout_s))
+        return self._result
+
+    async def file_exists(self, path: str) -> bool:
+        return False
+
+
+@pytest.mark.asyncio
+async def test_c18_container_command_uses_exec_shell(tmp_path):
+    """F-2: on a container backend (workspace_path=None, exec_shell present), a
+    command predicate is evaluated via exec_shell, NOT host subprocess.
+    The advisory note reflects the sandbox result and stamps '(sandbox)'."""
+    sbx = _FakeContainerSandboxWithExecShell(result=_FakeExecResult(exit_code=0))
+
+    agent = ScriptedAgent(
+        [
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "p",
+                    "steps": [
+                        {
+                            "title": "check build output",
+                            "done_condition": {
+                                "kind": "command",
+                                "cmd": "test -d css && test -f index.html",
+                                "expect_exit": 0,
+                            },
+                        }
+                    ],
+                },
+            ),
+            action_step("plan_step", {"index": 1, "state": "done"}),
+            finish_step(),
+        ]
+    )
+    loop, store = build_loop(agent, executor=_SandboxExecutor(sbx), conversation_id=CID)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    await loop.send_message("go")
+    await loop.run()
+    await loop.approve_plan()
+    await loop.run()
+
+    events = await store.get_events(CID)
+    notes = _advisory_notes(events)
+    assert len(notes) == 1, f"expected exactly 1 C18 note, got {len(notes)}"
+    note = notes[0]
+    # exec_shell returned exit_code=0 matching expect_exit=0 → met.
+    assert "met" in note.message.content
+    assert "NOT met" not in note.message.content
+    assert note.meta.get("passed") is True
+    # Prove exec_shell (not host subprocess) was consulted — exactly once.
+    assert len(sbx.exec_shell_calls) == 1
+    assert sbx.exec_shell_calls[0][0] == "test -d css && test -f index.html"
+    # Sandbox path stamps "(sandbox)" in the reason (not the subprocess "(in X.XXs)").
+    assert "(sandbox)" in note.message.content
+
+
+@pytest.mark.asyncio
+async def test_c18_container_command_timed_out_fails(tmp_path):
+    """F-2 / timeout caveat: timed_out=True on the ExecResult is always a
+    non-pass, even when exit_code coincidentally matches expect_exit (e.g. 124).
+    The note must name 'timed out' so the user sees the actual failure reason."""
+    # exit_code=0 equals expect_exit=0, but timed_out=True → must fail.
+    sbx = _FakeContainerSandboxWithExecShell(
+        result=_FakeExecResult(exit_code=0, timed_out=True)
+    )
+
+    agent = ScriptedAgent(
+        [
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "p",
+                    "steps": [
+                        {
+                            "title": "check dist",
+                            "done_condition": {
+                                "kind": "command",
+                                "cmd": "test -d dist",
+                                "expect_exit": 0,
+                            },
+                        }
+                    ],
+                },
+            ),
+            action_step("plan_step", {"index": 1, "state": "done"}),
+            finish_step(),
+        ]
+    )
+    loop, store = build_loop(agent, executor=_SandboxExecutor(sbx), conversation_id=CID)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    await loop.send_message("go")
+    await loop.run()
+    await loop.approve_plan()
+    await loop.run()
+
+    events = await store.get_events(CID)
+    notes = _advisory_notes(events)
+    assert len(notes) == 1, f"expected exactly 1 C18 note, got {len(notes)}"
+    note = notes[0]
+    # timed_out=True → NOT met, even though exit_code would have matched.
+    assert "NOT met" in note.message.content
+    assert note.meta.get("passed") is False
+    # The note names 'timed out' so the user knows why it failed.
+    assert "timed out" in note.message.content
+    # exec_shell was still called (the failure is detected after the call, not before).
+    assert len(sbx.exec_shell_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_c18_sandboxless_command_falls_back_to_subprocess(tmp_path):
+    """F-2: when the sandbox has no exec_shell (or there is no sandbox), the
+    command predicate falls back to host subprocess. _FakeSandbox has
+    workspace_path but no exec_shell, so subprocess runs against the real cwd."""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    sbx = _FakeSandbox(str(workspace))
+
+    agent = ScriptedAgent(
+        [
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "p",
+                    "steps": [
+                        {
+                            "title": "always passes",
+                            "done_condition": {
+                                "kind": "command",
+                                "cmd": "true",
+                                "expect_exit": 0,
+                            },
+                        }
+                    ],
+                },
+            ),
+            action_step("plan_step", {"index": 1, "state": "done"}),
+            finish_step(),
+        ]
+    )
+    loop, store = build_loop(agent, executor=_SandboxExecutor(sbx), conversation_id=CID)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    await loop.send_message("go")
+    await loop.run()
+    await loop.approve_plan()
+    await loop.run()
+
+    events = await store.get_events(CID)
+    notes = _advisory_notes(events)
+    assert len(notes) == 1, f"expected exactly 1 C18 note, got {len(notes)}"
+    note = notes[0]
+    assert "met" in note.message.content
+    assert note.meta.get("passed") is True
+    # Subprocess path stamps "in X.XXs"; sandbox path stamps "(sandbox)".
+    assert "(sandbox)" not in note.message.content
+    assert "in " in note.message.content

@@ -24,8 +24,39 @@ from typing import Any
 from disco.core import (
     ConversationStatus,
     EventSource,
+    LLMMessage,
+    MessageEvent,
     StatusEvent,
 )
+
+# ---- F-3: conservative "stop, accept as-is" intent list ----------------------
+# Matched case-insensitively against the full (stripped) user text.
+# ONLY whole-intent stop phrases are listed — bare "publish it", "deploy it",
+# or any real change/deploy intent intentionally fall through to the replan path.
+# TODO: the cleaner long-term signal is an explicit UI `accept_finished`/
+# `mark_done` frame action rather than free-text matching. This is a stopgap.
+_SHIP_IT_PHRASES: frozenset[str] = frozenset({
+    "publish it and be done",
+    "leave it as is",
+    "leave it as-is",
+    "you're done",
+    "you are done",
+    "that's done",
+    "we're done",
+    "mark it done",
+    "mark it as done",
+    "mark it complete",
+    "mark as complete",
+    "it's done",
+    "call it done",
+})
+
+
+def _is_ship_it_intent(text: str) -> bool:
+    """Conservative whole-intent check: True ONLY for clear 'stop, accept as-is'
+    phrases. Default False (fall through to re-plan). Case-insensitive + stripped.
+    Excludes bare 'publish it', 'deploy it', or any real change/deploy intent."""
+    return text.strip().lower() in _SHIP_IT_PHRASES
 
 
 class ControlOps:
@@ -64,10 +95,30 @@ class ControlOps:
         re-plan after a build, so focused diff-style changes are planned and re-approved
         instead of free-form steered.
 
+        F-3 exception: when the conversation is already FINISHED and the user's text
+        is a clear 'stop, accept as-is' intent (_SHIP_IT_PHRASES), append the user
+        message (resolving the optimistic UI echo) but skip enter_planning() and
+        kick() — the build stays FINISHED. Any ambiguous text falls through to the
+        existing replan path unchanged.
+
         Composes the loop lazily (`_loop_for`, same as `kick`) — a fresh
         conversation or one whose loop died with a server restart has no entry in
         `_loops`, and the old `.get()` guard silently dropped the frame: the
         composer showed "sending…" forever while the server did nothing."""
+        # F-3: ONLY when already FINISHED + a clear stop-intent — keep FINISHED.
+        state = await self._rt._store.get_state(conversation_id)
+        if state.execution_status == ConversationStatus.FINISHED and _is_ship_it_intent(text):
+            # Append the user message so the optimistic UI echo resolves (same
+            # append that enter_planning would do), but skip enter_planning + kick.
+            if text.strip():
+                await self._rt._store.append(
+                    conversation_id,
+                    MessageEvent(
+                        source=EventSource.USER,
+                        message=LLMMessage(role="user", content=text),
+                    ),
+                )
+            return
         loop = self._rt._loop_for(conversation_id)
         await loop.enter_planning(text)
         self._rt.kick(conversation_id)  # produce the (revised) plan

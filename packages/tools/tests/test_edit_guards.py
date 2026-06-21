@@ -9,11 +9,13 @@ content-loss seen live on gpt-oss-120b:
 from __future__ import annotations
 
 import pytest
+from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin.files import (
     FileEditArgs,
     FileEditTool,
     FileReplaceLinesArgs,
     FileReplaceLinesTool,
+    reset_read_tracker,
 )
 
 
@@ -26,12 +28,26 @@ class _FakeSandbox:
         return self._text
 
     async def write_file(self, path: str, data: bytes) -> None:
+        self._text = data  # update so subsequent reads see the change
         self.writes.append(data)
 
 
-class _Ctx:
-    def __init__(self, sandbox):
-        self.sandbox = sandbox
+def _Ctx(sandbox) -> ToolContext:  # noqa: N802 — keeps old call sites unchanged
+    return ToolContext(
+        sandbox=sandbox,
+        workspace_path=".",
+        timeout_s=10,
+        capabilities={Capability.FILESYSTEM},
+        owner_id="local",
+        conversation_id="conv-edit-guards",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _clear_tracker():
+    reset_read_tracker()
+    yield
+    reset_read_tracker()
 
 
 _FILE = "config.py\n".join(["A = 1", "B = 2", "C = 3", "D = 4", ""])
