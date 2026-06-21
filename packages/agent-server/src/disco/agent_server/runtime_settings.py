@@ -209,11 +209,13 @@ class RuntimeSettings:
     # ---- assist tier -------------------------------------------------------
 
     def _is_small_assist_default(self, entry: Any) -> bool:
-        if not entry or not getattr(entry, "base_url", None):
-            return False
-        base_url = str(entry.base_url).lower()
-        is_local = any(x in base_url for x in ("localhost", "127.0.0.1", "192.168.", ".local"))
-        return is_local and "openrouter" not in base_url
+        # Assist is EXPLICIT-toggle-only (Dylan's requirement): never auto-enabled by
+        # hosting. The old heuristic (local && !openrouter → weak) sandbagged capable
+        # local models — e.g. Qwen 27B, which is NOT a quality compromise — purely for
+        # running on localhost. Hosting no longer implies the assist tier; the per-
+        # conversation UI toggle (or an explicit ModelEntry.tier in config) is the only
+        # way in. So this default is always False.
+        return False
 
     def _load_assist(self) -> dict[str, bool]:
         if self._rt._assist_path and os.path.exists(self._rt._assist_path):

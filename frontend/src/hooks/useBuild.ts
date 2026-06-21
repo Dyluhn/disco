@@ -36,6 +36,10 @@ export function useBuild(
   // Create-time choice: run this build headless (no questions, auto-approve plan).
   // Off by default. Locked once the conversation is created (it's a per-run mode).
   const [autonomousChoice, setAutonomousChoice] = useState(false);
+  // Create-time choice: the weak-model ASSIST tier. EXPLICIT opt-in only — never
+  // auto-enabled by hosting (a capable local model like Qwen 27B is not sandbagged).
+  // Off by default; the user flips it for a genuinely weak model. Locked once work begins.
+  const [assistChoice, setAssistChoice] = useState(false);
 
   // G1/DR-4: pre-created cid for the empty state UploadComposer.
   // Created eagerly on mount with default settings so a paperclip is rendered
@@ -75,8 +79,11 @@ export function useBuild(
   }, [resumeCid, session, seedTask, seedContext]);
 
   const create = useMutation({
-    mutationFn: (opts: { modelOverride: string | null; autonomous: boolean }) =>
-      createBuildConversation(opts.modelOverride, surface, opts.autonomous),
+    mutationFn: (opts: {
+      modelOverride: string | null;
+      autonomous: boolean;
+      assist: boolean;
+    }) => createBuildConversation(opts.modelOverride, surface, opts.autonomous, opts.assist),
   });
 
   const submit = useCallback(
@@ -86,23 +93,23 @@ export function useBuild(
       // G1/DR-4: use pre-created cid if available so uploads survive.
       if (preCid) {
         // runthru-v2 ROOT-1: the preCid was created on mount with DEFAULT settings,
-        // so apply the user's CURRENT model pick + autonomous choice to it BEFORE the
-        // kick (the loop caches the model at kick). Without this the build ran on the
-        // default local model regardless of the picker. await so the patch lands first.
+        // so apply the user's CURRENT model pick + autonomous + assist choice to it
+        // BEFORE the kick (the loop caches the model at kick). await so the patch lands.
         await patchConversationSettings(preCid, {
           modelOverride: modelId,
           autonomous: autonomousChoice,
+          assist: assistChoice,
         });
         setSession({ cid: preCid, task: trimmed, kick: true });
         setPreCid(null);
         return;
       }
       create.mutate(
-        { modelOverride: modelId, autonomous: autonomousChoice },
+        { modelOverride: modelId, autonomous: autonomousChoice, assist: assistChoice },
         { onSuccess: (cid) => setSession({ cid, task: trimmed, kick: true }) },
       );
     },
-    [create, modelId, autonomousChoice, preCid],
+    [create, modelId, autonomousChoice, assistChoice, preCid],
   );
 
   const kill = useCallback(async () => {
@@ -122,6 +129,8 @@ export function useBuild(
     setModelId,
     autonomousChoice,
     setAutonomousChoice,
+    assistChoice,
+    setAssistChoice,
     submit,
     kill,
     reset,

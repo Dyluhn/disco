@@ -64,37 +64,43 @@ def _model_entry(base_url: str) -> MagicMock:
 
 
 def test_runtime_effective_assist_default(tmp_path):
+    """Assist is EXPLICIT-toggle-only (Dylan's requirement): NEVER auto-enabled by
+    hosting. Every model — local, LAN, mDNS, cloud — defaults to assist OFF; the only
+    ways in are the per-conversation UI toggle or an explicit ModelEntry.tier='weak'."""
     with patch.dict("os.environ", {"PMX_DB": str(tmp_path / "disco.db")}):
         rt = ConversationRuntime(store=MagicMock())
 
-        # Mock the router and config
         router = MagicMock()
         rt._router_now = MagicMock(return_value=router)
 
-        # Local base url -> Default ON (hosting heuristic: local && !openrouter)
-        router._config.model_for.return_value = "local-model"
-        router._config.models = {"local-model": _model_entry("http://127.0.0.1:8080/v1")}
-        assert rt._effective_assist("c1") is True
+        # Local / LAN / mDNS / cloud — ALL default OFF now (no hosting auto-weak; a
+        # capable local model like Qwen 27B is not sandbagged for running on localhost).
+        for cid, url in [
+            ("c1", "http://127.0.0.1:8080/v1"),
+            ("c2", "https://api.anthropic.com/v1"),
+            ("c3", "https://openrouter.ai/api/v1/local"),
+            ("c4", "http://192.168.1.231:18080/v1"),
+            ("c5", "http://workstation.local:18080/v1"),
+        ]:
+            router._config.model_for.return_value = "m"
+            router._config.models = {"m": _model_entry(url)}
+            assert rt._effective_assist(cid) is False, f"{url} should default OFF"
 
-        # Cloud base url -> Default OFF
-        router._config.model_for.return_value = "cloud-model"
-        router._config.models = {"cloud-model": _model_entry("https://api.anthropic.com/v1")}
-        assert rt._effective_assist("c2") is False
+        # The explicit per-conversation toggle is the ONLY default-path way in: setting
+        # it flips assist ON even for a local model (where the old heuristic auto-ON'd).
+        router._config.model_for.return_value = "m"
+        router._config.models = {"m": _model_entry("http://127.0.0.1:8080/v1")}
+        rt.set_assist("c6", True)
+        assert rt._effective_assist("c6") is True
+        rt.set_assist("c6", False)
+        assert rt._effective_assist("c6") is False
 
-        # OpenRouter URL with local in it just in case -> Default OFF
-        router._config.model_for.return_value = "or-model"
-        router._config.models = {"or-model": _model_entry("https://openrouter.ai/api/v1/local")}
-        assert rt._effective_assist("c3") is False
-
-        # LAN IP (192.168.x) -> local -> Default ON (gate-policy positive case)
-        router._config.model_for.return_value = "lan-model"
-        router._config.models = {"lan-model": _model_entry("http://192.168.1.231:18080/v1")}
-        assert rt._effective_assist("c4") is True
-
-        # *.local mDNS host -> local -> Default ON (gate-policy positive case)
-        router._config.model_for.return_value = "mdns-model"
-        router._config.models = {"mdns-model": _model_entry("http://workstation.local:18080/v1")}
-        assert rt._effective_assist("c5") is True
+        # An explicit ModelEntry.tier='weak' in config still enables it (config escape hatch).
+        weak_entry = _model_entry("https://api.anthropic.com/v1")
+        weak_entry.tier = "weak"
+        router._config.model_for.return_value = "weak-cfg"
+        router._config.models = {"weak-cfg": weak_entry}
+        assert rt._effective_assist("c7") is True
 
 
 def test_create_body_sets_assist_and_state_extras(tmp_path):

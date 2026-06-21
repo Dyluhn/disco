@@ -55,6 +55,9 @@ export async function createBuildConversation(
   modelOverride?: string | null,
   surface: "build" | "agent" = "build",
   autonomous = false,
+  /** Weak-model assist tier — EXPLICIT user toggle only (null/false = standard).
+   *  Assist is never auto-enabled by hosting; the user opts in via the UI toggle. */
+  assist: boolean | null = null,
 ): Promise<string> {
   if (!agentLive()) return FIXTURE_CID;
   const res = await agentSend<{ conversation_id: string }>("POST", "/conversations", {
@@ -62,6 +65,7 @@ export async function createBuildConversation(
     surface,
     model_override: modelOverride ?? null,
     autonomous,
+    assist,
   });
   return res.conversation_id;
 }
@@ -73,12 +77,17 @@ export async function createBuildConversation(
  * 409s if the loop already started (the model is fixed once a run begins). */
 export async function patchConversationSettings(
   conversationId: string,
-  settings: { modelOverride?: string | null; autonomous?: boolean },
+  settings: {
+    modelOverride?: string | null;
+    autonomous?: boolean;
+    assist?: boolean | null;
+  },
 ): Promise<void> {
   if (!agentLive()) return;
   await agentSend("PATCH", `/conversations/${conversationId}/settings`, {
     model_override: settings.modelOverride ?? null,
     ...(settings.autonomous !== undefined ? { autonomous: settings.autonomous } : {}),
+    ...(settings.assist !== undefined ? { assist: settings.assist } : {}),
   });
 }
 

@@ -194,21 +194,38 @@ export function BuildSurface({
           <div className="w-full max-w-measure">
             <div className="mb-inline flex items-center justify-between gap-inline">
               <BuildModelPicker value={b.modelId} onChange={b.setModelId} />
-              <button
-                type="button"
-                role="switch"
-                aria-checked={b.autonomousChoice}
-                onClick={() => b.setAutonomousChoice(!b.autonomousChoice)}
-                title="Autonomous: the agent runs headless — it won't ask you questions, auto-approves its own plan, and stops cleanly instead of waiting for you. Best for unattended runs; for tricky tasks leave it off so the agent can ask."
-                className={cn(
-                  "flex items-center gap-hair rounded-full border px-inline py-px font-ui text-[0.72rem] transition-colors",
-                  b.autonomousChoice
-                    ? "border-accent/50 bg-accent/5 text-accent"
-                    : "border-hairline text-text-faint hover:text-text-muted",
-                )}
-              >
-                {b.autonomousChoice ? "autonomous: on" : "autonomous: off"}
-              </button>
+              <div className="flex items-center gap-hair">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={b.assistChoice}
+                  onClick={() => b.setAssistChoice(!b.assistChoice)}
+                  title="Assist: weak-model compensations (file-state reinforcement, simplified tool surface + plan handling). Turn ON for a genuinely small/weak model. Leave OFF for capable models — it is NEVER auto-enabled, even for local models like Qwen 27B."
+                  className={cn(
+                    "flex items-center gap-hair rounded-full border px-inline py-px font-ui text-[0.72rem] transition-colors",
+                    b.assistChoice
+                      ? "border-accent/50 bg-accent/5 text-accent"
+                      : "border-hairline text-text-faint hover:text-text-muted",
+                  )}
+                >
+                  {b.assistChoice ? "assist: on" : "assist: off"}
+                </button>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={b.autonomousChoice}
+                  onClick={() => b.setAutonomousChoice(!b.autonomousChoice)}
+                  title="Autonomous: the agent runs headless — it won't ask you questions, auto-approves its own plan, and stops cleanly instead of waiting for you. Best for unattended runs; for tricky tasks leave it off so the agent can ask."
+                  className={cn(
+                    "flex items-center gap-hair rounded-full border px-inline py-px font-ui text-[0.72rem] transition-colors",
+                    b.autonomousChoice
+                      ? "border-accent/50 bg-accent/5 text-accent"
+                      : "border-hairline text-text-faint hover:text-text-muted",
+                  )}
+                >
+                  {b.autonomousChoice ? "autonomous: on" : "autonomous: off"}
+                </button>
+              </div>
             </div>
             <QueryInput
               onSubmit={b.submit}
