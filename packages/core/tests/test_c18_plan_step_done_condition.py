@@ -106,6 +106,11 @@ class _SandboxExecutor:
         return [
             ToolSpec(name="shell", description="run a shell command", parameters_schema={}),
             ToolSpec(name="plan_step", description="mark plan step progress", parameters_schema={}),
+            ToolSpec(
+                name="update_plan_progress",
+                description="declarative full-state plan progress",
+                parameters_schema={},
+            ),
         ]
 
     async def execute(self, call: ToolCall) -> ToolResult:
@@ -705,3 +710,99 @@ async def test_c18_sandboxless_command_falls_back_to_subprocess(tmp_path):
     # Subprocess path stamps "in X.XXs"; sandbox path stamps "(sandbox)".
     assert "(sandbox)" not in note.message.content
     assert "in " in note.message.content
+
+
+# ---------------------------------------------------------------------------
+# update_plan_progress (the #3 declarative tool) drives C18 the same as plan_step
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_c18_update_plan_progress_satisfied_emits_met_note(tmp_path):
+    """A capable model marks the step done via the DECLARATIVE update_plan_progress
+    snapshot (not plan_step). C18 must still evaluate the step's done_condition and emit
+    the advisory — before the unify fix the capable path got NO done-condition checks."""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "artifact.txt").write_text("ok")
+    sbx = _FakeSandbox(str(workspace))
+
+    agent = ScriptedAgent(
+        [
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "p",
+                    "steps": [
+                        {
+                            "title": "write artifact",
+                            "done_condition": {"kind": "file_exists", "path": "artifact.txt"},
+                        }
+                    ],
+                },
+            ),
+            action_step("update_plan_progress", {"steps": [{"index": 1, "state": "done"}]}),
+            finish_step(),
+        ]
+    )
+    loop, store = build_loop(agent, executor=_SandboxExecutor(sbx), conversation_id=CID)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    await loop.send_message("go")
+    await loop.run()
+    await loop.approve_plan()
+    await loop.run()
+
+    events = await store.get_events(CID)
+    notes = _advisory_notes(events)
+    assert len(notes) == 1, f"expected exactly 1 C18 note, got {len(notes)}"
+    assert "done-condition for plan step 1" in notes[0].message.content
+    assert "met" in notes[0].message.content and "NOT met" not in notes[0].message.content
+    assert notes[0].meta.get("passed") is True
+
+
+@pytest.mark.asyncio
+async def test_c18_update_plan_progress_no_respam_on_repeat_snapshot(tmp_path):
+    """An update_plan_progress snapshot re-lists already-done steps every time; the C18
+    hook fires ONLY for steps that TRANSITION to done, so a second identical snapshot
+    must NOT emit a duplicate advisory for the same step."""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "artifact.txt").write_text("ok")
+    sbx = _FakeSandbox(str(workspace))
+
+    agent = ScriptedAgent(
+        [
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "p",
+                    "steps": [
+                        {
+                            "title": "write artifact",
+                            "done_condition": {"kind": "file_exists", "path": "artifact.txt"},
+                        },
+                        {"title": "second step"},
+                    ],
+                },
+            ),
+            action_step("update_plan_progress", {"steps": [{"index": 1, "state": "done"}]}),
+            # repeat snapshot re-lists step 1 done — must NOT re-emit its advisory
+            action_step("update_plan_progress", {"steps": [{"index": 1, "state": "done"}]}),
+            action_step("update_plan_progress", {"steps": [{"index": 1, "state": "done"}, {"index": 2, "state": "done"}]}),
+            finish_step(),
+        ]
+    )
+    loop, store = build_loop(agent, executor=_SandboxExecutor(sbx), conversation_id=CID)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    await loop.send_message("go")
+    await loop.run()
+    await loop.approve_plan()
+    await loop.run()
+
+    events = await store.get_events(CID)
+    notes = _advisory_notes(events)
+    # Exactly ONE note: step 1 transitioned once (step 2 has no predicate → no note).
+    assert len(notes) == 1, f"expected 1 C18 note (no re-spam), got {len(notes)}"
+    assert "plan step 1" in notes[0].message.content

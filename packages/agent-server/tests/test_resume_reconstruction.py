@@ -152,6 +152,15 @@ def _plan_step(idx: int, state: str) -> ActionEvent:
     )
 
 
+def _upp(steps: list[dict]) -> ActionEvent:
+    """The declarative update_plan_progress full-state snapshot (capable models)."""
+    return ActionEvent(
+        source=EventSource.AGENT,
+        thought="progress snapshot",
+        tool_call=ToolCall(tool_name="update_plan_progress", arguments={"steps": steps}),
+    )
+
+
 async def _cancel_task(rt: ConversationRuntime) -> None:
     task = rt._tasks.get(CID)
     if task is not None and not task.done():
@@ -312,6 +321,25 @@ async def test_plan_restatement_names_first_undone_step():
     assert "Step C" in content
     assert "(3)" in content
     assert "Do not re-plan" in content
+
+
+async def test_plan_restatement_reads_update_plan_progress():
+    """Steps 1-2 marked done via the DECLARATIVE update_plan_progress snapshot (capable
+    models, not plan_step) → the resume reality block must still name step 3 as next. Before
+    the unify fix, resume read only plan_step and would tell the agent to redo step 1."""
+    store = SqliteEventStore(":memory:")
+    store.create_conversation(CID, owner_id="local")
+    rt = _runtime(store)
+
+    plan = _plan(["Step A", "Step B", "Step C", "Step D"])
+    snapshot = _upp([{"index": 1, "state": "done"}, {"index": 2, "state": "done"}])
+
+    new_events = await rt._reconstruct_resume_context(CID, [plan, snapshot])
+
+    msg = next(e for e in new_events if isinstance(e, MessageEvent))
+    content = msg.message.content
+    assert "Step C" in content
+    assert "(3)" in content
 
 
 async def test_plan_restatement_absent_when_no_plan():

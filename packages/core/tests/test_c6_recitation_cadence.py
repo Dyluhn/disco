@@ -59,6 +59,14 @@ def _plan_step(idx: int, state: str) -> ActionEvent:
     )
 
 
+def _upp(steps: list[dict]) -> ActionEvent:
+    """The declarative update_plan_progress full-state snapshot (capable models)."""
+    return ActionEvent(
+        thought="progress snapshot",
+        tool_call=ToolCall(tool_name="update_plan_progress", arguments={"steps": steps}),
+    )
+
+
 def _seed_events(plan: PlanEvent, plan_steps: list[ActionEvent] | None = None) -> list:
     """The minimum event list to put a plan in the log: a user turn + the
     PlanEvent + zero or more plan_step actions. Seqs are assigned by
@@ -273,6 +281,24 @@ async def test_c6_signature_includes_plan_id_and_done_active_sets():
     # 3) Stable plan, no marks → signature unchanged
     sig0_again = loop._recitation_signature(events)
     assert sig0 == sig0_again, "identical plan + marks must hash the same"
+
+
+async def test_c6_signature_drifts_on_update_plan_progress():
+    """The C6 drift signature must ALSO change when a capable model marks progress via
+    the DECLARATIVE update_plan_progress (not plan_step) — else the freshly-rendered tail
+    recap is dropped as 'no drift' and the model never sees its own completion (the
+    plan-progress-unify bug). The declarative path mirrors the plan_step drift behavior."""
+    plan = _plan()
+    loop = _make_loop(cadence=999)  # huge cadence so only DRIFT can fire
+    sig0 = loop._recitation_signature(_seed_events(plan))
+    sig1 = loop._recitation_signature(
+        _seed_events(plan, plan_steps=[_upp([{"index": 1, "state": "done"}])])
+    )
+    assert sig1 is not None
+    assert sig0 != sig1, (
+        "marking a step done via update_plan_progress must flip the signature "
+        "(otherwise drift never fires for capable models and the recap is dropped)"
+    )
 
 
 async def test_c6_recap_content_byte_identical_to_view_py_renderer():

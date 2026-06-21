@@ -849,3 +849,37 @@ if __name__ == "__main__":
         print(f"smoke: assist=ON cadence=3 over counts 1..6 → {n} fires (expected 2)")
 
     asyncio.run(_smoke())
+
+
+def test_hs03_progress_reflects_update_plan_progress():
+    """The HS-03 recap PROGRESS section is PERSISTED as an environment message, so it
+    must reflect a capable model's DECLARATIVE update_plan_progress marks — not just
+    plan_step. Otherwise a stale 'incomplete' checklist re-injects into context at every
+    cadence boundary (the plan-progress-unify bug)."""
+    from disco.core import PlanStep
+    from disco.core.events import ActionEvent, PlanEvent, ToolCall
+
+    plan = PlanEvent(
+        summary="build",
+        steps=[PlanStep(title="Scaffold"), PlanStep(title="Style")],
+        revision=1,
+        seq=1,
+    )
+    upp = ActionEvent(
+        thought="",
+        tool_call=ToolCall(
+            tool_name="update_plan_progress",
+            arguments={"steps": [{"index": 1, "state": "done"}]},
+            call_id="c",
+        ),
+        seq=2,
+    )
+    # With the declarative done-mark: the recap shows ✓ for the Scaffold step.
+    msg = _hs03_reground_message([plan, upp])
+    assert msg is not None
+    assert "✓" in msg.content and "Scaffold" in msg.content
+
+    # Contrast: the SAME plan with no progress marks shows no ✓ checkmark.
+    baseline = _hs03_reground_message([plan])
+    assert baseline is not None
+    assert "✓" not in baseline.content

@@ -25,6 +25,7 @@ from ..events import (
     MessageEvent,
     PlanEvent,
 )
+from ..view import effective_plan_progress
 
 if TYPE_CHECKING:
     from .engine import AgentLoop
@@ -35,10 +36,18 @@ class PlanStepConditions:
         self._loop = loop
 
     async def maybe_emit_plan_step_done_condition_note(self, action: ActionEvent) -> None:
-        """If `action` is a `plan_step(idx, 'done')` whose plan step has a
-        stored `done_condition` predicate, evaluate it inline and emit a
-        visible pass/fail note in the trace. ADVISORY ONLY:
+        """If `action` marks one or more plan steps DONE and a step has a stored
+        `done_condition` predicate, evaluate it inline and emit a visible pass/fail
+        note in the trace. Handles BOTH progress channels:
 
+          * `plan_step(idx, 'done')` — the single step `idx` (small models).
+          * `update_plan_progress({steps:[...]})` — the declarative full-state snapshot
+            (capable models, the #3 redesign). Fires ONLY for steps that TRANSITION to
+            done in THIS action (diffed against the prior effective state) — a snapshot
+            re-lists already-done steps every time, so without the transition check it
+            would re-spam an advisory for every step on every snapshot.
+
+        ADVISORY ONLY:
           * never blocks the run;
           * never nudges the agent (no <system-reminder>, no auto-continue,
             no speak-back to the model);
@@ -47,66 +56,66 @@ class PlanStepConditions:
             fresh-context DoDEvaluator and gates `finish` itself).
 
         Steps WITHOUT a predicate are a strict no-op (back-compat): no
-        lookup, no note, no event. The check fires only on `state="done"`,
-        never on `state="active"` (an active mark is the agent saying
-        "I am starting" — there is no work to check yet)."""
+        lookup, no note, no event. `state="active"` never fires (an active mark is the
+        agent saying "I am starting" — there is no work to check yet)."""
         tc = action.tool_call
-        if tc is None or tc.tool_name != "plan_step":
+        if tc is None or tc.tool_name not in ("plan_step", "update_plan_progress"):
             return
         args = tc.arguments or {}
-        state = str(args.get("state") or "")
-        if state != "done":
-            return
-        # Find the latest plan + the step's (revision, index). The current
-        # plan is whichever PlanEvent has the highest revision; a re-plan
-        # supersedes, so we must use the LATEST (not just any) — the
-        # `_plan_step_predicates` map is revision-scoped for exactly this
-        # reason (a stale (revision, idx) must not match a fresh plan).
-        try:
-            # The value is dynamically typed (arguments: dict[str, Any]); a
-            # missing/None/non-numeric index is handled by the except below.
-            raw_index: Any = args.get("index")
-            idx = int(raw_index)
-        except (TypeError, ValueError):
-            return
         events = await self._loop._events()
+        # Find the latest plan (highest revision; a re-plan supersedes). The
+        # `_plan_step_predicates` map is revision-scoped so a stale (revision, idx)
+        # never matches a fresh plan.
         latest_plan: PlanEvent | None = None
         for e in events:
             if isinstance(e, PlanEvent):
                 if latest_plan is None or e.revision >= latest_plan.revision:
                     latest_plan = e
         if latest_plan is None:
-            return  # no plan in scope — the plan_step is unanchored
-        # 1-based step index. Out-of-range = nothing to look up.
-        if idx < 1 or idx > len(latest_plan.steps):
-            return
-        predicate = self._loop._plan_step_predicates.get((latest_plan.revision, idx))
-        if predicate is None:
-            # Back-compat: a step with no predicate is the explicit design
-            # target (most steps). No note, no extra event. Today was
-            # silent here and stays silent.
-            return
-        passed, reason = await self.evaluate_plan_step_predicate(predicate)
-        # The note is a <system-reminder>-less MessageEvent from
-        # ENVIRONMENT with source=ADVISORY semantics: it is visible in
-        # the trace for the human and the LLM sees it on its next turn
-        # as a normal message (NOT a system-reminder, so it does NOT
-        # nudge — the model is free to ignore or act on it as it sees
-        # fit). The "advisory" framing in the prefix is what makes the
-        # no-nudge contract explicit in the trace.
-        verdict_word = "met" if passed else "NOT met"
-        body = (
-            f"[advisory, C18] done-condition for plan step {idx} "
-            f"(\"{latest_plan.steps[idx - 1].title}\"): {verdict_word}. "
-            f"{reason}"
-        )
-        await self._loop._emit(
-            MessageEvent(
-                source=EventSource.ENVIRONMENT,
-                message=LLMMessage(role="user", content=body),
-                meta={"advisory": "plan_step_done_condition", "passed": passed},
+            return  # no plan in scope — the mark is unanchored
+
+        # The step indices THIS action newly marks done.
+        if tc.tool_name == "plan_step":
+            if str(args.get("state") or "") != "done":
+                return
+            try:
+                raw_index: Any = args.get("index")
+                newly_done = [int(raw_index)]
+            except (TypeError, ValueError):
+                return
+        else:  # update_plan_progress — only steps that transitioned to done now
+            _, cur = effective_plan_progress(events)
+            _, prev = effective_plan_progress([e for e in events if e.id != action.id])
+            newly_done = [i for i, st in cur.items() if st == "done" and prev.get(i) != "done"]
+
+        for idx in newly_done:
+            # 1-based step index. Out-of-range = nothing to look up.
+            if idx < 1 or idx > len(latest_plan.steps):
+                continue
+            predicate = self._loop._plan_step_predicates.get((latest_plan.revision, idx))
+            if predicate is None:
+                # Back-compat: a step with no predicate is the explicit design
+                # target (most steps) — silent, no note, no extra event.
+                continue
+            passed, reason = await self.evaluate_plan_step_predicate(predicate)
+            # The note is a <system-reminder>-less MessageEvent from ENVIRONMENT: it is
+            # visible in the trace for the human and the LLM sees it next turn as a
+            # normal message (NOT a system-reminder, so it does NOT nudge — the model is
+            # free to ignore or act). The "advisory" framing makes the no-nudge contract
+            # explicit in the trace.
+            verdict_word = "met" if passed else "NOT met"
+            body = (
+                f"[advisory, C18] done-condition for plan step {idx} "
+                f"(\"{latest_plan.steps[idx - 1].title}\"): {verdict_word}. "
+                f"{reason}"
             )
-        )
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(role="user", content=body),
+                    meta={"advisory": "plan_step_done_condition", "passed": passed},
+                )
+            )
 
     async def evaluate_plan_step_predicate(
         self, predicate: DoDPredicate
