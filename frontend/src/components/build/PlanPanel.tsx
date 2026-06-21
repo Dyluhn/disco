@@ -1,17 +1,39 @@
 /**
- * The plan-approval gate + live capstone tracker (the plan-first Build flow). Before any
- * work runs, the agent's proposed plan is shown here as a checklist; the human Approves to
- * start building or Revises to send focused changes back for a new plan. During and after
- * the build the SAME panel renders read-only, checking steps off as the agent reports them
- * (honest, agent-driven progress — an unreported step stays pending, never inferred).
+ * The plan-approval gate + plan view, shared by Build and Deep Research.
+ * Before any work runs, the agent's proposed plan is shown here; the human Approves to
+ * start or Revises to send focused changes back for a new plan.
+ *
+ * TWO progress modes — by design, because the two surfaces have different progress
+ * truth-sources:
+ *
+ *  • `progress` (Deep Research): a per-step state map DERIVED FROM THE ENGINE's real
+ *    `section_done` ActionEvents — reliable, not model self-report — so DR keeps an
+ *    honest ticking checklist.
+ *
+ *  • `status` (Build): runthru-v2 (#3) removed Build's per-step ticking checklist. It
+ *    relied on the model emitting incremental `plan_step(idx, done)` deltas, which EVERY
+ *    model tier (Qwen 27B through DeepSeek/GPT/Claude) maintains unreliably — one missed
+ *    delta left a step wrong forever, and the finish gate even bounced completed builds
+ *    over unticked boxes. Build now shows the plan as an explanation + a STATIC outline
+ *    of the approach, with one honest status chip (Building… → Done) reflecting the REAL
+ *    run state. This keeps the surface truthful for tiny local models (Gemma 3 E4B) that
+ *    can't self-report — "done" comes from the build actually finishing, not from boxes.
  */
 
 import { useState } from "react";
-import { Check, CircleDashed, CirclePause, ClipboardList, Loader2 } from "lucide-react";
+import {
+  Check,
+  CircleDashed,
+  CirclePause,
+  ClipboardList,
+  Loader2,
+  TriangleAlert,
+} from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Markdown } from "@/components/Markdown";
 import { planProgressSummary } from "@/lib/buildTrace";
 import type { StepState, PlanView } from "@/lib/buildTrace";
+import type { ConversationStatus } from "@/types/agent";
 
 function StepIcon({ state }: { state: StepState }) {
   if (state === "done") return <Check className="size-3.5 shrink-0 text-supported" aria-hidden />;
@@ -27,16 +49,53 @@ function StepIcon({ state }: { state: StepState }) {
   return <CircleDashed className="size-3.5 shrink-0 text-text-faint" aria-hidden />;
 }
 
+/** Build's single, honest progress signal: derived from the REAL conversation status,
+ * not from model-reported step marks. Building while the loop runs; Done when it
+ * actually finishes; Paused/Stopped surfaced truthfully. */
+function StatusChip({ status }: { status: ConversationStatus }) {
+  if (status === "FINISHED")
+    return (
+      <span className="ml-auto flex items-center gap-hair font-ui text-[0.72rem] font-medium text-supported">
+        <Check className="size-3.5" aria-hidden /> Done
+      </span>
+    );
+  if (status === "PAUSED")
+    return (
+      <span className="ml-auto flex items-center gap-hair font-ui text-[0.72rem] font-medium text-warn">
+        <CirclePause className="size-3.5" aria-hidden /> Paused
+      </span>
+    );
+  if (status === "STUCK" || status === "ERROR")
+    return (
+      <span className="ml-auto flex items-center gap-hair font-ui text-[0.72rem] font-medium text-warn">
+        <TriangleAlert className="size-3.5" aria-hidden /> Stopped
+      </span>
+    );
+  if (status === "IDLE") return null;
+  // RUNNING and the awaiting-* states all read as actively in-flight.
+  return (
+    <span className="ml-auto flex items-center gap-hair font-ui text-[0.72rem] font-medium text-accent">
+      <Loader2 className="size-3.5 animate-spin" aria-hidden /> Building…
+    </span>
+  );
+}
+
 export function PlanPanel({
   plan,
   progress,
+  status,
   onApprove,
   onRevise,
   approveLabel,
 }: {
   plan: PlanView;
-  progress: Map<number, StepState>;
-  /** Gate mode: present only while awaiting approval. Omit for the read-only tracker. */
+  /** Deep Research tracker mode: per-step state DERIVED FROM ENGINE section_done
+   *  events (reliable). When present, renders the honest ticking checklist. */
+  progress?: Map<number, StepState>;
+  /** Build tracker mode: the live conversation status, used for the honest status
+   *  chip. Omitted at the approval gate (where the chip would be meaningless). */
+  status?: ConversationStatus;
+  /** Gate mode: present only while awaiting approval. Omit for the read-only view. */
   onApprove?: () => void;
   onRevise?: (text: string) => void;
   /** Override the approve button label. Defaults to "Approve & build" — the
@@ -48,7 +107,10 @@ export function PlanPanel({
   const [revising, setRevising] = useState(false);
   const [text, setText] = useState("");
   const gate = Boolean(onApprove);
-  const summary = planProgressSummary(plan.steps.length, progress);
+  // Checklist mode only when a reliable engine-derived progress map is supplied
+  // (Deep Research) and we're not at the approval gate.
+  const checklist = !gate && progress !== undefined;
+  const summary = checklist ? planProgressSummary(plan.steps.length, progress!) : null;
 
   const submitRevision = () => {
     const t = text.trim();
@@ -61,7 +123,7 @@ export function PlanPanel({
   return (
     <section
       role={gate ? "alertdialog" : undefined}
-      aria-label={gate ? "Plan needs your approval" : "Plan progress"}
+      aria-label={gate ? "Plan needs your approval" : "Plan"}
       className={cn(
         "rounded-card bg-surface-1 px-body py-body",
         gate ? "border-2 border-accent" : "border border-hairline",
@@ -82,20 +144,22 @@ export function PlanPanel({
             needs your approval
           </span>
         )}
-        {/* Cluster 6: glanceable aggregate progress (tracker mode only). */}
-        {!gate && plan.steps.length > 0 && (
+        {/* Deep Research: glanceable aggregate progress (reliable engine-derived). */}
+        {checklist && plan.steps.length > 0 && (
           <span className="ml-auto flex items-center gap-hair">
             <span className="font-mono text-[0.72rem] text-text-faint">
-              {summary.done}/{summary.total}
+              {summary!.done}/{summary!.total}
             </span>
             <span className="h-1 w-14 overflow-hidden rounded-full bg-surface-2" aria-hidden>
               <span
                 className="block h-full bg-accent transition-[width]"
-                style={{ width: `${Math.round(summary.fraction * 100)}%` }}
+                style={{ width: `${Math.round(summary!.fraction * 100)}%` }}
               />
             </span>
           </span>
         )}
+        {/* Build: one honest status chip from the real run state. */}
+        {!gate && !checklist && status && <StatusChip status={status} />}
       </header>
 
       <p className="mt-inline font-ui text-[0.84rem] leading-snug text-text-muted">{plan.summary}</p>
@@ -116,32 +180,36 @@ export function PlanPanel({
         </details>
       )}
 
-      <ol className="mt-body flex flex-col gap-hair">
-        {plan.steps.map((step, i) => {
-          const state = progress.get(i + 1) ?? "pending";
-          return (
-            <li key={i} className="flex items-start gap-inline">
-              <span className="mt-px flex items-center gap-hair">
-                <span className="w-4 text-right font-mono text-[0.72rem] text-text-faint">
-                  {i + 1}
+      {plan.steps.length > 0 && (
+        <ol className="mt-body flex flex-col gap-hair">
+          {plan.steps.map((step, i) => {
+            // Checklist mode (DR) shows a per-step icon; Build shows a static
+            // numbered outline of the approach (no per-step state at all).
+            const state = checklist ? (progress!.get(i + 1) ?? "pending") : null;
+            return (
+              <li key={i} className="flex items-start gap-inline">
+                <span className="mt-px flex items-center gap-hair">
+                  <span className="w-4 text-right font-mono text-[0.72rem] text-text-faint">
+                    {i + 1}
+                  </span>
+                  {state && <StepIcon state={state} />}
                 </span>
-                <StepIcon state={state} />
-              </span>
-              <span
-                className={cn(
-                  "font-ui text-[0.84rem] leading-snug",
-                  state === "done" ? "text-text-muted" : "text-text",
-                )}
-              >
-                {step.title}
-                {step.detail && (
-                  <span className="block text-[0.76rem] text-text-faint">{step.detail}</span>
-                )}
-              </span>
-            </li>
-          );
-        })}
-      </ol>
+                <span
+                  className={cn(
+                    "font-ui text-[0.84rem] leading-snug",
+                    state === "done" ? "text-text-muted" : "text-text",
+                  )}
+                >
+                  {step.title}
+                  {step.detail && (
+                    <span className="block text-[0.76rem] text-text-faint">{step.detail}</span>
+                  )}
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+      )}
 
       {gate && (
         <>

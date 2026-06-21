@@ -316,7 +316,6 @@ export function BuildSurface({
               <div className="flex flex-col gap-section">
                 <PlanPanel
                   plan={b.plan}
-                  progress={b.planProgress}
                   onApprove={b.approvePlan}
                   onRevise={b.requestPlan}
                 />
@@ -346,7 +345,7 @@ export function BuildSurface({
                     stay visible while the activity feed scrolls beneath it. */}
                 {b.plan && (
                   <div className="sticky top-0 z-10 mb-section bg-bg pb-inline">
-                    <PlanPanel plan={b.plan} progress={b.planProgress} />
+                    <PlanPanel plan={b.plan} status={b.status} />
                   </div>
                 )}
                 <ActivityFeed items={activity} conversationId={b.cid ?? undefined} />

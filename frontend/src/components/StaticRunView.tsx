@@ -13,7 +13,6 @@ import {
   deriveActivity,
   deriveDeliverable,
   derivePlan,
-  derivePlanProgress,
   latestAgentMessage,
 } from "@/lib/buildTrace";
 import { ActivityFeed } from "@/components/build/ActivityFeed";
@@ -36,7 +35,6 @@ export function StaticRunView({
 }) {
   const activity = useMemo(() => deriveActivity(events, null, status), [events, status]);
   const plan = useMemo(() => derivePlan(events), [events]);
-  const planProgress = useMemo(() => derivePlanProgress(events, status), [events, status]);
   const finalMessage = useMemo(() => latestAgentMessage(events), [events]);
   const deliverable = useMemo(() => deriveDeliverable(events), [events]);
 
@@ -48,7 +46,7 @@ export function StaticRunView({
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-body py-inline lg:max-w-[45%]">
           {plan && (
             <div className="mb-section">
-              <PlanPanel plan={plan} progress={planProgress} />
+              <PlanPanel plan={plan} status={status} />
             </div>
           )}
 
