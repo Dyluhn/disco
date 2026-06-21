@@ -12,7 +12,7 @@ advertised set.
 from __future__ import annotations
 
 import pytest
-from disco.core.llm import Requirement
+from disco.core.llm import ModelExecutionPolicy
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin.files import (
     FileAppendArgs,
@@ -30,7 +30,6 @@ from disco.tools.builtin.files import (
     reset_read_tracker,
 )
 from disco.tools.registry import (
-    _WEAK_TIER_ADVERTISED,
     AGENT_TOOLS,
     agent_scope,
 )
@@ -311,18 +310,18 @@ async def test_w4_str_replace_with_w3_gate_reverts_bad_python():
 # ===========================================================================
 
 
-def test_w4_registry_withholds_str_replace_from_weak_tier():
-    """Weak tier (no ANCHORED_EDIT): file_str_replace is in AGENT_TOOLS but
-    NOT in the advertised set."""
-    scope = agent_scope()  # default: no caps → weak tier
+def test_w4_registry_withholds_str_replace_from_non_anchored_policy():
+    """standard + anchored_edit=False: file_str_replace is in AGENT_TOOLS but
+    NOT in the advertised set (the policy's withheld_tools drives the exclusion)."""
+    scope = agent_scope(model_policy=ModelExecutionPolicy(tier="standard", anchored_edit=False))
     assert "file_str_replace" in scope.allowed_tools
     assert scope.advertised_tools is not None
     assert "file_str_replace" not in scope.advertised_tools
 
 
-def test_w4_registry_grants_str_replace_to_capable_tier():
-    """Capable tier (ANCHORED_EDIT set): file_str_replace is in the advertised set."""
-    scope = agent_scope(model_caps=frozenset({Requirement.ANCHORED_EDIT}))
+def test_w4_registry_grants_str_replace_to_standard_anchored_policy():
+    """standard + anchored_edit=True: file_str_replace is in the advertised set."""
+    scope = agent_scope(model_policy=ModelExecutionPolicy.standard())
     assert "file_str_replace" in scope.allowed_tools
     # advertised_tools=None means "advertise all allowed"
     assert scope.advertised_tools is None
@@ -333,6 +332,7 @@ def test_w4_file_str_replace_in_agent_tools():
     assert "file_str_replace" in AGENT_TOOLS
 
 
-def test_w4_weak_tier_advertised_excludes_str_replace():
-    """_WEAK_TIER_ADVERTISED == AGENT_TOOLS minus file_str_replace."""
-    assert _WEAK_TIER_ADVERTISED == AGENT_TOOLS - frozenset({"file_str_replace"})
+def test_w4_non_anchored_policy_advertised_excludes_str_replace():
+    """standard + anchored_edit=False advertises AGENT_TOOLS minus file_str_replace."""
+    scope = agent_scope(model_policy=ModelExecutionPolicy(tier="standard", anchored_edit=False))
+    assert scope.advertised_tools == AGENT_TOOLS - frozenset({"file_str_replace"})

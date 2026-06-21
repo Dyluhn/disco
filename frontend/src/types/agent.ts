@@ -250,7 +250,8 @@ export interface ConversationState {
   pending_clarify_id?: string | null;
   // Runtime-overlaid sandbox liveness; absent for non-build surfaces.
   // `autonomous` is set when the run is headless (no ask_user, auto-approved plan).
-  extras?: { sandbox?: "active" | "suspended"; autonomous?: boolean };
+  // `assist` is the server-derived execution tier (true = weak/assist; false/absent = standard).
+  extras?: { sandbox?: "active" | "suspended"; autonomous?: boolean; assist?: boolean };
   // BP-15: the active sandbox backend name ('gvisor'|'podman'|'local'|'process').
   // Absent until the first state frame; wire value only — never guessed client-side.
   sandbox_backend?: string;

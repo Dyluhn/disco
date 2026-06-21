@@ -26,6 +26,7 @@ from disco.core import (
     ToolCall,
     View,
 )
+from disco.core.llm import ModelExecutionPolicy
 from disco.core.loop import ConfirmRisky
 from disco.core.security import RuleBasedAnalyzer
 from disco.tools.builtin.browser import _FENCE_CLOSE, _FENCE_OPEN, _quarantine
@@ -71,7 +72,11 @@ class _PageSandbox(FakeSandboxInstance):
 def _exec(sandbox):
     from disco.tools.builtin import build_default_registry
 
-    return DefaultToolExecutor(build_default_registry(), agent_scope(), sandbox=sandbox)
+    return DefaultToolExecutor(
+        build_default_registry(),
+        agent_scope(model_policy=ModelExecutionPolicy.standard()),
+        sandbox=sandbox,
+    )
 
 
 # ---- the quarantine: hostile HTML → structured, injection-proof data ---------

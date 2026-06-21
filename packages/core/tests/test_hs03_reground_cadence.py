@@ -50,7 +50,7 @@ from disco.core import (
     StatusEvent,
     ToolCall,
 )
-from disco.core.llm import OperatingMode
+from disco.core.llm import ModelExecutionPolicy, OperatingMode
 from disco.core.loop import AgentLoop, NeverConfirm
 from disco.core.loop.messages import (
     _HS03_REGROUND_SENTINEL,
@@ -122,7 +122,11 @@ def _seed_events(plan: PlanEvent | None = None, *extras) -> list:
     return with_seqs(evs)
 
 
-def _make_loop(*, assist: bool, cadence: int = 3) -> AgentLoop:
+def _make_loop(
+    *,
+    model_policy: ModelExecutionPolicy | None = None,
+    cadence: int = 3,
+) -> AgentLoop:
     """Build an AgentLoop with a real in-memory store but no script.
     Used by the predicate tests that drive `_should_emit_reground` /
     `_maybe_emit_reground` directly (no real `run()` needed for the
@@ -138,7 +142,7 @@ def _make_loop(*, assist: bool, cadence: int = 3) -> AgentLoop:
         NoOpCondenser(),  # inert condenser — should_condense returns None
         FakeSummarizer(),
         mode=OperatingMode.LONG_HORIZON,
-        assist=assist,
+        model_policy=model_policy or ModelExecutionPolicy.standard(),
         reground_cadence=cadence,
     )
 
@@ -174,7 +178,7 @@ async def test_hs03_assist_on_fires_at_cadence_boundary():
     directly into the store so the loop enters at count=6, past the
     one-shot window) then run the gate directly and count emits.
     """
-    loop = _make_loop(assist=True, cadence=3)
+    loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), cadence=3)
     # Seed events such that actions_since_last_resume == 6 (past the
     # one-shot at 0; the 6 % 3 == 0 boundary IS hit). Six shell
     # actions is the boundary; the next call sees count=6 and fires.
@@ -211,7 +215,7 @@ async def test_hs03_assist_on_emits_exactly_one_message_per_boundary():
     is NOT exercised here (actions==2, not 0) — this test isolates
     the cadence path. The post-resume path is covered in test (b).
     """
-    loop = _make_loop(assist=True, cadence=2)
+    loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), cadence=2)
     plan = _plan()
     events = _seed_events(plan, _shell_action(), _shell_action())
     # Materialize events into the store (the gate emits via _emit →
@@ -261,7 +265,7 @@ async def test_hs03_post_resume_one_shot_fires_exactly_once():
     (actions_since_last_resume == 0). The gate fires; we mark the
     one-shot consumed; the next call is silent.
     """
-    loop = _make_loop(assist=True, cadence=3)
+    loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), cadence=3)
     plan = _plan()
     events = _seed_events(plan)  # plan only — no actions yet
     # First call: count==0, one-shot not yet fired → should fire.
@@ -291,7 +295,7 @@ async def test_hs03_post_resume_resets_on_new_run_segment():
     bookkeeping); verify the post-resume condition fires again on
     the next `_should_emit_reground` call.
     """
-    loop = _make_loop(assist=True, cadence=3)
+    loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), cadence=3)
     # Simulate a prior recap (the one-shot fired, the per-boundary
     # counter recorded count==12, the most recent boundary).
     loop._hs03_reground_post_resume_emitted = True
@@ -356,7 +360,7 @@ async def test_hs03_does_not_fire_on_every_step():
     count at 1 by seeding one action (so actions_since_last_resume
     = 1, past the one-shot window) and then march forward.
     """
-    loop = _make_loop(assist=True, cadence=3)
+    loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), cadence=3)
     plan = _plan()
     # The plan-only seed would be count==0 (one-shot territory).
     # To start at count==1 we add one shell action up front and
@@ -419,7 +423,7 @@ async def test_hs03_per_boundary_guard_prevents_consecutive_emits():
     boundary) and confirm the gate fires again — a fresh boundary
     is NOT silenced by the per-boundary guard.
     """
-    loop = _make_loop(assist=True, cadence=12)
+    loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), cadence=12)
     plan = _plan()
     events_at_12 = _seed_events(plan, *[_shell_action() for _ in range(12)])
     # First call at count==12 → fires.
@@ -459,7 +463,7 @@ async def test_hs03_assist_off_never_fires():
     (next boundary) — and assert the gate stays closed.
     """
     for count in (0, 3, 6, 9):
-        loop = _make_loop(assist=False, cadence=3)
+        loop = _make_loop(model_policy=ModelExecutionPolicy.standard(), cadence=3)
         plan = _plan()
         if count == 0:
             evs = _seed_events(plan)
@@ -559,7 +563,7 @@ async def test_hs03_assist_off_store_unchanged_after_real_run():
         NoOpCondenser(),
         FakeSummarizer(),
         mode=OperatingMode.LONG_HORIZON,
-        assist=False,  # THE POINT: assist is OFF
+        model_policy=ModelExecutionPolicy.standard(),  # THE POINT: assist is OFF
     )
     store = loop.store
     await store.append(
@@ -604,7 +608,7 @@ async def test_hs03_emitted_content_is_recap_not_steer():
     events) and also assert the wrapper's persisted message
     (whichever path the test lands on, the text is the same).
     """
-    _loop = _make_loop(assist=True, cadence=3)
+    _loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), cadence=3)
     plan = _plan(
         summary="ship the page",
         steps=[{"title": "scaffold"}, {"title": "style"}],
@@ -695,7 +699,7 @@ async def test_hs03_recap_omits_constraints_when_plan_context_is_empty():
     `context` is empty. We assert CONSTRAINTS is absent and the
     recap still ends with the closing sentinel.
     """
-    _loop = _make_loop(assist=True, cadence=3)
+    _loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), cadence=3)
     plan = _plan(summary="ship", context="")  # no rationale
     events = _seed_events(plan)
     recap = _hs03_reground_message(events)
@@ -716,7 +720,7 @@ async def test_hs03_recap_omits_when_no_plan():
     hello" without a plan would be cargo-cult; the brief asks for
     a recap of the stable facts, and without a plan there is no
     goal to anchor to."""
-    loop = _make_loop(assist=True, cadence=3)
+    loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), cadence=3)
     events = with_seqs([user_msg("hello")])
     assert _hs03_reground_message(events) is None, (
         "no plan → the helper must return None (nothing to recap)"
@@ -770,7 +774,7 @@ async def test_hs03_end_to_end_through_real_run():
         NoOpCondenser(),
         FakeSummarizer(),
         mode=OperatingMode.LONG_HORIZON,
-        assist=True,
+        model_policy=ModelExecutionPolicy(tier="weak"),
         reground_cadence=2,
     )
     await loop.store.append(
@@ -838,7 +842,7 @@ def test_hs03_module_constant_documented():
 if __name__ == "__main__":
     # Manual smoke run.
     async def _smoke() -> None:
-        loop = _make_loop(assist=True, cadence=3)
+        loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), cadence=3)
         plan = _plan()
         evs = _seed_events(plan, *[_shell_action() for _ in range(6)])
         n = sum(1 for count in range(1, 7) if loop._should_emit_reground(evs))

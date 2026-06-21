@@ -16,7 +16,7 @@ from disco.core import (
     SqliteEventStore,
     ToolCall,
 )
-from disco.core.llm import OperatingMode
+from disco.core.llm import ModelExecutionPolicy, OperatingMode
 from disco.core.loop import AgentLoop, AgentStep, NeverConfirm, NullSecurityAnalyzer
 from disco.core.view import NoOpCondenser
 from disco.tools import (
@@ -55,7 +55,10 @@ async def test_loop_drives_real_tools_with_secrets_held_out():
     broker = CapabilityBroker()
     broker.register("search", search_handler)
     executor = DefaultToolExecutor(
-        build_default_registry(), agent_scope(), sandbox=sandbox, broker=broker
+        build_default_registry(),
+        agent_scope(model_policy=ModelExecutionPolicy.standard()),
+        sandbox=sandbox,
+        broker=broker,
     )
 
     agent = ScriptedAgent(

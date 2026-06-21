@@ -5,6 +5,7 @@ planner be handed, and (critically) which may NOT."""
 
 from __future__ import annotations
 
+from disco.core.llm import ModelExecutionPolicy
 from disco.tools import (
     DefaultToolExecutor,
     agent_scope,
@@ -19,7 +20,10 @@ _EXPECTED_MUTATING = {"file_write", "file_append", "file_edit", "shell", "code_e
 
 
 def _executor():
-    return DefaultToolExecutor(build_default_registry(), agent_scope())
+    return DefaultToolExecutor(
+        build_default_registry(),
+        agent_scope(model_policy=ModelExecutionPolicy.standard()),
+    )
 
 
 def test_readonly_tool_names_matches_the_classification():

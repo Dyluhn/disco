@@ -43,7 +43,7 @@ from disco.core import (
     ToolCall,
     ToolResult,
 )
-from disco.core.llm import OperatingMode
+from disco.core.llm import ModelExecutionPolicy, OperatingMode
 from disco.core.loop import AgentLoop, NeverConfirm
 from disco.core.loop.messages import (
     _HS03_REGROUND_SENTINEL,
@@ -299,7 +299,7 @@ async def test_reground_in_planning_mode_uses_new_instruction_not_old_goal():
         NoOpCondenser(),
         FakeSummarizer(),
         mode=OperatingMode.PLANNING,
-        assist=True,
+        model_policy=ModelExecutionPolicy(tier="weak"),
         reground_cadence=3,
         execution_mode=OperatingMode.LONG_HORIZON,
     )

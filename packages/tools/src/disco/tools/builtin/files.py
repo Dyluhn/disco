@@ -73,6 +73,19 @@ def reset_read_tracker() -> None:
     _read_state.clear()
 
 
+def clear_conversation_read_state(conv_id: str) -> None:
+    """Remove the F3 tracker entry for a single conversation.
+
+    Called by DefaultToolExecutor.kill() so the module-level dict does not
+    grow unbounded in long-running processes (each killed executor cleans up
+    its own per-conversation bucket).  The per-conversation-id key design
+    already prevents cross-conversation leaks; this call prevents the dict
+    from accumulating dead entries indefinitely.
+
+    Tests should use reset_read_tracker() for a full clear between runs."""
+    _read_state.pop(conv_id, None)
+
+
 def _conv_state(conv_id: str) -> dict[str, set[str]]:
     s = _read_state.get(conv_id)
     if s is None:

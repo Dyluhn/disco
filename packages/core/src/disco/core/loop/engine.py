@@ -43,6 +43,7 @@ from ..events import (
 )
 from ..llm import (
     LLMRouter,
+    ModelExecutionPolicy,
     OperatingMode,
 )
 from ..state import ConversationState
@@ -121,6 +122,11 @@ _DEFAULT_VETO_FEEDBACK = (
     "hook refused the FINISHED transition.\n"
     "</system-reminder>"
 )
+
+# Module-level constant so `ModelExecutionPolicy.standard()` is evaluated once
+# and the per-parameter call doesn't trip ruff's B008 rule (function call in
+# default). The policy is a frozen dataclass — safe to share as a singleton.
+_DEFAULT_MODEL_POLICY: ModelExecutionPolicy = ModelExecutionPolicy.standard()
 
 # C6 — recitation cadence (Manus telemetry: re-emitting the plan/objective
 # tail-recap on every iteration wastes ~1/3 of actions with no behavior
@@ -466,7 +472,7 @@ class AgentLoop:
         plan_tool: str = "submit_plan",
         execution_mode: OperatingMode = OperatingMode.LONG_HORIZON,
         autonomous: bool = False,
-        assist: bool = False,
+        model_policy: ModelExecutionPolicy = _DEFAULT_MODEL_POLICY,
         # C6 — cadence for the plan/objective tail-recap (default: every 5
         # model turns). Set to 1 to recover the old "recite every step"
         # behavior; 0 / negative are clamped to 1. The smolagents math is
@@ -498,8 +504,9 @@ class AgentLoop:
         # circuit-breaker's "hand off to the user" becomes a clean forfeit (STUCK)
         # instead of an indefinite AWAITING_USER_DECISION stall.
         self._autonomous = autonomous
-        # Assist mode (T1): signals weak-model assist tier
-        self._assist = assist
+        # Execution policy (T1): the SINGLE source of truth for model-tier execution.
+        # `_assist` is a read-only property delegating to `_model_policy.assist`.
+        self._model_policy = model_policy
         self.conversation_id = conversation_id
         self.store = store
         self.agent = agent
@@ -559,7 +566,7 @@ class AgentLoop:
         # the model to keep going; this is the harness driving the loop forward.
         self._auto_continue_cap = 3
         self._stop_hooks = list(stop_hooks or [])
-        self._stuck = StuckDetector(stuck_thresholds)
+        self._stuck = StuckDetector(stuck_thresholds, assist=model_policy.assist)
         # C6/HS-03/C5 collaborator: recitation cadence, scheduled re-grounding,
         # and the MEMORY write-through mirror. Reads the loop's cadence counters.
         self._recit = RecitationRegrounder(self)
@@ -669,6 +676,16 @@ class AgentLoop:
         #     from -1 (no boundary yet).
         self._hs03_reground_post_resume_emitted: bool = False
         self._hs03_reground_last_action_count: int = -1
+
+    # ---- policy accessors ---------------------------------------------------
+
+    @property
+    def _assist(self) -> bool:
+        """Read-only shim for the legacy weak-model gate. All collaborators
+        that read `self._loop._assist` continue to work without changes because
+        this property exposes the same name they already access. The SINGLE
+        source of truth is `_model_policy.assist`."""
+        return self._model_policy.assist
 
     # ---- emission + small helpers -------------------------------------------
 
@@ -1138,8 +1155,6 @@ class AgentLoop:
                     continue
                 if disp is Disp.HALT:
                     return await self.get_state()
-
-                events = await self._valve.gate_plan_step_lag(events)
 
                 disp, events = await self._valve.gate_bookkeeping_streak(events)
                 if disp is Disp.HALT:

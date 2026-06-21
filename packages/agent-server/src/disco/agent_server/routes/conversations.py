@@ -91,25 +91,44 @@ def make_conversations_router(
 
     @router.patch("/conversations/{conversation_id}/settings")
     async def update_settings(conversation_id: str, body: UpdateSettingsBody) -> dict:
-        """runthru-v2 ROOT-1: apply the user's model pick / autonomous choice to a
-        PRE-CREATED conversation right before the kick. The build surface pre-creates
-        a cid on mount with defaults, then the user picks a model; without this the
-        pick was dropped and the run used the default (local Qwen) instead. The loop
-        caches the driver model at first kick, so this MUST be 409 if a loop already
-        started — we do not silently no-op (that's the bug we're fixing)."""
+        """runthru-v2 ROOT-1: apply the user's model pick / autonomous / assist choice
+        to a PRE-CREATED conversation right before the kick. The build surface
+        pre-creates a cid on mount with defaults, then the user picks a model; without
+        this the pick was dropped and the run used the default (local Qwen) instead.
+
+        model_override and assist are gated by apply_settings_change (atomic pristine
+        check + per-cid lock): if the conversation already has work/run events OR a
+        composed loop OR a live run task, the change is REJECTED with 409 and settings
+        are left UNMUTATED. autonomous is applied unconditionally (no pristine gate).
+
+        This generalises the prior `cid in _loops` check: the pristine check also
+        catches the compose-gap (loop composed but RUNNING not yet emitted) and
+        post-restart state (RUNNING/FINISHED in the event store)."""
         if runtime is None:
             raise HTTPException(status_code=503, detail="runtime not available")
         _reject_if_imported(store, conversation_id)
-        if conversation_id in runtime._loops:
-            raise HTTPException(
-                status_code=409,
-                detail={"reason": "loop_already_started",
-                        "hint": "the driver model is fixed once the run begins"},
+
+        # Gate model_override + assist together under the atomic pristine check.
+        if body.model_override is not None or body.assist is not None:
+            resolved_model = (
+                _resolve_model(body.model_override, runtime)
+                if body.model_override is not None
+                else None
             )
-        if body.model_override is not None:
-            runtime.set_model_override(
-                conversation_id, _resolve_model(body.model_override, runtime)
+            ok = await runtime.apply_settings_change(
+                conversation_id,
+                model_override=resolved_model,
+                assist=body.assist,
             )
+            if not ok:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "reason": "conversation_not_pristine",
+                        "hint": "model/assist settings are fixed once work has begun",
+                    },
+                )
+
         if body.autonomous is not None:
             runtime.set_autonomous(conversation_id, body.autonomous)
         return {"ok": True, "model_override": runtime._model_override.get(conversation_id)}

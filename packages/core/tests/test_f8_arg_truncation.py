@@ -48,7 +48,7 @@ from disco.core import (
     ToolCall,
     ToolResult,
 )
-from disco.core.llm import OperatingMode
+from disco.core.llm import ModelExecutionPolicy, OperatingMode
 from disco.core.loop.dedup import (
     _F8_PREFIX_CHARS,
     _F8_TRUNCATION_MARKER_TEMPLATE,
@@ -90,7 +90,11 @@ class _NoOpCondenser:
         return None
 
 
-def _make_loop(*, assist: bool, store: SqliteEventStore) -> AgentLoop:  # noqa: F821
+def _make_loop(
+    *,
+    model_policy: ModelExecutionPolicy | None = None,
+    store: SqliteEventStore,
+) -> AgentLoop:  # noqa: F821
     """Build an AgentLoop with a real in-memory store and a no-op
     ScriptedAgent. The tests never call `agent.step()` — they drive
     `_materialize_view` directly to inspect the rendered messages."""
@@ -107,11 +111,7 @@ def _make_loop(*, assist: bool, store: SqliteEventStore) -> AgentLoop:  # noqa: 
         _NoOpCondenser(),
         FakeSummarizer(),
         mode=OperatingMode.LONG_HORIZON,
-        # assist is a kwarg on AgentLoop; we set the post-init flag too so
-        # the call site mirrors every other assist-gated test (the kwarg
-        # only controls the initial value, which is False; we want to be
-        # explicit when we flip it).
-        assist=assist,
+        model_policy=model_policy or ModelExecutionPolicy.standard(),
     )
 
 
@@ -189,7 +189,10 @@ async def test_assist_on_confirmed_write_shrinks_content_to_prefix_marker():
     events = with_seqs(
         [user_msg("write it"), _write_event(), _success_observation()]
     )
-    loop = _make_loop(assist=True, store=SqliteEventStore(":memory:"))
+    loop = _make_loop(
+        model_policy=ModelExecutionPolicy(tier="weak"),
+        store=SqliteEventStore(":memory:"),
+    )
 
     view = await loop._materialize_view(events)
     content = _content_of(view.messages)
@@ -219,7 +222,10 @@ async def test_assist_on_confirmed_write_marker_is_deterministic_for_same_event(
     events = with_seqs(
         [user_msg("write it"), _write_event(), _success_observation()]
     )
-    loop = _make_loop(assist=True, store=SqliteEventStore(":memory:"))
+    loop = _make_loop(
+        model_policy=ModelExecutionPolicy(tier="weak"),
+        store=SqliteEventStore(":memory:"),
+    )
     a = (await loop._materialize_view(events)).messages
     b = (await loop._materialize_view(events)).messages
     assert _content_of(a) == _content_of(b)
@@ -243,7 +249,10 @@ async def test_assist_on_failed_write_does_not_shrink():
     events = with_seqs(
         [user_msg("write it"), _write_event(), _failure_observation()]
     )
-    loop = _make_loop(assist=True, store=SqliteEventStore(":memory:"))
+    loop = _make_loop(
+        model_policy=ModelExecutionPolicy(tier="weak"),
+        store=SqliteEventStore(":memory:"),
+    )
 
     view = await loop._materialize_view(events)
     content = _content_of(view.messages)
@@ -253,7 +262,10 @@ async def test_assist_on_failed_write_does_not_shrink():
     assert "file_read to recover" not in content
     # The content is the same string the OFF-path sees: whatever the
     # existing render-time shapers produce for a failed write.
-    loop_off = _make_loop(assist=False, store=SqliteEventStore(":memory:"))
+    loop_off = _make_loop(
+        model_policy=ModelExecutionPolicy.standard(),
+        store=SqliteEventStore(":memory:"),
+    )
     view_off = await loop_off._materialize_view(events)
     assert _content_of(view_off.messages) == content
 
@@ -267,8 +279,14 @@ async def test_assist_on_failed_write_keeps_full_content_for_retry():
     events = with_seqs(
         [user_msg("write it"), _write_event(), _failure_observation()]
     )
-    loop_on = _make_loop(assist=True, store=SqliteEventStore(":memory:"))
-    loop_off = _make_loop(assist=False, store=SqliteEventStore(":memory:"))
+    loop_on = _make_loop(
+        model_policy=ModelExecutionPolicy(tier="weak"),
+        store=SqliteEventStore(":memory:"),
+    )
+    loop_off = _make_loop(
+        model_policy=ModelExecutionPolicy.standard(),
+        store=SqliteEventStore(":memory:"),
+    )
     on_content = _content_of((await loop_on._materialize_view(events)).messages)
     off_content = _content_of((await loop_off._materialize_view(events)).messages)
     # The two paths are byte-identical for a FAILED write — the F8
@@ -290,7 +308,10 @@ async def test_assist_off_byte_identical_even_for_confirmed_write():
     events = with_seqs(
         [user_msg("write it"), _write_event(), _success_observation()]
     )
-    loop = _make_loop(assist=False, store=SqliteEventStore(":memory:"))
+    loop = _make_loop(
+        model_policy=ModelExecutionPolicy.standard(),
+        store=SqliteEventStore(":memory:"),
+    )
 
     view = await loop._materialize_view(events)
     content = _content_of(view.messages)
@@ -319,8 +340,14 @@ async def test_assist_off_renders_full_short_content_unchanged():
             _success_observation(),
         ]
     )
-    loop_off = _make_loop(assist=False, store=SqliteEventStore(":memory:"))
-    loop_on = _make_loop(assist=True, store=SqliteEventStore(":memory:"))
+    loop_off = _make_loop(
+        model_policy=ModelExecutionPolicy.standard(),
+        store=SqliteEventStore(":memory:"),
+    )
+    loop_on = _make_loop(
+        model_policy=ModelExecutionPolicy(tier="weak"),
+        store=SqliteEventStore(":memory:"),
+    )
     off_content = _content_of((await loop_off._materialize_view(events)).messages)
     on_content = _content_of((await loop_on._materialize_view(events)).messages)
     # Both paths show the FULL short content byte-for-byte.
@@ -352,7 +379,7 @@ async def test_persisted_event_still_has_full_content_after_f8_render():
 
     # Render the view. The transform fires (assist=ON), the rendered
     # message has the F8 prefix+marker.
-    loop = _make_loop(assist=True, store=store)
+    loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), store=store)
     view = await loop._materialize_view(events)
     rendered_content = _content_of(view.messages)
     assert rendered_content.startswith(LONG_CONTENT[:_F8_PREFIX_CHARS])
@@ -386,7 +413,7 @@ async def test_view_recover_span_returns_full_content_after_f8_render():
 
     # Drive the F8 render (assist=ON). Then verify the event in the store
     # is still the full content (the F8 transform is a render-time pass).
-    loop = _make_loop(assist=True, store=store)
+    loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), store=store)
     view = await loop._materialize_view(events)
     # The rendered message shows the shrunk content.
     assert f"[written to {LONG_PATH}" in _content_of(view.messages)
@@ -407,7 +434,10 @@ async def test_unconfirmed_write_does_not_shrink():
     events = with_seqs(
         [user_msg("write it"), _write_event()]  # no observation
     )
-    loop = _make_loop(assist=True, store=SqliteEventStore(":memory:"))
+    loop = _make_loop(
+        model_policy=ModelExecutionPolicy(tier="weak"),
+        store=SqliteEventStore(":memory:"),
+    )
     content = _content_of((await loop._materialize_view(events)).messages)
     # The F8 marker is absent — F8 did not fire.
     assert "written to" not in content
@@ -432,7 +462,10 @@ async def test_agent_error_unconfirms_a_write():
             ),
         ]
     )
-    loop = _make_loop(assist=True, store=SqliteEventStore(":memory:"))
+    loop = _make_loop(
+        model_policy=ModelExecutionPolicy(tier="weak"),
+        store=SqliteEventStore(":memory:"),
+    )
     content = _content_of((await loop._materialize_view(events)).messages)
     # The F8 marker is absent — the AgentErrorEvent downgraded the write.
     assert "written to" not in content
@@ -452,8 +485,14 @@ async def test_short_confirmed_write_does_not_shrink():
             _success_observation(),
         ]
     )
-    loop_on = _make_loop(assist=True, store=SqliteEventStore(":memory:"))
-    loop_off = _make_loop(assist=False, store=SqliteEventStore(":memory:"))
+    loop_on = _make_loop(
+        model_policy=ModelExecutionPolicy(tier="weak"),
+        store=SqliteEventStore(":memory:"),
+    )
+    loop_off = _make_loop(
+        model_policy=ModelExecutionPolicy.standard(),
+        store=SqliteEventStore(":memory:"),
+    )
     on_content = _content_of((await loop_on._materialize_view(events)).messages)
     off_content = _content_of((await loop_off._materialize_view(events)).messages)
     # The short content passes through unchanged on BOTH paths (no
@@ -490,7 +529,10 @@ async def test_non_file_write_tool_does_not_shrink():
         action_id="x",
     )
     events = with_seqs([user_msg("do it"), append_action, append_obs])
-    loop = _make_loop(assist=True, store=SqliteEventStore(":memory:"))
+    loop = _make_loop(
+        model_policy=ModelExecutionPolicy(tier="weak"),
+        store=SqliteEventStore(":memory:"),
+    )
     content = _content_of(
         (await loop._materialize_view(events)).messages, name="file_append"
     )
@@ -513,7 +555,10 @@ async def test_multiple_confirmed_writes_all_shrink():
             _success_observation(call_id="call_b"),
         ]
     )
-    loop = _make_loop(assist=True, store=SqliteEventStore(":memory:"))
+    loop = _make_loop(
+        model_policy=ModelExecutionPolicy(tier="weak"),
+        store=SqliteEventStore(":memory:"),
+    )
 
     view = await loop._materialize_view(events)
     file_write_msgs = [
@@ -549,7 +594,10 @@ async def test_input_messages_list_not_mutated_by_f8_transform():
     events = with_seqs(
         [user_msg("write it"), _write_event(), _success_observation()]
     )
-    loop = _make_loop(assist=True, store=SqliteEventStore(":memory:"))
+    loop = _make_loop(
+        model_policy=ModelExecutionPolicy(tier="weak"),
+        store=SqliteEventStore(":memory:"),
+    )
     view = await loop._materialize_view(events)
     # Snapshot the LLMMessage identities and tool_call dict identities
     # BEFORE the F8 transform. Re-run and verify the original view

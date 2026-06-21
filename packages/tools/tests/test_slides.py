@@ -22,6 +22,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from disco.core.llm import ModelExecutionPolicy
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin import build_default_registry
 from disco.tools.builtin.slides import (
@@ -285,7 +286,11 @@ async def test_path_traversal_filename_rejected(tmp_workspace):
     rejected by the sandbox jail and surfaced as a clean failure — and NOTHING
     is written outside the workspace."""
     reg = build_default_registry()
-    ex = DefaultToolExecutor(reg, agent_scope(), sandbox=_jailed_sandbox(tmp_workspace))
+    ex = DefaultToolExecutor(
+        reg,
+        agent_scope(model_policy=ModelExecutionPolicy.standard()),
+        sandbox=_jailed_sandbox(tmp_workspace),
+    )
 
     escape_target = tmp_workspace.parent / "escape.html"
     assert not escape_target.exists()
@@ -341,7 +346,7 @@ async def test_file_lands_in_workspace_not_host_cwd(tmp_workspace):
 async def test_tool_registered_and_scoped():
     """slides_generate is in the default registry AND in agent scope."""
     reg = build_default_registry()
-    agt_scope = agent_scope()
+    agt_scope = agent_scope(model_policy=ModelExecutionPolicy.standard())
     assert "slides_generate" in reg.names()
     assert "slides_generate" in agt_scope.allowed_tools
 

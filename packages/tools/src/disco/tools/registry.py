@@ -9,7 +9,7 @@ the sandbox/egress/secrets rules are the hard backstops.
 
 from __future__ import annotations
 
-from disco.core.llm import Requirement
+from disco.core.llm import ModelExecutionPolicy
 from pydantic import BaseModel, ConfigDict
 
 from .anatomy import Tool
@@ -70,9 +70,9 @@ AGENT_TOOLS = frozenset(
         # line-number-targeted edits — the reliable way to edit LARGE files (any model)
         "file_replace_lines",
         "file_insert_lines",
-        # W4 — anchored str-replace for capable models (ANCHORED_EDIT). Callable by
-        # all agents but WITHHELD from advertised_tools for the weak tier; see
-        # agent_scope() below. Capable models get it via model_caps=ANCHORED_EDIT.
+        # W4 — anchored str-replace for capable models (anchored_edit capability).
+        # Callable by all agents (in allowed_tools) but WITHHELD from advertised_tools
+        # when model_policy.anchored_edit is False; see agent_scope() below.
         "file_str_replace",
         "file_list",
         "shell",
@@ -109,9 +109,9 @@ AGENT_TOOLS = frozenset(
 )
 
 
-# W4: tools withheld from the advertised set for weak-tier (non-ANCHORED_EDIT) models.
-# These remain in AGENT_TOOLS (callable by qualified name) but are hidden from
-# available_tools() so the model's context never sees a tool it can't use well.
+# W4: backward-compat constants kept for external imports (e.g. agent-server tests).
+# The new agent_scope() uses model_policy.withheld_tools instead of these directly.
+# Do NOT use these constants in new code — derive from ModelExecutionPolicy.withheld_tools.
 _ANCHORED_EDIT_TOOLS: frozenset[str] = frozenset({"file_str_replace"})
 _WEAK_TIER_ADVERTISED: frozenset[str] = AGENT_TOOLS - _ANCHORED_EDIT_TOOLS
 
@@ -157,24 +157,28 @@ def research_scope() -> ToolScope:
     return ToolScope(allowed_tools=RESEARCH_TOOLS, preset="research")
 
 
-def agent_scope(
-    *, model_caps: frozenset[Requirement] = frozenset()
-) -> ToolScope:
-    """Return the ToolScope for an agent surface.
+def agent_scope(*, model_policy: ModelExecutionPolicy) -> ToolScope:
+    """Return the ToolScope for an agent surface, narrowed by model_policy.
 
-    W4 one-policy-point: `file_str_replace` is in `allowed_tools` for all agents
-    (callable by qualified name) but is only ADVERTISED to models that benchmark
-    well on anchored edits (`Requirement.ANCHORED_EDIT`). The weak tier (default)
-    sees only the whole-file + line-number tools and the W3 syntax gate catches
-    any bad writes. Pass `model_caps` from the model's `ModelEntry.capabilities`
-    to opt a capable model in.
+    Contract #4: ONE exact keyword signature (not "policy or withheld_tools").
+    AGENT_TOOLS is the security allowlist (what is *callable*); the advertised
+    set shown to the LLM is narrowed by model_policy.withheld_tools.  Withheld
+    tools remain in allowed_tools so the engine repair loop and the planner-
+    safety backstop (readonly_tool_names) continue to key off the full
+    allowed set — they must never see a narrower boundary than the security one.
+
+    Tier / capability behaviour (driven entirely by the policy object):
+      • standard + anchored_edit=True  → advertised_tools=None (show all)
+      • standard + anchored_edit=False → file_str_replace withheld
+      • weak    + anchored_edit=True   → plan_step, update_plan_progress withheld
+      • weak    + anchored_edit=False  → all three withheld
     """
-    if Requirement.ANCHORED_EDIT in model_caps:
-        # Capable tier: all tools advertised (advertised_tools=None = show all allowed).
+    withheld = model_policy.withheld_tools
+    if not withheld:
+        # Standard no-op: show the complete toolset (advertised_tools=None = all allowed).
         return ToolScope(allowed_tools=AGENT_TOOLS, preset="agent")
-    # Weak/default tier: withhold file_str_replace from advertised set.
     return ToolScope(
         allowed_tools=AGENT_TOOLS,
-        advertised_tools=_WEAK_TIER_ADVERTISED,
+        advertised_tools=AGENT_TOOLS - withheld,
         preset="agent",
     )

@@ -72,10 +72,11 @@ def test_assist_on_returns_small_model_execution_prompt():
     assert on != _EXECUTION_DRIVER_PROMPT
 
 
-def test_assist_on_planning_prompt_unchanged():
-    """The assist gate swaps the EXECUTION prompt only. The PLANNING prompt is
-    a different phase (propose a plan, do not act) and is not in scope for C21
-    — keep it on the original."""
+def test_assist_on_planning_prompt_omits_withheld_tools():
+    """assist-pipeline refactor: a weak (assist-on) model must NOT see withheld tools
+    NAMED in its prompt (no-contamination). The planning capability block omits the
+    per-step progress tools (plan_step / update_plan_progress) when weak, since they're
+    withheld from its tool surface. The capable (assist-off) planning prompt is unchanged."""
     dp = DriverPrompts()
     on = dp.system_prompt(
         model_family="qwen",
@@ -89,9 +90,11 @@ def test_assist_on_planning_prompt_unchanged():
         role=ModelRole.AGENT_DRIVER,
         assist=False,
     )
-    # Planning prompt is the same in both assist states (no variant in C21).
-    assert on == off
     assert "PLANNING mode" in on
+    # The weak planning prompt now DIFFERS — it omits the withheld progress tools.
+    assert on != off
+    assert "plan_step" not in on
+    assert "update_plan_progress" not in on
 
 
 # --------------------------------------------------------------------------

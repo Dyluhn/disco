@@ -74,6 +74,9 @@ export interface BuildStreamState {
   sandboxState: "active" | "suspended" | null;
   /** Headless run flag from the state frame's extras overlay (issue A). */
   autonomous: boolean;
+  /** Server-derived execution tier from the state frame's extras (Order D).
+   *  true = weak/assist tier (small-model compensations on); false = standard. */
+  assist: boolean;
   /** The state frame's last_seq at (re)connect. Events replayed from history
    *  have seq <= this; only GENUINELY NEW status events (seq beyond the frame)
    *  may clear the suspended badge — a fresh page load replays the whole run,
@@ -93,6 +96,7 @@ const initial: BuildStreamState = {
   pendingClarifyId: null,
   sandboxState: null,
   autonomous: false,
+  assist: false,
   frameSeq: 0,
   error: null,
 };
@@ -130,6 +134,7 @@ function reducer(state: BuildStreamState, action: Action): BuildStreamState {
       pendingClarifyId: f.state.pending_clarify_id ?? null,
       sandboxState: f.state.extras?.sandbox ?? null,
       autonomous: f.state.extras?.autonomous ?? state.autonomous,
+      assist: f.state.extras?.assist ?? state.assist,
       frameSeq: f.state.last_seq ?? 0,
     };
   }

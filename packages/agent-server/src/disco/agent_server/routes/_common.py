@@ -111,11 +111,17 @@ class SendMessageBody(BaseModel):
 class UpdateSettingsBody(BaseModel):
     """Patch a PRE-CREATED conversation's pre-kick settings (runthru-v2 ROOT-1).
     The build surface pre-creates a cid on mount with defaults; the user's later
-    model pick / autonomous choice is applied here right before the loop is kicked
-    (the loop caches the model at first kick). None = leave unchanged."""
+    model pick / autonomous / assist choice is applied here right before the loop
+    is kicked (the loop caches these at first kick). None = leave unchanged.
+
+    model_override and assist are applied via apply_settings_change (atomic
+    pristine check + per-cid lock). autonomous is applied separately (no gate)."""
 
     model_override: str | None = None
     autonomous: bool | None = None
+    # Order C: weak-model assist tier toggle. None ⇒ leave unchanged; True/False
+    # ⇒ explicit per-conversation override (mirrors CreateConversationBody.assist).
+    assist: bool | None = None
 
 
 def _user_message(content: str, *, steer: bool = False) -> MessageEvent:

@@ -1,0 +1,8 @@
+1781943609.514572 client started (3): version 3.6b, socket /tmp/tmux-1000/disco-audit-test, protocol 8
+1781943609.514587 on Linux 7.0.9-ogc3.2.fc44.x86_64 #1 SMP PREEMPT_DYNAMIC Wed May 20 01:34:43 UTC 2026
+1781943609.514592 using libevent 2.1.12-stable poll
+1781943609.514594 using ncurses 6.6 20251230
+1781943609.514601 flags are 0x18010000
+1781943609.514606 socket is /tmp/tmux-1000/disco-audit-test
+1781943609.514613 trying connect
+1781943609.514616 connect failed: Operation not permitted

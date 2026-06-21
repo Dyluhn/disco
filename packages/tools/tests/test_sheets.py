@@ -20,6 +20,7 @@ from pathlib import Path
 
 import openpyxl
 import pytest
+from disco.core.llm import ModelExecutionPolicy
 from disco.tools.anatomy import ToolContext
 from disco.tools.builtin import build_default_registry
 from disco.tools.builtin.sheets import SheetGenerateArgs, SheetsTool
@@ -306,7 +307,11 @@ async def test_path_traversal_filename_rejected(tmp_workspace):
     host-cwd write bug (the tool used to wb.save() directly to ctx.workspace_path
     '.' on the host, bypassing the jail)."""
     reg = build_default_registry()
-    ex = DefaultToolExecutor(reg, agent_scope(), sandbox=_jailed_sandbox(tmp_workspace))
+    ex = DefaultToolExecutor(
+        reg,
+        agent_scope(model_policy=ModelExecutionPolicy.standard()),
+        sandbox=_jailed_sandbox(tmp_workspace),
+    )
 
     escape_target = tmp_workspace.parent / "escape.xlsx"
     assert not escape_target.exists()
@@ -359,7 +364,7 @@ async def test_multiple_sheets(tmp_workspace):
 async def test_tool_registered_and_scoped():
     """sheet_generate is in the default registry AND in agent scope."""
     reg = build_default_registry()
-    agt_scope = agent_scope()
+    agt_scope = agent_scope(model_policy=ModelExecutionPolicy.standard())
     assert "sheet_generate" in reg.names()
     assert "sheet_generate" in agt_scope.allowed_tools
 

@@ -11,9 +11,9 @@ from __future__ import annotations
 import pytest
 from disco.agent_server.runtime import _apply_mcp_scope
 from disco.core import SecurityRisk, ToolCall
+from disco.core.llm import ModelExecutionPolicy
 from disco.tools import DefaultToolExecutor, agent_scope, build_default_registry
 from disco.tools.anatomy import ToolDef
-from disco.tools.registry import _WEAK_TIER_ADVERTISED
 from pydantic import BaseModel
 
 # ---- fakes ------------------------------------------------------------------
@@ -46,7 +46,12 @@ def _fake_mcp_tools(n: int, server: str = "srv") -> list[ToolDef]:
 
 
 def _executor() -> DefaultToolExecutor:
-    return DefaultToolExecutor(build_default_registry(), agent_scope())
+    _policy = ModelExecutionPolicy.standard()
+    return DefaultToolExecutor(
+        build_default_registry(),
+        agent_scope(model_policy=_policy),
+        model_policy=_policy,
+    )
 
 
 # ---- over-cap path ----------------------------------------------------------
@@ -126,9 +131,9 @@ def test_under_cap_no_tool_search():
 def test_zero_mcp_tools_noop():
     """Empty MCP tool list → executor unchanged (no-op).
 
-    W4: agent_scope() now returns advertised_tools=_WEAK_TIER_ADVERTISED for the
-    default (no-ANCHORED_EDIT) tier — None is no longer the default. The no-op
-    check is that allowed_tools and the advertised set are both unchanged.
+    For a standard-policy executor, agent_scope() returns advertised_tools=None
+    (show all allowed tools). The no-op check is that allowed_tools and the
+    advertised set are both unchanged after _apply_mcp_scope with an empty list.
     """
     ex = _executor()
     before_allowed = ex._scope.allowed_tools
@@ -136,8 +141,8 @@ def test_zero_mcp_tools_noop():
     _apply_mcp_scope(ex, [], _FakeCallTarget(), max_active_schemas=20)
     assert ex._scope.allowed_tools == before_allowed
     assert ex._scope.advertised_tools == before_advertised
-    # Confirm the weak tier withholds file_str_replace from advertised set
-    assert ex._scope.advertised_tools == _WEAK_TIER_ADVERTISED
+    # Standard policy: advertised_tools=None means all allowed tools are shown
+    assert ex._scope.advertised_tools is None
 
 
 # ---- readonly_tool_names planner-safety (allowed_tools, not advertised) ------

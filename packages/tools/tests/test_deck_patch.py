@@ -32,6 +32,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from disco.core.llm import ModelExecutionPolicy
 from disco.tools.builtin._deck_patch import (
     DeckPatchArgs,
     DeckPatchTool,
@@ -106,7 +107,8 @@ class TestApplyPatch:
 
     def test_replace_body_element(self):
         doc = {"slides": [{"body": ["A", "B", "C"]}]}
-        result = apply_patch(doc, [{"op": "replace", "path": "/slides/0/body/1", "value": "Updated"}])
+        patch = [{"op": "replace", "path": "/slides/0/body/1", "value": "Updated"}]
+        result = apply_patch(doc, patch)
         assert result["slides"][0]["body"] == ["A", "Updated", "C"]
 
     def test_add_append(self):
@@ -339,7 +341,8 @@ class TestDeckResolverPython:
 
         # Apply a patch via that pointer
         authored_dict = authored.model_dump(mode="json")
-        patched = apply_patch(authored_dict, [{"op": "replace", "path": pointer, "value": "Patched"}])
+        patch = [{"op": "replace", "path": pointer, "value": "Patched"}]
+        patched = apply_patch(authored_dict, patch)
         assert patched["slides"][0]["title"] == "Patched"
 
     def test_multi_slide_element_ids_are_unique(self):
@@ -596,7 +599,7 @@ class TestRegistryMembership:
         assert "deck_patch" in ARTIFACT_TOOLS
 
     def test_deck_patch_in_agent_scope(self):
-        scope = agent_scope()
+        scope = agent_scope(model_policy=ModelExecutionPolicy.standard())
         assert "deck_patch" in scope.allowed_tools
 
     def test_deck_patch_in_artifact_scope(self):
@@ -606,7 +609,7 @@ class TestRegistryMembership:
     def test_deck_patch_registered_in_default_registry(self):
         from disco.tools.builtin import build_default_registry
         reg = build_default_registry()
-        scope = agent_scope()
+        scope = agent_scope(model_policy=ModelExecutionPolicy.standard())
         tool = reg.get("deck_patch", scope=scope)
         assert tool is not None
         assert tool.definition.name == "deck_patch"
@@ -693,21 +696,21 @@ async def test_deck_patch_preserves_generated_images_on_edit(tmp_path):
     """Editing an image deck must NOT drop its images to placeholders: deck_patch
     reloads {stem}_img_{i}.png from the sandbox and re-embeds (C7)."""
     import io as _io
-    import json
     import zipfile
 
-    from PIL import Image
+    from disco.tools.anatomy import ToolContext
     from disco.tools.builtin._deck_patch import DeckPatchTool
     from disco.tools.builtin._deck_schema import AuthoredDeck, AuthoredSlide
-    from disco.tools.sandbox.process import ProcessSandboxService
     from disco.tools.sandbox import SandboxSession
-    from disco.tools.anatomy import ToolContext
+    from disco.tools.sandbox.process import ProcessSandboxService
+    from PIL import Image
 
     # a deck with one image slide + its on-disk generated image
     authored = AuthoredDeck(title="T", theme="disco-light", slides=[
         AuthoredSlide(type="full_image", title="Cover", body=[], image_prompt="a tree"),
     ])
-    buf = _io.BytesIO(); Image.new("RGB", (64, 36), (10, 160, 60)).save(buf, format="PNG")
+    buf = _io.BytesIO()
+    Image.new("RGB", (64, 36), (10, 160, 60)).save(buf, format="PNG")
     png = buf.getvalue()
 
     svc = ProcessSandboxService(root=str(tmp_path))

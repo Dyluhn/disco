@@ -12,15 +12,21 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from uuid import uuid4
 
 from disco.core import ToolCall, ToolResult
-from disco.core.llm import ToolSpec
+from disco.core.llm import ModelExecutionPolicy, ToolSpec
 from pydantic import BaseModel, ValidationError
 
 from .anatomy import ToolContext, ToolDef, ToolExecutionError
+from .builtin.files import clear_conversation_read_state
 from .registry import ToolRegistry, ToolScope
 from .sandbox.base import SandboxError, SandboxInstance
 from .secrets import CapabilityBroker, CapabilityDenied
+
+# Module-level singleton used as the default for model_policy in DefaultToolExecutor
+# (ruff B008 forbids function calls in default args; frozen dataclass is safe as a singleton).
+_STANDARD_POLICY: ModelExecutionPolicy = ModelExecutionPolicy.standard()
 
 
 class DefaultToolExecutor:
@@ -39,18 +45,23 @@ class DefaultToolExecutor:
         sandbox: SandboxInstance | None = None,
         broker: CapabilityBroker | None = None,
         owner_id: str = "local",
-        conversation_id: str = "conv",
+        conversation_id: str | None = None,
         default_timeout_s: int = 300,
-        assist: bool = False,
+        model_policy: ModelExecutionPolicy = _STANDARD_POLICY,
     ) -> None:
         self._registry = registry
         self._scope = scope
         self._sandbox = sandbox
         self._broker = broker or CapabilityBroker()
         self._owner_id = owner_id
-        self._conversation_id = conversation_id
+        # Generate a unique per-instance id when none is given so the F3 read-state
+        # tracker never silently shares a bucket with another executor (the old "conv"
+        # default would have all unkeyed executors share one bucket).
+        self._conversation_id = (
+            conversation_id if conversation_id is not None else f"conv_{uuid4().hex}"
+        )
         self._default_timeout_s = default_timeout_s
-        self._assist = assist  # weak-model assist gate → stamped onto every ToolContext
+        self._model_policy = model_policy  # replaces bare assist: bool; standard = no-op
         self._killed = False
 
     @property
@@ -78,6 +89,13 @@ class DefaultToolExecutor:
         tools = self._registry.in_scope(self._scope)  # registry ∩ allowed_tools
         if self._scope.advertised_tools is not None:
             tools = [t for t in tools if t.definition.name in self._scope.advertised_tools]
+        # Contract #3: additionally drop any tool the model policy withholds, regardless
+        # of what the scope advertises.  For the standard tier withheld_tools is empty
+        # (frozenset()) so this branch is a no-op.  For the weak tier and !anchored_edit
+        # this is the executor-level enforcement backstop on top of the registry's scope.
+        withheld = self._model_policy.withheld_tools
+        if withheld:
+            tools = [t for t in tools if t.definition.name not in withheld]
         return [t.definition.to_spec() for t in tools]
 
     def callable_tool_names(self) -> frozenset[str]:
@@ -161,6 +179,9 @@ class DefaultToolExecutor:
         self._broker.revoke_all()
         if self._sandbox is not None:
             await self._sandbox.destroy()
+        # F3 teardown: remove this conversation's read/write tracker entry so the
+        # module-level dict doesn't grow unbounded over the lifetime of the process.
+        clear_conversation_read_state(self._conversation_id)
 
     # ---- helpers ------------------------------------------------------------
 
@@ -186,7 +207,7 @@ class DefaultToolExecutor:
             capabilities=self._broker.grant(tool_def.uses_capabilities),
             owner_id=self._owner_id,
             conversation_id=self._conversation_id,
-            assist=self._assist,
+            assist=self._model_policy.assist,
         )
 
     def _fail(

@@ -27,6 +27,7 @@ import io
 
 import httpx
 import pytest
+from disco.core.llm import ModelExecutionPolicy
 from disco.tools.anatomy import ToolContext
 from disco.tools.builtin import ImageGenTool, build_default_registry
 from disco.tools.builtin.image_gen import (
@@ -397,7 +398,7 @@ def test_image_generate_in_default_registry_and_agent_scope():
     reg = build_default_registry()
     assert "image_generate" in reg.names()
 
-    agt = agent_scope()
+    agt = agent_scope(model_policy=ModelExecutionPolicy.standard())
     assert "image_generate" in agt.allowed_tools
     tool = reg.get("image_generate", scope=agt)
     assert tool is not None
@@ -466,7 +467,7 @@ def test_select_image_backend_returns_procedural_by_default(monkeypatch):
 
     # Mock ConfigStore to return procedural provider
     class _MockConfig:
-        image_gen = type('obj', (object,), {'provider': 'procedural', 'base_url': '', 'api_key_env': ''})()
+        image_gen = type('obj', (object,), {'provider': 'procedural', 'base_url': '', 'api_key_env': ''})()  # noqa: E501
 
     class _MockStore:
         def load(self):
@@ -620,7 +621,7 @@ def test_openai_backend_builds_correct_request_shape():
     from unittest.mock import MagicMock, patch
 
     # Create a minimal valid PNG (1x1 transparent)
-    png_data = base64.b64encode(b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82')
+    png_data = base64.b64encode(b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82')  # noqa: E501
 
     # Mock the httpx client
     mock_response = MagicMock()
@@ -817,7 +818,7 @@ def test_comfyui_template_substitutes_tokens_and_is_injection_safe():
         '"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "%ckpt%"}},'
         '"2": {"class_type": "CLIPTextEncode", "inputs": {"text": "%prompt%", "clip": ["1", 1]}},'
         '"3": {"class_type": "CLIPTextEncode", "inputs": {"text": "%negative%", "clip": ["1", 1]}},'
-        '"4": {"class_type": "EmptyLatentImage", "inputs": {"width": %width%, "height": %height%, "batch_size": 1}},'
+        '"4": {"class_type": "EmptyLatentImage", "inputs": {"width": %width%, "height": %height%, "batch_size": 1}},'  # noqa: E501
         '"5": {"class_type": "KSampler", "inputs": {"seed": %seed%, "model": ["1", 0]}}'
         '}'
     )
@@ -872,7 +873,7 @@ def test_comfyui_template_using_ckpt_token_requires_a_checkpoint():
     backend = _ComfyUIBackend(
         base_url='http://localhost:8188',
         model='',
-        workflow_json='{"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "%ckpt%"}}}',
+        workflow_json='{"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "%ckpt%"}}}',  # noqa: E501
     )
     with pytest.raises(ValueError, match="Checkpoint"):
         backend.generate(prompt='x', width=1024, height=1024, seed=1, fmt='png')
@@ -895,8 +896,8 @@ def test_comfyui_prefers_output_image_over_temp_preview():
                 'p1': {
                     'outputs': {
                         # preview node first (temp), final saved node second (output)
-                        '8': {'images': [{'filename': 'prev.png', 'subfolder': '', 'type': 'temp'}]},
-                        '9': {'images': [{'filename': 'final.png', 'subfolder': '', 'type': 'output'}]},
+                        '8': {'images': [{'filename': 'prev.png', 'subfolder': '', 'type': 'temp'}]},  # noqa: E501
+                        '9': {'images': [{'filename': 'final.png', 'subfolder': '', 'type': 'output'}]},  # noqa: E501
                     }
                 }
             }
@@ -1068,7 +1069,7 @@ def test_select_image_backend_openrouter_uses_reserved_slot(monkeypatch):
             "model": "google/gemini-2.5-flash-image", "workflow_json": "",
         })()
 
-    monkeypatch.setattr("disco.tools.builtin.image_gen.ConfigStore", lambda: type("S", (), {"load": lambda s: _Cfg()})())
+    monkeypatch.setattr("disco.tools.builtin.image_gen.ConfigStore", lambda: type("S", (), {"load": lambda s: _Cfg()})())  # noqa: E501
 
     class _Secret:
         def get_openrouter_key(self):
@@ -1115,4 +1116,4 @@ def test_openai_endpoint_ignores_query_string_false_positive():
     from disco.tools.builtin.image_gen import _OpenAIImageBackend
 
     be = _OpenAIImageBackend("https://proxy.example/api?next=/images/generations", "k")
-    assert be._endpoint() == "https://proxy.example/api?next=/images/generations/v1/images/generations"
+    assert be._endpoint() == "https://proxy.example/api?next=/images/generations/v1/images/generations"  # noqa: E501

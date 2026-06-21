@@ -11,7 +11,7 @@ import asyncio
 
 import pytest
 from disco.core import ToolResult
-from disco.core.llm import ToolSpec
+from disco.core.llm import ModelExecutionPolicy, ToolSpec
 from loop_fakes import ScriptedAgent, action_step, build_loop, finish_step
 
 
@@ -157,7 +157,7 @@ async def test_unknown_tool_hint_suggests_nearest_with_assist_on():
     )
     agent = ScriptedAgent([action_step("file_writ")])
     loop, _ = build_loop(agent, executor=executor, max_iterations=1)
-    loop._assist = True
+    loop._model_policy = ModelExecutionPolicy(tier="weak")
 
     await loop.send_message("go")
     await asyncio.wait_for(loop.run(), timeout=5.0)

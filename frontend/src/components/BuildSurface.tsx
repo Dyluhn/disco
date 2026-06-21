@@ -254,6 +254,7 @@ export function BuildSurface({
             isolation={isolationForBackend(sandboxBackend)}
             sandboxState={b.sandboxState ?? undefined}
             autonomous={b.autonomous}
+            assist={b.assist}
             onKill={b.kill}
             onStop={b.cancel}
             onResume={b.canResume ? b.resume : undefined}

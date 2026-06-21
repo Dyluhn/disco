@@ -12,13 +12,14 @@ consulted, so no read, no state lookup, no extra branch beyond the `if`).
 
 These tests cover BOTH the unit-tool layer (FileWriteTool / FileReadTool
 directly, with a fake sandbox) and a thin executor-level smoke that the
-DefaultToolExecutor passes `ctx.assist` through and that the assist-OFF branch
-is exercised end-to-end.
+DefaultToolExecutor passes `ctx.assist` through (via model_policy.assist) and
+that the assist-OFF branch is exercised end-to-end.
 """
 
 from __future__ import annotations
 
 import pytest
+from disco.core.llm import ModelExecutionPolicy
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin.files import (
     FileReadArgs,
@@ -240,7 +241,7 @@ async def test_assist_off_never_consults_tracker_state():
 
 @pytest.mark.asyncio
 async def test_executor_assist_on_refuses_via_default_tool_executor():
-    """End-to-end: DefaultToolExecutor with assist=True → file_write hits the
+    """End-to-end: DefaultToolExecutor with weak model_policy → file_write hits the
     F3 gate and returns a failure ToolResult. Verifies the gate is reachable
     from the production call path, not just the tool's .run() surface."""
     sbx = _FakeSandbox({"x.py": b"old\n"})
@@ -251,7 +252,7 @@ async def test_executor_assist_on_refuses_via_default_tool_executor():
         reg,
         ToolScope(allowed_tools=frozenset({"file_write", "file_read"})),
         sandbox=sbx,
-        assist=True,
+        model_policy=ModelExecutionPolicy(tier="weak", anchored_edit=True),
     )
     from disco.core import ToolCall
 
@@ -266,7 +267,7 @@ async def test_executor_assist_on_refuses_via_default_tool_executor():
 
 @pytest.mark.asyncio
 async def test_executor_assist_off_writes_through_byte_identically():
-    """End-to-end: DefaultToolExecutor with assist=False → file_write goes
+    """End-to-end: DefaultToolExecutor with standard model_policy → file_write goes
     through unchanged. No hint, no error, content lands on disk — proves the
     assist-OFF path is the pre-F3 code path byte-for-byte."""
     sbx = _FakeSandbox({"x.py": b"old\n"})
@@ -277,7 +278,7 @@ async def test_executor_assist_off_writes_through_byte_identically():
         reg,
         ToolScope(allowed_tools=frozenset({"file_write", "file_read"})),
         sandbox=sbx,
-        assist=False,
+        model_policy=ModelExecutionPolicy.standard(),
     )
     from disco.core import ToolCall
 

@@ -63,7 +63,7 @@ from disco.core import (
     ToolCall,
     ToolResult,
 )
-from disco.core.llm import OperatingMode
+from disco.core.llm import ModelExecutionPolicy, OperatingMode
 from disco.core.loop.dedup import (
     _F9_ARG_SUMMARY_MAX_CHARS,
     _F9_POINTER_TEMPLATE,
@@ -122,7 +122,11 @@ class _ReadonlyExecutor(FakeExecutor):
         return self._readonly
 
 
-def _make_loop(*, assist: bool, executor=None) -> AgentLoop:  # noqa: F821
+def _make_loop(
+    *,
+    model_policy: ModelExecutionPolicy | None = None,
+    executor=None,
+) -> AgentLoop:  # noqa: F821
     """Build an AgentLoop over a real in-memory store. Tests drive
     `_execute_and_observe` directly; the agent is never stepped."""
     from disco.core.loop.engine import AgentLoop
@@ -150,7 +154,7 @@ def _make_loop(*, assist: bool, executor=None) -> AgentLoop:  # noqa: F821
         _NoOpCondenser(),
         FakeSummarizer(),
         mode=OperatingMode.LONG_HORIZON,
-        assist=assist,
+        model_policy=model_policy or ModelExecutionPolicy.standard(),
     )
 
 
@@ -280,7 +284,7 @@ async def test_assist_on_repeat_read_short_circuits_with_pointer():
             content="the file content",
         )
     )
-    loop = _make_loop(assist=True, executor=ex)
+    loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), executor=ex)
     # First read: full normal path (propose → _emit → _execute_and_observe).
     first = _read_action(call_id="call_read_1", path="src/foo.py")
     events = await _drive_execute(loop, first)
@@ -323,7 +327,7 @@ async def test_assist_on_repeat_read_pointer_text_is_lossless():
     which earlier read to look at. Lossless: a re-`file_read` recovers
     the live content if the model suspects staleness.
     """
-    loop = _make_loop(assist=True, executor=_ReadonlyExecutor())
+    loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), executor=_ReadonlyExecutor())
     first = _read_action(call_id="call_read_1", path="src/foo.py")
     await _drive_execute(loop, first)
     second = _read_action(call_id="call_read_2", path="src/foo.py")
@@ -369,7 +373,7 @@ async def test_assist_on_read_after_write_to_same_path_re_executes():
                 content="the file content" if call.tool_name == "file_read" else "wrote",
             )
     ex = _EchoResultExecutor()
-    loop = _make_loop(assist=True, executor=ex)
+    loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), executor=ex)
     # 1. First read of P.
     first = _read_action(call_id="call_read_1", path="src/foo.py")
     await _drive_execute(loop, first)
@@ -407,7 +411,7 @@ async def test_assist_on_read_after_write_to_DIFFERENT_path_dedups():
     of P. The dedup still fires for a repeat read of P. The invalidation
     is path-specific, not a global 'anything happened' check.
     """
-    loop = _make_loop(assist=True, executor=_ReadonlyExecutor())
+    loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), executor=_ReadonlyExecutor())
     # 1. First read of P.
     first = _read_action(call_id="call_read_1", path="src/foo.py")
     await _drive_execute(loop, first)
@@ -439,7 +443,7 @@ async def test_assist_off_repeat_read_always_re_executes():
     the gate is closed end-to-end, the function body is never invoked,
     and the executor is called for every read.
     """
-    loop = _make_loop(assist=False, executor=_ReadonlyExecutor())
+    loop = _make_loop(model_policy=ModelExecutionPolicy.standard(), executor=_ReadonlyExecutor())
     # Three identical reads.
     for i in range(3):
         action = _read_action(call_id=f"call_read_{i + 1}", path="src/foo.py")
@@ -464,7 +468,7 @@ async def test_assist_off_with_write_between_reads_byte_identical_to_today():
     (today's behavior is: every read re-executes, regardless of
     intervening writes). This is the byte-identical-to-today contract
     for the OFF path."""
-    loop = _make_loop(assist=False, executor=_ReadonlyExecutor())
+    loop = _make_loop(model_policy=ModelExecutionPolicy.standard(), executor=_ReadonlyExecutor())
     first = _read_action(call_id="call_read_1", path="src/foo.py")
     await _drive_execute(loop, first)
     write = _write_action(call_id="call_write_1", path="src/foo.py", content="x")
@@ -487,7 +491,7 @@ async def test_assist_on_read_with_different_offset_does_not_dedup():
     of the prior read. The dedup contract is exact-args; the two reads
     return different slices of the file. The second read re-executes.
     """
-    loop = _make_loop(assist=True, executor=_ReadonlyExecutor())
+    loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), executor=_ReadonlyExecutor())
     first = _read_action(call_id="call_read_1", path="src/foo.py", offset=1, limit=10)
     await _drive_execute(loop, first)
     second = _read_action(call_id="call_read_2", path="src/foo.py", offset=11, limit=20)
@@ -504,7 +508,7 @@ async def test_assist_on_read_with_different_path_does_not_dedup():
     """A read of a DIFFERENT path is not a dedup candidate (different
     files, different content). The second read re-executes.
     """
-    loop = _make_loop(assist=True, executor=_ReadonlyExecutor())
+    loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), executor=_ReadonlyExecutor())
     first = _read_action(call_id="call_read_1", path="src/foo.py")
     await _drive_execute(loop, first)
     second = _read_action(call_id="call_read_2", path="src/bar.py")
@@ -540,7 +544,7 @@ async def test_assist_on_non_read_only_call_does_not_dedup():
                 content="ok" if call.tool_name == "shell" else "the file content",
             )
     ex = _EchoResultExecutor()
-    loop = _make_loop(assist=True, executor=ex)
+    loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), executor=ex)
     # Two identical shell calls. The dedup helper's success-observation
     # check would pass for both — the ONLY thing that should stop the
     # dedup is the read-only check itself.
@@ -564,7 +568,7 @@ async def test_assist_on_mixed_read_then_write_then_repeat_read_dedups_read_only
     if it's read-only + exact-args + no invalidation. A write is a
     mutating tool (not read-only) and is never itself deduped.
     """
-    loop = _make_loop(assist=True, executor=_ReadonlyExecutor())
+    loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), executor=_ReadonlyExecutor())
     # 1. First read of P.
     first = _read_action(call_id="call_read_1", path="src/foo.py")
     await _drive_execute(loop, first)
@@ -596,7 +600,7 @@ async def test_assist_on_repeat_read_outside_window_re_executes():
     is in READ-ONLY calls (not steps), so we build a chain of
     distinct read-only calls in between.
     """
-    loop = _make_loop(assist=True, executor=_ReadonlyExecutor())
+    loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), executor=_ReadonlyExecutor())
     # 1. First read of P (the cache seed).
     first = _read_action(call_id="call_read_1", path="src/foo.py")
     await _drive_execute(loop, first)
@@ -630,7 +634,7 @@ async def test_assist_on_repeat_read_just_inside_window_dedups():
     walks back through the prior read-only calls; the most recent
     one of the same tool+args is still in scope.
     """
-    loop = _make_loop(assist=True, executor=_ReadonlyExecutor())
+    loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), executor=_ReadonlyExecutor())
     # 1. First read of P.
     first = _read_action(call_id="call_read_1", path="src/foo.py")
     await _drive_execute(loop, first)
@@ -957,7 +961,7 @@ async def test_assist_on_dedup_does_not_lose_prior_observation():
             content="the file content",
         )
     )
-    loop = _make_loop(assist=True, executor=ex)
+    loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), executor=ex)
     first = _read_action(call_id="call_read_1", path="src/foo.py")
     await _drive_execute(loop, first)
     second = _read_action(call_id="call_read_2", path="src/foo.py")
@@ -980,7 +984,7 @@ async def test_assist_on_failed_prior_read_does_not_dedup():
     candidate — there's no useful prior result to point at. The
     second read re-executes.
     """
-    loop = _make_loop(assist=True, executor=_ReadonlyExecutor())
+    loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), executor=_ReadonlyExecutor())
     # First read with a failed observation.
     first = _read_action(call_id="call_read_1", path="src/foo.py")
     await store_append_action_obs(

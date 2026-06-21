@@ -10,6 +10,7 @@ import json
 
 import numpy as np
 import pytest
+from disco.core.llm import ModelExecutionPolicy
 from disco.tools.anatomy import ToolContext
 from disco.tools.builtin import build_default_registry
 from disco.tools.builtin._audio_mixer import (
@@ -359,7 +360,7 @@ async def test_tool_registered():
 @pytest.mark.asyncio
 async def test_tool_in_agent_scope():
     reg = build_default_registry()
-    agt_scope = agent_scope()
+    agt_scope = agent_scope(model_policy=ModelExecutionPolicy.standard())
     assert "audio_overview" in agt_scope.allowed_tools
     tool = reg.get("audio_overview", scope=agt_scope)
     assert tool is not None
@@ -381,7 +382,8 @@ async def test_tool_excluded_from_research_scope():
 @pytest.mark.asyncio
 async def test_tool_definition_fields():
     reg = build_default_registry()
-    tool = reg.get("audio_overview", scope=agent_scope())
+    _scope = agent_scope(model_policy=ModelExecutionPolicy.standard())
+    tool = reg.get("audio_overview", scope=_scope)
     assert tool is not None
     d = tool.definition
     assert d.name == "audio_overview"

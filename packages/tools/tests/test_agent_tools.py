@@ -10,6 +10,7 @@ real isolation/limits/secret-non-leak is the live check (verify_agent_tools_loca
 from __future__ import annotations
 
 import pytest
+from disco.core.llm import ModelExecutionPolicy
 from disco.tools.builtin import build_default_registry
 from disco.tools.executor import DefaultToolExecutor
 from disco.tools.registry import agent_scope, research_scope
@@ -23,6 +24,9 @@ from disco.tools.sandbox.base import (
     SandboxUnavailableError,
 )
 from tool_fakes import FakeSandboxInstance, call
+
+# Shared scope for tests that just need the standard agent toolset.
+_STANDARD_AGENT_SCOPE = agent_scope(model_policy=ModelExecutionPolicy.standard())
 
 # ---- fakes for the session / death tests -------------------------------------
 
@@ -96,13 +100,15 @@ async def test_file_list_tool_lists_workspace():
     sbx = FakeSandboxInstance()
     await sbx.write_file("a.txt", b"1")
     await sbx.write_file("b.txt", b"2")
-    ex = DefaultToolExecutor(build_default_registry(), agent_scope(), sandbox=sbx)
+    ex = DefaultToolExecutor(build_default_registry(), _STANDARD_AGENT_SCOPE, sandbox=sbx)
     res = await ex.execute(call("file_list", path="."))
     assert res.success and res.structured["entries"] == ["a.txt", "b.txt"]
 
 
 async def test_shell_timeout_is_surfaced_legibly():
-    ex = DefaultToolExecutor(build_default_registry(), agent_scope(), sandbox=TimeoutInstance())
+    ex = DefaultToolExecutor(
+        build_default_registry(), _STANDARD_AGENT_SCOPE, sandbox=TimeoutInstance()
+    )
     res = await ex.execute(call("shell", command="sleep 999"))
     assert res.success is False
     assert res.structured["timed_out"] is True
@@ -112,7 +118,9 @@ async def test_shell_timeout_is_surfaced_legibly():
 
 async def test_code_exec_timeout_is_surfaced():
     # FakeSandboxInstance now has a kernel property
-    ex = DefaultToolExecutor(build_default_registry(), agent_scope(), sandbox=FakeSandboxInstance())
+    ex = DefaultToolExecutor(
+        build_default_registry(), _STANDARD_AGENT_SCOPE, sandbox=FakeSandboxInstance()
+    )
     res = await ex.execute(call("code_exec", language="python", code="while True: pass"))
     assert res.success is False and res.structured["timed_out"] is True
 
@@ -128,7 +136,7 @@ async def test_code_exec_python_state_persists_across_cells(tmp_path):
     svc = ProcessSandboxService(root=str(tmp_path))
     session = SandboxSession(svc, owner_id="o", conversation_id="c")
 
-    ex = DefaultToolExecutor(build_default_registry(), agent_scope(), sandbox=session)
+    ex = DefaultToolExecutor(build_default_registry(), _STANDARD_AGENT_SCOPE, sandbox=session)
 
     # Mock the pwd for the session
     from unittest.mock import patch
@@ -152,7 +160,7 @@ async def test_code_exec_erroring_cell_keeps_prior_state(tmp_path):
     svc = ProcessSandboxService(root=str(tmp_path))
     session = SandboxSession(svc, owner_id="o", conversation_id="c")
     
-    ex = DefaultToolExecutor(build_default_registry(), agent_scope(), sandbox=session)
+    ex = DefaultToolExecutor(build_default_registry(), _STANDARD_AGENT_SCOPE, sandbox=session)
 
     from unittest.mock import patch
     with patch.object(ProcessSandboxInstance, "exec_shell") as mock_exec:
@@ -179,7 +187,7 @@ async def test_agent_tools_are_scoped_out_of_research():
         res = await research.execute(call(name, **args))
         assert res.success is False and res.structured["kind"] == "unknown_tool"
     # …but available in the Agent scope
-    agent = DefaultToolExecutor(reg, agent_scope(), sandbox=FakeSandboxInstance())
+    agent = DefaultToolExecutor(reg, _STANDARD_AGENT_SCOPE, sandbox=FakeSandboxInstance())
     res = await agent.execute(call("shell", command="echo hi"))
     assert res.success is True
 
@@ -234,7 +242,7 @@ async def test_executor_returns_clean_result_when_box_dies_under_a_tool():
     and the next tool call works on the re-created box."""
     svc = CountingService(first_dies_after=1)
     session = SandboxSession(svc, SandboxSpec())
-    ex = DefaultToolExecutor(build_default_registry(), agent_scope(), sandbox=session)
+    ex = DefaultToolExecutor(build_default_registry(), _STANDARD_AGENT_SCOPE, sandbox=session)
 
     ok = await ex.execute(call("shell", command="step 1"))
     assert ok.success is True

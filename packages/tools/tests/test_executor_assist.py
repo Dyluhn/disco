@@ -1,16 +1,16 @@
-"""Wire-through: DefaultToolExecutor stamps its `assist` gate onto EVERY
-ToolContext it builds.
+"""Wire-through: DefaultToolExecutor stamps its model_policy's assist gate onto
+EVERY ToolContext it builds.
 
 The executor is the only thing that constructs ToolContext for live tool runs,
-so a tool can only see the weak-model gate if the executor copies its `_assist`
-into ctx.assist. The field-existence test (`test_assist_tier.py`) proves the
-ToolContext *has* the field; this proves the executor *populates* it from the
-constructor flag — the value-flow the field test can't see because it builds the
-context by hand."""
+so a tool can only see the weak-model gate if the executor copies its policy's
+assist value into ctx.assist.  These tests prove the executor populates ctx.assist
+from model_policy.assist — the value-flow the ToolContext-field tests can't see
+because they build the context by hand."""
 
 from __future__ import annotations
 
 import pytest
+from disco.core.llm import ModelExecutionPolicy
 from disco.tools.anatomy import ToolDef
 from disco.tools.executor import DefaultToolExecutor
 from disco.tools.registry import ToolRegistry, ToolScope
@@ -25,28 +25,31 @@ class _NoArgs(BaseModel):
 
 _TOOL_DEF = ToolDef(name="probe", description="in-process probe", args_model=_NoArgs)
 
+_WEAK_POLICY = ModelExecutionPolicy(tier="weak", anchored_edit=True)
+_STANDARD_POLICY = ModelExecutionPolicy.standard()
 
-def _executor(*, assist):
+
+def _executor(*, model_policy: ModelExecutionPolicy) -> DefaultToolExecutor:
     reg = ToolRegistry()
     return DefaultToolExecutor(
-        reg, ToolScope(allowed_tools=frozenset({"probe"})), assist=assist
+        reg, ToolScope(allowed_tools=frozenset({"probe"})), model_policy=model_policy
     )
 
 
 async def test_build_context_stamps_assist_true():
-    """assist=True at construction → ctx.assist True for an in-process tool."""
-    ctx = await _executor(assist=True)._build_context(_TOOL_DEF)
+    """weak model_policy → ctx.assist True for an in-process tool."""
+    ctx = await _executor(model_policy=_WEAK_POLICY)._build_context(_TOOL_DEF)
     assert ctx.assist is True
 
 
 async def test_build_context_stamps_assist_false():
-    """assist=False → ctx.assist False (gate genuinely OFF, not just defaulted)."""
-    ctx = await _executor(assist=False)._build_context(_TOOL_DEF)
+    """standard model_policy → ctx.assist False (gate genuinely OFF, not just defaulted)."""
+    ctx = await _executor(model_policy=_STANDARD_POLICY)._build_context(_TOOL_DEF)
     assert ctx.assist is False
 
 
 async def test_build_context_assist_defaults_off():
-    """Legacy construction with no `assist` kwarg → ctx.assist False, so the
+    """Construction with no model_policy → standard policy → ctx.assist False, so the
     capable-model default carries through the executor unchanged."""
     reg = ToolRegistry()
     ex = DefaultToolExecutor(reg, ToolScope(allowed_tools=frozenset({"probe"})))

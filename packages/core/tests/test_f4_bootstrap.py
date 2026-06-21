@@ -54,6 +54,7 @@ from disco.core import (
     EventSource,
     MessageEvent,
 )
+from disco.core.llm import ModelExecutionPolicy
 from disco.core.loop.bootstrap import (
     _F4_MAX_SCRIPTS_PER_MANIFEST,
     _detect_cargo_toml,
@@ -158,7 +159,7 @@ async def test_assist_on_turn_one_emits_bootstrap_with_package_json_scripts(tmp_
         agent,
         executor=_SandboxExecutor(_FakeSandbox(workspace)),
     )
-    loop._assist = True
+    loop._model_policy = ModelExecutionPolicy(tier="weak")
     await loop.send_message("build a stock tracker")
     await loop.run()
 
@@ -215,7 +216,7 @@ async def test_assist_on_bootstrap_fires_only_on_turn_one_even_with_many_actions
         agent,
         executor=_SandboxExecutor(_FakeSandbox(workspace)),
     )
-    loop._assist = True
+    loop._model_policy = ModelExecutionPolicy(tier="weak")
     await loop.send_message("do work")
     await loop.run()
 
@@ -255,7 +256,7 @@ async def test_assist_on_bootstrap_fires_once_across_two_run_segments(tmp_path):
         agent,
         executor=_SandboxExecutor(_FakeSandbox(workspace)),
     )
-    loop._assist = True
+    loop._model_policy = ModelExecutionPolicy(tier="weak")
     # Segment 1: the bootstrap fires once.
     await loop.send_message("first instruction")
     await loop.run()
@@ -365,7 +366,7 @@ async def test_assist_on_workspace_with_no_manifests_emits_nothing(tmp_path):
         agent,
         executor=_SandboxExecutor(_FakeSandbox(workspace)),
     )
-    loop._assist = True
+    loop._model_policy = ModelExecutionPolicy(tier="weak")
     await loop.send_message("do it")
     await loop.run()
 
@@ -392,7 +393,7 @@ async def test_assist_on_workspace_with_unreadable_manifest_emits_nothing(tmp_pa
         agent,
         executor=_SandboxExecutor(_FakeSandbox(str(tmp_path))),
     )
-    loop._assist = True
+    loop._model_policy = ModelExecutionPolicy(tier="weak")
     await loop.send_message("do it")
     await loop.run()
     events = await store.get_events(CID)
@@ -620,7 +621,7 @@ async def test_bootstrap_message_reaches_first_model_call_view(tmp_path):
         agent,
         executor=_SandboxExecutor(_FakeSandbox(workspace)),
     )
-    loop._assist = True
+    loop._model_policy = ModelExecutionPolicy(tier="weak")
     await loop.send_message("do it")
     await loop.run()
 
@@ -679,7 +680,7 @@ async def test_planning_mode_skips_bootstrap(tmp_path):
         mode=OperatingMode.PLANNING,
     )
     loop._planning_tools = frozenset({"submit_plan"})
-    loop._assist = True
+    loop._model_policy = ModelExecutionPolicy(tier="weak")
     await loop.send_message("plan the build")
     await loop.run()
     events = await store.get_events(CID)
@@ -717,7 +718,7 @@ async def test_assist_on_with_file_as_workspace_path_does_not_crash(tmp_path):
         agent,
         executor=_SandboxExecutor(_FakeSandbox(str(fake_file))),
     )
-    loop._assist = True
+    loop._model_policy = ModelExecutionPolicy(tier="weak")
     await loop.send_message("do it")
     await loop.run()
     events = await store.get_events(CID)

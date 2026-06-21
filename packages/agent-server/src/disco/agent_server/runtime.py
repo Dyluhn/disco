@@ -47,6 +47,7 @@ from disco.core.llm import (
     ConfigStore,
     DefaultLLMRouter,
     DriverPrompts,
+    ModelExecutionPolicy,
     ModelRole,
     OperatingMode,
     RouterSummarizer,
@@ -935,11 +936,29 @@ class ConversationRuntime:
     def set_assist(self, conversation_id: str, value: bool = True) -> None:
         self._settings.set_assist(conversation_id, value)
 
+    def _effective_policy(self, conversation_id: str) -> ModelExecutionPolicy:
+        """Delegator: the SINGLE source of truth for model-tier execution. See
+        RuntimeSettings._effective_policy for the full contract."""
+        return self._settings._effective_policy(conversation_id)
+
     def _effective_assist(self, conversation_id: str) -> bool:
         return self._settings._effective_assist(conversation_id)
 
     def is_assist(self, conversation_id: str) -> bool:
         return self._settings.is_assist(conversation_id)
+
+    async def apply_settings_change(
+        self,
+        conversation_id: str,
+        *,
+        model_override: str | None = None,
+        assist: bool | None = None,
+    ) -> bool:
+        """Delegator: atomically apply pre-kick settings under the per-cid lock.
+        Returns True if pristine and applied; False → caller should 409."""
+        return await self._settings.apply_settings_change(
+            conversation_id, model_override=model_override, assist=assist
+        )
 
     # ---- artifact_mode (C6) ------------------------------------------------
 
@@ -1075,6 +1094,9 @@ class ConversationRuntime:
                     NoOpCondenser(),
                     RouterSummarizer(router),
                     mode=self._mode,
+                    # Research surface: always standard (no assist compensations);
+                    # explicit default so the positive PRODUCTION gate fires.
+                    model_policy=ModelExecutionPolicy.standard(),
                 )
             # Watch-it-write: wire the loop's stream sink to the store's ephemeral
             # broadcast so streamed file-content frames reach the conversation's WS
@@ -1189,23 +1211,15 @@ class ConversationRuntime:
                 # into the fresh instance before the agent retries (bp-13 §2).
                 on_recreate=lambda: self._rehydrate_after_recreate(conversation_id),
             )
-        # W4 (§10.8): advertise `file_str_replace` (the anchored-edit tool) ONLY to a
-        # driver whose ModelEntry declares ANCHORED_EDIT. Resolve the SAME driver key
-        # the build loop's turns use — the model pill reassigns AGENT_DRIVER, so we
-        # re-apply that override as `_router_now` does (not via the router's private
-        # config). Fail-safe to the weak tier (no caps → withheld; W3 syntax gate
-        # still guards writes) on any miss — advertising on a guess is the regression.
-        cfg = self._config_store.load()
-        _driver_key = cfg.model_for(
-            ModelRole.AGENT_DRIVER, override=self._model_override.get(conversation_id)
-        )
-        _driver_entry = cfg.models.get(_driver_key)
-        _driver_caps = _driver_entry.capabilities if _driver_entry is not None else frozenset()
+        # Order C: resolve the policy ONCE — anchored_edit + tier/assist both come
+        # from _effective_policy, eliminating the former separate caps-resolution path
+        # (W4 anchored-edit heuristic). _effective_policy IS the single source of truth
+        # (runtime_settings.py). No second reader of ModelEntry.capabilities remains here.
+        model_policy = self._effective_policy(conversation_id)
         # C6: artifact_mode selects a narrow scope (NO shell/browser/plan-gate);
-        # the W4 anchored-edit heuristic does not apply to the artifact scope
-        # (file_str_replace is excluded from ARTIFACT_TOOLS regardless of caps).
+        # file_str_replace is excluded from ARTIFACT_TOOLS regardless of policy.
         _art_mode = self._effective_artifact_mode(conversation_id)
-        _scope = artifact_scope() if _art_mode else agent_scope(model_caps=_driver_caps)
+        _scope = artifact_scope() if _art_mode else agent_scope(model_policy=model_policy)
         executor = DefaultToolExecutor(
             build_default_registry(),
             _scope,
@@ -1218,7 +1232,7 @@ class ConversationRuntime:
             sandbox=cast(SandboxInstance, session),
             broker=broker,
             conversation_id=conversation_id,
-            assist=self._effective_assist(conversation_id),
+            model_policy=model_policy,
         )
         # RP-05 rung A+B: extend the registry with MCP tools from the pool
         # snapshot (stdio) AND the HTTP-managed tools (rung B streamable_http).
@@ -1233,7 +1247,8 @@ class ConversationRuntime:
         if all_mcp_tools:
             # RP-05c: apply advertised/callable split. Over the cap, only
             # non-MCP tools + tool_search are advertised; all remain callable.
-            max_schemas = cfg.mcp.max_active_schemas if cfg.mcp else 20
+            _mcp_cfg = self._config_store.load()
+            max_schemas = _mcp_cfg.mcp.max_active_schemas if _mcp_cfg.mcp else 20
             _apply_mcp_scope(
                 executor, all_mcp_tools, self._mcp_call_target,
                 max_active_schemas=max_schemas,
@@ -1288,7 +1303,7 @@ class ConversationRuntime:
                 mode=OperatingMode.INTERACTIVE,
                 # No planning_tools (submit_plan/plan_step not in ARTIFACT_TOOLS scope).
                 autonomous=self._effective_autonomous(conversation_id),
-                assist=self._effective_assist(conversation_id),
+                model_policy=model_policy,
             )
         return AgentLoop(
             conversation_id,
@@ -1319,7 +1334,7 @@ class ConversationRuntime:
             # the gated value means a future caller can't desync the loop's behavior
             # from the prompt prefix.
             autonomous=self._effective_autonomous(conversation_id),
-            assist=self._effective_assist(conversation_id),
+            model_policy=model_policy,
         )
 
     # ---- deep research surface ---------------------------------------------

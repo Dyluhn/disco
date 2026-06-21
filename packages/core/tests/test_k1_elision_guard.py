@@ -94,7 +94,8 @@ def _make_loop(*, executor=None):  # noqa: ANN202
         _NoOpCondenser(),
         FakeSummarizer(),
         mode=OperatingMode.LONG_HORIZON,
-        assist=False,  # K1 is tier-INDEPENDENT — must fire for capable models too
+        # K1 is tier-INDEPENDENT — must fire for capable models too; no model_policy arg
+        # means the default ModelExecutionPolicy.standard() (assist=False) applies
     )
 
 

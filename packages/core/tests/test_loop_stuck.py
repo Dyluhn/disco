@@ -7,6 +7,7 @@ event_content_eq) + loop integration (STUCK then resume on a new message).
 from __future__ import annotations
 
 from disco.core import ConversationStatus, EventSource, MessageEvent, StatusEvent
+from disco.core.llm import ModelExecutionPolicy
 from disco.core.loop import StuckDetector, StuckThresholds, signals
 from disco.core.loop.control import Disp
 from disco.core.loop.stuck import repeated_verify_no_progress
@@ -866,3 +867,96 @@ def test_f6_per_file_rewrite_directive_failed_observation_also_counts_assist_on(
     assert result.rewrite_directive.path == "a/x.py"
     assert result.rewrite_directive.failures == 3
     assert result.rewrite_directive.attempts == 3
+
+
+# ---- Order A wiring test: weak model_policy threads assist=True into StuckDetector ----
+#
+# Previously `AgentLoop.__init__` always constructed `StuckDetector(thresholds)`
+# WITHOUT passing `assist`, so the detector defaulted to assist=False even when
+# the loop's `_assist` flag was later flipped to True. The result: the F6
+# patch-spiral directive was BROKEN-CLOSED — it never fired from a real loop run.
+#
+# After Order A the constructor calls `StuckDetector(thresholds, assist=model_policy.assist)`,
+# so a weak `model_policy` (assist=True) propagates into the detector's _assist gate.
+# This test verifies that end-to-end wiring: the loop's stuck detector must fire
+# the F6 directive when the loop was built with a weak model_policy.
+
+
+def test_f6_loop_wiring_weak_model_policy_enables_rewrite_directive():
+    """Order A acceptance: a weak model_policy passed to AgentLoop must make the
+    loop's StuckDetector emit the F6 rewrite_directive for a patch-spiraling file.
+
+    This was BROKEN before Order A because AgentLoop always passed assist=False
+    (the default) to StuckDetector regardless of its own _assist value. The fix:
+    `StuckDetector(stuck_thresholds, assist=model_policy.assist)`.
+    """
+    from disco.core import NoOpCondenser, SqliteEventStore
+    from disco.core.llm import OperatingMode
+    from disco.core.loop import NeverConfirm
+    from disco.core.loop.engine import AgentLoop
+    from loop_fakes import FakeAnalyzer, FakeExecutor, FakeSummarizer
+
+    _TIGHT = StuckThresholds(per_file_rewrite_failures=2, per_file_rewrite_min_attempts=2)
+
+    loop = AgentLoop(
+        "conv",
+        SqliteEventStore(":memory:"),
+        ScriptedAgent([]),  # never stepped — we inspect _stuck directly
+        FakeExecutor(),
+        None,
+        FakeAnalyzer(),
+        NeverConfirm(),
+        NoOpCondenser(),
+        FakeSummarizer(),
+        mode=OperatingMode.LONG_HORIZON,
+        model_policy=ModelExecutionPolicy(tier="weak"),
+        stuck_thresholds=_TIGHT,
+    )
+
+    # Build a spiral: 2 failed patches on the same file (threshold = 2,2).
+    events = _failed_patch("src/app.py", 2)
+    result = loop._stuck.evaluate(events)
+
+    assert result.rewrite_directive is not None, (
+        "StuckDetector inside AgentLoop(model_policy=ModelExecutionPolicy(tier='weak')) "
+        "must fire the F6 rewrite_directive — the loop wiring was broken before Order A "
+        "(assist defaulted to False regardless of _assist). "
+        f"events={[type(e).__name__ for e in events]}"
+    )
+    assert result.rewrite_directive.path == "src/app.py"
+
+
+def test_f6_loop_wiring_standard_model_policy_suppresses_rewrite_directive():
+    """Order A acceptance (inverse): a standard model_policy must NOT make the
+    StuckDetector emit an F6 directive — the gate must stay closed for capable models."""
+    from disco.core import NoOpCondenser, SqliteEventStore
+    from disco.core.llm import OperatingMode
+    from disco.core.loop import NeverConfirm
+    from disco.core.loop.engine import AgentLoop
+    from loop_fakes import FakeAnalyzer, FakeExecutor, FakeSummarizer
+
+    _TIGHT = StuckThresholds(per_file_rewrite_failures=2, per_file_rewrite_min_attempts=2)
+
+    loop = AgentLoop(
+        "conv",
+        SqliteEventStore(":memory:"),
+        ScriptedAgent([]),
+        FakeExecutor(),
+        None,
+        FakeAnalyzer(),
+        NeverConfirm(),
+        NoOpCondenser(),
+        FakeSummarizer(),
+        mode=OperatingMode.LONG_HORIZON,
+        model_policy=ModelExecutionPolicy.standard(),
+        stuck_thresholds=_TIGHT,
+    )
+
+    events = _failed_patch("src/app.py", 2)
+    result = loop._stuck.evaluate(events)
+
+    assert result.rewrite_directive is None, (
+        "StuckDetector inside AgentLoop(model_policy=ModelExecutionPolicy.standard()) "
+        "must NOT fire the F6 directive — the gate is closed for capable models. "
+        f"Got: {result.rewrite_directive!r}"
+    )

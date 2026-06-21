@@ -13,6 +13,7 @@ Acceptance:
 
 from __future__ import annotations
 
+from disco.core.llm import ModelExecutionPolicy
 from disco.tools import (
     DefaultToolExecutor,
     agent_scope,
@@ -33,7 +34,7 @@ async def test_think_returns_clean_ack_with_no_side_effects():
 
     ex = DefaultToolExecutor(
         build_default_registry(),
-        agent_scope(),
+        agent_scope(model_policy=ModelExecutionPolicy.standard()),
         sandbox=sandbox,
     )
 
@@ -87,7 +88,7 @@ async def test_think_returns_clean_ack_with_no_side_effects():
 def test_think_in_default_registry_and_agent_scope():
     """think is registered by build_default_registry and offered in agent_scope."""
     reg = build_default_registry()
-    scope = agent_scope()
+    scope = agent_scope(model_policy=ModelExecutionPolicy.standard())
 
     # in the registry
     assert "think" in reg.names()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
+from disco.core.llm import ModelExecutionPolicy
 from disco.tools import (
     DefaultToolExecutor,
     ToolContext,
@@ -18,11 +19,13 @@ from disco.tools.registry import ToolRegistry, ToolScope
 from pydantic import BaseModel
 from tool_fakes import FakeSandboxInstance, call
 
+_STANDARD = ModelExecutionPolicy.standard()
+
 
 def _executor(scope=None, sandbox=None):
     return DefaultToolExecutor(
         build_default_registry(),
-        scope or agent_scope(),
+        scope or agent_scope(model_policy=_STANDARD),
         sandbox=sandbox or FakeSandboxInstance(),
     )
 

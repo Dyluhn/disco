@@ -440,6 +440,17 @@ _AGENT_PLANNING_CAPABILITY_BLOCK = (
     "tool becomes callable — approval unlocks all of the above at once."
 )
 
+# [C21/policy] Weak-tier variant of the planning capability block: same as the standard
+# block but with `plan_step` removed.  The weak tier withholds plan_step and
+# update_plan_progress from the agent's tool surface entirely (small models get an
+# honest NL plan with done-at-finish and no per-step bookkeeping burden).  Mentioning
+# plan_step in the planning prompt when it won't appear in the tool list causes
+# the model to try to call a tool it can't, so we emit the clean variant instead.
+# update_plan_progress is not mentioned in any planning block, so no variant needed there.
+_AGENT_PLANNING_CAPABILITY_BLOCK_WEAK = _AGENT_PLANNING_CAPABILITY_BLOCK.replace(
+    "`plan_step`, ", ""
+)
+
 
 class DriverPrompts:
     """[CONTRACT role] A PromptProvider that gives the AGENT_DRIVER role phase-aware
@@ -497,8 +508,11 @@ class DriverPrompts:
         # write tools (read_only=False) from the PLANNING schema for BOTH the build and
         # agent flavors, so BOTH need this hint — appending it agent-only made build-flavor
         # plans (e.g. the DR→slides handoff) insist they "can't use slides_generate".
-        planning_prompt = planning_prompt + _AGENT_PLANNING_CAPABILITY_BLOCK
-        self._planning = planning_prompt
+        # [C21/policy] Two variants: the standard block (mentions plan_step) for capable
+        # models; the weak variant (omits plan_step) for the weak tier — the tool won't
+        # appear in the tool list for weak models, so prompting it causes confusion.
+        self._planning = planning_prompt + _AGENT_PLANNING_CAPABILITY_BLOCK
+        self._planning_weak = planning_prompt + _AGENT_PLANNING_CAPABILITY_BLOCK_WEAK
         self._execution = execution_prompt
         # [C21] Tightened execution prompt for small open models. Selected ONLY
         # when the assist gate is ON (req.assist=True) at prompt-injection time.
@@ -533,7 +547,12 @@ class DriverPrompts:
     ) -> str:
         if role == ModelRole.AGENT_DRIVER:
             if mode == OperatingMode.PLANNING:
-                return self._with_skills(self._planning, capabilities)
+                # [C21/policy] Weak tier: use the variant that omits plan_step from
+                # the capability block (the tool is withheld from the tool list for
+                # weak models, so mentioning it causes confusion).  Standard tier:
+                # keep the original byte-identical planning prompt.
+                planning = self._planning_weak if assist else self._planning
+                return self._with_skills(planning, capabilities)
             # [C21] assist gate: ON → small-model variant (crisper tool-use rules
             # for weak open models); OFF → original capable-model prompt, returned
             # byte-identical (no skills block re-formatting, no flavor side-effects).

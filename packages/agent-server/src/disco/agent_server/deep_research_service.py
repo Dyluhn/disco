@@ -59,6 +59,7 @@ from disco.core.llm import (
     CapabilityProfile,
     CompletionRequest,
     DefaultLLMRouter,
+    ModelExecutionPolicy,
     ModelRole,
     OperatingMode,
     RouterSummarizer,
@@ -92,6 +93,10 @@ class DeepResearchService:
         Research's iteration lives in the engine, not the loop."""
         from .runtime import _NoToolExecutor
 
+        # Deep Research intentionally uses the standard tier: it is a read-only
+        # pipeline (no tool execution), so the weak-model assist compensations
+        # (F-features) are not applicable. Explicit model_policy= satisfies the
+        # production-path EXPLICIT-pass gate (no silent default).
         return AgentLoop(
             conversation_id,
             self._rt._store,
@@ -108,6 +113,7 @@ class DeepResearchService:
             # plan-event is emitted synthetically by _run_with_persistence; the
             # loop never sees a submit_plan tool call.
             planning_tools=frozenset({"submit_plan"}),
+            model_policy=ModelExecutionPolicy.standard(),
         )
 
     def _depth_for(self, conversation_id: str) -> DepthTier:

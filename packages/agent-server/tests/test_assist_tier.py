@@ -2,6 +2,7 @@ import os
 from unittest.mock import MagicMock, patch
 
 from disco.agent_server.runtime import ConversationRuntime
+from disco.core.llm import ModelExecutionPolicy
 from disco.core.llm.types import CapabilityProfile, CompletionRequest, ModelRole
 from disco.core.loop.engine import AgentLoop
 from disco.tools.anatomy import ToolContext
@@ -28,6 +29,9 @@ def test_tool_context_assist_field():
     assert ctx.assist is False
 
 def test_agent_loop_assist_field():
+    """AgentLoop._assist is now a property delegating to _model_policy.assist.
+    A weak ModelExecutionPolicy makes _assist True (the existing collaborator
+    contract — agent.py / driver.py still read self._loop._assist)."""
     loop = AgentLoop(
         conversation_id="conv1",
         store=MagicMock(),
@@ -39,9 +43,25 @@ def test_agent_loop_assist_field():
         condenser=MagicMock(),
         summarizer=MagicMock(),
         mode=MagicMock(),
-        assist=True
+        model_policy=ModelExecutionPolicy(tier="weak"),
     )
     assert loop._assist is True
+
+def _model_entry(base_url: str) -> MagicMock:
+    """Minimal model-entry mock.
+
+    MagicMock auto-creates ANY attribute access as a truthy MagicMock, so plain
+    `MagicMock(base_url=…)` leaves `.tier` as a non-None MagicMock.  That causes
+    `_effective_policy` to take the `elif entry_tier is not None` branch, skip the
+    hosting heuristic, and set tier=MagicMock() (which compares False to "weak").
+
+    Fix: explicitly set `tier=None` and `capabilities=frozenset()` so the policy
+    resolver falls through to the hosting heuristic — which is what these tests
+    actually exercise."""
+    entry = MagicMock(base_url=base_url, tier=None)
+    entry.capabilities = frozenset()
+    return entry
+
 
 def test_runtime_effective_assist_default(tmp_path):
     with patch.dict("os.environ", {"PMX_DB": str(tmp_path / "disco.db")}):
@@ -51,35 +71,29 @@ def test_runtime_effective_assist_default(tmp_path):
         router = MagicMock()
         rt._router_now = MagicMock(return_value=router)
 
-        # Local base url -> Default ON
+        # Local base url -> Default ON (hosting heuristic: local && !openrouter)
         router._config.model_for.return_value = "local-model"
-        entry_local = MagicMock(base_url="http://127.0.0.1:8080/v1")
-        router._config.models = {"local-model": entry_local}
-        
+        router._config.models = {"local-model": _model_entry("http://127.0.0.1:8080/v1")}
         assert rt._effective_assist("c1") is True
 
         # Cloud base url -> Default OFF
         router._config.model_for.return_value = "cloud-model"
-        entry_cloud = MagicMock(base_url="https://api.anthropic.com/v1")
-        router._config.models = {"cloud-model": entry_cloud}
-        
+        router._config.models = {"cloud-model": _model_entry("https://api.anthropic.com/v1")}
         assert rt._effective_assist("c2") is False
 
         # OpenRouter URL with local in it just in case -> Default OFF
         router._config.model_for.return_value = "or-model"
-        entry_or = MagicMock(base_url="https://openrouter.ai/api/v1/local")
-        router._config.models = {"or-model": entry_or}
-
+        router._config.models = {"or-model": _model_entry("https://openrouter.ai/api/v1/local")}
         assert rt._effective_assist("c3") is False
 
         # LAN IP (192.168.x) -> local -> Default ON (gate-policy positive case)
         router._config.model_for.return_value = "lan-model"
-        router._config.models = {"lan-model": MagicMock(base_url="http://192.168.1.231:18080/v1")}
+        router._config.models = {"lan-model": _model_entry("http://192.168.1.231:18080/v1")}
         assert rt._effective_assist("c4") is True
 
         # *.local mDNS host -> local -> Default ON (gate-policy positive case)
         router._config.model_for.return_value = "mdns-model"
-        router._config.models = {"mdns-model": MagicMock(base_url="http://workstation.local:18080/v1")}
+        router._config.models = {"mdns-model": _model_entry("http://workstation.local:18080/v1")}
         assert rt._effective_assist("c5") is True
 
 

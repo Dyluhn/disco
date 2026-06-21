@@ -35,6 +35,7 @@ from disco.core.dod import (
     predicate_from_obj,
     predicate_to_dict,
 )
+from disco.core.llm import ModelExecutionPolicy
 from disco.core.store.base import EventStore
 from disco.tools import agent_scope, build_default_registry
 from pydantic import ValidationError
@@ -197,7 +198,7 @@ def test_dod_methods_on_protocol_do_not_appear_on_agent_tools() -> None:
     reg = build_default_registry()
     forbidden_method_names = ("set_dod_spec", "replace_dod_spec", "get_dod_spec")
     for name in reg.names():
-        tool = reg.get(name, scope=agent_scope())  # type: ignore[arg-type]
+        tool = reg.get(name, scope=agent_scope(model_policy=ModelExecutionPolicy.standard()))  # type: ignore[arg-type]
         assert tool is not None, f"tool {name!r} not in agent scope"
         for attr in dir(tool):
             assert attr not in forbidden_method_names, (

@@ -53,6 +53,7 @@ export function AgentStatusBar({
   isolation,
   sandboxState,
   autonomous,
+  assist,
   onKill,
   onStop,
   onResume,
@@ -66,6 +67,8 @@ export function AgentStatusBar({
   sandboxState?: "active" | "suspended";
   /** Headless run: no ask_user, auto-approved plan, clean forfeit instead of halting. */
   autonomous?: boolean;
+  /** Server-derived execution tier (Order D). true = weak/assist; false/absent = standard. */
+  assist?: boolean;
   onKill: () => void;
   /** Cluster 6: graceful stop (cooperative cancel — no sandbox teardown). */
   onStop?: () => void;
@@ -143,6 +146,25 @@ export function AgentStatusBar({
             className="flex items-center gap-hair rounded-full border border-accent/40 px-inline py-px font-ui text-[0.7rem] text-accent"
           >
             autonomous
+          </span>
+        )}
+        {/* Execution-tier badge: "Assist" (weak/small-model tier) vs "Standard" (capable).
+            Server-derived — no user toggle this pass; read from state.extras.assist. */}
+        {assist !== undefined && (
+          <span
+            title={
+              assist
+                ? "Assist tier — running with small-model compensations (weak driver)"
+                : "Standard tier — running with a capable model"
+            }
+            className={cn(
+              "flex items-center gap-hair rounded-full border px-inline py-px font-ui text-[0.7rem]",
+              assist
+                ? "border-warn/40 text-warn"
+                : "border-hairline text-text-faint",
+            )}
+          >
+            {assist ? "Assist" : "Standard"}
           </span>
         )}
         {sandboxState === "suspended" && (

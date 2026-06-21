@@ -11,6 +11,8 @@ collaborator constructed once in `ConversationRuntime`:
   - assist tier:            _load_assist / _save_assist / set_assist
                             / _effective_assist / is_assist
                             / _is_small_assist_default
+  - atomic settings gate:   apply_settings_change / _conversation_is_pristine
+                            per-cid asyncio.Lock in _settings_locks
 
 The mutable dicts (`_model_override`, `_surface`, `_autonomous`, `_assist`)
 and their sidecar paths stay declared on `ConversationRuntime`; the service is
@@ -24,17 +26,29 @@ test-suite + app routes call each directly on the runtime.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:
-    from disco.core.llm import ModelExecutionPolicy
+from disco.core import (
+    ActionEvent,
+    ConversationStatus,
+    EventSource,
+    MessageEvent,
+    PlanEvent,
+    StatusEvent,
+)
+from disco.core.llm import ModelExecutionPolicy
 
 
 class RuntimeSettings:
     def __init__(self, rt: Any) -> None:
         self._rt = rt
+        # Order C: per-conversation lock for atomic pre-kick settings changes.
+        # Acquired by apply_settings_change so concurrent PATCHes are serialized
+        # and a PATCH can't race the loop-compose+register step in kick().
+        self._settings_locks: dict[str, asyncio.Lock] = {}
 
     # ---- driver model override ---------------------------------------------
 
@@ -61,16 +75,27 @@ class RuntimeSettings:
         except Exception:  # noqa: BLE001 — persistence is best-effort, never fatal
             pass
 
-    def set_model_override(self, conversation_id: str, model_id: str | None) -> None:
-        """Pin the driver model for a conversation (the Build chat model picker). The id
-        is a catalogue KEY; RouterAgent reassigns AGENT_DRIVER to it. Must be set before
-        the loop is built (at create time). PERSISTED (B0) so a restart keeps the pick."""
+    def _set_model_override_unlocked(
+        self, conversation_id: str, model_id: str | None
+    ) -> None:
+        """Inner setter — does NOT acquire the per-cid lock; call ONLY from
+        apply_settings_change (which holds the lock) or from set_model_override
+        (non-route, non-concurrent callers that don't need the atomic gate)."""
         if model_id:
             self._rt._model_override[conversation_id] = model_id
             self._rt._save_overrides()
             # P3: also persist as the last-selected model so new conversations
             # seed from it by default (server-side, no localStorage).
             self.set_last_selected_model(model_id)
+
+    def set_model_override(self, conversation_id: str, model_id: str | None) -> None:
+        """Pin the driver model for a conversation (the Build chat model picker). The id
+        is a catalogue KEY; RouterAgent reassigns AGENT_DRIVER to it. Must be set before
+        the loop is built (at create time). PERSISTED (B0) so a restart keeps the pick.
+
+        Non-route callers (create-conversation, tests) use this directly; the PATCH route
+        uses apply_settings_change so the atomic pristine check covers the change."""
+        self._set_model_override_unlocked(conversation_id, model_id)
 
     # ---- last-selected model (P3) ------------------------------------------
 
@@ -212,10 +237,19 @@ class RuntimeSettings:
         except Exception:  # noqa: BLE001
             pass
 
-    def set_assist(self, conversation_id: str, value: bool = True) -> None:
-        """Mark a conversation assist tier (T1). Persisted."""
+    def _set_assist_unlocked(self, conversation_id: str, value: bool) -> None:
+        """Inner setter — does NOT acquire the per-cid lock; call ONLY from
+        apply_settings_change (which holds the lock) or from set_assist
+        (non-route, non-concurrent callers that don't need the atomic gate)."""
         self._rt._assist[conversation_id] = bool(value)
         self._rt._save_assist()
+
+    def set_assist(self, conversation_id: str, value: bool = True) -> None:
+        """Mark a conversation assist tier (T1). Persisted.
+
+        Non-route callers (create-conversation, tests) use this directly; the PATCH route
+        uses apply_settings_change so the atomic pristine check covers the change."""
+        self._set_assist_unlocked(conversation_id, value)
 
     def _effective_policy(self, conversation_id: str) -> ModelExecutionPolicy:
         """The SINGLE source of truth for model-tier execution — the ONLY place that
@@ -248,6 +282,73 @@ class RuntimeSettings:
 
     def is_assist(self, conversation_id: str) -> bool:
         return self._effective_assist(conversation_id)
+
+    # ---- atomic pre-kick settings gate (Order C) ---------------------------
+
+    async def _conversation_is_pristine(self, conversation_id: str) -> bool:
+        """True iff no work/run events have been recorded and no loop has been
+        composed or scheduled for this conversation.
+
+        NON-pristine (returns False) when ANY of the following hold:
+          (i)  cid in _loops — loop already composed (even before RUNNING);
+          (ii) cid in _tasks with a non-done task — run already scheduled;
+          (iii) event store has any PlanEvent, ActionEvent, AGENT MessageEvent,
+                or non-IDLE StatusEvent.
+
+        SETUP events are intentionally ignored: ENVIRONMENT MessageEvent and
+        DatasourceEvent from pre-kick uploads (files.py:191) must remain patchable
+        so the user can change the model after attaching a file."""
+        # --- in-memory checks (cheap, no I/O) ---
+        if conversation_id in self._rt._loops:
+            return False
+        task = self._rt._tasks.get(conversation_id)
+        if task is not None and not task.done():
+            return False
+        # --- event-store check (async, catches post-restart state) ---
+        events = await self._rt._store.get_events(conversation_id)
+        for event in events:
+            if isinstance(event, PlanEvent):
+                return False
+            if isinstance(event, ActionEvent):
+                return False
+            if (
+                isinstance(event, MessageEvent)
+                and event.source == EventSource.AGENT
+            ):
+                return False
+            if (
+                isinstance(event, StatusEvent)
+                and event.status != ConversationStatus.IDLE
+            ):
+                return False
+        return True
+
+    async def apply_settings_change(
+        self,
+        conversation_id: str,
+        *,
+        model_override: str | None = None,
+        assist: bool | None = None,
+    ) -> bool:
+        """Atomically apply pre-kick settings under the per-cid lock.
+
+        Acquires the lock ONCE, checks _conversation_is_pristine, and — if
+        pristine — calls the inner (non-locking) setters. Returns True on
+        success (settings applied); False when the conversation already has
+        work/run events or a composed loop/live task (the caller should
+        respond 409; settings are left UNMUTATED on False).
+
+        Callers MUST NOT hold the per-cid lock already (the inner setters are
+        non-reentrant to avoid deadlock)."""
+        lock = self._settings_locks.setdefault(conversation_id, asyncio.Lock())
+        async with lock:
+            if not await self._conversation_is_pristine(conversation_id):
+                return False
+            if model_override is not None:
+                self._set_model_override_unlocked(conversation_id, model_override)
+            if assist is not None:
+                self._set_assist_unlocked(conversation_id, assist)
+            return True
 
     # ---- artifact_mode (C6) ------------------------------------------------
 
