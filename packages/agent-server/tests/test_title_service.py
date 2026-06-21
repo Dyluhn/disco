@@ -54,15 +54,44 @@ def test_first_user_text_none_when_no_user_message() -> None:
 @pytest.mark.parametrize(
     "raw,expected",
     [
+        # clean
         ('"Tetris Game"', "Tetris Game"),
         ("Title: Personal Finance Dashboard", "Personal Finance Dashboard"),
         ("  A   macOS   Desktop   Clone  ", "A macOS Desktop Clone"),
         ("Recipe App.", "Recipe App"),
         ("“Weather Widget”", "Weather Widget"),
+        # markdown emphasis / heading / code
+        ("**Tetris Game**", "Tetris Game"),
+        ("## Budget Tracker", "Budget Tracker"),
+        ("`Markdown Editor`", "Markdown Editor"),
+        # list / bullet markers
+        ("1. Kanban Board", "Kanban Board"),
+        ("- Todo App", "Todo App"),
+        ("• Notes App", "Notes App"),
+        # conversational preamble (mid-string)
+        ("Sure! Here's a title: Recipe Finder App", "Recipe Finder App"),
+        ("Project Name: Foo Bar Baz", "Foo Bar Baz"),
+        # multi-line — title on line 1, explanation after (must NOT be merged in)
+        ("Weather Dashboard\nThis title captures the essence of the app", "Weather Dashboard"),
+        ("Title: Pomodoro Timer\n\nThis is concise and descriptive.", "Pomodoro Timer"),
+        # leading emoji / stray symbols
+        ("🚀 Rocket Launch Tracker", "Rocket Launch Tracker"),
+        # MUST preserve mid-token '#' and '_' (regression: don't break C#/F#/snake_case)
+        ("C# Game Engine", "C# Game Engine"),
+        ("F# Web Server", "F# Web Server"),
+        ("my_cool_app dashboard", "my_cool_app dashboard"),
+        # degenerate
+        ("", ""),
+        ("   \n  ", ""),
     ],
 )
 def test_sanitize_title(raw: str, expected: str) -> None:
     assert sanitize_title(raw) == expected
+
+
+def test_sanitize_title_does_not_overstrip_legit_titles_with_colon() -> None:
+    # A real title that merely contains a colon but no title:/name: preamble stays whole.
+    assert sanitize_title("AI: A Modern Approach") == "AI: A Modern Approach"
 
 
 def test_sanitize_title_clamps_long_output_on_word_boundary() -> None:

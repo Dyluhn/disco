@@ -33,13 +33,22 @@ _LOG = logging.getLogger(__name__)
 # break formatting or inject placeholders.
 _PROMPT_PREFIX = (
     "Generate a concise, specific title for the project or task described below.\n"
-    "Rules: 3 to 6 words, Title Case, no surrounding quotes, no trailing punctuation, "
-    "no preamble — output ONLY the title.\n\nTask:\n"
+    "Rules: 3 to 6 words, Title Case, plain text only — NO markdown, NO quotes, NO "
+    "preamble or explanation, NO trailing punctuation. Output ONLY the title.\n\nTask:\n"
 )
 
 _MAX_TITLE_CHARS = 60
 _MAX_TASK_CHARS = 800  # cap the prompt input — first messages can be very long
 _QUOTE_CHARS = "\"'`“”‘’"  # straight + smart quotes + backtick
+
+# A leading "…title:" / "…name:" preamble (≤40 chars before the colon so it can't fire
+# on a legit title that merely contains the word later). Captures what follows.
+_PREAMBLE_RE = re.compile(r"^.{0,40}?\b(?:title|name)\s*[:\-]\s*(.+)$", re.IGNORECASE)
+# Leading list / blockquote / bullet markers ("1. ", "- ", "• ", "> ", "* ").
+_LEADER_RE = re.compile(r"^\s*(?:[-•>*]|\d+[.)])\s+")
+# Leading junk before the first real character (emoji, stray symbols), while KEEPING a
+# leading letter/digit/quote/paren so real titles survive.
+_LEAD_JUNK_RE = re.compile(r"^[^\w(\"'“‘]+")
 
 
 def first_user_text(events: Sequence[Event]) -> str | None:
@@ -59,13 +68,34 @@ def first_user_text(events: Sequence[Event]) -> str | None:
 
 
 def sanitize_title(raw: str) -> str:
-    """Clean a model-produced title: collapse whitespace, drop a leading
-    ``Title:``/``Project:`` label, strip wrapping quotes + trailing punctuation, clamp
-    to the char budget on a word boundary."""
-    t = " ".join((raw or "").split())
-    t = re.sub(r"^(title|project|task)\s*[:\-]\s*", "", t, flags=re.IGNORECASE)
+    """Make a model-produced title presentable + CONSISTENT across chatty / markdown /
+    multi-line / preamble outputs (different SUMMARIZER models misbehave differently).
+
+    Steps, in order: take the first non-empty line (any explanation usually follows on
+    later lines); peel a leading ``…title:`` / ``name:`` preamble; strip list/heading
+    markers + markdown emphasis (``*`` and `` ` `` — but NOT ``#``, so ``C#``/``F#``
+    survive); strip leading emoji/symbols; collapse whitespace; strip wrapping quotes +
+    trailing punctuation; clamp to the char budget on a word boundary."""
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    # 1. First non-empty line — a chatty model puts the title on line 1, prose after.
+    first = next((ln for ln in text.splitlines() if ln.strip()), "")
+    # 2. Pull the title out of a leading "…title: X" / "…name: X" preamble.
+    m = _PREAMBLE_RE.match(first.strip())
+    t = m.group(1) if m else first
+    # 3. Strip leading list/blockquote markers + leading markdown heading (#…), then
+    #    markdown emphasis. KEEP '#' mid-token (C#, F#) and '_' (snake_case names).
+    t = _LEADER_RE.sub("", t)
+    t = re.sub(r"^#+\s*", "", t)
+    t = t.replace("*", "").replace("`", "")
+    # 4. Strip leading emoji / stray symbols (keeps a leading letter/digit/quote/paren).
+    t = _LEAD_JUNK_RE.sub("", t)
+    # 5. Collapse internal whitespace; strip wrapping quotes + trailing punctuation.
+    t = " ".join(t.split())
     t = t.strip().strip(_QUOTE_CHARS).strip()
     t = t.rstrip(".,;:!?—-").strip()
+    # 6. Clamp on a word boundary.
     if len(t) > _MAX_TITLE_CHARS:
         clipped = t[:_MAX_TITLE_CHARS].rsplit(" ", 1)[0].strip()
         t = clipped or t[:_MAX_TITLE_CHARS].strip()
