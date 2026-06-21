@@ -26,7 +26,10 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from disco.core.llm import ModelExecutionPolicy
 
 
 class RuntimeSettings:
@@ -214,18 +217,34 @@ class RuntimeSettings:
         self._rt._assist[conversation_id] = bool(value)
         self._rt._save_assist()
 
-    def _effective_assist(self, conversation_id: str) -> bool:
-        """The SINGLE source of truth for the assist gate."""
-        if conversation_id in self._rt._assist:
-            return self._rt._assist[conversation_id]
+    def _effective_policy(self, conversation_id: str) -> ModelExecutionPolicy:
+        """The SINGLE source of truth for model-tier execution — the ONLY place that
+        reads `ModelEntry.tier` and `Requirement.ANCHORED_EDIT`. Resolved fresh from the
+        conversation's driver model + explicit overrides; callers thread the returned
+        immutable object into the loop / executor / tool scope / prompt / request so all
+        consumers read the same decision (no second classifier, no stale boolean).
 
-        # Default policy
+        Precedence: explicit per-conversation assist toggle > ModelEntry.tier > hosting
+        heuristic (local && !openrouter). Behavior-preserving: with no tier metadata set,
+        a local driver still resolves to the weak/assist tier exactly as before."""
+        from disco.core.llm import ModelRole, resolve_policy
+        from disco.core.llm.types import Requirement
+
         override = self._rt._model_override.get(conversation_id)
         router = self._rt._router_now(pick=override)
-        from disco.core.llm import ModelRole
         key = router._config.model_for(ModelRole.AGENT_DRIVER, override=override)
         entry = router._config.models.get(key)
-        return self._is_small_assist_default(entry)
+        anchored = entry is not None and Requirement.ANCHORED_EDIT in entry.capabilities
+        return resolve_policy(
+            assist_override=self._rt._assist.get(conversation_id),
+            entry_tier=getattr(entry, "tier", None),
+            hosting_weak_default=self._is_small_assist_default(entry),
+            anchored_edit=anchored,
+        )
+
+    def _effective_assist(self, conversation_id: str) -> bool:
+        """Back-compat shim — the assist gate is now one facet of the resolved policy."""
+        return self._effective_policy(conversation_id).assist
 
     def is_assist(self, conversation_id: str) -> bool:
         return self._effective_assist(conversation_id)

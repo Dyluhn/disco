@@ -58,6 +58,13 @@ class ModelEntry(BaseModel):
     # order (probe → env back-compat → static table → False).  True/False =
     # force the capability, bypassing all probes.  Persisted in disco-config.json.
     vision: bool | None = None
+    # Explicit model-execution TIER — the single source of truth for whether this
+    # model gets the weak-model assist compensations. None = derive (back-compat:
+    # the runtime's hosting heuristic, local→weak). "weak" = enable assist;
+    # "standard" = capable model, NO compensations even when locally hosted — so a
+    # capable local model (e.g. Qwen 27B) is not sandbagged purely because it runs
+    # on localhost. The per-conversation assist toggle still overrides this.
+    tier: Literal["standard", "weak"] | None = None
 
 
 class RoleRouting(BaseModel):

@@ -40,6 +40,7 @@ from .errors import (
     NoEligibleModel,
     is_context_window_exceeded,
 )
+from .exec_policy import ModelExecutionPolicy, resolve_policy
 from .nli import Entailment, NLIVerifier, StubNLIVerifier
 
 # v1.2: OverflowPolicy / ThresholdOverflowPolicy are DORMANT (policy.py). Only
@@ -110,6 +111,8 @@ __all__ = [
     "PromptProvider",
     "ProposedToolCall",
     "Requirement",
+    "ModelExecutionPolicy",
+    "resolve_policy",
     "RoleRouting",
     "RouterConfig",
     "ProjectStorageSettings",
