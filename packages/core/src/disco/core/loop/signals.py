@@ -23,6 +23,7 @@ from ..events import (
     StatusEvent,
 )
 from ..llm import OperatingMode
+from ..view import effective_plan_progress
 
 if TYPE_CHECKING:
     from ..view import View
@@ -222,43 +223,16 @@ def auto_continue_attempts(events: list[Event]) -> int:
 def plan_is_incomplete(events: list[Event]) -> tuple[bool, list[int]]:
     """Is the most recent plan only partially done? Returns (incomplete, missing_idxs).
 
-    Walks the log to find the latest PlanEvent and the plan_step(index, state)
-    ActionEvents that report per-step progress. A step is "complete" iff the
-    agent emitted plan_step(idx, state="done") for it. If there's no plan at
-    all, returns (False, []) — nothing to gate on.
-
-    This is the truth-source for the FINISHED gate: if a plan exists and any
-    step is unmarked or stuck "active", the loop refuses to transition to
-    FINISHED and falls back to STUCK — honest about the work being incomplete
-    rather than lying about completion."""
-    # The latest plan (a re-plan supersedes prior).
-    plan: PlanEvent | None = None
-    for e in events:
-        if isinstance(e, PlanEvent):
-            if plan is None or e.revision >= plan.revision:
-                plan = e
-    if plan is None or not plan.steps:
+    A step is "complete" iff its EFFECTIVE latest state (from plan_step OR
+    update_plan_progress — see `effective_plan_progress`) is "done". If there's no plan,
+    returns (False, []) — nothing to gate on. This is the truth-source for the actionless
+    valve's done-build guard (`plan_steps_complete`): if a step is unmarked or stuck
+    "active", the build is honestly incomplete."""
+    plan, states = effective_plan_progress(events)
+    if plan is None:
         return (False, [])
-    # Only count plan_step marks made AFTER the current plan (a re-plan starts a
-    # fresh checklist — a prior plan's "done" marks must not satisfy the new gate).
-    plan_seq = plan.seq or 0
-    done: set[int] = set()
-    for e in events:
-        if not isinstance(e, ActionEvent) or e.tool_call is None:
-            continue
-        if e.tool_call.tool_name != "plan_step":
-            continue
-        if (e.seq or 0) < plan_seq:
-            continue
-        try:
-            idx = int(e.tool_call.arguments.get("index"))  # type: ignore[arg-type]
-            state = str(e.tool_call.arguments.get("state"))
-        except (TypeError, ValueError):
-            continue
-        if state == "done":
-            done.add(idx)
     total = len(plan.steps)
-    missing = [i + 1 for i in range(total) if (i + 1) not in done]
+    missing = [i + 1 for i in range(total) if states.get(i + 1) != "done"]
     return (bool(missing), missing)
 
 
@@ -338,8 +312,7 @@ def plan_step_lag_signal(events: list[Event]) -> bool:
     total = len(plan.steps)
 
     productive = 0
-    steps_done: set[int] = set()
-    last_plan_step_seq = -1
+    last_tracker_seq = -1  # last plan_step OR update_plan_progress (either tracker)
     last_lag_nudge_seq = -1
     for e in events:
         seq = e.seq or 0
@@ -347,13 +320,8 @@ def plan_step_lag_signal(events: list[Event]) -> bool:
             continue
         if isinstance(e, ActionEvent) and e.tool_call is not None:
             name = e.tool_call.tool_name
-            if name == "plan_step":
-                last_plan_step_seq = seq
-                try:
-                    if str(e.tool_call.arguments.get("state")) == "done":
-                        steps_done.add(int(e.tool_call.arguments.get("index")))  # type: ignore[arg-type]
-                except (TypeError, ValueError):
-                    pass
+            if name in ("plan_step", "update_plan_progress"):
+                last_tracker_seq = seq  # either channel counts as "tracking"
             elif name not in _NON_PRODUCTIVE_TOOLS:
                 productive += 1
         elif (
@@ -366,12 +334,15 @@ def plan_step_lag_signal(events: list[Event]) -> bool:
 
     if productive < total:
         return False  # not enough work yet to expect check-offs
-    if len(steps_done) * 2 >= total:
+    # Done-count from BOTH channels (a capable model tracks via update_plan_progress —
+    # nagging it about plan_step would be wrong, so the shared reader is the truth).
+    _, states = effective_plan_progress(events)
+    done_count = sum(1 for i in range(1, total + 1) if states.get(i) == "done")
+    if done_count * 2 >= total:
         return False  # tracker is keeping up (>= half done)
-    # Only nudge once per episode: skip if a lag nudge already fired more
-    # recently than the last plan_step action (the agent hasn't checked
-    # anything off since we last reminded it — no point repeating).
-    if last_lag_nudge_seq > last_plan_step_seq:
+    # Only nudge once per episode: skip if a lag nudge already fired more recently
+    # than the last tracker action (nothing checked off since — no point repeating).
+    if last_lag_nudge_seq > last_tracker_seq:
         return False
     return True
 

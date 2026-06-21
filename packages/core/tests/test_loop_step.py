@@ -222,22 +222,25 @@ def test_plan_is_incomplete_helper_uses_latest_revision():
     against the LATEST plan, not the original."""
     from disco.core import ActionEvent, PlanEvent, ToolCall
 
+    # Sequenced events (production always assigns seqs) so the re-plan boundary is
+    # unambiguous — the unified reader scopes per-step state to AFTER the latest plan.
     events = [
-        PlanEvent(summary="p1", steps=[{"title": "a"}], revision=1),
+        PlanEvent(summary="p1", steps=[{"title": "a"}], revision=1, seq=1),
         # All steps of plan #1 done.
         ActionEvent(
             thought="1",
             tool_call=ToolCall(tool_name="plan_step", arguments={"index": 1, "state": "done"}),
+            seq=2,
         ),
         # Re-plan with 2 steps; neither marked done yet.
-        PlanEvent(summary="p2", steps=[{"title": "a"}, {"title": "b"}], revision=2),
+        PlanEvent(summary="p2", steps=[{"title": "a"}, {"title": "b"}], revision=2, seq=3),
     ]
     incomplete, missing = signals.plan_is_incomplete(events)
-    # plan #2 is the latest — step 1 of p2 was never explicitly marked (the prior
-    # done was for p1's step 1, but it's the same index — the helper treats index
-    # as opaque, so p1's done carries forward. The unmarked one is step 2.).
+    # plan #2 is the latest. A re-plan starts a FRESH checklist: p1's done mark (before
+    # p2's seq) must NOT carry forward, so BOTH of p2's steps are unmarked. (This is the
+    # corrected behavior — the prior seqless fixture let p1's mark leak into p2.)
     assert incomplete is True
-    assert missing == [2]
+    assert missing == [1, 2]
 
 
 # ---- the model-chosen ask_user → AWAITING_USER_DECISION gate ----------------

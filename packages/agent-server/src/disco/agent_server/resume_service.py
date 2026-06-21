@@ -36,6 +36,7 @@ from disco.core import (
     ToolResult,
 )
 from disco.core.loop.engine import _BOOKKEEPING_TOOLS
+from disco.core.view import effective_plan_progress
 from disco.tools.projects import StorageStatus
 
 
@@ -260,34 +261,14 @@ class ResumeService:
         else:
             parts.append("- No shell sessions are running.")
 
-        # 3. Plan restatement: find the latest plan and the first step not yet done.
-        latest_plan: PlanEvent | None = None
-        for e in events:
-            if isinstance(e, PlanEvent):
-                if latest_plan is None or e.revision >= latest_plan.revision:
-                    latest_plan = e
-
+        # 3. Plan restatement: the first step not yet done, from the MERGED progress
+        # source (plan_step + update_plan_progress) so a capable model's declarative
+        # marks aren't ignored on resume — else it's told to redo an already-done step.
+        latest_plan, _states = effective_plan_progress(events)
         if latest_plan is not None and latest_plan.steps:
-            plan_seq = latest_plan.seq or 0
-            done_steps: set[int] = set()
-            for e in events:
-                if not isinstance(e, ActionEvent) or e.tool_call is None:
-                    continue
-                if e.tool_call.tool_name != "plan_step":
-                    continue
-                if (e.seq or 0) < plan_seq:
-                    continue
-                try:
-                    idx = int(e.tool_call.arguments.get("index"))  # type: ignore[arg-type]
-                    state = str(e.tool_call.arguments.get("state"))
-                except (TypeError, ValueError):
-                    continue
-                if state == "done":
-                    done_steps.add(idx)
-
             first_undone: int | None = None
             for i in range(1, len(latest_plan.steps) + 1):
-                if i not in done_steps:
+                if _states.get(i) != "done":
                     first_undone = i
                     break
 

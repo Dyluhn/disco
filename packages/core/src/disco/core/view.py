@@ -181,6 +181,71 @@ def _latest_plan(events: list[Event]) -> PlanEvent | None:
     return plan
 
 
+def effective_plan_progress(
+    events: list[Event],
+) -> tuple[PlanEvent | None, dict[int, str]]:
+    """The SINGLE source of truth for per-step plan completion. Merges BOTH progress
+    channels: incremental `plan_step(index, state)` marks (small models) AND declarative
+    `update_plan_progress({steps:[{index,state}...]})` full-state snapshots (capable
+    models — the #3 redesign). Returns (latest_plan, {1-based index: effective state}).
+
+    Why this exists: capable models report progress ONLY via update_plan_progress; the
+    old plan_step-only readers saw 0/N done for them, so a finished build PAUSED on the
+    actionless valve and the model's own recap kept showing the plan incomplete (it kept
+    verifying). Every completion/recap reader now flows through this one function so the
+    valve, the tail recap, the recitation drift-gate, and resume all agree.
+
+    Resolution: only events AFTER the latest plan count (a re-plan starts a fresh
+    checklist). Marks/snapshots apply in event order — by `seq`, falling back to LIST
+    POSITION when seqs are absent/zero (seqless fixtures) — and LATEST WINS, so a step can
+    move done→active if a later event says so. A `plan_step` sets ONE index; an
+    `update_plan_progress` applies the states it LISTS; indices a snapshot omits RETAIN
+    their prior known state (a partial snapshot never silently un-completes an omitted
+    step). Indices are bounded to the current plan (1..N); out-of-range marks are ignored.
+    Steps never mentioned have no entry (callers treat absent as not-done)."""
+    plan: PlanEvent | None = None
+    plan_pos = -1
+    for i, e in enumerate(events):
+        if isinstance(e, PlanEvent) and (plan is None or e.revision >= plan.revision):
+            plan, plan_pos = e, i
+    if plan is None or not plan.steps:
+        return (None, {})
+    plan_seq = plan.seq or 0
+    total = len(plan.steps)
+    states: dict[int, str] = {}
+
+    def _set(idx_raw: object, state_raw: object) -> None:
+        idx = int(idx_raw)  # type: ignore[arg-type]
+        if 1 <= idx <= total:  # bound to the current plan; ignore stale out-of-range
+            states[idx] = str(state_raw)
+
+    for i, e in enumerate(events):
+        if not isinstance(e, ActionEvent) or e.tool_call is None:
+            continue
+        eseq = e.seq or 0
+        # Scope to AFTER the current plan: prefer seq; fall back to list position when
+        # either seq is absent/zero (so seqless fixtures don't carry pre-replan marks).
+        if eseq and plan_seq:
+            if eseq < plan_seq:
+                continue
+        elif i < plan_pos:
+            continue
+        name = e.tool_call.tool_name
+        args = e.tool_call.arguments or {}
+        if name == "plan_step":
+            try:
+                _set(args.get("index"), args.get("state"))
+            except (TypeError, ValueError):
+                continue
+        elif name == "update_plan_progress":
+            for s in args.get("steps") or []:
+                try:
+                    _set(s.get("index"), s.get("state"))
+                except (TypeError, ValueError, AttributeError):
+                    continue
+    return (plan, states)
+
+
 def _pinned_seqs(events: list[Event]) -> set[int]:
     """Seqs that condensation must NEVER forget: the latest PlanEvent (GAP D) plus
     every KnowledgeEvent and DatasourceEvent (Cluster 7 — standing guidance and
@@ -215,32 +280,16 @@ def _recitation_message(events: list[Event]) -> LLMMessage | None:
     after dozens of tool calls drift the plan toward the forgettable middle.
     Built purely from the log (latest plan + plan_step actions) — no model call,
     regenerated every materialization, never stored (preserves append-only)."""
-    plan = _latest_plan(events)
+    # Merged truth-source (plan_step + update_plan_progress) so the tail recap reflects a
+    # capable model's DECLARATIVE progress, not just plan_step marks (the #3 redesign).
+    # A re-plan starts a fresh checklist (effective_plan_progress scopes to the latest
+    # PlanEvent — counting a prior plan's "done" marks would show every step done on the
+    # new plan: observed live as "all 5 done" → confused → STUCK).
+    plan, states = effective_plan_progress(events)
     if plan is None or not plan.steps:
         return None
-    # Only count plan_step marks made AFTER the current plan was proposed. A re-plan
-    # (new PlanEvent) starts a fresh checklist — counting the PRIOR plan's "done"
-    # marks would show every step done on the new plan (observed live: after a
-    # re-plan the model saw "all 5 done", got confused, looped → STUCK).
-    plan_seq = plan.seq or 0
-    done: set[int] = set()
-    active: set[int] = set()
-    for e in events:
-        if not isinstance(e, ActionEvent) or e.tool_call is None:
-            continue
-        if e.tool_call.tool_name != "plan_step":
-            continue
-        if (e.seq or 0) < plan_seq:
-            continue  # belongs to a superseded plan
-        try:
-            idx = int(e.tool_call.arguments.get("index"))  # type: ignore[arg-type]
-            state = str(e.tool_call.arguments.get("state"))
-        except (TypeError, ValueError):
-            continue
-        if state == "done":
-            done.add(idx)
-        elif state == "active":
-            active.add(idx)
+    done = {i for i, st in states.items() if st == "done"}
+    active = {i for i, st in states.items() if st == "active"}
     lines = []
     next_pending = None
     for i, step in enumerate(plan.steps, start=1):

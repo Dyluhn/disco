@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from ..events import ActionEvent, Event, EventSource, LLMMessage, MessageEvent
 from ..llm import LLMError
-from ..view import _latest_plan
+from ..view import _latest_plan, effective_plan_progress
 from .dedup import _WORKSPACE_MUTATING_TOOLS, _WORKSPACE_READ_TOOLS
 
 # (B2/B6) Cap on consecutive PLANNING-mode read/list tool calls before the loop
@@ -181,31 +181,14 @@ def _hs03_reground_message(
     # "keep executing the old plan" and the model never re-plans.
     goal = _clip((goal_override or "").strip() or plan.summary or "(no summary)")
 
-    # 2. PROGRESS: per-step checklist. Mirrors _recitation_signature's
-    # accounting (only plan_step marks AFTER the current plan's seq),
-    # but with FACTS ONLY — "✓ 1. step title" — and no "next incomplete"
-    # line (the brief is explicit: this is a recap, not a steer). A
-    # strong model that can read a checklist doesn't need a pointer to
-    # the "next" step; the model itself decides.
-    plan_seq = plan.seq or 0
-    done: set[int] = set()
-    active: set[int] = set()
-    for e in events:
-        if not isinstance(e, ActionEvent) or e.tool_call is None:
-            continue
-        if e.tool_call.tool_name != "plan_step":
-            continue
-        if (e.seq or 0) < plan_seq:
-            continue  # mark belongs to a superseded plan
-        try:
-            idx = int(e.tool_call.arguments.get("index"))  # type: ignore[arg-type]
-            state = str(e.tool_call.arguments.get("state"))
-        except (TypeError, ValueError):
-            continue
-        if state == "done":
-            done.add(idx)
-        elif state == "active":
-            active.add(idx)
+    # 2. PROGRESS: per-step checklist. Mirrors the tail recap's MERGED accounting
+    # (plan_step + update_plan_progress, see effective_plan_progress), FACTS ONLY —
+    # "✓ 1. step title", no "next incomplete" pointer (recap, not steer). This recap is
+    # PERSISTED as an environment message, so a plan_step-only count would re-inject a
+    # stale "incomplete" plan into context for a capable model that already marked it done.
+    _, states = effective_plan_progress(events)
+    done = {i for i, st in states.items() if st == "done"}
+    active = {i for i, st in states.items() if st == "active"}
     step_lines: list[str] = []
     for i, step in enumerate(plan.steps, start=1):
         if i in done:

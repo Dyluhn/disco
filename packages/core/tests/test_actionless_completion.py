@@ -74,6 +74,58 @@ async def test_notify_user_with_plan_complete_finishes_not_paused():
     )
 
 
+async def test_update_plan_progress_complete_finishes_not_paused():
+    """The plan-progress-source-unify repro (live build conv_c93912fa): a CAPABLE model
+    marks ALL steps done via the DECLARATIVE `update_plan_progress` snapshot (NOT
+    plan_step — the #3 redesign), then goes non-productive. Before the unified reader the
+    actionless valve counted only plan_step marks → saw 0/N done → PAUSED a finished build
+    ("plan steps remain undone"). Now the merged reader sees 2/2 done → FINISHED."""
+    from disco.core.llm import ToolSpec
+    from loop_fakes import FakeExecutor
+
+    agent = ScriptedAgent([
+        action_step(
+            "submit_plan",
+            {"summary": "p", "steps": [{"title": "1"}, {"title": "2"}]},
+        ),
+        # Declarative full-state snapshot — both steps done in ONE call, no plan_step.
+        action_step(
+            "update_plan_progress",
+            {"steps": [{"index": 1, "state": "done"}, {"index": 2, "state": "done"}]},
+        ),
+        _notify("All files are in place, the macOS-style site is built."),
+        _notify("The macOS-style static site is fully built and served."),
+        _notify("All set! The build is complete."),
+        finish_step(),
+    ])
+    # update_plan_progress is a real, advertised tool in production (unlike plan_step it
+    # isn't engine-special-cased), so the fake executor must advertise it or the action
+    # is dropped as unknown and never lands as an ActionEvent.
+    executor = FakeExecutor(
+        tools=[
+            ToolSpec(name=n, description=n, parameters_schema={})
+            for n in ("update_plan_progress", "notify_user", "file_read", "shell")
+        ]
+    )
+    loop, store = build_loop(executor=executor, agent=agent)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    await loop.send_message("go")
+    await loop.run()
+    await loop.approve_plan()
+    state = await loop.run()
+    events = await store.get_events(CID)
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert _last_status_detail(events) == "completed_via_notify"
+    assert not any(
+        isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.PAUSED
+        and e.detail == "actionless"
+        for e in events
+    )
+
+
 async def test_notify_user_with_plan_remaining_still_pauses():
     """3× notify_user with plan steps REMAINING → still PAUSED/actionless.
     Regression guard: the thrash protection must survive — an unfinished plan

@@ -12,14 +12,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..events import (
-    ActionEvent,
     Event,
     EventSource,
     KnowledgeEvent,
     MessageEvent,
 )
 from ..llm import OperatingMode
-from ..view import View, _latest_plan
+from ..view import View, effective_plan_progress
 from . import signals
 from .messages import _hs03_reground_message, _latest_user_instruction
 
@@ -38,14 +37,14 @@ class RecitationRegrounder:
         self._loop = loop
 
     def recitation_signature(self, events: list[Event]) -> str | None:
-        """C6 — stable signature of (latest plan + plan_step checklist), the
+        """C6 — stable signature of (latest plan + effective checklist), the
         inputs the view.py tail-recap renders. None iff there is no plan to
         recite (a re-plan or a pre-plan run has no signature).
 
-        Mirrors view.py:_recitation_message's accounting exactly: only
-        plan_step marks AFTER the current PlanEvent's seq count, and the
-        state set is split into done vs active (the recap's "✓" / "→" /
-        "□" markers). Any change in plan.summary, plan.steps, or the
+        Mirrors view.py:_recitation_message's accounting exactly: the MERGED
+        per-step state (plan_step + update_plan_progress, via
+        effective_plan_progress), split into done vs active (the recap's
+        "✓" / "→" / "□" markers). Any change in plan.summary, plan.steps, or the
         done/active set flips the signature → DRIFT fires the next
         materialization (once).
 
@@ -54,33 +53,20 @@ class RecitationRegrounder:
         tuples). Hashing is unnecessary — the content is short and we
         never re-hash for any other purpose.
         """
-        plan = _latest_plan(events)
+        # Shared truth-source — done/active from BOTH plan_step AND update_plan_progress,
+        # so the signature DRIFTS when a capable model marks progress declaratively. If
+        # this stayed plan_step-only while view.py reads the merged state, an
+        # update_plan_progress change would render once then get dropped as "no drift".
+        plan, states = effective_plan_progress(events)
         if plan is None or not plan.steps:
             return None
-        plan_seq = plan.seq or 0
-        done: list[int] = []
-        active: list[int] = []
-        for e in events:
-            if not isinstance(e, ActionEvent) or e.tool_call is None:
-                continue
-            if e.tool_call.tool_name != "plan_step":
-                continue
-            if (e.seq or 0) < plan_seq:
-                continue  # mark belongs to a superseded plan
-            try:
-                idx = int(e.tool_call.arguments.get("index"))  # type: ignore[arg-type]
-                state = str(e.tool_call.arguments.get("state"))
-            except (TypeError, ValueError):
-                continue
-            if state == "done":
-                done.append(idx)
-            elif state == "active":
-                active.append(idx)
+        done = sorted(i for i, st in states.items() if st == "done")
+        active = sorted(i for i, st in states.items() if st == "active")
         steps_t = tuple((s.title, s.detail) for s in plan.steps)
         return (
             f"plan:{plan.id}:{plan.revision}:{plan.summary}|"
             f"steps:{steps_t}|"
-            f"done:{sorted(done)}|active:{sorted(active)}"
+            f"done:{done}|active:{active}"
         )
 
     def should_emit_recitation(self, events: list[Event]) -> bool:
