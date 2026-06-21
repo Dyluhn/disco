@@ -219,7 +219,12 @@ export function ElementBox({
     top: `${geometry.y}%`,
     width: `${geometry.w}%`,
     height: `${geometry.h}%`,
-    fontSize: `${font_size_vw}vw`,
+    // Canvas-relative font sizing (#5): geometry (x/y/w/h) is a % of the CANVAS, but the
+    // font was `vw` — a % of the VIEWPORT. In the editor the canvas is a PANEL, not the
+    // full viewport, so vw made text render at the wrong scale and drift as the window
+    // resized. `font_size_vw` is conceptually "% of slide width", so resolve it against
+    // the canvas width (px) to match the geometry and the rendered deck.
+    fontSize: `${(font_size_vw / 100) * canvasWidth}px`,
     fontWeight: font_weight,
     fontStyle: font_style,
     boxSizing: "border-box",
@@ -250,7 +255,7 @@ export function ElementBox({
             justifyContent: "center",
             height: "100%",
             color: "rgba(0,0,0,0.4)",
-            fontSize: "1vw",
+            fontSize: `${canvasWidth / 100}px`, // canvas-relative (#5), matches the element font
             fontStyle: "italic",
           }}
         >
