@@ -671,22 +671,27 @@ export function deriveBuildProgress(
     if (i < latestPlanIdx) return;
     if (e.kind === "action" && e.tool_call?.tool_name === "update_plan_progress") latest = e;
   });
-  if (latest === null) return progress;
-  const steps = ((latest as AgentEvent).tool_call?.arguments?.steps ?? []) as Array<{
+  // Apply the declarative snapshot IF one exists — but do NOT early-return when it's
+  // absent. A SMALL model (the NL-done-at-finish tier, e.g. local Qwen) never calls
+  // update_plan_progress, so `latest` stays null; a `return` here skipped the FINISHED
+  // reconciliation below and left every step unchecked on a build that actually finished
+  // (the live #3 bug on Qwen). Fall through so terminal reconciliation runs regardless.
+  const steps = ((latest as AgentEvent | null)?.tool_call?.arguments?.steps ?? []) as Array<{
     index: number;
     state: string;
   }>;
-  if (!Array.isArray(steps)) return progress;
-  for (const s of steps) {
-    const idx = Number(s?.index);
-    const st = String(s?.state);
-    // Bound to the CURRENT plan's range. A malformed or stale index (e.g. index 99
-    // on a 3-step plan, or a leftover from a longer prior plan) must NOT create a
-    // phantom step or inflate the done-count into a lying checklist (a snapshot of
-    // [{index:99,state:"done"}] would otherwise render "1/3" with every real step
-    // pending). Out-of-range / non-integer indices are dropped.
-    if (!Number.isInteger(idx) || idx < 1 || (nSteps > 0 && idx > nSteps)) continue;
-    if (st === "done" || st === "active" || st === "pending") progress.set(idx, st as StepState);
+  if (Array.isArray(steps)) {
+    for (const s of steps) {
+      const idx = Number(s?.index);
+      const st = String(s?.state);
+      // Bound to the CURRENT plan's range. A malformed or stale index (e.g. index 99
+      // on a 3-step plan, or a leftover from a longer prior plan) must NOT create a
+      // phantom step or inflate the done-count into a lying checklist (a snapshot of
+      // [{index:99,state:"done"}] would otherwise render "1/3" with every real step
+      // pending). Out-of-range / non-integer indices are dropped.
+      if (!Number.isInteger(idx) || idx < 1 || (nSteps > 0 && idx > nSteps)) continue;
+      if (st === "done" || st === "active" || st === "pending") progress.set(idx, st as StepState);
+    }
   }
   // Terminal reconciliation:
   //  • FINISHED — the build passed the real finish gate, so the deliverable is

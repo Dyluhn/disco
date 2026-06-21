@@ -331,6 +331,21 @@ describe("deriveBuildProgress — declarative full-state snapshot (#3)", () => {
     expect(p.get(3)).toBe("done"); // not left "pending" → no "2/3 with no Done" lie
   });
 
+  it("#3 small-model (Qwen): NO snapshot at all + FINISHED → every step reads done", () => {
+    // The NL-done-at-finish tier (local Qwen) NEVER calls update_plan_progress. A
+    // finished build is still complete, so all steps must check off. This was the live
+    // bug: the no-snapshot early-return returned an empty map and skipped terminal
+    // reconciliation, so a finished Qwen build showed every step unchecked.
+    const p = deriveBuildProgress([planEvent(1, 4)], "FINISHED");
+    expect(p.size).toBe(4);
+    expect([1, 2, 3, 4].every((i) => p.get(i) === "done")).toBe(true);
+  });
+
+  it("#3 small-model: NO snapshot + still RUNNING → empty (no premature checks)", () => {
+    // The fix must NOT leak into the running state — only a real FINISHED reconciles.
+    expect(deriveBuildProgress([planEvent(1, 4)], "RUNNING").size).toBe(0);
+  });
+
   it("drops out-of-range / malformed indices (no lying checklist from a bad snapshot)", () => {
     const events = [
       planEvent(1, 3),
