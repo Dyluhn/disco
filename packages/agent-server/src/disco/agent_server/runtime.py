@@ -941,6 +941,13 @@ class ConversationRuntime:
         RuntimeSettings._effective_policy for the full contract."""
         return self._settings._effective_policy(conversation_id)
 
+    def _effective_driver_endpoint(
+        self, conversation_id: str
+    ) -> tuple[str, str, str | None] | None:
+        """Delegator (ROOT-5): the conversation's override-aware driver endpoint for
+        LLM-using tools. See RuntimeSettings._effective_driver_endpoint."""
+        return self._settings._effective_driver_endpoint(conversation_id)
+
     def _effective_assist(self, conversation_id: str) -> bool:
         return self._settings._effective_assist(conversation_id)
 
@@ -1233,6 +1240,9 @@ class ConversationRuntime:
             broker=broker,
             conversation_id=conversation_id,
             model_policy=model_policy,
+            # ROOT-5: the conversation's effective (override-aware) driver endpoint, so
+            # LLM-using tools (slides_generate) author with the model the user picked.
+            driver_llm=self._effective_driver_endpoint(conversation_id),
         )
         # RP-05 rung A+B: extend the registry with MCP tools from the pool
         # snapshot (stdio) AND the HTTP-managed tools (rung B streamable_http).

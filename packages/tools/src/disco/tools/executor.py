@@ -48,10 +48,14 @@ class DefaultToolExecutor:
         conversation_id: str | None = None,
         default_timeout_s: int = 300,
         model_policy: ModelExecutionPolicy = _STANDARD_POLICY,
+        driver_llm: tuple[str, str, str | None] | None = None,
     ) -> None:
         self._registry = registry
         self._scope = scope
         self._sandbox = sandbox
+        # ROOT-5: the conversation's effective (override-aware) driver endpoint,
+        # stamped onto every ToolContext for LLM-using tools (slides_generate).
+        self._driver_llm = driver_llm
         self._broker = broker or CapabilityBroker()
         self._owner_id = owner_id
         # Generate a unique per-instance id when none is given so the F3 read-state
@@ -208,6 +212,7 @@ class DefaultToolExecutor:
             owner_id=self._owner_id,
             conversation_id=self._conversation_id,
             assist=self._model_policy.assist,
+            driver_llm=self._driver_llm,
         )
 
     def _fail(

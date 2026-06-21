@@ -280,6 +280,24 @@ class RuntimeSettings:
         """Back-compat shim — the assist gate is now one facet of the resolved policy."""
         return self._effective_policy(conversation_id).assist
 
+    def _effective_driver_endpoint(
+        self, conversation_id: str
+    ) -> tuple[str, str, str | None] | None:
+        """ROOT-5: the conversation's EFFECTIVE (override-aware) AGENT_DRIVER endpoint as
+        (base_url, model_id, api_key_env) — for LLM-using tools (slides_generate) so a
+        deck is authored by the model the user PICKED for this conversation, not the
+        global default. None when the resolved entry has no live base_url (the tool then
+        falls back to the global resolver). Mirrors _effective_policy's entry resolution."""
+        from disco.core.llm import ModelRole
+
+        override = self._rt._model_override.get(conversation_id)
+        router = self._rt._router_now(pick=override)
+        key = router._config.model_for(ModelRole.AGENT_DRIVER, override=override)
+        entry = router._config.models.get(key)
+        if entry is None or not entry.base_url:
+            return None
+        return (entry.base_url, entry.model_id, entry.api_key_env)
+
     def is_assist(self, conversation_id: str) -> bool:
         return self._effective_assist(conversation_id)
 

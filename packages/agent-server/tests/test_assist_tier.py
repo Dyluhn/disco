@@ -164,3 +164,34 @@ def test_runtime_assist_explicit_override(tmp_path):
         rt2 = ConversationRuntime(store=MagicMock())
         assert rt2._assist["c1"] is False
         assert rt2._assist["c2"] is True
+
+
+def test_root5_effective_driver_endpoint_honors_override():
+    """ROOT-5: LLM-using tools (slides_generate) must author with the conversation's
+    PICKED model. _effective_driver_endpoint resolves the OVERRIDE-aware AGENT_DRIVER
+    entry → (base_url, model_id, api_key_env), not the global default."""
+    from disco.core.llm.config import ModelEntry
+
+    rt = ConversationRuntime(store=MagicMock())
+    router = MagicMock()
+    rt._router_now = MagicMock(return_value=router)
+    rt._model_override = {"c1": "or-deepseek"}
+    entry = ModelEntry(
+        model_id="deepseek/deepseek-v4-pro",
+        provider="openrouter",
+        context_window=64_000,
+        base_url="https://openrouter.ai/api/v1",
+        api_key_env="OPENROUTER_API_KEY",
+    )
+    router._config.model_for.return_value = "or-deepseek"
+    router._config.models = {"or-deepseek": entry}
+
+    ep = rt._effective_driver_endpoint("c1")
+    assert ep == ("https://openrouter.ai/api/v1", "deepseek/deepseek-v4-pro", "OPENROUTER_API_KEY")
+    # the resolver consulted model_for with the per-conversation override
+    router._config.model_for.assert_called_with(ModelRole.AGENT_DRIVER, override="or-deepseek")
+    # no live base_url ⇒ None (the tool then falls back to the global resolver)
+    router._config.models = {
+        "or-deepseek": ModelEntry(model_id="x", provider="p", context_window=1)
+    }
+    assert rt._effective_driver_endpoint("c1") is None

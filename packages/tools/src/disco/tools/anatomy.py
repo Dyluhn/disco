@@ -54,6 +54,12 @@ class ToolContext(BaseModel):
     owner_id: str
     conversation_id: str
     assist: bool = False
+    # ROOT-5: the conversation's EFFECTIVE driver endpoint (override-aware) for
+    # LLM-using tools (e.g. slides_generate), as (base_url, model_id, api_key_env).
+    # NEVER the resolved key — only the env-var NAME (§6, no raw secrets in ctx);
+    # the tool resolves the secret itself. None ⇒ the tool falls back to the global
+    # AGENT_DRIVER from ConfigStore (behavior-preserving for non-build executors).
+    driver_llm: tuple[str, str, str | None] | None = None
 
 
 class ToolOutcome(BaseModel):
