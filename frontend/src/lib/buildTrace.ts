@@ -640,6 +640,63 @@ export function derivePlanProgress(
   return progress;
 }
 
+/** runthru-v2 (#3): Build progress for CAPABLE models — derived from the LATEST
+ * declarative `update_plan_progress` snapshot (a full-state rewrite, not a delta).
+ * Because the latest snapshot carries the COMPLETE state of every step, it is
+ * self-correcting: a dropped/garbled prior update can't leave a step wrong, the
+ * next snapshot re-establishes truth. Returns an EMPTY map when no snapshot exists
+ * (small models on the assist path never emit it, or none yet) — the UI then falls
+ * back to the honest status chip rather than a lying empty checklist. Never inferred
+ * from action counts. */
+export function deriveBuildProgress(
+  events: AgentEvent[],
+  status?: ConversationStatus,
+): Map<number, StepState> {
+  const progress = new Map<number, StepState>();
+  // The latest plan supersedes prior ones; only count snapshots after it (a re-plan
+  // starts a fresh checklist).
+  let latestPlanIdx = -1;
+  let latestRev = -1;
+  events.forEach((e, i) => {
+    if (e.kind === "plan" && e.revision >= latestRev) {
+      latestRev = e.revision;
+      latestPlanIdx = i;
+    }
+  });
+  // Declarative: the LAST update_plan_progress action wins — it's the full picture.
+  let latest: AgentEvent | null = null;
+  events.forEach((e, i) => {
+    if (i < latestPlanIdx) return;
+    if (e.kind === "action" && e.tool_call?.tool_name === "update_plan_progress") latest = e;
+  });
+  if (latest === null) return progress;
+  const steps = ((latest as AgentEvent).tool_call?.arguments?.steps ?? []) as Array<{
+    index: number;
+    state: string;
+  }>;
+  if (!Array.isArray(steps)) return progress;
+  for (const s of steps) {
+    const idx = Number(s?.index);
+    const st = String(s?.state);
+    if (!Number.isFinite(idx)) continue;
+    if (st === "done" || st === "active" || st === "pending") progress.set(idx, st as StepState);
+  }
+  // Terminal reconciliation, so the checklist never spins on a stopped run:
+  //  • FINISHED (passed the real finish gate) → an in-progress step reads as done.
+  //  • STUCK/ERROR/IDLE (stopped without completing) → "active" reads as stalled,
+  //    honestly showing work that was underway when the loop halted.
+  if (status === "FINISHED") {
+    for (const [idx, st] of progress) {
+      if (st === "active") progress.set(idx, "done");
+    }
+  } else if (status === "STUCK" || status === "ERROR" || status === "IDLE") {
+    for (const [idx, st] of progress) {
+      if (st === "active") progress.set(idx, "stalled");
+    }
+  }
+  return progress;
+}
+
 /** The live activity signal — what the agent is doing RIGHT NOW between events.
  * Without true token streaming, the UI would otherwise show a static "Working"
  * label that feels frozen during slow local-model turns (5-30s for Qwen 27B).

@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { deriveActivity, deriveDeliverable, deriveFiles } from "@/lib/buildTrace";
+import { deriveActivity, deriveBuildProgress, deriveDeliverable, deriveFiles } from "@/lib/buildTrace";
 import type { AgentEvent } from "@/types/agent";
 
 function actionEvent(
@@ -259,5 +259,86 @@ describe("F2: deriveActivity — deliverable events become file download cards",
     const items = deriveActivity(events, null, "FINISHED");
     const deliverableItems = items.filter((i) => i.expandable?.file);
     expect(deliverableItems).toHaveLength(2);
+  });
+});
+
+// runthru-v2 (#3): the declarative capable-model progress derivation.
+function planEvent(revision: number, nSteps: number): AgentEvent {
+  return {
+    kind: "plan",
+    id: `plan-${revision}`,
+    revision,
+    summary: "p",
+    context: "",
+    steps: Array.from({ length: nSteps }, (_, i) => ({ title: `step ${i + 1}` })),
+  } as unknown as AgentEvent;
+}
+function progressEvent(id: string, steps: Array<{ index: number; state: string }>): AgentEvent {
+  return {
+    kind: "action",
+    id,
+    thought: "",
+    tool_call: { tool_name: "update_plan_progress", arguments: { steps }, call_id: id },
+  } as AgentEvent;
+}
+
+describe("deriveBuildProgress — declarative full-state snapshot (#3)", () => {
+  it("returns an empty map when there is no snapshot (→ UI shows the status chip)", () => {
+    const events = [planEvent(1, 3), actionEvent("a1", "shell")];
+    expect(deriveBuildProgress(events, "RUNNING").size).toBe(0);
+  });
+
+  it("takes the LATEST snapshot as the whole truth — self-correcting, not cumulative", () => {
+    const events = [
+      planEvent(1, 3),
+      // an earlier, wrong snapshot...
+      progressEvent("p1", [
+        { index: 1, state: "active" },
+        { index: 2, state: "pending" },
+        { index: 3, state: "pending" },
+      ]),
+      // ...fully superseded by the latest one (a missed/garbled prior update self-heals).
+      progressEvent("p2", [
+        { index: 1, state: "done" },
+        { index: 2, state: "done" },
+        { index: 3, state: "active" },
+      ]),
+    ];
+    const p = deriveBuildProgress(events, "RUNNING");
+    expect(p.get(1)).toBe("done");
+    expect(p.get(2)).toBe("done");
+    expect(p.get(3)).toBe("active");
+  });
+
+  it("ignores snapshots from a superseded plan revision (re-plan starts fresh)", () => {
+    const events = [
+      planEvent(1, 2),
+      progressEvent("p1", [
+        { index: 1, state: "done" },
+        { index: 2, state: "done" },
+      ]),
+      planEvent(2, 2), // re-plan — the prior snapshot must not satisfy the new checklist
+    ];
+    expect(deriveBuildProgress(events, "RUNNING").size).toBe(0);
+  });
+
+  it("on FINISHED, a lingering active step reads as done (no spinner on a done build)", () => {
+    const events = [
+      planEvent(1, 2),
+      progressEvent("p1", [
+        { index: 1, state: "done" },
+        { index: 2, state: "active" },
+      ]),
+    ];
+    const p = deriveBuildProgress(events, "FINISHED");
+    expect(p.get(2)).toBe("done");
+  });
+
+  it("on STUCK, a lingering active step reads as stalled (honest about halted work)", () => {
+    const events = [
+      planEvent(1, 1),
+      progressEvent("p1", [{ index: 1, state: "active" }]),
+    ];
+    expect(deriveBuildProgress(events, "STUCK").get(1)).toBe("stalled");
   });
 });

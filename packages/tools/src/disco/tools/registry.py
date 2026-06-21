@@ -88,6 +88,9 @@ AGENT_TOOLS = frozenset(
         # plan-mode meta tools: propose a plan (planning) + report capstones (execution).
         "submit_plan",
         "plan_step",
+        # runthru-v2 (#3): declarative full-state progress snapshot — capable models
+        # (assist OFF) use this instead of plan_step; prompt-gated, never gates finish.
+        "update_plan_progress",
         "think",  # NO-OP reasoning scratchpad — let a small model "say" things without side effects
         "sheet_generate",
         "slides_generate",

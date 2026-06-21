@@ -7,7 +7,13 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { resumeConversation, subscribeConversation, type AgentHandle } from "@/api/agent";
-import { derivePlan, derivePlanProgress, type PlanView, type StepState } from "@/lib/buildTrace";
+import {
+  derivePlan,
+  derivePlanProgress,
+  deriveBuildProgress,
+  type PlanView,
+  type StepState,
+} from "@/lib/buildTrace";
 import type {
   ActionEvent,
   AgentEvent,
@@ -230,6 +236,7 @@ export interface BuildStream extends BuildStreamState {
   pendingClarify: ClarifyEvent | null;
   plan: PlanView | null;
   planProgress: Map<number, StepState>;
+  buildProgress: Map<number, StepState>;
   awaitingPlan: boolean;
   awaitingDecision: boolean;
   awaitingQuestion: boolean;
@@ -342,6 +349,12 @@ export function useBuildStream(session: BuildSession | null): BuildStream {
     () => derivePlanProgress(state.events, state.status),
     [state.events, state.status],
   );
+  // runthru-v2 (#3): capable-model live checklist, derived from the latest declarative
+  // update_plan_progress snapshot. Empty (small models / none yet) → UI shows the chip.
+  const buildProgress = useMemo(
+    () => deriveBuildProgress(state.events, state.status),
+    [state.events, state.status],
+  );
   const awaitingPlan = state.status === "AWAITING_PLAN_APPROVAL";
   const awaitingDecision = state.status === "AWAITING_USER_DECISION";
   const awaitingQuestion = state.status === "AWAITING_USER_QUESTION";
@@ -354,6 +367,7 @@ export function useBuildStream(session: BuildSession | null): BuildStream {
     pendingClarify,
     plan,
     planProgress,
+    buildProgress,
     awaitingPlan,
     awaitingDecision,
     awaitingQuestion,

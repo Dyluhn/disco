@@ -345,7 +345,14 @@ export function BuildSurface({
                     stay visible while the activity feed scrolls beneath it. */}
                 {b.plan && (
                   <div className="sticky top-0 z-10 mb-section bg-bg pb-inline">
-                    <PlanPanel plan={b.plan} status={b.status} />
+                    {/* runthru-v2 (#3): capable models that emit declarative progress
+                        snapshots get a live checklist; otherwise (small models, or none
+                        yet) the honest status chip — never a lying empty checklist. */}
+                    <PlanPanel
+                      plan={b.plan}
+                      progress={b.buildProgress.size ? b.buildProgress : undefined}
+                      status={b.status}
+                    />
                   </div>
                 )}
                 <ActivityFeed items={activity} conversationId={b.cid ?? undefined} />

@@ -223,6 +223,9 @@ _EXPECTED_AGENT_TOOLS = [
     "slides_generate",
     "submit_plan",
     "think",
+    # runthru-v2 (#3): declarative full-state progress snapshot — capable models
+    # (assist OFF) use this in place of plan_step; prompt-gated, never gates finish.
+    "update_plan_progress",
 ]
 
 

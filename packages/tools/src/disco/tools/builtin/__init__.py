@@ -23,7 +23,7 @@ from .files import (
     FileWriteTool,
 )
 from .image_gen import ImageGenTool, select_image_backend
-from .plan import PlanStepTool, SubmitPlanTool
+from .plan import PlanStepTool, SubmitPlanTool, UpdatePlanProgressTool
 from .retrieval import ExtractTool, SearchTool
 from .server import ServerStatusTool
 from .sheets import SheetsTool
@@ -67,6 +67,7 @@ __all__ = [
     "ShellWaitTool",
     "ShellWriteTool",
     "SubmitPlanTool",
+    "UpdatePlanProgressTool",
     "ThinkTool",
     "build_default_registry",
 ]
@@ -96,7 +97,8 @@ def build_default_registry() -> ToolRegistry:
         BrowserTool(),
         ServerStatusTool(),
         SubmitPlanTool(),  # plan-mode: proposed plan (intercepted by the loop)
-        PlanStepTool(),  # plan-mode: capstone progress reports
+        PlanStepTool(),  # plan-mode: capstone progress reports (legacy incremental)
+        UpdatePlanProgressTool(),  # runthru-v2 #3: declarative full-state progress (capable)
         SheetsTool(),  # sheet_generate: write .xlsx with live formulas
         AudioOverviewTool(),  # audio_overview: two-voice TTS from finished report
         SlidesTool(),  # slides_generate: Marp-rendered slide decks (HTML/PDF/PPTX)

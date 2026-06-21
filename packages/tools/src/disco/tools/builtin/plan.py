@@ -120,3 +120,58 @@ class PlanStepTool:
             content=f"step {args.index} → {args.state}",
             structured={"index": args.index, "state": args.state},
         )
+
+
+# runthru-v2 (#3) — the DECLARATIVE progress tool for capable models (assist OFF).
+# Replaces the per-step incremental `plan_step` delta with a full-state snapshot the
+# model rewrites every time. This is the Claude Code TodoWrite / Cursor design: because
+# each call carries the COMPLETE state of every step, a dropped/garbled/skipped update
+# self-corrects on the next call (idempotent), rather than leaving a step wrong forever.
+# Research (codex/gpt-5.5 + web survey) + Dylan: incremental deltas are fragile across
+# ALL model tiers; declarative full-rewrite is what frontier models maintain reliably.
+# Small models (assist ON) are NOT offered this — they get an honest no-bookkeeping
+# plan (NL + done-at-finish), so the burden never falls on a model that can't carry it.
+# Like plan_step: a pure CONTROL signal — read_only, in_process, never gates finish.
+class PlanProgressItem(BaseModel):
+    index: int = Field(description="1-based index of the plan step.")
+    state: Literal["pending", "active", "done"] = Field(
+        description="This step's CURRENT state: 'pending' (not started), 'active' "
+        "(in progress now), or 'done' (completed)."
+    )
+
+
+class UpdatePlanProgressArgs(BaseModel):
+    steps: list[PlanProgressItem] = Field(
+        description=(
+            "The FULL current state of EVERY plan step, in order — rewrite the WHOLE "
+            "list each time (a declarative snapshot, NOT a delta). Include every step "
+            "with its current state. Because each call is the complete picture, a "
+            "missed update self-corrects the next time you call this."
+        )
+    )
+
+
+class UpdatePlanProgressTool:
+    definition = ToolDef(
+        name="update_plan_progress",
+        description=(
+            "Report progress on the approved plan by rewriting the FULL list of step "
+            "states (declarative snapshot). Pass EVERY step with its current state "
+            "('pending' | 'active' | 'done') — mark the step you're working on 'active' "
+            "and completed ones 'done'. Purely informational: it advances the UI's plan "
+            "tracker and takes NO action in the workspace. Call it as you make progress; "
+            "since each call is the complete picture, an occasional miss self-corrects."
+        ),
+        args_model=UpdatePlanProgressArgs,
+        base_risk=SecurityRisk.LOW,
+        runs_in="in_process",
+        read_only=True,  # informational progress snapshot — no environment mutation
+    )
+
+    async def run(self, args: UpdatePlanProgressArgs, ctx: ToolContext) -> ToolOutcome:
+        done = sum(1 for s in args.steps if s.state == "done")
+        return ToolOutcome(
+            success=True,
+            content=f"plan progress: {done}/{len(args.steps)} done",
+            structured={"steps": [s.model_dump() for s in args.steps]},
+        )
