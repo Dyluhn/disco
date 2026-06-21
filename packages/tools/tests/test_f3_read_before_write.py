@@ -364,6 +364,25 @@ async def test_path_alias_collapse_workspace_prefix():
 
 
 @pytest.mark.asyncio
+async def test_path_alias_collapse_dot_slash():
+    """'./x.py' and 'x.py' collapse to the same tracker key (codex MINOR): a mutate
+    via one spelling invalidates the read bit for the other, closing the stale-read
+    hole where read('x.py') + append('./x.py') + write('x.py') could pass un-read."""
+    sbx = _FakeSandbox({"x.py": b"original\n"})
+    ctx = _ctx(sbx)
+    # Read 'x.py' lifts the guard
+    assert (await FileReadTool().run(FileReadArgs(path="x.py"), ctx)).success is True
+    # Append via './x.py' must INVALIDATE the read bit (same canonical key)
+    app = await FileAppendTool().run(FileAppendArgs(path="./x.py", content="more\n"), ctx)
+    assert app.success is True
+    sbx._fs["x.py"] = b"original\nmore\n"
+    # Now a full file_write of 'x.py' WITHOUT a fresh read must be REFUSED
+    w = await FileWriteTool().run(FileWriteArgs(path="x.py", content="all new\n"), ctx)
+    assert w.success is False
+    assert w.error == "read_before_write"
+
+
+@pytest.mark.asyncio
 async def test_path_alias_abs_prefix_read_lifts_bare_write():
     """A file_read via '/workspace/foo.py' lifts the guard for a file_write
     on 'foo.py' (and vice versa) — they map to the same canonical key."""

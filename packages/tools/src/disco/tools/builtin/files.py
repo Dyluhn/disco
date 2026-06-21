@@ -98,10 +98,14 @@ def _conv_state(conv_id: str) -> dict[str, set[str]]:
 
 
 def _canonical(path: str) -> str:
-    """Canonical tracker key: strip leading workspace prefixes so 'workspace/foo'
-    and '/workspace/foo' collapse to the same entry as 'foo'. One level only —
-    'src/workspace/x' is untouched."""
-    return strip_redundant_workspace_prefix(path)
+    """Canonical tracker key so the read-before-rewrite guard can't be bypassed by
+    spelling the same file differently. Strips the redundant workspace prefix
+    ('workspace/foo' == '/workspace/foo' == 'foo') AND normalizes './', '//' and
+    '../' segments ('./x.py' == 'x.py') via posixpath.normpath, so a read of one
+    spelling and a mutate of another resolve to ONE key."""
+    import posixpath
+
+    return posixpath.normpath(strip_redundant_workspace_prefix(path))
 
 
 def _number_lines(text: str, start: int = 1) -> str:

@@ -35,28 +35,51 @@ from disco.core import (
 # or any real change/deploy intent intentionally fall through to the replan path.
 # TODO: the cleaner long-term signal is an explicit UI `accept_finished`/
 # `mark_done` frame action rather than free-text matching. This is a stopgap.
-_SHIP_IT_PHRASES: frozenset[str] = frozenset({
+# SUBSTRING-safe: specific, terminal multi-word phrases that do not precede a new
+# instruction, so they are matched ANYWHERE in the message — this catches the real
+# traced phrasing "stop troubleshooting, publish it and be done" (a leading clause +
+# the terminal stop phrase), which an exact-only match would miss.
+_SHIP_IT_CONTAINS: tuple[str, ...] = (
     "publish it and be done",
     "leave it as is",
     "leave it as-is",
+    "leave it as it is",
+    "mark it done",
+    "mark it as done",
+    "mark it complete",
+    "mark it as complete",
+    "mark as complete",
+    "call it done",
+    "be done with it",
+)
+# WHOLE-MESSAGE only: shorter phrases that could false-match mid-sentence inside a real
+# change request ("you're done with the header, now add a footer"), so they only count
+# when they ARE the entire message.
+_SHIP_IT_EXACT: frozenset[str] = frozenset({
     "you're done",
     "you are done",
     "that's done",
     "we're done",
-    "mark it done",
-    "mark it as done",
-    "mark it complete",
-    "mark as complete",
+    "we are done",
     "it's done",
-    "call it done",
+    "done",
+    "ship it",
+    "call it",
 })
 
 
 def _is_ship_it_intent(text: str) -> bool:
-    """Conservative whole-intent check: True ONLY for clear 'stop, accept as-is'
-    phrases. Default False (fall through to re-plan). Case-insensitive + stripped.
-    Excludes bare 'publish it', 'deploy it', or any real change/deploy intent."""
-    return text.strip().lower() in _SHIP_IT_PHRASES
+    """Conservative 'stop, accept as-is' check. True ONLY for clear stop intents;
+    default False (fall through to re-plan). Bare 'publish it', 'deploy it',
+    'publish to Netlify', and any change request intentionally fall through.
+
+    Terminal multi-word phrases match anywhere (so a leading clause like
+    'stop troubleshooting, …' still counts); short/ambiguous phrases must be the
+    whole message. Whitespace collapsed + trailing punctuation stripped."""
+    norm = " ".join(text.strip().lower().split()).rstrip(".!?")
+    if norm in _SHIP_IT_EXACT:
+        return True
+    return any(p in norm for p in _SHIP_IT_CONTAINS)
 
 
 class ControlOps:

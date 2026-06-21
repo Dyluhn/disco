@@ -158,10 +158,20 @@ async def test_ship_it_case_insensitive() -> None:
 
 
 async def test_ship_it_all_stop_phrases_skip_replan() -> None:
-    """Every phrase in _SHIP_IT_PHRASES must skip enter_planning + kick."""
-    from disco.agent_server.control_ops import _SHIP_IT_PHRASES
+    """Every stop phrase (both substring + exact sets) must skip enter_planning + kick,
+    INCLUDING the real traced phrasing with a leading clause (codex MAJOR), and a
+    trailing-punctuation / extra-whitespace variant."""
+    from disco.agent_server.control_ops import _SHIP_IT_CONTAINS, _SHIP_IT_EXACT
 
-    for phrase in _SHIP_IT_PHRASES:
+    phrases = [
+        *_SHIP_IT_CONTAINS,
+        *_SHIP_IT_EXACT,
+        "stop troubleshooting, publish it and be done",  # the actual trace phrase
+        "mark it as complete",  # codex-flagged miss
+        "you're done!",  # trailing punctuation
+        "  leave it as is  ",  # whitespace
+    ]
+    for phrase in phrases:
         store = SqliteEventStore(":memory:")
         await _finished_conversation(store)
         rt = _make_rt(store)
@@ -171,6 +181,17 @@ async def test_ship_it_all_stop_phrases_skip_replan() -> None:
 
         rt.kick.assert_not_called(), f"kick must not be called for phrase '{phrase}'"
         rt._loop_for.return_value.enter_planning.assert_not_awaited()
+
+
+async def test_mid_sentence_stop_phrase_still_replans() -> None:
+    """A short stop phrase embedded in a real change request must NOT skip replan —
+    'you're done with X, now add Y' is a change request, not a ship-it."""
+    store = SqliteEventStore(":memory:")
+    await _finished_conversation(store)
+    rt = _make_rt(store)
+    ops = ControlOps(rt)
+    await ops.request_plan(CID, "you're done with the header, now add a footer")
+    rt.kick.assert_called()  # fell through to the replan path
 
 
 # ---- request_plan: replan path (FINISHED + real change intent) ---------------
