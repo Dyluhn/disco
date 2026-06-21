@@ -51,7 +51,15 @@ export function DeckEditorPane({ cid, base }: DeckEditorPaneProps) {
     // Both fetches run in parallel; only the editor data (deck) is load-critical.
     // The render HTML failure degrades gracefully — overlays still exist at (0,0).
     const deckFetch = getDeckForEditor(cid, base);
-    const renderFetch = getDeckRenderHtml(cid, base).catch(() => null);
+    const renderFetch = getDeckRenderHtml(cid, base).catch((): string | null => {
+      // Render-preview failure is NON-fatal (the lowered deck still loads + edits save),
+      // but surface it — otherwise the canvas sits on "Loading slide preview…" forever.
+      if (!cancelled)
+        setPatchNotice(
+          "Couldn't load the slide preview. Editing still saves; reopen the deck to restore the visual.",
+        );
+      return null;
+    });
 
     Promise.all([deckFetch, renderFetch])
       .then(([d, html]) => {

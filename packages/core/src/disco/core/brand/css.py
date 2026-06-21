@@ -105,16 +105,20 @@ def font_face_css() -> str:
     def _uri(name: str) -> str:
         return _FONT_B64_CACHE[name]
 
+    # font-display:swap — render the fallback font IMMEDIATELY, then swap to the brand
+    # face once the (large, base64-inlined) TTF decodes. Without it the browser default
+    # is `block`: the deck text is INVISIBLE for up to ~3s while the font loads (FOIT) —
+    # the slide/editor/preview looks textless on every open. swap shows text instantly.
     return (
-        f"@font-face{{font-family:'Fraunces';font-weight:400;"
+        f"@font-face{{font-family:'Fraunces';font-weight:400;font-display:swap;"
         f"src:url('{_uri('Fraunces.ttf')}') format('truetype');}}\n"
-        f"@font-face{{font-family:'Fraunces';font-weight:400;font-style:italic;"
+        f"@font-face{{font-family:'Fraunces';font-weight:400;font-style:italic;font-display:swap;"
         f"src:url('{_uri('FrauncesItalic.ttf')}') format('truetype');}}\n"
-        f"@font-face{{font-family:'Schibsted Grotesk';font-weight:400;"
+        f"@font-face{{font-family:'Schibsted Grotesk';font-weight:400;font-display:swap;"
         f"src:url('{_uri('SchibstedGrotesk.ttf')}') format('truetype');}}\n"
-        f"@font-face{{font-family:'Newsreader';font-weight:400;"
+        f"@font-face{{font-family:'Newsreader';font-weight:400;font-display:swap;"
         f"src:url('{_uri('Newsreader.ttf')}') format('truetype');}}\n"
-        f"@font-face{{font-family:'Newsreader';font-weight:400;font-style:italic;"
+        f"@font-face{{font-family:'Newsreader';font-weight:400;font-style:italic;font-display:swap;"
         f"src:url('{_uri('NewsreaderItalic.ttf')}') format('truetype');}}\n"
     )
 

@@ -213,6 +213,26 @@ export function SlideCanvas({
       }}
       aria-label={`Slide ${activeSlideId}`}
     >
+      {/* No render yet (still fetching, slow 2.5 MB load, or a transient failure):
+          show an explicit state — NEVER a silent black box that reads as "broken". */}
+      {!renderHtml && (
+        <div
+          role="status"
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "#999",
+            fontFamily: "var(--ui, system-ui, sans-serif)",
+            fontSize: "0.9rem",
+          }}
+        >
+          Loading slide preview…
+        </div>
+      )}
+
       {/* ── Visual layer: the real rendered deck in an iframe ──────────────── */}
       <iframe
         ref={iframeRef}
