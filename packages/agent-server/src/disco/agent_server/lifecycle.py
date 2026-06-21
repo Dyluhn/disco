@@ -68,6 +68,13 @@ class LifecycleManager:
         if executor is not None:
             with contextlib.suppress(Exception):
                 await executor.kill()  # destroys the sandbox instance (§6.4)
+        # F3: clear the read-before-write tracker UNCONDITIONALLY on teardown — the
+        # executor's own kill() clears it too, but a teardown where the executor was
+        # already popped/absent would otherwise leave the module-global entry behind.
+        with contextlib.suppress(Exception):
+            from disco.tools.builtin.files import clear_conversation_read_state
+
+            clear_conversation_read_state(conversation_id)
         pending = self._rt._pending_sessions.pop(conversation_id, None)
         if pending is not None:
             with contextlib.suppress(Exception):

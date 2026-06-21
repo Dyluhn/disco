@@ -344,6 +344,18 @@ class RuntimeSettings:
         async with lock:
             if not await self._conversation_is_pristine(conversation_id):
                 return False
+            # FINAL synchronous guard (closes the compose→register race): the pristine
+            # check above does `await get_events`, and `kick()` is SYNC and does NOT take
+            # this lock — so a kick scheduled during that await composes + registers
+            # `_loops[cid]` AFTER the in-memory check inside _conversation_is_pristine
+            # already passed. Re-check the in-memory composition here with NO await before
+            # the (synchronous) mutation, so settings can never change under an
+            # already-composed loop / live task.
+            if conversation_id in self._rt._loops:
+                return False
+            task = self._rt._tasks.get(conversation_id)
+            if task is not None and not task.done():
+                return False
             if model_override is not None:
                 self._set_model_override_unlocked(conversation_id, model_override)
             if assist is not None:

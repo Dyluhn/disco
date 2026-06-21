@@ -28,7 +28,12 @@ from disco.core import (
     SqliteEventStore,
 )
 from disco.core.env import disco_env
-from disco.core.llm import DefaultLLMRouter, OperatingMode, RouterSummarizer
+from disco.core.llm import (
+    DefaultLLMRouter,
+    ModelExecutionPolicy,
+    OperatingMode,
+    RouterSummarizer,
+)
 from disco.core.llm.config import default_config
 from disco.core.llm.wiring import build_providers
 from disco.core.loop import AgentLoop, ConfirmRisky, RouterAgent
@@ -101,7 +106,7 @@ async def main() -> None:
 
     store = SqliteEventStore(":memory:")
     executor = DefaultToolExecutor(
-        build_default_registry(), agent_scope(), sandbox=session, broker=CapabilityBroker(), conversation_id=CID
+        build_default_registry(), agent_scope(model_policy=ModelExecutionPolicy.standard()), sandbox=session, broker=CapabilityBroker(), conversation_id=CID
     )
     loop = AgentLoop(
         CID, store, RouterAgent(router, conversation_id=CID), executor, router,

@@ -192,8 +192,10 @@ def make_conversations_router(
             # Surface the autonomous flag so the UI can badge the conversation.
             if runtime.is_autonomous(conversation_id):
                 state.extras["autonomous"] = True
-            if runtime.is_assist(conversation_id):
-                state.extras["assist"] = True
+            # ALWAYS emit assist (True or False) — the badge must reflect the CURRENT
+            # tier. Emitting it only-when-true let a switch to standard leave the
+            # frontend's preserved-on-absent value stuck on "Assist".
+            state.extras["assist"] = runtime.is_assist(conversation_id)
         result = state.model_dump(mode="json")
         # BP-15: overlay the real sandbox backend name so the UI shows the live tier.
         if runtime is not None:

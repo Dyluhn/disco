@@ -263,8 +263,33 @@ async def test_concurrent_apply_settings_change_no_deadlock(tmp_path, monkeypatc
     assert any(results)
 
 
+async def test_patch_blocked_by_loop_composed_during_pristine_await(tmp_path, monkeypatch):
+    """BLOCKER regression (codex impl review): _conversation_is_pristine does
+    `await get_events`, and kick() is sync + does NOT take the settings lock — so a
+    kick that composes _loops[cid] DURING that await would slip past the in-memory
+    check inside _conversation_is_pristine. The FINAL synchronous guard in
+    apply_settings_change (re-checks _loops/_tasks with no await before mutating) must
+    catch it: return False, settings UNMUTATED."""
+    rt = _rt(tmp_path, monkeypatch)
+    rt._store.create_conversation("c1")
+    # Inject a "concurrent kick" that registers the loop DURING the pristine await.
+    orig_get = rt._store.get_events
+
+    async def get_events_then_compose(cid):
+        events = await orig_get(cid)
+        rt._loops["c1"] = object()  # a kick composed the loop mid-await
+        return events
+
+    monkeypatch.setattr(rt._store, "get_events", get_events_then_compose)
+    ok = await rt.apply_settings_change("c1", model_override="driver-local")
+    assert ok is False  # the final guard caught the loop composed during the await
+    assert "c1" not in rt._model_override  # settings left UNMUTATED
+
+
 async def test_patch_and_kick_no_deadlock(tmp_path, monkeypatch):
-    """apply_settings_change (holds lock) + kick (sync, no lock) = no deadlock."""
+    """apply_settings_change (holds lock) + kick (sync, no lock) = no deadlock. The
+    race is closed not by kick locking, but by the final synchronous _loops/_tasks
+    guard in apply_settings_change (see the test above)."""
     rt = _rt(tmp_path, monkeypatch)
     rt._store.create_conversation("c1")
 

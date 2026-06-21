@@ -140,8 +140,9 @@ def make_ws_router(
                 state.extras["sandbox"] = sstate
             if runtime.is_autonomous(conversation_id):
                 state.extras["autonomous"] = True
-            if runtime.is_assist(conversation_id):
-                state.extras["assist"] = True
+            # ALWAYS emit assist (True or False) so the badge reflects the CURRENT
+            # tier (only-when-true left a switch-to-standard badge stuck on "Assist").
+            state.extras["assist"] = runtime.is_assist(conversation_id)
         # BP-15: inject sandbox_backend at the top level of the state dict (same
         # parity as the HTTP /state overlay — the live spec polls HTTP for this).
         state_dict = state.model_dump(mode="json")

@@ -26,6 +26,7 @@ import asyncio
 import os
 
 from disco.core import ToolCall
+from disco.core.llm import ModelExecutionPolicy
 from disco.tools.builtin import build_default_registry
 from disco.tools.executor import DefaultToolExecutor
 from disco.tools.registry import agent_scope
@@ -61,7 +62,7 @@ async def main() -> None:
 
     # ---- a normal session: tools drive a real box --------------------------------
     session = SandboxSession(svc, SandboxSpec(memory_mb=256), conversation_id="verify")
-    ex = DefaultToolExecutor(registry, agent_scope(), sandbox=session, default_timeout_s=20)
+    ex = DefaultToolExecutor(registry, agent_scope(model_policy=ModelExecutionPolicy.standard()), sandbox=session, default_timeout_s=20)
 
     # 1. exec genuinely captures (real output + a non-trivial exit code)
     r = await ex.execute(_call("shell", command="echo CAPTURED_LIVE; exit 7"))
@@ -100,7 +101,7 @@ async def main() -> None:
 
     # ---- THE HEADLINE: sandbox dies mid-session → re-create (lesson #1) -----------
     death_session = SandboxSession(svc, SandboxSpec(memory_mb=256), conversation_id="death")
-    dx = DefaultToolExecutor(registry, agent_scope(), sandbox=death_session, default_timeout_s=20)
+    dx = DefaultToolExecutor(registry, agent_scope(model_policy=ModelExecutionPolicy.standard()), sandbox=death_session, default_timeout_s=20)
 
     warm = await dx.execute(_call("shell", command="echo alive; cat /etc/hostname"))
     gen_before = death_session.generation
