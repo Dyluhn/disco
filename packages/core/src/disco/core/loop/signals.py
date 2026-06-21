@@ -282,6 +282,31 @@ def actions_since_last_resume(events: list[Event]) -> int:
     return count
 
 
+def productive_actions_since_approval(events: list[Event]) -> int:
+    """Count PRODUCTIVE (state-changing) actions since the latest plan approval — i.e.
+    actions NOT in `_NON_PRODUCTIVE_TOOLS` (excludes reads, browser, and the
+    plan_step/update_plan_progress bookkeeping). Used to keep the actionless valve's
+    `completed_via_notify` net HONEST: a build is "complete" only if the agent actually
+    DID work, not merely marked every step done + spammed notify_user — which would
+    otherwise FINISH an empty workspace (the `update_plan_progress` path made this
+    reachable for capable models). No approval yet → counts from the start."""
+    approval_seq: int | None = None
+    for e in events:
+        if isinstance(e, StatusEvent) and e.detail == "plan_approved":
+            approval_seq = e.seq
+    count = 0
+    for e in events:
+        if not isinstance(e, ActionEvent) or e.tool_call is None:
+            continue
+        if approval_seq is not None and (e.seq or 0) <= approval_seq:
+            continue
+        if e.meta.get("verify_probe"):
+            continue  # the finish gate's own probe is not agent work (#6 leak)
+        if e.tool_call.tool_name not in _NON_PRODUCTIVE_TOOLS:
+            count += 1
+    return count
+
+
 def plan_step_lag_signal(events: list[Event]) -> bool:
     """The 'auditor' for the soft plan-step nudge. Returns True when the
     agent has done substantial productive work but the capstone tracker is
@@ -295,7 +320,8 @@ def plan_step_lag_signal(events: list[Event]) -> bool:
       - productive (state-changing) actions since approval >= total steps
         (i.e. enough work has happened that *something* should be marked)
       - fewer than half the steps are marked done (tracker is behind)
-      - no soft-lag nudge has fired since the last plan_step action
+      - no soft-lag nudge has fired since the last tracker action (plan_step
+        OR update_plan_progress)
         (so we nudge once per episode, not every iteration)
     """
     # Latest plan.

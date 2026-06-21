@@ -128,8 +128,15 @@ class Valve:
             # FINISHED rather than PAUSED so a completed build doesn't read as
             # paused. Conservative: `plan_steps_complete` is False for the
             # no-plan / partially-done cases, so a genuine stall still PAUSES
-            # below (the thrash guard is untouched).
-            if signals.plan_steps_complete(events):
+            # below (the thrash guard is untouched). AND require real productive
+            # work since approval — marking every step done (plan_step OR the
+            # declarative update_plan_progress) + spamming notify_user must NOT
+            # FINISH an empty workspace; a "done" plan with zero state-changing
+            # actions is a hallucinated completion, not a build.
+            if (
+                signals.plan_steps_complete(events)
+                and signals.productive_actions_since_approval(events) > 0
+            ):
                 await self._loop._emit(
                     MessageEvent(
                         source=EventSource.ENVIRONMENT,

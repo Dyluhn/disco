@@ -103,6 +103,7 @@ async def test_actionless_breaker_inert_when_plan_complete():
     via noop turns instead of finish()) and terminates FINISHED."""
     agent = ScriptedAgent([
         action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+        action_step("shell", {"command": "echo do the work"}),  # real productive work
         action_step("plan_step", {"index": 1, "state": "done"}),
         noop_step("a"),
         noop_step("b"),

@@ -55,6 +55,7 @@ async def test_notify_user_with_plan_complete_finishes_not_paused():
     valve recognizes the build is done and lands a clean terminal."""
     agent = ScriptedAgent([
         action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+        action_step("shell", {"command": "echo build the site"}),  # real productive work
         action_step("plan_step", {"index": 1, "state": "done"}),  # plan complete
         _notify("All files are in place, the macOS-style site is built."),
         _notify("The macOS-style static site is fully built and served."),
@@ -88,6 +89,7 @@ async def test_update_plan_progress_complete_finishes_not_paused():
             "submit_plan",
             {"summary": "p", "steps": [{"title": "1"}, {"title": "2"}]},
         ),
+        action_step("shell", {"command": "echo build the site"}),  # real productive work
         # Declarative full-state snapshot — both steps done in ONE call, no plan_step.
         action_step(
             "update_plan_progress",
@@ -123,6 +125,42 @@ async def test_update_plan_progress_complete_finishes_not_paused():
         and e.status == ConversationStatus.PAUSED
         and e.detail == "actionless"
         for e in events
+    )
+
+
+async def test_plan_marked_done_with_no_work_does_not_falsely_complete():
+    """Codex-MAJOR guard: marking every step done (here via the DECLARATIVE
+    update_plan_progress) + notify spam with ZERO state-changing work must NOT emit a
+    clean `completed_via_notify` FINISH — that would "complete" an empty workspace. The
+    completion net now requires real productive work since approval; with none, the run
+    degrades to the honest noop give-up, never a false completion."""
+    from disco.core.llm import ToolSpec
+    from loop_fakes import FakeExecutor
+
+    agent = ScriptedAgent([
+        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+        action_step("update_plan_progress", {"steps": [{"index": 1, "state": "done"}]}),
+        # NO productive (state-changing) action — only bookkeeping + notify spam.
+        *[_notify(f"all done {i}") for i in range(8)],
+    ])
+    executor = FakeExecutor(
+        tools=[
+            ToolSpec(name=n, description=n, parameters_schema={})
+            for n in ("update_plan_progress", "notify_user", "file_read", "shell")
+        ]
+    )
+    loop, store = build_loop(executor=executor, agent=agent)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    await loop.send_message("go")
+    await loop.run()
+    await loop.approve_plan()
+    await loop.run()
+    events = await store.get_events(CID)
+
+    # The key invariant: zero productive work ⇒ NO clean "completed" terminal.
+    assert not any(
+        isinstance(e, StatusEvent) and e.detail == "completed_via_notify" for e in events
     )
 
 
