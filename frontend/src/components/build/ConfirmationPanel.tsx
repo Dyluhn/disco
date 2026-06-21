@@ -75,6 +75,7 @@ export function ConfirmationPanel({
         <button
           type="button"
           onClick={onReject}
+          data-disco-control="reject-action"
           className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
         >
           Reject
@@ -82,6 +83,7 @@ export function ConfirmationPanel({
         <button
           type="button"
           onClick={onApprove}
+          data-disco-control="approve-action"
           className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90"
         >
           Approve &amp; run

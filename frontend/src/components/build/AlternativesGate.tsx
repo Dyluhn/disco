@@ -59,6 +59,7 @@ export function AlternativesGate({
             <button
               type="button"
               onClick={() => onPick(opt.id)}
+              data-disco-control="pick-alternative"
               className="group flex h-full w-full flex-col gap-hair rounded-control border border-hairline bg-surface-1 p-inline text-left transition-colors hover:border-accent hover:bg-surface-2"
             >
               <span className="flex items-baseline gap-hair">
@@ -93,6 +94,7 @@ export function AlternativesGate({
           <button
             type="button"
             onClick={() => onPick(CONTINUE_ID)}
+            data-disco-control="pick-alternative"
             className="flex items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.8rem] text-text-muted transition-colors hover:border-accent hover:text-text"
           >
             <PlayCircle className="size-3.5" aria-hidden />

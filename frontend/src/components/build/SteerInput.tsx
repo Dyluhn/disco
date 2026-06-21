@@ -42,6 +42,7 @@ export function SteerInput({ onSteer, disabled }: { onSteer: (text: string) => v
         onClick={submit}
         disabled={disabled || !text.trim()}
         aria-label="Send steer"
+        data-disco-control="steer"
         className="shrink-0 text-text-faint transition-colors hover:text-text disabled:opacity-40"
       >
         <CornerDownLeft className="size-3.5" aria-hidden />

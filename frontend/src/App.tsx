@@ -9,6 +9,7 @@ import {
   useNavigate,
   useParams,
 } from "react-router-dom";
+import { installE2EBridge, type DiscoE2EState, type Surface } from "@/lib/e2eBridge";
 import { BuildSurface } from "@/components/BuildSurface";
 import { AgentSurface } from "@/components/AgentSurface";
 import { ResearchSurface } from "@/components/ResearchSurface";
@@ -27,6 +28,69 @@ import { ShareView } from "@/views/ShareView";
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
 });
+
+/**
+ * Mounts the `window.__DISCO_E2E__` metadata bridge (W6).  Derives surface +
+ * conversation-id from the router location; runStatus is null at the app level
+ * (surface components can extend via the shared stateRef if needed later).
+ * Renders nothing — purely a side-effect component.
+ */
+function E2EBridgeMounter() {
+  const location = useLocation();
+  const { mode } = useMode();
+  const pathname = location.pathname;
+
+  // Parse `/build|agent|deep|imported|share/<cid>` from the pathname.
+  const cidMatch = pathname.match(
+    /^\/(build|agent|deep|imported|share)\/([^/]+)/,
+  );
+  const routePrefix = cidMatch?.[1] ?? null;
+  const conversationId =
+    routePrefix === "build" ||
+    routePrefix === "agent" ||
+    routePrefix === "deep" ||
+    routePrefix === "imported"
+      ? (cidMatch?.[2] ?? null)
+      : null;
+
+  let surface: Surface = null;
+  if (routePrefix === "build") surface = "build";
+  else if (routePrefix === "agent") surface = "agent";
+  else if (routePrefix === "deep") surface = "deep_research";
+  else if (routePrefix === "imported") surface = "imported";
+  else if (routePrefix === "share") surface = "share";
+  else if (pathname === "/activity") surface = "activity";
+  else if (pathname === "/history") surface = "history";
+  else if (pathname === "/projects") surface = "projects";
+  else if (pathname === "/settings") surface = "settings";
+  else if (pathname === "/" || pathname === "")
+    surface =
+      mode === "build" ? "build" : mode === "agent" ? "agent" : "search";
+
+  // Keep a ref so the getter always returns the latest values without re-installing.
+  const stateRef = useRef<DiscoE2EState>({
+    schemaVersion: 1,
+    surface,
+    conversationId,
+    runStatus: null,
+    route: pathname,
+  });
+  stateRef.current = {
+    schemaVersion: 1,
+    surface,
+    conversationId,
+    runStatus: null,
+    route: pathname,
+  };
+
+  useEffect(() => {
+    installE2EBridge(() => stateRef.current);
+    // installE2EBridge is idempotent; run once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return null;
+}
 
 /** The main surface follows the active top-level mode (the slider): Search → the
  * grounded research surface; Build → the agent surface (software framing); Agent →
@@ -130,6 +194,8 @@ export default function App() {
       <Router>
         <ModeProvider>
           <ToastProvider>
+          {/* W6: evidence-harness bridge — inert in production without opt-in */}
+          <E2EBridgeMounter />
           <Routes>
             <Route element={<Shell />}>
               <Route index element={<MainSurface />} />

@@ -22,8 +22,10 @@ from ..anatomy import Capability
 from .base import (
     ExecResult,
     SandboxError,
+    SandboxPermissionError,
     SandboxSpec,
     SandboxUnavailableError,
+    raise_read_error,
     strip_redundant_workspace_prefix,
 )
 
@@ -276,7 +278,9 @@ class ContainerInstance:
         path = strip_redundant_workspace_prefix(path)  # ROOT-2: workspace/foo → foo
         target = posixpath.normpath(posixpath.join(self._ws, path))
         if target != self._ws and not target.startswith(self._ws + "/"):
-            raise SandboxError(f"path escapes workspace: {path!r}")
+            # W1/codex round-6: a path escaping the jail is an ACCESS denial → typed so the
+            # loop's bookkeeping handlers (except PermissionError/OSError) catch it.
+            raise SandboxPermissionError(f"path escapes workspace: {path!r}")
         return target
 
     async def exec_shell(self, cmd: str, *, timeout_s: int) -> ExecResult:
@@ -320,7 +324,7 @@ class ContainerInstance:
             res = self._container.exec_run(["cat", "--", target], demux=True)
             if res[0] != 0:
                 err = (res[1][1] if res[1] else b"") or b""
-                raise SandboxError(f"read_file {path!r}: {err.decode('utf-8', 'replace').strip()}")
+                raise_read_error(path, err)  # W1: missing file → typed FileNotFoundError
             return (res[1][0] if res[1] else b"") or b""
 
         return await self._guarded(_read)
@@ -380,7 +384,7 @@ class ContainerInstance:
             res = self._container.exec_run(["ls", "-1A", "--", target], demux=True)
             if res[0] != 0:
                 err = (res[1][1] if res[1] else b"") or b""
-                raise SandboxError(f"list_dir {path!r}: {err.decode('utf-8', 'replace').strip()}")
+                raise_read_error(path, err, op="list_dir")  # W1: typed missing-dir error
             out = (res[1][0] if res[1] else b"") or b""
             return sorted(n for n in out.decode("utf-8", "replace").splitlines() if n)
 

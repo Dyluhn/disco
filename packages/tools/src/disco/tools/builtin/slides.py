@@ -60,8 +60,12 @@ class SlidesGenerateArgs(BaseModel):
         )
     )
     format: str = Field(
-        default="html",
-        description="Output format: 'html', 'pdf', or 'pptx'. Default: 'html'.",
+        default="pptx",
+        description=(
+            "Output format: 'pptx' (default — a presentable, editable deck), 'pdf', or "
+            "'html'. Prefer 'pptx' for a deliverable the user opens/presents; 'html' is a "
+            "self-contained web deck."
+        ),
     )
     theme: str | None = Field(
         default=None,
@@ -576,14 +580,27 @@ class SlidesTool:
             return await self._render_html_fallback(markdown, out_filename, ctx, args)
 
         if not have_marp:
-            return ToolOutcome(
-                success=False,
-                content=(
-                    f"{fmt.upper()} export needs the Marp CLI + Chromium in the sandbox "
-                    f"image, which isn't present in this sandbox. HTML export works now "
-                    f"as a fallback — re-run with format='html' for a rendered deck."
-                ),
-                error=f"marp CLI not found in the sandbox — {fmt.upper()} export unavailable.",
+            # codex P1 / compat: now that the default format is pptx, a no-goal markdown
+            # caller in a Marp-less sandbox must NOT hard-fail (the old default was html,
+            # which always worked). Degrade to the always-available pure-HTML render so the
+            # default-format change stays compatibility-neutral — a deck is still produced.
+            html_name = out_filename.rsplit(".", 1)[0] + ".html"
+            outcome = await self._render_html_fallback(markdown, html_name, ctx, args)
+            # codex round-2 honesty: make the format DOWNGRADE explicit — the caller asked for
+            # pptx/pdf but Marp is absent, so an HTML deck was produced instead of silently
+            # implying the requested format succeeded.
+            return outcome.model_copy(
+                update={
+                    "content": (
+                        f"{outcome.content}\nNOTE: {fmt.upper()} was requested but the Marp "
+                        f"CLI is unavailable in this sandbox — produced an HTML deck instead."
+                    ),
+                    "structured": {
+                        **(outcome.structured or {}),
+                        "requested_format": fmt,
+                        "degraded_to": "html",
+                    },
+                }
             )
 
         return await self._render_with_marp(markdown, out_filename, fmt, ctx, args)

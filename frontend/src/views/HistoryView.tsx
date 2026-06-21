@@ -144,6 +144,7 @@ export function HistoryView() {
               type="button"
               onClick={() => fileRef.current?.click()}
               title="Import an exported share bundle (read-only)"
+              data-disco-control="import-share"
               className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
             >
               <Upload className="size-3.5" aria-hidden /> Import
@@ -264,6 +265,7 @@ export function HistoryView() {
                         <button
                           type="button"
                           aria-label={`Delete conversation: ${c.title}`}
+                          data-disco-control="delete-conversation"
                           className="grid size-8 shrink-0 place-items-center rounded-control border border-hairline text-text-faint transition-colors hover:border-unsupported/50 hover:text-unsupported"
                         >
                           <Trash2 className="size-4" aria-hidden />

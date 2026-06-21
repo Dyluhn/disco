@@ -50,7 +50,14 @@ from ._container import (
     proxy_env,
     proxy_run_argv,
 )
-from .base import ExecResult, SandboxError, SandboxInstance, SandboxSpec, SandboxUnavailableError
+from .base import (
+    ExecResult,
+    SandboxError,
+    SandboxInstance,
+    SandboxSpec,
+    SandboxUnavailableError,
+    raise_read_error,
+)
 from .config import SandboxConfig, default_podman_config
 from .naming import (
     EGR_NET_PREFIX,
@@ -160,7 +167,7 @@ class PodmanSandboxInstance(ContainerInstance):
         rc, out, err = await asyncio.to_thread(self._exec, ["cat", "--", target], 60)
         if rc != 0:
             self._raise_if_dead(rc, err)
-            raise SandboxError(f"read_file {path!r}: {err.decode('utf-8', 'replace').strip()}")
+            raise_read_error(path, err)  # W1: missing file → typed FileNotFoundError
         return out
 
     async def file_exists(self, path: str) -> bool:
@@ -184,7 +191,7 @@ class PodmanSandboxInstance(ContainerInstance):
         rc, out, err = await asyncio.to_thread(self._exec, ["ls", "-1A", "--", target], 30)
         if rc != 0:
             self._raise_if_dead(rc, err)
-            raise SandboxError(f"list_dir {path!r}: {err.decode('utf-8', 'replace').strip()}")
+            raise_read_error(path, err, op="list_dir")  # W1: typed missing-dir error
         return sorted(n for n in out.decode("utf-8", "replace").splitlines() if n)
 
     async def write_file(self, path: str, data: bytes) -> None:

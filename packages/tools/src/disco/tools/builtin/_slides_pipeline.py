@@ -487,6 +487,14 @@ async def _stage_assets(
     import hashlib
 
     assets: dict[int, bytes] = {}
+    # W3: never embed PROCEDURAL placeholder art into a deliverable deck. The keyless
+    # default backend draws abstract test-pattern graphics (nested rectangles + a diagonal)
+    # — honest for an "image-gen as a tool" demo, garish in a finished presentation. With no
+    # real image provider configured, omit images (text-only slides) instead of shipping
+    # placeholders. Configure ComfyUI/OpenAI/OpenRouter to include real images.
+    if getattr(backend, "name", "") == "pil-procedural":
+        _LOG.info("image provider is the procedural placeholder — omitting deck images")
+        return assets
     for i, slide in enumerate(authored.slides):
         if not slide.image_prompt:
             continue

@@ -187,6 +187,7 @@ export function AgentStatusBar({
             type="button"
             onClick={onResume}
             aria-label="Resume the agent — continue this build where it left off"
+            data-disco-control="resume"
             className="flex items-center gap-hair rounded-control border border-accent/40 px-inline py-hair font-ui text-[0.78rem] text-accent transition-colors hover:border-accent hover:bg-accent/5"
           >
             <Play className="size-3.5" aria-hidden />
@@ -202,6 +203,7 @@ export function AgentStatusBar({
             }}
             disabled={stopping}
             aria-label="Stop the agent gracefully (does not tear down the sandbox)"
+            data-disco-control="stop"
             className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-text-muted hover:text-text disabled:opacity-60"
           >
             {stopping ? (
@@ -225,6 +227,7 @@ export function AgentStatusBar({
                 onKill();
               }}
               aria-label="Confirm kill: stop, tear down the sandbox, revoke its access"
+              data-disco-control="kill-confirm"
               className="flex items-center gap-hair rounded-control border border-unsupported bg-unsupported px-inline py-hair font-ui text-[0.78rem] font-medium text-bg transition-opacity hover:opacity-90"
             >
               <OctagonX className="size-3.5" aria-hidden />
@@ -245,6 +248,7 @@ export function AgentStatusBar({
             onClick={() => setConfirmingKill(true)}
             disabled={!active}
             aria-label="Kill the agent: stop, tear down the sandbox, revoke its access"
+            data-disco-control="kill"
             className={cn(
               "flex items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.78rem] font-medium transition-colors",
               active

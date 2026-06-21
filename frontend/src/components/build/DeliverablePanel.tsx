@@ -62,6 +62,7 @@ export function DeliverablePanel({
           onClick={onExportManifest}
           aria-label="Export the project manifest (JSON)"
           title="Export manifest (files + deliverable metadata)"
+          data-disco-control="export-manifest"
           className="flex shrink-0 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text"
         >
           <FileJson className="size-3.5" aria-hidden />
@@ -90,6 +91,7 @@ export function DeliverablePanel({
           download
           aria-label={`Download the deliverable: ${deliverable.title}`}
           title={`Download ${deliverable.title}`}
+          data-disco-control="download-artifact"
           className="flex shrink-0 items-center gap-hair rounded-control bg-accent px-inline py-hair font-ui text-[0.8rem] font-medium text-surface-0 transition hover:bg-accent/90"
         >
           <Download className="size-3.5" aria-hidden />
@@ -102,6 +104,7 @@ export function DeliverablePanel({
           disabled={isApp ? !onOpen : !onDownload}
           aria-label={`${isApp ? "Open" : "Download"} the deliverable: ${deliverable.title}`}
           title={`${isApp ? "Open" : "Download"} ${deliverable.title}`}
+          data-disco-control={isApp ? "open-app" : "download-artifact"}
           className="flex shrink-0 items-center gap-hair rounded-control bg-accent px-inline py-hair font-ui text-[0.8rem] font-medium text-surface-0 transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isApp ? <ExternalLink className="size-3.5" aria-hidden /> : <Download className="size-3.5" aria-hidden />}

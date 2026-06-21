@@ -29,6 +29,7 @@ from .base import (
     ExecResult,
     SandboxError,
     SandboxInstance,
+    SandboxPermissionError,
     SandboxSpec,
     strip_redundant_workspace_prefix,
 )
@@ -56,7 +57,10 @@ class ProcessSandboxInstance:
         path = strip_redundant_workspace_prefix(path)  # ROOT-2: workspace/foo → foo
         target = (self._workspace / path).resolve()
         if target != self._workspace and self._workspace not in target.parents:
-            raise SandboxError(f"path escapes workspace: {path!r}")
+            # W1/codex round-6: a path escaping the jail is an ACCESS denial — type it so the
+            # loop's `except (PermissionError, OSError)` bookkeeping handlers catch it instead
+            # of a bare SandboxError escaping and crashing the task.
+            raise SandboxPermissionError(f"path escapes workspace: {path!r}")
         return target
 
     def _clean_env(self) -> dict[str, str]:

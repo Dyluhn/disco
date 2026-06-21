@@ -1,0 +1,753 @@
+"""disco-verify API-first runner (W15).
+
+Drives the app through its HTTP/WS API exactly like a frontend would — no
+browser, no internal calls — and writes a redacted evidence dossier per run.
+
+Key invariant (from codex): ``disco-verify`` is API-FIRST and has NO
+Playwright/browser dependency. Every signal comes from the real HTTP/WS
+boundary the frontend uses.
+
+Usage::
+
+    from disco.agent_server.verify.runner import run_scenario
+    from disco.agent_server.verify.scenarios import slides_from_research_report
+
+    result = await run_scenario(slides_from_research_report, agent_base="http://127.0.0.1:8000")
+    print(result.passed, result.dossier_path)
+
+Injectable transport (``_client`` param) keeps IO decoupled from logic so unit
+tests can feed canned events without a live server.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+import uuid
+from abc import ABC, abstractmethod
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+import disco.tools.verify.artifact_validators as _av
+import httpx
+from disco.core.evidence.schema import redact
+from websockets.asyncio.client import connect as _ws_connect  # has py.typed
+
+from .schema import Scenario, VerifyResult
+
+log = logging.getLogger(__name__)
+
+# Statuses from which the conversation will never advance without user action.
+_TERMINAL: frozenset[str] = frozenset({"FINISHED", "ERROR", "STUCK", "IDLE"})
+
+# Seconds between HTTP state polls.
+_POLL_INTERVAL: float = 2.0
+
+
+# ---------------------------------------------------------------------------
+# Abstract transport (injectable for testing)
+# ---------------------------------------------------------------------------
+
+
+class AbstractVerifyClient(ABC):
+    """Injectable IO layer for ``run_scenario``.
+
+    The production implementation (``HttpVerifyClient``) uses real httpx and
+    websockets connections. Unit tests inject a ``FakeVerifyClient`` that
+    returns pre-canned responses without a live server.
+    """
+
+    @abstractmethod
+    async def create_conversation(
+        self, surface: str, model_override: str | None
+    ) -> str:
+        """POST /conversations → return the new conversation_id."""
+        ...
+
+    @abstractmethod
+    async def run_ws_exchange(
+        self,
+        cid: str,
+        prompt: str,
+        *,
+        approve_plan: bool,
+        timeout_s: float,
+    ) -> None:
+        """Open the WS, send the user message, optionally approve the plan.
+
+        The connection is closed before returning; the caller then polls
+        HTTP state separately.
+        """
+        ...
+
+    @abstractmethod
+    async def poll_until_terminal(
+        self,
+        cid: str,
+        *,
+        timeout_s: float,
+    ) -> dict[str, Any]:
+        """GET /conversations/{cid}/state in a loop until a terminal status or timeout."""
+        ...
+
+    @abstractmethod
+    async def get_events(self, cid: str) -> list[dict[str, Any]]:
+        """GET /conversations/{cid}/events (all pages)."""
+        ...
+
+    @abstractmethod
+    async def get_state(self, cid: str) -> dict[str, Any]:
+        """GET /conversations/{cid}/state (one-shot snapshot after run)."""
+        ...
+
+    @abstractmethod
+    async def get_trace(self, cid: str) -> dict[str, Any] | None:
+        """GET /api/debug/trace/{cid} — None when DISCO_INSPECT is off or no trace."""
+        ...
+
+    @abstractmethod
+    async def get_manifest(self, cid: str) -> dict[str, Any] | None:
+        """GET /api/projects/{cid}/manifest — None when project storage is unavailable."""
+        ...
+
+    async def download_artifact(self, cid: str, path: str) -> bytes | None:
+        """GET /conversations/{cid}/artifacts/{path} → the real delivered file BYTES, or
+        None if not downloadable. NON-abstract (default None) so fakes opt in; the live
+        client overrides it. This is what lets the runner validate the ACTUAL output bytes
+        instead of a path that happens to exist in the runner's cwd (codex P0)."""
+        return None
+
+    async def fetch_app(self, url: str) -> tuple[int, bytes] | None:
+        """GET a live-app deliverable's preview/deployment URL → (status_code, body_bytes), or
+        None if it can't be fetched. Lets the runner prove a 'build me an app' handoff is
+        actually reachable + real, not just declared (codex round-5)."""
+        return None
+
+    async def fetch_preview(self, cid: str) -> tuple[int, bytes] | None:
+        """GET the conversation's LIVE PREVIEW (the `/preview-app/` proxy the UI iframes) →
+        (status, body_bytes). For a URL-less app handoff this is the REAL output the user sees
+        — probing it (not the declared-artifact jail) is the production boundary (codex r7).
+        Returning the BODY lets the validator reject a bare http.server directory listing that
+        the preview falls back to when there's no real app entry file (codex r8)."""
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Production HTTP/WS client
+# ---------------------------------------------------------------------------
+
+
+class HttpVerifyClient(AbstractVerifyClient):
+    """Production transport: drives the real app over HTTP and WebSocket."""
+
+    def __init__(self, base_url: str) -> None:
+        self._base_url = base_url.rstrip("/")
+
+    async def create_conversation(
+        self, surface: str, model_override: str | None
+    ) -> str:
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=30.0) as hc:
+            resp = await hc.post(
+                "/conversations",
+                json={"surface": surface, "model_override": model_override},
+            )
+            resp.raise_for_status()
+            return str(resp.json()["conversation_id"])
+
+    async def run_ws_exchange(
+        self,
+        cid: str,
+        prompt: str,
+        *,
+        approve_plan: bool,
+        timeout_s: float,
+    ) -> None:
+        ws_base = (
+            self._base_url.replace("http://", "ws://").replace("https://", "wss://")
+        )
+        ws_url = f"{ws_base}/ws/conversations/{cid}"
+        deadline = time.monotonic() + timeout_s
+        try:
+            async with _ws_connect(ws_url) as ws:
+                await ws.send(
+                    json.dumps({"type": "send_message", "content": prompt})
+                )
+                if not approve_plan:
+                    return
+                # Wait for AWAITING_PLAN_APPROVAL and then approve it.
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        log.warning(
+                            "run_ws_exchange: timed out waiting for AWAITING_PLAN_APPROVAL on %s",
+                            cid,
+                        )
+                        break
+                    try:
+                        raw: str = await asyncio.wait_for(
+                            ws.recv(decode=True), timeout=min(remaining, 10.0)
+                        )
+                    except TimeoutError:
+                        continue
+                    frame: dict[str, Any] = json.loads(raw)
+                    status = _status_from_frame(frame)
+                    if status == "AWAITING_PLAN_APPROVAL":
+                        await ws.send(json.dumps({"type": "approve_plan"}))
+                        break
+                    if status in _TERMINAL:
+                        break
+        except Exception as exc:  # noqa: BLE001
+            log.warning("run_ws_exchange error on %s: %s", cid, exc)
+
+    async def poll_until_terminal(
+        self,
+        cid: str,
+        *,
+        timeout_s: float,
+    ) -> dict[str, Any]:
+        deadline = time.monotonic() + timeout_s
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=30.0) as hc:
+            while True:
+                resp = await hc.get(f"/conversations/{cid}/state")
+                resp.raise_for_status()
+                state: dict[str, Any] = resp.json()
+                status = str(state.get("execution_status", ""))
+                if status in _TERMINAL:
+                    return state
+                if time.monotonic() >= deadline:
+                    log.warning(
+                        "poll_until_terminal: timeout for %s (last status=%s)", cid, status
+                    )
+                    state["_timed_out"] = True  # codex P0: a timeout must FAIL, not pass
+                    return state
+                await asyncio.sleep(_POLL_INTERVAL)
+
+    async def get_events(self, cid: str) -> list[dict[str, Any]]:
+        all_events: list[dict[str, Any]] = []
+        after_seq: int | None = None
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=30.0) as hc:
+            while True:
+                params: dict[str, Any] = {"limit": 200}
+                if after_seq is not None:
+                    params["after_seq"] = after_seq
+                resp = await hc.get(f"/conversations/{cid}/events", params=params)
+                resp.raise_for_status()
+                data: dict[str, Any] = resp.json()
+                page_events: list[dict[str, Any]] = data.get("events") or []
+                all_events.extend(page_events)
+                next_cursor = data.get("next_cursor")
+                if next_cursor is None:
+                    break
+                after_seq = int(next_cursor)
+        return all_events
+
+    async def get_state(self, cid: str) -> dict[str, Any]:
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=30.0) as hc:
+            resp = await hc.get(f"/conversations/{cid}/state")
+            resp.raise_for_status()
+            result: dict[str, Any] = resp.json()
+            return result
+
+    async def get_trace(self, cid: str) -> dict[str, Any] | None:
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=30.0) as hc:
+            resp = await hc.get(f"/api/debug/trace/{cid}")
+            if resp.status_code == 200:
+                result: dict[str, Any] = resp.json()
+                return result
+            return None
+
+    async def get_manifest(self, cid: str) -> dict[str, Any] | None:
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=30.0) as hc:
+            resp = await hc.get(f"/api/projects/{cid}/manifest")
+            if resp.status_code == 200:
+                result: dict[str, Any] = resp.json()
+                return result
+            return None
+
+    async def download_artifact(self, cid: str, path: str) -> bytes | None:
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=60.0) as hc:
+            resp = await hc.get(f"/conversations/{cid}/artifacts/{path}")
+            if resp.status_code == 200:
+                return resp.content
+            return None
+
+    async def fetch_app(self, url: str) -> tuple[int, bytes] | None:
+        try:
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as hc:
+                resp = await hc.get(url)
+                return resp.status_code, resp.content
+        except Exception as exc:  # noqa: BLE001 — unreachable URL → report, don't crash
+            log.warning("fetch_app(%s) failed: %s", url, exc)
+            return None
+
+    async def fetch_preview(self, cid: str) -> tuple[int, bytes] | None:
+        try:
+            async with httpx.AsyncClient(
+                base_url=self._base_url, timeout=30.0, follow_redirects=True
+            ) as hc:
+                resp = await hc.get(f"/conversations/{cid}/preview-app/")
+                return resp.status_code, resp.content
+        except Exception as exc:  # noqa: BLE001 — unreachable → report, don't crash
+            log.warning("fetch_preview(%s) failed: %s", cid, exc)
+            return None
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _status_from_frame(frame: dict[str, Any]) -> str:
+    """Extract an execution_status string from a WS server frame, or ''."""
+    if frame.get("type") == "state":
+        state = frame.get("state") or {}
+        return str(state.get("execution_status", ""))
+    if frame.get("type") == "event":
+        event = frame.get("event") or {}
+        if event.get("kind") == "status":
+            return str(event.get("status", ""))
+    return ""
+
+
+def _locate_deliverables(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Scan the event log and return workspace-relative deliverable paths.
+
+    Recognises the same tool names as ``_common._declared_artifacts`` so that
+    both the download jail and the verifier agree on what the run produced.
+
+    Each entry is ``{"path": str, "kind": str, "tool": str}``.
+    """
+    deliverables: list[dict[str, Any]] = []
+    for evt in events:
+        kind = evt.get("kind")
+        if kind == "observation":
+            tr: dict[str, Any] = evt.get("tool_result") or {}
+            if not tr.get("success"):
+                continue
+            tool_name = str(tr.get("tool_name", ""))
+            structured: dict[str, Any] = tr.get("structured") or {}
+            if tool_name in ("sheet_generate", "slides_generate"):
+                fn = structured.get("filename")
+                if isinstance(fn, str) and fn:
+                    deliverables.append({"path": fn, "kind": "file", "tool": tool_name})
+                es = structured.get("editable_source")
+                if isinstance(es, str) and es:
+                    deliverables.append({"path": es, "kind": "editable_source", "tool": tool_name})
+            elif tool_name == "image_generate":
+                p = structured.get("path")
+                if isinstance(p, str) and p:
+                    deliverables.append({"path": p, "kind": "image", "tool": tool_name})
+            elif tool_name == "audio_overview":
+                for key in ("mp3_path", "transcript_path"):
+                    p = structured.get(key)
+                    if isinstance(p, str) and p:
+                        deliverables.append(
+                            {"path": p, "kind": key.replace("_path", ""), "tool": tool_name}
+                        )
+        elif kind == "deliverable":
+            artifact_kind = str(evt.get("artifact_kind", "app"))
+            path = str(evt.get("path", ""))
+            if artifact_kind == "files":
+                if path:
+                    deliverables.append({"path": path, "kind": "files", "tool": "deliverable"})
+            elif artifact_kind == "app":
+                # codex round-5: a live-app handoff (the build surface's PRIMARY output for
+                # "make me a website") — collect it so a scenario expecting an app can't pass
+                # with nothing delivered, and so its preview URL gets validated.
+                deliverables.append(
+                    {
+                        "path": path,
+                        "kind": "app",
+                        "tool": "deliverable",
+                        "deployment_url": str(evt.get("deployment_url", "")),
+                    }
+                )
+    return deliverables
+
+
+# File extensions the runner can download + validate. A deliverable without one of these
+# (e.g. a live "app" deliverable) is NOT a file to fetch, so it's skipped — not a failure.
+_VALIDATABLE_EXTS = (
+    ".pdf", ".mp3", ".wav", ".xlsx", ".pptx", ".html", ".htm", ".png", ".jpg", ".jpeg"
+)
+
+# Expected-deliverable-type → the extensions that satisfy it. A scenario that declares
+# `expect.deliverable_type` must actually produce a matching file (codex round-2 false-pass).
+_DELIVERABLE_TYPE_EXTS: dict[str, tuple[str, ...]] = {
+    "deck": (".pptx", ".pdf", ".html", ".htm"),
+    "pdf": (".pdf",),
+    "audio": (".mp3", ".wav"),
+    "sheet": (".xlsx",),
+    "image": (".png", ".jpg", ".jpeg"),
+}
+
+
+def _deliverable_type_satisfied(
+    deliverables: list[dict[str, Any]], dtype: str | None
+) -> bool:
+    """True if the scenario's expected deliverable_type is satisfied. None/unrecognised type
+    → no gate. ``app`` is matched by deliverable KIND (a live-app handoff, no file extension);
+    other types require ≥1 deliverable with a matching file extension."""
+    if not dtype:
+        return True
+    if str(dtype).lower() == "app":
+        return any(d.get("kind") == "app" for d in deliverables)
+    exts = _DELIVERABLE_TYPE_EXTS.get(str(dtype).lower())
+    if exts is None:
+        return True
+    return any(str(d.get("path", "")).lower().endswith(exts) for d in deliverables)
+
+
+def _run_forbid_checks(
+    scenario: Scenario,
+    deliverables: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+) -> list[str]:
+    """Forbid checks over the event log + deliverable list — no file IO."""
+    problems: list[str] = []
+    for item in scenario.forbid:
+        if item == "raw_html_default":
+            # codex round-4: judge only the DECK deliverables (.html/.htm/.pptx/.pdf), NOT
+            # companion outputs (an editable source .json, a .png, a datasource). Otherwise a
+            # companion file masks a raw-HTML deck — "not all deliverables are html" → missed.
+            deck_exts = (".html", ".htm", ".pptx", ".pdf")
+
+            def _p(d: dict[str, Any]) -> str:
+                return str(d.get("path", "")).lower()
+
+            decks = [d for d in deliverables if _p(d).endswith(deck_exts)]
+            html_decks = [d["path"] for d in decks if _p(d).endswith((".html", ".htm"))]
+            presentable = [d for d in decks if _p(d).endswith((".pptx", ".pdf"))]
+            if html_decks and not presentable:
+                problems.append(
+                    f"forbid.raw_html_default: deck is raw HTML, no pptx/pdf: {html_decks}"
+                )
+        elif item == "procedural_image_provider":
+            for evt in events:
+                if evt.get("kind") != "observation":
+                    continue
+                tr = evt.get("tool_result") or {}
+                if tr.get("tool_name") != "image_generate":
+                    continue
+                if not tr.get("success"):
+                    continue
+                structured: dict[str, Any] = tr.get("structured") or {}
+                # codex round-2: the real image_generate tool emits `placeholder` /
+                # `backend` / `backend_connected` — NOT a `provider` field (the old check
+                # never fired). A procedural placeholder is `placeholder is True` /
+                # backend "pil-procedural" / not backend_connected.
+                if (
+                    structured.get("placeholder") is True
+                    or structured.get("backend") == "pil-procedural"
+                    or structured.get("backend_connected") is False
+                ):
+                    problems.append(
+                        "forbid.procedural_image_provider: image_generate produced a "
+                        "procedural placeholder image"
+                    )
+                    break
+        else:
+            log.debug("Unknown forbid item %r — skipped", item)
+    return problems
+
+
+async def _run_file_validators(
+    deliverables: list[dict[str, Any]],
+    *,
+    client: AbstractVerifyClient,
+    cid: str,
+    dest_dir: Path,
+) -> list[str]:
+    """codex P0: DOWNLOAD each file deliverable from the app and validate the ACTUAL bytes —
+    not a path that happens to exist in the runner's cwd (the old check silently skipped every
+    live artifact). This is what catches a procedural-image deck or a corrupt artifact live."""
+    problems: list[str] = []
+    file_deliverables = [
+        d for d in deliverables if str(d.get("path", "")).lower().endswith(_VALIDATABLE_EXTS)
+    ]
+    if file_deliverables:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+    for d in file_deliverables:
+        path = str(d["path"])
+        data = await client.download_artifact(cid, path)
+        if data is None:
+            problems.append(f"deliverable not downloadable from the app: {path}")
+            continue
+        local = dest_dir / Path(path).name
+        local.write_bytes(data)
+        low = path.lower()
+        if low.endswith(".pdf"):
+            problems.extend(_av.validate_pdf(str(local)))
+        elif low.endswith((".mp3", ".wav")):
+            problems.extend(_av.validate_audio(str(local)))
+        elif low.endswith(".xlsx"):
+            problems.extend(_av.validate_sheet(str(local)))
+        elif low.endswith((".pptx", ".html", ".htm")):
+            # deck: detect procedural placeholder images in the real file (W3 live proof)
+            problems.extend(_av.validate_deck_file(str(local)))
+            if low.endswith(".pptx"):
+                # codex round-3: also RENDER the pptx with LibreOffice — a zip-valid deck that
+                # won't actually open would otherwise pass. Skips on hosts without soffice (the
+                # PR tier); renders for real on the VM 201 nightly host.
+                from disco.tools.verify.heavy_validators import validate_pptx_renders
+
+                problems.extend(
+                    p for p in validate_pptx_renders(str(local)) if "unavailable" not in p
+                )
+        elif low.endswith((".png", ".jpg", ".jpeg")):
+            # codex round-2: a standalone image deliverable must also be checked for the
+            # procedural placeholder signature (not only images embedded in a deck).
+            if _av._looks_procedural(data):
+                problems.append(f"procedural_placeholder_image: {path}")
+    return problems
+
+
+async def _validate_app_deliverables(
+    deliverables: list[dict[str, Any]], *, client: AbstractVerifyClient, cid: str
+) -> list[str]:
+    """A live-app handoff ("build me a website") must produce REAL, reachable output — not just
+    be declared. If it has a deployment/preview URL, that URL must be 2xx + non-empty (codex
+    round-5). If it has NO URL (a static site served via the client-assembled preview), probe
+    the built ENTRY FILE (index.html) through the artifacts endpoint so the real output is
+    still checked — declared-but-empty is a fail (codex round-6)."""
+    problems: list[str] = []
+    for d in (d for d in deliverables if d.get("kind") == "app"):
+        url = str(d.get("deployment_url", ""))
+        root = str(d.get("path", "")).strip("/")
+        if url:
+            problem = _app_body_problem(await client.fetch_app(url), label=url)
+        else:
+            # URL-less app: probe the LIVE PREVIEW the user actually sees (the /preview-app/
+            # proxy) — the REAL production output, NOT the declared-artifact jail (codex r7).
+            problem = _app_body_problem(await client.fetch_preview(cid), label=root or "preview")
+        if problem:
+            problems.append(problem)
+    return problems
+
+
+def _app_body_problem(result: tuple[int, bytes] | None, *, label: str) -> str | None:
+    """Judge a fetched app/preview response: must be reachable, 2xx, non-empty, and NOT a bare
+    directory listing. The preview server falls back to `python3 -m http.server` on the
+    workspace root when there's no real app entry file, which returns a 200 non-empty Python
+    directory-listing page — that is NOT a real app and must fail (codex round-8)."""
+    if result is None:
+        return f"app deliverable not reachable: {label}"
+    status, body = result
+    if status == 503:
+        return f"app deliverable preview not available (503): {label}"
+    if not (200 <= status < 300):  # codex r9: 2xx ONLY — a 3xx (300/304) body is not a served app
+        return f"app deliverable returned HTTP {status}: {label}"
+    if not body:
+        return f"app deliverable is empty: {label}"
+    head = body[:4096].lower()
+    if b"directory listing for" in head:
+        return f"app deliverable is a bare directory listing, not a real app: {label}"
+    return None
+
+
+async def _run_validators(
+    scenario: Scenario,
+    deliverables: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+    *,
+    client: AbstractVerifyClient,
+    cid: str,
+    dest_dir: Path,
+) -> list[str]:
+    """Forbid checks (no IO) + file validators on the real downloaded bytes + live-app
+    reachability checks."""
+    problems = _run_forbid_checks(scenario, deliverables, events)
+    problems.extend(
+        await _run_file_validators(deliverables, client=client, cid=cid, dest_dir=dest_dir)
+    )
+    problems.extend(await _validate_app_deliverables(deliverables, client=client, cid=cid))
+    return problems
+
+
+def _write_dossier(
+    dossier: Path,
+    cid: str,
+    scenario: Scenario,
+    final_state: dict[str, Any],
+    events: list[dict[str, Any]],
+    trace: dict[str, Any] | None,
+    manifest: dict[str, Any] | None,
+    result: VerifyResult,
+) -> None:
+    """Write the redacted evidence dossier to *dossier* (created if absent).
+
+    Files written:
+    - ``result.json``    — scenario + VerifyResult, redacted
+    - ``events.jsonl``  — one event per line, redacted
+    - ``state.json``    — final state snapshot, redacted
+    - ``trace.json``    — DISCO_INSPECT trace (if available), redacted
+    - ``manifest.json`` — project manifest (if available), redacted
+    """
+    dossier.mkdir(parents=True, exist_ok=True)
+
+    (dossier / "result.json").write_text(
+        json.dumps(
+            redact(
+                {
+                    "run_id": dossier.name,
+                    "conversation_id": cid,
+                    "scenario": scenario.model_dump(mode="json"),
+                    "result": result.model_dump(mode="json"),
+                }
+            ),
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    with (dossier / "events.jsonl").open("w", encoding="utf-8") as fh:
+        for evt in events:
+            fh.write(json.dumps(redact(evt)) + "\n")
+
+    (dossier / "state.json").write_text(
+        json.dumps(redact(final_state), indent=2),
+        encoding="utf-8",
+    )
+
+    if trace is not None:
+        (dossier / "trace.json").write_text(
+            json.dumps(redact(trace), indent=2),
+            encoding="utf-8",
+        )
+
+    if manifest is not None:
+        (dossier / "manifest.json").write_text(
+            json.dumps(redact(manifest), indent=2),
+            encoding="utf-8",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+
+
+async def run_scenario(
+    scenario: Scenario,
+    *,
+    agent_base: str = "http://127.0.0.1:8000",
+    timeout_s: float = 600,
+    dossier_base: Path | None = None,
+    _client: AbstractVerifyClient | None = None,
+) -> VerifyResult:
+    """Run one scenario against the live app and return a ``VerifyResult``.
+
+    Drives the app through its HTTP/WS API (no browser, no internal calls):
+
+    (a) POST /conversations with the scenario's surface/model_override.
+    (b) Open the WS, send {"type":"send_message",...}; if ``approve_plan`` is
+        True, wait for AWAITING_PLAN_APPROVAL and send {"type":"approve_plan"}.
+    (c) Poll /conversations/{cid}/state until FINISHED/ERROR/STUCK/IDLE or timeout.
+    (d) Fetch evidence: events, state, /api/debug/trace/{cid}, /api/projects/{cid}/manifest.
+    (e) Locate deliverables from the event log.
+    (f) Run forbid checks and file validators (pdf/audio/sheet from artifact_validators).
+    (g) Write a redacted dossier under ``dossier_base/<run-id>/``.
+
+    Parameters
+    ----------
+    scenario:
+        The scenario to execute.
+    agent_base:
+        Base URL of the agent-server (e.g. ``http://127.0.0.1:8000``).
+    timeout_s:
+        Hard wall-clock timeout; effective timeout = min(scenario.timeout_s, timeout_s).
+    dossier_base:
+        Root directory for evidence output. Defaults to ``./test-record/disco-verify``.
+    _client:
+        Injectable transport for testing. Pass a ``FakeVerifyClient`` to skip live IO.
+    """
+    if dossier_base is None:
+        dossier_base = Path("test-record") / "disco-verify"
+
+    effective_timeout = min(float(scenario.timeout_s), timeout_s)
+    client: AbstractVerifyClient = _client if _client is not None else HttpVerifyClient(agent_base)
+
+    run_ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    run_id = f"run_{run_ts}_{uuid.uuid4().hex[:8]}"
+
+    log.info("[%s] scenario=%r surface=%s", run_id, scenario.id, scenario.surface)
+
+    # (a) create conversation
+    cid = await client.create_conversation(scenario.surface, scenario.model_override)
+    log.info("[%s] cid=%s", run_id, cid)
+
+    # (b) WS exchange: send message; optionally wait for plan approval
+    await client.run_ws_exchange(
+        cid,
+        scenario.prompt,
+        approve_plan=scenario.approve_plan,
+        timeout_s=effective_timeout,
+    )
+
+    # (c) poll until terminal
+    final_state = await client.poll_until_terminal(cid, timeout_s=effective_timeout)
+    terminal_status = str(final_state.get("execution_status", "UNKNOWN"))
+    log.info("[%s] cid=%s terminal_status=%s", run_id, cid, terminal_status)
+
+    # (d) fetch evidence — fresh snapshots after the run terminates
+    events = await client.get_events(cid)
+    # Re-fetch state for the dossier (clean post-run snapshot distinct from the
+    # poll's last-seen state, which may have been fetched mid-sleep).
+    evidence_state = await client.get_state(cid)
+    trace = await client.get_trace(cid)
+    manifest = await client.get_manifest(cid)
+
+    # (e) locate deliverables
+    deliverables = _locate_deliverables(events)
+    log.info("[%s] deliverables=%d", run_id, len(deliverables))
+
+    # (f) validate — download + inspect the REAL delivered bytes
+    validator_problems = await _run_validators(
+        scenario,
+        deliverables,
+        events,
+        client=client,
+        cid=cid,
+        dest_dir=dossier_base / run_id / "artifacts",
+    )
+    if validator_problems:
+        log.warning("[%s] %d problem(s): %s", run_id, len(validator_problems), validator_problems)
+
+    # compute passed
+    expected_status = scenario.expect.get("terminal_status")
+    # codex P0: a run that never reached a real terminal status — a timeout, or left at
+    # RUNNING / AWAITING_* — must FAIL, even when the scenario declares no expected status
+    # (otherwise a silent hang would PASS, defeating the whole point).
+    reached_terminal = terminal_status in _TERMINAL and not final_state.get("_timed_out", False)
+    status_ok = reached_terminal and (
+        expected_status is None or terminal_status == str(expected_status)
+    )
+    # codex round-2: a scenario that EXPECTS a deliverable type (e.g. a deck) must actually
+    # produce one — a FINISHED run with zero matching deliverables is a false pass.
+    expected_dtype = scenario.expect.get("deliverable_type")
+    deliverable_ok = _deliverable_type_satisfied(deliverables, expected_dtype)
+    if not deliverable_ok:
+        validator_problems.append(
+            f"expected deliverable_type={expected_dtype!r} but no matching deliverable was produced"
+        )
+    passed = not validator_problems and status_ok and deliverable_ok
+
+    # build result with the dossier path already set
+    dossier_path = dossier_base / run_id
+    result = VerifyResult(
+        scenario_id=scenario.id,
+        terminal_status=terminal_status,
+        deliverables=deliverables,
+        validator_problems=validator_problems,
+        passed=passed,
+        dossier_path=str(dossier_path.resolve()),
+    )
+
+    # (g) write dossier — use evidence_state (fresh post-run snapshot) for state.json
+    _write_dossier(dossier_path, cid, scenario, evidence_state, events, trace, manifest, result)
+    log.info("[%s] dossier=%s passed=%s", run_id, dossier_path, passed)
+
+    return result

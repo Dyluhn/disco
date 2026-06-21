@@ -1,0 +1,7 @@
+{
+  "kind": "deliverable",
+  "path": "threejs-history.html",
+  "title": "The History of Three.js \u2014 Slide Deck",
+  "format": "html",
+  "_why": "slides_generate defaulted to format=html; a presentable deck should be pptx/pdf. A validator must REJECT a deck deliverable whose default format is raw html."
+}

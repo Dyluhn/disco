@@ -203,17 +203,18 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
                     type="submit"
                     disabled={!steerText.trim()}
                     aria-label="Send steer"
+                    data-disco-control="steer-research"
                     className={CTRL_BTN}
                   >
                     <Navigation className="size-3" aria-hidden />
                     Steer
                   </button>
                 </form>
-                <button type="button" onClick={r.stop} className={CTRL_BTN}>
+                <button type="button" onClick={r.stop} data-disco-control="stop" className={CTRL_BTN}>
                   <Square className="size-3" aria-hidden />
                   Stop
                 </button>
-                <button type="button" onClick={r.kill} className={KILL_BTN}>
+                <button type="button" onClick={r.kill} data-disco-control="kill" className={KILL_BTN}>
                   <Ban className="size-3.5" aria-hidden />
                   Kill
                 </button>
@@ -222,11 +223,11 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
             {/* Stopped (paused): Resume continues it; Kill ends it. */}
             {r.status === "PAUSED" && (
               <>
-                <button type="button" onClick={r.resume} className={CTRL_BTN}>
+                <button type="button" onClick={r.resume} data-disco-control="resume" className={CTRL_BTN}>
                   <Play className="size-3.5 text-accent" aria-hidden />
                   Resume
                 </button>
-                <button type="button" onClick={r.kill} className={KILL_BTN}>
+                <button type="button" onClick={r.kill} data-disco-control="kill" className={KILL_BTN}>
                   <Ban className="size-3.5" aria-hidden />
                   Kill
                 </button>
@@ -234,7 +235,7 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
             )}
             {/* Errored: Retry = a fresh run of the same query. */}
             {r.status === "ERROR" && (
-              <button type="button" onClick={r.retry} className={CTRL_BTN}>
+              <button type="button" onClick={r.retry} data-disco-control="retry" className={CTRL_BTN}>
                 <RotateCcw className="size-3.5" aria-hidden />
                 Retry
               </button>
@@ -244,6 +245,7 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
                 <button
                   type="button"
                   onClick={() => handleTopBarExport("md")}
+                  data-disco-control="export-report-md"
                   className={CTRL_BTN}
                   title="Download as Markdown"
                 >
@@ -259,6 +261,7 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
                   // ExportModal pattern in NeedMoreCard.
                   disabled={!exportCaps.pdf || r.exportPending !== null}
                   aria-disabled={!exportCaps.pdf || r.exportPending !== null}
+                  data-disco-control="export-report-pdf"
                   className={exportCaps.pdf ? CTRL_BTN : PENDING_BTN}
                   title={
                     exportCaps.pdf
@@ -278,6 +281,7 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
                   onClick={() => handleTopBarExport("docx")}
                   disabled={!exportCaps.docx || r.exportPending !== null}
                   aria-disabled={!exportCaps.docx || r.exportPending !== null}
+                  data-disco-control="export-report-docx"
                   className={exportCaps.docx ? CTRL_BTN : PENDING_BTN}
                   title={
                     exportCaps.docx

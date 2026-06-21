@@ -231,50 +231,38 @@ async def test_invalid_format_rejected(tmp_workspace):
 # ---- marp-absent clean failures ----------------------------------------------
 
 
-async def test_pdf_fails_when_marp_absent(tmp_workspace):
-    """PDF export returns a clean failure when marp is not on PATH."""
+async def test_pdf_degrades_to_html_when_marp_absent(tmp_workspace):
+    """codex P1 / compat: now that the default format is pptx, a no-goal markdown caller in a
+    Marp-less sandbox must NOT hard-fail. pdf/pptx DEGRADE to the always-available HTML deck —
+    honestly written as `deck.html` (not a fake .pdf), so the deck is still produced."""
     tool = SlidesTool()
     ctx = _ctx(_jailed_sandbox(tmp_workspace))
 
     with patch("disco.tools.builtin.slides._marp_available", return_value=False):
         outcome = await tool.run(
-            SlidesGenerateArgs(
-                markdown=_THREE_SLIDE_MD,
-                filename="deck",
-                format="pdf",
-            ),
+            SlidesGenerateArgs(markdown=_THREE_SLIDE_MD, filename="deck", format="pdf"),
             ctx,
         )
 
-    assert not outcome.success
-    assert "PDF" in outcome.content
-    # marp runs INSIDE the sandbox now; absence is surfaced as "not present in this
-    # sandbox" + an HTML fallback hint — NOT the old false "after VM-201 rebuild".
-    assert "sandbox" in outcome.content.lower() and "html" in outcome.content.lower()
-    assert "marp CLI not found" in outcome.error
-    # No file was written
+    assert outcome.success
+    # an HTML deck was produced (honest extension), NOT a fake .pdf
+    assert (tmp_workspace / "deck.html").exists()
     assert not (tmp_workspace / "deck.pdf").exists()
 
 
-async def test_pptx_fails_when_marp_absent(tmp_workspace):
-    """PPTX export returns a clean failure when marp is not on PATH."""
+async def test_pptx_degrades_to_html_when_marp_absent(tmp_workspace):
+    """PPTX likewise degrades to an HTML deck when Marp is absent (no hard-fail)."""
     tool = SlidesTool()
     ctx = _ctx(_jailed_sandbox(tmp_workspace))
 
     with patch("disco.tools.builtin.slides._marp_available", return_value=False):
         outcome = await tool.run(
-            SlidesGenerateArgs(
-                markdown=_THREE_SLIDE_MD,
-                filename="deck",
-                format="pptx",
-            ),
+            SlidesGenerateArgs(markdown=_THREE_SLIDE_MD, filename="deck", format="pptx"),
             ctx,
         )
 
-    assert not outcome.success
-    assert "PPTX" in outcome.content
-    assert "html" in outcome.content.lower()  # suggests HTML fallback
-    assert "marp CLI not found" in outcome.error
+    assert outcome.success
+    assert (tmp_workspace / "deck.html").exists()
     assert not (tmp_workspace / "deck.pptx").exists()
 
 

@@ -53,7 +53,12 @@ dev = [
 # Async tests (the EventStore is async) run without per-test decorators.
 asyncio_mode = "auto"
 testpaths = ["packages"]
-markers = ["integration"]
+markers = [
+    "integration",
+    # W7: fast input/output boundary CONTRACTS (W1 sandbox-error typing, W2 task supervision,
+    # W3 slides/artifact, W10 guardrails). Selected into the fast PR tier: `-m boundary_contract`.
+    "boundary_contract",
+]
 addopts = "-q"
 
 [tool.ruff]

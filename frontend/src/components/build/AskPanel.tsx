@@ -74,6 +74,7 @@ export function AskPanel({
           onClick={submit}
           disabled={!text.trim()}
           aria-label="Send answer"
+          data-disco-control="answer-question"
           className="shrink-0 pb-hair text-accent transition-colors hover:opacity-80 disabled:opacity-40"
         >
           <CornerDownLeft className="size-4" aria-hidden />

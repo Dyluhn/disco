@@ -9,7 +9,7 @@ tools depend only on these protocols (§5.1, the "door open" seam).
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import NoReturn, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
@@ -47,6 +47,69 @@ class SandboxUnavailableError(SandboxError):
     Carries the real underlying cause (reactive-error rule); distinct from a
     per-command failure so the caller can tell "the box is broken" from "the
     command failed"."""
+
+
+class SandboxFileNotFoundError(SandboxError, FileNotFoundError):
+    """W1: a workspace file/dir was MISSING on a read. Subclasses BOTH SandboxError (so the
+    executor's `sandbox_error` mapping still applies) AND FileNotFoundError (so the loop's
+    ~8 ``except (FileNotFoundError, OSError)`` bookkeeping handlers — file_state,
+    recitation, observe, view_render, … — catch it instead of letting it ESCAPE and crash
+    the loop task into a silent forever-RUNNING hang). The container/podman backends used to
+    wrap a missing file in a plain SandboxError, defeating those handlers; the local
+    (process) backend already raised native FileNotFoundError. This makes them agree."""
+
+
+class SandboxPermissionError(SandboxError, PermissionError):
+    """W1: a read was denied (EACCES). Typed so `except (PermissionError, OSError)` loop
+    handlers catch it instead of a bare SandboxError crashing the task."""
+
+
+class SandboxNotADirectoryError(SandboxError, NotADirectoryError):
+    """W1: a path component was a file, not a directory (ENOTDIR). Typed for the same reason
+    — `except (NotADirectoryError, OSError)` handlers must catch it."""
+
+
+class SandboxIsADirectoryError(SandboxError, IsADirectoryError):
+    """W1: a `cat`/read was pointed at a DIRECTORY (EISDIR). `cat <dir>` emits "Is a
+    directory"; typed so `except (IsADirectoryError, OSError)` handlers catch it rather than a
+    bare SandboxError escaping the loop (codex round-3)."""
+
+
+# stderr signatures from a failed `cat`/read, by errno class. Substring match on the
+# lowercased message — `cat`/coreutils phrase these consistently across the backends.
+_NOT_FOUND_MARKER = "no such file"
+_IS_A_DIR_MARKER = "is a directory"
+_PERMISSION_MARKERS = ("permission denied", "operation not permitted")
+_NOT_A_DIR_MARKER = "not a directory"
+
+
+def looks_like_not_found(stderr: bytes | str) -> bool:
+    """True iff a failed read's stderr indicates a MISSING FILE (ENOENT), vs a missing
+    TOOL ("cat: not found"), permission error, etc. Lets the boundary type the error so a
+    renamed/deleted file becomes a FileNotFoundError, not a fatal untyped escape."""
+    s = stderr.decode("utf-8", "replace") if isinstance(stderr, bytes) else stderr
+    return _NOT_FOUND_MARKER in s.lower()
+
+
+def raise_read_error(path: str, stderr: bytes | str, *, op: str = "read_file") -> NoReturn:
+    """The SINGLE boundary every backend's filesystem op (`read_file`, `list_dir`, …) uses to
+    raise a failure. Maps the stderr onto the matching NATIVE OSError subtype — missing file →
+    SandboxFileNotFoundError (FileNotFoundError), denied → SandboxPermissionError
+    (PermissionError), ENOTDIR → SandboxNotADirectoryError (NotADirectoryError) — so the loop's
+    `except (FileNotFoundError, OSError)` bookkeeping handlers catch ALL benign fs failures
+    (read OR list), not just missing-file reads. Anything unrecognised stays a plain
+    SandboxError (still never a bare/untyped escape)."""
+    s = (stderr.decode("utf-8", "replace") if isinstance(stderr, bytes) else stderr).strip()
+    low = s.lower()
+    if _NOT_FOUND_MARKER in low:
+        raise SandboxFileNotFoundError(f"{op} {path!r}: {s}")
+    if _IS_A_DIR_MARKER in low:  # `cat <dir>` (EISDIR) — checked before ENOTDIR (both contain
+        raise SandboxIsADirectoryError(f"{op} {path!r}: {s}")  # "a directory")
+    if _NOT_A_DIR_MARKER in low:
+        raise SandboxNotADirectoryError(f"{op} {path!r}: {s}")
+    if any(m in low for m in _PERMISSION_MARKERS):
+        raise SandboxPermissionError(f"{op} {path!r}: {s}")
+    raise SandboxError(f"{op} {path!r}: {s}")
 
 
 class ExecResult(BaseModel):

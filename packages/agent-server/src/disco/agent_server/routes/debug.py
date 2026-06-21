@@ -8,6 +8,9 @@ a hint, so the surface can't leak routing internals in a default deployment.
 
 from __future__ import annotations
 
+from typing import Any
+
+from disco.core.evidence.schema import redact
 from disco.core.inspect import inspect_enabled, registry
 from disco.core.store.sqlite import SqliteEventStore
 from fastapi import APIRouter
@@ -53,6 +56,71 @@ def make_debug_router(
                 {"error": "no trace", "conversation_id": conversation_id},
                 status_code=404,
             )
-        return JSONResponse(snap)
+        return JSONResponse(redact(snap))
+
+    @router.get("/api/debug/evidence/{conversation_id}")
+    async def evidence(conversation_id: str) -> JSONResponse:
+        """Bundled, redacted evidence for one conversation: state, event log,
+        inspect trace, and project manifest (metadata only — no file contents).
+
+        Gated behind the same ``DISCO_INSPECT=1`` flag as ``/api/debug/trace``.
+        Returns 404 with a clear hint when the flag is off so the endpoint is
+        completely inert in a default deployment.
+
+        The entire bundle is passed through :func:`disco.core.evidence.schema.redact`
+        before serialisation — any dict key matching a secret pattern (api_key,
+        token, secret, …) has its value replaced with ``'***REDACTED***'``.
+
+        Path-traversal safety: FastAPI's ``{conversation_id}`` path segment does
+        not permit ``/`` or ``..``. No workspace files or arbitrary paths are read;
+        only structured store data is returned."""
+        if not inspect_enabled():
+            return _disabled()
+
+        # Conversation state (reconstructed from the append-only event log).
+        state_dict: dict[str, Any] = (
+            await store.get_state(conversation_id)
+        ).model_dump(mode="json")
+
+        # Full event log, each event serialised to its JSON-ready dict form.
+        events_list: list[dict[str, Any]] = [
+            e.model_dump(mode="json")
+            for e in await store.get_events(conversation_id)
+        ]
+
+        # Inspect trace — may be None when inspect is on but no model call has
+        # been captured yet for this conversation (or it aged out of the ring).
+        inspect_trace: dict[str, Any] | None = registry().snapshot(conversation_id)
+
+        # Project manifest — metadata only (title, dates, counts, last deliverable).
+        # Workspace file paths and content are intentionally excluded to eliminate
+        # any path-traversal or workspace-content leakage risk.
+        project_manifest: dict[str, Any] | None = None
+        if runtime is not None:
+            ps_method = getattr(runtime, "project_store", None)
+            if ps_method is not None:
+                ps = ps_method()
+                if ps is not None:
+                    record = ps.get(conversation_id)
+                    if record is not None:
+                        project_manifest = {
+                            "conversation_id": conversation_id,
+                            "title": record.title or "(untitled)",
+                            "created_at": record.created_at,
+                            "last_snapshot_at": record.last_snapshot_at,
+                            "file_count": record.file_count,
+                            "total_bytes": record.total_bytes,
+                        }
+
+        bundle: dict[str, Any] = {
+            "conversation_id": conversation_id,
+            "state": state_dict,
+            "events": events_list,
+            "inspect_trace": inspect_trace,
+            "project_manifest": project_manifest,
+        }
+
+        # Redact sensitive keys before any bytes leave the process.
+        return JSONResponse(redact(bundle))
 
     return router

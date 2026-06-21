@@ -284,6 +284,7 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
               type="button"
               onClick={handleMd}
               disabled={exporting !== null}
+              data-disco-control="export-report-md"
               className={cn(
                 "flex items-center gap-inline rounded-control border border-hairline p-inline",
                 "font-ui text-[0.85rem] text-text-muted transition-colors text-left",
@@ -315,6 +316,7 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
                   ? "Download as PDF"
                   : "PDF export requires WeasyPrint on the server"
               }
+              data-disco-control="export-report-pdf"
               className={cn(
                 "flex items-center gap-inline rounded-control border p-inline",
                 "font-ui text-[0.85rem] transition-colors text-left",
@@ -370,6 +372,7 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
                   ? "Download as DOCX"
                   : "DOCX export requires pandoc on the server"
               }
+              data-disco-control="export-report-docx"
               className={cn(
                 "flex items-center gap-inline rounded-control border p-inline",
                 "font-ui text-[0.85rem] transition-colors text-left",
@@ -465,6 +468,7 @@ function AudioModeDialog({ open, onOpenChange, onChoose }: AudioModeDialogProps)
             <button
               type="button"
               onClick={() => onChoose("podcast")}
+              data-disco-control="generate-audio"
               className={cn(
                 "flex items-start gap-inline rounded-card border border-hairline p-inline",
                 "font-ui text-[0.85rem] text-text-muted transition-colors text-left",
@@ -489,6 +493,7 @@ function AudioModeDialog({ open, onOpenChange, onChoose }: AudioModeDialogProps)
             <button
               type="button"
               onClick={() => onChoose("single")}
+              data-disco-control="generate-audio"
               className={cn(
                 "flex items-start gap-inline rounded-card border border-hairline p-inline",
                 "font-ui text-[0.85rem] text-text-muted transition-colors text-left",
@@ -629,6 +634,7 @@ function AudioSection({
               a.click();
               a.remove();
             }}
+            data-disco-control="export-audio"
             className={CTRL_BTN}
           >
             <ArrowDown className="size-3.5" aria-hidden />
@@ -831,6 +837,7 @@ export function NeedMoreCard({
           type="button"
           onClick={handleBuildDeck}
           disabled={building}
+          data-disco-control="build-deck"
           className={CTRL_BTN}
         >
           {building ? (

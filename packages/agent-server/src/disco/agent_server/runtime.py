@@ -1414,9 +1414,65 @@ class ConversationRuntime:
         if existing is not None and not existing.done():
             return  # already running; the new message is picked up at the next step
         loop = self._loop_for(conversation_id)
-        self._tasks[conversation_id] = asyncio.create_task(
-            self._run_with_persistence(conversation_id, loop)
+        task = asyncio.create_task(self._run_with_persistence(conversation_id, loop))
+        # W2 supervision: the run task ALWAYS resolves to a terminal status. Without this
+        # callback an exception escaping loop.run() killed the task silently and left the
+        # conversation at RUNNING forever (the silent hang Dylan hit).
+        task.add_done_callback(
+            lambda t, _cid=conversation_id: self._on_run_task_done(_cid, t)
         )
+        self._tasks[conversation_id] = task
+
+    # W2: statuses that mean "the run already concluded" — terminalization must not clobber.
+    _CONCLUDED_STATUSES = frozenset(
+        {
+            ConversationStatus.FINISHED,
+            ConversationStatus.ERROR,
+            ConversationStatus.STUCK,
+            ConversationStatus.PAUSED,
+        }
+    )
+
+    def _on_run_task_done(self, conversation_id: str, task: asyncio.Task[Any]) -> None:
+        """W2 supervision callback. Deregister the task; on an UNHANDLED exception (NOT
+        cancellation), schedule terminalization to ERROR so the conversation can never sit
+        at RUNNING forever."""
+        if self._tasks.get(conversation_id) is task:
+            self._tasks.pop(conversation_id, None)
+        if task.cancelled():
+            return  # cancellation is not an error
+        try:
+            exc = task.exception()
+        except asyncio.CancelledError:
+            return
+        if exc is None:
+            return  # clean completion — the loop set its own terminal status
+        # An exception escaped loop.run(). Schedule (best-effort) a terminal ERROR.
+        with contextlib.suppress(RuntimeError):  # no running loop (shutdown) → skip
+            asyncio.create_task(self._terminalize_crashed(conversation_id, exc))
+
+    async def _terminalize_crashed(
+        self, conversation_id: str, exc: BaseException
+    ) -> None:
+        """Append a terminal ERROR status + a user-visible reminder for a crashed run.
+        Idempotent: never overwrites an already-concluded status."""
+        try:
+            state = await self._store.get_state(conversation_id)
+            if state.execution_status in self._CONCLUDED_STATUSES:
+                return  # already concluded — don't clobber
+            detail = f"uncaught {type(exc).__name__}: {exc}"[:200]
+            logger.error("run task for %s crashed: %s", conversation_id, detail)
+            await self._store.append(
+                conversation_id,
+                StatusEvent(status=ConversationStatus.ERROR, detail=detail),
+            )
+            await self._emit_persistence_reminder(
+                conversation_id,
+                f"The run stopped on an unexpected internal error ({type(exc).__name__}). "
+                "It has been recorded as failed; you can retry or adjust the task.",
+            )
+        except Exception:  # noqa: BLE001 — supervision is best-effort, never re-raise
+            logger.exception("crash terminalization failed for %s", conversation_id)
 
     async def _run_with_persistence(
         self, conversation_id: str, loop: AgentLoop

@@ -235,6 +235,7 @@ export function PlanPanel({
                   type="button"
                   onClick={submitRevision}
                   disabled={!text.trim()}
+                  data-disco-control="revise-plan"
                   className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-40"
                 >
                   Send revision
@@ -253,6 +254,7 @@ export function PlanPanel({
               <button
                 type="button"
                 onClick={onApprove}
+                data-disco-control="approve-plan"
                 className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90"
               >
                 {approveLabel ?? "Approve & build"}

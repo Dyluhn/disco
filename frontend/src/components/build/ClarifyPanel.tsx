@@ -137,6 +137,7 @@ export function ClarifyPanel({
           type="button"
           onClick={submit}
           disabled={!allAnswered}
+          data-disco-control="submit-clarify"
           className={cn(
             "flex items-center gap-hair rounded-control border border-accent/40 px-inline py-hair font-ui text-[0.82rem] text-accent transition-colors",
             "hover:bg-accent/10 disabled:opacity-40 disabled:cursor-not-allowed",

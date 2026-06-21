@@ -107,6 +107,7 @@ export function QueryInput({
           type="submit"
           disabled={!canSend}
           aria-label="Ask"
+          data-disco-control="send-message"
           className={cn(
             "grid size-9 shrink-0 place-items-center rounded-control bg-accent text-bg transition-opacity",
             canSend ? "hover:opacity-90" : "opacity-50",
