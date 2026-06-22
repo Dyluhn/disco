@@ -170,8 +170,11 @@ class ContainerInstance:
         if self._destroyed:
             raise SandboxError(f"sandbox instance {self.id} has been destroyed")
 
-    def _safe_reload(self) -> bool:
-        """Bounded wrapper around `self._container.reload()` (docker-py / podman-py).
+    def _safe_reload(self, obj: Any = None) -> bool:
+        """Bounded wrapper around `reload()` (docker-py / podman-py) on `obj`, which
+        defaults to `self._container`. [FIX6] passing the egress SIDECAR lets
+        `_resolve_mapping` refresh the sidecar's published-port bindings under the
+        SAME wedge-guard (the filtered-box preview is published on the sidecar).
 
         A hung or failing client must NEVER wedge the event loop. The original
         VM 201/202 incident that motivated this guard: a docker daemon stall
@@ -199,6 +202,7 @@ class ContainerInstance:
         — measured: 1000 healthy reloads complete in <100ms on any CI runner
         (no measurable added latency).
         """
+        target = self._container if obj is None else obj
         done = threading.Event()
         # Result slot: written by the worker thread, read by the main thread
         # AFTER `done.wait()` returns. A small dict keeps the assignment atomic
@@ -207,8 +211,8 @@ class ContainerInstance:
 
         def _runner() -> None:
             try:
-                self._container.reload()
-                result["status"] = getattr(self._container, "status", "unknown")
+                target.reload()
+                result["status"] = getattr(target, "status", "unknown")
             except Exception as exc:  # noqa: BLE001 — surface as typed infra error
                 result["exc"] = exc
             finally:
@@ -415,12 +419,19 @@ class ContainerInstance:
     def _resolve_mapping(self, port: int) -> tuple[str, int] | None:
         """Internal helper to read the Docker/Podman port binding. Goes through
         `_safe_reload` so a hung/raising client returns None (no URL) instead of
-        wedging the loop. (Dispo #25 wedge-guard.)"""
+        wedging the loop. (Dispo #25 wedge-guard.)
+
+        [FIX6] For a FILTERED box (an egress sidecar is attached) the published
+        mapping lives on the SIDECAR, not the sandbox: the sandbox is on an
+        internal no-NAT net and publishes nothing, while the dual-homed sidecar
+        publishes the preview ports and forwards them inward. Sealed / open boxes
+        (no sidecar) keep the original sandbox-binding path."""
         if port not in PUBLISHED_PORTS:
             return None
+        source = self._container if self._egress_sidecar is None else self._egress_sidecar
         try:
-            self._safe_reload()  # bounded; raises SandboxUnavailableError on hang/raise
-            ports = self._container.attrs.get("NetworkSettings", {}).get("Ports") or {}
+            self._safe_reload(source)  # bounded; raises SandboxUnavailableError on hang/raise
+            ports = source.attrs.get("NetworkSettings", {}).get("Ports") or {}
             binding = ports.get(f"{port}/tcp")
             if not binding:
                 return None

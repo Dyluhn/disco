@@ -150,6 +150,13 @@ class FakeDockerClient:
         if self._run_error is not None:
             raise self._run_error
         c = FakeContainer(kwargs)
+        # [FIX6] mirror reality: a sandbox joined to the internal egress net is
+        # assigned an IP on it. `_launch_inbound_forwarder` reads this after
+        # reload() to target the inbound TCP forwarder. (Sealed/open boxes pass
+        # `network_mode`, not `network`, so they get no synthetic IP — correct.)
+        net = kwargs.get("network")
+        if net:
+            c.attrs = {"NetworkSettings": {"Networks": {net: {"IPAddress": "172.28.0.5"}}}}
         self.runs.append(c)
         self.last = c
         return c

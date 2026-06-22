@@ -21,6 +21,7 @@ import uuid
 from typing import Any
 
 from . import egress_proxy as _egress_proxy_mod
+from . import inbound_forward as _inbound_forward_mod
 from ._container import (
     EGRESS_PROXY_PORT,
     PUBLISHED_PORTS,
@@ -211,11 +212,18 @@ class GvisorSandboxService:
         # sweep can find it — its NAME is instance-keyed, not conversation-keyed.
         network = client.networks.create(net_name, driver="bridge", internal=True, labels=labels)
         # (1) create on bridge → connect internal → start, so runsc sees BOTH NICs.
+        # [FIX6] PUBLISH the preview ports on the SIDECAR (it's on bridge → it CAN
+        # publish; the sandbox is internal-only and can't). The sidecar's inbound
+        # forwarder (launched after the sandbox starts) bridges each published
+        # host port to the sandbox's internal IP — host reaches the preview, the
+        # sandbox keeps zero direct egress. Ports must be declared at create()
+        # (docker can't add mappings to a running container).
         sidecar = client.containers.create(
             image=self._cfg.image,
             command=["sh", "-c", "exec sleep infinity"],
             runtime=self._cfg.runtime,
             network="bridge",  # the route to the internet (the proxy's upstream)
+            ports={f"{p}/tcp": None for p in sorted(PUBLISHED_PORTS)},  # FIX6: preview publish
             mem_limit="256m",
             detach=True,
             name=net_name,
@@ -244,6 +252,56 @@ class GvisorSandboxService:
         env = proxy_env(proxy_ip, EGRESS_PROXY_PORT)
         return network, sidecar, env, net_name
 
+    def _launch_inbound_forwarder(self, sidecar: Any, container: Any, net_name: str) -> None:
+        """[FIX6 — live-proven on real gVisor/runsc] Make a FILTERED box's preview
+        ports host-reachable WITHOUT breaking containment. The sandbox is on an
+        INTERNAL no-NAT net and runsc froze its netstack at boot (no NIC hot-plug),
+        so it can NEVER publish a host port without a NAT bridge (= raw egress =
+        broken containment). Instead the dual-homed egress SIDECAR (bridge+internal)
+        already publishes the preview ports (see `_setup_filtered_egress`); here we
+        run a stdlib TCP forwarder on it that bridges each published host port to
+        the sandbox's internal IP — `host:PORT -> <sandbox_ip>:PORT`. Transparent
+        byte pipe → websockets / Vite HMR pass through; the sandbox keeps zero
+        direct egress.
+
+        Best-effort: on ANY failure the preview is unreachable but the box still
+        works (the agent-server surfaces the honest no-URL state), so we never
+        raise here and leak the just-started sandbox.
+
+        GOTCHA (found live): a detached `docker exec -d ... python3 -` drops stdin,
+        so the script is delivered via `put_archive` (NOT piped on stdin) and only
+        THEN launched detached."""
+        try:
+            container.reload()
+            sbx_ip = (
+                container.attrs.get("NetworkSettings", {})
+                .get("Networks", {})
+                .get(net_name, {})
+                .get("IPAddress", "")
+            )
+            if not sbx_ip:
+                _LOG.warning(
+                    "filtered sandbox has no internal IP on %s; preview unreachable", net_name
+                )
+                return
+            script = pathlib.Path(_inbound_forward_mod.__file__).read_bytes()
+            _put_file(sidecar, "/", "inbound_forward.py", script)
+            ports_arg = " ".join(str(p) for p in sorted(PUBLISHED_PORTS))
+            sidecar.exec_run(
+                [
+                    "sh",
+                    "-c",
+                    f"python3 /inbound_forward.py {sbx_ip} {ports_arg} "
+                    f">/var/log/inbound.log 2>&1 &",
+                ],
+                detach=True,
+            )
+        except Exception:  # noqa: BLE001 — best-effort; preview unreachable, box still works
+            _LOG.warning(
+                "failed to launch the inbound preview forwarder on the egress sidecar",
+                exc_info=True,
+            )
+
     def _start_container(
         self, spec: SandboxSpec, instance_id: str, host_workspace: str, conversation_id: str = ""
     ) -> Any:
@@ -271,13 +329,18 @@ class GvisorSandboxService:
         net_kwargs: dict[str, Any] = {}
         environment: dict[str, str] = {}
         egress_network = egress_sidecar = None
+        egress_net_name = ""
         labels = {LABEL_CONV: conversation_id} if conversation_id else {}
         if mode == "filtered":
             egress_network, egress_sidecar, environment, net_name = self._setup_filtered_egress(
                 client, spec, instance_id, conversation_id
             )
+            egress_net_name = net_name
             net_kwargs = {"network": net_name}  # internal no-NAT net; proxy is the only route
-            ports = None  # inbound preview not published on an internal net (live-verify TODO)
+            # The sandbox itself publishes NOTHING (it's on an internal no-NAT net and
+            # runsc can't hot-plug a NIC). [FIX6] the preview is reached via the egress
+            # SIDECAR's published ports + an inbound forwarder, launched below.
+            ports = None
         elif mode == "open":
             net_kwargs = {"network_mode": "bridge"}  # explicit raw egress (NETWORK capability)
         else:  # sealed
@@ -307,6 +370,11 @@ class GvisorSandboxService:
             # Don't leak the egress aux if the sandbox itself failed to start.
             self._best_effort_cleanup(egress_network, egress_sidecar)
             raise SandboxUnavailableError(f"container failed to start: {exc}") from exc
+        # [FIX6] sandbox is up and on the internal net — launch the inbound preview
+        # forwarder on the SIDECAR (host:PORT -> sandbox_ip:PORT). Best-effort: never
+        # raises, so it can't leak the just-started box.
+        if mode == "filtered" and egress_sidecar is not None:
+            self._launch_inbound_forwarder(egress_sidecar, container, egress_net_name)
         return container, egress_network, egress_sidecar
 
     @staticmethod

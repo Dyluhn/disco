@@ -308,6 +308,29 @@ class PodmanSandboxService:
         # (1) create on bridge → connect internal → start, so the sidecar's
         # `bridge` NIC (the route to the internet, the proxy's upstream) AND its
         # internal-net NIC BOTH exist before any sandbox traffic.
+        # FIX6-PODMAN-PARITY (needs live podman verify — VM 202 destroyed):
+        #   The gVisor backend now makes a FILTERED box's preview host-reachable by
+        #   (a) PUBLISHING PUBLISHED_PORTS on this SIDECAR's create() and (b) running
+        #   the stdlib `inbound_forward.py` on the sidecar (host:PORT ->
+        #   sandbox_ip:PORT) — see gvisor.py `_setup_filtered_egress` /
+        #   `_launch_inbound_forwarder` and the shared `_container.py
+        #   _resolve_mapping` (already reads `self._egress_sidecar` when set, so it
+        #   covers podman too). To finish parity here:
+        #     1. Publish on the sidecar create() below. podman-py's port-mapping
+        #        kwarg/format differs from docker-py's `{"8000/tcp": None}` (podman
+        #        uses `ports={container_port: host_port}` / PortMapping records) and
+        #        MUST be confirmed live before trusting it.
+        #     2. After the sandbox starts in `_start_container`, read the sandbox's
+        #        internal-net IP from its attrs, then launch the forwarder on the
+        #        sidecar via `self._sidecar_cli_run(sidecar.name, ["sh","-c",
+        #        f"python3 /inbound_forward.py {sbx_ip} {ports} >/var/log/inbound.log 2>&1 &"])`
+        #        after put_archive'ing `_inbound_forward_mod` onto the sidecar.
+        #     3. Replace the `expose_port` STUB (returns None today) with the shared
+        #        `_resolve_mapping` path. Reading published bindings back from
+        #        podman `container.attrs` NetworkSettings.Ports also differs from
+        #        docker-py and needs live confirmation.
+        #   Implemented for gVisor (live-proven on runsc) + the shared _container.py
+        #   change; podman left as this exact TODO pending a live podman host.
         sidecar = client.containers.create(
             image=self._cfg.image,
             command=["sh", "-c", "exec sleep infinity"],
