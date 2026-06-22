@@ -28,6 +28,112 @@ from .secrets import CapabilityBroker, CapabilityDenied
 # (ruff B008 forbids function calls in default args; frozen dataclass is safe as a singleton).
 _STANDARD_POLICY: ModelExecutionPolicy = ModelExecutionPolicy.standard()
 
+# Friendly names for the common annotations so the model sees "string"/"integer"
+# rather than "<class 'str'>". Falls back to the annotation's own __name__.
+_TYPE_NAMES: dict[type, str] = {
+    str: "string",
+    int: "integer",
+    float: "number",
+    bool: "boolean",
+    list: "array",
+    dict: "object",
+}
+
+
+def _field_type_name(annotation: Any) -> str:
+    """Best-effort friendly name for a pydantic field's annotation."""
+    if annotation in _TYPE_NAMES:
+        return _TYPE_NAMES[annotation]
+    name = getattr(annotation, "__name__", None)
+    if isinstance(name, str) and name:
+        return name
+    # Unions / generics (Optional[str], list[str], ...) — render the typing repr,
+    # trimmed of the typing/module noise so it stays readable.
+    return str(annotation).replace("typing.", "")
+
+
+def _valid_arg_keys(args_model: type[BaseModel]) -> set[str]:
+    """Every key the model legitimately may pass: field names AND any aliases
+    (pydantic accepts a field by either, depending on populate_by_name)."""
+    keys: set[str] = set()
+    for fname, finfo in args_model.model_fields.items():
+        keys.add(fname)
+        if finfo.alias:
+            keys.add(finfo.alias)
+        if finfo.validation_alias and isinstance(finfo.validation_alias, str):
+            keys.add(finfo.validation_alias)
+    return keys
+
+
+def _arg_surface(args_model: type[BaseModel]) -> str:
+    """Concise one-line summary of a tool's accepted arguments: each as
+    `name (type, required|optional)`. Small by construction — tool arg models
+    are a handful of fields — so it never dumps a huge schema."""
+    parts: list[str] = []
+    for fname, finfo in args_model.model_fields.items():
+        req = "required" if finfo.is_required() else "optional"
+        parts.append(f"{fname} ({_field_type_name(finfo.annotation)}, {req})")
+    return ", ".join(parts) if parts else "(takes no arguments)"
+
+
+def describe_validation_failure(
+    tool_name: str,
+    args_model: type[BaseModel],
+    arguments: dict[str, Any],
+    errors: list[dict[str, Any]],
+) -> str:
+    """Build a SELF-CORRECTING, model-facing validation error.
+
+    The model only sees a failed ToolResult's `error`/`content` string (the
+    structured `validation_errors`/`expected_schema` are not surfaced into the
+    agent's message stream), so the actionable detail MUST live in this string.
+    It names the unexpected key(s) the caller invented (e.g. `cmd`) AND the
+    expected/required field(s) it should have used (e.g. `command`), pulled
+    generically from the pydantic model — so EVERY tool benefits, not just shell.
+
+    Deterministic for identical arguments (so byte-identical repeated bad calls
+    still trip the loop's stuck detector as before).
+    """
+    valid_keys = _valid_arg_keys(args_model)
+    unknown = sorted(k for k in arguments if k not in valid_keys)
+
+    reasons: list[str] = []
+    if unknown:
+        reasons.append(
+            f"unexpected argument(s) {unknown} — not accepted by this tool"
+        )
+    for err in errors:
+        loc = ".".join(str(p) for p in err.get("loc", ())) or "(root)"
+        etype = err.get("type", "")
+        if etype == "missing":
+            reasons.append(f"missing required argument {loc!r}")
+        elif etype in {"extra_forbidden", "unexpected_keyword_argument"}:
+            # already covered by `unknown` above; skip to avoid duplication
+            continue
+        else:
+            reasons.append(f"argument {loc!r}: {err.get('msg', etype)}")
+    if not reasons:
+        reasons.append("arguments did not match the tool's schema")
+
+    msg = (
+        f"arguments for {tool_name!r} failed validation: "
+        + "; ".join(reasons)
+        + f". Expected arguments: {_arg_surface(args_model)}."
+    )
+    if unknown:
+        # spell out the likely fix so a weaker model can self-correct next turn
+        required_names = [
+            n for n, fi in args_model.model_fields.items() if fi.is_required()
+        ]
+        if required_names:
+            msg += (
+                f" Re-call {tool_name!r} using the correct key(s) "
+                f"{required_names} instead of {unknown}."
+            )
+    if arguments:
+        msg += f" You provided: {sorted(arguments)}."
+    return msg
+
 
 class DefaultToolExecutor:
     """[CONTRACT behavior; INTERIOR code] The concrete `ToolExecutor`.
@@ -140,11 +246,21 @@ class DefaultToolExecutor:
         try:
             args = tool.definition.args_model.model_validate(call.arguments)
         except ValidationError as e:
+            errors = [dict(err) for err in e.errors()]  # ErrorDetails -> plain dict
             return self._fail(
                 call,
                 "invalid_arguments",
-                f"arguments for {call.tool_name!r} failed validation",
-                validation_errors=[dict(err) for err in e.errors()],  # ErrorDetails -> plain dict
+                # SELF-CORRECTING message: names the unexpected key(s) the model
+                # invented AND the expected/required field(s). The model only sees
+                # this string (not `structured`), so the fix lives here, generic
+                # across all tools — un-sticks the 5-failure gate on bad arg keys.
+                describe_validation_failure(
+                    call.tool_name,
+                    tool.definition.args_model,
+                    call.arguments if isinstance(call.arguments, dict) else {},
+                    errors,
+                ),
+                validation_errors=errors,
                 expected_schema=tool.definition.args_model.model_json_schema(),
             )
 

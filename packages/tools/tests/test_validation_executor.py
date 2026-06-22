@@ -70,6 +70,44 @@ async def test_repair_loop_then_success():
     assert good.success and "hello" in good.content  # numbered read
 
 
+async def test_invalid_arguments_message_is_self_correcting():
+    """B-G: a bad arg KEY (model invents `cmd` instead of `command`) must yield a
+    message that names BOTH the unexpected key AND the expected/required field,
+    so a weak model can self-correct rather than repeat the call into the
+    5-failure stuck gate. The detail must be in the model-visible string
+    (`error`/`content`), NOT only in `structured`."""
+    ex = _executor(sandbox=FakeSandboxInstance())
+    res = await ex.execute(call("shell", cmd="ls -la"))  # wrong key: cmd not command
+    assert res.success is False
+    assert res.structured["kind"] == "invalid_arguments"
+    seen = res.error or ""
+    assert res.content == seen  # model sees this exact string
+    # names the unexpected key the model invented...
+    assert "cmd" in seen and "unexpected" in seen.lower()
+    # ...and the field it should have used (required), with type
+    assert "command" in seen
+    assert "required" in seen
+    # generic across tools: the expected-arguments surface is included
+    assert "Expected arguments" in seen
+
+
+async def test_invalid_arguments_message_deterministic_for_stuck_detector():
+    """Identical bad calls produce byte-identical messages (so the loop's
+    stuck detector still trips after the fix)."""
+    ex = _executor(sandbox=FakeSandboxInstance())
+    a = await ex.execute(call("shell", cmd="ls"))
+    b = await ex.execute(call("shell", cmd="ls"))
+    assert a.content == b.content
+
+
+async def test_missing_required_message_names_field():
+    """No-key-at-all case still names the missing required field generically."""
+    ex = _executor(sandbox=FakeSandboxInstance())
+    res = await ex.execute(call("file_read"))  # missing required `path`
+    seen = res.error or ""
+    assert "path" in seen and "missing required argument" in seen
+
+
 # ---- §11.2 executor ↔ loop boundary -----------------------------------------
 
 
