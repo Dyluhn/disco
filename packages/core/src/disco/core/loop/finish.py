@@ -173,15 +173,27 @@ def _is_web_deliverable(events: list[Event]) -> bool:
 
 
 def _browser_verified(events: list[Event], since_seq: int) -> tuple[bool, str | None]:
-    """Scan browser observations since since_seq. Returns (ok, first_error_line).
-    An observation is valid if it's from the browser tool, against port 8000,
-    and has zero console errors. If not ok, returns the first error from the
-    LATEST qualifying observation."""
+    """Scan the AGENT's browser observations since since_seq. Returns (ok,
+    first_error_line). An observation is valid if it's from the browser tool,
+    against port 8000, and has zero console errors. If not ok, returns the first
+    error from the LATEST qualifying observation.
+
+    The finish gate's OWN driven probe (the verify-overclaim active check —
+    ActionEvent tagged `verify_probe`) is EXCLUDED here: this helper answers "did
+    the AGENT verify cleanly", and the gate judges its own probe separately (with
+    the blank-render guard). Without the exclusion a clean-console-but-blank probe
+    from a prior refusal cycle would read back as an agent pass and bypass the
+    blank guard."""
+    probe_action_ids = {
+        ev.id for ev in events if isinstance(ev, ActionEvent) and ev.meta.get("verify_probe")
+    }
     valid_obs = []
     for ev in events:
         if ev.seq is None or ev.seq <= since_seq:
             continue
         if isinstance(ev, ObservationEvent) and ev.tool_result.tool_name == "browser":
+            if ev.action_id in probe_action_ids:
+                continue  # the gate's own probe — judged actively, not as agent work
             res = ev.tool_result
             if res.success and res.structured:
                 url = str(res.structured.get("url", ""))
@@ -209,6 +221,47 @@ def _browser_verified(events: list[Event], since_seq: int) -> tuple[bool, str | 
             break
 
     return ok, first_error_line
+
+
+def _browser_content_meaningful(structured: dict) -> bool:
+    """Blank-render guard for the ACTIVE finish probe. A page can serve HTTP 200
+    with a CLEAN console yet render nothing a user would see — an SPA whose JS
+    never mounted, or an empty shell. `_browser_verified` (console-errors only)
+    passes that page; this guard catches it.
+
+    Meaningful iff there is real visible content (title + body text >= 20 chars
+    combined) OR interactive structure. The browser daemon's element walker
+    (`_get_elements`) indexes links/forms/buttons/inputs/clickables, so a
+    non-empty `elements` list means the page has actionable structure even when
+    its text is sparse. (`links`/`forms` count fields are honored too if a daemon
+    variant supplies them.)"""
+    title = str(structured.get("title", "") or "")
+    text = str(structured.get("text", "") or "")
+    if len((title + " " + text).strip()) >= 20:
+        return True
+    elements = structured.get("elements")
+    if isinstance(elements, list) and len(elements) > 0:
+        return True
+    if structured.get("links") or structured.get("forms"):
+        return True
+    return False
+
+
+def _latest_browser_structured(events: list[Event]) -> dict | None:
+    """Structured payload of the LATEST successful browser observation on :8000
+    (any seq). Feeds the active finish probe's blank-render judgement — "the
+    gate's own observation". None when the agent/gate never produced a qualifying
+    :8000 browser observation."""
+    for ev in reversed(events):
+        if not (isinstance(ev, ObservationEvent) and ev.tool_result.tool_name == "browser"):
+            continue
+        res = ev.tool_result
+        if not (res.success and res.structured):
+            continue
+        url = str(res.structured.get("url", ""))
+        if url.startswith("http://127.0.0.1:8000") or url.startswith("http://localhost:8000"):
+            return res.structured
+    return None
 
 
 def _vision_mode() -> bool:
@@ -400,6 +453,60 @@ class FinishGate:
                 or (exit_code is None and ": not found" in low)
             )
         return passed, malformed
+
+    async def _drive_finish_browser_probe(self) -> bool:
+        """ACTIVE finish-verify: instead of TRUSTING the agent to have browsed the
+        deliverable, the gate DRIVES a `browser navigate http://127.0.0.1:8000/`
+        itself and judges the result on ground truth. This closes the
+        verification-overclaim hole: an agent that declares done without ever
+        looking can no longer land a JS-broken/blank page as FINISHED — the gate
+        looks for it.
+
+        Returns True iff the probe RAN and produced a usable browser observation
+        (ObservationEvent.tool_result.success). The caller then re-judges via
+        `_browser_verified` (console errors) + `_browser_content_meaningful`
+        (blank render). Returns False (no-op) when the browser backend is
+        unavailable (the process backend ships no `browser` tool) or the probe is
+        hard-denied — so the gate degrades to its prior passive nudge/release
+        behavior on browserless backends rather than hanging or false-refusing.
+
+        The probe ActionEvent is tagged `meta={"verify_probe": True}` so signals.py
+        keeps it OUT of agent-work accounting (actions_since_last_resume /
+        productive_actions_since_approval) — the same marker finish_verify_passed
+        uses. Running the gate's own probe is never evidence the AGENT did work."""
+        # Browserless backend? (process backend exposes no `browser` tool) → no-op,
+        # let the gate fall back to today's passive behavior.
+        try:
+            tool_names = {
+                getattr(t, "name", None) for t in self._loop.executor.available_tools()
+            }
+        except Exception:  # noqa: BLE001 — any introspection failure → degrade safely
+            tool_names = set()
+        if "browser" not in tool_names:
+            return False
+
+        call = ToolCall(
+            tool_name="browser",
+            arguments={"action": "navigate", "url": "http://127.0.0.1:8000/"},
+        )
+        action = ActionEvent(
+            thought="Verifying the app renders: navigating to http://127.0.0.1:8000/",
+            tool_call=call,
+            meta={"verify_probe": True},
+        )
+        # A hard-denied probe (should never happen for a browser navigate, but the
+        # contract surface is shared) is a no-op → degrade to passive.
+        if signals.hard_deny_reason(action) is not None:
+            return False
+
+        await self._loop._emit(action)
+        await self._loop._execute_and_observe(action)
+        events_after = await self._loop._events()
+        obs = next(
+            (e for e in reversed(events_after) if getattr(e, "action_id", None) == action.id),
+            None,
+        )
+        return isinstance(obs, ObservationEvent) and obs.tool_result.success
 
     async def finish_dod_gate_passed(self) -> bool:
         """C1c DoD gate. Returns True iff the finish should be allowed.
@@ -798,6 +905,23 @@ class FinishGate:
         ):
             since_seq = _last_productive_seq(events)
             ok, _ = _browser_verified(events, since_seq)
+            if not ok:
+                # ACTIVE verify (verification-overclaim fix): the AGENT has NOT
+                # produced a clean :8000 browser observation since the last edit.
+                # Rather than wait/trust it to browse (it may have overclaimed and
+                # never looked), DRIVE the browse ourselves and judge the probe on
+                # ground truth — zero console errors AND a non-blank render (a page
+                # can serve 200 with a clean console yet mount nothing). Degrades to
+                # the prior passive nudge/release on browserless backends (the probe
+                # is a no-op there). Bounded by the existing 3-refusal cap below.
+                if await self._drive_finish_browser_probe():
+                    events = await self._loop._events()
+                    probe = _latest_browser_structured(events)
+                    if probe is not None:
+                        probe_console_clean = not any(
+                            c.get("level") == "error" for c in probe.get("console", [])
+                        )
+                        ok = probe_console_clean and _browser_content_meaningful(probe)
             # Messaging reads the FULL history: a post-browse edit
             # invalidates the verification but not what was seen.
             first_error = _latest_browser_error(events)
