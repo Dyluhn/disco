@@ -210,6 +210,132 @@ def test_render_observation_stack_truncated_to_cap():
     assert "stack truncated" in rendered
 
 
+class _FakePage:
+    """A Playwright-like page for driving the daemon capture path.
+
+    `body_texts` and `elements_seq` are per-call sequences: each `.evaluate()`
+    (text read) and each `_get_elements()` returns the next entry, holding the
+    last one once exhausted. This lets a test simulate a late SPA hydration that
+    is empty for the first N reads then yields content.
+    """
+
+    def __init__(self, body_texts, screenshot_path_target):
+        self._body_texts = list(body_texts)
+        self._eval_call = 0
+        self.url = "http://localhost:5173/"
+        self._screenshot_target = screenshot_path_target
+        self.waits = []  # records wait_for_timeout calls (retry sleeps)
+
+    def goto(self, url, wait_until=None):
+        pass
+
+    def wait_for_timeout(self, ms):
+        self.waits.append(ms)
+
+    def title(self):
+        return "App"
+
+    def evaluate(self, script):
+        # The capture path calls evaluate() once per attempt for the body text.
+        idx = min(self._eval_call, len(self._body_texts) - 1)
+        self._eval_call += 1
+        return self._body_texts[idx]
+
+    def screenshot(self, path=None, full_page=False):
+        with open(path, "wb") as f:
+            f.write(b"\x89PNG\r\n")
+
+
+def _drive_capture(fake_page, elements_seq, action="navigate", params=None):
+    """Run a HtmlHandler._handle_action against a fake page + elements sequence."""
+    import disco.tools.builtin._browser_daemon as daemon_mod
+
+    # Point module state at the fake page.
+    daemon_mod.state.page = fake_page
+
+    handler = daemon_mod.BrowserHandler.__new__(daemon_mod.BrowserHandler)
+
+    elems = list(elements_seq)
+    calls = {"n": 0}
+
+    def _fake_get_elements(page):
+        idx = min(calls["n"], len(elems) - 1)
+        calls["n"] += 1
+        return elems[idx]
+
+    handler._get_elements = _fake_get_elements  # type: ignore[method-assign]
+
+    p = {"action": action, "url": "http://localhost:5173/"}
+    if params:
+        p.update(params)
+    return handler._handle_action(action, p)
+
+
+def test_capture_retries_until_late_hydration_renders(tmp_path, monkeypatch):
+    """B-F: a SPA that is blank for the first 2 reads then mounts must NOT be
+    returned as a permanent empty observation — the capture path retries."""
+    import disco.tools.builtin._browser_daemon as daemon_mod
+
+    monkeypatch.setattr(daemon_mod, "WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setattr(daemon_mod, "SCREENSHOT_DIR", str(tmp_path / ".pmx/screenshots"))
+
+    fake_page = _FakePage(
+        body_texts=["", "", "Hello from React"],  # empty twice, then content
+        screenshot_path_target=tmp_path,
+    )
+    # Elements empty until text appears (3rd read).
+    elements_seq = [[], [], ["1[:]<button>Go</button>"]]
+
+    res = _drive_capture(fake_page, elements_seq)
+
+    assert res["ok"] is True
+    assert res["text"] == "Hello from React"
+    assert res["elements"] == ["1[:]<button>Go</button>"]
+    # It retried: two empty reads → two retry sleeps before the content read.
+    retry_sleeps = [w for w in fake_page.waits if w == daemon_mod.CAPTURE_RETRY_INTERVAL_MS]
+    assert retry_sleeps == [
+        daemon_mod.CAPTURE_RETRY_INTERVAL_MS,
+        daemon_mod.CAPTURE_RETRY_INTERVAL_MS,
+    ]
+
+
+def test_capture_breaks_on_elements_only(tmp_path, monkeypatch):
+    """Non-empty elements (even with empty body text) should end the retry loop."""
+    import disco.tools.builtin._browser_daemon as daemon_mod
+
+    monkeypatch.setattr(daemon_mod, "WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setattr(daemon_mod, "SCREENSHOT_DIR", str(tmp_path / ".pmx/screenshots"))
+
+    fake_page = _FakePage(body_texts=[""], screenshot_path_target=tmp_path)
+    res = _drive_capture(fake_page, [["1[:]<button>Go</button>"]])
+
+    assert res["ok"] is True
+    assert res["text"] == ""
+    assert res["elements"] == ["1[:]<button>Go</button>"]
+    # Content on the first read → no retry sleeps (only the navigate settle wait).
+    assert daemon_mod.CAPTURE_RETRY_INTERVAL_MS not in fake_page.waits
+
+
+def test_capture_blank_page_returns_empty_after_bounded_cap(tmp_path, monkeypatch):
+    """A genuinely-blank page must return empty after the bounded cap — it must
+    NOT hang, and must not retry more than CAPTURE_RETRY_MAX times."""
+    import disco.tools.builtin._browser_daemon as daemon_mod
+
+    monkeypatch.setattr(daemon_mod, "WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setattr(daemon_mod, "SCREENSHOT_DIR", str(tmp_path / ".pmx/screenshots"))
+
+    fake_page = _FakePage(body_texts=[""], screenshot_path_target=tmp_path)
+    res = _drive_capture(fake_page, [[]])  # forever empty
+
+    assert res["ok"] is True
+    assert res["text"] == ""
+    assert res["elements"] == []
+    # Bounded: exactly CAPTURE_RETRY_MAX attempts → CAPTURE_RETRY_MAX-1 retry
+    # sleeps (the final attempt does not sleep before falling through).
+    retry_sleeps = [w for w in fake_page.waits if w == daemon_mod.CAPTURE_RETRY_INTERVAL_MS]
+    assert len(retry_sleeps) == daemon_mod.CAPTURE_RETRY_MAX - 1
+
+
 @pytest.mark.asyncio
 async def test_browser_ensure_daemon_restart_on_failure():
     tool = BrowserTool()

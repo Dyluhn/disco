@@ -29,6 +29,15 @@ MAX_CONSOLE = 200
 MAX_NETWORK = 100
 MAX_TEXT = 4000
 MAX_ELEMENTS = 120
+# B-F: SPAs (React/Vite) mount the DOM AFTER `load` via JS hydration, so a single
+# read taken right after the fixed settle can capture an empty body/elements when
+# the mount lands a few hundred ms late. Retry-until-content: poll the capture a
+# bounded number of times, breaking as soon as text OR elements appear. A
+# genuinely-blank page still returns empty after the cap (no false stall). We do
+# NOT switch navigate to wait_until="networkidle" because Disco serves live apps
+# with websockets/HMR, where networkidle can hang the turn indefinitely.
+CAPTURE_RETRY_MAX = 8
+CAPTURE_RETRY_INTERVAL_MS = 250
 # W6: click timeout cut from Playwright's 30s default to a few seconds so a
 # div-based dock/button that is briefly un-clickable doesn't stall a full turn.
 CLICK_TIMEOUT_MS = 3000
@@ -265,10 +274,23 @@ class BrowserHandler(BaseHTTPRequestHandler):
 
         # Common data for most actions
         if action not in ("console_view", "live_start", "live_stop", "live_touch"):
-            elements = self._get_elements(page)
-            text = page.evaluate(
-                "() => (document.body.innerText || document.body.textContent || '').trim()"
-            ).strip()[:MAX_TEXT]
+            # B-F: capture-before-render race — read elements + text, but retry up to
+            # CAPTURE_RETRY_MAX times until the page has SOMETHING (text or elements),
+            # so a late SPA hydration (mount > the fixed settle) is not returned as a
+            # permanent empty observation. ~CAPTURE_RETRY_MAX * INTERVAL worst case.
+            elements = []
+            text = ""
+            for _attempt in range(CAPTURE_RETRY_MAX):
+                elements = self._get_elements(page)
+                text = page.evaluate(
+                    "() => (document.body.innerText || document.body.textContent || '').trim()"
+                ).strip()[:MAX_TEXT]
+                if text or elements:
+                    break
+                # Don't sleep after the final read — a genuinely-blank page returns
+                # empty immediately at the cap rather than burning a trailing wait.
+                if _attempt < CAPTURE_RETRY_MAX - 1:
+                    page.wait_for_timeout(CAPTURE_RETRY_INTERVAL_MS)
 
             state.screenshot_seq += 1
             os.makedirs(SCREENSHOT_DIR, exist_ok=True)
