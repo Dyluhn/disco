@@ -162,3 +162,66 @@ def test_hostname_proxy_503_when_no_upstream_and_no_session() -> None:
     client = _host_proxy_client(upstream=None, session=None)
     resp = client.get("/", headers={"host": "abc12345-8000.localhost"})
     assert resp.status_code == 503
+
+
+# ---- (g) noVNC gate-bypass regression: NOVNC_PORT must NOT use fetch_inside ----
+#
+# codex P1: NOVNC_PORT (6080) is in USER_PORTS, so the path proxy + hostname proxy
+# reach the fetch_inside fallback. When live browser is DISABLED, wake_for_preview /
+# the upstream resolver returns None for 6080 *as the gate* (port_upstream refuses
+# NOVNC_PORT). The fetch_inside fallback firing on that None would re-expose the
+# stale in-box noVNC HTTP surface, bypassing the gate. These prove it does NOT — the
+# disabled noVNC surface stays a 503 — while a normal dev port (8000) still falls back.
+
+
+def test_port_app_does_not_fetch_inside_novnc_when_gated() -> None:
+    """GET /port/6080/ on a sealed box with a live session that WOULD answer must
+    still 503: the noVNC surface is never reachable via the exec-curl fallback, so
+    a disabled live-browser surface cannot be revived through the path proxy."""
+    from disco.tools.sandbox._container import NOVNC_PORT
+
+    # session.fetch_inside WOULD return a live noVNC page if it were ever called.
+    session = _FakeSession((200, b"<html>noVNC</html>", "text/html"))
+    rt = _FakeRuntime(session)
+    resp = _client(rt).get(f"/conversations/conv_novnc001/port/{NOVNC_PORT}/vnc.html")
+    assert resp.status_code == 503
+    assert b"preview not available" in resp.content
+    # The gate held: fetch_inside was NEVER invoked for the noVNC port.
+    assert all(call[0] != NOVNC_PORT for call in session.calls)
+
+
+def test_port_app_still_fetches_inside_normal_port() -> None:
+    """Control: a genuine dev port (8000) still gets the fetch_inside fallback — the
+    fix closes ONLY the noVNC bypass, not the whole point of Fix 2."""
+    body = b"dev server up"
+    session = _FakeSession((200, body, "text/html"))
+    rt = _FakeRuntime(session)
+    resp = _client(rt).get("/conversations/conv_devport0/port/8000/")
+    assert resp.status_code == 200
+    assert resp.content == body
+    assert session.calls and session.calls[0][0] == 8000
+
+
+def test_hostname_proxy_does_not_fetch_inside_novnc_when_gated() -> None:
+    """The canonical hostname proxy (cid8-6080.localhost) must also refuse the
+    fetch_inside fallback for the noVNC surface → honest 503, gate preserved."""
+    from disco.tools.sandbox._container import NOVNC_PORT
+
+    session = _FakeSession((200, b"<html>noVNC</html>", "text/html"))
+    client = _host_proxy_client(upstream=None, session=session)
+    resp = client.get("/vnc.html", headers={"host": f"abc12345-{NOVNC_PORT}.localhost"})
+    assert resp.status_code == 503
+    assert b"preview not available" in resp.content
+    assert all(call[0] != NOVNC_PORT for call in session.calls)
+
+
+def test_hostname_proxy_still_fetches_inside_normal_port() -> None:
+    """Control for the hostname proxy: a normal dev port still falls back to
+    fetch_inside (Fix 2 reachability preserved)."""
+    body = b"<h1>iframe live</h1>"
+    session = _FakeSession((200, body, "text/html"))
+    client = _host_proxy_client(upstream=None, session=session)
+    resp = client.get("/", headers={"host": "abc12345-8000.localhost"})
+    assert resp.status_code == 200
+    assert resp.content == body
+    assert session.calls and session.calls[0][0] == 8000

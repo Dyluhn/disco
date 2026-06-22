@@ -49,6 +49,15 @@ async def _fetch_inside_response(
     the agent's dev server through a liveness proxy that curls it from INSIDE the
     sandbox. Returns a Response only when the in-sandbox server actually answers;
     None lets the caller fall through to the snapshot/503 path (honest unavailable)."""
+    # SECURITY (noVNC gate-bypass fix): NOVNC_PORT is in USER_PORTS, so a request for
+    # 6080 reaches here when wake_for_preview → None. But for 6080 that None is the
+    # live-browser GATE (port_upstream refuses NOVNC_PORT when the feature is disabled),
+    # NOT merely "no host port published". curling the stale noVNC HTTP surface from
+    # inside the box would re-expose a disabled live-browser surface — bypassing the
+    # gate. The noVNC surface is served EXCLUSIVELY through the gated published-port
+    # proxy; the exec-curl fallback is for genuine dev-server/preview ports only.
+    if port == NOVNC_PORT:
+        return None
     try:
         session = runtime.live_session(conversation_id)
         if session is None:

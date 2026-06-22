@@ -172,6 +172,16 @@ class HostPreviewProxyMiddleware:
         """Fix 2 (codex P1) — fall back to the in-sandbox liveness proxy when there's
         no published host upstream. Returns True iff the live in-box server answered
         (response already sent); False to let the caller emit the honest 503. GET only."""
+        # SECURITY (noVNC gate-bypass fix): NOVNC_PORT is in USER_PORTS, so a hostname
+        # like {cid8}-6080.localhost reaches here when the upstream resolver returns
+        # None. For 6080 that None is the live-browser GATE (port_upstream refuses
+        # NOVNC_PORT when the feature is disabled), NOT just "no host port published".
+        # Curling the stale noVNC HTTP surface from inside the box would re-expose a
+        # disabled live-browser surface, bypassing the gate. The noVNC surface is
+        # served EXCLUSIVELY via the gated published-port proxy — never fetch_inside.
+        from disco.tools.sandbox._container import NOVNC_PORT
+        if port == NOVNC_PORT:
+            return False
         resolver = self.session_resolver
         if resolver is None:
             return False
