@@ -75,14 +75,18 @@ async def test_inbound_forwarder_injected_and_launched_on_sidecar(tmp_path):
         conversation_id="c",
     )
     sidecar = client.runs[0]
-    # The stdlib forwarder script was put_archive'd onto the sidecar (NOT piped on a
-    # detached-exec stdin — the live gotcha).
-    assert any("inbound_forward.py" in p for p in sidecar.fs), sidecar.fs.keys()
-    # It was launched detached, targeting the SANDBOX's internal IP (172.28.0.5, the
-    # fake's synthetic internal-net IP) and the published port set.
+    # [FIX6 live-found on real gVisor] the forwarder is delivered + launched in ONE
+    # exec: the script is base64-embedded, decoded to /inbound_forward.py, then python3
+    # `exec`s it — all in the same shell. A separate put_archive + later exec was proven
+    # UNRELIABLE on a dual-homed runsc sidecar (put returned success but the file was not
+    # visible to the next exec → forwarder died Errno 2 → preview silently unreachable).
     launched = [c for c in sidecar.exec_calls if any("inbound_forward.py" in str(a) for a in c)]
     assert launched, "inbound forwarder was not launched on the sidecar"
     joined = " ".join(launched[0])
+    # delivered inline (base64 decode → file) and run in the same shell, not put_archive
+    assert "base64 -d > /inbound_forward.py" in joined, joined
+    assert "python3 /inbound_forward.py" in joined, joined
+    # targets the SANDBOX's internal IP (172.28.0.5, the fake's synthetic IP) + ports
     assert "172.28.0.5" in joined, joined
     for port in sorted(PUBLISHED_PORTS):
         assert str(port) in joined, f"port {port} missing from forwarder launch: {joined}"

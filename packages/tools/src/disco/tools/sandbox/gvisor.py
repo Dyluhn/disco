@@ -14,6 +14,7 @@ run via `asyncio.to_thread`.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import pathlib
 import posixpath
@@ -285,14 +286,23 @@ class GvisorSandboxService:
                 )
                 return
             script = pathlib.Path(_inbound_forward_mod.__file__).read_bytes()
-            _put_file(sidecar, "/", "inbound_forward.py", script)
+            # [FIX6 — live-found on real gVisor] Do NOT deliver the forwarder via a
+            # separate `put_archive` + later `exec`: against a dual-homed runsc sidecar
+            # that put intermittently returns success while the file is NOT visible to a
+            # subsequently-exec'd process (the forwarder then dies with Errno 2 and the
+            # preview is silently unreachable). Instead embed the script base64 and
+            # decode+exec it in ONE shell — the write and the run share a process, so
+            # there is no cross-exec gofer-visibility gap. `exec` makes python3 the
+            # detached process itself (not a backgrounded child that gets reaped).
+            b64 = base64.b64encode(script).decode("ascii")
             ports_arg = " ".join(str(p) for p in sorted(PUBLISHED_PORTS))
             sidecar.exec_run(
                 [
                     "sh",
                     "-c",
-                    f"python3 /inbound_forward.py {sbx_ip} {ports_arg} "
-                    f">/var/log/inbound.log 2>&1 &",
+                    f"echo {b64} | base64 -d > /inbound_forward.py && "
+                    f"exec python3 /inbound_forward.py {sbx_ip} {ports_arg} "
+                    f">/var/log/inbound.log 2>&1",
                 ],
                 detach=True,
             )
