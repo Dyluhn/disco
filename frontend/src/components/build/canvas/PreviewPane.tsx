@@ -13,14 +13,6 @@ import { SELECTION_AGENT_SCRIPT } from "@/lib/selectionAgent";
 import { formatEditSteer, parseOid } from "@/lib/resolvers/appResolver";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
-/** E2 — detect a Vite/bundler entry HTML by the module-script src it references.
- *  The srcdoc iframe can't load `/src/...` or `/@vite/...` (those are dev-server
- *  virtual modules), so a bundler entry is UNRUNNABLE as a srcdoc preview. The
- *  PreviewPane defaults to the live server in that case (when one is available). */
-function isBundlerEntryHtml(html: string): boolean {
-  return /<script[^>]*\bsrc=["'](?:\/src\/|\/@vite\/)/i.test(html);
-}
-
 /** One phase-aware pane (replacing the redundant Preview + Live tabs). When the agent's
  * dev server is reachable (via the ACTIVE backend's port exposure — local direct, gVisor
  * over the tailnet), this IS the live interactive preview (an iframe of the real running

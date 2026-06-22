@@ -145,21 +145,24 @@ describe("NeedMoreCard", () => {
     expect(screen.getByRole("heading", { name: /Need More/i })).toBeInTheDocument();
   });
 
-  // A5: the "Build a deck" handoff creates an AUTONOMOUS build conversation and
-  // navigates to it with the serialized report as the seed task.
-  it("A5: 'Build a deck' starts an autonomous build seeded with the report", async () => {
+  // A5: the "Build a deck" handoff creates a conversation on the AGENT surface and
+  // navigates to it with the serialized report as the seed task. runthru-v2 #7+#2
+  // routes slide-making to the AGENT surface (task framing, not the build/live-preview
+  // framing) and DROPS autonomous so the user sees + approves the plan first —
+  // createBuildConversation(null, "agent", false) + navigate to /agent/<cid>.
+  it("A5: 'Build a deck' starts an agent run seeded with the report", async () => {
     const user = userEvent.setup();
     renderCard();
 
     await user.click(screen.getByRole("button", { name: /Build a deck/i }));
 
-    await waitFor(() => expect(_createBuild).toHaveBeenCalledWith(null, "build", true));
+    await waitFor(() => expect(_createBuild).toHaveBeenCalledWith(null, "agent", false));
     await waitFor(() => expect(_navMock).toHaveBeenCalled());
     const [path, opts] = _navMock.mock.calls[0] as [
       string,
       { state: { seedTask: string; seedContext: string } },
     ];
-    expect(path).toBe("/build/conv_new_deck");
+    expect(path).toBe("/agent/conv_new_deck");
     // R3: the VISIBLE seed is a short one-liner (not the whole report dumped inline).
     expect(opts.state.seedTask).toMatch(/make slides for the deep research report/i);
     expect(opts.state.seedTask).not.toContain("# Report");

@@ -177,7 +177,7 @@ describe("PreviewPane — E2: bundler entry defaults to live server when proxy i
     expect(screen.getByText("live server")).toBeInTheDocument();
   });
 
-  it("still defaults to the rendered srcdoc for plain static HTML (no bundler modules)", () => {
+  it("defaults to the live server even for plain static HTML when a proxy is available (runthru-v2 #4)", () => {
     useBuildPreviewMock.mockReturnValue({
       data: {
         available: true,
@@ -190,10 +190,14 @@ describe("PreviewPane — E2: bundler entry defaults to live server when proxy i
     render(
       withClient(<ExecutionCanvas events={[HTML]} status="RUNNING" cid="conv_e2static" />),
     );
-    // Plain static HTML has no /src/ or /@vite/ references → srcdoc renders fine,
-    // so the rendered default is preserved (user can still toggle to live).
-    expect(screen.getByTitle("Static preview")).toBeInTheDocument();
-    expect(screen.queryByTitle("Live preview")).not.toBeInTheDocument();
+    // runthru-v2 #4: whenever a live preview server is available the pane DEFAULTS
+    // TO LIVE — it serves the real built site with correct css/js asset resolution,
+    // which the srcdoc can't do reliably. The old bundler-vs-static split was
+    // dropped. Static HTML is still renderable on demand via the "Rendered" toggle.
+    expect(screen.getByTitle("Live preview")).toBeInTheDocument();
+    expect(screen.queryByTitle("Static preview")).not.toBeInTheDocument();
+    // The client-side srcDoc still exists, so the "Rendered" toggle is offered.
+    expect(screen.getByRole("button", { name: /rendered/i })).toBeInTheDocument();
   });
 });
 

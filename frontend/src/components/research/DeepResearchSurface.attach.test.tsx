@@ -79,13 +79,16 @@ describe("DeepResearchSurface — G1/DR-4 attach (empty state)", () => {
     expect(screen.getByRole("button", { name: /attach files/i })).toBeEnabled();
   });
 
-  it("UploadComposer is absent when agentLive is false (offline/fixture mode)", async () => {
+  it("UploadComposer renders but self-disables when agentLive is false (offline/fixture mode)", async () => {
     vi.spyOn(clientModule, "agentLive").mockReturnValue(false);
     renderSurface();
 
-    // Allow async effects to settle; the composer must never appear.
+    // Allow async effects to settle. runthru-v2 #9: the composer is ALWAYS rendered
+    // inline (no longer gated on `r.preCid && …`). With agentLive false no preCid is
+    // created, so the composer self-disables (disabled:opacity-40) instead of vanishing.
     await new Promise((r) => setTimeout(r, 100));
-    expect(screen.queryByTestId("upload-composer")).not.toBeInTheDocument();
+    expect(screen.getByTestId("upload-composer")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /attach files/i })).toBeDisabled();
   });
 
   it("createDeepResearchConversation is called on mount with empty query", async () => {

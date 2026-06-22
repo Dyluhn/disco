@@ -15,7 +15,6 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { ModeProvider } from "@/shell/ModeProvider";
@@ -90,8 +89,8 @@ describe("ResearchSurface — G1/DR-4 attach (empty state)", () => {
     expect(btn).not.toBeDisabled();
   });
 
-  it("UploadComposer is absent when preCid is null (offline / session active)", async () => {
-    // Override to simulate no preCid — offline or already in a run.
+  it("UploadComposer renders but self-disables when preCid is null (offline / re-create window)", async () => {
+    // Override to simulate no preCid — offline or the brief pre-create window.
     const { useResearch } = await import("@/hooks/useResearch");
     (useResearch as ReturnType<typeof vi.fn>).mockReturnValueOnce(
       makeResearchReturn(null),
@@ -99,8 +98,12 @@ describe("ResearchSurface — G1/DR-4 attach (empty state)", () => {
 
     renderResearchSurface();
 
-    // No upload-composer: null preCid → footer is undefined.
-    expect(screen.queryByTestId("upload-composer")).not.toBeInTheDocument();
+    // runthru-v2 #9: the composer is ALWAYS rendered inline (it no longer unmounts
+    // on `r.preCid && …`) so the paperclip doesn't flicker out during the brief
+    // pre-create window. With a null cid it self-disables (disabled:opacity-40)
+    // rather than disappearing.
+    expect(screen.getByTestId("upload-composer")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /attach files/i })).toBeDisabled();
   });
 
   it("UploadComposer is rendered inside QueryInput's footer slot", () => {
