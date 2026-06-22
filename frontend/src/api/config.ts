@@ -1,6 +1,7 @@
 import { MCP_CONNECTIONS } from "@/fixtures/config";
 import type { McpConnection, McpServerApprove, McpServerConfig, Skill, SkillCreate, SkillPatch } from "@/types/config";
-import { apiGet, apiSend, fixtureDelay, isLive } from "./client";
+import type { ProbeResult } from "@/types/probe";
+import { agentSend, apiGet, apiSend, fixtureDelay, isLive } from "./client";
 
 /**
  * Data-access for the skills + MCP surfaces. Components reach these only through
@@ -166,4 +167,11 @@ export async function approveMcpServer(
   };
   fixtureMcp[idx] = updated;
   return updated;
+}
+
+/** T4.5 — handshake a configured MCP server (initialize + tools/list) and report
+ * the tool count or the real connection error. Runs against the agent-server,
+ * which owns the MCP transport clients. */
+export async function testMcpConnection(name: string): Promise<ProbeResult> {
+  return agentSend<ProbeResult>("POST", "/api/mcp/test", { name });
 }

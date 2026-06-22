@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { agentLive } from "@/api/client";
+import { testMcpConnection } from "@/api/config";
 import {
   useApproveMcpServer,
   useCreateMcpServer,
@@ -9,6 +11,7 @@ import {
   useUpdateMcpServer,
 } from "@/hooks/useConfig";
 import type { McpServerConfig, McpStatus } from "@/types/config";
+import { ProbeButton } from "./ProbeButton";
 
 /**
  * MCP connections (rung B) — live add, toggle, approve, and remove external
@@ -369,6 +372,18 @@ export function McpSection() {
                     <Trash2 className="size-3.5" aria-hidden />
                   </button>
                 </div>
+              </div>
+              {/* T4.5 live probe: handshake the server (initialize + tools/list)
+                  and show the tool count or the real connection error. Disabled
+                  until the agent-server (which owns the MCP transport) is up. */}
+              <div className="px-body pb-inline">
+                <ProbeButton
+                  control="settings.mcp-test"
+                  idleLabel="Test connection"
+                  run={() => testMcpConnection(c.id)}
+                  disabled={!agentLive()}
+                  disabledHint="connect the agent server to test"
+                />
               </div>
               {hashMismatch && c.description_hash && c.new_description_hash && (
                 <div className="px-body pb-inline">

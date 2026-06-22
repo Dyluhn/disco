@@ -36,6 +36,7 @@ from .config.dtos import (
     ModelDTO,
     ModelUpsert,
     OpenRouterKeyStatus,
+    ProbeResult,
     ProjectStorageConfigDTO,
     SandboxConfigDTO,
     SecretsListDTO,
@@ -202,6 +203,152 @@ class ConfigState:
             raise ValueError("use the dedicated /api/openrouter/key route for the OpenRouter key")
         self._secrets.clear_secret(name)
         return self.secret_status(name)
+
+    def _resolve_secret_value(self, name: str) -> str | None:
+        """The same resolution order the agent-server uses to overlay a key at
+        build time: the encrypted store first (by env-var NAME), then the
+        reserved OpenRouter slot if this IS the OpenRouter env, then the live
+        process env. Returns None when nothing decryptable is available."""
+        import os
+
+        from disco.core.llm.secrets import (
+            OPENROUTER_API_KEY_ENV,
+            OPENROUTER_API_KEY_ENV_LEGACY,
+        )
+
+        val = self._secrets.get_secret(name)
+        if not val and name in (OPENROUTER_API_KEY_ENV, OPENROUTER_API_KEY_ENV_LEGACY):
+            val = self._secrets.get_openrouter_key()
+        if not val:
+            val = os.environ.get(name)
+        return val or None
+
+    async def test_secret(self, name: str) -> ProbeResult:
+        """Probe T4.1: a cheap authenticated call against the OpenAI-compatible
+        backend that USES this key, so a "green" means the provider really
+        answered. The endpoint is resolved from the model catalogue (the
+        ModelEntry whose ``api_key_env`` matches this name); the value is
+        decrypted from the secret store. Honest failures (no endpoint, no value,
+        bad key, host down) come back ok=False at HTTP 200."""
+        cfg = self._store.load()
+        # 1) Find an OpenAI-compatible model endpoint that consumes this key —
+        # capture its model_id too, so the probe can do a real authenticated
+        # completion (a key that only passes an UNauthenticated /models GET would
+        # be a false green — OpenRouter serves /models without a key).
+        base_url: str | None = None
+        model_id: str = ""
+        for entry in cfg.models.values():
+            if entry.api_key_env == name and entry.base_url:
+                base_url = entry.base_url
+                model_id = entry.model_id
+                break
+        if base_url is None:
+            # Maybe a search/extraction key (no /models endpoint) — point the
+            # user at the right probe rather than failing opaquely.
+            ds_envs = {
+                cfg.search.api_key_env,
+                cfg.extraction.api_key_env,
+            }
+            if name in ds_envs and name:
+                return ProbeResult(
+                    ok=False,
+                    status="misconfigured",
+                    detail=(
+                        f"{name} is used by a data source, which has no models "
+                        "list to test. Use 'Test connection' under Data sources."
+                    ),
+                )
+            return ProbeResult(
+                ok=False,
+                status="misconfigured",
+                detail=(
+                    f"No configured model references {name}. Assign it as a "
+                    "model's api_key_env (Models), then test it there."
+                ),
+            )
+        # 2) Decrypt the stored value (or fall back to env).
+        value = self._resolve_secret_value(name)
+        if not value:
+            locked = self._secrets.locked
+            return ProbeResult(
+                ok=False,
+                status="misconfigured",
+                detail=(
+                    f"No decryptable value for {name} — "
+                    + ("the app secret can't decrypt it; re-enter the key."
+                       if locked
+                       else "store the key first.")
+                ),
+            )
+        # 3) The real, authenticated network call (a 1-token completion).
+        from .probe_clients import probe_openai_auth
+
+        ok, status, detail = await probe_openai_auth(base_url, value, model_id)
+        return ProbeResult(ok=ok, status=status, detail=detail)
+
+    async def test_data_source(self, kind: str) -> ProbeResult:
+        """Probe T4.2: reachability of the configured search/extraction endpoint.
+        Bundled (in-process) tiers have no network dependency — reported honestly
+        as such, never as a remote "ok". Self-host tiers probe the configured base
+        URL; paid tiers probe the vendor host (any HTTP answer = reachable, a
+        401/403 = the key was rejected)."""
+        import os
+
+        from .probe_clients import probe_reachable
+
+        cfg = self._store.load()
+        # Vendor hosts for the paid tiers (no key-free models list; reachability only).
+        _PAID_HOSTS = {
+            "tavily": "https://api.tavily.com",
+            "brave": "https://api.search.brave.com",
+            "firecrawl": "https://api.firecrawl.dev",
+        }
+        if kind == "search":
+            s = cfg.search
+            provider, base_url, key_env = s.provider, s.base_url.strip(), s.api_key_env.strip()
+            bundled = "ddgs"
+        elif kind == "extraction":
+            e = cfg.extraction
+            provider, base_url, key_env = e.provider, e.base_url.strip(), e.api_key_env.strip()
+            bundled = "local"
+        else:
+            return ProbeResult(
+                ok=False, status="error", detail=f"unknown data-source kind {kind!r}"
+            )
+
+        if provider == bundled:
+            return ProbeResult(
+                ok=True,
+                status="bundled",
+                detail=(
+                    f"Bundled in-process tier ({provider}) — runs locally with no "
+                    "network service, so there's nothing to reach."
+                ),
+                provider=provider,
+            )
+        # Self-host tiers (searxng / crawl4ai) need a configured base URL.
+        if provider in ("searxng", "crawl4ai"):
+            if not base_url:
+                return ProbeResult(
+                    ok=False,
+                    status="misconfigured",
+                    detail=f"No base URL set for {provider} — add the service URL above.",
+                    provider=provider,
+                )
+            ok, status, detail = await probe_reachable(base_url)
+            return ProbeResult(ok=ok, status=status, detail=detail, provider=provider)
+        # Paid tiers (tavily / brave / firecrawl): probe the vendor host with the key.
+        host = base_url or _PAID_HOSTS.get(provider)
+        if not host:
+            return ProbeResult(
+                ok=False,
+                status="misconfigured",
+                detail=f"No endpoint known for provider {provider!r}.",
+                provider=provider,
+            )
+        key = (self._secrets.get_secret(key_env) or os.environ.get(key_env)) if key_env else None
+        ok, status, detail = await probe_reachable(host, api_key=key)
+        return ProbeResult(ok=ok, status=status, detail=detail, provider=provider)
 
     def assignments(self) -> AssignmentsDTO:
         return _assignments_from(self._store.load())

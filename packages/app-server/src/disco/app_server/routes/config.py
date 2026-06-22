@@ -14,6 +14,7 @@ from ..config.dtos import (
     EncodersConfigDTO,
     ImageGenConfigDTO,
     LiveBrowserConfigDTO,
+    ProbeResult,
     ProjectStorageConfigDTO,
     SandboxConfigDTO,
     TtsConfigDTO,
@@ -63,6 +64,13 @@ def make_config_router(state: ConfigState) -> APIRouter:
     @router.put("/api/data-sources/config")
     async def put_data_sources_config(dto: DataSourcesConfigDTO) -> DataSourcesConfigDTO:
         return state.update_data_sources_config(dto)
+
+    @router.post("/api/data-sources/{kind}/test")
+    async def test_data_source(kind: str) -> ProbeResult:
+        """Probe T4.2 — reachability of the configured search/extraction endpoint.
+        ``kind`` is 'search' or 'extraction'. Bundled tiers report honestly that
+        there's nothing to reach; remote tiers do a real GET. Always 200."""
+        return await state.test_data_source(kind)
 
     @router.get("/api/projects/storage/config")
     async def get_projects_config() -> ProjectStorageConfigDTO:

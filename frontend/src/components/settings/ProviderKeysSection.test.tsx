@@ -63,6 +63,11 @@ function installFetch() {
       // useExpectedKeyNames() now also reads image-gen; procedural carries no key.
       return jsonResponse({ provider: "procedural", base_url: "", api_key_env: "", model: "" });
     }
+    if (method === "POST" && url.endsWith("/test") && url.startsWith("/api/secrets/")) {
+      // T4.1 probe: a real authenticated call would happen server-side; here the
+      // boundary returns the honest result the section must render.
+      return jsonResponse({ ok: true, status: "ok", detail: "the key works" });
+    }
     if (method === "PUT" && url.startsWith("/api/secrets/")) {
       const name = decodeURIComponent(url.split("/api/secrets/")[1]);
       names.push(name);
@@ -127,7 +132,7 @@ describe("ProviderKeysSection — store any provider key encrypted by name", () 
     );
     // ...the value rode in the body, NOT the URL (write-only key)...
     const putCall = fetchStub.mock.calls.find(
-      ([u, i]) => (i?.method ?? "GET").toUpperCase() === "PUT",
+      ([, i]) => (i?.method ?? "GET").toUpperCase() === "PUT",
     );
     expect(String(putCall?.[1]?.body)).toContain("sk-openai-SECRET");
     // ...and the stored name now renders in the list.
@@ -226,6 +231,30 @@ describe("ProviderKeysSection — store any provider key encrypted by name", () 
     fireEvent.click(prefill ?? addButtons[0]);
     const nameInput = screen.getByLabelText("Provider key env-var name") as HTMLInputElement;
     await waitFor(() => expect(nameInput.value).toBe("ANTHROPIC_API_KEY"));
+  });
+
+  it("T4.1: 'Test key' POSTs to the probe endpoint and renders the live result", async () => {
+    names = ["OPENAI_API_KEY"];
+    render(createElement(ProviderKeysSection), { wrapper: makeWrapper() });
+    expect(await screen.findByText("OPENAI_API_KEY")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /test key/i }));
+
+    // it hit the REAL probe endpoint for that key...
+    await waitFor(() =>
+      expect(
+        fetchStub.mock.calls.some(
+          ([u, i]) =>
+            (i?.method ?? "GET").toUpperCase() === "POST" &&
+            u === "/api/secrets/OPENAI_API_KEY/test",
+        ),
+      ).toBe(true),
+    );
+    // ...and rendered the honest result chip.
+    await waitFor(() =>
+      expect(document.querySelector("[data-probe-status='ok']")).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/the key works/)).toBeInTheDocument();
   });
 
   it("excludes the reserved OpenRouter env from the cross-reference", async () => {

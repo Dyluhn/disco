@@ -13,8 +13,11 @@
 import { useEffect, useState } from "react";
 import { Check, Container, Globe, KeyRound, Loader2, Package } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { isLive } from "@/api/client";
+import { testDataSource } from "@/api/models";
 import { useDataSourcesConfig, useUpdateDataSourcesConfig } from "@/hooks/useModels";
 import type { DataSourcesConfig, ExtractionProvider, SearchProvider } from "@/types/models";
+import { ProbeButton } from "./ProbeButton";
 
 type Tier = "bundled" | "selfhost" | "paid";
 
@@ -179,16 +182,28 @@ export function DataSourcesSection() {
             onApiKeyEnv={(v) => set({ extraction_api_key_env: v })}
           />
 
-          {/* Honest validity state: no "test connection" — a provider/base-URL/key
-              is only exercised on the next search or extraction run, so we never
-              claim a source is reachable here. */}
-          <p
-            data-source-validity="untested-until-search"
-            className="font-ui text-[0.76rem] text-text-faint"
-          >
-            Sources aren't tested here — connectivity and credentials are first exercised on
-            the next search or extraction run.
-          </p>
+          {/* T4.2 live probes: a real reachability check against the SAVED
+              search / extraction endpoint. Bundled tiers report honestly that
+              there's nothing to reach; remote tiers do a real GET. Disabled until
+              changes are saved (the probe tests persisted config) and a backend
+              is connected — no false affordance. */}
+          <div className="flex flex-col gap-hair">
+            <span className="font-ui text-[0.76rem] text-text-muted">Test connection</span>
+            <ProbeButton
+              control="settings.datasource-test-search"
+              idleLabel="Test search"
+              run={() => testDataSource("search")}
+              disabled={!isLive() || dirty}
+              disabledHint={dirty ? "save changes to test" : "connect a backend to test"}
+            />
+            <ProbeButton
+              control="settings.datasource-test-extraction"
+              idleLabel="Test extraction"
+              run={() => testDataSource("extraction")}
+              disabled={!isLive() || dirty}
+              disabledHint={dirty ? "save changes to test" : "connect a backend to test"}
+            />
+          </div>
 
           <div className="flex items-center gap-inline">
             <button

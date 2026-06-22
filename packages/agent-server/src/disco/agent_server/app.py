@@ -34,6 +34,7 @@ from .routes import (
     make_models_router,
     make_preview_edit_router,
     make_preview_router,
+    make_probes_router,
     make_projects_router,
     make_report_router,
     make_schedules_router,
@@ -129,5 +130,6 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     app.include_router(make_report_router(store, runtime))
     app.include_router(make_share_router(store, runtime))
     app.include_router(make_debug_router(store, runtime))
+    app.include_router(make_probes_router())
 
     return app

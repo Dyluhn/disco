@@ -18,12 +18,15 @@
 import { useEffect, useState } from "react";
 import { Check, Cloud, Cpu, Loader2, Server } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { agentLive } from "@/api/client";
+import { testImageGen } from "@/api/models";
 import {
   useImageGenConfig,
   useOpenRouterKey,
   useOpenRouterModels,
   useUpdateImageGenConfig,
 } from "@/hooks/useModels";
+import { ProbeButton } from "./ProbeButton";
 
 /** Honest price label for an OpenRouter IMAGE model, from real OpenRouter data:
  *  - image_price_per_m (the /endpoints `image_output` rate ×1e6) is the actual
@@ -245,6 +248,19 @@ export function ImageGenSection() {
               ⚠ {fallbackWarning}
             </p>
           )}
+
+          {/* T4.4 live probe: one tiny 64×64 generation via the SAVED tier. If a
+              real tier is selected but the run falls back to the keyless procedural
+              placeholder (#76), the probe SAYS procedural-fallback rather than
+              faking a green. Disabled until edits are saved + the agent is up. */}
+          <ProbeButton
+            control="settings.imagegen-test"
+            idleLabel="Test image"
+            run={testImageGen}
+            disabled={!agentLive() || fieldsDirty}
+            disabledHint={fieldsDirty ? "save changes to test" : "connect the agent server to test"}
+          />
+          {/* the procedural-fallback fact for this section ties to the #76 warning above */}
 
           {/* Contextual fields — endpoint (self-host/paid) + model + key env (paid). */}
           {showFields && (

@@ -1,12 +1,14 @@
 import { AlertTriangle, Check, KeyRound, Lock, Pencil, X } from "lucide-react";
 import { useRef, useState } from "react";
-import { ApiError } from "@/api/client";
+import { ApiError, isLive } from "@/api/client";
+import { testSecret } from "@/api/secrets";
 import {
   useClearSecret,
   useExpectedKeyNames,
   useSecrets,
   useSetSecret,
 } from "@/hooks/useSecrets";
+import { ProbeButton } from "./ProbeButton";
 
 const field =
   "w-full rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text outline-none focus:border-hairline-strong";
@@ -90,36 +92,50 @@ function StoredKeyRow({
 
   return (
     <li
-      className={`flex items-center justify-between gap-inline rounded-control border px-body py-inline ${
+      className={`flex flex-col gap-hair rounded-control border px-body py-inline ${
         locked ? "border-unsupported/40 bg-unsupported/5" : "border-hairline bg-surface-1"
       }`}
     >
-      <span className="flex items-center gap-hair font-mono text-[0.82rem] text-text">
-        {locked ? (
-          <Lock className="size-3.5 text-unsupported" aria-hidden />
-        ) : (
-          <KeyRound className="size-3.5 text-supported" aria-hidden />
-        )}
-        {name}
-        {locked && <span className="font-ui text-[0.74rem] text-unsupported">can't decrypt</span>}
-      </span>
-      <div className="flex items-center gap-inline">
-        <button
-          type="button"
-          onClick={() => setEditing(true)}
-          className="flex items-center gap-hair font-ui text-[0.8rem] text-text-muted hover:text-text"
-        >
-          <Pencil className="size-3" aria-hidden /> {locked ? "Re-enter" : "Edit"}
-        </button>
-        <button
-          type="button"
-          data-disco-control="settings.provider-key-clear"
-          onClick={onClear}
-          className="font-ui text-[0.8rem] text-text-muted hover:text-unsupported"
-        >
-          Clear
-        </button>
+      <div className="flex items-center justify-between gap-inline">
+        <span className="flex items-center gap-hair font-mono text-[0.82rem] text-text">
+          {locked ? (
+            <Lock className="size-3.5 text-unsupported" aria-hidden />
+          ) : (
+            <KeyRound className="size-3.5 text-supported" aria-hidden />
+          )}
+          {name}
+          {locked && <span className="font-ui text-[0.74rem] text-unsupported">can't decrypt</span>}
+        </span>
+        <div className="flex items-center gap-inline">
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="flex items-center gap-hair font-ui text-[0.8rem] text-text-muted hover:text-text"
+          >
+            <Pencil className="size-3" aria-hidden /> {locked ? "Re-enter" : "Edit"}
+          </button>
+          <button
+            type="button"
+            data-disco-control="settings.provider-key-clear"
+            onClick={onClear}
+            className="font-ui text-[0.8rem] text-text-muted hover:text-unsupported"
+          >
+            Clear
+          </button>
+        </div>
       </div>
+      {/* T4.1 live probe: a real authenticated call to the provider that uses
+          this key. Disabled when the key can't be decrypted or no backend is
+          connected (no false affordance). */}
+      {!locked && (
+        <ProbeButton
+          control="settings.provider-key-test"
+          idleLabel="Test key"
+          run={() => testSecret(name)}
+          disabled={!isLive()}
+          disabledHint="connect a backend to test"
+        />
+      )}
     </li>
   );
 }
@@ -303,15 +319,16 @@ export function ProviderKeysSection() {
             {setSecret.isPending ? "Saving…" : "Add key"}
           </button>
         </div>
-        {/* Honest validity state: we never round-trip a key to a provider here, so
-            we cannot say a stored key is "valid" — only that it's stored. Validity
-            is first observable when a tool call actually uses it. No fake "test". */}
+        {/* Live validity: each stored key has a real "Test key" probe (above)
+            that makes an authenticated call to the provider that uses it. A green
+            means the provider really answered; a failure is shown honestly. */}
         <p
-          data-key-validity="untested-until-use"
+          data-key-validity="tested-on-demand"
           className="font-ui text-[0.74rem] text-text-faint"
         >
-          Stored keys are encrypted at rest but not verified here — a key's validity
-          is only confirmed the first time a model or tool call uses it.
+          Stored keys are encrypted at rest. Use “Test key” on a stored key to verify
+          it with a real authenticated call to its provider — a key referenced by a
+          configured model can be checked without spending a conversation.
         </p>
         {nameError && (
           <p role="alert" className="font-ui text-[0.78rem] text-unsupported">{nameError}</p>

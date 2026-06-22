@@ -103,6 +103,33 @@ class SecretsListDTO(BaseModel):
     can_store: bool
 
 
+class ProbeResult(BaseModel):
+    """The outcome of a live "test" probe (provider key / data source / TTS /
+    image / MCP). A real network call decides this — never a fake green. An
+    EXPECTED failure (bad key, host down, misconfigured) returns ``ok=False``
+    with a machine-readable ``status`` + human ``detail`` at HTTP 200, so the UI
+    renders the truth without a 500. ``status`` vocabulary:
+      ``ok`` — the provider really answered.
+      ``unauthorized`` — reached, but the credential was rejected (401/403).
+      ``unreachable`` — connect/timeout/DNS failure; the host didn't answer.
+      ``misconfigured`` — nothing to probe (no endpoint/key/server resolved).
+      ``disabled`` — the feature is turned off in Settings.
+      ``procedural-fallback`` — a real tier is selected but the run fell back to
+        the keyless procedural/bundled placeholder (image-gen #76).
+      ``error`` — the provider answered with an unexpected/non-2xx status.
+    Optional extras carry probe-specific facts (the model count, tool count,
+    synthesized byte length) so the chip can show a concrete number."""
+
+    ok: bool
+    status: str
+    detail: str = ""
+    # probe-specific extras (None when not applicable to that probe)
+    provider: str | None = None
+    tool_count: int | None = None
+    byte_count: int | None = None
+    procedural: bool | None = None
+
+
 class AssignmentsDTO(BaseModel):
     default_model: str
     roles: dict[str, str]  # {rag_answerer, query_rewriter, summarizer, nli_verifier} -> model id

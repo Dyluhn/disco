@@ -16,7 +16,7 @@ import re
 
 from fastapi import APIRouter, HTTPException
 
-from ..config.dtos import SecretBody, SecretsListDTO, SecretStatus
+from ..config.dtos import ProbeResult, SecretBody, SecretsListDTO, SecretStatus
 from ..config_state import ConfigState
 
 # Provider keys are referenced by their env-var name; constrain the path param to
@@ -57,5 +57,12 @@ def make_secrets_router(state: ConfigState) -> APIRouter:
             return state.clear_secret(_validate(name))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/api/secrets/{name}/test")
+    async def test_secret(name: str) -> ProbeResult:
+        """Probe T4.1 — a REAL authenticated call to the provider that uses this
+        key (an OpenAI-compatible models list). Expected failures (no endpoint,
+        bad key, unreachable) return ok=False at 200; only a bad NAME is a 400."""
+        return await state.test_secret(_validate(name))
 
     return router

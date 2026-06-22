@@ -21,7 +21,10 @@
 import { useEffect, useState } from "react";
 import { Check, Cloud, Cpu, Loader2, Server, VolumeX } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { agentLive } from "@/api/client";
+import { testTts } from "@/api/models";
 import { useTtsConfig, useUpdateTtsConfig } from "@/hooks/useModels";
+import { ProbeButton } from "./ProbeButton";
 
 type Provider = "bundled" | "speaches" | "openai";
 type Mode = "off" | Provider;
@@ -284,16 +287,17 @@ export function AudioSection() {
                   <span className="font-ui text-[0.76rem] text-text-faint">Saved</span>
                 )}
               </div>
-              {/* Honest validity state: no "test voice/TTS" here. The voice model,
-                  endpoint, or key is first exercised when an audio overview is
-                  actually generated — we don't fake a synthesis test. */}
-              <p
-                data-tts-validity="untested-until-overview"
-                className="font-ui text-[0.76rem] text-text-faint"
-              >
-                Voices and endpoints aren't tested here — they're first exercised the next time an
-                audio overview is generated.
-              </p>
+              {/* T4.3 live probe: synthesize the single word "Disco" via the
+                  SAVED TTS tier. Non-empty audio = ok; a disabled/unreachable/
+                  bad-key tier fails honestly. Disabled until field edits are saved
+                  and the agent-server is connected. */}
+              <ProbeButton
+                control="settings.audio-test-tts"
+                idleLabel="Test TTS"
+                run={testTts}
+                disabled={!agentLive() || fieldsDirty}
+                disabledHint={fieldsDirty ? "save changes to test" : "connect the agent server to test"}
+              />
             </div>
           )}
           {save.error && (

@@ -14,7 +14,8 @@ import type {
   TtsConfig,
 } from "@/types/models";
 import type { SandboxConfig } from "@/types/sandbox";
-import { apiGet, apiSend, fixtureDelay, isLive } from "./client";
+import type { ProbeResult } from "@/types/probe";
+import { agentSend, apiGet, apiSend, fixtureDelay, isLive } from "./client";
 
 /**
  * Data-access layer for the model catalogue + assignments (the absolute, manual
@@ -235,6 +236,24 @@ export async function updateDataSourcesConfig(cfg: DataSourcesConfig): Promise<D
   await fixtureDelay();
   fixtureDataSources = { ...cfg };
   return { ...fixtureDataSources };
+}
+
+// ---- T4.2/T4.3/T4.4 live provider probes -----------------------------------
+
+/** T4.2 — reachability of the configured search/extraction endpoint (app-server). */
+export async function testDataSource(kind: "search" | "extraction"): Promise<ProbeResult> {
+  return apiSend<ProbeResult>("POST", `/api/data-sources/${kind}/test`);
+}
+
+/** T4.3 — synthesize a one-word clip via the configured TTS tier (agent-server). */
+export async function testTts(): Promise<ProbeResult> {
+  return agentSend<ProbeResult>("POST", "/api/tts/test");
+}
+
+/** T4.4 — one tiny generation via the configured image tier; flags procedural
+ * fallback honestly (#76) (agent-server). */
+export async function testImageGen(): Promise<ProbeResult> {
+  return agentSend<ProbeResult>("POST", "/api/image-gen/test");
 }
 
 // ---- OpenRouter ------------------------------------------------------------
