@@ -78,6 +78,7 @@ class LocalSandboxService(GvisorSandboxService):
         net_kwargs: dict[str, Any] = {}
         environment: dict[str, str] = {}
         egress_network = egress_sidecar = None
+        net_name = ""  # set in the filtered branch; used by the Fix6 forwarder launch
         if mode == "filtered":
             # Reuse the gVisor proxy setup unchanged — same docker-py client, same
             # internal-network + sidecar pattern (the local tier just differs in its
@@ -135,4 +136,13 @@ class LocalSandboxService(GvisorSandboxService):
                 except Exception:  # noqa: BLE001 — best-effort
                     pass
             raise SandboxUnavailableError(f"container failed to start: {exc}") from exc
+        # [FIX6 podman-parity] The parent gVisor `_start_container` launches the inbound
+        # preview forwarder on the sidecar after the sandbox starts; this override has
+        # to do the same or a FILTERED box's published preview port forwards to nothing
+        # (the sidecar publishes the port, but nothing listens on it → connection
+        # refused → preview 502). Live-proven on the workstation's rootless podman: with
+        # this call the host reaches the filtered box's preview via the sidecar; without
+        # it, 502. Best-effort (never raises), same as the parent.
+        if mode == "filtered" and egress_sidecar is not None:
+            self._launch_inbound_forwarder(egress_sidecar, container, net_name)
         return container, egress_network, egress_sidecar

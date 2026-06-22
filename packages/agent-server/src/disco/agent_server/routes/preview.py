@@ -300,6 +300,12 @@ def make_preview_router(
             async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
                 r = await client.get(f"{upstream}/{path}")
         except Exception:  # noqa: BLE001 — upstream not up yet / unreachable
+            # Fix 2 safety net: a RESOLVED-but-unreachable upstream (host port mapped but
+            # nothing answers) bypassed the None-fallback above; try the in-sandbox
+            # liveness proxy before giving up so a live server is still served.
+            served = await _fetch_inside_response(runtime, conversation_id, PREVIEW_PORT, path)
+            if served is not None:
+                return served
             return Response("preview upstream unreachable", status_code=502, media_type="text/plain")  # noqa: E501
         return Response(
             content=r.content,
@@ -334,6 +340,11 @@ def make_preview_router(
             async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
                 r = await client.get(f"{upstream}/{path}")
         except Exception:  # noqa: BLE001 — upstream not up yet / unreachable
+            # Fix 2 safety net: resolved-but-unreachable upstream → try the in-sandbox
+            # liveness proxy before the 502 (same as preview_app).
+            served = await _fetch_inside_response(runtime, conversation_id, port, path)
+            if served is not None:
+                return served
             return Response("preview upstream unreachable", status_code=502, media_type="text/plain")  # noqa: E501
         return Response(
             content=r.content,
