@@ -69,6 +69,18 @@ def make_schedules_router(
         deleted = runtime.delete_schedule(schedule_id, owner_id=DEFAULT_OWNER_ID)
         return {"ok": deleted, "schedule_id": schedule_id, "deleted": deleted}
 
+    @router.post("/api/conversations/{conversation_id}/schedules/{schedule_id}/fire-now")
+    async def fire_schedule_now(conversation_id: str, schedule_id: str) -> dict:
+        """Run a schedule IMMEDIATELY (gap #98 — the 'fire now' control + the verify
+        fire-now seam). Reuses the periodic execute path: emits a ScheduleRunEvent,
+        re-injects the original query, kicks the loop. 404 if no such schedule."""
+        if runtime is None:
+            raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
+        fired = await runtime.fire_schedule_now(schedule_id, owner_id=DEFAULT_OWNER_ID)
+        if not fired:
+            raise HTTPException(status_code=404, detail={"reason": "schedule_not_found"})
+        return {"ok": True, "schedule_id": schedule_id, "fired": True}
+
     @router.post("/api/schedules/preview")
     async def preview_schedule(body: PreviewScheduleBody) -> dict:
         """Preview the next N run times for a cron expression.  Use this before

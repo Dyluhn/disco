@@ -1860,6 +1860,10 @@ class ConversationRuntime:
     def delete_schedule(self, schedule_id: str, *, owner_id: str) -> bool:
         return self._schedule.delete_schedule(schedule_id, owner_id=owner_id)
 
+    async def fire_schedule_now(self, schedule_id: str, *, owner_id: str) -> bool:
+        """Run a schedule immediately, out of band (gap #98). False if not found."""
+        return await self._schedule.fire_now(schedule_id, owner_id=owner_id)
+
     def preview_schedule_runs(self, rrule: str, n: int = 3) -> list[str]:
         return self._schedule.preview_schedule_runs(rrule, n)
 

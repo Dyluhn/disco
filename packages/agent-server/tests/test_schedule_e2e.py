@@ -372,3 +372,33 @@ async def test_marker_event_alone_does_not_open_the_work_gate():
         "a system-sourced marker is NOT an unprocessed user message — kicking on "
         "it alone re-runs nothing (the original rp-08 defect)"
     )
+
+
+# ---- gap #98: fire-now (out-of-band manual run) ------------------------------
+
+
+async def test_fire_now_runs_schedule_immediately_and_returns_true():
+    """#98: fire_now runs a schedule out-of-band exactly like a due tick — appends a
+    ScheduleRunEvent, re-injects the original query, kicks the loop. Unknown id -> False."""
+    store = _store()
+    clock = [datetime(2026, 6, 22, 9, 0, tzinfo=UTC)]
+    cid = f"conv_{uuid.uuid4().hex[:8]}"
+    await _seed_query(store, cid)
+    mgr, rt = _manager(store, clock)
+    sched = mgr.create_schedule(
+        conversation_id=cid,
+        owner_id="local",
+        rrule="0 9 * * *",
+        description="daily 9am",
+    )
+
+    fired = await mgr.fire_now(sched.schedule_id, owner_id="local")
+    assert fired is True
+
+    runs = await _run_events(store, cid)
+    assert len(runs) == 1
+    assert runs[0].coalesced is False  # a manual fire is always intentional
+    rt.kick.assert_called_once_with(cid)
+
+    # unknown schedule id -> False (the route turns this into a 404)
+    assert await mgr.fire_now("does-not-exist", owner_id="local") is False

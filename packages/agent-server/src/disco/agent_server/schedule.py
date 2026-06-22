@@ -158,6 +158,24 @@ class ScheduleManager:
         """Next N run times from now. Returns [] for invalid expressions."""
         return next_n_runs(rrule, n, after=self._now_fn())
 
+    async def fire_now(self, schedule_id: str, *, owner_id: str) -> bool:
+        """Run a schedule IMMEDIATELY, out of band (gap #98 — the UI/harness 'fire now').
+
+        Reuses the exact periodic-tick path (`_execute_run`), so it emits a
+        ScheduleRunEvent + re-injects the original user query + kicks the loop just
+        like a due run — no separate execution logic to drift. `coalesced=False`
+        because a manual fire is always intentional. Returns False if no such
+        schedule belongs to this owner (caller surfaces a 404)."""
+        schedules = [
+            Schedule.from_store_row(r)
+            for r in self._store.list_schedules(owner_id=owner_id)
+        ]
+        sched = next((s for s in schedules if s.schedule_id == schedule_id), None)
+        if sched is None:
+            return False
+        await self._execute_run(sched, coalesced=False)
+        return True
+
     # ---- background loop ----------------------------------------------------
 
     async def run(self) -> None:

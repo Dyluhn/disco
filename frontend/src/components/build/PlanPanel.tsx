@@ -247,6 +247,7 @@ export function PlanPanel({
               <button
                 type="button"
                 onClick={() => setRevising(true)}
+                data-disco-control="revise-plan-open"
                 className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
               >
                 Revise…

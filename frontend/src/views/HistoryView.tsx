@@ -267,6 +267,7 @@ export function HistoryView() {
                       title="Delete this conversation?"
                       description="This permanently removes the conversation and its answer. This can't be undone."
                       confirmLabel="Delete"
+                      confirmContext="history-delete"
                       onConfirm={() => del.mutate(c.id)}
                       trigger={
                         <button

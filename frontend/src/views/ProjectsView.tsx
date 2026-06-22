@@ -141,6 +141,7 @@ function ProjectRow({ project, onDelete }: { project: Project; onDelete: () => v
           title="Delete this project?"
           description="This removes the saved workspace files. The conversation history is left intact in History."
           confirmLabel="Delete"
+          confirmContext="project-delete"
           onConfirm={onDelete}
           trigger={
             <button

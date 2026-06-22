@@ -172,7 +172,7 @@ export function ElementBox({
           <textarea
             ref={inputRef as React.RefObject<HTMLTextAreaElement>}
             value={editValue}
-            data-disco-control="build.deck-element-edit"
+            data-disco-control="build.deck-element-edit-bullet"
             aria-label={`Edit ${kind}`}
             onChange={(e) => setEditValue(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -198,7 +198,7 @@ export function ElementBox({
             ref={inputRef as React.RefObject<HTMLInputElement>}
             type="text"
             value={editValue}
-            data-disco-control="build.deck-element-edit"
+            data-disco-control="build.deck-element-edit-text"
             aria-label={`Edit ${kind}`}
             onChange={(e) => setEditValue(e.target.value)}
             onKeyDown={handleKeyDown}
