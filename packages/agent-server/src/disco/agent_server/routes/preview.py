@@ -42,6 +42,28 @@ def _serve_static_from_snapshot(
     return Response(content=target.read_bytes(), media_type=ctype)
 
 
+async def _fetch_inside_response(
+    runtime: ConversationRuntime, conversation_id: str, port: int, rel_path: str
+) -> Response | None:
+    """Fix 2 (B-E): when no host port is published (sealed/filtered backend), reach
+    the agent's dev server through a liveness proxy that curls it from INSIDE the
+    sandbox. Returns a Response only when the in-sandbox server actually answers;
+    None lets the caller fall through to the snapshot/503 path (honest unavailable)."""
+    try:
+        session = runtime.live_session(conversation_id)
+        if session is None:
+            return None
+        got = await session.fetch_inside(port, rel_path)
+    except Exception:  # noqa: BLE001 — a liveness probe must never 500 the preview route
+        return None
+    if got is None:
+        return None
+    status, body, ctype = got
+    return Response(
+        content=body, status_code=status, media_type=ctype or "application/octet-stream"
+    )
+
+
 def make_preview_router(
     store: SqliteEventStore, runtime: ConversationRuntime | None
 ) -> APIRouter:
@@ -250,6 +272,14 @@ def make_preview_router(
         cid8 = conversation_id.removeprefix("conv_")[:8]
         upstream = await runtime.wake_for_preview(cid8, PREVIEW_PORT)
         if upstream is None:
+            # Fix 2 (B-E): on sealed/filtered boxes no host port is published, so
+            # `wake_for_preview` resolves None even with a live dev server. Before
+            # falling back to the (stale mid-run) snapshot, try a liveness proxy that
+            # curls the server from INSIDE the sandbox — genuinely liveness-gated and
+            # backend-agnostic. Only succeeds when something IS listening on the port.
+            served = await _fetch_inside_response(runtime, conversation_id, PREVIEW_PORT, path)
+            if served is not None:
+                return served
             # runthru-v2: the sandbox can't be woken (finished build / backend
             # unavailable), but the built static site may already be on the host
             # snapshot — serve it directly instead of a 503 for a file we have.
@@ -285,6 +315,11 @@ def make_preview_router(
         cid8 = conversation_id.removeprefix("conv_")[:8]
         upstream = await runtime.wake_for_preview(cid8, port)
         if upstream is None:
+            # Fix 2 (B-E): liveness proxy into the sandbox when no host port is
+            # published (sealed/filtered boxes). Honest 503 if nothing is listening.
+            served = await _fetch_inside_response(runtime, conversation_id, port, path)
+            if served is not None:
+                return served
             return Response("preview not available", status_code=503, media_type="text/plain")
         try:
             async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:

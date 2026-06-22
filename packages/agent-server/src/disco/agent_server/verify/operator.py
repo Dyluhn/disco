@@ -214,6 +214,21 @@ class OperatorClient:
             "sources": sources[:8] if sources else [],
         }
 
+    async def _has_live_preview_port(self, cid: str) -> bool:
+        """Fix 2 (B-H.2): True iff the backend reports a live preview port for this
+        conversation (a dev/http server is bound inside the sandbox). Hits the same
+        GET /preview the UI polls (runtime.preview() → available/ports). Best-effort:
+        any failure ⇒ False (the probe is additive, never a hard gate)."""
+        try:
+            async with httpx.AsyncClient(base_url=self.base, timeout=6.0) as hc:
+                r = await hc.get(f"/conversations/{cid}/preview")
+            if r.status_code != 200:
+                return False
+            d = r.json()
+            return bool(d.get("available")) or bool(d.get("ports"))
+        except Exception:  # noqa: BLE001 — additive probe; never block view()
+            return False
+
     async def view(self, cid: str) -> dict[str, Any]:
         """The complete code-level visual of the conversation — what the operator would see
         with their eyes on the surface, plus the live preview body when there's a served app."""
@@ -225,7 +240,16 @@ class OperatorClient:
         if view["gate"]:
             view["gate_context"] = self._gate_context(status, events)
         # if the run served/produced a page, fetch what it actually looks like.
-        if view["files"].get("index.html") or any(d["kind"] == "app" for d in view["deliverables"]):
+        # Fix 2 (B-H.2): ALSO probe when a live preview port is detected — a
+        # shell-served site (`python3 -m http.server`) writes no index.html observation
+        # and emits no app-deliverable, so the old gate left it invisible. The live
+        # port (runtime.preview() owners → available/ports) is the real signal that
+        # there IS something to view.
+        if (
+            view["files"].get("index.html")
+            or any(d["kind"] == "app" for d in view["deliverables"])
+            or await self._has_live_preview_port(cid)
+        ):
             try:
                 async with httpx.AsyncClient(base_url=self.base, timeout=8.0) as hc:
                     r = await hc.get(f"/conversations/{cid}/preview-app/")

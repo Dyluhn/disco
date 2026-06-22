@@ -43,9 +43,17 @@ class HostPreviewProxyMiddleware:
         app: ASGIApp,
         *,
         upstream_resolver: Callable[[str, int], str | None | Awaitable[str | None]],
+        session_resolver: Callable[[str], object | None] | None = None,
     ) -> None:
         self.app = app
         self.upstream_resolver = upstream_resolver
+        # Fix 2 (codex P1): cid8 -> live SandboxSession (or None). On sealed/filtered
+        # backends the hostname proxy gets NO host upstream even while the dev server
+        # is up, so the canonical in-app iframe 503s "available-then-broken". When a
+        # live session exists we fall back to a liveness proxy (curl INSIDE the box)
+        # so the iframe shows the built result on every backend. None ⇒ no fallback
+        # (behaviour byte-identical to before this fix).
+        self.session_resolver = session_resolver
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] not in {"http", "websocket"}:
@@ -89,6 +97,15 @@ class HostPreviewProxyMiddleware:
             upstream = upstream_res
 
         if not upstream:
+            # Fix 2 (codex P1): no host upstream published, but a live session may be
+            # serving the port INSIDE the box (sealed/filtered backend). For HTTP,
+            # fall back to the in-sandbox liveness proxy so the canonical iframe still
+            # renders the built result. Websocket/HMR upgrade still needs a published
+            # port on open boxes (unchanged) — the fallback is for "view the result".
+            if scope["type"] == "http" and await self._proxy_http_via_session(
+                scope, send, cid8, port
+            ):
+                return
             if scope["type"] == "http":
                 await send({
                     "type": "http.response.start",
@@ -148,6 +165,38 @@ class HostPreviewProxyMiddleware:
         })
         await send({"type": "http.response.body", "body": b"preview upstream unreachable"})
         return None
+
+    async def _proxy_http_via_session(
+        self, scope: Scope, send: Send, cid8: str, port: int
+    ) -> bool:
+        """Fix 2 (codex P1) — fall back to the in-sandbox liveness proxy when there's
+        no published host upstream. Returns True iff the live in-box server answered
+        (response already sent); False to let the caller emit the honest 503. GET only."""
+        resolver = self.session_resolver
+        if resolver is None:
+            return False
+        try:
+            session = resolver(cid8)
+            if session is None:
+                return False
+            path = scope.get("path", "")
+            query_string = scope.get("query_string", b"").decode("latin1")
+            rel = path.lstrip("/")
+            if query_string:
+                rel = f"{rel}?{query_string}"
+            got = await session.fetch_inside(port, rel)  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 — a liveness probe must never 500 the iframe
+            return False
+        if got is None:
+            return False
+        status, body, ctype = got
+        await send({
+            "type": "http.response.start",
+            "status": status,
+            "headers": [(b"content-type", (ctype or "application/octet-stream").encode("latin1"))],
+        })
+        await send({"type": "http.response.body", "body": body})
+        return True
 
     async def _proxy_http(self, scope: Scope, receive: Receive, send: Send, upstream: str) -> None:
         client = _get_client()
@@ -298,3 +347,23 @@ class HostPreviewProxyMiddleware:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+
+
+def make_preview_session_resolver(runtime: object | None) -> Callable[[str], object | None]:
+    """Fix 2 (codex P1): build the `cid8 -> live SandboxSession | None` resolver the
+    HostPreviewProxyMiddleware uses for its in-sandbox liveness fallback. Captures
+    `runtime` (None in wire-only tests → always None). Read-only: resolves the full
+    conversation id from the 8-char prefix, then the live session (no creation)."""
+
+    def _resolve(cid8: str) -> object | None:
+        if runtime is None:
+            return None
+        try:
+            cid = runtime.resolve_cid_prefix(cid8)  # type: ignore[attr-defined]
+            if not cid:
+                return None
+            return runtime.live_session(cid)  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 — resolver must never raise into the proxy
+            return None
+
+    return _resolve

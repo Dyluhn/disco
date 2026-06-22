@@ -21,7 +21,7 @@ from disco.core.store.sqlite import SqliteEventStore
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .host_proxy import HostPreviewProxyMiddleware
+from .host_proxy import HostPreviewProxyMiddleware, make_preview_session_resolver
 from .routes import (
     make_activity_router,
     make_conversations_router,
@@ -107,6 +107,9 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     app.add_middleware(
         HostPreviewProxyMiddleware,
         upstream_resolver=make_preview_upstream_resolver(runtime),
+        # Fix 2 (codex P1): in-sandbox liveness fallback so the canonical iframe
+        # renders on sealed/filtered backends that publish no host port.
+        session_resolver=make_preview_session_resolver(runtime),
     )
 
     # Per-domain routers (routes/<domain>.py). Registration order preserves the

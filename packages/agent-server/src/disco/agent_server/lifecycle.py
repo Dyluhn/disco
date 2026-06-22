@@ -36,6 +36,7 @@ from typing import Any
 from disco.core import (
     DEFAULT_OWNER_ID,
     ConversationStatus,
+    DeliverableEvent,
     EventFilter,
     EventSource,
     LLMMessage,
@@ -505,3 +506,66 @@ class LifecycleManager:
                 conversation_id,
                 f"snapshot failed: {exc}",
             )
+            return
+        # Fix 2 (B-H.1): a shell-served / npm-built site emits NO app DeliverableEvent
+        # (handle_serve is the only emitter; `python3 -m http.server` / a `npm run
+        # build` write index.html with no serve tool-call) — so the user gets no
+        # "Open app" card and the snapshot serve path is never advertised. If the
+        # snapshot has an index.html and no app-deliverable was emitted, synthesize
+        # one THROUGH THE EVENT STORE. Idempotent: gated on no existing app-deliverable
+        # so a second snapshot / a real serve-emitted card never duplicates it.
+        await self._maybe_synthesize_app_deliverable(
+            conversation_id, store.path_for(conversation_id)
+        )
+
+    async def _maybe_synthesize_app_deliverable(
+        self, conversation_id: str, snapshot_dir: Path
+    ) -> None:
+        """Fix 2 (B-H.1): append a synthetic app DeliverableEvent for a shell-served
+        build (index.html on disk, no serve tool-call). Idempotent + best-effort —
+        a missing index.html, an existing app-deliverable, or any read/append failure
+        is a silent no-op (the snapshot itself already succeeded)."""
+        try:
+            index = self._find_snapshot_index(snapshot_dir)
+            if index is None:
+                return
+            existing = await self._rt._store.get_events(conversation_id)
+            if any(
+                isinstance(e, DeliverableEvent) and e.artifact_kind == "app"
+                for e in existing
+            ):
+                return  # codex P1b: idempotency read goes through the store
+            rel_dir = index.parent.relative_to(snapshot_dir).as_posix()
+            path = rel_dir if rel_dir and rel_dir != "." else "."
+            await self._rt._store.append(
+                conversation_id,
+                DeliverableEvent(
+                    source=EventSource.AGENT,
+                    title="Web app",
+                    path=path,
+                    artifact_kind="app",
+                    deployment_url="",
+                ),
+            )
+        except Exception:  # noqa: BLE001 — synthetic card is a convenience, never crash snapshot
+            _LOG.debug(
+                "synthetic app-deliverable skipped for %s", conversation_id, exc_info=True
+            )
+
+    @staticmethod
+    def _find_snapshot_index(snapshot_dir: Path) -> Path | None:
+        """First index.html in the snapshot (root preferred, else shallowest subdir),
+        skipping internal dirs — mirrors SandboxSession._detect_serve_dir's skip set."""
+        root = snapshot_dir / "index.html"
+        if root.is_file():
+            return root
+        candidates = [
+            p for p in snapshot_dir.rglob("index.html")
+            if p.is_file()
+            and ".pmx" not in p.parts
+            and ".disco" not in p.parts
+            and "node_modules" not in p.parts
+        ]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda p: len(p.parts))
