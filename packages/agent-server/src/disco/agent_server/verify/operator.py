@@ -135,6 +135,103 @@ class OperatorClient:
             ctx["alternatives"] = alternatives
         return ctx
 
+    @staticmethod
+    def _derive_view(status: str | None, events: list[dict[str, Any]]) -> dict[str, Any]:
+        """Assemble the FULL visible state of the surface from the event log — the same
+        things a human sees with their eyes: the plan + its progress, the activity feed,
+        the workspace files, terminal/server output, the rendered-page observation, the
+        deliverables, the answer/sources, and the pending gate. Tool names live on the
+        OBSERVATION (tool_result.tool_name); actions carry only args."""
+        import re as _re
+
+        plan: dict[str, Any] | None = None
+        progress: Any = None
+        activity: list[str] = []
+        files: dict[str, int] = {}
+        terminal: list[str] = []
+        browser: dict[str, Any] | None = None
+        deliverables: list[dict[str, Any]] = []
+        messages: list[str] = []
+        answer: str | None = None
+        sources: list[Any] = []
+        for e in events:
+            k = e.get("kind")
+            if k == "plan":
+                plan = {"summary": e.get("summary"), "steps": e.get("steps")}
+            elif k == "observation":
+                tr = e.get("tool_result") or {}
+                name = tr.get("tool_name")
+                content = str(tr.get("content") or "")
+                st = tr.get("structured") or {}
+                activity.append(f"{name}: {content[:90]}" if content else f"{name}")
+                if name == "file_write":
+                    m = _re.search(r"wrote\s+(\d+)\s+bytes?\s+to\s+(.+)", content)
+                    if m:
+                        files[m.group(2).strip()] = int(m.group(1))
+                elif name == "file_list" and isinstance(st.get("entries"), list):
+                    for p in st["entries"]:
+                        files.setdefault(str(p), 0)
+                elif name in ("run_command", "bash", "exec", "server_status"):
+                    terminal.append(content[:300])
+                elif name == "browser":
+                    browser = {kk: st.get(kk) for kk in ("url", "title", "console", "network")}
+                elif name == "update_plan_progress":
+                    progress = st.get("steps") or content
+                elif name in ("research_answer", "answer"):
+                    answer = content or answer
+                    sources = st.get("sources") or st.get("citations") or sources
+            elif k == "deliverable":
+                deliverables.append({
+                    "kind": e.get("artifact_kind"),
+                    "path": e.get("path"),
+                    "url": e.get("deployment_url"),
+                })
+            elif k == "message" and e.get("source") == "agent":
+                msg = e.get("message", {}).get("content")
+                if msg:
+                    messages.append(str(msg)[:600])
+        return {
+            "status": status,
+            "plan": plan,
+            "plan_progress": progress,
+            "activity": activity[-25:],
+            "files": files,
+            "terminal": terminal[-8:],
+            "browser": browser,
+            "deliverables": deliverables,
+            "messages": messages[-4:],
+            "answer": answer,
+            "sources": sources[:8] if sources else [],
+        }
+
+    async def view(self, cid: str) -> dict[str, Any]:
+        """The complete code-level visual of the conversation — what the operator would see
+        with their eyes on the surface, plus the live preview body when there's a served app."""
+        status = await self._status(cid)
+        events = await self._events(cid)
+        view = self._derive_view(status, events)
+        view["cid"] = cid
+        view["gate"] = status if status in _GATES else None
+        if view["gate"]:
+            view["gate_context"] = self._gate_context(status, events)
+        # if the run served/produced a page, fetch what it actually looks like.
+        if view["files"].get("index.html") or any(d["kind"] == "app" for d in view["deliverables"]):
+            try:
+                async with httpx.AsyncClient(base_url=self.base, timeout=8.0) as hc:
+                    r = await hc.get(f"/conversations/{cid}/preview-app/")
+                    if r.status_code == 200 and r.content:
+                        body = r.text
+                        view["preview"] = {
+                            "url": f"/conversations/{cid}/preview-app/",
+                            "status": r.status_code,
+                            "bytes": len(r.content),
+                            "is_directory_listing": "directory listing for" in body.lower(),
+                            "html_head": body[:600],
+                        }
+            except Exception:  # noqa: BLE001
+                view["preview"] = {"error": "preview not reachable"}
+        return view
+
     async def state(self, cid: str) -> dict[str, Any]:
         status = await self._status(cid)
         events = await self._events(cid)
@@ -213,6 +310,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     p_state = sub.add_parser("state")
     p_state.add_argument("cid")
+    p_view = sub.add_parser("view")
+    p_view.add_argument("cid")
     p_wait = sub.add_parser("wait")
     p_wait.add_argument("cid", nargs="?")
     p_wait.add_argument("--any", action="store_true")
@@ -227,6 +326,8 @@ def main(argv: list[str] | None = None) -> int:
     async def run() -> dict[str, Any]:
         if args.cmd == "state":
             return await client.state(args.cid)
+        if args.cmd == "view":
+            return await client.view(args.cid)
         if args.cmd == "respond":
             return await client.respond(args.cid, args.action, args.text)
         if args.cmd == "wait":

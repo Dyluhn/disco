@@ -162,3 +162,16 @@ The complete notify→read→respond loop, end-to-end, as the operator (me):
 This is exactly Dylan's 4 asks: ping on plan/question/state-change + enter text into the response
 boxes + make them actionable. The disco-verify runner's canned auto_answer is the dumb fallback; this
 is a real intelligence in the loop. → Becomes the MCP (state/wait/respond = the tools).
+
+### OPERATOR `view` — "see in code what I see with my eyes" (Dylan 2026-06-22) + FULL DELIVERABLE PROOF
+Added `operator view <cid>` — the complete code-level visual of a surface, derived from the event log:
+status, plan + per-step progress, the activity feed, workspace files (path→bytes), terminal/server
+output, the BROWSER observation (rendered url+title), deliverables, agent messages, and (for a served
+app) the live /preview-app/ body (with a directory-listing guard). No more ad-hoc curl/parse — one tool
+gives the whole picture. This removes Dylan from manual verification: I see the surface as he does.
+
+FULL DELIVERABLE PROOF (operator-driven, live MiniMax): I approved conv_8ed9's plan as operator → MiniMax
+built SPEC.md (3826 B) + index.html (15969 B, title "Velocity - Build Something Amazing"), served it
+(preview 200, real HTML, NOT a directory listing), opened it in the browser tool to verify, marked plan
+progress 4/4 done, emitted an `app` deliverable, and FINISHED. operator `view` shows ALL of it.
+The operator console now = state + view (SEE) + wait (NOTIFY) + respond (ACT) → the Disco Operator MCP.
