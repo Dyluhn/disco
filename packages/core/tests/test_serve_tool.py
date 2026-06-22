@@ -114,3 +114,81 @@ def test_deliverable_event_renders_into_llm_context():
     msg = ev.to_llm_message()
     assert "report.html" in msg.content and "files" in msg.content
     assert "Sales report" in msg.content
+
+
+# --- F3: sandbox-internal serve URL must not become a (false) reachable URL ----
+
+
+def test_canonical_deployment_url_drops_sandbox_internal_addresses():
+    from disco.core.loop.turn_control import _canonical_deployment_url
+
+    # The exact live-observed sandbox-internal address (collides with the
+    # agent-server's own :8000) — never reachable from the host → dropped.
+    assert _canonical_deployment_url("http://127.0.0.1:8000/") == ""
+    # Other non-externally-reachable hosts are dropped too.
+    for bad in (
+        "http://localhost:5173/",
+        "http://0.0.0.0:8000/",
+        "http://[::1]:8000/",
+        "http://10.0.0.5:3000/",
+        "http://192.168.1.20:8080/",
+        "http://172.17.0.2:8000/",  # docker/sandbox bridge net
+        "http://169.254.0.1/",  # link-local
+        "ftp://example.com/",  # not http(s)
+        "not-a-url",
+        "",
+    ):
+        assert _canonical_deployment_url(bad) == "", bad
+    # A REAL deploy target / tunnel hostname or a public IP is preserved.
+    for good in (
+        "https://my-site.trycloudflare.com/",
+        "https://cadence.example.com/app",
+        "http://8.8.8.8/",  # a genuinely public IP literal
+    ):
+        assert _canonical_deployment_url(good) == good, good
+
+
+async def test_serve_drops_sandbox_internal_url_but_keeps_public():
+    # Two served apps: the first reports the sandbox-internal http.server address
+    # (must be dropped → ""), the second a real tunnel (must be preserved).
+    agent = _agent(
+        [
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "build"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(
+                        tool_name="serve",
+                        arguments={
+                            "title": "Local",
+                            "path": "dist",
+                            "kind": "app",
+                            "url": "http://127.0.0.1:8000/",
+                        },
+                    )
+                ]
+            },
+            {
+                "tool_calls": [
+                    ProposedToolCall(
+                        tool_name="serve",
+                        arguments={
+                            "title": "Tunnel",
+                            "path": "site",
+                            "kind": "app",
+                            "url": "https://demo.trycloudflare.com/",
+                        },
+                    )
+                ]
+            },
+            {"tool_calls": [ProposedToolCall(tool_name="finish", arguments={"summary": "done"})]},
+        ]
+    )
+    loop, store = build_loop(agent, executor=FakeExecutor(), policy=NeverConfirm())
+    await loop.send_message("build it")
+    await loop.run()
+    delivs = [e for e in await store.get_events(CID) if isinstance(e, DeliverableEvent)]
+    by_title = {d.title: d for d in delivs}
+    # Sandbox-internal address is NOT surfaced as a reachable URL (consumers fall
+    # back to the host preview-app proxy); the real tunnel URL is preserved.
+    assert by_title["Local"].deployment_url == ""
+    assert by_title["Tunnel"].deployment_url == "https://demo.trycloudflare.com/"

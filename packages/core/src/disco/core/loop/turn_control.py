@@ -18,8 +18,10 @@ the loop (`self._loop._post_noop_valve()`, `self._loop._valve.refuse_fresh_sessi
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from ..events import (
     ActionEvent,
@@ -101,6 +103,49 @@ def _no_progress_marker_seq(events: list[Event]) -> int | None:
         if isinstance(e, MessageEvent) and e.source == EventSource.USER:
             return None
     return None
+
+
+def _canonical_deployment_url(raw: str) -> str:
+    """Return a served `deployment_url` ONLY when it is reachable from OUTSIDE the
+    sandbox; otherwise return "".
+
+    F3 (live build stress-test): when the agent serves a site it reports the
+    address it bound INSIDE the sandbox (observed: ``http://127.0.0.1:8000/``).
+    That loopback/private address is reachable only from inside the sandbox —
+    never from the host browser, the operator, or the verifier. Worse, :8000 also
+    happens to be the Disco agent-server's own port, so following the URL verbatim
+    hits the wrong server. Surfacing it as the deliverable's "Deployed" URL is a
+    false affordance.
+
+    The honest, host-reachable address is the preview-proxy route
+    (``/conversations/{cid}/preview-app/``), which every consumer already falls
+    back to when there is no canonical URL (frontend DeliverablePanel/PreviewPane,
+    operator `view`, the verify runner's URL-less app branch). So we keep the URL
+    only for an absolute http(s) URL whose host is publicly reachable (a real
+    deploy target / tunnel hostname or a global IP); a loopback / unspecified /
+    private / link-local / reserved host is dropped to "".
+    """
+    url = (raw or "").strip()
+    if not url:
+        return ""
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return ""
+    host = parts.hostname
+    if host.lower() in {
+        "localhost",
+        "localhost.localdomain",
+        "ip6-localhost",
+        "ip6-loopback",
+    }:
+        return ""
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        # A real DNS hostname (deploy target / tunnel) — keep it.
+        return url
+    # A bare IP literal: keep only a globally-routable (public) address.
+    return url if ip.is_global else ""
 
 
 class Valve:
@@ -733,7 +778,10 @@ class MetaToolHandlers:
             title = str(step.tool_call.arguments.get("title") or "").strip()
             path = str(step.tool_call.arguments.get("path") or "").strip()
             kind = str(step.tool_call.arguments.get("kind") or "app").strip()
-            url = str(step.tool_call.arguments.get("url") or "").strip()
+            # F3: a sandbox-internal/loopback serve address (e.g. 127.0.0.1:8000) is
+            # NOT reachable from the host — drop it so consumers fall back to the
+            # host-reachable preview-app proxy instead of a false "Deployed" link.
+            url = _canonical_deployment_url(str(step.tool_call.arguments.get("url") or ""))
             if kind not in ("app", "files"):
                 kind = "app"
             if not (title and path):
