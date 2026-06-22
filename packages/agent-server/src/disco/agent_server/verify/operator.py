@@ -116,6 +116,16 @@ class OperatorClient:
                     "steps": e.get("steps"),
                     "revision": e.get("revision"),
                 }
+            # The stuck-detector / clarify path emits a dedicated event whose KIND is
+            # "alternatives", carrying summary + options at the top level — NOT a
+            # tool_call. The operator was blind to exactly the gate that needs it most
+            # (F5/F6 from the build stress-test): surface the summary + option ids so
+            # the operator knows what to decide and that the verb is `pick <id>`.
+            if k in ("alternatives", "ask", "clarify"):
+                if e.get("options"):
+                    alternatives = {"summary": e.get("summary"), "options": e.get("options")}
+                if e.get("question") or e.get("summary"):
+                    question = question or e.get("question") or e.get("summary")
             # ActionEvent: the tool call lives under `tool_call` (name + arguments).
             tc = e.get("tool_call") or {}
             name = tc.get("name") or tc.get("tool_name")
