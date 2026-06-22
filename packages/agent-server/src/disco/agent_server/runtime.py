@@ -547,6 +547,14 @@ class ConversationRuntime:
             install_inspect()
         self._loops: dict[str, AgentLoop] = {}
         self._tasks: dict[str, asyncio.Task] = {}
+        # W11 (silent RUNNING-stall recovery): bounded re-kick budget per cid. When
+        # loop.run() RETURNS while the conversation is still RUNNING — a dropped /
+        # unparseable model response ended the turn with no terminal StatusEvent, so
+        # the loop's `return await self.get_state()` carries RUNNING straight out (the
+        # silent hang Dylan hit on the MiniMax builds) — we re-kick ONCE to recover a
+        # transient drop, then terminalize honestly to STUCK so a wedged build is
+        # VISIBLE, never RUNNING forever. Reset whenever a run reaches a real status.
+        self._nonterminal_rekicks: dict[str, int] = {}
         # Cooperative-cancellation flags for Deep Research (whose engine isn't an
         # AgentLoop and can't be soft-cancelled the loop's way). Stop sets the flag;
         # the engine polls it at each sub-question/section boundary and halts,
@@ -1433,6 +1441,22 @@ class ConversationRuntime:
         }
     )
 
+    # W11: statuses where it is LEGITIMATE for loop.run() to return and wait — the loop
+    # parked intentionally (for the user, or a control op like confirm/resume/pick).
+    # A clean return at any OTHER status (i.e. RUNNING) means the turn ended WITHOUT
+    # concluding: the silent stall. IDLE = "ready, no unprocessed work" (also fine).
+    _RUN_PARKED_STATUSES = frozenset(
+        {
+            ConversationStatus.IDLE,
+            ConversationStatus.PAUSED,
+            ConversationStatus.WAITING_FOR_CONFIRMATION,
+            ConversationStatus.AWAITING_PLAN_APPROVAL,
+            ConversationStatus.AWAITING_USER_DECISION,
+            ConversationStatus.AWAITING_USER_QUESTION,
+        }
+    )
+    _MAX_NONTERMINAL_REKICKS = 1
+
     def _on_run_task_done(self, conversation_id: str, task: asyncio.Task[Any]) -> None:
         """W2 supervision callback. Deregister the task; on an UNHANDLED exception (NOT
         cancellation), schedule terminalization to ERROR so the conversation can never sit
@@ -1446,10 +1470,106 @@ class ConversationRuntime:
         except asyncio.CancelledError:
             return
         if exc is None:
-            return  # clean completion — the loop set its own terminal status
+            # W11: a CLEAN return is NOT proof the loop concluded. loop.run() can
+            # return while the conversation is still RUNNING — a dropped/unparseable
+            # model response ends the turn with no terminal StatusEvent, and the
+            # loop's `return await self.get_state()` carries RUNNING out unchanged.
+            # W2 only handled the exception case, so this sat at RUNNING forever
+            # (the silent MiniMax-build hang). Reconcile it (re-kick once, else STUCK).
+            with contextlib.suppress(RuntimeError):  # no running loop (shutdown) → skip
+                asyncio.create_task(self._finalize_clean_return(conversation_id))
+            return
         # An exception escaped loop.run(). Schedule (best-effort) a terminal ERROR.
         with contextlib.suppress(RuntimeError):  # no running loop (shutdown) → skip
             asyncio.create_task(self._terminalize_crashed(conversation_id, exc))
+
+    async def _finalize_clean_return(self, conversation_id: str) -> None:
+        """W11 supervision. The run task returned WITHOUT raising. If the conversation
+        already concluded, or legitimately parked (awaiting the user / a control op),
+        there's nothing to do. But if it's still RUNNING the turn ended without
+        reaching a terminal state — the silent stall. Re-kick ONCE (recovers a
+        transient dropped response), and if it STILL returns non-terminal, terminalize
+        to STUCK so the wedge is visible to the operator/UI, never RUNNING forever.
+        Best-effort: never re-raises (a supervisor failure must not crash the loop)."""
+        try:
+            state = await self._store.get_state(conversation_id)
+        except Exception:  # noqa: BLE001 — supervision is best-effort, never re-raise
+            logger.exception("clean-return finalize could not read state for %s", conversation_id)
+            return
+        status = state.execution_status
+        if status in self._CONCLUDED_STATUSES or status in self._RUN_PARKED_STATUSES:
+            # Healthy ending → reset the per-cid re-kick budget for the next segment.
+            self._nonterminal_rekicks.pop(conversation_id, None)
+            return
+        # Still RUNNING (the loop emits RUNNING at entry and only leaves it by emitting
+        # a different status): the turn ended without concluding.
+        attempts = self._nonterminal_rekicks.get(conversation_id, 0)
+        if attempts < self._MAX_NONTERMINAL_REKICKS:
+            self._nonterminal_rekicks[conversation_id] = attempts + 1
+            logger.warning(
+                "run task for %s returned at %s without concluding; re-kicking once "
+                "(silent-stall recovery)",
+                conversation_id,
+                status.value,
+            )
+            self.kick(conversation_id)
+            return
+        # Already re-kicked and STILL non-terminal → stop spinning, mark STUCK honestly.
+        self._nonterminal_rekicks.pop(conversation_id, None)
+        try:
+            # Re-read under the (rare) race where the re-kick concluded between checks.
+            state = await self._store.get_state(conversation_id)
+            if state.execution_status in self._CONCLUDED_STATUSES:
+                return
+            logger.error(
+                "run task for %s wedged at RUNNING after re-kick; marking STUCK",
+                conversation_id,
+            )
+            await self._store.append(
+                conversation_id,
+                StatusEvent(
+                    status=ConversationStatus.STUCK,
+                    detail="loop ended without reaching a terminal state",
+                ),
+            )
+            await self._emit_persistence_reminder(
+                conversation_id,
+                "The run ended without completing or stopping cleanly (the model turn "
+                "produced no actionable response). It's been marked stuck — send a "
+                "message to steer it and continue.",
+            )
+        except Exception:  # noqa: BLE001 — supervision is best-effort, never re-raise
+            logger.exception("stall terminalization failed for %s", conversation_id)
+
+    async def sweep_stranded_runs_once(self) -> int:
+        """W11 backstop watchdog (idle-sweep cadence). A conversation whose status is
+        RUNNING but which has NO live run task is STRANDED — nothing will ever advance
+        it (the done-callback was lost, a re-kick never landed, or a prior process left
+        it RUNNING between reconcile passes). Route it through the same recovery as a
+        clean non-terminal return: re-kick once, else STUCK. Returns the count acted on.
+
+        Distinct from reconcile_orphaned_runs (startup-only, store-wide → PAUSED): this
+        runs continuously over the IN-PROCESS loops so a runtime stall self-heals
+        without waiting for a restart. Zero false-positive risk: a healthy RUNNING run
+        always has a live, not-done task in self._tasks, which is skipped here."""
+        acted = 0
+        for cid in list(self._loops):
+            task = self._tasks.get(cid)
+            if task is not None and not task.done():
+                continue  # a live task is driving it — healthy
+            try:
+                state = await self._store.get_state(cid)
+            except Exception:  # noqa: BLE001 — one bad cid must not abort the sweep
+                continue
+            if state.execution_status is not ConversationStatus.RUNNING:
+                continue
+            logger.warning(
+                "stranded RUNNING conversation %s (no live task) — reconciling", cid
+            )
+            with contextlib.suppress(Exception):
+                await self._finalize_clean_return(cid)
+            acted += 1
+        return acted
 
     async def _terminalize_crashed(
         self, conversation_id: str, exc: BaseException

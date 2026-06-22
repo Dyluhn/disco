@@ -336,6 +336,11 @@ class LifecycleManager:
                 return
             with contextlib.suppress(Exception):
                 await self._rt.sweep_idle_once()
+            # W11 backstop: reconcile conversations stranded at RUNNING with no live
+            # task (lost done-callback / never re-kicked) so a stall self-heals or
+            # becomes visibly STUCK instead of hanging RUNNING forever.
+            with contextlib.suppress(Exception):
+                await self._rt.sweep_stranded_runs_once()
             with contextlib.suppress(Exception):
                 tts_idle_ttl = disco_env("TTS_IDLE_TTL_S", "1800")
                 assert tts_idle_ttl is not None  # default above is non-None

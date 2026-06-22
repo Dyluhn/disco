@@ -26,3 +26,18 @@ def test_supervisor_terminalizes_to_error():
     """The supervisor method must emit a terminal ERROR (not just log) on an uncaught crash."""
     src = inspect.getsource(ConversationRuntime._terminalize_crashed)
     assert "ConversationStatus.ERROR" in src, "a crashed run must terminalize to ERROR"
+
+
+def test_clean_return_is_reconciled():
+    """W11: a CLEAN run-task return (no exception) must be routed through finalization —
+    not silently ignored — so a return at RUNNING can't sit there forever."""
+    src = inspect.getsource(ConversationRuntime._on_run_task_done)
+    assert "_finalize_clean_return" in src, (
+        "_on_run_task_done must reconcile a clean (exception-free) return, not just exceptions"
+    )
+
+
+def test_finalizer_terminalizes_stall_to_stuck():
+    """W11: the clean-return finalizer must mark a non-terminal (RUNNING) stall STUCK."""
+    src = inspect.getsource(ConversationRuntime._finalize_clean_return)
+    assert "ConversationStatus.STUCK" in src, "a wedged RUNNING run must terminalize to STUCK"

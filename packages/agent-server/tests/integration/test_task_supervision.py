@@ -136,3 +136,138 @@ async def test_terminalize_is_idempotent(monkeypatch):
     assert (
         state.execution_status == ConversationStatus.FINISHED
     ), "must not clobber an already-terminal status"
+
+
+# --- W11: clean RETURN at RUNNING (the silent MiniMax-build stall) -------------------
+#
+# B-C root cause: loop.run() can RETURN without raising while the conversation status
+# is still RUNNING (a dropped/unparseable model response ends the turn with no terminal
+# StatusEvent). W2 only caught EXCEPTIONS, so this sat at RUNNING forever — no gate, no
+# terminal status, no recovery (only an operator steer un-wedged it). W11 reconciles a
+# clean non-terminal return: re-kick once, else mark STUCK so the wedge is VISIBLE.
+
+
+async def _drain_until(store, cid, predicate, *, ticks=40, dt=0.05):
+    for _ in range(ticks):
+        await asyncio.sleep(dt)
+        if predicate(await store.get_state(cid)):
+            return await store.get_state(cid)
+    return await store.get_state(cid)
+
+
+async def test_clean_return_at_running_recovers_then_stucks(monkeypatch):
+    """A run that keeps returning at RUNNING is re-kicked ONCE, then terminalized STUCK."""
+    store = SqliteEventStore(":memory:")
+    runtime = _runtime(store)
+    cid = await _kicked_conversation(store, runtime)
+
+    calls = {"n": 0}
+
+    class _ReturnAtRunning:
+        async def run(self):
+            calls["n"] += 1
+            await store.append(cid, StatusEvent(status=ConversationStatus.RUNNING))
+            return await store.get_state(cid)
+
+    monkeypatch.setattr(runtime, "_loop_for", lambda _c: _ReturnAtRunning())
+
+    runtime.kick(cid)
+    state = await _drain_until(
+        store, cid, lambda s: s.execution_status == ConversationStatus.STUCK
+    )
+
+    assert (
+        state.execution_status == ConversationStatus.STUCK
+    ), "a run that ends at RUNNING without concluding must become visibly STUCK"
+    assert calls["n"] >= 2, "must re-kick once (transient-drop recovery) before giving up"
+    events = await store.get_events(cid)
+    assert any(
+        isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.STUCK
+        and e.detail == "loop ended without reaching a terminal state"
+        for e in events
+    ), "the STUCK status must carry an honest no-terminal-state reason"
+
+
+async def test_clean_return_at_running_transient_recovers_without_stuck(monkeypatch):
+    """The FIRST return stalls at RUNNING; the re-kick FINISHES — no STUCK is emitted."""
+    store = SqliteEventStore(":memory:")
+    runtime = _runtime(store)
+    cid = await _kicked_conversation(store, runtime)
+
+    seq = {"n": 0}
+
+    class _TransientStall:
+        async def run(self):
+            seq["n"] += 1
+            status = (
+                ConversationStatus.RUNNING if seq["n"] == 1 else ConversationStatus.FINISHED
+            )
+            await store.append(cid, StatusEvent(status=status))
+            return await store.get_state(cid)
+
+    monkeypatch.setattr(runtime, "_loop_for", lambda _c: _TransientStall())
+
+    runtime.kick(cid)
+    state = await _drain_until(
+        store, cid, lambda s: s.execution_status == ConversationStatus.FINISHED
+    )
+
+    assert state.execution_status == ConversationStatus.FINISHED, "the re-kick must recover"
+    events = await store.get_events(cid)
+    assert not any(
+        isinstance(e, StatusEvent) and e.status == ConversationStatus.STUCK for e in events
+    ), "a transient stall that recovers on re-kick must NOT be marked STUCK"
+
+
+async def test_clean_return_at_paused_is_left_alone(monkeypatch):
+    """A legitimate parked return (PAUSED/awaiting) must NOT be re-kicked or clobbered."""
+    store = SqliteEventStore(":memory:")
+    runtime = _runtime(store)
+    cid = await _kicked_conversation(store, runtime)
+
+    calls = {"n": 0}
+
+    class _Park:
+        async def run(self):
+            calls["n"] += 1
+            await store.append(cid, StatusEvent(status=ConversationStatus.PAUSED))
+            return await store.get_state(cid)
+
+    monkeypatch.setattr(runtime, "_loop_for", lambda _c: _Park())
+
+    runtime.kick(cid)
+    await asyncio.sleep(0.4)
+
+    state = await store.get_state(cid)
+    assert state.execution_status == ConversationStatus.PAUSED, "a parked run is honored"
+    assert calls["n"] == 1, "a legitimately parked return must not be re-kicked"
+
+
+async def test_stranded_running_swept_to_recovery(monkeypatch):
+    """The idle-sweep watchdog detects a RUNNING conversation with no live task and
+    routes it through recovery (re-kick → STUCK), so a lost done-callback self-heals."""
+    store = SqliteEventStore(":memory:")
+    runtime = _runtime(store)
+    cid = await _kicked_conversation(store, runtime)
+
+    class _ReturnAtRunning:
+        async def run(self):
+            await store.append(cid, StatusEvent(status=ConversationStatus.RUNNING))
+            return await store.get_state(cid)
+
+    monkeypatch.setattr(runtime, "_loop_for", lambda _c: _ReturnAtRunning())
+    # Simulate a stranded conversation: a loop this process owns, status RUNNING in the
+    # store, but NO live task in self._tasks (the done-callback never fired).
+    runtime._loops[cid] = _ReturnAtRunning()  # type: ignore[assignment]
+    await store.append(cid, StatusEvent(status=ConversationStatus.RUNNING))
+
+    acted = await runtime.sweep_stranded_runs_once()
+    assert acted == 1, "the stranded RUNNING conversation must be detected"
+
+    state = await _drain_until(
+        store, cid, lambda s: s.execution_status == ConversationStatus.STUCK
+    )
+    assert (
+        state.execution_status == ConversationStatus.STUCK
+    ), "a stranded RUNNING run must self-heal to a visible terminal status"
