@@ -15,6 +15,12 @@ from __future__ import annotations
 
 from .schema import Scenario
 
+_AUTO_ANSWER = (
+    "Proceed using your best reasonable judgment. If something is missing or "
+    "ambiguous, note the limitation briefly and complete the task — do not ask "
+    "further questions."
+)
+
 # ---------------------------------------------------------------------------
 # slides_from_research_report
 # ---------------------------------------------------------------------------
@@ -36,6 +42,7 @@ slides_from_research_report = Scenario(
         "raw_html_default",        # deliverables must not be raw HTML only
         "procedural_image_provider",  # images must not come from the procedural tier
     ],
+    auto_answer=_AUTO_ANSWER,
     timeout_s=600,
 )
 
@@ -59,6 +66,7 @@ missing_file_sandbox_error = Scenario(
         "terminal_status": "FINISHED",
     },
     forbid=[],
+    auto_answer=_AUTO_ANSWER,
     timeout_s=180,
 )
 
@@ -81,6 +89,7 @@ app_from_build = Scenario(
         "deliverable_type": "app",
     },
     forbid=[],
+    auto_answer=_AUTO_ANSWER,
     timeout_s=600,
 )
 
@@ -106,6 +115,7 @@ steer_then_stop_build = Scenario(
     ],
     expect={},  # any terminal status (IDLE after stop, or FINISHED if it raced to done)
     forbid=[],
+    auto_answer=_AUTO_ANSWER,
     timeout_s=300,
 )
 
@@ -127,5 +137,6 @@ research_report_export = Scenario(
     report_export="md",
     expect={"terminal_status": "FINISHED"},
     forbid=[],
+    auto_answer=_AUTO_ANSWER,
     timeout_s=600,
 )

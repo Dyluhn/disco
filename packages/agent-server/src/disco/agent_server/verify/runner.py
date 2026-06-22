@@ -42,6 +42,7 @@ log = logging.getLogger(__name__)
 
 # Statuses from which the conversation will never advance without user action.
 _TERMINAL: frozenset[str] = frozenset({"FINISHED", "ERROR", "STUCK", "IDLE"})
+_MAX_AUTO_ANSWERS = 3  # cap auto-answers to a question-asking live model (no infinite Q&A)
 
 # Seconds between HTTP state polls.
 _POLL_INTERVAL: float = 2.0
@@ -76,6 +77,7 @@ class AbstractVerifyClient(ABC):
         approve_plan: bool,
         timeout_s: float,
         ws_commands: list[dict[str, Any]] | None = None,
+        auto_answer: str | None = None,
     ) -> None:
         """Open the WS, send the user message, optionally approve the plan, then
         send any extra ``ws_commands`` frames (gap #3 — steer/stop/resume/…).
@@ -181,46 +183,61 @@ class HttpVerifyClient(AbstractVerifyClient):
         approve_plan: bool,
         timeout_s: float,
         ws_commands: list[dict[str, Any]] | None = None,
+        auto_answer: str | None = None,
     ) -> None:
         ws_base = (
             self._base_url.replace("http://", "ws://").replace("https://", "wss://")
         )
         ws_url = f"{ws_base}/ws/conversations/{cid}"
         deadline = time.monotonic() + timeout_s
+        answers = 0
+        sent_cmds = False
         try:
             async with _ws_connect(ws_url) as ws:
                 await ws.send(
                     json.dumps({"type": "send_message", "content": prompt})
                 )
-                if approve_plan:
-                    # Wait for AWAITING_PLAN_APPROVAL and then approve it.
-                    while True:
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            log.warning(
-                                "run_ws_exchange: timed out waiting for "
-                                "AWAITING_PLAN_APPROVAL on %s",
-                                cid,
-                            )
-                            break
-                        try:
-                            raw: str = await asyncio.wait_for(
-                                ws.recv(decode=True), timeout=min(remaining, 10.0)
-                            )
-                        except TimeoutError:
-                            continue
-                        frame: dict[str, Any] = json.loads(raw)
-                        status = _status_from_frame(frame)
-                        if status == "AWAITING_PLAN_APPROVAL":
-                            await ws.send(json.dumps({"type": "approve_plan"}))
-                            break
-                        if status in _TERMINAL:
-                            break
-                # Gap #3: send any scripted extra command frames (steer / stop /
-                # resume / answer / pick_alternative / …) so the runner can drive
-                # more than just send_message + approve_plan.
-                for cmd in ws_commands or []:
-                    await ws.send(json.dumps(cmd))
+                # Drive EVERY gate to terminal on ONE long-lived WS — a live model
+                # hits plan-approval AND mid-run questions, and closing the socket
+                # right after approve_plan raced the frame delivery (ConnectionClosed
+                # → a stuck AWAITING_PLAN_APPROVAL). Stay open until terminal/timeout.
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        log.warning(
+                            "run_ws_exchange: timed out driving gates on %s", cid
+                        )
+                        break
+                    try:
+                        raw: str = await asyncio.wait_for(
+                            ws.recv(decode=True), timeout=min(remaining, 10.0)
+                        )
+                    except TimeoutError:
+                        continue
+                    frame: dict[str, Any] = json.loads(raw)
+                    status = _status_from_frame(frame)
+                    if status == "AWAITING_PLAN_APPROVAL" and approve_plan:
+                        await ws.send(json.dumps({"type": "approve_plan"}))
+                    elif (
+                        status in ("AWAITING_USER_QUESTION", "AWAITING_USER_DECISION")
+                        and auto_answer is not None
+                        and answers < _MAX_AUTO_ANSWERS
+                    ):
+                        # A live model legitimately asks/clarifies; an unanswered gate
+                        # stalls the run. Auto-answer via a fresh user message (the
+                        # same channel the UI uses), capped so we never loop forever.
+                        answers += 1
+                        await ws.send(
+                            json.dumps({"type": "send_message", "content": auto_answer})
+                        )
+                    # Gap #3: scripted extra command frames (steer/stop/resume/…),
+                    # once, after the run is underway.
+                    if not sent_cmds and ws_commands:
+                        for cmd in ws_commands:
+                            await ws.send(json.dumps(cmd))
+                        sent_cmds = True
+                    if status in _TERMINAL:
+                        break
         except Exception as exc:  # noqa: BLE001
             log.warning("run_ws_exchange error on %s: %s", cid, exc)
 
@@ -773,6 +790,7 @@ async def run_scenario(
         cid,
         scenario.prompt,
         approve_plan=scenario.approve_plan,
+        auto_answer=scenario.auto_answer,
         timeout_s=effective_timeout,
         ws_commands=scenario.ws_commands,
     )

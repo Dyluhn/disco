@@ -44,6 +44,7 @@ class Scenario(BaseModel):
     # used to ignore (steer / stop / kill / resume / reject_action / pick_alternative /
     # answer / revise_plan / …) instead of only send_message + approve_plan.
     ws_commands: list[dict[str, Any]] = Field(default_factory=list)
+    auto_answer: str | None = None
     # Gap #54: when set ("md" | "pdf" | "docx"), the runner calls
     # POST /conversations/{cid}/report/export?format=… after the run and validates the
     # returned BYTES — report export bypasses the event-log deliverable path, so it is

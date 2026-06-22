@@ -90,6 +90,7 @@ class FakeVerifyClient(AbstractVerifyClient):
         approve_plan: bool,
         timeout_s: float,
         ws_commands: list[dict[str, Any]] | None = None,
+        auto_answer: str | None = None,
     ) -> None:
         self.calls.append("run_ws_exchange")
         self.ws_prompt = prompt
