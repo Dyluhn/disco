@@ -232,6 +232,23 @@ class OperatorClient:
                 view["preview"] = {"error": "preview not reachable"}
         return view
 
+    async def start(
+        self, surface: str, prompt: str, *, model: str | None = None
+    ) -> dict[str, Any]:
+        """Create a conversation on `surface` and submit the opening prompt — the operator
+        kicking off a run (e.g. a build) it will then drive via wait/view/respond."""
+        async with httpx.AsyncClient(base_url=self.base, timeout=30.0) as hc:
+            r = await hc.post("/conversations", json={"surface": surface, "model_override": model})
+            r.raise_for_status()
+            cid = str(r.json()["conversation_id"])
+        async with _ws_connect(f"{self.ws_base}/ws/conversations/{cid}") as ws:
+            await ws.send(json.dumps({"type": "send_message", "content": prompt}))
+            try:  # brief grace so the server registers the message before we close
+                await asyncio.wait_for(ws.recv(decode=True), timeout=5.0)
+            except TimeoutError:
+                pass
+        return {"ok": True, "cid": cid, "surface": surface, "model": model}
+
     async def state(self, cid: str) -> dict[str, Any]:
         status = await self._status(cid)
         events = await self._events(cid)
@@ -308,6 +325,10 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Disco Operator — watch + respond to live runs.")
     ap.add_argument("--agent-base", default="http://127.0.0.1:8000")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    p_start = sub.add_parser("start")
+    p_start.add_argument("surface")
+    p_start.add_argument("prompt")
+    p_start.add_argument("--model", default=None)
     p_state = sub.add_parser("state")
     p_state.add_argument("cid")
     p_view = sub.add_parser("view")
@@ -324,6 +345,8 @@ def main(argv: list[str] | None = None) -> int:
     client = OperatorClient(args.agent_base)
 
     async def run() -> dict[str, Any]:
+        if args.cmd == "start":
+            return await client.start(args.surface, args.prompt, model=args.model)
         if args.cmd == "state":
             return await client.state(args.cid)
         if args.cmd == "view":
