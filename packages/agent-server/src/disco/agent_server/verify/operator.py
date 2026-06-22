@@ -232,6 +232,28 @@ class OperatorClient:
                 view["preview"] = {"error": "preview not reachable"}
         return view
 
+    async def list_conversations(
+        self, *, active_only: bool = False, limit: int = 60
+    ) -> dict[str, Any]:
+        """Every conversation with its live status — so the orchestrator can SEE all running
+        builds at once (GET /conversations only returns ids in an unreliable order, and there's
+        no running-filter; this fills that gap). `active_only` keeps just the live ones."""
+        async with httpx.AsyncClient(base_url=self.base, timeout=20.0) as hc:
+            r = await hc.get("/conversations")
+            ids = (r.json() if r.status_code == 200 else {}).get("conversation_ids", [])
+        rows = await asyncio.gather(*(self._status(c) for c in ids[-limit:]))
+        live = {"RUNNING", "PLANNING", *_GATES}
+        out = [
+            {"cid": c, "status": s}
+            for c, s in zip(ids[-limit:], rows, strict=False)
+            if not active_only or s in live
+        ]
+        return {
+            "count": len(out),
+            "active": sum(1 for o in out if o["status"] in live),
+            "conversations": out,
+        }
+
     async def start(
         self, surface: str, prompt: str, *, model: str | None = None
     ) -> dict[str, Any]:
@@ -325,6 +347,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Disco Operator — watch + respond to live runs.")
     ap.add_argument("--agent-base", default="http://127.0.0.1:8000")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    p_list = sub.add_parser("list")
+    p_list.add_argument("--active", action="store_true")
     p_start = sub.add_parser("start")
     p_start.add_argument("surface")
     p_start.add_argument("prompt")
@@ -345,6 +369,8 @@ def main(argv: list[str] | None = None) -> int:
     client = OperatorClient(args.agent_base)
 
     async def run() -> dict[str, Any]:
+        if args.cmd == "list":
+            return await client.list_conversations(active_only=args.active)
         if args.cmd == "start":
             return await client.start(args.surface, args.prompt, model=args.model)
         if args.cmd == "state":
