@@ -179,22 +179,44 @@ class LifecycleManager:
         Called from reconcile_orphaned_runs at startup. Returns count destroyed."""
         service = self._rt._sandbox_service_now()
         live_cids = await service.list_live_instances()
-        destroyed = 0
+        # Decision phase (cheap existence/status reads): collect the set of cids to
+        # destroy. Kept serial + suppressed per-cid so one unreadable conversation
+        # doesn't abort the sweep. `status_value` is the log string for the
+        # terminal-status branch, or None for the no-row branch (which logs nothing,
+        # matching the original).
+        to_destroy: list[tuple[str, str | None]] = []
         for cid in live_cids:
             with contextlib.suppress(Exception):
                 if not await self._rt._store.conversation_exists(cid):
-                    await service.destroy_by_conversation(cid)
-                    destroyed += 1
+                    to_destroy.append((cid, None))
                     continue
                 state = await self._rt._store.get_state(cid)
                 if state.execution_status in terminal_statuses:
+                    to_destroy.append((cid, state.execution_status.value))
+
+        # Destroy phase: the actual destroy is slow (~4s each on a container backend),
+        # so run them CONCURRENTLY with bounded fan-out instead of serially on the
+        # awaited startup critical path (~25s → ~4-5s for 6 containers). Order doesn't
+        # matter; each task is suppressed so one bad cid never aborts the others.
+        sem = asyncio.Semaphore(6)
+
+        async def _destroy_one(cid: str, status_value: str | None) -> bool:
+            async with sem:
+                with contextlib.suppress(Exception):
                     await service.destroy_by_conversation(cid)
-                    _LOG.info(
-                        "swept orphan container cid=%s status=%s",
-                        cid,
-                        state.execution_status.value,
-                    )
-                    destroyed += 1
+                    if status_value is not None:
+                        _LOG.info(
+                            "swept orphan container cid=%s status=%s",
+                            cid,
+                            status_value,
+                        )
+                    return True
+            return False
+
+        results = await asyncio.gather(
+            *(_destroy_one(cid, status_value) for cid, status_value in to_destroy)
+        )
+        destroyed = sum(1 for ok in results if ok)
         # Process backend: sweep workspace dirs older than 7 days (no container layer).
         if isinstance(service, ProcessSandboxService):
             with contextlib.suppress(Exception):

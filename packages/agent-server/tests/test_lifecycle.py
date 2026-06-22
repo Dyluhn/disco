@@ -279,6 +279,79 @@ async def test_orphan_sweep_keeps_running(tmp_path):
     assert cid not in destroyed
 
 
+async def test_orphan_sweep_destroys_concurrently(tmp_path):
+    """Fix 5: the slow destroy_by_conversation calls must run CONCURRENTLY (bounded
+    fan-out), not serially — a serial sweep blocked startup ~25s for 6 leaked
+    containers. With N orphans each sleeping `delay`, total wall time must be ~one
+    delay, not N×delay."""
+    import asyncio
+    import time
+
+    store = SqliteEventStore(":memory:")
+    rt = _runtime(store)
+
+    n = 6
+    delay = 0.2
+    cids = []
+    for _ in range(n):
+        cids.append(await _make_conversation(store, ConversationStatus.FINISHED))
+
+    destroyed: list[str] = []
+
+    async def _slow_destroy(cid):
+        await asyncio.sleep(delay)
+        destroyed.append(cid)
+
+    svc = MagicMock()
+    svc.list_live_instances = AsyncMock(return_value=list(cids))
+    svc.destroy_by_conversation = AsyncMock(side_effect=_slow_destroy)
+    rt._sandbox_service_now = MagicMock(return_value=svc)
+
+    start = time.perf_counter()
+    await rt.reconcile_orphaned_runs()
+    elapsed = time.perf_counter() - start
+
+    assert set(destroyed) == set(cids), "every orphan must be destroyed"
+    # Serial would be n*delay (1.2s); concurrent (fan-out 6) ~= one delay. Generous
+    # bound rules out serialization without being flaky.
+    assert elapsed < delay * (n / 2), (
+        f"destroys ran serially: {elapsed:.2f}s for {n} x {delay}s"
+    )
+
+
+async def test_orphan_sweep_one_failure_does_not_abort_others(tmp_path):
+    """Fix 5 preserves the 'one bad cid doesn't abort the sweep' property under the
+    concurrent destroy phase: a cid whose destroy raises must not stop the others
+    from being destroyed."""
+    import asyncio
+
+    store = SqliteEventStore(":memory:")
+    rt = _runtime(store)
+
+    cids = [await _make_conversation(store, ConversationStatus.FINISHED) for _ in range(4)]
+    bad = cids[1]
+    destroyed: list[str] = []
+
+    async def _maybe_fail(cid):
+        await asyncio.sleep(0)
+        if cid == bad:
+            raise RuntimeError("backend refused to destroy this container")
+        destroyed.append(cid)
+
+    svc = MagicMock()
+    svc.list_live_instances = AsyncMock(return_value=list(cids))
+    svc.destroy_by_conversation = AsyncMock(side_effect=_maybe_fail)
+    rt._sandbox_service_now = MagicMock(return_value=svc)
+
+    await rt.reconcile_orphaned_runs()
+
+    # destroy_by_conversation was attempted on every cid (incl. the bad one)...
+    attempted = {c.args[0] for c in svc.destroy_by_conversation.await_args_list}
+    assert attempted == set(cids)
+    # ...and the good ones all succeeded despite the bad cid raising.
+    assert set(destroyed) == set(cids) - {bad}
+
+
 # ---- HTTP state route overlay parity (live-spec regression) -------------------
 
 async def test_http_state_route_overlays_sandbox_state():
