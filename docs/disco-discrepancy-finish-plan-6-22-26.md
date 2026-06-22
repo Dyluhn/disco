@@ -138,3 +138,17 @@ status reflects truth, live-verified with a real provider where Dylan has one.
 Verification discipline (all tiers): real-only for proof (no cassettes), evidence dossiers + screenshots
 for every UI claim, Playwright ONLY on VM-201, two-gate (real screenshot + adversarial review) on the
 risky cores. "Regression-clean" vs "proven-works" kept distinct in every report.
+
+---
+## TIER 5 — Disco Operator (Claude drives Disco non-deterministically) [Dylan request 2026-06-22]
+Built `packages/agent-server/.../verify/operator.py` — the control plane that lets CLAUDE sit in the
+human-in-the-loop seat over the real HTTP/WS boundary:
+- `operator state <cid>` → status + pending-gate context (proposed plan summary+steps / question / alternatives).
+- `operator wait [--any] [--timeout]` → blocks until a watched conversation reaches a gate or changes
+  state, prints the event (the NOTIFIER — run as a backgrounded cmd that pings me on completion, or in a loop).
+- `operator respond <cid> <action> [text]` → approve | revise <text> | reject | confirm | answer <text> |
+  steer <text> | pick <id> | resume | stop | pause | inject — thin wrappers over the verified UI WS frames;
+  keeps the socket open until the status moves off the gate (the close-race fix from a99e1a2).
+LIVE-PROVEN: as the operator I read a stuck conversation (AWAITING_PLAN_APPROVAL) and `respond approve`
+→ status_before AWAITING_PLAN_APPROVAL → status_after RUNNING. This is the foundation of the MCP Dylan
+asked about (these three verbs become the MCP tools: state/wait/respond).
