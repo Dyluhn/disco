@@ -655,3 +655,86 @@ async def test_failed_verify_probe_does_not_unlock_meta_tools():
     assert not any(
         isinstance(e, KnowledgeEvent) and e.seq < shell_seq for e in events
     )
+
+
+# ---- Fix 3: in-loop exit invariant (no path carries RUNNING out of run()) ------
+# Defense-in-depth atop the runtime backstop (9c90d7e). engine.py funnels every
+# drive-loop exit through one boundary: on a NORMAL return, if the reconstructed
+# status is still RUNNING, run() terminalizes to STUCK in-turn with the same
+# canonical detail the supervisor uses — instead of sitting RUNNING forever.
+
+_STUCK_DETAIL = "loop ended without reaching a terminal state"
+
+
+@pytest.mark.asyncio
+async def test_exit_invariant_terminalizes_running_return():
+    """A drive loop that returns while status is still RUNNING (a dropped /
+    no-event step on a HALT path) must become STUCK in-turn with the canonical
+    detail — the conversation never carries RUNNING out of run()."""
+    agent = ScriptedAgent([finish_step()])
+    loop, store = build_loop(agent)
+    await loop.send_message("go")
+
+    # Simulate the wedge: run() emits RUNNING just before calling _run_drive;
+    # the loop yields a return WITHOUT any terminal/parked emit (status stays
+    # RUNNING). The instance-attr shadow is an unbound async fn (no self).
+    async def wedged_drive():
+        return await loop.get_state()
+
+    loop._run_drive = wedged_drive  # type: ignore[method-assign]
+
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.STUCK
+    events = await store.get_events(CID)
+    assert _last_status_detail(events) == _STUCK_DETAIL
+    # Exactly one STUCK-with-canonical-detail event was synthesized.
+    assert sum(
+        isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.STUCK
+        and e.detail == _STUCK_DETAIL
+        for e in events
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_exit_invariant_no_spurious_stuck_on_finished():
+    """The invariant must NOT fire on a clean FINISHED exit — no spurious STUCK."""
+    agent = ScriptedAgent([action_step(), finish_step()])
+    loop, store = build_loop(agent)
+    await loop.send_message("do the task")
+
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    events = await store.get_events(CID)
+    assert not any(
+        isinstance(e, StatusEvent) and e.detail == _STUCK_DETAIL for e in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_exit_invariant_no_spurious_stuck_on_parked():
+    """The invariant must NOT fire on a legitimate PARKED exit (actionless →
+    PAUSED): a parked status is terminal-for-now, not a silent RUNNING stall."""
+    agent = ScriptedAgent([
+        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+        noop_step("a"),
+        noop_step("b"),
+        noop_step("c"),
+        finish_step(),
+    ])
+    loop, store = build_loop(agent)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    await loop.send_message("go")
+    await loop.run()
+    await loop.approve_plan()
+
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.PAUSED
+    events = await store.get_events(CID)
+    assert not any(
+        isinstance(e, StatusEvent) and e.detail == _STUCK_DETAIL for e in events
+    )

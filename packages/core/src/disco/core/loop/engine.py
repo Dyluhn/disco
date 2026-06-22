@@ -1078,6 +1078,39 @@ class AgentLoop:
 
         await self._emit(StatusEvent(status=ConversationStatus.RUNNING))
 
+        # EXIT INVARIANT (Fix 3) — in-loop defense-in-depth atop the runtime
+        # backstop (9c90d7e). run() emits RUNNING above; each of the drive
+        # loop's ~15 exits relies on a PRECEDING emit having set a terminal or
+        # parked status. A dropped/unparseable model turn can yield a no-event
+        # step, and a HALT path can return while still RUNNING — the
+        # conversation would then sit RUNNING forever until the supervisor
+        # catches it. Funnel every drive-loop exit through one boundary: on a
+        # NORMAL return, if the reconstructed status is still RUNNING (i.e. NOT
+        # in _TERMINAL_FOR_NOW), terminalize to STUCK with the SAME detail the
+        # runtime backstop uses. An exception (-> runtime ERROR) or a
+        # CancelledError (deliberate kill) propagates out of _run_drive()
+        # untouched — only a clean, silently-non-concluding return is repaired.
+        result = await self._run_drive()
+        if (await self.get_state()).execution_status not in _TERMINAL_FOR_NOW:
+            _LOG.error(
+                "run(%s) drive loop returned without reaching a terminal state; "
+                "marking STUCK (in-loop exit invariant)",
+                self.conversation_id,
+            )
+            await self._emit(
+                StatusEvent(
+                    status=ConversationStatus.STUCK,
+                    detail="loop ended without reaching a terminal state",
+                )
+            )
+            return await self.get_state()
+        return result
+
+    async def _run_drive(self) -> ConversationState:
+        """The drive loop body, extracted from run() so a single exit funnel
+        (the Fix-3 exit invariant) covers ALL of its ~15 return paths. Loops
+        forever, yielding only by returning the reconstructed state at a
+        checkpoint (or by propagating an exception / CancelledError)."""
         while True:
             action_to_execute: ActionEvent | None = None
             async with self._lock:
