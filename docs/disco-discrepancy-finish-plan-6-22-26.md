@@ -152,3 +152,13 @@ human-in-the-loop seat over the real HTTP/WS boundary:
 LIVE-PROVEN: as the operator I read a stuck conversation (AWAITING_PLAN_APPROVAL) and `respond approve`
 → status_before AWAITING_PLAN_APPROVAL → status_after RUNNING. This is the foundation of the MCP Dylan
 asked about (these three verbs become the MCP tools: state/wait/respond).
+
+### TIER 5 OPERATOR — FULL LOOP LIVE-PROVEN (2026-06-22)
+The complete notify→read→respond loop, end-to-end, as the operator (me):
+1. NOTIFY: `operator wait --any` detected conv_8ed9 at AWAITING_PLAN_APPROVAL.
+2. READ: `operator state` surfaced MiniMax's actual proposed plan — "Create and serve a modern
+   one-page landing page…" + 4 steps (SPEC.md → index.html → verify → serve file server).
+3. RESPOND: `operator respond approve` → status AWAITING_PLAN_APPROVAL → RUNNING; the build proceeded.
+This is exactly Dylan's 4 asks: ping on plan/question/state-change + enter text into the response
+boxes + make them actionable. The disco-verify runner's canned auto_answer is the dumb fallback; this
+is a real intelligence in the loop. → Becomes the MCP (state/wait/respond = the tools).
