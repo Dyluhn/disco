@@ -25,9 +25,10 @@
  * subscription, the Build status state machine.
  */
 
-import { Ban, File, FileText, FileType, Loader2, Navigation, Play, RotateCcw, Settings as SettingsIcon, Square } from "lucide-react";
+import { Ban, File, FilePlus, FileText, FileType, Loader2, Navigation, Play, RotateCcw, Settings as SettingsIcon, Square } from "lucide-react";
 import { UploadComposer } from "@/components/build/BuildSurface";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { publishRunStatus } from "@/lib/runStatusBridge";
 import { Link } from "react-router-dom";
 import { Markdown } from "@/components/Markdown";
 import { PlanPanel } from "@/components/build/PlanPanel";
@@ -73,9 +74,20 @@ const PENDING_BTN =
 export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId }: Props) {
   const r = useDeepResearch(resumeCid, initialLeaderId);
   const started = r.started;
+  // Gap #4: publish the DR run status to the W6 E2E bridge (await RUNNING/PAUSED/
+  // FINISHED/ERROR); clear on unmount.
+  useEffect(() => {
+    publishRunStatus(r.status);
+    return () => publishRunStatus(null);
+  }, [r.status]);
   // D3 mid-run steer input state. Only rendered while status === "RUNNING".
   const [steerText, setSteerText] = useState("");
   const steerInputRef = useRef<HTMLInputElement>(null);
+  // Gap #53: inject-source mid-run input. injectSource() was implemented in the
+  // hook (useDeepResearchStream) but had NO visible UI path — a hidden dead
+  // capability. This is a real, minimal affordance: a plaintext snippet folded
+  // into the run's corpus. Only rendered while RUNNING (same gate as steer).
+  const [injectText, setInjectText] = useState("");
   // RP-07: PDF/DOCX run in the agent-server (weasyprint / pandoc). The buttons are
   // gated on the REAL server capability — never a clickable button that 500s. MD
   // always works; PDF/DOCX enable wherever the server has the toolchain.
@@ -110,9 +122,27 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
     [topBarPendingFmt, r],
   );
 
+  // Gap #39 — a stable, assertable DR lifecycle phase. The run itself is
+  // model+live-search+streaming (non-deterministic), but the PHASE TRANSITIONS
+  // (idle → planning → running → paused/error → done) are deterministic and can
+  // be asserted by the harness off this single attribute.
+  const drPhase: string = r.awaitingPlan
+    ? "planning"
+    : r.status === "RUNNING"
+      ? r.plan
+        ? "running"
+        : "planning"
+      : r.status === "PAUSED"
+        ? "paused"
+        : r.status === "ERROR"
+          ? "error"
+          : r.status === "FINISHED"
+            ? "done"
+            : "idle";
+
   if (!started) {
     return (
-      <div className="flex min-h-full flex-col pt-section">
+      <div className="flex min-h-full flex-col pt-section" data-dr-phase={drPhase}>
         <main className="flex flex-1 flex-col items-center justify-center gap-major px-body pb-[12vh]">
           <EmptyState />
           <div className="flex w-full max-w-measure flex-col gap-inline">
@@ -159,7 +189,7 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
   }
 
   return (
-    <div className="flex min-h-full flex-col pt-section">
+    <div className="flex min-h-full flex-col pt-section" data-dr-phase={drPhase}>
       <main className="mx-auto flex w-full max-w-doc flex-1 flex-col gap-section px-body pb-major">
         {/* Header row: H1 + actions */}
         <header className="flex flex-wrap items-baseline justify-between gap-inline border-b border-hairline pb-section">
@@ -203,18 +233,51 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
                     type="submit"
                     disabled={!steerText.trim()}
                     aria-label="Send steer"
-                    data-disco-control="steer-research"
+                    data-disco-control="dr.steer"
                     className={CTRL_BTN}
                   >
                     <Navigation className="size-3" aria-hidden />
                     Steer
                   </button>
                 </form>
-                <button type="button" onClick={r.stop} data-disco-control="stop" className={CTRL_BTN}>
+                {/* Gap #53: inject-source — a real, wired mid-run affordance.
+                    Folds a plaintext snippet into the DR corpus (r.injectSource
+                    → inject_source WS frame). Only rendered while RUNNING. */}
+                <form
+                  className="flex items-center gap-hair"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const trimmed = injectText.trim();
+                    if (!trimmed) return;
+                    r.injectSource(trimmed);
+                    setInjectText("");
+                  }}
+                >
+                  <input
+                    type="text"
+                    value={injectText}
+                    onChange={(e) => setInjectText(e.target.value)}
+                    placeholder="Add a source snippet…"
+                    aria-label="Inject a source: add a plaintext snippet to the research corpus"
+                    className="h-[1.8rem] w-44 rounded-control border border-hairline bg-surface-0 px-inline font-ui text-[0.78rem] text-text placeholder:text-text-faint focus:outline-none focus:ring-1 focus:ring-accent"
+                    data-testid="dr-inject-source-input"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!injectText.trim()}
+                    aria-label="Inject source"
+                    data-disco-control="dr.inject-source"
+                    className={CTRL_BTN}
+                  >
+                    <FilePlus className="size-3" aria-hidden />
+                    Add source
+                  </button>
+                </form>
+                <button type="button" onClick={r.stop} data-disco-control="dr.stop" className={CTRL_BTN}>
                   <Square className="size-3" aria-hidden />
                   Stop
                 </button>
-                <button type="button" onClick={r.kill} data-disco-control="kill" className={KILL_BTN}>
+                <button type="button" onClick={r.kill} data-disco-control="dr.kill" className={KILL_BTN}>
                   <Ban className="size-3.5" aria-hidden />
                   Kill
                 </button>
@@ -223,11 +286,11 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
             {/* Stopped (paused): Resume continues it; Kill ends it. */}
             {r.status === "PAUSED" && (
               <>
-                <button type="button" onClick={r.resume} data-disco-control="resume" className={CTRL_BTN}>
+                <button type="button" onClick={r.resume} data-disco-control="dr.resume" className={CTRL_BTN}>
                   <Play className="size-3.5 text-accent" aria-hidden />
                   Resume
                 </button>
-                <button type="button" onClick={r.kill} data-disco-control="kill" className={KILL_BTN}>
+                <button type="button" onClick={r.kill} data-disco-control="dr.kill" className={KILL_BTN}>
                   <Ban className="size-3.5" aria-hidden />
                   Kill
                 </button>
@@ -235,7 +298,7 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
             )}
             {/* Errored: Retry = a fresh run of the same query. */}
             {r.status === "ERROR" && (
-              <button type="button" onClick={r.retry} data-disco-control="retry" className={CTRL_BTN}>
+              <button type="button" onClick={r.retry} data-disco-control="dr.retry" className={CTRL_BTN}>
                 <RotateCcw className="size-3.5" aria-hidden />
                 Retry
               </button>
@@ -245,7 +308,8 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
                 <button
                   type="button"
                   onClick={() => handleTopBarExport("md")}
-                  data-disco-control="export-report-md"
+                  data-disco-control="dr.export.topbar.md"
+                  data-export-cap="true"
                   className={CTRL_BTN}
                   title="Download as Markdown"
                 >
@@ -261,7 +325,8 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
                   // ExportModal pattern in NeedMoreCard.
                   disabled={!exportCaps.pdf || r.exportPending !== null}
                   aria-disabled={!exportCaps.pdf || r.exportPending !== null}
-                  data-disco-control="export-report-pdf"
+                  data-disco-control="dr.export.topbar.pdf"
+                  data-export-cap={String(exportCaps.pdf)}
                   className={exportCaps.pdf ? CTRL_BTN : PENDING_BTN}
                   title={
                     exportCaps.pdf
@@ -281,7 +346,8 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
                   onClick={() => handleTopBarExport("docx")}
                   disabled={!exportCaps.docx || r.exportPending !== null}
                   aria-disabled={!exportCaps.docx || r.exportPending !== null}
-                  data-disco-control="export-report-docx"
+                  data-disco-control="dr.export.topbar.docx"
+                  data-export-cap={String(exportCaps.docx)}
                   className={exportCaps.docx ? CTRL_BTN : PENDING_BTN}
                   title={
                     exportCaps.docx
@@ -343,24 +409,30 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
           </div>
         )}
 
-        {/* Plan-edit gate — present only at AWAITING_PLAN_APPROVAL */}
+        {/* Plan-edit gate — present only at AWAITING_PLAN_APPROVAL.
+            Gap #52: PlanPanel is the SHARED build/DR plan gate (owned by the
+            build lane) so its internal handles aren't surface-scoped here.
+            Wrap the DR-side mount point with a stable marker so the harness can
+            detect "the DR plan gate is showing" without reaching into PlanPanel. */}
         {r.awaitingPlan && r.plan && (
-          <PlanPanel
-            plan={{
-              id: r.plan.id,
-              summary: r.plan.summary,
-              steps: r.plan.steps,
-              revision: r.plan.revision,
-              context: r.plan.context,
-            }}
-            progress={r.progress}
-            onApprove={r.approvePlan}
-            onRevise={r.requestPlan}
-            // fix-c #1: the shared PlanPanel defaults its approve button to
-            // "Approve & build" (build surface). On deep research the same
-            // gate means something different — override.
-            approveLabel="Approve research plan"
-          />
+          <div data-dr-plan-gate="">
+            <PlanPanel
+              plan={{
+                id: r.plan.id,
+                summary: r.plan.summary,
+                steps: r.plan.steps,
+                revision: r.plan.revision,
+                context: r.plan.context,
+              }}
+              progress={r.progress}
+              onApprove={r.approvePlan}
+              onRevise={r.requestPlan}
+              // fix-c #1: the shared PlanPanel defaults its approve button to
+              // "Approve & build" (build surface). On deep research the same
+              // gate means something different — override.
+              approveLabel="Approve research plan"
+            />
+          </div>
         )}
 
         {/* During the run + after: the progress strip (collapses on finish) */}

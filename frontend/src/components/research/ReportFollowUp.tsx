@@ -67,7 +67,7 @@ export function ReportFollowUp({
           onClick={submit}
           disabled={!text.trim() || busy}
           aria-label="Ask follow-up"
-          data-disco-control="follow-up"
+          data-disco-control="dr.follow-up"
           className={cn(
             "shrink-0 pb-hair text-accent transition-colors hover:opacity-80 disabled:opacity-40",
             busy && "animate-pulse",

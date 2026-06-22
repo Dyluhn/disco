@@ -52,6 +52,9 @@ class FakeVerifyClient(AbstractVerifyClient):
         artifacts: dict[str, bytes] | None = None,
         app_responses: dict[str, tuple[int, bytes]] | None = None,
         preview_response: tuple[int, bytes] | None = None,
+        export_response: tuple[int, bytes] | None = None,
+        schedule_fires: bool = False,
+        post_fire_events: list[dict[str, Any]] | None = None,
     ) -> None:
         self.cid = cid
         self._final_state: dict[str, Any] = final_state or {"execution_status": "FINISHED"}
@@ -61,10 +64,17 @@ class FakeVerifyClient(AbstractVerifyClient):
         self._artifacts: dict[str, bytes] = artifacts or {}
         self._app_responses: dict[str, tuple[int, bytes]] = app_responses or {}
         self._preview_response = preview_response
+        self._export_response = export_response
+        self._schedule_fires = schedule_fires
+        self._post_fire_events = post_fire_events
         # call-tracking for assertions
         self.calls: list[str] = []
         self.ws_prompt: str | None = None
         self.ws_approve_plan: bool = False
+        self.ws_commands: list[dict[str, Any]] = []
+        self.export_fmt: str | None = None
+        self.fired_schedule_id: str | None = None
+        self._get_events_count = 0
 
     async def create_conversation(
         self, surface: str, model_override: str | None
@@ -79,10 +89,12 @@ class FakeVerifyClient(AbstractVerifyClient):
         *,
         approve_plan: bool,
         timeout_s: float,
+        ws_commands: list[dict[str, Any]] | None = None,
     ) -> None:
         self.calls.append("run_ws_exchange")
         self.ws_prompt = prompt
         self.ws_approve_plan = approve_plan
+        self.ws_commands = list(ws_commands or [])
 
     async def poll_until_terminal(
         self,
@@ -95,6 +107,11 @@ class FakeVerifyClient(AbstractVerifyClient):
 
     async def get_events(self, cid: str) -> list[dict[str, Any]]:
         self.calls.append("get_events")
+        self._get_events_count += 1
+        # After a schedule fire, the second get_events returns the post-fire log
+        # (so a schedule_run event can appear) when one was supplied.
+        if self._get_events_count > 1 and self._post_fire_events is not None:
+            return list(self._post_fire_events)
         return list(self._events)
 
     async def get_state(self, cid: str) -> dict[str, Any]:
@@ -122,6 +139,16 @@ class FakeVerifyClient(AbstractVerifyClient):
     async def fetch_preview(self, cid: str) -> tuple[int, bytes] | None:
         self.calls.append("fetch_preview")
         return self._preview_response
+
+    async def export_report(self, cid: str, fmt: str) -> tuple[int, bytes] | None:
+        self.calls.append("export_report")
+        self.export_fmt = fmt
+        return self._export_response
+
+    async def fire_schedule_now(self, cid: str, schedule_id: str) -> bool:
+        self.calls.append("fire_schedule_now")
+        self.fired_schedule_id = schedule_id
+        return self._schedule_fires
 
 
 # ---------------------------------------------------------------------------
@@ -802,3 +829,139 @@ async def test_app_fails_on_3xx(tmp_path: Path) -> None:
     result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
     assert not result.passed
     assert any("HTTP 300" in p for p in result.validator_problems)
+
+
+# ---------------------------------------------------------------------------
+# Tests: gap #3 — extra WS command frames (steer/stop/resume/…)
+# ---------------------------------------------------------------------------
+
+
+async def test_ws_commands_forwarded_to_exchange(tmp_path: Path) -> None:
+    """A scenario's ws_commands are sent to run_ws_exchange after send_message — so the
+    runner can drive more than just send_message + approve_plan (gap #3)."""
+    client = FakeVerifyClient(final_state={"execution_status": "FINISHED"})
+    scenario = Scenario(
+        id="steer_then_stop",
+        prompt="build a thing",
+        ws_commands=[
+            {"type": "steer", "content": "focus on tests"},
+            {"type": "stop"},
+        ],
+    )
+    await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
+    assert client.ws_commands == [
+        {"type": "steer", "content": "focus on tests"},
+        {"type": "stop"},
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Tests: gap #54 — report export (bypasses the event-log deliverable path)
+# ---------------------------------------------------------------------------
+
+
+async def test_report_export_md_validates_and_passes(tmp_path: Path) -> None:
+    client = FakeVerifyClient(
+        final_state={"execution_status": "FINISHED"},
+        export_response=(200, b"# Report\n\nReal markdown body."),
+    )
+    scenario = Scenario(
+        id="report_md", prompt="research X",
+        expect={"terminal_status": "FINISHED"}, report_export="md",
+    )
+    result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
+    assert "export_report" in client.calls
+    assert client.export_fmt == "md"
+    assert result.passed, result.validator_problems
+
+
+async def test_report_export_blank_md_fails(tmp_path: Path) -> None:
+    client = FakeVerifyClient(
+        final_state={"execution_status": "FINISHED"},
+        export_response=(200, b"   \n  "),
+    )
+    scenario = Scenario(
+        id="report_blank", prompt="research X",
+        expect={"terminal_status": "FINISHED"}, report_export="md",
+    )
+    result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
+    assert not result.passed
+    assert any("blank" in p for p in result.validator_problems)
+
+
+async def test_report_export_unreachable_fails(tmp_path: Path) -> None:
+    client = FakeVerifyClient(
+        final_state={"execution_status": "FINISHED"},
+        export_response=None,  # endpoint unreachable
+    )
+    scenario = Scenario(
+        id="report_dead", prompt="research X",
+        expect={"terminal_status": "FINISHED"}, report_export="pdf",
+    )
+    result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
+    assert not result.passed
+    assert any("not reachable" in p for p in result.validator_problems)
+
+
+async def test_report_export_docx_needs_zip_signature(tmp_path: Path) -> None:
+    client = FakeVerifyClient(
+        final_state={"execution_status": "FINISHED"},
+        export_response=(200, b"not a zip"),
+    )
+    scenario = Scenario(
+        id="report_docx", prompt="research X",
+        expect={"terminal_status": "FINISHED"}, report_export="docx",
+    )
+    result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
+    assert not result.passed
+    assert any("docx" in p for p in result.validator_problems)
+
+
+# ---------------------------------------------------------------------------
+# Tests: gap #98 — deterministic schedule "fire now" seam (REGRESSION)
+# ---------------------------------------------------------------------------
+
+
+async def test_fire_schedule_passes_when_run_event_appears(tmp_path: Path) -> None:
+    client = FakeVerifyClient(
+        final_state={"execution_status": "FINISHED"},
+        schedule_fires=True,
+        post_fire_events=[{"kind": "schedule_run", "schedule_id": "sched-1"}],
+    )
+    scenario = Scenario(
+        id="sched_fire", prompt="schedule X",
+        expect={"terminal_status": "FINISHED"}, fire_schedule_id="sched-1",
+    )
+    result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
+    assert "fire_schedule_now" in client.calls
+    assert client.fired_schedule_id == "sched-1"
+    assert result.passed, result.validator_problems
+
+
+async def test_fire_schedule_fails_when_hook_rejected(tmp_path: Path) -> None:
+    client = FakeVerifyClient(
+        final_state={"execution_status": "FINISHED"},
+        schedule_fires=False,
+    )
+    scenario = Scenario(
+        id="sched_reject", prompt="schedule X",
+        expect={"terminal_status": "FINISHED"}, fire_schedule_id="sched-1",
+    )
+    result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
+    assert not result.passed
+    assert any("fire-now hook did not accept" in p for p in result.validator_problems)
+
+
+async def test_fire_schedule_fails_without_run_event(tmp_path: Path) -> None:
+    client = FakeVerifyClient(
+        final_state={"execution_status": "FINISHED"},
+        schedule_fires=True,
+        post_fire_events=[{"kind": "status", "status": "FINISHED"}],  # no schedule_run
+    )
+    scenario = Scenario(
+        id="sched_noevent", prompt="schedule X",
+        expect={"terminal_status": "FINISHED"}, fire_schedule_id="sched-1",
+    )
+    result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
+    assert not result.passed
+    assert any("no schedule_run event" in p for p in result.validator_problems)

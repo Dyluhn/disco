@@ -24,6 +24,7 @@ import { agentHttpBase, agentLive } from "@/api/client";
 import { EmptyState, ErrorState } from "@/components/states";
 import { Markdown } from "@/components/Markdown";
 import { QueryInput } from "@/components/QueryInput";
+import { publishRunStatus } from "@/lib/runStatusBridge";
 import { Download, Loader2 } from "lucide-react";
 import { useDownloadProject, useExportManifest } from "@/hooks/useProjects";
 import { ActivityFeed } from "@/components/build/ActivityFeed";
@@ -121,6 +122,14 @@ export function BuildSurface({
   // run finishes or needs the user while the tab is hidden.
   useBuildNotifications(b.status, b.task);
 
+  // Gap #4: publish this surface's live run status to the W6 E2E bridge so the
+  // harness can await RUNNING / AWAITING_* / FINISHED. (AgentSurface delegates to
+  // BuildSurface, so this covers both build and agent.) Clear on unmount.
+  useEffect(() => {
+    publishRunStatus(b.status);
+    return () => publishRunStatus(null);
+  }, [b.status]);
+
   // Auto-scroll the feed to the bottom ONLY on a "you need to look now" moment —
   // never on every event (that would yank the user off whatever they're reading).
   // Two triggers: (1) the agent needs input (a gate just opened), or (2) a
@@ -199,6 +208,8 @@ export function BuildSurface({
                   type="button"
                   role="switch"
                   aria-checked={b.assistChoice}
+                  aria-label="Assist tier (weak-model compensations)"
+                  data-disco-control="build.assist-toggle"
                   onClick={() => b.setAssistChoice(!b.assistChoice)}
                   title="Assist: weak-model compensations (file-state reinforcement, simplified tool surface + plan handling). Turn ON for a genuinely small/weak model. Leave OFF for capable models — it is NEVER auto-enabled, even for local models like Qwen 27B."
                   className={cn(
@@ -214,6 +225,8 @@ export function BuildSurface({
                   type="button"
                   role="switch"
                   aria-checked={b.autonomousChoice}
+                  aria-label="Autonomous mode (headless run)"
+                  data-disco-control="build.autonomous-toggle"
                   onClick={() => b.setAutonomousChoice(!b.autonomousChoice)}
                   title="Autonomous: the agent runs headless — it won't ask you questions, auto-approves its own plan, and stops cleanly instead of waiting for you. Best for unattended runs; for tricky tasks leave it off so the agent can ask."
                   className={cn(
@@ -291,6 +304,7 @@ export function BuildSurface({
                   onClick={() => b.cid && download.mutate(b.cid)}
                   disabled={download.isPending}
                   aria-label="Download the project as a zip"
+                  data-disco-control="build.export-zip"
                   title="Download a zip of the project files"
                   className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text disabled:opacity-40"
                 >
@@ -474,7 +488,11 @@ export function BuildSurface({
             <div className="flex flex-col gap-hair">
               <BuildModelPicker value={b.modelId} onChange={b.setModelId} />
               {/* re-enter plan mode: a focused, diff-style change is planned + re-approved */}
-              <QueryInput onSubmit={b.requestPlan} placeholder={copy.replanPlaceholder} />
+              <QueryInput
+                onSubmit={b.requestPlan}
+                placeholder={copy.replanPlaceholder}
+                controlId="replan-send"
+              />
             </div>
           )}
           {/* RP-08: schedule this conversation to re-run on a cron cadence. Only

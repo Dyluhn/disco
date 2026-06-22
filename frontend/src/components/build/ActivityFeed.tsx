@@ -82,6 +82,8 @@ export function SheetDownload({
     <a
       href={href}
       download
+      data-disco-control="build.activity-download"
+      data-download-kind="sheet"
       className="mt-hair flex items-center gap-inline rounded-card border border-hairline bg-surface-0 px-inline py-hair transition-colors hover:border-hairline-strong"
     >
       <FileSpreadsheet className="size-4 shrink-0 text-accent" aria-hidden />
@@ -140,6 +142,8 @@ export function SlidesDownload({
       <a
         href={href}
         download
+        data-disco-control="build.activity-download"
+        data-download-kind="slides"
         className="flex items-center gap-inline rounded-card border border-hairline bg-surface-0 px-inline py-hair transition-colors hover:border-hairline-strong"
       >
         <MonitorPlay className="size-4 shrink-0 text-accent" aria-hidden />
@@ -189,6 +193,8 @@ export function FileDownload({
     <a
       href={href}
       download
+      data-disco-control="build.activity-download"
+      data-download-kind="file"
       className="mt-hair flex items-center gap-inline rounded-card border border-hairline bg-surface-0 px-inline py-hair transition-colors hover:border-hairline-strong"
     >
       <File className="size-4 shrink-0 text-accent" aria-hidden />

@@ -13,16 +13,32 @@ interface Props {
   description: string;
   confirmLabel: string;
   onConfirm: () => void;
+  /** Gap #63: a stable, machine-readable tag distinguishing WHICH confirm flow
+   *  this is (e.g. "history-delete" vs "projects-delete"). Both delete flows
+   *  share this one component, so the harness otherwise can't tell which gate it
+   *  drove. Stamped as `data-confirm-context` on the dialog content + both
+   *  buttons; defaults to "generic". */
+  confirmContext?: string;
 }
 
-export function ConfirmDialog({ trigger, title, description, confirmLabel, onConfirm }: Props) {
+export function ConfirmDialog({
+  trigger,
+  title,
+  description,
+  confirmLabel,
+  onConfirm,
+  confirmContext = "generic",
+}: Props) {
   const [open, setOpen] = useState(false);
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Trigger asChild>{trigger}</Dialog.Trigger>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/45" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(26rem,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-card border border-hairline bg-bg p-body pmx-rise">
+        <Dialog.Content
+          data-confirm-context={confirmContext}
+          className="fixed left-1/2 top-1/2 z-50 w-[min(26rem,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-card border border-hairline bg-bg p-body pmx-rise"
+        >
           <Dialog.Title className="font-ui text-[0.95rem] font-semibold text-text">
             {title}
           </Dialog.Title>
@@ -33,6 +49,8 @@ export function ConfirmDialog({ trigger, title, description, confirmLabel, onCon
             <Dialog.Close asChild>
               <button
                 type="button"
+                data-disco-control="confirm-dialog.cancel"
+                data-confirm-context={confirmContext}
                 className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
               >
                 Cancel
@@ -44,6 +62,8 @@ export function ConfirmDialog({ trigger, title, description, confirmLabel, onCon
                 onConfirm();
                 setOpen(false);
               }}
+              data-disco-control="confirm-dialog.confirm"
+              data-confirm-context={confirmContext}
               className="rounded-control bg-unsupported px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90"
             >
               {confirmLabel}

@@ -20,6 +20,7 @@ import { Check, Cloud, Cpu, Loader2, Server } from "lucide-react";
 import { cn } from "@/lib/cn";
 import {
   useImageGenConfig,
+  useOpenRouterKey,
   useOpenRouterModels,
   useUpdateImageGenConfig,
 } from "@/hooks/useModels";
@@ -81,6 +82,11 @@ export function ImageGenSection() {
   // filtered to image-OUTPUT models so the model field becomes a priced picker.
   const orModels = useOpenRouterModels(data?.provider === "openrouter", { allModalities: true });
   const imageModels = (orModels.data ?? []).filter((m) => m.image_output);
+  // For the OpenRouter tier the required config is a decryptable OpenRouter key
+  // (stored under Provider API keys) — otherwise image-gen silently falls back to
+  // procedural, which we must warn about rather than imply it's working.
+  const orKey = useOpenRouterKey();
+  const orKeyReady = Boolean(orKey.data?.configured && !orKey.data?.locked);
 
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKeyEnv, setApiKeyEnv] = useState("");
@@ -168,7 +174,11 @@ export function ImageGenSection() {
       ? "Set a base URL below — until then, image generation silently falls back to procedural."
       : data?.provider === "openai" && !(data.api_key_env ?? "").trim()
         ? "Set the API key env var below and store that key in Provider API keys — until then, image generation falls back to procedural."
-        : null;
+        : data?.provider === "openrouter" && !orKeyReady
+          ? "Store a decryptable OpenRouter key in Provider API keys — until then, image generation falls back to procedural."
+          : data?.provider === "openrouter" && !(data.model ?? "").trim()
+            ? "Set an image model id below — until then, image generation falls back to procedural."
+            : null;
 
   const fieldClass =
     "rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60";
@@ -194,6 +204,8 @@ export function ImageGenSection() {
               <button
                 key={opt.provider}
                 type="button"
+                data-disco-control="settings.imagegen-provider"
+                data-provider={opt.provider}
                 onClick={() => selectProvider(opt.provider)}
                 disabled={save.isPending}
                 aria-pressed={isActive}
@@ -225,7 +237,11 @@ export function ImageGenSection() {
           })}
 
           {fallbackWarning && (
-            <p className="font-ui text-[0.8rem] text-warn" role="status">
+            <p
+              className="font-ui text-[0.8rem] text-warn"
+              role="status"
+              data-disco-flag="imagegen-procedural-fallback"
+            >
               ⚠ {fallbackWarning}
             </p>
           )}
@@ -379,6 +395,7 @@ export function ImageGenSection() {
               <div className="flex items-center gap-inline">
                 <button
                   type="button"
+                  data-disco-control="settings.imagegen-save"
                   disabled={!fieldsDirty || save.isPending}
                   onClick={saveFields}
                   className={cn(

@@ -53,6 +53,8 @@ export function RoleModelPicker({ value, onSelect, ariaLabel, busy, disabled }: 
       <Dialog.Trigger asChild>
         <button
           type="button"
+          data-disco-control="settings.model-assign"
+          data-model-id={value || undefined}
           aria-label={ariaLabel}
           disabled={busy || disabled}
           className="flex w-full items-center justify-between gap-inline rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text transition-colors hover:border-hairline-strong disabled:cursor-not-allowed disabled:opacity-50 sm:w-64"
@@ -87,6 +89,8 @@ export function RoleModelPicker({ value, onSelect, ariaLabel, busy, disabled }: 
                         <li key={m.id}>
                           <button
                             type="button"
+                            data-disco-control="settings.model-assign-option"
+                            data-model-id={m.id}
                             onClick={() => pick(m.id)}
                             className={cn(
                               "flex w-full flex-col gap-hair rounded-control border px-inline py-inline text-left transition-colors",

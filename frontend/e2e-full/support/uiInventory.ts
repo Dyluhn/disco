@@ -184,6 +184,13 @@ interface RawAttrs {
   disabledAttr: boolean;
   ariaDisabled: string | null;
   href: string | null;
+  /** Gap #5: extra name sources so inputs/icon-buttons aren't anonymous.
+   *  `placeholder` (inputs/textarea), `title` (icon buttons), and the resolved
+   *  IMPLICIT label text — `<label for=id>` or a wrapping `<label>` — which
+   *  `uiInventory` previously ignored, leaving the main fields unaddressable. */
+  placeholder: string | null;
+  title: string | null;
+  implicitLabel: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -231,9 +238,33 @@ export async function enumerateControls(page: Page): Promise<Control[]> {
       // Cast through unknown to avoid needing DOM lib in tsconfig
       const el = rawEl as unknown as {
         tagName: string;
+        id: string;
         getAttribute(name: string): string | null;
         hasAttribute(name: string): boolean;
+        closest(sel: string): { textContent: string | null } | null;
+        ownerDocument: {
+          querySelector(sel: string): { textContent: string | null } | null;
+        };
+        labels?: ArrayLike<{ textContent: string | null }>;
       };
+      // Implicit label resolution (gap #5): prefer the element's associated
+      // <label> elements (the `labels` HTMLInputElement collection), then a
+      // `<label for=id>`, then a wrapping <label>.
+      let implicitLabel: string | null = null;
+      const labels = el.labels;
+      if (labels && labels.length > 0) {
+        implicitLabel = labels[0]?.textContent?.trim() || null;
+      }
+      if (!implicitLabel && el.id) {
+        // CSS.escape isn't always available in older evaluate contexts; ids here
+        // are simple slugs, so a direct attribute selector is safe enough.
+        const forLabel = el.ownerDocument.querySelector(`label[for="${el.id}"]`);
+        implicitLabel = forLabel?.textContent?.trim() || null;
+      }
+      if (!implicitLabel) {
+        const wrap = el.closest("label");
+        implicitLabel = wrap?.textContent?.trim() || null;
+      }
       return {
         tagName: el.tagName.toLowerCase(),
         roleAttr: el.getAttribute("role"),
@@ -243,6 +274,9 @@ export async function enumerateControls(page: Page): Promise<Control[]> {
         disabledAttr: el.hasAttribute("disabled"),
         ariaDisabled: el.getAttribute("aria-disabled"),
         href: el.getAttribute("href"),
+        placeholder: el.getAttribute("placeholder"),
+        title: el.getAttribute("title"),
+        implicitLabel,
       };
     });
 
@@ -251,16 +285,37 @@ export async function enumerateControls(page: Page): Promise<Control[]> {
 
     const role = attrs.roleAttr ?? attrs.tagName;
     const textContent = (await loc.textContent())?.trim() ?? "";
-    const name = attrs.ariaLabel ?? textContent;
-    const controlId = makeControlId(
+    // Gap #5: richer name resolution. aria-label → visible text → IMPLICIT label
+    // (label[for] / wrapping <label> / .labels) → placeholder → title. Without the
+    // implicit-label + placeholder fallbacks the primary text fields resolved to ""
+    // and were unaddressable by the inventory.
+    const name =
+      attrs.ariaLabel ||
+      textContent ||
+      attrs.implicitLabel ||
+      attrs.placeholder ||
+      attrs.title ||
+      "";
+    let controlId = makeControlId(
       attrs.discoControl,
       attrs.dataTestId,
       name,
       role,
     );
 
-    // Skip duplicates (same controlId already collected)
-    if (seen.has(controlId)) continue;
+    // Gap #5: dedup must not collapse DISTINCT repeated controls. A stable handle
+    // (disco:/tid:) that legitimately repeats — e.g. three `pick-alternative`
+    // cards — is ONE logical control for coverage, so we keep collapsing those.
+    // But a generated slug (`gen:`) collision is accidental (two different
+    // unnamed/icon buttons hashing to the same slug); collapsing those silently
+    // dropped real controls. Disambiguate gen: collisions with an occurrence
+    // suffix so each distinct element is enumerated.
+    if (seen.has(controlId)) {
+      if (!controlId.startsWith("gen:")) continue; // intentional shared handle
+      let n = 2;
+      while (seen.has(`${controlId}#${n}`)) n += 1;
+      controlId = `${controlId}#${n}`;
+    }
     seen.add(controlId);
 
     const visible = await loc.isVisible();
@@ -330,6 +385,45 @@ export class HitMap {
   /** All clicked control IDs. */
   get allClicked(): ReadonlySet<string> {
     return this._clicked;
+  }
+
+  /**
+   * Gap #6: a NON-throwing coverage report — the structured list of every
+   * declared-but-unclicked backend-command handle (the data behind the gate).
+   * Specs write this to the dossier so a human (and the gate) can see exactly
+   * which of the ~36 `data-disco-control` handles a run did NOT exercise, even
+   * when they are intentionally allowlisted. Distinct from {@link assertCoverage},
+   * which throws; this just reports.
+   */
+  coverageReport(allowlist: Record<string, string> = {}): {
+    backend_command_seen: number;
+    clicked: number;
+    unclicked: Array<{ controlId: string; surface: string; name: string; role: string; allowlisted: boolean }>;
+  } {
+    const backendSeen = this.allSeen.filter((c) => c.kind === "backend-command");
+    const unclicked: Array<{
+      controlId: string;
+      surface: string;
+      name: string;
+      role: string;
+      allowlisted: boolean;
+    }> = [];
+    for (const ctrl of backendSeen) {
+      if (!ctrl.enabled || !ctrl.visible) continue;
+      if (this._clicked.has(ctrl.controlId)) continue;
+      unclicked.push({
+        controlId: ctrl.controlId,
+        surface: ctrl.surface,
+        name: ctrl.name,
+        role: ctrl.role,
+        allowlisted: ctrl.controlId in allowlist,
+      });
+    }
+    return {
+      backend_command_seen: backendSeen.length,
+      clicked: this._clicked.size,
+      unclicked,
+    };
   }
 
   /**

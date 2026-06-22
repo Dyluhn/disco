@@ -35,7 +35,7 @@ describe("EditAffordance", () => {
     fireEvent.change(screen.getByPlaceholderText(/Describe the change/i), {
       target: { value: "make the heading larger" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    fireEvent.click(screen.getByRole("button", { name: /Apply/ }));
 
     expect(onApply).toHaveBeenCalledTimes(1);
     const instruction = onApply.mock.calls[0][0] as string;
@@ -52,7 +52,7 @@ describe("EditAffordance", () => {
     render(
       <EditAffordance file="a.html" line={3} rect={RECT} onApply={onApply} onCancel={vi.fn()} />,
     );
-    const apply = screen.getByRole("button", { name: "Apply" });
+    const apply = screen.getByRole("button", { name: /Apply/ });
     expect(apply).toBeDisabled();
     fireEvent.click(apply);
     expect(onApply).not.toHaveBeenCalled();

@@ -57,12 +57,15 @@ export function CommandPalette() {
   }, []);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    const count = filteredCommands.length;
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setSelectedIndex((i) => (i + 1) % filteredCommands.length);
+      // Guard the modulo: with an empty result set `% 0` is NaN, which would wedge
+      // selection. No-op (keep index at 0) when there is nothing to move through.
+      if (count > 0) setSelectedIndex((i) => (i + 1) % count);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setSelectedIndex((i) => (i - 1 + filteredCommands.length) % filteredCommands.length);
+      if (count > 0) setSelectedIndex((i) => (i - 1 + count) % count);
     } else if (e.key === "Enter") {
       e.preventDefault();
       const command = filteredCommands[selectedIndex];
@@ -78,7 +81,10 @@ export function CommandPalette() {
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[2px]" />
-        <Dialog.Content className="fixed left-1/2 top-[20%] z-50 w-full max-w-lg -translate-x-1/2 overflow-hidden rounded-control border border-hairline bg-surface-1 shadow-2xl pmx-rise focus:outline-none">
+        <Dialog.Content
+          data-testid="command-palette"
+          className="fixed left-1/2 top-[20%] z-50 w-full max-w-lg -translate-x-1/2 overflow-hidden rounded-control border border-hairline bg-surface-1 shadow-2xl pmx-rise focus:outline-none"
+        >
           {/* Visually-hidden title/description: Radix Dialog requires a title for
               screen-reader users (the input placeholder is not announced as a label). */}
           <Dialog.Title className="sr-only">Command palette</Dialog.Title>
@@ -89,6 +95,8 @@ export function CommandPalette() {
             <Search className="mr-3 size-4 text-text-muted" />
             <input
               autoFocus
+              data-testid="command-palette-input"
+              aria-label="Search commands"
               className="w-full bg-transparent font-ui text-[0.95rem] text-text placeholder:text-text-faint focus:outline-none"
               placeholder="Search commands..."
               value={query}
@@ -106,6 +114,8 @@ export function CommandPalette() {
                   return (
                     <li key={command.id}>
                       <button
+                        data-disco-control={`shell.command-${command.id}`}
+                        data-selected={i === selectedIndex}
                         className={cn(
                           "flex w-full items-center gap-3 rounded-control px-3 py-2 text-left font-ui text-[0.86rem] transition-colors",
                           i === selectedIndex

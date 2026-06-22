@@ -129,9 +129,11 @@ function ConfirmCard({
         <p className="font-ui text-[0.78rem] font-medium text-text-muted uppercase tracking-wide">
           Next 3 runs
         </p>
+        {/* `data-next-run` carries the raw ISO so a frozen-clock test can assert the
+            previewed times deterministically (the visible text is locale-formatted). */}
         <ol className="list-decimal list-inside space-y-px">
           {preview.next_runs.map((t) => (
-            <li key={t} className="font-ui text-[0.82rem] text-text">
+            <li key={t} data-next-run={t} className="font-ui text-[0.82rem] text-text">
               {fmtDatetime(t)}
             </li>
           ))}
@@ -147,6 +149,7 @@ function ConfirmCard({
         </button>
         <button
           type="button"
+          data-disco-control="settings.schedule-save"
           disabled={busy}
           onClick={onConfirm}
           className="rounded-control bg-accent px-body py-hair font-ui text-[0.8rem] font-medium text-bg transition-opacity disabled:opacity-40"
@@ -262,6 +265,7 @@ export function ScheduleSection({ conversationId }: { conversationId: string }) 
         {!creating && (
           <button
             type="button"
+            data-disco-control="settings.schedule-new"
             onClick={() => setCreating(true)}
             className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text"
           >
@@ -300,6 +304,8 @@ export function ScheduleSection({ conversationId }: { conversationId: string }) 
               <button
                 key={cron}
                 type="button"
+                data-disco-control="settings.schedule-preset"
+                data-cron={cron}
                 disabled={previewLoading}
                 onClick={() => handleSelectPreset(cron)}
                 className="rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text disabled:opacity-40"
@@ -312,6 +318,7 @@ export function ScheduleSection({ conversationId }: { conversationId: string }) 
             Or type your own:
           </p>
           <input
+            data-disco-control="settings.schedule-input"
             value={draft.input}
             onChange={(e) => {
               setDraft({ input: e.target.value });
@@ -342,6 +349,7 @@ export function ScheduleSection({ conversationId }: { conversationId: string }) 
             </button>
             <button
               type="button"
+              data-disco-control="settings.schedule-preview"
               disabled={!draft.input.trim() || previewLoading}
               onClick={handlePreview}
               className="rounded-control bg-accent px-body py-hair font-ui text-[0.8rem] font-medium text-bg transition-opacity disabled:opacity-40"
@@ -384,6 +392,7 @@ export function ScheduleSection({ conversationId }: { conversationId: string }) 
             </div>
             <button
               type="button"
+              data-disco-control="settings.schedule-delete"
               onClick={() => removeMutation.mutate(s.schedule_id)}
               aria-label={`Delete schedule ${s.description}`}
               className="text-text-faint transition-colors hover:text-unsupported"

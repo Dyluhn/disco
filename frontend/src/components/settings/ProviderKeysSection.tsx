@@ -61,6 +61,7 @@ function StoredKeyRow({
           />
           <button
             type="button"
+            data-disco-control="settings.provider-key-save"
             disabled={saving || !draft.trim()}
             onClick={() => {
               onSave(draft.trim());
@@ -112,6 +113,7 @@ function StoredKeyRow({
         </button>
         <button
           type="button"
+          data-disco-control="settings.provider-key-clear"
           onClick={onClear}
           className="font-ui text-[0.8rem] text-text-muted hover:text-unsupported"
         >
@@ -294,12 +296,23 @@ export function ProviderKeysSection() {
           />
           <button
             type="submit"
+            data-disco-control="settings.provider-key-add"
             disabled={setSecret.isPending || !name.trim() || !value.trim()}
             className="shrink-0 rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg disabled:opacity-60"
           >
             {setSecret.isPending ? "Saving…" : "Add key"}
           </button>
         </div>
+        {/* Honest validity state: we never round-trip a key to a provider here, so
+            we cannot say a stored key is "valid" — only that it's stored. Validity
+            is first observable when a tool call actually uses it. No fake "test". */}
+        <p
+          data-key-validity="untested-until-use"
+          className="font-ui text-[0.74rem] text-text-faint"
+        >
+          Stored keys are encrypted at rest but not verified here — a key's validity
+          is only confirmed the first time a model or tool call uses it.
+        </p>
         {nameError && (
           <p role="alert" className="font-ui text-[0.78rem] text-unsupported">{nameError}</p>
         )}

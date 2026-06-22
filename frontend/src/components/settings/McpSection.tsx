@@ -35,6 +35,7 @@ function Switch({
     <button
       type="button"
       role="switch"
+      data-disco-control="settings.mcp-toggle"
       aria-checked={checked}
       aria-label={label}
       onClick={() => onChange(!checked)}
@@ -131,6 +132,7 @@ function ConnectionForm({
         </button>
         <button
           type="button"
+          data-disco-control="settings.mcp-add-save"
           disabled={!canSave || busy}
           onClick={() => onSave(draft)}
           className="rounded-control bg-accent px-body py-hair font-ui text-[0.8rem] font-medium text-bg transition-opacity disabled:opacity-40"
@@ -189,6 +191,7 @@ function ApprovalDiff({
         </button>
         <button
           type="button"
+          data-disco-control="settings.mcp-reapprove-confirm"
           disabled={busy}
           onClick={onConfirm}
           className="rounded-control bg-accent px-body py-hair font-ui text-[0.78rem] font-medium text-bg transition-opacity disabled:opacity-40"
@@ -245,6 +248,7 @@ export function McpSection() {
         {!creating && (
           <button
             type="button"
+            data-disco-control="settings.mcp-add"
             onClick={() => setCreating(true)}
             className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text"
           >
@@ -323,7 +327,10 @@ export function McpSection() {
                   )}
                 </div>
                 <div className="flex shrink-0 items-center gap-inline">
-                  <span className="flex shrink-0 items-center gap-hair font-ui text-[0.76rem] text-text-muted">
+                  <span
+                    data-mcp-status={c.status}
+                    className="flex shrink-0 items-center gap-hair font-ui text-[0.76rem] text-text-muted"
+                  >
                     <span
                       className={cn("size-1.5 rounded-full", meta.dot)}
                       aria-hidden
@@ -333,6 +340,7 @@ export function McpSection() {
                   {c.description_hash && c.new_description_hash && (
                     <button
                       type="button"
+                      data-disco-control="settings.mcp-reapprove"
                       onClick={() => setApprovingServer(c.id)}
                       aria-label={`Re-approve ${c.name}`}
                       title="Re-approve changed tool descriptions"
@@ -353,6 +361,7 @@ export function McpSection() {
                   />
                   <button
                     type="button"
+                    data-disco-control="settings.mcp-remove"
                     onClick={() => remove.mutate(c.id)}
                     aria-label={`Remove ${c.name}`}
                     className="text-text-faint transition-colors hover:text-unsupported"

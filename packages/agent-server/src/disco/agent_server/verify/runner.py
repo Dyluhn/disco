@@ -75,8 +75,10 @@ class AbstractVerifyClient(ABC):
         *,
         approve_plan: bool,
         timeout_s: float,
+        ws_commands: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Open the WS, send the user message, optionally approve the plan.
+        """Open the WS, send the user message, optionally approve the plan, then
+        send any extra ``ws_commands`` frames (gap #3 — steer/stop/resume/…).
 
         The connection is closed before returning; the caller then polls
         HTTP state separately.
@@ -134,6 +136,20 @@ class AbstractVerifyClient(ABC):
         the preview falls back to when there's no real app entry file (codex r8)."""
         return None
 
+    async def export_report(self, cid: str, fmt: str) -> tuple[int, bytes] | None:
+        """Gap #54: POST /conversations/{cid}/report/export?format=fmt → (status, body_bytes),
+        or None if unreachable. Report export bypasses the event-log deliverable path, so this
+        is the ONLY way the runner can see + validate it. NON-abstract (default None) so fakes
+        opt in; the live client overrides it."""
+        return None
+
+    async def fire_schedule_now(self, cid: str, schedule_id: str) -> bool:
+        """Gap #98 (REGRESSION seam): POST the schedule "fire now" test hook so cron-driven
+        behavior runs WITHOUT waiting on wall-clock. Returns True if the hook accepted the
+        request. NON-abstract default False so fakes opt in. Requires the backend test endpoint
+        (cross-file dependency)."""
+        return False
+
 
 # ---------------------------------------------------------------------------
 # Production HTTP/WS client
@@ -164,6 +180,7 @@ class HttpVerifyClient(AbstractVerifyClient):
         *,
         approve_plan: bool,
         timeout_s: float,
+        ws_commands: list[dict[str, Any]] | None = None,
     ) -> None:
         ws_base = (
             self._base_url.replace("http://", "ws://").replace("https://", "wss://")
@@ -175,32 +192,61 @@ class HttpVerifyClient(AbstractVerifyClient):
                 await ws.send(
                     json.dumps({"type": "send_message", "content": prompt})
                 )
-                if not approve_plan:
-                    return
-                # Wait for AWAITING_PLAN_APPROVAL and then approve it.
-                while True:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        log.warning(
-                            "run_ws_exchange: timed out waiting for AWAITING_PLAN_APPROVAL on %s",
-                            cid,
-                        )
-                        break
-                    try:
-                        raw: str = await asyncio.wait_for(
-                            ws.recv(decode=True), timeout=min(remaining, 10.0)
-                        )
-                    except TimeoutError:
-                        continue
-                    frame: dict[str, Any] = json.loads(raw)
-                    status = _status_from_frame(frame)
-                    if status == "AWAITING_PLAN_APPROVAL":
-                        await ws.send(json.dumps({"type": "approve_plan"}))
-                        break
-                    if status in _TERMINAL:
-                        break
+                if approve_plan:
+                    # Wait for AWAITING_PLAN_APPROVAL and then approve it.
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            log.warning(
+                                "run_ws_exchange: timed out waiting for "
+                                "AWAITING_PLAN_APPROVAL on %s",
+                                cid,
+                            )
+                            break
+                        try:
+                            raw: str = await asyncio.wait_for(
+                                ws.recv(decode=True), timeout=min(remaining, 10.0)
+                            )
+                        except TimeoutError:
+                            continue
+                        frame: dict[str, Any] = json.loads(raw)
+                        status = _status_from_frame(frame)
+                        if status == "AWAITING_PLAN_APPROVAL":
+                            await ws.send(json.dumps({"type": "approve_plan"}))
+                            break
+                        if status in _TERMINAL:
+                            break
+                # Gap #3: send any scripted extra command frames (steer / stop /
+                # resume / answer / pick_alternative / …) so the runner can drive
+                # more than just send_message + approve_plan.
+                for cmd in ws_commands or []:
+                    await ws.send(json.dumps(cmd))
         except Exception as exc:  # noqa: BLE001
             log.warning("run_ws_exchange error on %s: %s", cid, exc)
+
+    async def export_report(self, cid: str, fmt: str) -> tuple[int, bytes] | None:
+        try:
+            async with httpx.AsyncClient(
+                base_url=self._base_url, timeout=60.0, follow_redirects=True
+            ) as hc:
+                resp = await hc.post(
+                    f"/conversations/{cid}/report/export", params={"format": fmt}
+                )
+                return resp.status_code, resp.content
+        except Exception as exc:  # noqa: BLE001 — unreachable → report, don't crash
+            log.warning("export_report(%s, %s) failed: %s", cid, fmt, exc)
+            return None
+
+    async def fire_schedule_now(self, cid: str, schedule_id: str) -> bool:
+        try:
+            async with httpx.AsyncClient(base_url=self._base_url, timeout=30.0) as hc:
+                resp = await hc.post(
+                    f"/conversations/{cid}/schedules/{schedule_id}/fire-now"
+                )
+                return 200 <= resp.status_code < 300
+        except Exception as exc:  # noqa: BLE001
+            log.warning("fire_schedule_now(%s, %s) failed: %s", cid, schedule_id, exc)
+            return False
 
     async def poll_until_terminal(
         self,
@@ -505,6 +551,48 @@ async def _run_file_validators(
     return problems
 
 
+def _validate_report_export(
+    result: tuple[int, bytes] | None, fmt: str, *, dest_dir: Path
+) -> list[str]:
+    """Gap #54: validate the REAL bytes returned by POST /report/export. Report export
+    bypasses the event-log deliverable path (it's a direct blob/FSA download in the UI), so
+    _locate_deliverables never sees it — this is what makes it discoverable + validatable by
+    disco-verify. Must be reachable, 2xx, non-empty, and pass the format's byte check:
+      • pdf  → validate_pdf on the downloaded bytes
+      • docx → a valid OOXML zip (PK signature)
+      • md   → non-empty, UTF-8-decodable text
+    """
+    label = f"report.export[{fmt}]"
+    if result is None:
+        return [f"{label}: export endpoint not reachable"]
+    status, body = result
+    if not (200 <= status < 300):
+        return [f"{label}: HTTP {status}"]
+    if not body:
+        return [f"{label}: empty body"]
+    low = fmt.lower()
+    if low == "pdf":
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        local = dest_dir / "report_export.pdf"
+        local.write_bytes(body)
+        return [f"{label}: {p}" for p in _av.validate_pdf(str(local))]
+    if low == "docx":
+        # OOXML docx is a zip — must start with the PK signature.
+        if not body.startswith(b"PK"):
+            return [f"{label}: not a valid .docx (missing zip/PK signature)"]
+        return []
+    if low == "md":
+        try:
+            text = body.decode("utf-8")
+        except UnicodeDecodeError:
+            return [f"{label}: not UTF-8-decodable markdown"]
+        if not text.strip():
+            return [f"{label}: markdown body is blank"]
+        return []
+    # Unknown format → only the reachable+non-empty checks above apply.
+    return []
+
+
 async def _validate_app_deliverables(
     deliverables: list[dict[str, Any]], *, client: AbstractVerifyClient, cid: str
 ) -> list[str]:
@@ -679,12 +767,14 @@ async def run_scenario(
     cid = await client.create_conversation(scenario.surface, scenario.model_override)
     log.info("[%s] cid=%s", run_id, cid)
 
-    # (b) WS exchange: send message; optionally wait for plan approval
+    # (b) WS exchange: send message; optionally wait for plan approval; then send
+    # any scripted extra command frames (gap #3 — steer/stop/resume/…).
     await client.run_ws_exchange(
         cid,
         scenario.prompt,
         approve_plan=scenario.approve_plan,
         timeout_s=effective_timeout,
+        ws_commands=scenario.ws_commands,
     )
 
     # (c) poll until terminal
@@ -713,6 +803,32 @@ async def run_scenario(
         cid=cid,
         dest_dir=dossier_base / run_id / "artifacts",
     )
+    # Gap #54: report export bypasses the event log — call it explicitly + validate bytes.
+    if scenario.report_export:
+        export_result = await client.export_report(cid, scenario.report_export)
+        validator_problems.extend(
+            _validate_report_export(
+                export_result,
+                scenario.report_export,
+                dest_dir=dossier_base / run_id / "artifacts",
+            )
+        )
+
+    # Gap #98 (REGRESSION seam): fire a schedule deterministically (no wall-clock) and
+    # assert it produced a schedule_run event.
+    if scenario.fire_schedule_id:
+        fired = await client.fire_schedule_now(cid, scenario.fire_schedule_id)
+        if not fired:
+            validator_problems.append(
+                f"schedule fire-now hook did not accept schedule {scenario.fire_schedule_id!r}"
+            )
+        else:
+            post_fire_events = await client.get_events(cid)
+            if not any(e.get("kind") == "schedule_run" for e in post_fire_events):
+                validator_problems.append(
+                    f"fired schedule {scenario.fire_schedule_id!r} produced no schedule_run event"
+                )
+
     if validator_problems:
         log.warning("[%s] %d problem(s): %s", run_id, len(validator_problems), validator_problems)
 

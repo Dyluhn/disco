@@ -38,6 +38,22 @@ class Scenario(BaseModel):
     #   "raw_html_default"         — no .html-only deliverable output
     #   "procedural_image_provider" — image_generate must not use provider=procedural
     forbid: list[str] = Field(default_factory=list)
+    # Gap #3: extra WS command frames sent AFTER the initial send_message (and after
+    # plan approval, if any) — e.g. [{"type": "steer", "content": "focus on tests"},
+    # {"type": "stop"}]. Lets a scenario exercise the ~17 backend commands the runner
+    # used to ignore (steer / stop / kill / resume / reject_action / pick_alternative /
+    # answer / revise_plan / …) instead of only send_message + approve_plan.
+    ws_commands: list[dict[str, Any]] = Field(default_factory=list)
+    # Gap #54: when set ("md" | "pdf" | "docx"), the runner calls
+    # POST /conversations/{cid}/report/export?format=… after the run and validates the
+    # returned BYTES — report export bypasses the event-log deliverable path, so it is
+    # otherwise invisible to _locate_deliverables.
+    report_export: str | None = None
+    # Gap #98 (REGRESSION seam): when set, the runner POSTs to the schedule "fire now"
+    # test hook for this schedule id so cron-driven behavior is exercised WITHOUT
+    # waiting on wall-clock, then asserts a schedule_run event appears. Needs the
+    # backend test endpoint (cross-file dependency — see runner.fire_schedule_now).
+    fire_schedule_id: str | None = None
     # Per-scenario timeout in seconds (overridden downward by run_scenario timeout_s).
     timeout_s: int = 600
 

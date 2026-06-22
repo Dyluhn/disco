@@ -27,6 +27,9 @@ function BackendCard({
     <button
       type="button"
       role="radio"
+      data-disco-control="settings.sandbox-backend"
+      data-backend-id={id}
+      data-stub={m.stub ? true : undefined}
       aria-checked={selected}
       aria-label={`Use the ${m.name} sandbox backend`}
       onClick={onSelect}
@@ -133,7 +136,7 @@ export function SandboxSection() {
             </label>
           ))}
           {meta.stub && (
-            <p className="font-ui text-[0.76rem] text-weak">
+            <p data-disco-flag="sandbox-stub" className="font-ui text-[0.76rem] text-weak">
               Podman is a stub in this environment — it configures but doesn’t run here; completed at deployment.
             </p>
           )}
@@ -143,6 +146,7 @@ export function SandboxSection() {
       <div className="flex items-center gap-inline">
         <button
           type="button"
+          data-disco-control="settings.sandbox-save"
           onClick={() => draft && save.mutate(draft)}
           disabled={!dirty || save.isPending}
           className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-50"

@@ -15,6 +15,8 @@ import { useRunningCount } from "@/hooks/useActivity";
 import { useMode } from "@/shell/mode";
 
 interface NavItem {
+  /** Stable, surface-scoped id for the test handle (independent of label copy). */
+  id: string;
   to: string;
   label: string;
   icon: ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
@@ -25,16 +27,16 @@ interface NavItem {
 }
 
 const ITEMS: NavItem[] = [
-  { to: "/", label: "New", icon: Plus, end: true },
+  { id: "new", to: "/", label: "New", icon: Plus, end: true },
   // Activity is the background-task dashboard — what's running now + scheduled-run
   // history. It carries the live "N running" badge (the global indicator).
-  { to: "/activity", label: "Activity", icon: Activity },
-  { to: "/history", label: "History", icon: Clock },
+  { id: "activity", to: "/activity", label: "Activity", icon: Activity },
+  { id: "history", to: "/history", label: "History", icon: Clock },
   // Projects is its OWN surface — distinct from History (ephemeral research) and
   // Spaces (research corpora). This is for resumable Build workspaces.
-  { to: "/projects", label: "Projects", icon: FolderGit2 },
-  { to: "/spaces", label: "Spaces", icon: Boxes, dormant: true },
-  { to: "/settings", label: "Settings", icon: Settings },
+  { id: "projects", to: "/projects", label: "Projects", icon: FolderGit2 },
+  { id: "spaces", to: "/spaces", label: "Spaces", icon: Boxes, dormant: true },
+  { id: "settings", to: "/settings", label: "Settings", icon: Settings },
 ];
 
 interface Props {
@@ -76,6 +78,8 @@ export function NavRail({ collapsed, onToggleCollapse, onNavigate }: Props) {
             return (
               <li key={item.to}>
                 <span
+                  data-disco-control={`shell.nav-${item.id}`}
+                  data-dormant="true"
                   aria-disabled="true"
                   title="Coming soon"
                   className={cn(
@@ -105,6 +109,8 @@ export function NavRail({ collapsed, onToggleCollapse, onNavigate }: Props) {
               <NavLink
                 to={item.to}
                 end={item.end}
+                data-disco-control={`shell.nav-${item.id}`}
+                {...(item.to === "/activity" ? { "data-running-count": running } : {})}
                 onClick={() => {
                   // "New" is the home/start affordance: reset the surface to the
                   // default landing mode (Search) so it doesn't pin the user to the
@@ -148,6 +154,7 @@ export function NavRail({ collapsed, onToggleCollapse, onNavigate }: Props) {
       <div className="px-inline">
         <button
           type="button"
+          data-disco-control="shell.rail-collapse"
           onClick={onToggleCollapse}
           aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
           aria-pressed={collapsed}

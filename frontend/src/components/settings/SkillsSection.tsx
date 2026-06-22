@@ -29,6 +29,7 @@ function Switch({
     <button
       type="button"
       role="switch"
+      data-disco-control="settings.skill-toggle"
       aria-checked={checked}
       aria-label={label}
       onClick={() => onChange(!checked)}
@@ -166,6 +167,7 @@ function SkillEditor({
         </button>
         <button
           type="button"
+          data-disco-control="settings.skill-save"
           disabled={!canSave || busy}
           onClick={() => onSave(draft)}
           className="rounded-control bg-accent px-body py-hair font-ui text-[0.8rem] font-medium text-bg transition-opacity disabled:opacity-40"
@@ -199,6 +201,7 @@ export function SkillsSection() {
         {!creating && editingId === null && (
           <button
             type="button"
+            data-disco-control="settings.skill-new"
             onClick={() => setCreating(true)}
             className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text"
           >
@@ -313,6 +316,7 @@ export function SkillsSection() {
               <div className="flex shrink-0 items-center gap-inline">
                 <button
                   type="button"
+                  data-disco-control="settings.skill-edit"
                   onClick={() => setEditingId(s.id)}
                   aria-label={`Edit ${s.name}`}
                   className="text-text-faint transition-colors hover:text-text"
@@ -321,6 +325,7 @@ export function SkillsSection() {
                 </button>
                 <button
                   type="button"
+                  data-disco-control="settings.skill-delete"
                   onClick={() => remove.mutate(s.id)}
                   aria-label={`Delete ${s.name}`}
                   className="text-text-faint transition-colors hover:text-unsupported"

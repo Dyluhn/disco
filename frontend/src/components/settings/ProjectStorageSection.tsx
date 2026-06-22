@@ -121,6 +121,7 @@ export function ProjectStorageSection() {
           />
         </div>
         <p
+          data-storage-validation={status}
           className={cn(
             "flex items-center gap-hair font-ui text-[0.78rem]",
             help.ok ? "text-supported" : status === "unset" ? "text-text-faint" : "text-weak",
@@ -154,6 +155,7 @@ export function ProjectStorageSection() {
       <div className="flex items-center gap-inline">
         <button
           type="button"
+          data-disco-control="settings.storage-save"
           onClick={() => save.mutate({ projects_root: draft.trim(), status: "unset" })}
           disabled={!dirty || save.isPending}
           className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-50"

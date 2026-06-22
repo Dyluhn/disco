@@ -83,3 +83,49 @@ app_from_build = Scenario(
     forbid=[],
     timeout_s=600,
 )
+
+
+# ---------------------------------------------------------------------------
+# steer_then_stop_build
+# ---------------------------------------------------------------------------
+# Gap #3: exercise backend commands BEYOND send_message + approve_plan. After the
+# build starts, the runner sends a `steer` frame (mid-run redirect) and then a
+# `stop` frame over the same WS — driving two of the ~17 commands the runner used
+# to ignore. The loop must terminalize (a stopped build settles at IDLE), proving
+# the steer + stop frames were honored without a silent hang.
+
+steer_then_stop_build = Scenario(
+    id="steer_then_stop_build",
+    surface="build",
+    prompt="Build a small command-line calculator.",
+    model_override=None,
+    approve_plan=True,
+    ws_commands=[
+        {"type": "steer", "content": "Add a unit test for the add() function."},
+        {"type": "stop"},
+    ],
+    expect={},  # any terminal status (IDLE after stop, or FINISHED if it raced to done)
+    forbid=[],
+    timeout_s=300,
+)
+
+
+# ---------------------------------------------------------------------------
+# research_report_export
+# ---------------------------------------------------------------------------
+# Gap #54: a Deep Research run whose markdown report is then EXPORTED via
+# POST /conversations/{cid}/report/export. Report export bypasses the event-log
+# deliverable path, so this is the only scenario that proves the exported bytes
+# are real (non-empty, well-formed) rather than a silent blob the harness can't see.
+
+research_report_export = Scenario(
+    id="research_report_export",
+    surface="deep_research",
+    prompt="Give me a short briefing on the state of RISC-V laptops in 2026.",
+    model_override=None,
+    approve_plan=False,
+    report_export="md",
+    expect={"terminal_status": "FINISHED"},
+    forbid=[],
+    timeout_s=600,
+)

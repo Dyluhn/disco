@@ -284,7 +284,7 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
               type="button"
               onClick={handleMd}
               disabled={exporting !== null}
-              data-disco-control="export-report-md"
+              data-disco-control="dr.export.modal.md"
               className={cn(
                 "flex items-center gap-inline rounded-control border border-hairline p-inline",
                 "font-ui text-[0.85rem] text-text-muted transition-colors text-left",
@@ -316,7 +316,8 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
                   ? "Download as PDF"
                   : "PDF export requires WeasyPrint on the server"
               }
-              data-disco-control="export-report-pdf"
+              data-disco-control="dr.export.modal.pdf"
+              data-export-cap={String(exportCaps.pdf)}
               className={cn(
                 "flex items-center gap-inline rounded-control border p-inline",
                 "font-ui text-[0.85rem] transition-colors text-left",
@@ -358,6 +359,7 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
                 disabled={exporting !== null}
                 label="PDF template"
                 id="pdf-template"
+                dataControl="dr.export-template"
               />
             )}
 
@@ -372,7 +374,8 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
                   ? "Download as DOCX"
                   : "DOCX export requires pandoc on the server"
               }
-              data-disco-control="export-report-docx"
+              data-disco-control="dr.export.modal.docx"
+              data-export-cap={String(exportCaps.docx)}
               className={cn(
                 "flex items-center gap-inline rounded-control border p-inline",
                 "font-ui text-[0.85rem] transition-colors text-left",
@@ -468,7 +471,7 @@ function AudioModeDialog({ open, onOpenChange, onChoose }: AudioModeDialogProps)
             <button
               type="button"
               onClick={() => onChoose("podcast")}
-              data-disco-control="generate-audio"
+              data-disco-control="dr.audio.podcast"
               className={cn(
                 "flex items-start gap-inline rounded-card border border-hairline p-inline",
                 "font-ui text-[0.85rem] text-text-muted transition-colors text-left",
@@ -493,7 +496,7 @@ function AudioModeDialog({ open, onOpenChange, onChoose }: AudioModeDialogProps)
             <button
               type="button"
               onClick={() => onChoose("single")}
-              data-disco-control="generate-audio"
+              data-disco-control="dr.audio.single"
               className={cn(
                 "flex items-start gap-inline rounded-card border border-hairline p-inline",
                 "font-ui text-[0.85rem] text-text-muted transition-colors text-left",
@@ -597,7 +600,10 @@ function AudioSection({
   // Radix Dialog handles open/close via the `open` prop; unmounting it would
   // lose any open-animation state and break the dialog after first generation.
   return (
-    <>
+    // Gap #46: data-tts-state reflects the TTS lifecycle (idle → generating →
+    // done | unavailable). `display:contents` so the marker carries the attr
+    // without perturbing the flex layout of the action row.
+    <div className="contents" data-tts-state={audio.status}>
       <AudioModeDialog
         open={modeOpen}
         onOpenChange={onModeOpenChange}
@@ -634,13 +640,18 @@ function AudioSection({
               a.click();
               a.remove();
             }}
-            data-disco-control="export-audio"
+            data-disco-control="dr.audio.export"
             className={CTRL_BTN}
           >
             <ArrowDown className="size-3.5" aria-hidden />
             Export MP3
           </button>
-          <button type="button" onClick={reset} className={CTRL_BTN}>
+          <button
+            type="button"
+            onClick={reset}
+            data-disco-control="dr.audio.regenerate"
+            className={CTRL_BTN}
+          >
             <Headphones className="size-3.5" aria-hidden />
             Regenerate
           </button>
@@ -664,7 +675,7 @@ function AudioSection({
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -837,7 +848,7 @@ export function NeedMoreCard({
           type="button"
           onClick={handleBuildDeck}
           disabled={building}
-          data-disco-control="build-deck"
+          data-disco-control="dr.build-deck"
           className={CTRL_BTN}
         >
           {building ? (

@@ -6,6 +6,8 @@ export function ThemeToggle() {
   return (
     <button
       type="button"
+      data-disco-control="shell.theme-toggle"
+      data-theme={theme}
       onClick={toggle}
       aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
       className="grid size-8 place-items-center rounded-control border border-hairline text-text-muted transition-colors hover:text-text"

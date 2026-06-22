@@ -70,6 +70,7 @@ function KeyManager() {
         />
         <button
           type="submit"
+          data-disco-control="settings.openrouter-key-save"
           disabled={setKey.isPending || !value.trim()}
           className="shrink-0 rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg disabled:opacity-60"
         >
@@ -98,6 +99,7 @@ function KeyManager() {
         </span>
         <button
           type="button"
+          data-disco-control="settings.openrouter-key-clear"
           onClick={() => clearKey.mutate()}
           className="font-ui text-[0.8rem] text-text-muted hover:text-unsupported"
         >
@@ -132,8 +134,10 @@ function KeyManager() {
   return entryForm;
 }
 
-/** Browse the live OpenRouter catalogue and add a model to ours. */
-function BrowseDialog({ addedSlugs }: { addedSlugs: Set<string> }) {
+/** Browse the live OpenRouter catalogue and add a model to ours. Gated on a usable
+ * key: browsing hits the live OpenRouter API, so with no decryptable key the call
+ * can only fail — we disable the trigger and say so rather than offer a dead button. */
+function BrowseDialog({ addedSlugs, keyReady }: { addedSlugs: Set<string>; keyReady: boolean }) {
   const [open, setOpen] = useState(false);
   const { data: models, isLoading, isError } = useOpenRouterModels(open);
   const create = useCreateModel();
@@ -153,7 +157,11 @@ function BrowseDialog({ addedSlugs }: { addedSlugs: Set<string> }) {
       <Dialog.Trigger asChild>
         <button
           type="button"
-          className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.8rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text"
+          data-disco-control="settings.openrouter-browse"
+          data-key-ready={keyReady}
+          disabled={!keyReady}
+          title={keyReady ? undefined : "Add a decryptable OpenRouter key first — browsing queries the live API."}
+          className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.8rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Search className="size-3.5" aria-hidden /> Browse OpenRouter models
         </button>
@@ -171,6 +179,8 @@ function BrowseDialog({ addedSlugs }: { addedSlugs: Set<string> }) {
             </Dialog.Description>
             <input
               autoFocus
+              data-disco-control="settings.openrouter-search"
+              aria-label="Search OpenRouter models"
               className={cn(field, "mt-inline")}
               value={q}
               placeholder="Search 300+ models — vendor or name…"
@@ -202,6 +212,8 @@ function BrowseDialog({ addedSlugs }: { addedSlugs: Set<string> }) {
                     </div>
                     <button
                       type="button"
+                      data-disco-control="settings.openrouter-add-model"
+                      data-model-id={m.id}
                       disabled={added || create.isPending}
                       onClick={() => create.mutate(openRouterUpsert(m))}
                       className={cn(
@@ -236,6 +248,10 @@ function BrowseDialog({ addedSlugs }: { addedSlugs: Set<string> }) {
 
 export function OpenRouterSection() {
   const { data: models } = useModels();
+  const { data: keyStatus } = useOpenRouterKey();
+  // Browsing the live catalogue needs a key that's actually usable (stored AND
+  // decryptable). Otherwise the trigger is honestly disabled (no dead affordance).
+  const keyReady = Boolean(keyStatus?.configured && !keyStatus?.locked);
   // catalogue entries that came from OpenRouter (so the browser shows "Added")
   const addedSlugs = useMemo(
     () =>
@@ -253,12 +269,22 @@ export function OpenRouterSection() {
         <h3 id="openrouter-heading" className="font-ui text-[0.92rem] font-semibold text-text">
           OpenRouter
         </h3>
-        <BrowseDialog addedSlugs={addedSlugs} />
+        <BrowseDialog addedSlugs={addedSlugs} keyReady={keyReady} />
       </div>
       <p className="font-ui text-[0.82rem] text-text-muted">
         One API key, any model hosted on OpenRouter. The key is encrypted at rest; added models share
         it and the OpenRouter endpoint.
       </p>
+      {!keyReady && (
+        <p
+          role="note"
+          data-disco-flag="openrouter-key-required"
+          className="font-ui text-[0.78rem] text-text-faint"
+        >
+          Browsing the OpenRouter catalogue is disabled until a decryptable key is stored —
+          the browser queries the live OpenRouter API.
+        </p>
+      )}
       <KeyManager />
     </section>
   );

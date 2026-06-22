@@ -161,6 +161,7 @@ export function IncludeFollowUpsModal({
               <button
                 type="button"
                 aria-label="Close dialog"
+                data-disco-control="dr.include-followups.close"
                 className="rounded-control p-hair text-text-faint transition-colors hover:text-text"
               >
                 <X className="size-4" aria-hidden />
@@ -243,6 +244,7 @@ export function IncludeFollowUpsModal({
             <button
               type="button"
               onClick={handleSkip}
+              data-disco-control="dr.include-followups.skip"
               className="rounded-control border border-hairline px-inline py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
             >
               Skip
@@ -250,6 +252,7 @@ export function IncludeFollowUpsModal({
             <button
               type="button"
               onClick={handleConfirm}
+              data-disco-control="dr.include-followups.confirm"
               className="rounded-control border border-accent/60 bg-accent/10 px-inline py-hair font-ui text-[0.82rem] font-medium text-accent transition-colors hover:bg-accent/20"
             >
               {selected.size > 0

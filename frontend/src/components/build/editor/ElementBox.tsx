@@ -157,6 +157,7 @@ export function ElementBox({
       data-element-id={elementId}
       // slide_id is the prefix of element_id (e.g. "slide-0:title" → "slide-0")
       data-slide-id={elementId.split(":")[0]}
+      data-disco-control="build.deck-element"
       style={boxStyle}
       tabIndex={0}
       role="button"
@@ -171,6 +172,8 @@ export function ElementBox({
           <textarea
             ref={inputRef as React.RefObject<HTMLTextAreaElement>}
             value={editValue}
+            data-disco-control="build.deck-element-edit"
+            aria-label={`Edit ${kind}`}
             onChange={(e) => setEditValue(e.target.value)}
             onKeyDown={handleKeyDown}
             onBlur={commitEdit}
@@ -195,6 +198,8 @@ export function ElementBox({
             ref={inputRef as React.RefObject<HTMLInputElement>}
             type="text"
             value={editValue}
+            data-disco-control="build.deck-element-edit"
+            aria-label={`Edit ${kind}`}
             onChange={(e) => setEditValue(e.target.value)}
             onKeyDown={handleKeyDown}
             onBlur={commitEdit}

@@ -131,6 +131,7 @@ export function SourcePanel({ answer, onReScope }: Props) {
               type="button"
               onClick={() => onReScope({ drop_weak: true })}
               disabled={!hasWeak}
+              data-disco-control="search.drop-weak"
               className="flex items-center gap-hair rounded-control px-inline py-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text disabled:opacity-40"
             >
               <Filter className="size-3" aria-hidden />
@@ -139,6 +140,7 @@ export function SourcePanel({ answer, onReScope }: Props) {
             <button
               type="button"
               onClick={() => onReScope({})}
+              data-disco-control="search.rescope"
               className="flex items-center gap-hair rounded-control px-inline py-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text"
             >
               <RefreshCw className="size-3" aria-hidden />
@@ -149,7 +151,7 @@ export function SourcePanel({ answer, onReScope }: Props) {
 
         <Tabs.Content value="all" className="min-h-0 flex-1 overflow-y-auto px-body">
           <ul className="flex flex-col">
-            {allHits.map((hit) => (
+            {allHits.map((hit, i) => (
               <div key={hit.url} className="group flex items-center">
                 <div className="flex-1">
                   <HitRow hit={hit} />
@@ -158,6 +160,8 @@ export function SourcePanel({ answer, onReScope }: Props) {
                   type="button"
                   aria-label={`Filter out ${cleanDomain(hit.url)}`}
                   onClick={() => toggleDeny(cleanDomain(hit.url))}
+                  data-disco-control="search.rescope-domain"
+                  data-domain-index={i}
                   className={cn(
                     "ml-inline shrink-0 rounded-control p-hair font-ui text-[0.68rem] transition-colors",
                     denied.includes(cleanDomain(hit.url))

@@ -102,10 +102,21 @@ function WorkspaceImage({ src, className }: { src: string; className: string }) 
   const [failed, setFailed] = useState(false);
   if (failed)
     return (
-      <span className="font-ui text-[0.74rem] text-text-faint italic">screenshot no longer available</span>
+      <span
+        data-screenshot-state="missing"
+        className="font-ui text-[0.74rem] text-text-faint italic"
+      >
+        screenshot no longer available
+      </span>
     );
   return (
-    <img src={src} alt="browser screenshot" onError={() => setFailed(true)} className={className} />
+    <img
+      src={src}
+      alt="browser screenshot"
+      data-screenshot-state="present"
+      onError={() => setFailed(true)}
+      className={className}
+    />
   );
 }
 
@@ -237,6 +248,8 @@ function BrowserPane({
               onClick={toggleLive}
               disabled={liveLoading}
               aria-pressed={!!liveView}
+              aria-label={liveView ? "Close live browser view" : "Open live browser view (noVNC)"}
+              data-disco-control="agent.live-browser"
               title={liveView ? "Close live view" : "Open live browser view (noVNC)"}
               className={cn(
                 "flex shrink-0 items-center gap-hair rounded-control border px-inline py-px font-ui text-[0.72rem] transition-colors",
@@ -291,7 +304,7 @@ function BrowserPane({
   // → an honest empty state, never a broken <img>.
   if (!hero || !cid) {
     return (
-      <div className="flex h-full min-h-0 flex-col">
+      <div className="flex h-full min-h-0 flex-col" data-screenshot-state="empty">
         {Header}
         {liveError && (
           <p className="shrink-0 font-ui text-[0.78rem] text-warn px-body py-hair">

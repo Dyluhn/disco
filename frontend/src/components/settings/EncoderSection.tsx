@@ -81,6 +81,8 @@ export function EncoderSection() {
               <button
                 key={String(opt.remote)}
                 type="button"
+                data-disco-control="settings.encoder-mode"
+                data-remote={opt.remote}
                 onClick={() => !active && save.mutate({ remote: opt.remote, ...urls })}
                 disabled={save.isPending}
                 aria-pressed={active}
@@ -111,33 +113,49 @@ export function EncoderSection() {
             );
           })}
 
-          {/* Contextual endpoint fields — only when Remote is the active mode.
-              Empty = the server's env default for that endpoint. */}
-          {data.remote && (
-            <div className="mt-hair flex flex-col gap-inline rounded-card border border-hairline bg-surface-1/40 px-body py-inline">
-              <p className="font-ui text-[0.78rem] text-text-muted">
-                Remote endpoints — leave blank to use the agent-server's configured default.
+          {/* Endpoint fields. Rendered always (so the config is legible), but the
+              inputs are honestly DISABLED + flagged when Bundled is active — the
+              agent-server ignores these URLs unless Remote is the selected mode, so
+              an editable-looking-but-ignored field would be a false affordance. */}
+          <div className="mt-hair flex flex-col gap-inline rounded-card border border-hairline bg-surface-1/40 px-body py-inline">
+            <p className="font-ui text-[0.78rem] text-text-muted">
+              Remote endpoints — leave blank to use the agent-server's configured default.
+            </p>
+            {!data.remote && (
+              <p
+                role="note"
+                data-disco-flag="encoder-endpoints-inactive"
+                className="font-ui text-[0.76rem] text-text-faint"
+              >
+                Inactive while Bundled is selected — these endpoints apply only when Remote is the
+                active mode. Switch to Remote endpoints above to edit them.
               </p>
-              {ENDPOINTS.map((ep) => (
-                <label key={ep.key} className="flex flex-col gap-hair">
-                  <span className="flex items-baseline gap-hair font-ui text-[0.8rem] text-text">
-                    {ep.label}
-                    <span className="font-ui text-[0.72rem] text-text-faint">· {ep.hint}</span>
-                  </span>
-                  <input
-                    type="url"
-                    inputMode="url"
-                    spellCheck={false}
-                    value={urls[ep.key]}
-                    onChange={(e) => setUrls((u) => ({ ...u, [ep.key]: e.target.value }))}
-                    placeholder="http://host:port  (empty = server default)"
-                    className="rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60"
-                  />
-                </label>
-              ))}
+            )}
+            {ENDPOINTS.map((ep) => (
+              <label key={ep.key} className="flex flex-col gap-hair">
+                <span className="flex items-baseline gap-hair font-ui text-[0.8rem] text-text">
+                  {ep.label}
+                  <span className="font-ui text-[0.72rem] text-text-faint">· {ep.hint}</span>
+                </span>
+                <input
+                  type="url"
+                  inputMode="url"
+                  spellCheck={false}
+                  data-disco-control="settings.encoder-endpoint"
+                  data-endpoint={ep.key}
+                  disabled={!data.remote || save.isPending}
+                  value={urls[ep.key]}
+                  onChange={(e) => setUrls((u) => ({ ...u, [ep.key]: e.target.value }))}
+                  placeholder="http://host:port  (empty = server default)"
+                  className="rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60 disabled:opacity-50"
+                />
+              </label>
+            ))}
+            {data.remote && (
               <div className="flex items-center gap-inline">
                 <button
                   type="button"
+                  data-disco-control="settings.encoder-save"
                   disabled={!dirty || save.isPending}
                   onClick={() => save.mutate({ remote: true, ...urls })}
                   className={cn(
@@ -158,8 +176,8 @@ export function EncoderSection() {
                   <span className="font-ui text-[0.76rem] text-text-faint">Saved</span>
                 )}
               </div>
-            </div>
-          )}
+            )}
+          </div>
           {save.error && (
             <p className="font-ui text-[0.8rem] text-warn">
               Couldn't save: {(save.error as Error).message}

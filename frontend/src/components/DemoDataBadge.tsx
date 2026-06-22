@@ -14,6 +14,7 @@ export function DemoDataBadge() {
   return (
     <div
       role="status"
+      data-demo-data="true"
       aria-label="Demo data — no backend connected"
       className="shrink-0 border-b border-hairline bg-warn/10 px-body py-1 text-center text-xs text-warn"
     >

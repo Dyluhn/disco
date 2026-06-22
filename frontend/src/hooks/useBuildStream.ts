@@ -24,12 +24,24 @@ import type {
   WSServerFrame,
 } from "@/types/agent";
 
+/** Factory for the unique suffix of an optimistic message id. Injectable so a test
+ *  can FREEZE it (the default uses Date.now()/Math.random(), which makes the DOM key
+ *  non-reproducible even under a fixed event stream — codex P1). Production keeps the
+ *  default, so behavior is unchanged. */
+export type OptimisticIdFactory = () => string;
+
+const defaultOptimisticIdFactory: OptimisticIdFactory = () =>
+  `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
 /** Build a transient optimistic MessageEvent for the user's just-sent
  *  steer/revise text. The reducer drops it once the server echoes the
  *  canonical event back (matched by content). */
-function localUserMessage(content: string): MessageEvent {
+function localUserMessage(
+  content: string,
+  makeId: OptimisticIdFactory = defaultOptimisticIdFactory,
+): MessageEvent {
   return {
-    id: `local-pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: `local-pending-${makeId()}`,
     kind: "message",
     source: "user",
     message: { role: "user", content },
@@ -262,9 +274,17 @@ export interface BuildStream extends BuildStreamState {
   canResume: boolean;
 }
 
-export function useBuildStream(session: BuildSession | null): BuildStream {
+export function useBuildStream(
+  session: BuildSession | null,
+  options?: {
+    /** Inject a deterministic id factory for optimistic message ids (tests).
+     *  Omitted in production → the default Date.now()/Math.random() suffix. */
+    idFactory?: OptimisticIdFactory;
+  },
+): BuildStream {
   const [state, dispatch] = useReducer(reducer, initial);
   const handle = useRef<AgentHandle | null>(null);
+  const makeId = options?.idFactory ?? defaultOptimisticIdFactory;
 
   useEffect(() => {
     if (!session) return;
@@ -291,16 +311,16 @@ export function useBuildStream(session: BuildSession | null): BuildStream {
     // Optimistic echo: render immediately so the user sees their input land in
     // the timeline. The server's canonical echo (same content) replaces this
     // placeholder on arrival.
-    dispatch({ type: "local_message", event: localUserMessage(trimmed) });
+    dispatch({ type: "local_message", event: localUserMessage(trimmed, makeId) });
     handle.current?.send({ type: "steer", steer_text: trimmed });
-  }, []);
+  }, [makeId]);
   const approvePlan = useCallback(() => handle.current?.send({ type: "approve_plan" }), []);
   const requestPlan = useCallback((text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
-    dispatch({ type: "local_message", event: localUserMessage(trimmed) });
+    dispatch({ type: "local_message", event: localUserMessage(trimmed, makeId) });
     handle.current?.send({ type: "request_plan", content: trimmed });
-  }, []);
+  }, [makeId]);
   const pickAlternative = useCallback(
     (optionId: string) =>
       handle.current?.send({ type: "pick_alternative", option_id: optionId }),

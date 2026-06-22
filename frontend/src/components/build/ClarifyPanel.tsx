@@ -53,6 +53,7 @@ export function ClarifyPanel({
   return (
     <div
       role="alertdialog"
+      data-gate="clarify"
       aria-label="The agent needs clarification before planning"
       className="flex flex-col gap-inline rounded-control border border-accent/40 bg-accent/5 p-body"
     >

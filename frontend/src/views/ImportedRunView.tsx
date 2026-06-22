@@ -74,7 +74,7 @@ export function ImportedRunView() {
   }
 
   const banner = (
-    <div className="border-b border-hairline bg-surface-1 px-body py-inline">
+    <div className="border-b border-hairline bg-surface-1 px-body py-inline" data-imported-cid={cid}>
       <div className="flex flex-wrap items-center gap-inline">
         <Download className="size-4 text-text-faint" aria-hidden />
         <h1 className="font-display text-[1.1rem] font-medium leading-tight text-text">

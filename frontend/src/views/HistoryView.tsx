@@ -75,6 +75,7 @@ function EmptyHistory() {
       </p>
       <button
         type="button"
+        data-disco-control="history.start-query"
         onClick={() => navigate("/")}
         className="mt-inline rounded-control border border-hairline px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:text-text"
       >
@@ -135,6 +136,8 @@ export function HistoryView() {
           <div className="shrink-0">
             <input
               ref={fileRef}
+              id="history-import-input"
+              data-disco-control="history.import-input"
               type="file"
               accept="application/json,.json"
               hidden
@@ -163,6 +166,7 @@ export function HistoryView() {
             <Search className="size-4 shrink-0 text-text-faint" aria-hidden />
             <input
               type="search"
+              data-disco-control="history.search"
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search conversations…"
@@ -183,6 +187,7 @@ export function HistoryView() {
             <div className="font-ui text-[0.88rem] text-text">Couldn't load your conversations.</div>
             <button
               type="button"
+              data-disco-control="history.retry"
               onClick={() => refetch()}
               className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
             >
@@ -211,6 +216,8 @@ export function HistoryView() {
                         but never re-runs it — view ≠ start). Research → the main page. */}
                     <button
                       type="button"
+                      data-disco-control="history.open-row"
+                      data-conversation-id={c.id}
                       onClick={() =>
                         navigate(
                           c.origin === "imported"

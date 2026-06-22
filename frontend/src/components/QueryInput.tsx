@@ -30,6 +30,19 @@ interface Props {
    *  Research surface for Depth/Recency/Iterative so selecting DR doesn't add a
    *  new full-width row that grows the card and reflows the centered layout. */
   extraControls?: React.ReactNode;
+  /** Gap #18: the stable `data-disco-control` id for the submit button. The
+   *  shared QueryInput is mounted at TWO distinct sites (first send + the build
+   *  surface's replan box); both previously collapsed onto `send-message`, so a
+   *  HitMap keyed by controlId marked both covered after a single click. Callers
+   *  pass a distinct id (e.g. "replan-send") to make the replan submit
+   *  independently driveable + coverable. Defaults to "send-message" so the
+   *  primary first-send site is unchanged. */
+  controlId?: string;
+  /** Gap #30: a STABLE accessible name for the textarea, independent of the
+   *  (dynamic, caller-supplied) placeholder. `uiInventory` names form-inputs by
+   *  aria-label first, so without this the main query field was unaddressable by
+   *  the inventory. Defaults to a stable label; callers may override per surface. */
+  inputAriaLabel?: string;
 }
 
 /**
@@ -53,6 +66,8 @@ export function QueryInput({
   showControls = true,
   footer,
   extraControls,
+  controlId = "send-message",
+  inputAriaLabel = "Ask Disco a question",
 }: Props) {
   const [value, setValue] = useState("");
   const canSend = !!value.trim() && !busy;
@@ -79,6 +94,7 @@ export function QueryInput({
         autoFocus={autoFocus}
         rows={2}
         value={value}
+        aria-label={inputAriaLabel}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey) submit(e);
@@ -107,7 +123,7 @@ export function QueryInput({
           type="submit"
           disabled={!canSend}
           aria-label="Ask"
-          data-disco-control="send-message"
+          data-disco-control={controlId}
           className={cn(
             "grid size-9 shrink-0 place-items-center rounded-control bg-accent text-bg transition-opacity",
             canSend ? "hover:opacity-90" : "opacity-50",

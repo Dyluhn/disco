@@ -204,6 +204,12 @@ export function AgentStatusBar({
             disabled={stopping}
             aria-label="Stop the agent gracefully (does not tear down the sandbox)"
             data-disco-control="stop"
+            // #22: stable, deterministic phase of the cooperative stop. "idle" = can
+            // stop, not yet clicked; "stopping" = clicked, loop still finishing its
+            // in-flight step. The terminal "stopped" phase is the control's ABSENCE
+            // (the loop settled to PAUSED/IDLE and this button unmounts) — asserted
+            // via the status label + Resume affordance, never a lying live Stop.
+            data-stop-state={stopping ? "stopping" : "idle"}
             className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-text-muted hover:text-text disabled:opacity-60"
           >
             {stopping ? (
@@ -304,10 +310,17 @@ function CostMeter({ events, modelId }: { events: AgentEvent[]; modelId: string 
     return { cost: total, hasMissingUsage: missing, allFree: !anyPaid, sawUsage: usageSeen };
   }, [events, models, modelId]);
 
-  if (!allFree && !sawUsage) return null;
+  // #21: when paid-but-no-usage-yet we render NO visible meter (a meter pinned at
+  // "$0.00" would be a false lower bound). Emit a zero-size, aria-hidden sentinel
+  // carrying data-cost-state="hidden" so a test can deterministically assert the
+  // branch — it is a regression seam, not a visible affordance.
+  if (!allFree && !sawUsage)
+    return <span hidden aria-hidden data-disco-control="build.cost-meter" data-cost-state="hidden" />;
 
   return (
     <span
+      data-disco-control="build.cost-meter"
+      data-cost-state={allFree ? "free" : "usd"}
       title={
         allFree
           ? "This model is free"

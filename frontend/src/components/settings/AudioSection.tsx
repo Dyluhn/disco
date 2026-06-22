@@ -145,6 +145,8 @@ export function AudioSection() {
               <button
                 key={opt.mode}
                 type="button"
+                data-disco-control="settings.audio-mode"
+                data-mode={opt.mode}
                 onClick={() => selectMode(opt.mode)}
                 disabled={save.isPending}
                 aria-pressed={isActive}
@@ -261,6 +263,7 @@ export function AudioSection() {
               <div className="flex items-center gap-inline">
                 <button
                   type="button"
+                  data-disco-control="settings.audio-save"
                   disabled={!fieldsDirty || save.isPending}
                   onClick={saveFields}
                   className={cn(
@@ -281,6 +284,16 @@ export function AudioSection() {
                   <span className="font-ui text-[0.76rem] text-text-faint">Saved</span>
                 )}
               </div>
+              {/* Honest validity state: no "test voice/TTS" here. The voice model,
+                  endpoint, or key is first exercised when an audio overview is
+                  actually generated — we don't fake a synthesis test. */}
+              <p
+                data-tts-validity="untested-until-overview"
+                className="font-ui text-[0.76rem] text-text-faint"
+              >
+                Voices and endpoints aren't tested here — they're first exercised the next time an
+                audio overview is generated.
+              </p>
             </div>
           )}
           {save.error && (

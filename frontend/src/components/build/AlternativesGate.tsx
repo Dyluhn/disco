@@ -35,6 +35,7 @@ export function AlternativesGate({
   return (
     <div
       role="alertdialog"
+      data-gate="alternatives"
       aria-label="The agent needs a decision after repeated failures"
       className="flex flex-col gap-inline rounded-control border border-warn/40 bg-warn/5 p-body"
     >
@@ -59,7 +60,7 @@ export function AlternativesGate({
             <button
               type="button"
               onClick={() => onPick(opt.id)}
-              data-disco-control="pick-alternative"
+              data-disco-control={`alternative.${opt.id}`}
               className="group flex h-full w-full flex-col gap-hair rounded-control border border-hairline bg-surface-1 p-inline text-left transition-colors hover:border-accent hover:bg-surface-2"
             >
               <span className="flex items-baseline gap-hair">
@@ -94,7 +95,7 @@ export function AlternativesGate({
           <button
             type="button"
             onClick={() => onPick(CONTINUE_ID)}
-            data-disco-control="pick-alternative"
+            data-disco-control="build.alternatives-continue"
             className="flex items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.8rem] text-text-muted transition-colors hover:border-accent hover:text-text"
           >
             <PlayCircle className="size-3.5" aria-hidden />

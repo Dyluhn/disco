@@ -104,6 +104,8 @@ export function UploadComposer({ cid, onUploaded }: UploadComposerProps) {
       </button>
       <input
         ref={inputRef}
+        id="build-upload-input"
+        data-disco-control="build.upload-input"
         type="file"
         multiple
         className="sr-only"

@@ -63,6 +63,8 @@ export function LiveBrowserSection() {
               <button
                 key={String(enabled)}
                 type="button"
+                data-disco-control="settings.livebrowser-toggle"
+                data-enabled={enabled}
                 onClick={() => {
                   if (!isActive) save.mutate({ enabled });
                 }}
@@ -92,6 +94,17 @@ export function LiveBrowserSection() {
               </button>
             );
           })}
+          {/* Honest state: this toggle only persists a preference. Whether noVNC is
+              actually reachable depends on the sandbox backend + image and is only
+              determined when the "Live" button is opened on the Agent canvas. We do
+              NOT claim availability here. */}
+          <p
+            data-live-browser-availability="runtime-checked"
+            className="font-ui text-[0.76rem] text-text-faint"
+          >
+            Enabling this saves a preference only — actual noVNC availability is checked at
+            runtime when you open the “Live” view (it depends on the sandbox backend and image).
+          </p>
           {save.error && (
             <p className="font-ui text-[0.8rem] text-warn">
               Couldn't save: {(save.error as Error).message}

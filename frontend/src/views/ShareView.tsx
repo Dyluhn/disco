@@ -12,9 +12,13 @@ import { StaticRunView } from "@/components/StaticRunView";
 import { Loader2, AlertTriangle, Share2 } from "lucide-react";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
+/** Stable, locale-independent classification for the error states so the
+ *  revoked-link and version-mismatch paths are assertable (gap #83). */
+type ShareErrorKind = "revoked" | "version-mismatch" | "error";
+
 type LoadState =
   | { tag: "loading" }
-  | { tag: "error"; reason: string }
+  | { tag: "error"; reason: string; kind: ShareErrorKind }
   | { tag: "done"; bundle: ShareBundle; events: AgentEvent[] };
 
 /** The only version we recognise. Future versions (or a mismatch) get a clear
@@ -27,7 +31,7 @@ export function ShareView() {
 
   useEffect(() => {
     if (!token) {
-      setState({ tag: "error", reason: "Missing share token in the URL." });
+      setState({ tag: "error", reason: "Missing share token in the URL.", kind: "error" });
       return;
     }
     let cancelled = false;
@@ -39,6 +43,7 @@ export function ShareView() {
           setState({
             tag: "error",
             reason: "Share link not found or has been revoked.",
+            kind: "revoked",
           });
           return;
         }
@@ -46,6 +51,7 @@ export function ShareView() {
           setState({
             tag: "error",
             reason: `This shared run uses bundle version ${bundle.bundle_version}, but this viewer supports version ${SUPPORTED_VERSION}. The link may have been created with a newer version of the agent.`,
+            kind: "version-mismatch",
           });
           return;
         }
@@ -62,6 +68,7 @@ export function ShareView() {
             err instanceof Error
               ? err.message
               : "Couldn't load the shared run.",
+          kind: "error",
         });
       }
     })();
@@ -96,7 +103,10 @@ export function ShareView() {
 
   if (state.tag === "error") {
     return (
-      <div className="flex min-h-full flex-col items-center justify-center gap-major px-body pb-[12vh]">
+      <div
+        className="flex min-h-full flex-col items-center justify-center gap-major px-body pb-[12vh]"
+        data-share-error={state.kind}
+      >
         <AlertTriangle
           className="size-8 text-warn"
           aria-label="Error loading shared run"
@@ -119,16 +129,29 @@ export function ShareView() {
 
   const { bundle } = state;
 
+  // A locale-independent ISO-8601 UTC timestamp rendered alongside the human
+  // (locale-formatted) date so tests can assert deterministically (gap #84).
+  // Guarded: an unparseable date would make toISOString() throw.
+  const sharedAt = bundle.share?.created_at ? new Date(bundle.share.created_at) : null;
+  const sharedAtIso = sharedAt && !Number.isNaN(sharedAt.getTime()) ? sharedAt.toISOString() : undefined;
+
   const banner = (
-    <div className="border-b border-hairline bg-surface-1 px-body py-inline">
+    <div
+      className="border-b border-hairline bg-surface-1 px-body py-inline"
+      data-share-token={token}
+      data-share-error="ok"
+    >
       <div className="flex flex-wrap items-center gap-inline">
         <Share2 className="size-4 text-text-faint" aria-hidden />
         <h1 className="font-display text-[1.1rem] font-medium leading-tight text-text">
           {bundle.title || `Shared run ${bundle.conversation_id.slice(0, 8)}`}
         </h1>
-        {bundle.share?.created_at && (
-          <span className="font-ui text-[0.7rem] text-text-faint">
-            shared {new Date(bundle.share.created_at).toLocaleDateString()}
+        {sharedAt && (
+          <span
+            className="font-ui text-[0.7rem] text-text-faint"
+            data-iso-timestamp={sharedAtIso}
+          >
+            shared {sharedAt.toLocaleDateString()}
           </span>
         )}
         <span className="ml-auto shrink-0 rounded-full border border-hairline px-hair font-ui text-[0.62rem] uppercase tracking-wide text-text-faint">

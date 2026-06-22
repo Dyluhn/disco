@@ -82,6 +82,12 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
               <div
                 key={t.id}
                 role="status"
+                // Gap #92: stable, assertable handles. Cost/usage notifications
+                // fire deterministically (a paid-model pick) but via non-det
+                // triggers (timing/usage); these attrs let the harness assert
+                // "a cost toast appeared" without scraping prose.
+                data-disco-toast={t.id}
+                data-toast-kind={t.tone}
                 className={cn(
                   "pointer-events-auto flex w-[min(28rem,92vw)] items-start gap-inline rounded-card border bg-surface-1/95 px-body py-inline shadow-lg backdrop-blur pmx-rise",
                   t.tone === "cost" ? "border-accent/40" : "border-hairline",

@@ -92,6 +92,8 @@ function ProjectRow({ project, onDelete }: { project: Project; onDelete: () => v
     <li className="flex items-center justify-between gap-section border-b border-hairline py-inline last:border-b-0">
       <button
         type="button"
+        data-disco-control="projects.open-row"
+        data-project-id={project.id}
         onClick={() =>
           navigate(project.surface === "agent" ? `/agent/${project.id}` : `/build/${project.id}`)
         }
@@ -125,6 +127,8 @@ function ProjectRow({ project, onDelete }: { project: Project; onDelete: () => v
       <div className="flex shrink-0 items-center gap-hair">
         <button
           type="button"
+          data-disco-control="projects.download-zip"
+          data-zip-disabled={project.files_missing || download.isPending}
           onClick={() => download.mutate(project.id)}
           disabled={project.files_missing || download.isPending}
           aria-label={`Download project: ${project.title}`}
@@ -163,7 +167,10 @@ export function ProjectsView() {
   const filtered = all.filter((p) => p.title.toLowerCase().includes(q.trim().toLowerCase()));
 
   return (
-    <div className="mx-auto w-full max-w-doc px-body py-section">
+    <div
+      className="mx-auto w-full max-w-doc px-body py-section"
+      data-storage-status={isLoading ? "loading" : isError ? "error" : status}
+    >
       <div className="mx-auto flex w-full max-w-[46rem] flex-col gap-section">
         <header>
           <h1 className="font-display text-[2rem] tracking-tight text-text">Projects</h1>
@@ -182,6 +189,7 @@ export function ProjectsView() {
             <Search className="size-4 shrink-0 text-text-faint" aria-hidden />
             <input
               type="search"
+              data-disco-control="projects.search"
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search projects…"

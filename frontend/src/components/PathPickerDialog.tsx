@@ -143,7 +143,10 @@ export function PathPickerDialog({
 
           {/* footer: validity + actions */}
           <div className="flex items-center justify-between gap-inline border-t border-hairline px-body py-inline">
-            <div className="flex items-center gap-hair font-ui text-[0.78rem]">
+            <div
+              data-storage-validation={status}
+              className="flex items-center gap-hair font-ui text-[0.78rem]"
+            >
               {statusInfo.ok ? (
                 <>
                   <CheckCircle2 className="size-3.5 text-supported" aria-hidden />
@@ -167,6 +170,7 @@ export function PathPickerDialog({
               </Dialog.Close>
               <button
                 type="button"
+                data-disco-control="settings.storage-pick"
                 onClick={confirm}
                 disabled={!data || data.selectable !== "ok"}
                 className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-40"

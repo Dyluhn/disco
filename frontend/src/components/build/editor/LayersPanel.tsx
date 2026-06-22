@@ -153,6 +153,7 @@ export function LayersPanel({
                           onClick={() => onSelectElement(el.element_id)}
                           data-element-id={el.element_id}
                           data-slide-id={el.slide_id}
+                          data-disco-control="build.deck-layer"
                           style={{
                             display: "flex",
                             alignItems: "center",

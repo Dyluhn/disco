@@ -25,6 +25,7 @@ export function IterativeToggle({ value, onChange, disabled }: Props) {
       disabled={disabled}
       aria-pressed={value}
       aria-label={`Iterative grounding: ${value ? "on" : "off"}`}
+      data-disco-control="dr.iterative"
       title="Re-searches weakly-grounded claims and re-checks, up to 3 rounds — slower, better-grounded"
       onClick={() => onChange(!value)}
       className={cn(

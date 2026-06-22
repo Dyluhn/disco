@@ -2,6 +2,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { ApiError } from "@/api/client";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { cn } from "@/lib/cn";
 import { useCreateModel, useDeleteModel, useModels, useUpdateModel } from "@/hooks/useModels";
 import { type Capability, CAPABILITY_LABEL, type ModelInfo, type ModelUpsert } from "@/types/models";
@@ -260,6 +261,7 @@ export function ModelCatalogue() {
         </h3>
         <button
           type="button"
+          data-disco-control="settings.model-add"
           onClick={() => setDialog({ mode: "add", initial: BLANK })}
           className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.8rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text"
         >
@@ -282,22 +284,33 @@ export function ModelCatalogue() {
             <div className="flex shrink-0 items-center gap-hair">
               <button
                 type="button"
+                data-disco-control="settings.model-edit"
+                data-model-id={m.id}
                 aria-label={`Edit ${m.id}`}
                 onClick={() => setDialog({ mode: "edit", initial: toUpsert(m) })}
                 className="rounded-control p-hair text-text-faint transition-colors hover:text-text"
               >
                 <Pencil className="size-3.5" aria-hidden />
               </button>
-              <button
-                type="button"
-                aria-label={`Remove ${m.id}`}
-                onClick={() => {
-                  if (confirm(`Remove ${m.id} from the catalogue?`)) del.mutate(m.id);
-                }}
-                className="rounded-control p-hair text-text-faint transition-colors hover:text-unsupported"
-              >
-                <Trash2 className="size-3.5" aria-hidden />
-              </button>
+              {/* Driveable confirm (replaces native confirm(), which Playwright/the
+                  harness cannot address) — the in-app ConfirmDialog gate. */}
+              <ConfirmDialog
+                title={`Remove ${m.id}?`}
+                description={`This removes ${m.id} from the catalogue. It will no longer be assignable or callable at runtime.`}
+                confirmLabel="Remove model"
+                onConfirm={() => del.mutate(m.id)}
+                trigger={
+                  <button
+                    type="button"
+                    data-disco-control="settings.model-delete"
+                    data-model-id={m.id}
+                    aria-label={`Remove ${m.id}`}
+                    className="rounded-control p-hair text-text-faint transition-colors hover:text-unsupported"
+                  >
+                    <Trash2 className="size-3.5" aria-hidden />
+                  </button>
+                }
+              />
             </div>
           </li>
         ))}

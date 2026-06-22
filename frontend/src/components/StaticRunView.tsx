@@ -39,7 +39,7 @@ export function StaticRunView({
   const deliverable = useMemo(() => deriveDeliverable(events), [events]);
 
   return (
-    <div className="flex min-h-full flex-col">
+    <div className="flex min-h-full flex-col" data-static-run-view>
       {banner}
       <div className="flex flex-1 min-h-0 lg:flex-row flex-col">
         {/* Left pane — Activity Feed + Plan */}

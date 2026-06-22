@@ -60,11 +60,31 @@ export function ResearchSurface() {
     onThinkChange: setThink,
   };
 
+  // Gap #29 — a stable, assertable phase attribute on the surface. The submit
+  // answer itself is model+live-search+streaming (non-deterministic), but the
+  // PHASE TRANSITIONS (idle → running → done) are deterministic and can be
+  // asserted by the harness without depending on the answer content.
+  const researchPhase = !started ? "idle" : r.phase === "running" ? "running" : "done";
+  // Gap #38 — expose the token/block/final stream reconciliation as a stable
+  // attribute so a fixture-driven test can assert the standard-search stream
+  // state machine (idle → token → block → final) without scraping the DOM.
+  const streamState = r.answer
+    ? "final"
+    : r.streamingBlockId
+      ? "token"
+      : r.blocks.length > 0
+        ? "block"
+        : "idle";
+
   // The shell (Prompt 2) owns the chrome — wordmark in the rail, theme toggle +
   // mode indicator in the top bar — so this surface no longer renders a header;
   // it fills the shell's scrollable main region.
   return (
-    <div className="flex min-h-full flex-col pt-section">
+    <div
+      className="flex min-h-full flex-col pt-section"
+      data-research-phase={researchPhase}
+      data-stream-state={streamState}
+    >
       {!started ? (
         <main className="flex flex-1 flex-col items-center justify-center gap-major px-body pb-[12vh]">
           <EmptyState />
@@ -120,6 +140,7 @@ export function ResearchSurface() {
                 <button
                   type="button"
                   onClick={r.stop}
+                  data-disco-control="search.stop"
                   className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text"
                 >
                   <Square className="size-3" aria-hidden />

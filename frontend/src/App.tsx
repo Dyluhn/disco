@@ -10,6 +10,7 @@ import {
   useParams,
 } from "react-router-dom";
 import { installE2EBridge, type DiscoE2EState, type Surface } from "@/lib/e2eBridge";
+import { getPublishedRunStatus } from "@/lib/runStatusBridge";
 import { BuildSurface } from "@/components/BuildSurface";
 import { AgentSurface } from "@/components/AgentSurface";
 import { ResearchSurface } from "@/components/ResearchSurface";
@@ -29,6 +30,25 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
 });
 
+/**
+ * Gap #4: live run-status seam for the W6 E2E bridge.
+ *
+ * The `E2EBridgeMounter` lives ABOVE the surface components (it's a sibling of
+ * `<Routes>`), so it cannot call `useBuild`/`useDeepResearchStream` directly to
+ * learn the live `execution_status`. Previously `runStatus` was therefore
+ * hardcoded `null`, blocking every status-gated harness assertion.
+ *
+ * This is a tiny module-level publish seam: the active surface publishes its
+ * current conversation status here (and clears it on unmount), and the bridge
+ * getter reads it LIVE on every access — so the harness can `await` the run
+ * reaching RUNNING / AWAITING_* / FINISHED without a re-render of the mounter.
+ *
+ * CROSS-FILE DEPENDENCY (other agents own the surfaces): BuildSurface /
+ * AgentSurface / DeepResearchSurface must call `publishRunStatus(status)` when
+ * their conversation status changes and `publishRunStatus(null)` on unmount.
+ * Until they do, the bridge simply reports `null` (no regression — that was the
+ * prior hardcoded value).
+ */
 /**
  * Mounts the `window.__DISCO_E2E__` metadata bridge (W6).  Derives surface +
  * conversation-id from the router location; runStatus is null at the app level
@@ -68,6 +88,8 @@ function E2EBridgeMounter() {
       mode === "build" ? "build" : mode === "agent" ? "agent" : "search";
 
   // Keep a ref so the getter always returns the latest values without re-installing.
+  // `runStatus` is filled in LIVE by the getter (below) from the publish seam, so
+  // it reflects status changes even between mounter re-renders.
   const stateRef = useRef<DiscoE2EState>({
     schemaVersion: 1,
     surface,
@@ -79,14 +101,20 @@ function E2EBridgeMounter() {
     schemaVersion: 1,
     surface,
     conversationId,
-    runStatus: null,
+    runStatus: getPublishedRunStatus(),
     route: pathname,
   };
 
   useEffect(() => {
-    installE2EBridge(() => stateRef.current);
-    // installE2EBridge is idempotent; run once on mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Read the published run status LIVE on every bridge access (gap #4) — the
+    // surface publishes it via `publishRunStatus`, and the harness reads the
+    // current value without waiting on a mounter re-render.
+    installE2EBridge(() => ({
+      ...stateRef.current,
+      runStatus: getPublishedRunStatus(),
+    }));
+    // installE2EBridge is idempotent; run once on mount. The effect closes over
+    // only stable bindings (a ref + module-level getters), so there are no deps.
   }, []);
 
   return null;

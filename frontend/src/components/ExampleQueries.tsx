@@ -39,13 +39,15 @@ const EXAMPLES: Example[] = [
 export function ExampleQueries({ onPick }: { onPick: (query: string) => void }) {
   return (
     <div className="flex w-full max-w-measure flex-wrap justify-center gap-inline">
-      {EXAMPLES.map((ex) => {
+      {EXAMPLES.map((ex, i) => {
         const Icon = ex.icon;
         return (
           <button
             key={ex.label}
             type="button"
             onClick={() => onPick(ex.query)}
+            data-disco-control="search.example"
+            data-example-index={i}
             className="flex items-center gap-hair rounded-control border border-hairline px-body py-inline font-ui text-[0.82rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text"
           >
             <Icon className="size-3.5 text-text-faint" aria-hidden />

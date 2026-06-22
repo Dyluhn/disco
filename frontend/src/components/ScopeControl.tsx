@@ -56,6 +56,7 @@ export function ScopeControl({ value, onChange }: Props) {
         <button
           type="button"
           aria-label={`Scope: ${current.label}`}
+          data-disco-control="search.scope"
           className="flex items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text"
         >
           <SlidersHorizontal className="size-3.5 shrink-0 text-text-faint" aria-hidden />

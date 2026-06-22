@@ -79,7 +79,7 @@ export function ActivityView() {
         {!isLoading && !isError && (
           <>
             {/* ---- Running now ---- */}
-            <section className="flex flex-col gap-inline">
+            <section className="flex flex-col gap-inline" data-running-count={running.length}>
               <h2 className="flex items-center gap-hair font-ui text-[0.95rem] font-medium text-text">
                 Running now
                 {running.length > 0 && (
@@ -101,6 +101,8 @@ export function ActivityView() {
                     >
                       <button
                         type="button"
+                        data-disco-control="activity.open-task"
+                        data-task-id={t.id}
                         onClick={() => navigate(surfacePath(t))}
                         className="group flex w-full items-center gap-inline text-left"
                       >
@@ -144,10 +146,11 @@ export function ActivityView() {
                   cadence and they'll show up here.
                 </p>
               ) : (
-                <ul className="flex flex-col">
+                <ul className="flex flex-col" data-scheduled-runs>
                   {recent.map((r: ScheduleRunRecord) => (
                     <li
                       key={r.run_id}
+                      data-run-id={r.run_id}
                       className="flex items-center gap-inline border-b border-hairline py-inline last:border-b-0"
                     >
                       <CalendarClock className="size-4 shrink-0 text-text-faint" aria-hidden />

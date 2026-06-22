@@ -18,12 +18,20 @@ import asyncio
 import sys
 
 from .runner import run_scenario
-from .scenarios import app_from_build, missing_file_sandbox_error, slides_from_research_report
+from .scenarios import (
+    app_from_build,
+    missing_file_sandbox_error,
+    research_report_export,
+    slides_from_research_report,
+    steer_then_stop_build,
+)
 
 _SCENARIOS = {
     "slides_from_research_report": slides_from_research_report,
     "missing_file_sandbox_error": missing_file_sandbox_error,
     "app_from_build": app_from_build,
+    "steer_then_stop_build": steer_then_stop_build,
+    "research_report_export": research_report_export,
 }
 
 

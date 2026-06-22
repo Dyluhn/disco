@@ -88,13 +88,16 @@ describe("Scope control (one component, mode-driven options)", () => {
 });
 
 describe("Think toggle", () => {
-  it("is a switch that toggles and is honestly labeled as in-progress", async () => {
+  it("is a switch that toggles and is honestly labeled (reasoning effort, not a fake in-progress)", async () => {
     const onChange = vi.fn();
     const user = userEvent.setup();
     render(<ThinkToggle value={false} onChange={onChange} />);
     const sw = screen.getByRole("switch", { name: /Think/i });
     expect(sw).toHaveAttribute("aria-checked", "false");
-    expect(sw).toHaveAttribute("title", expect.stringMatching(/in progress/i));
+    // gap #35: the toggle is genuinely wired (think flag → backend on submit); the
+    // title now honestly describes that, replacing the old "backend handling in
+    // progress" false-affordance wording.
+    expect(sw).toHaveAttribute("title", expect.stringMatching(/reasoning effort/i));
     await user.click(sw);
     expect(onChange).toHaveBeenCalledWith(true);
   });

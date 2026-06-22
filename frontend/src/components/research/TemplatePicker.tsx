@@ -11,6 +11,7 @@ export function TemplatePicker({
   disabled,
   label = "Template",
   id = "template-picker",
+  dataControl,
 }: {
   templates: Template[];
   value: string;
@@ -18,6 +19,8 @@ export function TemplatePicker({
   disabled?: boolean;
   label?: string;
   id?: string;
+  /** Optional stable harness handle applied to the <select> (gap #45). */
+  dataControl?: string;
 }) {
   const current = templates.find((t) => t.id === value) ?? templates[0];
   return (
@@ -43,6 +46,7 @@ export function TemplatePicker({
           disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
           title={current?.description}
+          data-disco-control={dataControl}
           className={cn(
             "rounded-control border border-hairline bg-surface-1 px-inline py-px font-ui text-[0.74rem] text-text",
             "focus:border-hairline-strong focus:outline-none",

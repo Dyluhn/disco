@@ -9,11 +9,13 @@ export function FollowUps({ items, onPick }: { items: string[]; onPick: (q: stri
         Follow up
       </div>
       <div className="flex flex-wrap gap-inline">
-        {items.map((q) => (
+        {items.map((q, i) => (
           <button
             key={q}
             type="button"
             onClick={() => onPick(q)}
+            data-disco-control="search.followup"
+            data-followup-index={i}
             className="flex items-center gap-hair rounded-control border border-hairline bg-surface-1 px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text"
           >
             {q}

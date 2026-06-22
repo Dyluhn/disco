@@ -36,6 +36,8 @@ export function ModeSlider() {
             key={m.id}
             type="button"
             role="radio"
+            data-disco-control={`shell.mode-${m.id}`}
+            data-active={active}
             aria-checked={active}
             aria-label={m.label}
             disabled={m.dormant}

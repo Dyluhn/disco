@@ -41,6 +41,7 @@ export function ConfirmationPanel({
   return (
     <section
       role="alertdialog"
+      data-gate="confirm"
       aria-label="Action needs your approval"
       className={cn("rounded-card border-2 bg-surface-1 px-body py-body", style.box)}
     >

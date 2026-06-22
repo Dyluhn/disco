@@ -228,15 +228,48 @@ test(
     ).toBe(true);
 
     // -----------------------------------------------------------------------
-    // Structural proof: records 4–8 infrastructure is importable + callable
+    // Records 4–8 (conversation_id / event-log / state / trace / sandbox).
     //
-    // These helpers will throw on a real call without a live backend; here we
-    // only verify they are correctly typed and exported.  Live assertions are
-    // added in W13 scenario specs.
+    // Gap #7: these were STRUCTURAL-ONLY here (assert the helpers are callable)
+    // because they require a live backend workflow. That is now made explicit AND
+    // upgraded to a real workflow assertion WHEN a live backend is wired:
+    //
+    //   • STRUCTURAL (no live backend): we only assert the helpers exist + are
+    //     callable. A green check here proves nothing about the backend — it is a
+    //     wiring guard, NOT proof a control works (memory: feedback-live-model-
+    //     proves-works). The gated branch below is the only real evidence.
+    //
+    //   • LIVE (DISCO_LIVE_CID + DISCO_AGENT_BASE set, e.g. on VM 201 against a
+    //     seeded conversation): record 5 is upgraded to an ACTUAL workflow
+    //     assertion — the conversation's event log must contain the real event
+    //     `kind`s, fetched from GET /conversations/{cid}/events.
     // -----------------------------------------------------------------------
-    expect(typeof expectEventSequence).toBe("function");
-    expect(typeof expectInspectTrace).toBe("function");
-    expect(typeof expectArtifactReadable).toBe("function");
+    expect(typeof expectEventSequence).toBe("function"); // structural (always)
+    expect(typeof expectInspectTrace).toBe("function"); // structural (always)
+    expect(typeof expectArtifactReadable).toBe("function"); // structural (always)
+
+    const liveCid = process.env.DISCO_LIVE_CID;
+    const liveBase = process.env.DISCO_AGENT_BASE;
+    if (liveCid && liveBase) {
+      // Record 5 UPGRADED: assert the live event log actually contains a status
+      // event (the minimum any real conversation emits). Throws on a missing kind.
+      await expectEventSequence(liveCid, liveBase, ["status"]);
+      recorder.write("ui-actions.jsonl", {
+        schema: "live-workflow-assertion",
+        record: "5-event-log",
+        cid: liveCid,
+        asserted: ["status"],
+        ts: new Date().toISOString(),
+      });
+    } else {
+      recorder.write("ui-actions.jsonl", {
+        schema: "structural-only-note",
+        records: "4-8",
+        reason:
+          "no live backend (DISCO_LIVE_CID/DISCO_AGENT_BASE unset) — records 4-8 are wiring guards, not proof",
+        ts: new Date().toISOString(),
+      });
+    }
 
     // -----------------------------------------------------------------------
     // Control-kind breakdown logged for human inspection

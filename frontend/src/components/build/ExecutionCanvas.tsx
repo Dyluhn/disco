@@ -130,6 +130,10 @@ export function ExecutionCanvas({
     <Tabs.Root
       value={tab}
       onValueChange={(v) => setTab(v as TabId)}
+      // #26: expose the active tab so a streaming test can assert the watch-it-write
+      // rising-edge focus (a file write pulls focus to "files") deterministically,
+      // without reaching into Radix internals.
+      data-active-tab={tab}
       className="flex h-full min-h-0 flex-col"
     >
       <Tabs.List className="flex shrink-0 items-center gap-px border-b border-hairline px-inline">

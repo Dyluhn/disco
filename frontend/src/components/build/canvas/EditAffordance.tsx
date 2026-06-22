@@ -81,6 +81,8 @@ export function EditAffordance({ file, line, rect, onApply, onCancel }: Props) {
           type="button"
           onClick={() => onApply(value)}
           disabled={!trimmed}
+          aria-label="Apply this edit — steer the agent to change the source"
+          data-disco-control="build.edit-apply"
           className="rounded bg-accent px-inline py-px font-ui text-[0.72rem] text-white transition-opacity hover:opacity-90 disabled:opacity-40"
         >
           Apply

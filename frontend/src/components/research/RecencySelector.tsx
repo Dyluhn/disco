@@ -46,6 +46,7 @@ export function RecencySelector({ value, onChange, disabled }: Props) {
           type="button"
           disabled={disabled}
           aria-label={`Recency filter: ${active.label}`}
+          data-disco-control="dr.recency"
           className={cn(
             "flex items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text disabled:opacity-50",
           )}

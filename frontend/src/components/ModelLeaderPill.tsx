@@ -66,6 +66,7 @@ export function ModelLeaderPill({ value, onChange }: Props) {
         <button
           type="button"
           aria-label="Choose the model that leads this conversation"
+          data-disco-control="search.model-pill"
           className="flex max-w-[14rem] items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text"
         >
           {effective && isFree(effective) ? (
@@ -100,6 +101,7 @@ export function ModelLeaderPill({ value, onChange }: Props) {
             <button
               type="button"
               onClick={() => pick(null)}
+              data-model-id="__default__"
               className={cn(
                 "flex w-full items-center justify-between gap-inline rounded-control border px-inline py-inline text-left transition-colors",
                 value === null
@@ -130,6 +132,7 @@ export function ModelLeaderPill({ value, onChange }: Props) {
                           <button
                             type="button"
                             onClick={() => pick(m.id)}
+                            data-model-id={m.id}
                             className={cn(
                               "flex w-full flex-col gap-hair rounded-control border px-inline py-inline text-left transition-colors",
                               active

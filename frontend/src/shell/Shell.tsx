@@ -40,6 +40,7 @@ export function Shell() {
         <div className="lg:hidden">
           <button
             type="button"
+            data-disco-control="shell.drawer-close"
             aria-label="Close navigation"
             onClick={() => setDrawerOpen(false)}
             className="fixed inset-0 z-30 bg-black/45"
@@ -60,6 +61,7 @@ export function Shell() {
           <div className="flex items-center gap-inline">
             <button
               type="button"
+              data-disco-control="shell.drawer-open"
               aria-label="Open navigation"
               onClick={() => setDrawerOpen(true)}
               className="grid size-9 place-items-center rounded-control border border-hairline text-text-muted transition-colors hover:text-text lg:hidden"

@@ -145,7 +145,15 @@ export function DeckEditorPane({ cid, base }: DeckEditorPaneProps) {
     );
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div
+      className="flex h-full min-h-0 flex-col"
+      // #12: the deck editor's real backend action is the autosave PUT /deck/editor
+      // patch on each text commit (there is no separate Save button). Expose the
+      // host + a deterministic save phase so a harness can address the editor and
+      // await a save settling without racing the in-flight request.
+      data-disco-control="build.deck-editor"
+      data-deck-saving={saving ? "saving" : "idle"}
+    >
       {patchNotice && (
         <p
           role="alert"

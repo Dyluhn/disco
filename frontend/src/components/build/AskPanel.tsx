@@ -35,6 +35,7 @@ export function AskPanel({
   return (
     <div
       role="alertdialog"
+      data-gate="ask"
       aria-label="The agent has a question for you"
       className="flex flex-col gap-inline rounded-control border border-accent/40 bg-accent/5 p-body"
     >

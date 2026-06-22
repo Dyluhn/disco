@@ -163,6 +163,8 @@ export function PreviewPane({
       type="button"
       onClick={refresh}
       disabled={restarting}
+      aria-label="Refresh the preview — and restart the server if it's down"
+      data-disco-control="build.preview-refresh"
       title="Reload the preview — and restart the server if it's down"
       className="flex items-center gap-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text disabled:opacity-50"
     >
@@ -316,6 +318,8 @@ export function PreviewPane({
                   setEditMode((v) => !v);
                 }}
                 aria-pressed={showEdit}
+                aria-label="Toggle click-to-edit mode on the preview"
+                data-disco-control="build.edit-toggle"
                 className={cn(
                   "flex items-center gap-hair font-ui text-[0.74rem] transition-colors",
                   showEdit ? "text-accent" : "text-text-muted hover:text-text",
@@ -444,6 +448,8 @@ export function PreviewPane({
           type="button"
           onClick={refresh}
           disabled={restarting}
+          aria-label="Refresh or restart the preview server"
+          data-disco-control="build.preview-restart"
           className="mt-hair flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text disabled:opacity-50"
         >
           <RotateCw className={cn("size-3.5", restarting && "animate-spin")} aria-hidden />

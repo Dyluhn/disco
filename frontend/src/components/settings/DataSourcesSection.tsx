@@ -79,6 +79,8 @@ function ProviderGroup<P extends string>({
             <button
               key={o.id}
               type="button"
+              data-disco-control="settings.datasource-pick"
+              data-provider-id={o.id}
               onClick={() => onPick(o.id)}
               aria-pressed={on}
               className={cn(
@@ -177,9 +179,21 @@ export function DataSourcesSection() {
             onApiKeyEnv={(v) => set({ extraction_api_key_env: v })}
           />
 
+          {/* Honest validity state: no "test connection" — a provider/base-URL/key
+              is only exercised on the next search or extraction run, so we never
+              claim a source is reachable here. */}
+          <p
+            data-source-validity="untested-until-search"
+            className="font-ui text-[0.76rem] text-text-faint"
+          >
+            Sources aren't tested here — connectivity and credentials are first exercised on
+            the next search or extraction run.
+          </p>
+
           <div className="flex items-center gap-inline">
             <button
               type="button"
+              data-disco-control="settings.datasource-save"
               disabled={!dirty || save.isPending}
               onClick={() => draft && save.mutate(draft)}
               className={cn(
