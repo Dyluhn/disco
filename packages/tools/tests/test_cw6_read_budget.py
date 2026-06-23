@@ -111,3 +111,29 @@ async def test_executor_default_budget_pages_large_file():
     res = await ex.execute(call("file_read", path="big.py"))
     assert res.success
     assert "read more with offset=" in res.content  # paged at the default budget
+
+
+async def test_pin_sized_short_line_file_reads_in_one_shot():
+    # CW P1-b — the INVARIANT: a RAW file at the per-file pin size reads in ONE shot
+    # even when it has MANY SHORT lines (whose line-numbered render inflates the size
+    # well past the raw pin). The derived read budget carries render headroom so this
+    # holds — otherwise a pin-sized short-line file pages (re-opening the read loop).
+    from disco.core.loop.context_budget import derive_context_caps
+
+    caps = derive_context_caps(assist=False, context_window=192_000)
+    per_file = caps.per_file_chars  # 48_000 (the pin ceiling)
+    # Build a RAW file of ~per_file chars made of short (~12-char) lines.
+    line = "x" * 11  # 11 content chars + newline = 12 raw chars/line
+    n_lines = per_file // 12
+    body = ("\n".join(line for _ in range(n_lines))).encode()
+    assert abs(len(body) - per_file) <= 12  # raw size fits the per-file pin
+    # The line-numbered RENDER is materially larger than the raw pin (that is exactly
+    # the bug): confirm the render would have PAGED at a raw-sized budget.
+    assert caps.read_char_budget > per_file  # headroom over the raw pin
+
+    ctx, inst = await _ctx(caps.read_char_budget)
+    await inst.write_file("short.py", body)
+    out = await FileReadTool().run(FileReadTool().definition.args_model(path="short.py"), ctx)
+    assert "read more with offset=" not in out.content  # ONE shot, not paged
+    assert f"of {n_lines}]" in out.content  # the header shows the whole file was read
+    await inst.destroy()

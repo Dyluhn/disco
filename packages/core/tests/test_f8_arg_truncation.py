@@ -260,22 +260,29 @@ async def test_assist_on_failed_write_does_not_shrink():
     # The F8 marker is the contract under test — it MUST NOT appear.
     assert "written to" not in content
     assert "file_read to recover" not in content
-    # The content is the same string the OFF-path sees: whatever the
-    # existing render-time shapers produce for a failed write.
+    # The OFF path ALSO leaves the failed write unshrunk by F8 (no F8 marker).
+    # (CW P1-a/P1-c: the _ARG_SNIP elision marker is now tier-specific — assist-ON
+    # directional, assist-OFF the truthful per-pin marker — so the two are no longer
+    # byte-identical; F8-gate-closed for a failed write is the contract under test.)
     loop_off = _make_loop(
         model_policy=ModelExecutionPolicy.standard(),
         store=SqliteEventStore(":memory:"),
     )
     view_off = await loop_off._materialize_view(events)
-    assert _content_of(view_off.messages) == content
+    off_content = _content_of(view_off.messages)
+    assert "written to" not in off_content
+    assert "file_read to recover" not in off_content
+    # Both tiers still elide the long content to the K1 placeholder (F8 didn't fire).
+    assert "chars" in content and "do not copy this placeholder" in content
+    assert "chars" in off_content and "do not copy this placeholder" in off_content
 
 
 async def test_assist_on_failed_write_keeps_full_content_for_retry():
-    """Stronger byte-level guarantee: a FAILED write's `content` arg in
-    the rendered view is exactly the same string the OFF-path sees (no
-    F8 mutation). The model can read it back as-is and retry. F8 is a
-    one-way transform applied ONLY to confirmed writes — it never
-    touches a failed write, not even by accident."""
+    """A FAILED write's `content` arg is NOT shrunk by F8 in either tier — F8 is a
+    one-way transform applied ONLY to confirmed writes, never a failed one. (The
+    _ARG_SNIP elision marker still applies; CW P1-a/P1-c made that marker tier-
+    specific, so the two tiers are no longer byte-identical — the invariant under
+    test is the ABSENCE of the F8 mutation, not cross-tier byte-equality.)"""
     events = with_seqs(
         [user_msg("write it"), _write_event(), _failure_observation()]
     )
@@ -289,9 +296,11 @@ async def test_assist_on_failed_write_keeps_full_content_for_retry():
     )
     on_content = _content_of((await loop_on._materialize_view(events)).messages)
     off_content = _content_of((await loop_off._materialize_view(events)).messages)
-    # The two paths are byte-identical for a FAILED write — the F8
-    # gate is closed for that branch.
-    assert on_content == off_content
+    # F8 gate is closed for a failed write in BOTH tiers (no F8 marker either side).
+    for c in (on_content, off_content):
+        assert "written to" not in c
+        assert "file_read to recover" not in c
+        assert "do not copy this placeholder" in c  # the long content is still elided
 
 
 # ---------------------------------------------------------------------------

@@ -316,18 +316,121 @@ WORKSPACE_SNAPSHOT_SENTINEL = "# CURRENT WORKSPACE"
 # STRUCTURE — `<N chars … {elided|full content} …>` — not the exact wording, so
 # the marker can be reworded freely without the execution guard going blind.
 _ELISION_MARKER_RE = re.compile(r"<\s*\d[\d,]*\s*chars\b[^>]*?\b(?:elided|full content)\b[^>]*>")
+# CW P1-a — capture the char count from an existing marker so the assist-OFF retarget
+# pass can re-render it (pinned vs non-pinned) without re-deriving the original length.
+_ELISION_COUNT_RE = re.compile(r"<\s*(\d[\d,]*)\s*chars\b")
+
+
+# CW P1-c — the DEFAULT / assist-ON elided-arg marker: the pre-CW-3 directional bytes.
+# For assist-ON the CURRENT WORKSPACE block stays in the TAIL (after the history), so
+# "below" is CORRECT, and this is the byte-identical pre-CW-3 wording. `_snip_args`
+# (the View.of render, which has no tier context) always emits THIS; assist-OFF then
+# rewrites it via `retarget_elided_arg_markers` (below) because that tier moved the
+# block to the cacheable PREFIX, where a directional word would be wrong.
+def _arg_snip_marker_below(n: int) -> str:
+    return (
+        f"<{n:,} chars — full content is in the CURRENT WORKSPACE block "
+        "below; do not copy this placeholder into a tool argument>"
+    )
+
+
+# CW P1-a — assist-OFF, the call's target path IS pinned in FULL in the block this
+# turn: location-independent (the block moved to the prefix) and TRUTHFUL (the content
+# really is there in full). Same bytes CW-3 introduced for the snip marker.
+def _arg_snip_marker_pinned(n: int) -> str:
+    return (
+        f"<{n:,} chars — full content is in the CURRENT WORKSPACE block "
+        "in this prompt; do not copy this placeholder into a tool argument>"
+    )
+
+
+# CW P1-a — assist-OFF, the path is NOT pinned in full (omitted/truncated by the
+# snapshot breadth/budget cap, or no identifiable file path): NON-DANGLING marker. It
+# claims only what is ALWAYS true — the full content is recoverable by re-issuing the
+# call or file_read'ing the path — so it never points at a block that doesn't carry
+# the content. Kept angle-bracketed + "elided"/"full content" so the K1 execution
+# guard (`_ELISION_MARKER_RE`) still detects a copy-back.
+def _arg_snip_marker_unpinned(n: int) -> str:
+    return (
+        f"<{n:,} chars elided — re-issue the call or file_read the path for the "
+        "full content; do not copy this placeholder into a tool argument>"
+    )
 
 
 def _snip_args(arguments: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for k, v in arguments.items():
         if isinstance(v, str) and len(v) > _ARG_SNIP_CHARS:
-            out[k] = (
-                f"<{len(v):,} chars — full content is in the CURRENT WORKSPACE block "
-                "in this prompt; do not copy this placeholder into a tool argument>"
-            )
+            # Always the assist-ON / pre-CW-3 directional marker. assist-OFF retargets
+            # it (per pinned-in-full path) in ViewBuilder; assist-ON keeps it as-is.
+            out[k] = _arg_snip_marker_below(len(v))
         else:
             out[k] = v
+    return out
+
+
+def retarget_elided_arg_markers(
+    messages: list[LLMMessage], pinned_full: frozenset[str]
+) -> list[LLMMessage]:
+    """CW P1-a — assist-OFF render pass: rewrite each elided tool-call argument marker
+    so its claim about WHERE the full content lives is TRUTHFUL.
+
+    `_snip_args` emits the directional `_arg_snip_marker_below` unconditionally (it runs
+    inside `View.of`, which has no tier/pin context). For assist-OFF the CURRENT
+    WORKSPACE block moved to the cacheable PREFIX and only the paths pinned in FULL
+    this turn actually carry their content there. This pass — run by ViewBuilder AFTER
+    the snapshot is built (so `pinned_full` is known) — rewrites every elided arg:
+
+      * the tool call's target ``path`` IS in ``pinned_full`` → `_arg_snip_marker_pinned`
+        (location-independent, truthfully names the block);
+      * otherwise (path omitted/truncated from the block, or no ``path`` arg at all) →
+        `_arg_snip_marker_unpinned` (a NON-DANGLING marker that claims only re-issue /
+        file_read recovery — never a false "it's in the block" pointer).
+
+    assist-ON never calls this (the directional marker is correct + pre-CW-3 byte-
+    identical for the tail-placed block). Pure: returns a new list; input unchanged.
+    """
+    out: list[LLMMessage] = []
+    for msg in messages:
+        if msg.role != "assistant" or not msg.tool_calls:
+            out.append(msg)
+            continue
+        new_tcs: list[dict[str, Any]] = []
+        mutated = False
+        for tc in msg.tool_calls:
+            if not isinstance(tc, dict):
+                new_tcs.append(tc)
+                continue
+            args = tc.get("arguments")
+            if not isinstance(args, dict):
+                new_tcs.append(tc)
+                continue
+            path = args.get("path")
+            path_pinned = isinstance(path, str) and path in pinned_full
+            new_args: dict[str, Any] | None = None
+            for k, v in args.items():
+                if not isinstance(v, str):
+                    continue
+                count = _ELISION_COUNT_RE.match(v)
+                if count is None or _ELISION_MARKER_RE.search(v) is None:
+                    continue  # not one of our markers — leave the model's arg alone
+                n = int(count.group(1).replace(",", ""))
+                replacement = (
+                    _arg_snip_marker_pinned(n) if path_pinned else _arg_snip_marker_unpinned(n)
+                )
+                if replacement == v:
+                    continue
+                if new_args is None:
+                    new_args = dict(args)
+                new_args[k] = replacement
+            if new_args is not None:
+                new_tc = dict(tc)
+                new_tc["arguments"] = new_args
+                new_tcs.append(new_tc)
+                mutated = True
+            else:
+                new_tcs.append(tc)
+        out.append(msg.model_copy(update={"tool_calls": new_tcs}) if mutated else msg)
     return out
 
 

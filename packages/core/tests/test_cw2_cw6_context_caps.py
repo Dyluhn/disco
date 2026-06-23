@@ -88,7 +88,12 @@ def test_huge_window_is_capped_not_unbounded():
     caps = derive_context_caps(assist=False, context_window=1_000_000)
     # Per-file is ceilinged at 48k regardless of how large the window grows.
     assert caps.per_file_chars == 48_000
-    assert caps.read_char_budget == 48_000
+    # CW P1-b: the read budget carries RENDER headroom over the raw per-file pin (so a
+    # pin-sized file with many short lines still reads in one shot), bounded — not
+    # unbounded. 48k raw at the ~8-char short-line model → 78k rendered budget.
+    assert caps.read_char_budget == 78_000
+    assert caps.read_char_budget > caps.per_file_chars  # headroom holds
+    assert caps.obs_snip_chars >= caps.read_char_budget
 
 
 # ---- snapshot pin: full vs truncated ----------------------------------------

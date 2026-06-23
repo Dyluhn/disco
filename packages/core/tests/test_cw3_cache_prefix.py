@@ -165,11 +165,13 @@ def test_assist_on_keeps_tail_placement_and_pointer_collapse():
 
     # Second unchanged turn → the W2 pointer collapse fires (byte-identical to
     # the pre-CW-3 assist-ON behavior): no full body, a one-line pointer instead.
+    # CW P1-c — assist-ON renders the pre-CW-3 pointer wording ("current, shown
+    # earlier"), not the CW-3 location-independent wording (which is assist-OFF only).
     view2 = asyncio.run(builder.build(events))
     snap2 = _snapshot_msg(view2)
     assert snap2 is not None
     assert "BEGIN FILE app.js" not in snap2.content
-    assert "unchanged since last shown" in snap2.content
+    assert "current, shown earlier" in snap2.content
     assert _snapshot_index(view2) == len(view2.messages) - 1
 
 
@@ -281,12 +283,30 @@ def test_no_directional_words_in_assist_off_workspace_prose():
 
 
 def test_no_directional_words_in_recovery_markers():
-    # The superseded-read pointer and the elided-arg marker both reference the
-    # workspace block and must name it location-independently.
+    # The superseded-read pointer (assist-OFF, pinned path) references the workspace
+    # block and must name it location-independently.
     superseded = _SUPERSEDED_READ_NOTICE.format(path="app.js")
     assert _DIRECTIONAL.search(superseded) is None, superseded
     assert "in this prompt" in superseded
 
-    snipped = _snip_args({"content": "x" * 4_000})["content"]
+    # CW P1-a/P1-c — `_snip_args` itself renders the assist-ON / pre-CW-3 DIRECTIONAL
+    # marker ("below"); the location-independent marker is the assist-OFF retarget
+    # output. Retargeting a PINNED-path elided arg yields the location-independent,
+    # directional-word-free marker.
+    from disco.core.events import retarget_elided_arg_markers
+
+    raw = _snip_args({"content": "x" * 4_000})["content"]
+    assert "below" in raw  # the un-retargeted assist-ON marker IS directional
+    msg = LLMMessage(
+        role="assistant",
+        content="",
+        tool_calls=[{
+            "id": "c1",
+            "name": "file_write",
+            "arguments": {"path": "app.js", "content": raw},
+        }],
+    )
+    out = retarget_elided_arg_markers([msg], frozenset({"app.js"}))
+    snipped = out[0].tool_calls[0]["arguments"]["content"]
     assert _DIRECTIONAL.search(snipped) is None, snipped
     assert "CURRENT WORKSPACE block in this prompt" in snipped

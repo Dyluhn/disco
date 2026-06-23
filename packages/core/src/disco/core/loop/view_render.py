@@ -23,6 +23,7 @@ from ..events import (
     MessageEvent,
     ObservationEvent,
     obs_snip_override,
+    retarget_elided_arg_markers,
 )
 from ..llm import Difficulty, OverflowSignal
 from ..view import View, microcompact
@@ -185,27 +186,49 @@ async def workspace_snapshot_message(
     ordered = mutated + read_only  # mutated first → never evicted by reads (#1)
     if not ordered:
         return None
-    # CW-3 (REVISION 2) — LOCATION-INDEPENDENT wording. This block now renders in
-    # the cacheable PREFIX (before the event history) for capable models, so any
-    # directional reference ("below"/"above") to the history would be WRONG. The
-    # preamble names itself ("the CURRENT WORKSPACE block in this prompt") instead.
-    preamble = (
-        f"{WORKSPACE_SNAPSHOT_SENTINEL} — your files on disk RIGHT NOW (authoritative).\n"
-        "This block contains the live, exact content of the files you are working "
-        "on, re-read from disk this turn. It OVERRIDES any other copy of these "
-        "files shown elsewhere in this prompt; trust THIS over your memory.\n"
-        "To change a file: for a SMALL change, prefer `file_edit` (pass the exact "
-        "text you see as `old`) or `file_replace_lines` / `file_insert_lines` (use "
-        "the line numbers shown for each file in this block). For a full rewrite, "
-        "use `file_write` with the FULL new content — but you MUST call `file_read` "
-        "on this file first if you have written to it before, or the write will be "
-        "refused. Keep every existing function, constant, and docstring you are not "
-        "deliberately removing — do not drop code you did not mean to delete.\n"
-        "**SILENT CONTEXT** — use this block without narrating it. Do NOT "
-        "acknowledge the snapshot in your reply (no 'I can see the files', "
-        "'the workspace shows…', 'good, the content is here', etc.). "
-        "Just continue the work.\n\n"
-    )
+    # CW-3 / CW P1-c — PER-TIER preamble wording, gated on `pin_full` (which is set
+    # iff assist is OFF). assist-OFF moves the block to the cacheable PREFIX (before
+    # the event history), so any directional reference ("below"/"above") to the
+    # history is WRONG → the block names ITSELF ("the CURRENT WORKSPACE block in this
+    # prompt"). assist-ON keeps the block in the TAIL (after the history), so the
+    # ORIGINAL pre-CW-3 directional wording is CORRECT — and restoring it byte-for-byte
+    # keeps the assist-ON rendered prompt byte-identical to pre-CW-3 (P1-c).
+    if pin_full:
+        preamble = (
+            f"{WORKSPACE_SNAPSHOT_SENTINEL} — your files on disk RIGHT NOW (authoritative).\n"
+            "This block contains the live, exact content of the files you are working "
+            "on, re-read from disk this turn. It OVERRIDES any other copy of these "
+            "files shown elsewhere in this prompt; trust THIS over your memory.\n"
+            "To change a file: for a SMALL change, prefer `file_edit` (pass the exact "
+            "text you see as `old`) or `file_replace_lines` / `file_insert_lines` (use "
+            "the line numbers shown for each file in this block). For a full rewrite, "
+            "use `file_write` with the FULL new content — but you MUST call `file_read` "
+            "on this file first if you have written to it before, or the write will be "
+            "refused. Keep every existing function, constant, and docstring you are not "
+            "deliberately removing — do not drop code you did not mean to delete.\n"
+            "**SILENT CONTEXT** — use this block without narrating it. Do NOT "
+            "acknowledge the snapshot in your reply (no 'I can see the files', "
+            "'the workspace shows…', 'good, the content is here', etc.). "
+            "Just continue the work.\n\n"
+        )
+    else:
+        preamble = (
+            f"{WORKSPACE_SNAPSHOT_SENTINEL} — your files on disk RIGHT NOW (authoritative).\n"
+            "Below is the live, exact content of the files you are working on, "
+            "re-read from disk this turn. It OVERRIDES any earlier or elided copy of "
+            "these files shown above; trust THIS over your memory.\n"
+            "To change a file: for a SMALL change, prefer `file_edit` (pass the exact "
+            "text you see as `old`) or `file_replace_lines` / `file_insert_lines` (use "
+            "the line numbers shown below). For a full rewrite, use `file_write` with "
+            "the FULL new content — but you MUST call `file_read` on this file first "
+            "if you have written to it before, or the write will be refused. Keep "
+            "every existing function, constant, and docstring you are not deliberately "
+            "removing — do not drop code you did not mean to delete.\n"
+            "**SILENT CONTEXT** — use this block without narrating it. Do NOT "
+            "acknowledge the snapshot in your reply (no 'I can see the files', "
+            "'the workspace shows…', 'good, the content is here', etc.). "
+            "Just continue the work.\n\n"
+        )
     blocks: list[str] = []
     # E4 (T8) — per-file notes appended to the trailing omitted-notice.
     # Each note tells the model exactly WHY a file it touched is NOT
@@ -264,7 +287,9 @@ async def workspace_snapshot_message(
             and tracker.is_known(path)
             and path not in _stale
         ):
-            pointer = f"✓ {path} — current on disk, unchanged since last shown"
+            # CW P1-c — this pointer only renders when NOT pin_full (assist-ON), where
+            # the pre-CW-3 wording is byte-identical for the tail-placed block.
+            pointer = f"✓ {path} — current, shown earlier"
             budget -= len(pointer)
             blocks.append(pointer)
             shown_count += 1
@@ -553,6 +578,22 @@ class ViewBuilder:
                 )
             }
         )
+        # CW P1-a — assist-OFF: retarget the elided tool-call ARGUMENT markers so each
+        # only claims "the full content is in the CURRENT WORKSPACE block" when that
+        # call's target path is actually pinned in FULL this turn; every other elided
+        # arg (path omitted/truncated from the block, or no file path at all) gets a
+        # non-dangling marker. `_snip_args` rendered the directional pre-CW-3 marker
+        # inside View.of (no tier/pin context there); this fixes the reachable dangling
+        # pointer on the assist-OFF prefix-placed block. assist-ON keeps the directional
+        # marker (correct for its tail-placed block + byte-identical to pre-CW-3).
+        if not self._loop._assist:
+            view = view.model_copy(
+                update={
+                    "messages": retarget_elided_arg_markers(
+                        view.messages, frozenset(pinned_full)
+                    )
+                }
+            )
         # F8 — GATED mid-turn arg truncation (assist-tier context-window
         # reclaim). When assist is ON, replace the long `content` argument
         # in any past assistant message whose `file_write` tool call was
