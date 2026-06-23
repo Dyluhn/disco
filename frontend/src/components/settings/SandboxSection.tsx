@@ -9,7 +9,8 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, ShieldCheck, ShieldHalf } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { useSandboxConfig, useUpdateSandboxConfig } from "@/hooks/useModels";
+import { useSandboxConfig, useUpdateSandboxConfig, useTestSandbox } from "@/hooks/useModels";
+import type { ProbeResult } from "@/types/probe";
 import {
   BACKEND_META,
   backendMeta,
@@ -101,7 +102,9 @@ function BackendCard({
 export function SandboxSection() {
   const { data } = useSandboxConfig();
   const save = useUpdateSandboxConfig();
+  const test = useTestSandbox();
   const [draft, setDraft] = useState<SandboxConfig | null>(null);
+  const [probe, setProbe] = useState<ProbeResult | null>(null);
 
   useEffect(() => {
     if (data && draft === null) setDraft(data);
@@ -119,8 +122,38 @@ export function SandboxSection() {
   const meta = backendMeta(draft.backend);
   const dirty = JSON.stringify(draft) !== JSON.stringify(data);
 
-  const selectBackend = (id: string) =>
-    setDraft({ ...draft, backend: id, runtime: backendMeta(id)?.defaultRuntime ?? draft.runtime });
+  const selectBackend = (id: string) => {
+    const m = backendMeta(id);
+    const next: SandboxConfig = {
+      ...draft,
+      backend: id,
+      runtime: m?.defaultRuntime ?? draft.runtime,
+    };
+    // W-48(b): seed the ONE varying connection field with the backend's template when
+    // it's empty or still a WRONG-TIER default — e.g. the LOCAL docker socket left on
+    // the REMOTE gVisor tier, which would point docker-py at a local socket with no
+    // runsc. After this the user only edits the host part of `ssh://sandbox@<host>`.
+    if (m?.primaryField && m.primaryPrefill) {
+      const cur = next[m.primaryField];
+      if (!cur || !cur.startsWith(m.primaryPrefill)) next[m.primaryField] = m.primaryPrefill;
+    }
+    setProbe(null);
+    setDraft(next);
+  };
+
+  // W-48: preflight on SAVE — persist, then run the real connectivity probe and surface
+  // a typed, host-naming reachability verdict (so a misconfigured/unreachable backend is
+  // visible up-front, not as a silent failure on the first build).
+  const onSave = () => {
+    setProbe(null);
+    save.mutate(draft, {
+      onSuccess: () => test.mutate(draft, { onSuccess: setProbe }),
+    });
+  };
+  const onTest = () => {
+    setProbe(null);
+    test.mutate(draft, { onSuccess: setProbe });
+  };
 
   return (
     <section className="flex flex-col gap-section border-t border-hairline pt-section">
@@ -168,13 +201,21 @@ export function SandboxSection() {
 
           {/* the ONE connection field that varies per backend (null → none shown) */}
           {meta.primaryField && (
-            <SandboxField
-              field={meta.primaryField}
-              label={meta.primaryLabel ?? fieldLabel(meta.primaryField)}
-              value={draft[meta.primaryField]}
-              disabled={meta.stub}
-              onChange={(v) => setDraft({ ...draft, [meta.primaryField!]: v })}
-            />
+            <div className="flex flex-col gap-hair">
+              <SandboxField
+                field={meta.primaryField}
+                label={meta.primaryLabel ?? fieldLabel(meta.primaryField)}
+                value={draft[meta.primaryField]}
+                disabled={meta.stub}
+                onChange={(v) => setDraft({ ...draft, [meta.primaryField!]: v })}
+              />
+              {/* W-48(b): inline "use the tailnet IP, not the LAN IP" guidance */}
+              {meta.primaryHint && (
+                <p data-sandbox-hint={meta.primaryField} className="font-ui text-[0.72rem] text-text-faint">
+                  {meta.primaryHint}
+                </p>
+              )}
+            </div>
           )}
 
           {/* Advanced — everything else, collapsed by default. runtime is NOT in the form
@@ -216,19 +257,47 @@ export function SandboxSection() {
         </div>
       )}
 
-      <div className="flex items-center gap-inline">
-        <button
-          type="button"
-          data-disco-control="settings.sandbox-save"
-          onClick={() => draft && save.mutate(draft)}
-          disabled={!dirty || save.isPending}
-          className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-50"
-        >
-          {save.isPending ? "Saving…" : dirty ? "Save sandbox" : "Saved"}
-        </button>
-        {save.error && (
-          <span role="alert" className="font-ui text-[0.78rem] text-unsupported">
-            {(save.error as Error).message}
+      <div className="flex flex-col gap-inline">
+        <div className="flex items-center gap-inline">
+          <button
+            type="button"
+            data-disco-control="settings.sandbox-save"
+            onClick={onSave}
+            disabled={!dirty || save.isPending || test.isPending}
+            className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-50"
+          >
+            {save.isPending ? "Saving…" : dirty ? "Save sandbox" : "Saved"}
+          </button>
+          {/* W-48: explicit connectivity preflight — a real probe of the configured
+              endpoint, returning a typed host-naming verdict. Hidden for the Podman stub. */}
+          {!meta?.stub && (
+            <button
+              type="button"
+              data-disco-control="settings.sandbox-test"
+              onClick={onTest}
+              disabled={test.isPending || save.isPending}
+              className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text transition-colors hover:border-hairline-strong disabled:opacity-50"
+            >
+              {test.isPending ? "Testing…" : "Test connection"}
+            </button>
+          )}
+          {save.error && (
+            <span role="alert" className="font-ui text-[0.78rem] text-unsupported">
+              {(save.error as Error).message}
+            </span>
+          )}
+        </div>
+        {/* the typed reachability verdict from the preflight probe (W-48) */}
+        {probe && (
+          <span
+            role="status"
+            data-sandbox-probe={probe.ok ? "ok" : probe.status}
+            className={cn(
+              "font-ui text-[0.78rem]",
+              probe.ok ? "text-supported" : "text-unsupported",
+            )}
+          >
+            {probe.detail}
           </span>
         )}
       </div>

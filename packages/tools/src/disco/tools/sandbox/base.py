@@ -224,6 +224,19 @@ class SandboxService(Protocol):
 
     async def get(self, instance_id: str) -> SandboxInstance | None: ...
 
+    async def healthcheck(self) -> None:
+        """[W-48] Connectivity PREFLIGHT. Probe THIS backend's endpoint (the Docker
+        socket / ssh:// host for the container backends; the Podman native-remote
+        socket; the workspace root for the process backend) and return None when the
+        backend is reachable + usable. On failure raise a typed
+        ``SandboxUnavailableError`` whose message NAMES the endpoint and the real
+        reason (e.g. "Docker unreachable at ssh://sandbox@<host>: <cause>") so the
+        Settings save / first-use path can surface the truth instead of a silent
+        failure or a generic 500 later. MUST be bounded (run the blocking client work
+        in a thread; the client carries its own socket timeout) so an unreachable host
+        fails fast rather than hanging."""
+        return None
+
     async def list_live_instances(self) -> list[str]:
         """Return the conversation_ids of all live sandbox containers on this backend.
         Container backends return conversation_ids of running pmx-sbx-* containers;

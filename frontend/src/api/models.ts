@@ -158,6 +158,15 @@ export async function updateSandboxConfig(cfg: SandboxConfig): Promise<SandboxCo
   return { ...fixtureSandbox };
 }
 
+/** W-48 — connectivity preflight for a sandbox backend (app-server). A real, bounded
+ * probe of the configured endpoint; returns a typed host-naming verdict (never throws
+ * for an expected failure). The fixture path returns a synthetic "reachable". */
+export async function testSandbox(cfg: SandboxConfig): Promise<ProbeResult> {
+  if (isLive()) return apiSend<ProbeResult>("POST", "/api/sandbox/test", cfg);
+  await fixtureDelay();
+  return { ok: true, status: "ok", detail: `${cfg.backend} sandbox is reachable.` };
+}
+
 // ---- encoders (bundled-local vs remote) ------------------------------------
 
 let fixtureEncoders: EncodersConfig = { remote: false };

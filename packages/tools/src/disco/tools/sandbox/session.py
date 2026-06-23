@@ -128,6 +128,15 @@ class SandboxSession:
         return f"session-{self.conversation_id}"
 
     @property
+    def backend_name(self) -> str:
+        """[W-48(c)] The name of the backend service this session composes on
+        ('process'|'gvisor'|'local'|'podman'). Lets the runtime reconcile cached
+        sessions against a changed Settings backend — a session whose backend no
+        longer matches the configured one is destroyed so the next kick composes a
+        fresh sandbox on the new backend (never leaking the old backend's box)."""
+        return self._service.name
+
+    @property
     def generation(self) -> int:
         """How many underlying instances this session has created (1 after the first
         use; >1 means it survived a death)."""

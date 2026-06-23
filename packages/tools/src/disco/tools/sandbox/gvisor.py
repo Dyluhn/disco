@@ -434,6 +434,22 @@ class GvisorSandboxService:
     async def get(self, instance_id: str) -> SandboxInstance | None:
         return self._instances.get(instance_id)
 
+    async def healthcheck(self) -> None:
+        """[W-48] Connectivity preflight: ping the configured Docker endpoint
+        (`docker_socket` — a local socket OR `ssh://user@host` over keyless Tailscale
+        SSH) and confirm the selected runtime (`runsc` for gVisor, `runc` for the
+        local tier) is registered on that host. Raises a typed
+        ``SandboxUnavailableError`` NAMING the endpoint + reason on failure
+        (`_client()` → "Docker unreachable at <endpoint>: …"; `_require_runtime` →
+        "the '<runtime>' runtime is not configured on the Docker host"); returns None
+        on success. The blocking docker-py calls run in a thread and are bounded by
+        `client_timeout_s`, so an unreachable host fails fast instead of hanging."""
+        def _probe() -> None:
+            client = self._client()  # typed: "Docker unreachable at <endpoint>: …"
+            self._require_runtime(client)  # typed: "<runtime> not configured …"
+
+        await asyncio.to_thread(_probe)
+
     async def list_live_instances(self) -> list[str]:
         """Return conversation_ids of all live pmx-sbx-* containers on this backend.
 

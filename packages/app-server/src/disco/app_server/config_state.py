@@ -372,7 +372,13 @@ class ConfigState:
 
     def update_sandbox_config(self, dto: SandboxConfigDTO) -> SandboxConfigDTO:
         """Persist the chosen backend + connection. The agent-server reloads the shared
-        config per request, so a new selection drives the NEXT conversation's sandbox."""
+        config per request, so a new selection drives the NEXT conversation's sandbox.
+
+        W-48: the connectivity PREFLIGHT is a SEPARATE probe (`test_sandbox` /
+        POST /api/sandbox/test) the Save flow runs after persisting, so a config is
+        never LOST just because the host is momentarily down — the user saves, then
+        sees the typed named reachability verdict and can fix the host. The
+        agent-server ALSO re-probes on first use (first-kick pre-flight)."""
         from disco.core.llm import SandboxSettings
 
         self._store.save_sandbox(
@@ -386,6 +392,77 @@ class ConfigState:
             )
         )
         return _sandbox_from(self._store.load())
+
+    # W-48: HARD wall-clock bound on the sandbox connectivity probe — a "test" must
+    # feel instant and never hang Settings on a black-holed gVisor/Podman host. The
+    # backends' own client_timeout_s bounds the socket, but the SSH transport is
+    # outside that, so this caps the WHOLE probe; a timeout is itself "unreachable".
+    _SANDBOX_PROBE_TIMEOUT_S = 12.0
+
+    async def test_sandbox(self, dto: SandboxConfigDTO) -> ProbeResult:
+        """W-48: connectivity PREFLIGHT for a sandbox backend. Build the SAME backend
+        service the agent-server would (`service_from_config`) and run its
+        `healthcheck()` — a REAL probe of the configured endpoint (Docker socket /
+        ssh:// host / Podman socket / process workspace root). Classifies the outcome
+        into the ProbeResult vocabulary with a typed, host-NAMING detail
+        (e.g. "gvisor sandbox host ssh://sandbox@<host> unreachable: …") instead of a
+        silent failure or a generic 500 later. Bounded by _SANDBOX_PROBE_TIMEOUT_S so a
+        dead host fails fast. Never raises for an expected failure — it's a RESULT."""
+        import asyncio
+
+        from disco.tools.sandbox import (
+            SandboxConfig,
+            SandboxUnavailableError,
+            service_from_config,
+        )
+
+        cfg = SandboxConfig(
+            backend=dto.backend,
+            docker_socket=dto.docker_socket,
+            podman_url=dto.podman_url,
+            runtime=dto.runtime,
+            image=dto.image,
+            workspace_root=dto.workspace_root,
+        )
+        if dto.backend in ("gvisor", "local"):
+            endpoint = f"{dto.backend} sandbox host {dto.docker_socket}"
+        elif dto.backend == "podman":
+            endpoint = f"podman sandbox host {dto.podman_url}"
+        else:
+            endpoint = f"{dto.backend} sandbox"
+        service = service_from_config(cfg)
+        try:
+            await asyncio.wait_for(service.healthcheck(), self._SANDBOX_PROBE_TIMEOUT_S)
+        except TimeoutError:
+            return ProbeResult(
+                ok=False,
+                status="unreachable",
+                detail=(
+                    f"{endpoint} unreachable: no response within "
+                    f"{self._SANDBOX_PROBE_TIMEOUT_S:.0f}s (the probe timed out)."
+                ),
+                provider=dto.backend,
+            )
+        except SandboxUnavailableError as exc:
+            return ProbeResult(
+                ok=False,
+                status="unreachable",
+                detail=f"{endpoint} unreachable: {exc}",
+                provider=dto.backend,
+            )
+        except Exception as exc:  # noqa: BLE001 — any probe failure is a RESULT, not a 500
+            return ProbeResult(
+                ok=False,
+                status="error",
+                detail=f"{endpoint}: {exc}",
+                provider=dto.backend,
+            )
+        return ProbeResult(
+            ok=True,
+            status="ok",
+            detail=f"{endpoint} is reachable.",
+            provider=dto.backend,
+        )
 
     # encoders: bundled-local vs remote (persisted; agent-server honors per request) -
 

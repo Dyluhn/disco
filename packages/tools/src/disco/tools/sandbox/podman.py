@@ -503,6 +503,17 @@ class PodmanSandboxService:
     async def get(self, instance_id: str) -> SandboxInstance | None:
         return self._instances.get(instance_id)
 
+    async def healthcheck(self) -> None:
+        """[W-48] Connectivity preflight for the Podman native remote: ping the
+        rootless socket over the (keyless Tailscale SSH) transport. Raises a typed
+        ``SandboxUnavailableError`` NAMING the URL + reason on failure ("Podman
+        unreachable at <url>: …"); returns None on success. Runs in a thread so the
+        blocking SSH/socket call can't block the event loop."""
+        def _probe() -> None:
+            self._client()  # PodmanClient(...).ping(), typed "Podman unreachable at <url>: …"
+
+        await asyncio.to_thread(_probe)
+
     async def list_live_instances(self) -> list[str]:
         """Return conversation_ids of all live pmx-sbx-* containers on this Podman backend.
 

@@ -24,6 +24,21 @@ from .podman import PodmanSandboxInstance, PodmanSandboxService
 from .process import ProcessSandboxInstance, ProcessSandboxService
 from .session import SandboxSession
 
+
+def service_from_config(cfg: SandboxConfig) -> SandboxService:
+    """[W-48] Map a SandboxConfig to its concrete backend service — the ONE shared
+    backend↔config mapping used by BOTH the agent-server's live builder
+    (`build_sandbox_service`) and the Settings connectivity preflight
+    (`ConfigState.test_sandbox`). `process`/unknown → the dev backend (runs on host)."""
+    if cfg.backend == "gvisor":
+        return GvisorSandboxService(cfg)
+    if cfg.backend == "local":
+        return LocalSandboxService(cfg)
+    if cfg.backend == "podman":
+        return PodmanSandboxService(cfg)
+    return ProcessSandboxService()
+
+
 __all__ = [
     "ExecResult",
     "GvisorSandboxInstance",
@@ -47,4 +62,5 @@ __all__ = [
     "default_podman_config",
     "default_sandbox_config",
     "isolation_for",
+    "service_from_config",
 ]

@@ -31,6 +31,7 @@ from .base import (
     SandboxInstance,
     SandboxPermissionError,
     SandboxSpec,
+    SandboxUnavailableError,
     strip_redundant_workspace_prefix,
 )
 
@@ -201,6 +202,25 @@ class ProcessSandboxService:
 
     async def get(self, instance_id: str) -> SandboxInstance | None:
         return self._instances.get(instance_id)
+
+    async def healthcheck(self) -> None:
+        """[W-48] The process (dev) backend runs tools directly on the host — there is
+        no remote endpoint or container runtime to reach, so the preflight only
+        confirms the workspace ROOT is present + writable (the one local resource it
+        needs). Raises ``SandboxUnavailableError`` naming the root on failure; returns
+        None on success."""
+        def _probe() -> None:
+            try:
+                self._root.mkdir(parents=True, exist_ok=True)
+                probe = self._root / ".disco-healthcheck"
+                probe.write_text("ok")
+                probe.unlink()
+            except Exception as exc:  # noqa: BLE001 — map to a typed infra error
+                raise SandboxUnavailableError(
+                    f"process sandbox workspace root {self._root} is not writable: {exc}"
+                ) from exc
+
+        await asyncio.to_thread(_probe)
 
     async def list_live_instances(self) -> list[str]:
         """Process backend has no container layer — returns empty."""

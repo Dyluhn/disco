@@ -87,7 +87,6 @@ from disco.tools import (
     Capability,
     CapabilityBroker,
     DefaultToolExecutor,
-    ProcessSandboxService,
     SandboxService,
     SandboxSession,
     SandboxSpec,
@@ -104,11 +103,10 @@ from disco.tools.projects import (
     StorageStatus,
 )
 from disco.tools.sandbox import (
-    GvisorSandboxService,
-    LocalSandboxService,
-    PodmanSandboxService,
     SandboxConfig,
     SandboxInstance,
+    SandboxUnavailableError,
+    service_from_config,
 )
 from disco.tools.sandbox._container import PREVIEW_PORT
 from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
@@ -295,13 +293,11 @@ def build_sandbox_service(settings: SandboxSettings) -> SandboxService:
         # previews work from other devices, not just the agent-server's host (else derived).
         preview_host=disco_env("PREVIEW_HOST", ""),
     )
-    if settings.backend == "gvisor":
-        return GvisorSandboxService(cfg)
-    if settings.backend == "local":
-        return LocalSandboxService(cfg)
-    if settings.backend == "podman":
-        return PodmanSandboxService(cfg)  # stub-in-this-env (see docstring)
-    return ProcessSandboxService()  # "process"/unknown → the dev backend (runs on host)
+    # The backend↔config mapping lives in ONE place (disco.tools.sandbox) so the
+    # Settings connectivity preflight (ConfigState.test_sandbox) builds the SAME
+    # backend this live builder does — no parallel mapping to drift. Podman remains a
+    # stub in THIS environment (see docstring); it constructs but isn't live here.
+    return service_from_config(cfg)
 
 
 # Live model-server probe: derive the ACTUALLY-SERVED model name + context window
@@ -1516,6 +1512,10 @@ class ConversationRuntime:
         existing = self._tasks.get(conversation_id)
         if existing is not None and not existing.done():
             return  # already running; the new message is picked up at the next step
+        # W-48(c): if Settings switched the sandbox backend since this conversation
+        # last composed, evict its stale-backend session here so _loop_for composes a
+        # fresh sandbox on the new backend (best-effort destroy of the old box).
+        self._evict_stale_backend(conversation_id)
         loop = self._loop_for(conversation_id)
         task = asyncio.create_task(self._run_with_persistence(conversation_id, loop))
         # W2 supervision: the run task ALWAYS resolves to a terminal status. Without this
@@ -1774,6 +1774,133 @@ class ConversationRuntime:
         self._driver_preflight_ok[key] = time.monotonic()
         return None
 
+    # W-48: HARD wall-clock bound on a SINGLE sandbox connectivity pre-flight. Like
+    # the driver pre-flight, the WHOLE point is to FAIL FAST — a gVisor host that's
+    # down (or an ssh:// host that black-holes the connection) must not stall the
+    # first kick for the docker-py / system-ssh default minute. The backends' own
+    # client_timeout_s bounds the socket, but the SSH transport is outside that, so
+    # asyncio.wait_for caps the entire probe here; a timeout is ITSELF "unreachable".
+    _SANDBOX_PREFLIGHT_TIMEOUT_S = 12.0
+
+    @staticmethod
+    def _sandbox_endpoint_label(service: SandboxService) -> str:
+        """[W-48] A human-readable label NAMING the backend's connection endpoint, for
+        a typed pre-flight error the user can act on (which host/socket to fix)."""
+        name = getattr(service, "name", "sandbox")
+        cfg = getattr(service, "_cfg", None)
+        if cfg is not None:
+            if name in ("gvisor", "local"):
+                return f"{name} sandbox host {getattr(cfg, 'docker_socket', '?')}"
+            if name == "podman":
+                return f"podman sandbox host {getattr(cfg, 'podman_url', '?')}"
+        return f"{name} sandbox"
+
+    async def _preflight_sandbox(self, conversation_id: str) -> str | None:
+        """W-48: first-use connectivity PREFLIGHT for the Build sandbox. Probe the
+        configured backend's endpoint (the Docker socket / ssh:// host for the
+        container backends; the Podman native-remote socket; the workspace root for
+        the process backend) BEFORE the loop composes a session, so a misconfigured /
+        unreachable backend (e.g. gVisor pointed at a host that's down, or the
+        local-socket default selected for the REMOTE gVisor tier) fails fast with a
+        NAMED reason — "gVisor sandbox host ssh://sandbox@<host> unreachable: …" —
+        instead of a generic 500 on the first tool call. Returns None when reachable,
+        else the reason string (the caller surfaces it as StatusEvent(ERROR) + an
+        ambient reminder and does NOT start the loop). Bounded by
+        _SANDBOX_PREFLIGHT_TIMEOUT_S; a hung host is itself an 'unreachable' verdict.
+        The process (dev) backend's healthcheck is a cheap local check → ~no latency."""
+        if self._injected_sandbox is not None:
+            return None  # test/dev seam: the injected backend is authoritative
+        try:
+            service = self._sandbox_service_now()
+        except Exception as exc:  # noqa: BLE001 — backend couldn't even be built
+            return f"sandbox backend is misconfigured: {exc}"
+        label = self._sandbox_endpoint_label(service)
+        try:
+            await asyncio.wait_for(service.healthcheck(), self._SANDBOX_PREFLIGHT_TIMEOUT_S)
+        except TimeoutError:
+            return (
+                f"{label} unreachable: no response within "
+                f"{self._SANDBOX_PREFLIGHT_TIMEOUT_S:.0f}s (sandbox pre-flight timed out)"
+            )
+        except SandboxUnavailableError as exc:
+            return f"{label} unreachable: {exc}"
+        except Exception as exc:  # noqa: BLE001 — any probe failure blocks, with the cause
+            return f"{label} error: {exc}"
+        return None
+
+    async def _best_effort_destroy_session(self, session: SandboxSession) -> None:
+        """[W-48(c)] Tear down a stale-backend session without ever raising — the box
+        on the OLD backend is being abandoned because Settings switched backends."""
+        with contextlib.suppress(Exception):
+            await session.destroy()
+
+    def _evict_stale_backend(self, conversation_id: str) -> None:
+        """[W-48(c)] On a persisted sandbox-backend change, reconcile THIS conversation:
+        if its cached session runs a DIFFERENT backend than the now-configured one (the
+        user switched backends in Settings), evict the cached loop/executor/pending
+        session so the NEXT compose builds a fresh sandbox on the new backend, and
+        best-effort tear the old box down (never leak the old backend's session).
+        No-op when the backend is unchanged, a backend override is injected (tests), or
+        a live run is in flight (never reconnect mid-turn). Called synchronously at the
+        top of kick(); the async teardown is scheduled so kick() stays non-blocking."""
+        if self._injected_sandbox is not None:
+            return  # injected backend is authoritative; Settings backend is ignored
+        try:
+            current = self._config_store.load().sandbox.backend
+        except Exception:  # noqa: BLE001 — config unreadable ⇒ leave caches alone
+            return
+        task = self._tasks.get(conversation_id)
+        if task is not None and not task.done():
+            return  # mid-turn — don't reconnect
+        stale: list[SandboxSession] = []
+        executor = self._executors.get(conversation_id)
+        sess = getattr(executor, "_sandbox", None) if executor is not None else None
+        if sess is not None and getattr(sess, "backend_name", current) != current:
+            stale.append(sess)
+            self._loops.pop(conversation_id, None)
+            self._executors.pop(conversation_id, None)
+        pending = self._pending_sessions.get(conversation_id)
+        if pending is not None and pending.backend_name != current:
+            self._pending_sessions.pop(conversation_id, None)
+            stale.append(pending)
+        for s in stale:
+            with contextlib.suppress(RuntimeError):  # no running loop (shutdown) → skip
+                asyncio.create_task(self._best_effort_destroy_session(s))
+
+    async def reconcile_sandbox_backend(self) -> int:
+        """[W-48(c)] Sweep ALL cached sessions and destroy any whose backend != the
+        now-configured backend, so the next kick of each composes a fresh sandbox on
+        the new backend. Skips conversations with a LIVE run task (don't reconnect
+        mid-turn). Returns the count reconciled. The lazy per-conversation
+        `_evict_stale_backend` (run at kick) is the cross-process path that needs no
+        signal; this is the explicit form (tests + a future config-change hook)."""
+        if self._injected_sandbox is not None:
+            return 0
+        try:
+            current = self._config_store.load().sandbox.backend
+        except Exception:  # noqa: BLE001
+            return 0
+        reconciled = 0
+        for cid in list(self._executors) + list(self._pending_sessions):
+            task = self._tasks.get(cid)
+            if task is not None and not task.done():
+                continue  # mid-turn — don't reconnect
+            executor = self._executors.get(cid)
+            sess = getattr(executor, "_sandbox", None) if executor is not None else None
+            pending = self._pending_sessions.get(cid)
+            mismatched: list[SandboxSession] = []
+            if sess is not None and getattr(sess, "backend_name", current) != current:
+                mismatched.append(sess)
+                self._loops.pop(cid, None)
+                self._executors.pop(cid, None)
+            if pending is not None and pending.backend_name != current:
+                self._pending_sessions.pop(cid, None)
+                mismatched.append(pending)
+            for s in mismatched:
+                await self._best_effort_destroy_session(s)
+                reconciled += 1
+        return reconciled
+
     async def _run_with_persistence(
         self, conversation_id: str, loop: AgentLoop
     ) -> Any:
@@ -1813,6 +1940,27 @@ class ConversationRuntime:
                 "API key in Settings, then send a message to retry.",
             )
             return await self._store.get_state(conversation_id)
+
+        # W-48: sandbox connectivity pre-flight BEFORE a Build loop composes a
+        # session. A misconfigured / unreachable backend (gVisor host down, or the
+        # local-socket default left on the REMOTE gVisor tier) would otherwise stall
+        # silently on the first tool call and surface as a generic error. Probe it
+        # up-front and, on failure, surface a NAMED StatusEvent(ERROR) + an ambient
+        # reminder and DO NOT start the loop (mirrors the W-35 driver pre-flight).
+        if surface in self._BUILD_LIKE_SURFACES:
+            sandbox_reason = await self._preflight_sandbox(conversation_id)
+            if sandbox_reason is not None:
+                await self._store.append(
+                    conversation_id,
+                    StatusEvent(status=ConversationStatus.ERROR, detail=sandbox_reason[:200]),
+                )
+                await self._emit_persistence_reminder(
+                    conversation_id,
+                    f"{sandbox_reason} The run did not start — check the sandbox "
+                    "backend's host/connection in Settings → Sandbox, then send a "
+                    "message to retry.",
+                )
+                return await self._store.get_state(conversation_id)
 
         # Rehydrate hook: BEFORE the loop runs for the first time, if a project
         # storage path is configured AND a prior snapshot exists for this cid,

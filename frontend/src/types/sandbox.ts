@@ -32,6 +32,11 @@ export interface BackendMeta {
   // non-primary connection field) collapses under "Advanced" with its saved default.
   primaryField: SandboxField | null;
   primaryLabel?: string; // friendlier label for the primary field at the point of use
+  // W-48(b): when this backend is selected and the primary field is still empty / a
+  // wrong-tier default (e.g. the LOCAL docker socket left on the REMOTE gVisor tier),
+  // seed it with this template so the user only edits the ONE varying part (the host).
+  primaryPrefill?: string;
+  primaryHint?: string; // inline guidance under the primary field (e.g. "use the tailnet IP")
   provides: string; // the short "what you provide" subline
 }
 
@@ -63,6 +68,9 @@ export const BACKEND_META: BackendMeta[] = [
     confirmNote: "Strong sandbox → by default the agent only pauses on HIGH-risk actions.",
     primaryField: "docker_socket",
     primaryLabel: "Remote host (Tailscale)",
+    primaryPrefill: "ssh://sandbox@",
+    primaryHint:
+      "Use your Tailscale IP or hostname (e.g. ssh://sandbox@100.x.y.z) — NOT the LAN IP. Only the tailnet reaches the host keyless.",
     provides: "You provide: the remote host to reach over Tailscale SSH. Everything else has a default.",
   },
   {

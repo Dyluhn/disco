@@ -33,6 +33,13 @@ def make_config_router(state: ConfigState) -> APIRouter:
     async def put_sandbox_config(dto: SandboxConfigDTO) -> SandboxConfigDTO:
         return state.update_sandbox_config(dto)
 
+    @router.post("/api/sandbox/test")
+    async def test_sandbox(dto: SandboxConfigDTO) -> ProbeResult:
+        """W-48: connectivity PREFLIGHT for the given sandbox backend config — a real,
+        bounded probe of the configured endpoint, returning a typed host-naming verdict
+        (HTTP 200 with ok=False on an expected failure, never a 500)."""
+        return await state.test_sandbox(dto)
+
     @router.get("/api/encoders/config")
     async def get_encoders_config() -> EncodersConfigDTO:
         return state.encoders_config()

@@ -21,7 +21,17 @@ const DEFAULTS: SandboxConfig = {
   workspace_root: "/srv/disco/workspaces",
 };
 
-const saveMutate = vi.fn();
+// save/test mutates invoke their onSuccess so the W-48 preflight cascade (save →
+// probe → surface verdict) is exercised end-to-end in the component.
+const saveMutate = vi.fn((_cfg, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
+const probeResult = {
+  ok: false,
+  status: "unreachable",
+  detail: "gvisor sandbox host ssh://sandbox@host unreachable: connection refused",
+};
+const testMutate = vi.fn((_cfg, opts?: { onSuccess?: (r: unknown) => void }) =>
+  opts?.onSuccess?.(probeResult),
+);
 
 vi.mock("@/hooks/useModels", () => ({
   useSandboxConfig: vi.fn(() => ({ data: DEFAULTS })),
@@ -30,6 +40,7 @@ vi.mock("@/hooks/useModels", () => ({
     isPending: false,
     error: null,
   })),
+  useTestSandbox: vi.fn(() => ({ mutate: testMutate, isPending: false })),
 }));
 
 function wrap() {
@@ -106,7 +117,57 @@ describe("SandboxSection — W-49 progressive disclosure", () => {
     expect(payload.runtime).toBe("runsc");
     expect(payload.image).toBe(DEFAULTS.image);
     expect(payload.workspace_root).toBe(DEFAULTS.workspace_root);
-    expect(payload.docker_socket).toBe(DEFAULTS.docker_socket);
+    // W-48(b): selecting gVisor seeds the remote-host field (the LOCAL socket default
+    // is the wrong tier for the REMOTE gVisor backend) so the user only edits the host.
+    expect(payload.docker_socket).toBe("ssh://sandbox@");
     expect(payload.podman_url).toBe(DEFAULTS.podman_url);
+  });
+});
+
+describe("SandboxSection — W-48 connectivity preflight + gVisor pre-fill", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("gVisor: pre-fills ssh://sandbox@ + shows the tailnet-IP hint", async () => {
+    wrap();
+    const gvisor = await screen.findByRole("radio", { name: /gvisor/i });
+    await userEvent.click(gvisor);
+    const input = (await waitFor(() => {
+      const el = document.querySelector('input[data-sandbox-field="docker_socket"]');
+      expect(el).not.toBeNull();
+      return el as HTMLInputElement;
+    }));
+    // Seeded with the ssh:// template (not the wrong-tier local socket default).
+    expect(input.value).toBe("ssh://sandbox@");
+    // The inline "use the tailnet IP, not the LAN IP" guidance is shown.
+    expect(screen.getByText(/tailscale ip/i)).toBeInTheDocument();
+    expect(screen.getByText(/not the lan ip/i)).toBeInTheDocument();
+  });
+
+  it("Save runs the connectivity preflight and surfaces the typed named verdict", async () => {
+    wrap();
+    const gvisor = await screen.findByRole("radio", { name: /gvisor/i });
+    await userEvent.click(gvisor);
+    const saveBtn = await screen.findByRole("button", { name: /save sandbox/i });
+    await waitFor(() => expect(saveBtn).toBeEnabled());
+    await userEvent.click(saveBtn);
+    // save → (onSuccess) → test probe → surface the verdict
+    expect(saveMutate).toHaveBeenCalledTimes(1);
+    expect(testMutate).toHaveBeenCalledTimes(1);
+    const verdict = await screen.findByRole("status");
+    expect(verdict).toHaveAttribute("data-sandbox-probe", "unreachable");
+    expect(verdict).toHaveTextContent(/ssh:\/\/sandbox@host unreachable/i);
+  });
+
+  it("Test connection button probes the draft directly", async () => {
+    wrap();
+    const gvisor = await screen.findByRole("radio", { name: /gvisor/i });
+    await userEvent.click(gvisor);
+    const testBtn = await screen.findByRole("button", { name: /test connection/i });
+    await userEvent.click(testBtn);
+    expect(testMutate).toHaveBeenCalledTimes(1);
+    expect(saveMutate).not.toHaveBeenCalled();
+    expect(await screen.findByRole("status")).toHaveTextContent(/unreachable/i);
   });
 });

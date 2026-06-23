@@ -22,6 +22,7 @@ import {
   updateTtsConfig,
   updateModel,
   updateSandboxConfig,
+  testSandbox,
 } from "@/api/models";
 import type {
   AssignmentsPatch,
@@ -78,6 +79,15 @@ export function useUpdateSandboxConfig() {
   return useMutation({
     mutationFn: (cfg: SandboxConfig) => updateSandboxConfig(cfg),
     onSuccess: (next) => qc.setQueryData(SANDBOX_KEY, next),
+  });
+}
+
+/** W-48 — connectivity preflight for a sandbox backend. Returns the typed host-naming
+ * ProbeResult; the Settings Save flow runs it so a misconfigured/unreachable backend
+ * surfaces up-front instead of failing silently on the first build. */
+export function useTestSandbox() {
+  return useMutation({
+    mutationFn: (cfg: SandboxConfig) => testSandbox(cfg),
   });
 }
 
