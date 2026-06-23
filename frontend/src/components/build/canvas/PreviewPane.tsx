@@ -137,6 +137,31 @@ export function PreviewPane({
     }
   }, [boundPorts, previewPort]);
 
+  // W-42 — auto-refresh the preview when the agent rewrites a file. The event
+  // stream IS the change signal: derive a stable signature from the files map
+  // (path:bytes:length) and, debounced, bump reloadKey so the iframe(s) reload
+  // with the fresh content instead of showing the stale running app. Gated on
+  // RUNNING so a finished/idle preview isn't fought by a late reload.
+  const fileSignature = useMemo(
+    () => files.map((f) => `${f.path}:${f.bytes}:${f.content.length}`).join("|"),
+    [files],
+  );
+  const lastFileSigRef = useRef(fileSignature);
+  useEffect(() => {
+    if (status !== "RUNNING") {
+      // Keep the baseline current while paused/finished so the next RUNNING
+      // turn doesn't immediately fire on a signature that's already on screen.
+      lastFileSigRef.current = fileSignature;
+      return;
+    }
+    if (fileSignature === lastFileSigRef.current) return;
+    const t = setTimeout(() => {
+      lastFileSigRef.current = fileSignature;
+      setReloadKey((k) => k + 1);
+    }, 600);
+    return () => clearTimeout(t);
+  }, [fileSignature, status]);
+
   const [restarting, setRestarting] = useState(false);
   async function refresh() {
     setReloadKey((k) => k + 1);

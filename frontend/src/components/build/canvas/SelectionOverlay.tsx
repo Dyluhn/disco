@@ -24,8 +24,81 @@
  * The component is PURE — all state lives in the parent via `useElementSelect`.
  */
 
+import { useEffect, useRef, useState } from "react";
 import { ChevronUp, MousePointer2, X } from "lucide-react";
 import type { SelectionEnvelope } from "@/lib/selectionBridge";
+
+/** W-27: a self-dismissing first-run hint explaining the Inspect feature.
+ * Shows once (localStorage flag), counts down visibly from 10s, auto-hides at 0,
+ * and can be dismissed early with the X. Self-contained — no parent wiring. */
+const INSPECT_TIP_SEEN_KEY = "disco-inspect-tip-seen";
+
+function InspectTip() {
+  // Seed from localStorage on first render so the tip never flashes for a
+  // returning user. SSR-safe guard (no window during prerender).
+  const [show, setShow] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem(INSPECT_TIP_SEEN_KEY) == null;
+    } catch {
+      return false;
+    }
+  });
+  const [seconds, setSeconds] = useState(10);
+  const dismissed = useRef(false);
+
+  function dismiss() {
+    if (dismissed.current) return;
+    dismissed.current = true;
+    setShow(false);
+    try {
+      window.localStorage.setItem(INSPECT_TIP_SEEN_KEY, "1");
+    } catch {
+      /* private mode / disabled storage — fine, just won't persist */
+    }
+  }
+
+  useEffect(() => {
+    if (!show) return;
+    const id = setInterval(() => {
+      setSeconds((s) => {
+        if (s <= 1) {
+          clearInterval(id);
+          dismiss();
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+  }, [show]);
+
+  if (!show) return null;
+
+  return (
+    <div
+      className="absolute right-2 top-10 z-[103] flex max-w-[220px] items-start gap-1.5 rounded border border-hairline bg-surface-1/95 px-2 py-1.5 shadow-md backdrop-blur-sm select-none"
+      role="status"
+    >
+      <MousePointer2 className="mt-0.5 size-3 shrink-0 text-accent" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <p className="font-ui text-[0.7rem] leading-snug text-text">
+          <span className="font-medium">Inspect:</span> highlight an item and discuss or
+          iterate on it with the agent.
+        </p>
+        <p className="mt-0.5 font-ui text-[0.62rem] text-text-faint">Hiding in {seconds}s</p>
+      </div>
+      <button
+        type="button"
+        onClick={dismiss}
+        aria-label="Dismiss inspect tip"
+        className="shrink-0 rounded p-0.5 text-text-faint hover:text-text"
+      >
+        <X className="size-3" aria-hidden />
+      </button>
+    </div>
+  );
+}
 
 interface Props {
   /** Whether the selection mode is currently active. */
@@ -88,6 +161,9 @@ export function SelectionOverlay({
           </button>
         )}
       </div>
+
+      {/* ── W-27: first-run inspect explainer (only when inspect is usable) ─── */}
+      {!untrusted && <InspectTip />}
 
       {/* ── Armed: crosshair layer (pointer-events:none so iframe gets events) */}
       {armed && !untrusted && (

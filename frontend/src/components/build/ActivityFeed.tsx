@@ -28,6 +28,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { splitThink } from "@/lib/think";
 import { agentHttpBase } from "@/api/client";
 import { useTemplates } from "@/hooks/useTemplates";
 import { TemplatePicker } from "@/components/research/TemplatePicker";
@@ -299,6 +300,32 @@ function ExpandableDetail({ item }: { item: ActivityItem }) {
   );
 }
 
+/** W-02: render an agent thought, splitting any inline `<think>` reasoning into
+ * a collapsed (default-closed) "Thinking" details so raw tags never leak. */
+function Thought({ text }: { text: string }) {
+  const { reasoning, answer } = splitThink(text);
+  return (
+    <>
+      {answer && (
+        <p className="whitespace-pre-wrap break-words font-ui text-[0.84rem] leading-snug text-text">
+          {answer}
+        </p>
+      )}
+      {reasoning && (
+        <details className="group mt-hair">
+          <summary className="flex cursor-pointer list-none items-center gap-hair font-ui text-[0.72rem] uppercase tracking-wide text-text-faint hover:text-text-muted">
+            <ChevronRight className="size-3 transition-transform group-open:rotate-90" aria-hidden />
+            Thinking
+          </summary>
+          <p className="mt-hair whitespace-pre-wrap break-words border-l-2 border-hairline pl-body font-ui text-[0.8rem] leading-snug text-text-muted">
+            {reasoning}
+          </p>
+        </details>
+      )}
+    </>
+  );
+}
+
 export function ActivityFeed({
   items,
   conversationId,
@@ -385,12 +412,11 @@ export function ActivityFeed({
                 )}
               </span>
               {/* The agent's natural-language thought — NEVER truncated, always
-                  shown wrapped. Swallowing this was the most painful UX bug. */}
-              {item.thought && !isMessage && (
-                <p className="whitespace-pre-wrap break-words font-ui text-[0.84rem] leading-snug text-text">
-                  {item.thought}
-                </p>
-              )}
+                  shown wrapped. Swallowing this was the most painful UX bug.
+                  W-02: models that inline raw <think> tags (Qwen-style) get split
+                  here — the answer renders normally, the reasoning collapses into
+                  a closed "Thinking" details (kept, not deleted). */}
+              {item.thought && !isMessage && <Thought text={item.thought} />}
               {/* The technical detail row — a short single-line label like a
                   file path or command preview. */}
               {item.detail && !isMessage && !item.thought && (
