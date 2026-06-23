@@ -1,3 +1,4 @@
+import type { DriverModel } from "@/types/agent";
 import { isFree, isSubscription, type ModelInfo, type TokenUsage } from "@/types/models";
 
 /**
@@ -15,6 +16,17 @@ export function costLabel(m: ModelInfo): string {
 export function costTag(m: ModelInfo): string {
   if (isSubscription(m)) return "Subscription";
   return isFree(m) ? "Free" : `$${m.price_in_per_m}/Mtok`;
+}
+
+/**
+ * One-word cost tag for the Build driver picker. A DriverModel carries no per-token
+ * price (just `free` + `pricing_mode`), so this is the picker's counterpart to
+ * `costTag` — a single DISPLAY label, never the raw lowercase enum value (W-05):
+ * subscription → "Subscription", free → "Free", else "Paid". Capitalized everywhere.
+ */
+export function driverCostTag(m: DriverModel): string {
+  if (m.pricing_mode === "subscription") return "Subscription";
+  return m.free ? "Free" : "Paid";
 }
 
 /**

@@ -4,8 +4,15 @@ import { type FormEvent, useState } from "react";
 import { ApiError } from "@/api/client";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { cn } from "@/lib/cn";
+import { costLabel } from "@/lib/cost";
 import { useCreateModel, useDeleteModel, useModels, useUpdateModel } from "@/hooks/useModels";
-import { type Capability, CAPABILITY_LABEL, type ModelInfo, type ModelUpsert } from "@/types/models";
+import {
+  type Capability,
+  CAPABILITY_LABEL,
+  isMetered,
+  type ModelInfo,
+  type ModelUpsert,
+} from "@/types/models";
 
 /**
  * The model CATALOGUE — add, edit, and remove the assignable models. Real CRUD:
@@ -312,7 +319,19 @@ export function ModelCatalogue() {
                 {m.id} · {m.note}
               </p>
             </div>
-            <div className="flex shrink-0 items-center gap-hair">
+            <div className="flex shrink-0 items-center gap-inline">
+              {/* W-05: the row shows its pricing via the SAME formatter every other cost
+                  surface uses — a subscription model reads "Subscription" here too (never
+                  "Free", never a $/Mtok rate); free/metered show "Free"/the price. */}
+              <span
+                data-disco-flag="catalogue-cost"
+                className={cn(
+                  "shrink-0 font-ui text-[0.72rem]",
+                  isMetered(m) ? "text-accent" : "text-text-muted",
+                )}
+              >
+                {costLabel(m)}
+              </span>
               <button
                 type="button"
                 data-disco-control="settings.model-edit"

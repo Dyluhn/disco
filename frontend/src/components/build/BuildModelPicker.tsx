@@ -8,6 +8,7 @@
 import * as Dropdown from "@radix-ui/react-dropdown-menu";
 import { Check, ChevronDown, Cpu } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { driverCostTag } from "@/lib/cost";
 import { useDriverModels, useLastSelectedModel } from "@/hooks/useDriverModels";
 import { useToast } from "@/components/Toast";
 import type { DriverModel } from "@/types/agent";
@@ -39,8 +40,10 @@ export function BuildModelPicker({
   const subscription = models.filter(isSub);
   const overflow = models.filter((m) => !m.free && !isSub(m));
 
-  const costTag = (m: DriverModel) =>
-    isSub(m) ? "subscription" : m.free ? "free" : "paid";
+  // W-05: render the DISPLAY label ("Subscription"/"Free"/"Paid") via the shared
+  // formatter — never the raw lowercase pricing_mode enum. Same source of truth the
+  // catalogue/matrix/pill use, so "Subscription" reads identically everywhere.
+  const costTag = driverCostTag;
   const costClass = (m: DriverModel) =>
     isSub(m) ? "text-text-muted" : m.free ? "text-supported" : "text-weak";
 
@@ -63,6 +66,10 @@ export function BuildModelPicker({
     }
   };
 
+  // W-05: each option sits under an explicit cost SECTION header below
+  // ("Local — free" / "Subscription" / "Overflow — paid"), so the row needs no
+  // redundant per-row tag — and never the raw lowercase pricing_mode enum. The
+  // collapsed trigger carries the cost label via the shared driverCostTag formatter.
   const Row = ({ m }: { m: DriverModel }) => (
     <Dropdown.Item
       onSelect={() => select(m)}
@@ -70,7 +77,6 @@ export function BuildModelPicker({
     >
       <Check className={cn("size-3.5 shrink-0", m.id === effectiveId ? "text-accent" : "opacity-0")} aria-hidden />
       <span className="flex-1 truncate">{m.label}</span>
-      <span className={cn("shrink-0 font-ui text-[0.7rem]", costClass(m))}>{costTag(m)}</span>
     </Dropdown.Item>
   );
 
