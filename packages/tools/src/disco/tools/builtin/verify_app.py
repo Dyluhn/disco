@@ -31,15 +31,16 @@ import shlex
 from typing import Any
 
 from disco.core import SecurityRisk
+from disco.core.loop.finish import _PREVIEW_PORTS
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 from .browser import BrowserArgs, BrowserTool
 
-# Preview ports the user-visible deliverable may serve on (ordered by preference;
-# 8000 is Disco's canonical user-visible port). NOVNC_PORT is deliberately
-# excluded — it's the live-view bridge, never the app under test.
-_PREVIEW_PORTS: tuple[int, ...] = (8000, 5173, 3000, 8080, 5000, 4321)
+# `_PREVIEW_PORTS` (imported above): SINGLE SOURCE OF TRUTH lives in core's finish
+# gate so the gate's preview detection (P1-1) and this tool's auto-detect stay
+# byte-identical (8000 is Disco's canonical user-visible port; NOVNC_PORT is
+# deliberately excluded — it's the live-view bridge, never the app under test).
 
 # Network failures that are NEVER load-bearing for "does the app work" — a missing
 # favicon or a blocked analytics beacon must not fail an otherwise-good build.

@@ -52,11 +52,12 @@ def _verdict(
     console_errors=None,
     network_failures=None,
     screenshot="shot.png",
+    url: str = "http://127.0.0.1:8000/",
 ) -> dict:
     return {
         "passed": passed,
         "verdict": "pass" if passed else verdict,
-        "url": "http://127.0.0.1:8000/",
+        "url": url,
         "http_status": 200,
         "title": "t",
         "meaningful_content": passed,
@@ -116,6 +117,40 @@ class VerifyExecutor(FakeExecutor):
                 structured={"url": "http://127.0.0.1:8000/", "console": []},
             )
         return await super().execute(call)
+
+
+class _FakeExecResult:
+    def __init__(self, stdout: str):
+        self.stdout = stdout
+        self.exit_code = 0
+
+
+class _FakePreviewSandbox:
+    """Duck-typed sandbox whose `exec_shell` answers the gate's preview-port probe
+    with a fixed listening port (so `_detect_preview_url` resolves to a known
+    target_url). Records calls so the test can assert the probe ran."""
+
+    def __init__(self, port: int):
+        self.port = port
+        self.exec_calls = 0
+
+    async def exec_shell(self, cmd, *, timeout_s):  # noqa: ARG002 — signature parity
+        self.exec_calls += 1
+        return _FakeExecResult(f"{self.port}\n")
+
+
+class SandboxedVerifyExecutor(VerifyExecutor):
+    """VerifyExecutor that also exposes a `sandbox` so the finish gate can detect
+    the CURRENT preview URL (P1-1 binding). Without this, `executor.sandbox` is
+    None → binding disabled (the other tests' pre-binding behavior)."""
+
+    def __init__(self, verdicts, *, preview_port=8000, has_verify=True):
+        super().__init__(verdicts, has_verify=has_verify)
+        self._sandbox = _FakePreviewSandbox(preview_port)
+
+    @property
+    def sandbox(self):
+        return self._sandbox
 
 
 def _gate_loop(agent, executor):
@@ -315,3 +350,200 @@ async def test_non_web_deliverable_does_not_drive_verify():
         for e in events
     )
     assert ("FINISHED", None) in _statuses(events)
+
+
+# ---- P1-1: verdict bound to the CURRENT preview url/port --------------------
+
+
+def test_preview_key_normalizes_loopback_and_port():
+    from disco.core.loop.finish import _preview_key
+
+    assert _preview_key("http://127.0.0.1:8000/") == ("127.0.0.1", 8000)
+    # localhost / 0.0.0.0 collapse to the same loopback host as 127.0.0.1
+    assert _preview_key("http://localhost:8000/") == _preview_key("http://127.0.0.1:8000/")
+    assert _preview_key("http://0.0.0.0:8000/") == ("127.0.0.1", 8000)
+    # a different PORT is a different target
+    assert _preview_key("http://127.0.0.1:3000/") != _preview_key("http://127.0.0.1:8000/")
+    # empty / unparseable → None (can never bind to a target)
+    assert _preview_key("") is None
+    assert _preview_key(None) is None  # type: ignore[arg-type]
+
+
+def test_latest_verify_verdict_binds_to_target_url():
+    from disco.core.loop.finish import _latest_verify_verdict
+
+    def obs(url, seq):
+        res = ToolResult(
+            call_id="c",
+            tool_name="verify_web_app",
+            success=True,
+            content="v",
+            structured={"url": url, "passed": True, "failure_fingerprint": "CLEAN"},
+        )
+        return ObservationEvent(tool_result=res, action_id="a").model_copy(update={"seq": seq})
+
+    foreign = [obs("http://127.0.0.1:3000/", 15)]
+    # target known + verdict url MISMATCHES → not accepted (gate must drive fresh)
+    assert _latest_verify_verdict(foreign, 10, "http://127.0.0.1:8000/") is None
+    # target known + verdict url MATCHES (localhost≡127.0.0.1) → accepted
+    matching = [obs("http://localhost:8000/", 15)]
+    v = _latest_verify_verdict(matching, 10, "http://127.0.0.1:8000/")
+    assert v is not None and v["url"] == "http://localhost:8000/"
+    # target None (undetectable) → binding disabled → accepted regardless of url
+    assert _latest_verify_verdict(foreign, 10, None) is not None
+
+
+@pytest.mark.asyncio
+async def test_matching_url_pass_is_accepted_without_driving():
+    # The agent verifies the LIVE preview (8000) itself with a PASS verdict, then
+    # finishes. The gate detects the current preview (8000), the cached verdict
+    # BINDS, and the run finishes WITHOUT the gate driving a fresh verify.
+    agent = ScriptedAgent(
+        [
+            action_step(tool="file_write", args={"path": "index.html", "content": "<h1>x</h1>"}),
+            action_step(tool="verify_web_app", args={}),
+            finish_step(),
+        ]
+    )
+    execu = SandboxedVerifyExecutor(
+        [_verdict(passed=True, fp="CLEAN", url="http://127.0.0.1:8000/")],
+        preview_port=8000,
+    )
+    loop, store = _gate_loop(agent, execu)
+    await loop.send_message("build me a page")
+    await loop.run()
+
+    events = await store.get_events("conv")
+    # exactly ONE verify call (the agent's) — the gate accepted the bound verdict
+    # and did not drive its own probe.
+    assert execu.verify_calls == 1, f"gate should not drive a fresh verify: {execu.verify_calls}"
+    assert not any(
+        isinstance(e, ActionEvent) and e.meta.get("verify_probe") for e in events
+    ), "gate must not drive a verify_probe when a bound verdict exists"
+    assert ("FINISHED", None) in _statuses(events)
+
+
+@pytest.mark.asyncio
+async def test_foreign_url_pass_is_not_accepted_drives_fresh_verify():
+    # The agent's cached PASS verdict is for a DIFFERENT port (3000) than the live
+    # preview (8000). A stale/foreign PASS must NOT satisfy the finish gate — it
+    # drives a FRESH verify against the real preview (which then passes on 8000).
+    agent = ScriptedAgent(
+        [
+            action_step(tool="file_write", args={"path": "index.html", "content": "<h1>x</h1>"}),
+            action_step(tool="verify_web_app", args={}),
+            finish_step(),
+        ]
+    )
+    execu = SandboxedVerifyExecutor(
+        [
+            _verdict(passed=True, fp="CLEAN", url="http://127.0.0.1:3000/"),  # agent's (foreign)
+            _verdict(passed=True, fp="CLEAN", url="http://127.0.0.1:8000/"),  # gate-driven (live)
+        ],
+        preview_port=8000,
+    )
+    loop, store = _gate_loop(agent, execu)
+    await loop.send_message("build me a page")
+    await loop.run()
+
+    events = await store.get_events("conv")
+    # TWO verify calls: the agent's foreign one was rejected, so the gate drove a
+    # fresh verify against the real preview.
+    assert execu.verify_calls == 2, (
+        f"foreign-url verdict must not satisfy the gate; expected a driven verify: "
+        f"{execu.verify_calls}"
+    )
+    assert any(
+        isinstance(e, ActionEvent) and e.meta.get("verify_probe") for e in events
+    ), "the gate must drive its own verify_probe when the cached verdict is foreign"
+    assert ("FINISHED", None) in _statuses(events)
+
+
+# ---- P1-2: verifier failure must NOT cleanly finish ------------------------
+
+
+class FailingVerifyExecutor(VerifyExecutor):
+    """`verify_web_app` is advertised but ALWAYS fails to execute (success=False,
+    no structured verdict) — the verifier-execution-error path. Drives the P1-2
+    'no usable verdict' disposition."""
+
+    async def execute(self, call):
+        if call.tool_name == "verify_web_app":
+            self.verify_calls += 1
+            self.calls.append(call)
+            return ToolResult(
+                call_id=call.call_id,
+                tool_name="verify_web_app",
+                success=False,
+                content="",
+                error="verify_web_app error: boom",
+            )
+        return await super().execute(call)
+
+
+@pytest.mark.asyncio
+async def test_verifier_failure_does_not_cleanly_finish():
+    # verify_web_app is advertised but cannot produce a usable verdict. The gate
+    # must NOT fall through to a clean FINISH (W-32): it refuses-and-continues with
+    # a "verification could not run" reminder, then releases EXPLICITLY as
+    # unverified at the cap — never a silent clean done.
+    agent = ScriptedAgent(
+        [
+            action_step(tool="file_write", args={"path": "index.html", "content": "<h1>x</h1>"}),
+            finish_step(),  # ScriptedAgent repeats finish on each CONTINUE
+        ]
+    )
+    execu = FailingVerifyExecutor([_verdict(passed=False, fp="X")])
+    loop, store = _gate_loop(agent, execu)
+    await loop.send_message("build me a page")
+    await loop.run()
+
+    events = await store.get_events("conv")
+    env = _env(events)
+    sts = _statuses(events)
+    reminders = [m for m in env if "verification could not run" in m]
+    # the gate continued (did not clean-finish) at least once
+    assert reminders, f"expected a 'verification could not run' reminder: {env}"
+    # any terminal FINISHED must be accompanied by the explicit unverified marker —
+    # never a plain clean finish for a build that never verified.
+    assert any(d == "unverified_release" for _, d in sts), sts
+    assert any("UNVERIFIED" in m for m in env), env
+
+
+# ---- P1-3: the 3-refusal release is an EXPLICIT incomplete outcome ----------
+
+
+@pytest.mark.asyncio
+async def test_fail_release_emits_explicit_unverified_marker():
+    # A FAIL verdict with a CHANGING fingerprint across real edits exhausts the
+    # 3-refusal cap and releases. The release must carry a DISTINCT terminal signal
+    # (StatusEvent detail="unverified_release") so the run cannot present as a clean
+    # verified FINISHED — the agent's pre-gate summary text is not relied upon.
+    agent = ScriptedAgent(
+        [
+            action_step(tool="file_write", args={"path": "index.html", "content": "v1"}),
+            finish_step(),
+            action_step(tool="file_write", args={"path": "index.html", "content": "v2"}),
+            finish_step(),
+            action_step(tool="file_write", args={"path": "index.html", "content": "v3"}),
+            finish_step(),
+            action_step(tool="file_write", args={"path": "index.html", "content": "v4"}),
+            finish_step(),
+        ]
+    )
+    verdicts = [
+        _verdict(passed=False, fp=f"FP{i}", summary=f"broke {i}", next_action=f"fix {i}")
+        for i in range(1, 6)
+    ]
+    execu = VerifyExecutor(verdicts)
+    loop, store = _gate_loop(agent, execu)
+    await loop.send_message("build me a page")
+    await loop.run()
+
+    events = await store.get_events("conv")
+    sts = _statuses(events)
+    # the distinct, queryable incomplete signal precedes the terminal FINISHED
+    assert any(d == "unverified_release" for _, d in sts), sts
+    assert ("FINISHED", None) in sts  # still bounded — releases, doesn't hang
+    env = _env(events)
+    assert any("INCOMPLETE" in m for m in env), env

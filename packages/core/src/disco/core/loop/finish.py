@@ -341,20 +341,79 @@ def _latest_browser_error(events: list[Event]) -> str | None:
 # productive edit is recognized as no-progress and halts, rather than re-looping.
 _VERIFY_MARKER_PREFIX = "verify_no_progress:"
 
+# Preview ports the user-visible deliverable may serve on (ordered by preference;
+# 8000 is Disco's canonical user-visible port). SINGLE SOURCE OF TRUTH for the
+# preview-port set: the `verify_web_app` tool (tools/builtin/verify_app.py)
+# imports THIS tuple so the finish gate's preview detection and the tool's
+# auto-detect stay byte-identical (the prompt's "same _PREVIEW_PORTS detection").
+_PREVIEW_PORTS: tuple[int, ...] = (8000, 5173, 3000, 8080, 5000, 4321)
 
-def _latest_verify_verdict(events: list[Event], since_seq: int) -> dict | None:
+
+def _preview_key(url: str) -> tuple[str, int] | None:
+    """Normalize a preview URL to a comparable (host, port) key. Loopback aliases
+    (localhost / 127.0.0.1 / 0.0.0.0 / ::1 / empty host) collapse to one host so a
+    verdict on http://localhost:8000/ matches a target of http://127.0.0.1:8000/.
+    Returns None for an empty / unparseable URL (a verdict with no usable url can
+    never bind to a target)."""
+    from urllib.parse import urlsplit
+
+    u = (url or "").strip()
+    if not u:
+        return None
+    if "://" not in u:
+        u = "http://" + u
+    try:
+        parts = urlsplit(u)
+        port = parts.port
+    except ValueError:
+        return None
+    host = (parts.hostname or "").lower()
+    if host in ("localhost", "127.0.0.1", "0.0.0.0", "::1", ""):
+        host = "127.0.0.1"
+    if port is None:
+        port = 443 if parts.scheme == "https" else 80
+    return (host, port)
+
+
+def _verdict_targets_preview(verdict: dict, target_url: str | None) -> bool:
+    """P1-1 — does `verdict` address the CURRENT preview target?
+
+    When `target_url` is None the live preview could not be detected (sandbox-less
+    / legacy backend) → binding is NOT enforced and the verdict is accepted on the
+    (since_seq) key alone (preserves the pre-binding behavior the pure-reader unit
+    tests exercise). When the target IS known, the verdict's `url` must resolve to
+    the SAME (host, port) preview key — a stale or foreign-port verdict (or one
+    with no url) does NOT satisfy the gate, so the caller drives a fresh verify
+    against the real preview instead of landing a stale PASS."""
+    if target_url is None:
+        return True
+    vkey = _preview_key(str(verdict.get("url") or ""))
+    tkey = _preview_key(target_url)
+    return vkey is not None and tkey is not None and vkey == tkey
+
+
+def _latest_verify_verdict(
+    events: list[Event], since_seq: int, target_url: str | None = None
+) -> dict | None:
     """Structured verdict of the LATEST `verify_web_app` observation since
-    `since_seq`. None when no verdict exists since the last productive edit — the
-    cache key is (since_seq), so a non-productive probe (browser/navigate/
-    verify_web_app itself) does NOT move `since_seq` and a re-verify reads the
-    SAME cached verdict (no real re-run). A productive edit advances `since_seq`
-    past the stale verdict → None → the gate drives a fresh verify."""
+    `since_seq` whose url BINDS to the current preview `target_url` (P1-1). None
+    when no such verdict exists.
+
+    The cache key is effectively (since_seq, server/port, url): a non-productive
+    probe (browser/navigate/verify_web_app itself) does NOT move `since_seq`, AND
+    a verdict for a DIFFERENT preview url/port (or with no url) is skipped — so a
+    stale or foreign-URL PASS can never satisfy the finish gate. A productive edit
+    advances `since_seq` past the stale verdict → None → the gate drives a fresh
+    verify. `target_url=None` disables the url binding (sandbox-less / legacy
+    callers + the pure unit tests)."""
     for ev in reversed(events):
         if ev.seq is None or ev.seq <= since_seq:
             continue
         if isinstance(ev, ObservationEvent) and ev.tool_result.tool_name == "verify_web_app":
             res = ev.tool_result
-            if res.success and res.structured:
+            if res.success and res.structured and _verdict_targets_preview(
+                res.structured, target_url
+            ):
                 return res.structured
     return None
 
@@ -562,6 +621,51 @@ class FinishGate:
         except Exception:  # noqa: BLE001 — introspection failure → degrade safely
             return False
         return "verify_web_app" in tool_names
+
+    async def _detect_preview_url(self) -> str | None:
+        """P1-1 — detect the URL the live deliverable currently serves on, using
+        the SAME `_PREVIEW_PORTS` preference order the `verify_web_app` tool
+        auto-detects with. Duck-typed over the executor's sandbox (`exec_shell`):
+        core never imports `tools`, so rather than call tools' `port_owners` the
+        liveness probe is inlined here (a single in-sandbox exec that connects to
+        each preview port in order and prints the first that accepts).
+
+        Returns `http://127.0.0.1:<port>/` for the first reachable preview port,
+        or None when there is no sandbox / the sandbox lacks `exec_shell` / the
+        probe fails — in which case binding is NOT enforced (see
+        `_verdict_targets_preview`) and the gate falls back to the (since_seq) key
+        alone. Never raises (a detection failure must not wedge the finish gate)."""
+        sbx = getattr(self._loop.executor, "sandbox", None)
+        if sbx is None or not hasattr(sbx, "exec_shell"):
+            return None
+        import shlex
+
+        ports = list(_PREVIEW_PORTS)
+        script = (
+            "import socket,sys\n"
+            f"for p in {ports!r}:\n"
+            "    s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)\n"
+            "    s.settimeout(0.3)\n"
+            "    try:\n"
+            "        s.connect(('127.0.0.1',p))\n"
+            "        print(p)\n"
+            "        sys.exit(0)\n"
+            "    except Exception:\n"
+            "        pass\n"
+            "    finally:\n"
+            "        s.close()\n"
+        )
+        try:
+            res = await sbx.exec_shell(
+                f"python3 -c {shlex.quote(script)}", timeout_s=10
+            )
+        except Exception:  # noqa: BLE001 — detection failure → no binding (degrade safe)
+            return None
+        for line in str(getattr(res, "stdout", "") or "").splitlines():
+            line = line.strip()
+            if line.isdigit():
+                return f"http://127.0.0.1:{int(line)}/"
+        return None
 
     async def _drive_verify_web_app(self) -> bool:
         """W-45 ACTIVE verify: DRIVE one `verify_web_app` call when the agent
@@ -989,16 +1093,31 @@ class FinishGate:
         silently converts repeated failed verification into 'done' — it finishes
         ONLY with an explicit blocked/incomplete summary."""
         since_seq = _last_productive_seq(events)
-        verdict = _latest_verify_verdict(events, since_seq)
+        # P1-1: bind the accepted verdict to the CURRENT preview target. Detect the
+        # live preview (same _PREVIEW_PORTS detection the tool uses) and accept only
+        # a verdict whose url matches it; a stale / foreign-port (or url-less) PASS
+        # must NOT satisfy the gate — it drives a fresh verify against the real
+        # preview instead. target_url=None (preview undetectable) disables binding.
+        target_url = await self._detect_preview_url()
+        verdict = _latest_verify_verdict(events, since_seq, target_url)
         if verdict is None:
-            # No fresh verdict — the agent may have overclaimed. Drive ONE verify.
+            # No fresh verdict bound to the current preview — the agent may have
+            # overclaimed, or only a stale/foreign-url verdict exists. Drive ONE.
             if await self._drive_verify_web_app():
                 events = await self._loop._events()
-                verdict = _latest_verify_verdict(events, since_seq)
+                # The freshly driven verify auto-detected + tested the CURRENT
+                # preview, so its verdict IS bound by construction — read it
+                # unconditionally (target_url=None) rather than re-binding against a
+                # detection that could disagree with the tool's own auto-detect.
+                verdict = _latest_verify_verdict(events, since_seq, target_url=None)
         if verdict is None:
-            # Could not produce a verdict (tool failed / browserless) — degrade to
-            # passive (don't deadlock the finish on an un-runnable check).
-            return Disp.FALLTHROUGH
+            # P1-2: the verifier could not produce a usable verdict (execution
+            # error / empty / the driven verify failed). This must NOT fall through
+            # to a clean finish — on the build/web surface a FINISH requires a real
+            # PASS verdict (W-32: route completion THROUGH the gate). Refuse-and-
+            # continue (bounded), then an EXPLICIT unverified release at the cap;
+            # never a silent done, never a fall-back to the legacy browser gate.
+            return await self._verifier_unavailable_disposition()
 
         if verdict.get("passed"):
             self._loop._browser_verify_refusals = 0  # clean pass → reset the streak
@@ -1080,9 +1199,18 @@ class FinishGate:
             )
             return Disp.CONTINUE
 
-        # 3-refusal release — but NOT a silent 'done': finish ONLY with an explicit
-        # blocked/incomplete summary so repeated failed verification is never
-        # converted into a clean pass (the W-32-adjacent escape, closed here).
+        # 3-refusal release — but NOT a silent 'done' (P1-3). The release emits a
+        # DISTINCT terminal signal (StatusEvent detail="unverified_release") AND a
+        # visible INCOMPLETE message BEFORE finalization, so a repeatedly-failing
+        # web build can never present as a clean verified FINISHED — the UI/harness
+        # keys on the marker, not on the agent's pre-gate summary text. Bounded:
+        # the run still releases after the cap so it cannot hang forever.
+        await self._loop._emit(
+            StatusEvent(
+                status=ConversationStatus.RUNNING,
+                detail="unverified_release",
+            )
+        )
         warn = (
             "⚠ Finished WITHOUT a passing verify_web_app verdict (3 attempts) — the "
             f"deliverable is INCOMPLETE. {summary}"
@@ -1093,6 +1221,59 @@ class FinishGate:
             MessageEvent(
                 source=EventSource.ENVIRONMENT,
                 message=LLMMessage(role="user", content=warn),
+            )
+        )
+        self._loop._browser_verify_refusals = 0
+        return Disp.FALLTHROUGH
+
+    async def _verifier_unavailable_disposition(self) -> Disp:
+        """P1-2 — disposition when `verify_web_app` is advertised but produced NO
+        usable verdict (verifier execution error / empty / the driven verify
+        failed). On the build/web surface a clean FINISH requires a real PASS
+        verdict, so this must NOT fall through to finalization (the W-32 regression
+        codex found). Refuse-and-continue with a "verification could not run"
+        reminder while under the cap; at the cap, release EXPLICITLY as unverified
+        (distinct status marker + visible message) rather than a silent clean
+        finish. Bounded by the shared `_browser_verify_refusals` cap so a verifier
+        that can never run still terminates."""
+        if self._loop._browser_verify_refusals < 3:
+            self._loop._browser_verify_refusals += 1
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "verification could not run: verify_web_app did not return a "
+                            "usable verdict (the verifier failed to execute, or the preview "
+                            "server is not reachable on its port). The build is NOT verified "
+                            "— start/repair the dev server on the preview port, then finish "
+                            "again and it will re-verify."
+                        ),
+                    ),
+                )
+            )
+            return Disp.CONTINUE
+        # Cap reached — bounded release, but EXPLICITLY unverified (never a clean
+        # done): distinct terminal marker + visible message, mirroring the FAIL
+        # release above.
+        await self._loop._emit(
+            StatusEvent(
+                status=ConversationStatus.RUNNING,
+                detail="unverified_release",
+            )
+        )
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(
+                    role="user",
+                    content=(
+                        "⚠ Finished WITHOUT a verify_web_app verdict — the verifier could "
+                        "not run after 3 attempts, so the deliverable is UNVERIFIED and may "
+                        "be INCOMPLETE. Note this clearly in your summary."
+                    ),
+                ),
             )
         )
         self._loop._browser_verify_refusals = 0
