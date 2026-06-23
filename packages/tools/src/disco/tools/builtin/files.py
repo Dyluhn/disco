@@ -322,9 +322,14 @@ class FileReadTool:
         used = 0
         i = start
         cap = start + args.limit if args.limit is not None else total
+        # The raw charge must equal the file's true byte size: the FINAL line carries no
+        # trailing newline unless `text` ends in one, so charging +1 for it would
+        # over-count by 1 and page a file that exactly fits the pin (codex round-3).
+        ends_nl = text.endswith("\n")
         while i < min(cap, total):
             line = f"{i + 1:>{width}}\t{lines[i]}"
-            charge = (len(lines[i]) + 1) if budget_raw else (len(line) + 1)
+            raw_nl = 1 if (i < total - 1 or ends_nl) else 0
+            charge = (len(lines[i]) + raw_nl) if budget_raw else (len(line) + 1)
             if out and used + charge > read_budget:
                 break
             out.append(line)

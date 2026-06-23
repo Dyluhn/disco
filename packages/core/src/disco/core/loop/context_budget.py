@@ -55,18 +55,21 @@ _MAX_FILES_OFF = 20  # raised breadth for the larger working set (16-24 range)
 # is larger than raw — and that render must survive the observation snip intact. So the
 # numbering overhead lands HERE, on the obs-snip cap, NOT on the read budget (raising the
 # read budget would let a single non-pinned read dump huge rendered pages). We model the
-# realistic worst case as 2-raw-char lines ("x\n" — the codex x\n×24000 file): every line
-# adds a line-number (width digits) + a tab. (A 1-char all-blank-line file is not a source
-# artifact and stays out of scope.) A small margin covers the "[lines a-b of N]" header.
-_RENDER_SHORT_LINE_CHARS = 2  # realistic short-line floor: 1 content char + newline
+# ABSOLUTE worst case as 1-raw-char lines ("\n" — an all-blank-line file): every char is a
+# newline, so raw_budget chars become raw_budget lines, each adding a line-number (width
+# digits) + a tab. This is the true ceiling (codex round-3: the x\n×24000 2-char model
+# under-covered a "\n"×N blank file, which renders ~7x raw). A small margin covers the
+# "[lines a-b of N]" header.
+_RENDER_SHORT_LINE_CHARS = 1  # absolute worst case: every raw char is a newline (blank lines)
 _RENDER_HEADER_MARGIN = 256  # the "[lines …]" header + join/rounding slack
 
 
 def _rendered_obs_floor(raw_budget: int) -> int:
     """Chars an OBSERVATION must hold to keep the line-numbered render of a ONE-SHOT
-    file_read of ``raw_budget`` RAW chars intact (worst realistic case: ~2-char lines).
-    Used to raise the assist-OFF obs-snip cap so a pin-fitting read is never snipped to a
-    corrupted head/tail. Returns raw_budget + the line-numbering overhead + a header margin."""
+    file_read of ``raw_budget`` RAW chars intact (ABSOLUTE worst case: all-newline blank
+    file → raw_budget lines). Used to raise the assist-OFF obs-snip cap so a pin-fitting
+    read is never snipped to a corrupted head/tail. Returns raw_budget + the line-numbering
+    overhead + a header margin."""
     lines = max(1, raw_budget // _RENDER_SHORT_LINE_CHARS)
     width = len(str(lines))  # digits in the largest line number
     per_line_overhead = width + 1  # line-number digits + tab (the newline is in raw)

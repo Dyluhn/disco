@@ -183,6 +183,62 @@ async def test_pathological_xn_file_one_shots_and_obs_not_corrupted():
     await inst.destroy()
 
 
+async def test_pin_sized_file_without_trailing_newline_one_shots():
+    # codex round-3 off-by-one: a RAW file of EXACTLY the pin size with NO trailing newline
+    # must one-shot. The raw charge used to add +1 (a newline) for the final line that has
+    # none, over-counting by 1 and paging a file that exactly fits.
+    from disco.core.loop.context_budget import derive_context_caps
+
+    caps = derive_context_caps(assist=False, context_window=192_000)
+    # "x\n"×(N-1) + "xy": (N-1)*2 + 2 == 2N raw chars, NO trailing newline. Size to the pin.
+    n = caps.per_file_chars // 2
+    body = ("x\n" * (n - 1) + "xy").encode()
+    assert len(body) == caps.per_file_chars == caps.read_char_budget  # exactly the pin
+    assert not body.endswith(b"\n")  # the off-by-one trigger
+
+    ctx, inst = await _ctx(caps.read_char_budget)
+    await inst.write_file("nonl.py", body)
+    out = await FileReadTool().run(FileReadTool().definition.args_model(path="nonl.py"), ctx)
+    assert "read more with offset=" not in out.content  # ONE shot (was paged before the fix)
+    assert f"of {n}]" in out.content  # whole file read
+    await inst.destroy()
+
+
+async def test_all_newline_blank_file_one_shots_and_obs_not_corrupted():
+    # codex round-3: the ABSOLUTE worst case — a "\n"×N all-blank-line file (1 raw char/line)
+    # renders ~7× raw, above the old 2-char-line obs floor. The floor now models 1-char lines,
+    # so this one-shots AND its render survives the snip uncorrupted.
+    from disco.core.events import ObservationEvent, ToolResult, obs_snip_override
+    from disco.core.loop.context_budget import derive_context_caps
+
+    caps = derive_context_caps(assist=False, context_window=192_000)
+    n = caps.per_file_chars  # N newlines == N raw chars == the pin
+    body = ("\n" * n).encode()
+    assert len(body) == caps.read_char_budget
+
+    ctx, inst = await _ctx(caps.read_char_budget)
+    await inst.write_file("blank.py", body)
+    out = await FileReadTool().run(FileReadTool().definition.args_model(path="blank.py"), ctx)
+    assert "read more with offset=" not in out.content  # ONE shot
+    # Render is ~7× raw (all blank numbered lines) yet bounded by the (raised) obs-snip cap.
+    assert len(out.content) > 4 * caps.per_file_chars
+    assert len(out.content) <= caps.obs_snip_chars
+
+    token = obs_snip_override.set(caps.obs_snip_chars)
+    try:
+        msg = ObservationEvent(
+            tool_result=ToolResult(
+                call_id="c1", tool_name="file_read", success=True, content=out.content
+            ),
+            action_id="a1",
+        ).to_llm_message()
+    finally:
+        obs_snip_override.reset(token)
+    assert "snipped" not in msg.content  # not corrupted-truncated
+    assert msg.content == out.content
+    await inst.destroy()
+
+
 async def test_normal_48k_code_file_one_shots():
     # A NORMAL ~48k source file (40-char lines) also reads in one shot under the pin.
     from disco.core.loop.context_budget import derive_context_caps
