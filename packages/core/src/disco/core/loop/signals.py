@@ -195,6 +195,18 @@ def consecutive_noops(events: list[Event]) -> int:
             if tool in _BOOKKEEPING_TOOLS:
                 continue  # plan shuffling: neither real work nor spam signal
             break
+        # A resume reinjection is a fresh boundary: a resumed run gets a clean
+        # actionless runway. Without this the streak walks PAST the pause+resume
+        # (the resume marker is ENVIRONMENT, not USER) and keeps counting the
+        # pre-pause noops, so resume re-pauses after ~1 turn (live MiniMax-M3
+        # build, 2026-06). Treat the resume marker like a USER turn for the
+        # streak reset.
+        if (
+            isinstance(e, StatusEvent)
+            and e.status == ConversationStatus.RUNNING
+            and e.detail == "resumed"
+        ):
+            break
         if isinstance(e, MessageEvent) and e.source == EventSource.USER:
             break
         if isinstance(e, MessageEvent) and e.source == EventSource.AGENT:

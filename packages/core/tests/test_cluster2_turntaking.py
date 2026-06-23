@@ -8,6 +8,7 @@ from disco.core import (
     EventSource,
     MessageEvent,
     ObservationEvent,
+    StatusEvent,
     ToolResult,
 )
 from disco.core.loop import signals
@@ -129,6 +130,38 @@ def test_consecutive_noops_helper_counts_and_resets():
     # A user message resets the count.
     seq2 = [agent_msg("a"), user_msg("go"), agent_msg("b")]
     assert signals.consecutive_noops(seq2) == 1
+
+
+def test_consecutive_noops_resets_at_resume_marker():
+    """Fix B — a resume reinjection is a fresh actionless boundary. The streak
+    must NOT walk past the pause+resume and keep counting pre-pause noops
+    (which made a resumed MiniMax-M3 build re-pause after ~1 turn). The resume
+    marker is ENVIRONMENT (StatusEvent RUNNING/resumed), not USER, so it needs
+    its own reset."""
+    from disco.core import LLMMessage
+
+    def agent_msg(text):
+        return MessageEvent(
+            source=EventSource.AGENT, message=LLMMessage(role="assistant", content=text)
+        )
+
+    paused = StatusEvent(status=ConversationStatus.PAUSED, detail="actionless")
+    resumed = StatusEvent(status=ConversationStatus.RUNNING, detail="resumed")
+
+    # [noop, noop, PAUSED, resume-marker, noop] → only the single post-resume
+    # noop counts; the pre-pause streak is behind the resume boundary.
+    seq = [agent_msg("a"), agent_msg("b"), paused, resumed, agent_msg("c")]
+    assert signals.consecutive_noops(seq) == 1
+
+    # Without a resume marker, the spam cap still accumulates normally (the real
+    # serve/prose caps are untouched).
+    seq_no_resume = [agent_msg("a"), agent_msg("b"), agent_msg("c"), agent_msg("d")]
+    assert signals.consecutive_noops(seq_no_resume) == 4
+
+    # A PAUSED with no following resume does NOT reset (only the resume marker
+    # is a boundary) — the streak walks through it.
+    seq_paused_only = [agent_msg("a"), paused, agent_msg("b"), agent_msg("c")]
+    assert signals.consecutive_noops(seq_paused_only) == 3
 
 
 # ---- the circuit breaker (distinct failures → hand off to user) -------------

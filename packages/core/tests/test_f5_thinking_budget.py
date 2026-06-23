@@ -18,10 +18,17 @@ When the assist gate is ON, the OpenAI provider:
       `req.enable_thinking` and the provider default — the goal is to
       guarantee thinking is off on a repair.
 
-Assist OFF (the capable-model default) → byte-identical to today. No
-truncation, no `chat_template_kwargs` override. The default
-`CompletionRequest.attempt=1` keeps existing callers unaffected even if
-they never set the field.
+Assist OFF (the capable-model default) → no F5 head+tail truncation and no
+`chat_template_kwargs` override. The default `CompletionRequest.attempt=1`
+keeps existing callers unaffected even if they never set the field.
+
+ALL-TIERS think-history strip (independent of assist): a CLOSED
+`<think>...</think>` block on an ASSISTANT-ROLE message is ALWAYS fully
+stripped from re-fed history (reasoning-model context-poisoning fix). This
+supersedes the F5 head+tail truncation for assistant messages — the block is
+removed entirely. Non-assistant roles (user/tool/system) are NEVER stripped
+(their literal `<think>` may be task data / tool observations). An UNCLOSED
+`<think>` is preserved (the regex requires both tags).
 
 # Prior art
 
@@ -194,14 +201,24 @@ def test_truncate_think_block_multiple_blocks_each_handled():
 # ===========================================================================
 
 
-# --- (a) truncation on the wire: assist ON, over-long think → truncated ---
+# --- (a) ALL-TIERS strip of re-fed assistant `<think>` history ---
+#
+# The reasoning-model context-poisoning fix: an assistant turn's CLOSED
+# `<think>...</think>` block is ALWAYS fully stripped from re-fed history,
+# INDEPENDENT of req.assist (a reasoning model run as the CAPABLE driver
+# emits its chain of thought inline in `content`; re-feeding it verbatim
+# every turn poisons the growing context → tool-less turns → the actionless
+# valve pauses the build). The F5 head+tail truncation (which only fired
+# under assist) is therefore superseded for assistant-role messages: the
+# whole block is removed, not budget-trimmed. Truncation still applies to
+# NON-assistant roles under assist (see test_assist_truncation_still_fires_
+# for_non_assistant_role below).
 
 
-async def test_assist_on_overlong_think_in_assistant_message_is_truncated():
+async def test_assist_on_overlong_assistant_think_is_stripped():
     """A prior assistant turn whose content includes an over-long `<think>`
-    block (the model's prior reasoning echoed back in the next request)
-    is head+tail truncated on the wire — when assist is ON. The full
-    block does NOT reach the LLM."""
+    block (the model's prior reasoning echoed back) is FULLY STRIPPED on the
+    wire when assist is ON. The block is gone entirely; the prose survives."""
     big_think = _long_think(_F5_THINK_BUDGET_CHARS * 3)  # well over budget
     prior = LLMMessage(
         role="assistant",
@@ -214,23 +231,22 @@ async def test_assist_on_overlong_think_in_assistant_message_is_truncated():
     assert captured, "provider must have made a request"
     body = captured[0]
     msgs = body["messages"]
-    # The first message is the prior assistant turn — its content must have
-    # been truncated, not the original.
     prior_on_wire = msgs[0]["content"]
-    assert "<think>" in prior_on_wire and "</think>" in prior_on_wire
-    # The marker is present (proves the truncation ran).
-    assert "F5 truncated" in prior_on_wire
-    # The full big_think body is GONE — we did not ship 6,000+ chars.
+    # The think block is GONE entirely — no tags, no marker, no inner content.
+    assert "<think>" not in prior_on_wire
+    assert "</think>" not in prior_on_wire
+    assert "F5 truncated" not in prior_on_wire
     assert big_think not in prior_on_wire
-    # The post-think prose survives (the model still sees its own conclusion).
+    # The post-think prose survives.
     assert "I'll go look up the docs now." in prior_on_wire
     # The user turn is untouched.
     assert msgs[1]["content"] == "continue"
 
 
-async def test_assist_on_under_budget_think_is_passthrough():
-    """An under-budget `<think>` block is shipped unchanged. No spurious
-    truncation of normal reasoning."""
+async def test_assist_on_under_budget_assistant_think_is_stripped():
+    """The strip ignores the F5 budget: ANY closed assistant `<think>` block —
+    even a small one — is removed from re-fed history (it is reasoning, not an
+    answer). Only the answer text survives."""
     small_think = _long_think(_F5_THINK_BUDGET_CHARS // 2)
     prior = LLMMessage(role="assistant", content=f"{small_think}\nnext step")
     req = _req(messages=[prior, LLMMessage(role="user", content="continue")], assist=True)
@@ -239,16 +255,15 @@ async def test_assist_on_under_budget_think_is_passthrough():
 
     body = captured[0]
     prior_on_wire = body["messages"][0]["content"]
-    # Under-budget → no marker, full block survives.
-    assert "F5 truncated" not in prior_on_wire
-    assert small_think in prior_on_wire
+    assert "<think>" not in prior_on_wire
+    assert small_think not in prior_on_wire
     assert "next step" in prior_on_wire
 
 
-async def test_assist_off_overlong_think_is_NOT_truncated():
-    """Assist OFF (the capable-model default) must be BYTE-IDENTICAL to
-    today. The full `<think>` block is shipped to the LLM unchanged.
-    No truncation, no marker, no transformation."""
+async def test_assist_off_overlong_assistant_think_is_stripped_all_tiers():
+    """Assist OFF (the capable-model / reasoning-model default) ALSO strips
+    re-fed assistant `<think>` history — this is the core of the fix. The
+    capable driver no longer re-ingests its own chain of thought every turn."""
     big_think = _long_think(_F5_THINK_BUDGET_CHARS * 3)
     prior = LLMMessage(role="assistant", content=f"{big_think}\nnext step")
     req = _req(messages=[prior, LLMMessage(role="user", content="continue")], assist=False)
@@ -257,10 +272,80 @@ async def test_assist_off_overlong_think_is_NOT_truncated():
 
     body = captured[0]
     prior_on_wire = body["messages"][0]["content"]
-    # The full think block is shipped unchanged.
-    assert big_think in prior_on_wire
+    # Stripped even with assist OFF.
+    assert "<think>" not in prior_on_wire
+    assert big_think not in prior_on_wire
     assert "F5 truncated" not in prior_on_wire
     assert "next step" in prior_on_wire
+
+
+async def test_assistant_closed_think_stripped_exact():
+    """Exact-output pin: an assistant "<think>plan</think>answer" yields
+    content == "answer" on the wire (text before `<think>` and after
+    `</think>` are both preserved; only the block is removed)."""
+    prior = LLMMessage(role="assistant", content="<think>plan</think>answer")
+    req = _req(messages=[prior, LLMMessage(role="user", content="continue")], assist=False)
+    captured: list[dict] = []
+    await _provider(captured).complete(req, model="m1")
+    assert captured[0]["messages"][0]["content"] == "answer"
+
+
+async def test_user_and_tool_literal_think_is_NOT_stripped():
+    """A USER or TOOL message that legitimately contains a literal
+    `<think>...</think>` (task data, a tool observation echoing model output)
+    is left UNCHANGED — stripping non-assistant content would corrupt data."""
+    user = LLMMessage(role="user", content="<think>x</think>y")
+    tool = LLMMessage(
+        role="tool", content="<think>x</think>y", tool_call_id="c1"
+    )
+    req = _req(messages=[user, tool], assist=False)
+    captured: list[dict] = []
+    await _provider(captured).complete(req, model="m1")
+    msgs = captured[0]["messages"]
+    assert msgs[0]["content"] == "<think>x</think>y"  # user unchanged
+    assert msgs[1]["content"] == "<think>x</think>y"  # tool unchanged
+
+
+async def test_no_think_assistant_is_byte_identical():
+    """An assistant message with NO closed `<think>` block is byte-identical
+    on the wire (the strip is a no-op)."""
+    content = "Just a normal assistant answer with no reasoning block."
+    prior = LLMMessage(role="assistant", content=content)
+    req = _req(messages=[prior, LLMMessage(role="user", content="continue")], assist=False)
+    captured: list[dict] = []
+    await _provider(captured).complete(req, model="m1")
+    assert captured[0]["messages"][0]["content"] == content
+
+
+async def test_unclosed_assistant_think_is_preserved():
+    """An UNCLOSED `<think>` (W-31 truncated turn — no `</think>`) is preserved
+    on an assistant message: `_F5_THINK_BLOCK_RE` requires BOTH tags, so the
+    strip does not fire and the partial reasoning is kept for the condenser."""
+    content = "<think>" + "x" * 50  # no closing tag
+    prior = LLMMessage(role="assistant", content=content)
+    req = _req(messages=[prior, LLMMessage(role="user", content="continue")], assist=False)
+    captured: list[dict] = []
+    await _provider(captured).complete(req, model="m1")
+    assert captured[0]["messages"][0]["content"] == content
+
+
+async def test_assist_truncation_still_fires_for_non_assistant_role():
+    """The F5 head+tail truncation is unchanged for NON-assistant roles under
+    assist: a tool observation echoing an over-long `<think>` block is
+    budget-trimmed (not stripped — strip is assistant-only)."""
+    big_think = _long_think(_F5_THINK_BUDGET_CHARS * 3)
+    tool = LLMMessage(
+        role="tool", content=f"{big_think}\nobserved", tool_call_id="c1"
+    )
+    req = _req(messages=[tool, LLMMessage(role="user", content="continue")], assist=True)
+    captured: list[dict] = []
+    await _provider(captured).complete(req, model="m1")
+    on_wire = captured[0]["messages"][0]["content"]
+    # Truncated (head+tail+marker), NOT stripped — the tags survive.
+    assert "<think>" in on_wire and "</think>" in on_wire
+    assert "F5 truncated" in on_wire
+    assert big_think not in on_wire
+    assert "observed" in on_wire
 
 
 # --- (b) disable thinking on repair attempt >= 2 ---
@@ -409,23 +494,20 @@ async def test_assist_off_attempt2_does_NOT_disable_thinking():
 #        both, so the wire body is identical. ---
 
 
-async def test_streaming_assist_on_overlong_think_is_truncated():
-    """stream_complete path: the wire body the provider would have sent
-    carries the truncated think block. Same shape as the non-streaming
+async def test_streaming_assist_on_overlong_assistant_think_is_stripped():
+    """stream_complete path (the LIVE path Disco streams): re-fed assistant
+    `<think>` history is FULLY STRIPPED on the wire, same as the non-streaming
     case — both call sites go through `_payload`."""
     big_think = _long_think(_F5_THINK_BUDGET_CHARS * 2)
     prior = LLMMessage(role="assistant", content=f"{big_think}\nok")
     req = _req(messages=[prior, LLMMessage(role="user", content="continue")], assist=True)
     captured: list[dict] = []
-    p = _provider(captured)
     # Drive the stream to its terminal chunk so the call returns cleanly.
     chunks = _sse(
         {"model": "m", "choices": [{"delta": {"content": "ok"}}]},
         {"model": "m", "choices": [{"delta": {}, "finish_reason": "stop"}],
          "usage": {"prompt_tokens": 1, "completion_tokens": 1}},
     )
-    # Replace the transport with one that streams the SSE response and
-    # ALSO captures the request body.
     def _handler(request: httpx.Request) -> httpx.Response:
         captured.append(json.loads(request.content) if request.content else {})
         return httpx.Response(
@@ -438,7 +520,8 @@ async def test_streaming_assist_on_overlong_think_is_truncated():
     body = captured[0]
     assert body["stream"] is True
     prior_on_wire = body["messages"][0]["content"]
-    assert "F5 truncated" in prior_on_wire
+    assert "<think>" not in prior_on_wire
+    assert "F5 truncated" not in prior_on_wire
     assert big_think not in prior_on_wire
     assert "ok" in prior_on_wire
 
@@ -467,10 +550,11 @@ async def test_streaming_assist_on_attempt2_disables_thinking():
     assert body["chat_template_kwargs"]["enable_thinking"] is False
 
 
-async def test_streaming_assist_off_attempt2_byte_identical():
-    """stream_complete + assist OFF + attempt >= 2 → byte-identical to
-    today. No truncation, no thinking disable, no chat_template_kwargs
-    override on the wire."""
+async def test_streaming_assist_off_attempt2_strips_history_but_keeps_thinking():
+    """stream_complete + assist OFF + attempt >= 2: the all-tiers strip removes
+    re-fed assistant `<think>` history (the fix), but the F5 disable-thinking
+    gate stays CLOSED on the capable path — `enable_thinking` follows the
+    provider default (True), unchanged."""
     big_think = _long_think(_F5_THINK_BUDGET_CHARS * 2)
     prior = LLMMessage(role="assistant", content=f"{big_think}\nok")
     req = _req(
@@ -498,10 +582,12 @@ async def test_streaming_assist_off_attempt2_byte_identical():
             break
     body = captured[0]
     prior_on_wire = body["messages"][0]["content"]
-    # No truncation.
-    assert big_think in prior_on_wire
+    # History stripped (all tiers).
+    assert "<think>" not in prior_on_wire
+    assert big_think not in prior_on_wire
     assert "F5 truncated" not in prior_on_wire
-    # No disable: chat_template_kwargs follows the provider default (True).
+    assert "ok" in prior_on_wire
+    # Disable-thinking gate stays closed on the capable path: default (True).
     assert body["chat_template_kwargs"]["enable_thinking"] is True
 
 
@@ -512,10 +598,11 @@ async def test_streaming_assist_off_attempt2_byte_identical():
 # ===========================================================================
 
 
-async def test_assist_on_overlong_think_AND_attempt2_both_gates_fire():
-    """A repair attempt that arrives with a prior turn's over-long think
-    block: BOTH the truncation gate and the disable-repair gate fire
-    on the same call. The wire body must show both transformations."""
+async def test_assist_on_overlong_assistant_think_AND_attempt2_both_gates_fire():
+    """A repair attempt (assist ON, attempt >= 2) that arrives with a prior
+    assistant turn's over-long think block: BOTH the all-tiers strip and the
+    disable-repair gate fire on the same call. The wire body must show both:
+    the think history is stripped AND thinking is forced off."""
     big_think = _long_think(_F5_THINK_BUDGET_CHARS * 3)
     prior = LLMMessage(role="assistant", content=f"{big_think}\nconclusion")
     req = _req(
@@ -539,9 +626,10 @@ async def test_assist_on_overlong_think_AND_attempt2_both_gates_fire():
     )
     await p.complete(req, model="m1")
     body = captured[0]
-    # Truncation gate fired.
-    assert "F5 truncated" in body["messages"][0]["content"]
+    # Strip gate fired: the think block is gone, the conclusion survives.
+    assert "<think>" not in body["messages"][0]["content"]
     assert big_think not in body["messages"][0]["content"]
+    assert "conclusion" in body["messages"][0]["content"]
     # Disable-repair gate fired.
     assert body["chat_template_kwargs"]["enable_thinking"] is False
 

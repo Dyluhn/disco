@@ -265,16 +265,45 @@ class OpenAIProvider:
         # every message for an over-long `<think>...</think>` block and head+tail
         # truncate it. A frozen LLMMessage requires a `model_copy(update=...)` to
         # mutate, so the transform may rebuild a subset of the message list.
-        # When `req.assist` is OFF (the capable-model default) `req.messages` is
-        # passed through untouched — byte-identical to today.
-        source_messages = req.messages
-        if req.assist:
-            source_messages = [
-                m.model_copy(update={"content": _truncate_think_block(m.content)})
-                if "<think>" in m.content and "</think>" in m.content
-                else m
-                for m in req.messages
-            ]
+        # When `req.assist` is OFF (the capable-model default) F5's head+tail
+        # truncation is skipped.
+        #
+        # ALL-TIERS think-history strip (reasoning-model context poisoning):
+        # INDEPENDENT of `req.assist`, ALWAYS fully strip CLOSED
+        # `<think>...</think>` blocks from ASSISTANT-ROLE history (keeping the
+        # text before `<think>` and the answer after `</think>`). A reasoning
+        # model running as the CAPABLE driver (assist=False) emits its chain of
+        # thought inline in `content`; re-feeding it verbatim every turn poisons
+        # the growing context until the model degenerates to tool-less turns and
+        # the actionless valve pauses the build (live MiniMax-M3 build, 2026-06).
+        # Why this is safe:
+        #   * ASSISTANT-ROLE ONLY — user/tool/environment/system content can
+        #     legitimately contain a literal `<think>` (task data, a tool
+        #     observation echoing a model's output); stripping those would
+        #     corrupt data.
+        #   * Reuses `_F5_THINK_BLOCK_RE` (requires BOTH tags) so an UNCLOSED
+        #     `<think>` from a W-31 truncated turn is PRESERVED.
+        #   * Byte-identical guarantee: an assistant message with no closed
+        #     `<think>` block is returned unchanged (the regex sub is a no-op).
+        #   * Tool-call args arrive via structured `tool_calls`, separate from
+        #     `content`, so they are never touched here.
+        # The raw reasoning is preserved in the event log/audit — this strip is
+        # render-time only (not persisted before storage).
+        def _shape(m: LLMMessage) -> LLMMessage:
+            content = m.content
+            if (
+                m.role == "assistant"
+                and "<think>" in content
+                and "</think>" in content
+            ):
+                content = _F5_THINK_BLOCK_RE.sub("", content)
+            if req.assist and "<think>" in content and "</think>" in content:
+                content = _truncate_think_block(content)
+            if content is m.content:
+                return m
+            return m.model_copy(update={"content": content})
+
+        source_messages = [_shape(m) for m in req.messages]
         msgs = [self._message(m) for m in source_messages]
         # B9: Assistant prefill. Append as a trailing
         # assistant message; compatible servers (llama.cpp, vLLM, Anthropic)
