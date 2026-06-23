@@ -1,0 +1,271 @@
+"""W-35 driver pre-flight + W-33 encoder pre-flight — fail fast with a NAMED
+reason, never a doomed loop / DR run on a dead model or a silently-degraded
+encoder.
+
+Hermetic: every network call is faked (a fake router / a MockTransport-backed
+encoder client). No real endpoints are touched.
+"""
+
+from __future__ import annotations
+
+import httpx
+from disco.agent_server import ConversationRuntime
+from disco.core import (
+    ConversationStatus,
+    ErrorEvent,
+    EventSource,
+    LLMMessage,
+    MessageEvent,
+    PlanEvent,
+    PlanStep,
+    SqliteEventStore,
+    StatusEvent,
+)
+from disco.core.llm import (
+    CompletionResponse,
+    DefaultLLMRouter,
+    LLMAuthError,
+    LLMTransientError,
+    ModelEntry,
+    RouterConfig,
+    TokenUsage,
+)
+from disco.retrieval.live import TeiReranker
+
+# ---- shared fakes -----------------------------------------------------------
+
+
+class _FakeProvider:
+    name = "fake"
+
+    async def complete(self, req, *, model):
+        return CompletionResponse(
+            text="ok",
+            tool_calls=[],
+            usage=TokenUsage(input_tokens=1, output_tokens=1),
+            finish_reason="stop",
+            model_used=model,
+            request_id=req.request_id,
+            routing=None,
+        )
+
+    async def stream_complete(self, req, *, model):
+        yield None  # unused
+
+    def supports(self, requirement, *, model):
+        return True
+
+
+class _FakeNLI:
+    def entail(self, premise, hypothesis):
+        return "entail"
+
+    def score(self, premise, hypothesis):
+        return 0.9
+
+
+def _cfg() -> RouterConfig:
+    return RouterConfig(
+        models={"m": ModelEntry(model_id="m", provider="fake", context_window=8192)},
+        default_model="m",
+    )
+
+
+def _dead_reranker() -> TeiReranker:
+    def handler(req: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    return TeiReranker("http://dead:8091", transport=httpx.MockTransport(handler))
+
+
+# ---- W-35: driver pre-flight ------------------------------------------------
+
+
+async def test_preflight_driver_blocks_on_auth_error():
+    """A dead/unauthed driver → a NAMED reason; the caller will NOT start the loop."""
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)  # no injected router → preflight runs for real
+
+    class _DeadRouter:
+        async def complete(self, req, *, context=None):
+            raise LLMAuthError("invalid api key", provider="x")
+
+    rt._router_now = lambda **kw: _DeadRouter()
+    reason = await rt._preflight_driver("c1")
+    assert reason is not None
+    assert "rejected the API key" in reason
+    assert "invalid api key" in reason  # the provider's real reason is carried
+
+
+async def test_preflight_driver_blocks_on_connect_error():
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)
+
+    class _UnreachableRouter:
+        async def complete(self, req, *, context=None):
+            raise LLMTransientError("connection error: refused", provider="x")
+
+    rt._router_now = lambda **kw: _UnreachableRouter()
+    reason = await rt._preflight_driver("c1")
+    assert reason is not None and "unreachable" in reason
+
+
+async def test_preflight_driver_passes_and_caches_success():
+    """A healthy driver passes; a SUCCESS is cached so back-to-back kicks don't
+    each pay a live round-trip."""
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)
+
+    class _OkRouter:
+        def __init__(self):
+            self.calls = 0
+
+        async def complete(self, req, *, context=None):
+            self.calls += 1
+
+    ok = _OkRouter()
+    rt._router_now = lambda **kw: ok
+    assert await rt._preflight_driver("c1") is None
+    assert await rt._preflight_driver("c1") is None
+    assert ok.calls == 1  # second call served from the short-TTL success cache
+
+
+async def test_preflight_driver_skipped_when_router_injected():
+    """A pinned (test/dev) router has no real endpoint — preflight is a no-op."""
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(
+        store, router=DefaultLLMRouter(_cfg(), {"fake": _FakeProvider()})
+    )
+    assert await rt._preflight_driver("c1") is None
+
+
+async def test_run_with_persistence_emits_error_and_skips_loop_on_dead_driver():
+    """The integration chokepoint: a failed pre-flight emits StatusEvent(ERROR)
+    with the named reason AND the loop never runs."""
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(
+        store, router=DefaultLLMRouter(_cfg(), {"fake": _FakeProvider()})
+    )
+    rt.set_surface("c1", "build")
+
+    async def _fail(cid, **kw):
+        return "Driver 'm' unreachable: connection error: refused"
+
+    rt._preflight_driver = _fail  # type: ignore[assignment]
+
+    class _Loop:
+        def __init__(self):
+            self.ran = False
+
+        async def run(self):
+            self.ran = True
+
+    loop = _Loop()
+    await rt._run_with_persistence("c1", loop)
+    assert loop.ran is False  # the doomed loop never started
+
+    events = await store.get_events("c1")
+    errs = [
+        e
+        for e in events
+        if isinstance(e, StatusEvent) and e.status == ConversationStatus.ERROR
+    ]
+    assert errs and "unreachable" in (errs[-1].detail or "")
+
+
+# ---- W-33: encoder pre-flight (Deep Research) -------------------------------
+
+
+async def test_preflight_encoders_names_unreachable_reranker():
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(
+        store, router=DefaultLLMRouter(_cfg(), {"fake": _FakeProvider()})
+    )
+    deps = {"reranker": _dead_reranker(), "nli": _FakeNLI()}
+    reason = await rt._dr._preflight_encoders(deps, required=("reranker", "nli"))
+    assert reason is not None
+    assert "reranker" in reason and "dead:8091" in reason
+
+
+async def test_preflight_encoders_names_missing_nli():
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(
+        store, router=DefaultLLMRouter(_cfg(), {"fake": _FakeProvider()})
+    )
+    # bundled/fake reranker (no probe) present, but NLI is None (declined encoder).
+    deps = {"reranker": _FakeNLI(), "nli": None}
+    reason = await rt._dr._preflight_encoders(deps, required=("reranker", "nli"))
+    assert reason is not None and "nli" in reason
+
+
+async def test_preflight_encoders_passes_when_all_present():
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(
+        store, router=DefaultLLMRouter(_cfg(), {"fake": _FakeProvider()})
+    )
+    # Bundled encoders have no probe() → treated as present (raise on RAM fail).
+    deps = {"reranker": _FakeNLI(), "nli": _FakeNLI()}
+    assert await rt._dr._preflight_encoders(deps, required=("reranker", "nli")) is None
+
+
+async def test_research_stream_emits_named_error_on_dead_encoder():
+    """research_stream pre-flights the required encoders and emits ONE error frame
+    (no doomed stream) when the reranker is unreachable."""
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(
+        store,
+        router=DefaultLLMRouter(_cfg(), {"fake": _FakeProvider()}),
+        research_providers={
+            "search": object(),
+            "extraction": object(),
+            "reranker": _dead_reranker(),
+            "embedder": None,
+            "nli": _FakeNLI(),
+        },
+    )
+    frames = [f async for f in rt.research_stream("q")]
+    assert len(frames) == 1
+    assert frames[0]["type"] == "error"
+    assert "reranker" in frames[0]["message"]
+
+
+async def test_execute_deep_research_blocks_on_dead_encoder():
+    """The DR report engine does NOT start on a dead required encoder: an
+    ErrorEvent + StatusEvent(ERROR) name the reason instead of a wrong report."""
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(
+        store,
+        router=DefaultLLMRouter(_cfg(), {"fake": _FakeProvider()}),
+        research_providers={
+            "search": object(),
+            "extraction": object(),
+            "reranker": _dead_reranker(),
+            "embedder": None,
+            "nli": _FakeNLI(),
+        },
+    )
+    await store.append(
+        "c1",
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="research X"),
+        ),
+    )
+    plan = PlanEvent(summary="plan", steps=[PlanStep(title="q1")])
+    await rt._dr._execute_deep_research("c1", plan)
+
+    events = await store.get_events("c1")
+    assert any(
+        isinstance(e, ErrorEvent) and e.code == "deep_research_preflight"
+        for e in events
+    )
+    errs = [
+        e
+        for e in events
+        if isinstance(e, StatusEvent) and e.status == ConversationStatus.ERROR
+    ]
+    assert errs and "reranker" in (errs[-1].detail or "")
+    # the engine never produced a report
+    from disco.core import ReportEvent
+
+    assert not any(isinstance(e, ReportEvent) for e in events)

@@ -185,3 +185,80 @@ async def test_nli_failure_degrades_to_neutral():
     nli = SidecarNLIVerifier("http://x", transport=httpx.MockTransport(handler))
     assert nli.entail("p", "h") == "neutral"  # weak, never a crash
     assert nli.score("p", "h") == 0.0
+
+
+# ---- W-33 encoder pre-flight probes -----------------------------------------
+
+
+async def test_reranker_probe_ok_when_endpoint_answers():
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="ok")
+
+    # A 200 (or any HTTP status) means the host answered → reachable.
+    await TeiReranker("http://x", transport=httpx.MockTransport(handler)).probe()
+
+
+async def test_reranker_probe_ok_even_on_404():
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text="no route")
+
+    # Non-2xx still proves the service is REACHABLE — pre-flight must not fail it.
+    await TeiReranker("http://x", transport=httpx.MockTransport(handler)).probe()
+
+
+async def test_reranker_probe_raises_named_on_connect_error():
+    import pytest
+    from disco.retrieval.local_encoders import EncoderUnavailable
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    with pytest.raises(EncoderUnavailable) as ei:
+        await TeiReranker(
+            "http://dead:8091", transport=httpx.MockTransport(handler)
+        ).probe()
+    msg = str(ei.value)
+    assert "reranker" in msg and "dead:8091" in msg  # NAMES the encoder + url
+
+
+async def test_reranker_probe_raises_named_on_empty_url():
+    import pytest
+    from disco.retrieval.local_encoders import EncoderUnavailable
+
+    with pytest.raises(EncoderUnavailable) as ei:
+        await TeiReranker("").probe()
+    assert "reranker_url is empty" in str(ei.value)
+
+
+async def test_embedder_probe_raises_named_on_connect_error():
+    import pytest
+    from disco.retrieval.local_encoders import EncoderUnavailable
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    with pytest.raises(EncoderUnavailable) as ei:
+        await OpenAIEmbedder(
+            "http://dead:8090/v1", transport=httpx.MockTransport(handler)
+        ).probe()
+    assert "embedder" in str(ei.value) and "dead:8090" in str(ei.value)
+
+
+async def test_nli_probe_ok_and_named_failure():
+    import pytest
+    from disco.retrieval.local_encoders import EncoderUnavailable
+
+    def ok(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={})
+
+    await SidecarNLIVerifier("http://x", transport=httpx.MockTransport(ok)).probe()
+
+    def dead(req: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    with pytest.raises(EncoderUnavailable) as ei:
+        await SidecarNLIVerifier(
+            "http://dead:8092", transport=httpx.MockTransport(dead)
+        ).probe()
+    assert "NLI" in str(ei.value) and "dead:8092" in str(ei.value)

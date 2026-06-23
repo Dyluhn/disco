@@ -44,11 +44,21 @@ from disco.core.env import disco_env
 from disco.core.inspect import inspect_enabled, routing_sink_for
 from disco.core.inspect import install as install_inspect
 from disco.core.llm import (
+    CallContext,
+    CapabilityProfile,
+    CompletionRequest,
     ConfigStore,
     DefaultLLMRouter,
     DriverPrompts,
+    LLMAuthError,
+    LLMContentFiltered,
+    LLMContextWindowExceeded,
+    LLMError,
+    LLMProviderUnavailable,
+    LLMTransientError,
     ModelExecutionPolicy,
     ModelRole,
+    NoEligibleModel,
     OperatingMode,
     RouterSummarizer,
     SandboxSettings,
@@ -576,6 +586,11 @@ class ConversationRuntime:
         # Settings assignments are actually honored.
         self._injected_router = router
         self._enable_thinking = enable_thinking
+        # W-35: short-TTL success cache for the driver pre-flight, keyed by the
+        # RESOLVED driver model key → monotonic timestamp of the last OK probe. A
+        # healthy driver is re-probed at most once per _DRIVER_PREFLIGHT_TTL_S, so
+        # back-to-back kicks don't each pay a live round-trip.
+        self._driver_preflight_ok: dict[str, float] = {}
         if config_store is not None:
             self._config_store = config_store
         elif config is not None:
@@ -1665,6 +1680,70 @@ class ConversationRuntime:
         except Exception:  # noqa: BLE001 — supervision is best-effort, never re-raise
             logger.exception("crash terminalization failed for %s", conversation_id)
 
+    # W-35: how long a SUCCESSFUL driver pre-flight is trusted before re-probing.
+    _DRIVER_PREFLIGHT_TTL_S = 60.0
+
+    async def _preflight_driver(
+        self,
+        conversation_id: str | None,
+        *,
+        override: str | None = None,
+        role: ModelRole = ModelRole.AGENT_DRIVER,
+    ) -> str | None:
+        """W-35: make ONE cheap (1-token) real call against the RESOLVED driver
+        endpoint+key BEFORE the loop composes, so a dead / unauthed / misconfigured
+        driver fails fast with a NAMED reason instead of stalling silently on the
+        first mid-loop call. Returns None when the driver is reachable, else a
+        human-readable reason string (the caller surfaces it as StatusEvent(ERROR)
+        / an error frame and does NOT start the loop).
+
+        A SUCCESS is cached for _DRIVER_PREFLIGHT_TTL_S (keyed by the resolved model)
+        so a healthy driver adds no latency to every kick. Error classification is
+        owned by the provider (openai_provider._raise_typed): LLMAuthError /
+        LLMProviderUnavailable / LLMTransientError / NoEligibleModel all block; a
+        content-filter or context-window response means the endpoint ANSWERED, so it
+        passes (the endpoint is reachable — that's all pre-flight checks)."""
+        if self._injected_router is not None:
+            # Test/dev seam: a pinned router has no real endpoint to probe.
+            return None
+        cid = conversation_id or ""
+        override = override if override is not None else self._model_override.get(cid)
+        cfg = self._config_store.load()
+        if override and override in cfg.models:
+            key = override
+        else:
+            try:
+                key = cfg.model_for(role)
+            except Exception:  # noqa: BLE001 — resolution failure ⇒ generic label
+                key = "?"
+        cached = self._driver_preflight_ok.get(key)
+        if cached is not None and time.monotonic() - cached < self._DRIVER_PREFLIGHT_TTL_S:
+            return None
+        router = self._router_now(pick=override, conversation_id=cid)
+        req = CompletionRequest(
+            profile=CapabilityProfile(role=role),
+            messages=[LLMMessage(role="user", content="ping")],
+            max_tokens=1,
+        )
+        try:
+            await router.complete(
+                req, context=CallContext(conversation_id=cid, model_override=override)
+            )
+        except (LLMContentFiltered, LLMContextWindowExceeded):
+            pass  # the endpoint answered → reachable
+        except NoEligibleModel as exc:
+            return f"Driver '{key}' is misconfigured: {exc}"
+        except LLMAuthError as exc:
+            return f"Driver '{key}' rejected the API key: {exc}"
+        except LLMProviderUnavailable as exc:
+            return f"Driver '{key}' is unavailable: {exc}"
+        except LLMTransientError as exc:
+            return f"Driver '{key}' unreachable: {exc}"
+        except LLMError as exc:
+            return f"Driver '{key}' error: {exc}"
+        self._driver_preflight_ok[key] = time.monotonic()
+        return None
+
     async def _run_with_persistence(
         self, conversation_id: str, loop: AgentLoop
     ) -> Any:
@@ -1686,6 +1765,23 @@ class ConversationRuntime:
             await self._maybe_run_deep_research(conversation_id)
             # Return the (possibly-updated) state. The store reflects whatever
             # we emitted.
+            return await self._store.get_state(conversation_id)
+
+        # W-35: driver pre-flight BEFORE the loop runs. A dead / unauthed /
+        # misconfigured driver would otherwise stall silently on the first
+        # mid-loop call. On failure, surface a NAMED StatusEvent(ERROR) + an
+        # ambient reminder and DO NOT start the loop (return the ERROR state).
+        reason = await self._preflight_driver(conversation_id)
+        if reason is not None:
+            await self._store.append(
+                conversation_id,
+                StatusEvent(status=ConversationStatus.ERROR, detail=reason[:200]),
+            )
+            await self._emit_persistence_reminder(
+                conversation_id,
+                f"{reason} The run did not start — check the model's endpoint and "
+                "API key in Settings, then send a message to retry.",
+            )
             return await self._store.get_state(conversation_id)
 
         # Rehydrate hook: BEFORE the loop runs for the first time, if a project

@@ -17,6 +17,7 @@ rendering (§2.2) shows it. Base URLs are injected (env-configured at wiring tim
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 from collections.abc import Mapping
@@ -25,8 +26,14 @@ from urllib.parse import urlparse
 
 import httpx
 
+from .local_encoders import EncoderUnavailable
 from .models import ExtractedDoc, Passage, SearchHit
 from .nli import Entailment
+
+# W-33: cap how long a remote-encoder connectivity probe waits. The probe only
+# needs to confirm the host ANSWERS (any HTTP status counts) — a dead endpoint
+# must fail FAST so Deep Research surfaces a named error instead of hanging.
+_PROBE_TIMEOUT_S = 5.0
 
 ExtractStatus = Literal["ok", "paywalled", "blocked", "not_found", "error"]
 
@@ -270,6 +277,30 @@ class TeiReranker:
         self._timeout = timeout_s
         self._transport = transport
 
+    async def probe(self) -> None:
+        """W-33 pre-flight: confirm this reranker endpoint is configured AND
+        answering, BEFORE a Deep Research run starts. Raises EncoderUnavailable
+        with a VERBOSE, named reason on an empty URL or a connect/timeout error.
+        A non-2xx HTTP status still counts as REACHABLE (the service answered) —
+        we only fail on transport-level failures."""
+        if not self._base:
+            raise EncoderUnavailable(
+                "Deep Research needs the reranker, but it isn't connected "
+                "(reranker_url is empty). Set Settings -> Encoders -> Reranker URL, "
+                "or switch encoders to in-process (local)."
+            )
+        try:
+            async with httpx.AsyncClient(
+                timeout=min(self._timeout, _PROBE_TIMEOUT_S), transport=self._transport
+            ) as client:
+                await client.get(self._base)
+        except httpx.HTTPError as exc:
+            raise EncoderUnavailable(
+                f"Deep Research needs the reranker, but it isn't reachable at "
+                f"{self._base} ({type(exc).__name__}: {exc}). Check the reranker "
+                "service, or switch encoders to in-process (local)."
+            ) from exc
+
     async def rerank(self, query: str, passages: list[Passage], *, top_k: int) -> list[Passage]:
         if not passages:
             return []
@@ -311,6 +342,28 @@ class OpenAIEmbedder:
         self._key = api_key
         self._timeout = timeout_s
         self._transport = transport
+
+    async def probe(self) -> None:
+        """W-33 pre-flight: confirm this embedder endpoint is configured AND
+        answering. Raises EncoderUnavailable (verbose, named) on an empty URL or
+        a connect/timeout failure; a non-2xx HTTP status counts as reachable."""
+        if not self._base:
+            raise EncoderUnavailable(
+                "Deep Research needs the embedder, but it isn't connected "
+                "(embedder_url is empty). Set Settings -> Encoders -> Embedder URL, "
+                "or switch encoders to in-process (local)."
+            )
+        try:
+            async with httpx.AsyncClient(
+                timeout=min(self._timeout, _PROBE_TIMEOUT_S), transport=self._transport
+            ) as client:
+                await client.get(self._base)
+        except httpx.HTTPError as exc:
+            raise EncoderUnavailable(
+                f"Deep Research needs the embedder, but it isn't reachable at "
+                f"{self._base} ({type(exc).__name__}: {exc}). Check the embedder "
+                "service, or switch encoders to in-process (local)."
+            ) from exc
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
@@ -358,6 +411,33 @@ class SidecarNLIVerifier:
         self._timeout = timeout_s
         self._transport = transport
         self._cache: dict[tuple[str, str], dict] = {}
+
+    async def probe(self) -> None:
+        """W-33 pre-flight: confirm this NLI verifier endpoint is configured AND
+        answering. Raises EncoderUnavailable (verbose, named) on an empty URL or
+        a connect/timeout failure; a non-2xx HTTP status counts as reachable.
+        The client transport is SYNC, so the GET runs off the event loop."""
+        if not self._base:
+            raise EncoderUnavailable(
+                "Deep Research needs the verifier (NLI), but it isn't connected "
+                "(nli_url is empty). Set Settings -> Encoders -> NLI URL, "
+                "or switch encoders to in-process (local)."
+            )
+
+        def _ping() -> None:
+            with httpx.Client(
+                timeout=min(self._timeout, _PROBE_TIMEOUT_S), transport=self._transport
+            ) as client:
+                client.get(self._base)
+
+        try:
+            await asyncio.to_thread(_ping)
+        except httpx.HTTPError as exc:
+            raise EncoderUnavailable(
+                f"Deep Research needs the verifier (NLI), but it isn't reachable at "
+                f"{self._base} ({type(exc).__name__}: {exc}). Check the NLI sidecar, "
+                "or switch encoders to in-process (local)."
+            ) from exc
 
     def _verify(self, premise: str, hypothesis: str) -> dict:
         key = (premise, hypothesis)

@@ -220,7 +220,41 @@ class DeepResearchService:
             self._rt._research_encoders_key = key
         return self._rt._research_providers
 
-    def research_stream(
+    async def _preflight_encoders(
+        self, deps: dict[str, Any], *, required: tuple[str, ...]
+    ) -> str | None:
+        """W-33: validate the REQUIRED Deep Research encoders are configured AND
+        reachable BEFORE the run starts. Remote encoders degrade SILENTLY — a
+        TeiReranker on an HTTP error returns input order, a SidecarNLIVerifier
+        returns neutral, a None embedder yields no vectors — so an empty/unreachable
+        remote URL (the `encoders.remote=true` + empty-url misconfig) produces a
+        quietly-wrong report. Returns None when every required encoder is usable,
+        else a VERBOSE reason string NAMING the exact encoder.
+
+        Bundled/in-process encoders have no `probe()` — they load lazily and raise
+        EncoderUnavailable on a RAM failure (surfaced at use), so they are treated
+        as present here. Only the live HTTP clients (TeiReranker / OpenAIEmbedder /
+        SidecarNLIVerifier) carry a `probe()` that we await."""
+        from disco.retrieval.local_encoders import EncoderUnavailable
+
+        for name in required:
+            client = deps.get(name)
+            if client is None:
+                return (
+                    f"Deep Research needs the {name}, but it isn't connected "
+                    f"(no {name} is configured). Set it in Settings -> Encoders, "
+                    "or switch encoders to in-process (local)."
+                )
+            probe = getattr(client, "probe", None)
+            if probe is None:
+                continue  # bundled/in-process encoder — present (raises on RAM fail)
+            try:
+                await probe()
+            except EncoderUnavailable as exc:
+                return str(exc)
+        return None
+
+    async def research_stream(
         self,
         query: str,
         *,
@@ -237,6 +271,12 @@ class DeepResearchService:
         `think` runs the answerer in reasoning mode (it thinks, then the answer
         streams; the reasoning is never emitted as answer tokens).
 
+        W-35/W-33: before streaming, pre-flight the resolved driver (one cheap call)
+        and the required encoders (reranker + NLI). On failure, emit a single
+        ``{type: error, message}`` frame NAMING the unreachable driver/encoder and
+        stop — instead of a doomed stream on a dead model or a silently-wrong answer
+        from a degraded reranker/verifier.
+
         G1/DR-4 F3: when ``conversation_id`` is provided and the conversation has
         pre-attached upload passages (text files the user uploaded in the initial
         box), they are threaded into the rerank step as ``seed_passages`` so they
@@ -246,6 +286,19 @@ class DeepResearchService:
         from disco.retrieval.streaming import stream_research_answer
 
         deps = self._rt._research()
+        # W-35: pre-flight the resolved answerer model (the pill reassigns all
+        # generative roles → AGENT_DRIVER covers the answerer when a pill is set).
+        driver_reason = await self._rt._preflight_driver(
+            conversation_id, override=model_override
+        )
+        if driver_reason is not None:
+            yield {"type": "error", "message": driver_reason}
+            return
+        # W-33: the live answer grounds on the reranker + NLI verifier.
+        enc_reason = await self._preflight_encoders(deps, required=("reranker", "nli"))
+        if enc_reason is not None:
+            yield {"type": "error", "message": enc_reason}
+            return
         # RP-05b §3: MCP retrieval providers join the citation path here too — the
         # composite hands MCP-discovered hits to the SAME GroundingPipeline.
         search, extraction = self._rt._compose_mcp_retrieval(deps)
@@ -257,7 +310,7 @@ class DeepResearchService:
             if conversation_id
             else []
         )
-        return stream_research_answer(
+        async for frame in stream_research_answer(
             query,
             router=router,
             search=search,
@@ -276,7 +329,8 @@ class DeepResearchService:
             think=think,
             # G1/DR-4 F3: seed the rerank step with any pre-attached upload passages.
             seed_passages=seed_passages,
-        )
+        ):
+            yield frame
 
     async def _maybe_run_deep_research(self, conversation_id: str) -> None:
         """The Deep Research driver. Inspects the conversation state to decide
@@ -478,6 +532,28 @@ class DeepResearchService:
         )
 
         deps = self._rt._research()
+        # W-35/W-33: pre-flight the driver + the REQUIRED encoders BEFORE the engine
+        # starts. A dead driver or a degraded/empty remote reranker/NLI would
+        # otherwise run a long, expensive job that silently produces a wrong report.
+        # On failure: emit a NAMED StatusEvent(ERROR) + ErrorEvent and DO NOT run.
+        from disco.core import ErrorEvent
+
+        override = self._rt._model_override.get(conversation_id)
+        preflight_reason = await self._rt._preflight_driver(
+            conversation_id, override=override
+        ) or await self._preflight_encoders(deps, required=("reranker", "nli"))
+        if preflight_reason is not None:
+            await self._rt._store.append(
+                conversation_id,
+                ErrorEvent(code="deep_research_preflight", detail=preflight_reason),
+            )
+            await self._rt._store.append(
+                conversation_id,
+                StatusEvent(
+                    status=ConversationStatus.ERROR, detail=preflight_reason[:200]
+                ),
+            )
+            return
         # RP-05b §3: deep research's discovery/extraction also flows MCP providers
         # through the SAME engine, so deep-research citations can come from the MCP
         # tier identically to bundled providers.
