@@ -28,6 +28,11 @@ export function ResearchSurface() {
   const [leaderId, setLeaderId] = useState<string | null | undefined>(undefined);
   const [scope, setScope] = useState<ScopeId>("standard");
   const [think, setThink] = useState(false);
+  // W-06: the typed draft lives in the SHARED parent so it survives the
+  // standard ↔ deep-research mount swap below (the standard input unmounts when
+  // we render DeepResearchSurface, and DR has its OWN QueryInput). Both inputs
+  // read/write this one string, so toggling scope preserves what the user typed.
+  const [draft, setDraft] = useState("");
 
   const { data: lastSelected } = useLastSelectedModel();
   const effectiveLeaderId = leaderId === undefined ? (lastSelected ?? null) : leaderId;
@@ -48,7 +53,14 @@ export function ResearchSurface() {
     // fix-c #2: forward the leader-pick from the standard scope — without it,
     // switching search→deep-research silently dropped the user-selected model
     // and the deep surface fell back to the default.
-    return <DeepResearchSurface onScopeChange={setScope} initialLeaderId={effectiveLeaderId} />;
+    return (
+      <DeepResearchSurface
+        onScopeChange={setScope}
+        initialLeaderId={effectiveLeaderId}
+        draft={draft}
+        onDraftChange={setDraft}
+      />
+    );
   }
 
   const clusterProps = {
@@ -93,13 +105,15 @@ export function ResearchSurface() {
               onSubmit={submit}
               busy={r.submitting}
               autoFocus
+              value={draft}
+              onValueChange={setDraft}
               {...clusterProps}
               extraControls={
                 /* runthru-v2 #9: UploadComposer is now INLINE in the pill row (like
                    the DR surface), not a `footer` block BELOW the cards. Always
                    rendered (UploadComposer self-disables when cid is null) so it
                    doesn't flicker out during the brief pre-create window. */
-                <UploadComposer cid={r.preCid} />
+                <UploadComposer cid={r.preCid} ensureCid={r.ensurePreCid} />
               }
             />
             {r.submitError && (

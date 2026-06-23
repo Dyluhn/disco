@@ -142,6 +142,27 @@ export function useDeepResearch(
 
   const create = useMutation({ mutationFn: createDeepResearchConversation });
 
+  // W-07: lazily obtain the pre-created cid for the Attach affordance so uploads
+  // work BEFORE the user submits. Returns the existing preCid, or creates one NOW
+  // carrying the CURRENT depth/recency/iterative/leader settings (so the upload
+  // lands in the conversation that will actually run) and stores it so submit()
+  // reuses the SAME cid. null offline.
+  const ensurePreCid = useCallback(async () => {
+    if (!agentLive()) return null;
+    if (preCid) return preCid;
+    const requested = { depthTier, iterative, recencyWindow, leaderId };
+    preCidSettingsRef.current = requested;
+    const cid = await preCreate.mutateAsync({
+      query: "",
+      leaderId,
+      depthTier,
+      iterative,
+      recencyWindow,
+    });
+    setPreCid(cid);
+    return cid;
+  }, [preCid, preCreate, depthTier, iterative, recencyWindow, leaderId]);
+
   const submit = useCallback(
     (query: string) => {
       const trimmed = query.trim();
@@ -317,6 +338,9 @@ export function useDeepResearch(
      *  Pass to UploadComposer so text files can be attached before submitting.
      *  null when a session is already live or on the resume path. */
     preCid: session === null && !resumeCid ? preCid : null,
+    /** W-07: lazily create-or-return the upload cid so Attach works pre-cid.
+     *  Exposed only when a server exists (offline → Attach stays disabled). */
+    ensurePreCid: agentLive() ? ensurePreCid : undefined,
     query: effectiveQuery,
     /** True once the real query text is available (not the loading placeholder). */
     queryResolved:

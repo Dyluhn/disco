@@ -41,6 +41,18 @@ export function useResearch() {
     preCreate.mutate(undefined, { onSuccess: setPreCid });
   }, [scope]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // W-07: lazily obtain the pre-created cid for the Attach affordance. Returns the
+  // existing preCid, or creates one NOW (same surface as the eager mount path) and
+  // stores it so the upcoming submit reuses it — routing the upload to THIS
+  // (standard search) pipeline. null offline (no upload possible).
+  const ensurePreCid = useCallback(async () => {
+    if (!agentLive()) return null;
+    if (preCid) return preCid;
+    const cid = await preCreate.mutateAsync();
+    setPreCid(cid);
+    return cid;
+  }, [preCid, preCreate]);
+
   const submit = useCallback(
     (query: string, opts?: { model_override?: string | null; think?: boolean }) => {
       // The per-conversation lead-model override + Think flag ride along on the
@@ -74,6 +86,10 @@ export function useResearch() {
     /** G1/DR-4: pre-created cid for the empty-state UploadComposer. null when a
      *  run is active (the scope is live) or offline (no server). */
     preCid: scope === null ? preCid : null,
+    /** W-07: lazily create-or-return the upload cid so Attach works pre-cid.
+     *  Exposed only when a server exists — offline there's nothing to upload to,
+     *  so Attach stays honestly disabled (no false affordance). */
+    ensurePreCid: agentLive() ? ensurePreCid : undefined,
     /** D1: the run's conversation id, RETAINED through the run (unlike preCid, which
      *  the empty-state gate hides). Threaded into AnswerDocument so in-block sheet /
      *  slides downloads (which fetch /conversations/{cid}/artifacts/…) appear ONLY

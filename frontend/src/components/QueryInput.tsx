@@ -1,5 +1,5 @@
 import { ArrowUp } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useCallback, useState } from "react";
 import { cn } from "@/lib/cn";
 import type { ScopeId } from "@/shell/mode";
 import { ModelLeaderPill } from "./ModelLeaderPill";
@@ -43,6 +43,13 @@ interface Props {
    *  aria-label first, so without this the main query field was unaddressable by
    *  the inventory. Defaults to a stable label; callers may override per surface. */
   inputAriaLabel?: string;
+  /** W-06: OPTIONAL controlled-value mode. When `value`/`onValueChange` are
+   *  supplied the draft text is owned by the PARENT, so a parent that swaps which
+   *  QueryInput is mounted (e.g. Search ↔ Deep Research) can preserve the typed
+   *  draft across the unmount. Omit both for the default UNCONTROLLED behavior
+   *  (the field owns its own draft) — every existing caller is unchanged. */
+  value?: string;
+  onValueChange?: (next: string) => void;
 }
 
 /**
@@ -68,15 +75,29 @@ export function QueryInput({
   extraControls,
   controlId = "send-message",
   inputAriaLabel = "Ask Disco a question",
+  value,
+  onValueChange,
 }: Props) {
-  const [value, setValue] = useState("");
-  const canSend = !!value.trim() && !busy;
+  // W-06: support an optional CONTROLLED draft. When `value` is provided the
+  // parent owns the text (so it survives a mount swap); otherwise we keep the
+  // historical uncontrolled local state. `setText` writes to whichever owns it.
+  const isControlled = value !== undefined;
+  const [internalValue, setInternalValue] = useState("");
+  const text = isControlled ? value : internalValue;
+  const setText = useCallback(
+    (next: string) => {
+      if (!isControlled) setInternalValue(next);
+      onValueChange?.(next);
+    },
+    [isControlled, onValueChange],
+  );
+  const canSend = !!text.trim() && !busy;
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    const q = value.trim();
+    const q = text.trim();
     if (q && !busy) {
       onSubmit(q);
-      setValue("");
+      setText("");
     }
   };
 
@@ -93,9 +114,9 @@ export function QueryInput({
       <textarea
         autoFocus={autoFocus}
         rows={2}
-        value={value}
+        value={text}
         aria-label={inputAriaLabel}
-        onChange={(e) => setValue(e.target.value)}
+        onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey) submit(e);
         }}

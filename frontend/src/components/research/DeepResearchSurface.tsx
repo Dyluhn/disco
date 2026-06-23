@@ -60,6 +60,12 @@ interface Props {
    *  it, switching search → deep-research silently dropped the user-selected
    *  model (fix-c #2). Defaults to null = "use Settings default". */
   initialLeaderId?: string | null;
+  /** W-06: the SHARED draft string lifted to ResearchSurface, so the query text
+   *  typed in the standard search box survives the toggle into Deep Research
+   *  (this surface mounts its own QueryInput). Omitted on the /deep/:cid resume
+   *  path → the input falls back to uncontrolled. */
+  draft?: string;
+  onDraftChange?: (next: string) => void;
 }
 
 const CTRL_BTN =
@@ -71,7 +77,7 @@ const KILL_BTN =
 // not-allowed cursor), never a click that silently errors. NO FALSE AFFORDANCES.
 const PENDING_BTN =
   "flex items-center gap-hair rounded-control border border-hairline border-dashed px-inline py-hair font-ui text-[0.78rem] text-text-faint opacity-50 cursor-not-allowed";
-export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId }: Props) {
+export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId, draft, onDraftChange }: Props) {
   const r = useDeepResearch(resumeCid, initialLeaderId);
   const started = r.started;
   // Gap #4: publish the DR run status to the W6 E2E bridge (await RUNNING/PAUSED/
@@ -150,6 +156,8 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
               onSubmit={r.submit}
               busy={r.submitting}
               autoFocus
+              value={draft}
+              onValueChange={onDraftChange}
               placeholder="Ask a research question that deserves a multi-page report…"
               leaderId={r.leaderId}
               onLeaderChange={r.setLeaderId}
@@ -171,7 +179,7 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId 
                       self-disables when cid is null) so the attach affordance does
                       NOT vanish during the brief preCid re-create window on a
                       settings change — it just dims until the new cid resolves. */}
-                  <UploadComposer cid={r.preCid} />
+                  <UploadComposer cid={r.preCid} ensureCid={r.ensurePreCid} />
                 </>
               }
             />

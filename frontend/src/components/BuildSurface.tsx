@@ -302,14 +302,14 @@ export function BuildSurface({
               autoFocus
               placeholder={copy.placeholder}
               footer={
-                /* G1/DR-4: UploadComposer in the empty state. The preCid is
-                   eagerly pre-created on mount so the paperclip renders before
-                   the user types anything. No false affordance — only when ready. */
-                b.preCid ? (
-                  <div className="flex items-center gap-inline">
-                    <UploadComposer cid={b.preCid} />
-                  </div>
-                ) : undefined
+                /* G1/DR-4 + W-07: UploadComposer in the empty state. Always
+                   rendered (no longer gated on preCid, which HID the attach while
+                   the eager mount-create was in flight). It self-enables via
+                   ensureCid — Attach is usable before a cid exists, lazily
+                   creating the build conversation the first message will run. */
+                <div className="flex items-center gap-inline">
+                  <UploadComposer cid={b.preCid} ensureCid={b.ensurePreCid} />
+                </div>
               }
             />
             <p className="mt-inline text-center font-ui text-[0.78rem] text-text-faint">

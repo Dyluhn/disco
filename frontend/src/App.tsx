@@ -136,6 +136,10 @@ function ResumeProject() {
   const { cid } = useParams<{ cid: string }>();
   const location = useLocation();
   const navigate = useNavigate();
+  // W-24: keep the mode slider in sync with the resumed surface so landing on
+  // /build/:cid shows the Build toggle position (not whatever was last active).
+  const { setMode } = useMode();
+  useEffect(() => setMode("build"), [setMode]);
   // A5: a "Build a deck from this report" handoff navigates here with the serialized
   // report in router state — BuildSurface seeds+kicks it ONCE. A plain resume (no
   // state) just reopens the existing build (view ≠ start).
@@ -180,6 +184,11 @@ function ResumeAgent() {
   const { cid } = useParams<{ cid: string }>();
   const location = useLocation();
   const navigate = useNavigate();
+  // W-24: sync the 3-way mode slider to Agent — the "Build Slides" handoff (and a
+  // direct /agent/:cid open or reload) lands here, and the slider must reflect it
+  // rather than staying on Search/Build.
+  const { setMode } = useMode();
+  useEffect(() => setMode("agent"), [setMode]);
   const seedRef = useRef<string | null>(
     (location.state as { seedTask?: string } | null)?.seedTask ?? null,
   );
@@ -207,6 +216,10 @@ function ResumeAgent() {
  * recovers naturally. */
 function ResumeDeepResearch() {
   const { cid } = useParams<{ cid: string }>();
+  // W-24: Deep Research is a child scope of Search → sync the slider to Search so
+  // a resumed /deep/:cid reflects the Search toggle position.
+  const { setMode } = useMode();
+  useEffect(() => setMode("search"), [setMode]);
   return <DeepResearchSurface resumeCid={cid ?? null} />;
 }
 

@@ -13,21 +13,36 @@ interface UploadComposerProps {
   cid: string | null;
   /** Called after a successful upload so the parent can react (e.g. re-kick). */
   onUploaded?: () => void;
+  /** W-07: lazily obtain the conversation id when none exists yet. When supplied,
+   *  Attach is usable BEFORE a cid is created: on file-select we await this (the
+   *  SAME pre-create path the surface's submit flow uses) so the upload lands in
+   *  the conversation the first message will run, routed to the active surface's
+   *  pipeline (standard search / deep research / build). Returns null when it
+   *  can't create one (offline) → the attach is a no-op rather than a 404. */
+  ensureCid?: () => Promise<string | null>;
 }
 
-export function UploadComposer({ cid, onUploaded }: UploadComposerProps) {
+export function UploadComposer({ cid, onUploaded, ensureCid }: UploadComposerProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const { show } = useToast();
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
+  // Attach is actionable whenever we already have a cid OR can create one on
+  // demand. Only truly inert (disabled) when neither is possible.
+  const canAttach = cid != null || ensureCid != null;
 
   async function handleFiles(files: FileList | File[] | null) {
-    if (!files || !cid) return;
+    if (!files) return;
     const list = Array.from(files);
     if (list.length === 0) return;
     setBusy(true);
     try {
-      const result = await uploadFiles(cid, list);
+      // W-07: resolve a target cid — use the existing one, else lazily pre-create
+      // (held until the cid resolves, then the upload is sent).
+      let targetCid = cid;
+      if (!targetCid && ensureCid) targetCid = await ensureCid();
+      if (!targetCid) return;
+      const result = await uploadFiles(targetCid, list);
       if (result.saved.length > 0) {
         show({ title: `Uploaded ${result.saved.length} file(s) to uploads/` });
         onUploaded?.();
@@ -89,7 +104,7 @@ export function UploadComposer({ cid, onUploaded }: UploadComposerProps) {
       )}
       <button
         type="button"
-        disabled={busy || !cid}
+        disabled={busy || !canAttach}
         onClick={() => inputRef.current?.click()}
         aria-label="Attach files"
         title="Upload files to uploads/"

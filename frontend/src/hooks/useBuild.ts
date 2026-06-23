@@ -86,6 +86,18 @@ export function useBuild(
     }) => createBuildConversation(opts.modelOverride, surface, opts.autonomous, opts.assist),
   });
 
+  // W-07: lazily obtain the pre-created cid for the Attach affordance so uploads
+  // work BEFORE the user submits (and even before the eager mount-create lands).
+  // Returns the existing preCid or creates one now (default settings, like the
+  // mount path) and stores it so submit() reuses the SAME cid (upload survives).
+  const ensurePreCid = useCallback(async () => {
+    if (!agentLive()) return null;
+    if (preCid) return preCid;
+    const cid = await preCreate.mutateAsync({ modelOverride: null, autonomous: false });
+    setPreCid(cid);
+    return cid;
+  }, [preCid, preCreate]);
+
   const submit = useCallback(
     async (task: string) => {
       const trimmed = task.trim();
@@ -137,6 +149,9 @@ export function useBuild(
     /** G1/DR-4: pre-created cid for the empty state UploadComposer. null once
      *  a session is live (the cid is on session.cid then) or on the resume path. */
     preCid: session === null && !resumeCid ? preCid : null,
+    /** W-07: lazily create-or-return the upload cid so Attach works pre-cid.
+     *  Exposed only when a server exists (offline → Attach stays disabled). */
+    ensurePreCid: agentLive() ? ensurePreCid : undefined,
     ...stream,
     // A failed create (e.g. backend unreachable) was silent — the surface stayed
     // on the empty state with no signal. Expose it so the UI can show an error.

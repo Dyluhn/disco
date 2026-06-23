@@ -81,6 +81,47 @@ describe("UploadComposer", () => {
     expect(group.getAttribute("data-dragging")).toBeNull();
   });
 
+  // W-07: Attach is usable BEFORE a cid exists when an `ensureCid` lazy-create is
+  // supplied (the surface's pre-create path). The button is ENABLED with a null cid.
+  it("W-07: is enabled with a null cid when ensureCid is provided", () => {
+    const ensureCid = vi.fn().mockResolvedValue("conv_lazy");
+    render(<UploadComposer cid={null} ensureCid={ensureCid} />);
+    expect(screen.getByRole("button", { name: /attach files/i })).toBeEnabled();
+  });
+
+  // W-07: with a null cid + ensureCid, selecting files lazily creates the cid and
+  // routes the upload to THAT conversation (so the attachment rides the first send).
+  it("W-07: lazily creates a cid then uploads the attachment to it", async () => {
+    const ensureCid = vi.fn().mockResolvedValue("conv_lazy");
+    const spy = vi.spyOn(agentApi, "uploadFiles").mockResolvedValue({
+      saved: [{ name: "a.csv", bytes: 5 }],
+      rejected: [],
+    });
+    render(<UploadComposer cid={null} ensureCid={ensureCid} />);
+    const group = screen.getByRole("group");
+
+    const file = new File(["a,b,c"], "a.csv", { type: "text/csv" });
+    fireEvent.drop(group, { preventDefault: vi.fn(), dataTransfer: { files: [file] } });
+
+    await vi.waitFor(() => expect(ensureCid).toHaveBeenCalled());
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledWith("conv_lazy", [file]));
+  });
+
+  // W-07: when ensureCid resolves null (e.g. offline) the upload is a no-op — never
+  // a 404 against a missing conversation.
+  it("W-07: does not upload when ensureCid resolves null (offline)", async () => {
+    const ensureCid = vi.fn().mockResolvedValue(null);
+    const spy = vi.spyOn(agentApi, "uploadFiles").mockResolvedValue({ saved: [], rejected: [] });
+    render(<UploadComposer cid={null} ensureCid={ensureCid} />);
+    const group = screen.getByRole("group");
+
+    const file = new File(["x"], "x.txt", { type: "text/plain" });
+    fireEvent.drop(group, { preventDefault: vi.fn(), dataTransfer: { files: [file] } });
+
+    await vi.waitFor(() => expect(ensureCid).toHaveBeenCalled());
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it("calls uploadFiles with dropped files", async () => {
     const onUploaded = vi.fn();
     const spy = vi.spyOn(agentApi, "uploadFiles").mockResolvedValue({

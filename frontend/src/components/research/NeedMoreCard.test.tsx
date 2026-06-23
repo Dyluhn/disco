@@ -16,6 +16,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { NeedMoreCard } from "./NeedMoreCard";
+import { ModeProvider } from "@/shell/ModeProvider";
+import { useMode } from "@/shell/mode";
 import type { ReportEvent } from "@/types/agent";
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
@@ -102,6 +104,14 @@ const STUB_CID = "conv_test_abc123";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// W-24: NeedMoreCard now reads the mode context (Build Slides switches the slider
+// to Agent), so it MUST render inside a ModeProvider. A tiny readout exposes the
+// live mode so a test can assert the switch.
+function ModeReadout() {
+  const { mode } = useMode();
+  return <span data-testid="active-mode">{mode}</span>;
+}
+
 function renderCard(overrides?: Partial<React.ComponentProps<typeof NeedMoreCard>>) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -110,13 +120,16 @@ function renderCard(overrides?: Partial<React.ComponentProps<typeof NeedMoreCard
   const result = render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
-        <NeedMoreCard
-          report={STUB_REPORT}
-          cid={STUB_CID}
-          onFollowUp={onFollowUp}
-          followUpBusy={false}
-          {...overrides}
-        />
+        <ModeProvider>
+          <ModeReadout />
+          <NeedMoreCard
+            report={STUB_REPORT}
+            cid={STUB_CID}
+            onFollowUp={onFollowUp}
+            followUpBusy={false}
+            {...overrides}
+          />
+        </ModeProvider>
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -169,6 +182,23 @@ describe("NeedMoreCard", () => {
     // The serialized report rides along as HIDDEN seedContext (an ENVIRONMENT message).
     expect(opts.state.seedContext).toContain("# Report");
     expect(opts.state.seedContext).toMatch(/slides_generate/);
+  });
+
+  // W-24: the slide handoff lands on the AGENT surface, so the 3-way mode slider
+  // must switch to Agent — otherwise it stayed on Search while Agent rendered.
+  it("W-24: 'Build a deck' switches the mode to Agent", async () => {
+    const user = userEvent.setup();
+    renderCard();
+
+    // Starts on Search (the slider's default).
+    expect(screen.getByTestId("active-mode")).toHaveTextContent("search");
+
+    await user.click(screen.getByRole("button", { name: /Build a deck/i }));
+
+    // After the handoff the mode is Agent (the slider reflects Agent).
+    await waitFor(() =>
+      expect(screen.getByTestId("active-mode")).toHaveTextContent("agent"),
+    );
   });
 
   // (b) Ask-Follow-Up toggles the input open/closed repeatedly

@@ -40,6 +40,7 @@ import { createBuildConversation } from "@/api/agent";
 import { serializeReportToMarkdown } from "@/api/deepResearch";
 import { useExportCapabilities } from "@/hooks/useExportCapabilities";
 import { useTemplates } from "@/hooks/useTemplates";
+import { useMode } from "@/shell/mode";
 import { TemplatePicker } from "./TemplatePicker";
 import type { MessageEvent, ReportEvent } from "@/types/agent";
 import { ReportFollowUp } from "./ReportFollowUp";
@@ -728,6 +729,7 @@ export function NeedMoreCard({
 
   const hasFollowUps = followUps.length > 0;
   const navigate = useNavigate();
+  const { setMode } = useMode();
   const [building, setBuilding] = useState(false);
 
   const toggleFollowUp = useCallback(() => setFollowUpOpen((v) => !v), []);
@@ -760,11 +762,15 @@ export function NeedMoreCard({
       // "just build the deck" handoff — per-action risk gates still apply.
       // model_override=null → server uses the last-selected pick.
       const newCid = await createBuildConversation(null, "agent", true);
+      // W-24: this handoff lands on the AGENT surface (/agent/:cid). Sync the
+      // 3-way mode slider to "agent" so it reflects where we just navigated —
+      // otherwise the slider stayed on Search while the Agent surface rendered.
+      setMode("agent");
       navigate(`/agent/${newCid}`, { state: { seedTask, seedContext } });
     } catch {
       setBuilding(false); // surface stays; the button re-enables for a retry
     }
-  }, [building, report, navigate]);
+  }, [building, report, navigate, setMode]);
 
   // Export button: show include-modal first if follow-ups exist.
   const handleExportClick = useCallback(() => {
