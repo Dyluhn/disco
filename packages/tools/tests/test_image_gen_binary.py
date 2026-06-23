@@ -67,6 +67,9 @@ class _FakeSandbox:
     async def list_dir(self, path: str) -> list[str]:
         return sorted(self._fs)
 
+    async def file_exists(self, path: str) -> bool:
+        return path in self._fs
+
 
 def _ctx(sandbox: _FakeSandbox) -> ToolContext:
     return ToolContext(
@@ -386,6 +389,109 @@ async def test_image_generate_preserves_f3_read_before_write_guard():
         "F3 guard must still fire on file_write after image_generate ran"
     )
     assert sbx._fs["important.txt"] == b"do not clobber"
+
+
+# ---- W-51: generated images must not overwrite each other ------------------
+
+
+@pytest.mark.asyncio
+async def test_w51_default_filename_does_not_overwrite_previous_image():
+    """W-51 root: ImageGenArgs.filename defaults to 'image', so two generations
+    with the default name would both write 'image.png' and the second clobbers the
+    first. The fix probes the sandbox and disambiguates: first → image.png, second →
+    image-1.png. Both files survive on disk."""
+    sbx = _FakeSandbox()
+    tool = ImageGenTool(backend=_PILProceduralBackend())
+
+    first = await tool.run(ImageGenArgs(prompt="alpha", format="png"), _ctx(sbx))
+    second = await tool.run(ImageGenArgs(prompt="beta", format="png"), _ctx(sbx))
+
+    assert first.success is True and second.success is True
+    # The two deliverables have DIFFERENT names — no overwrite.
+    assert first.structured is not None and second.structured is not None
+    assert first.structured["path"] == "image.png"
+    assert second.structured["path"] == "image-1.png"
+    # Both files are present on disk (the first was not clobbered).
+    assert "image.png" in sbx._fs
+    assert "image-1.png" in sbx._fs
+    # A third generation continues the sequence.
+    third = await tool.run(ImageGenArgs(prompt="gamma", format="png"), _ctx(sbx))
+    assert third.structured is not None
+    assert third.structured["path"] == "image-2.png"
+    assert "image-2.png" in sbx._fs
+
+
+@pytest.mark.asyncio
+async def test_w51_explicit_unique_filename_is_unaffected():
+    """A caller that supplies a distinct base each time gets exactly that name —
+    the disambiguation only kicks in on an actual collision."""
+    sbx = _FakeSandbox()
+    tool = ImageGenTool(backend=_PILProceduralBackend())
+
+    a = await tool.run(ImageGenArgs(prompt="x", filename="cover", format="png"), _ctx(sbx))
+    b = await tool.run(ImageGenArgs(prompt="y", filename="hero", format="png"), _ctx(sbx))
+
+    assert a.structured is not None and b.structured is not None
+    assert a.structured["path"] == "cover.png"
+    assert b.structured["path"] == "hero.png"
+    # But re-using an explicit base DOES disambiguate (overwrite is never possible).
+    c = await tool.run(ImageGenArgs(prompt="z", filename="cover", format="png"), _ctx(sbx))
+    assert c.structured is not None
+    assert c.structured["path"] == "cover-1.png"
+
+
+@pytest.mark.asyncio
+async def test_w51_returned_path_artifacts_and_content_reflect_final_name():
+    """The disambiguated name must propagate to EVERY reference the caller sees:
+    out_path (content), artifacts, structured.path and structured.filename_base —
+    so the returned path matches the bytes that were actually written."""
+    # Pre-seed the collision so the first run already has to disambiguate.
+    sbx = _FakeSandbox({"image.png": b"\x89PNG\r\n\x1a\n-existing"})
+    out = await ImageGenTool(backend=_PILProceduralBackend()).run(
+        ImageGenArgs(prompt="fresh", format="png"), _ctx(sbx)
+    )
+    assert out.success is True
+    assert out.structured is not None
+    final = out.structured["path"]
+    assert final == "image-1.png"
+    assert out.artifacts == [final], "artifacts must reference the final disambiguated name"
+    assert out.structured["filename_base"] == "image-1"
+    assert final in out.content, "content summary must name the file actually written"
+    # The pre-existing file was NOT overwritten.
+    assert sbx._fs["image.png"] == b"\x89PNG\r\n\x1a\n-existing"
+    # The bytes the caller is pointed at are the ones that landed on disk.
+    assert out.structured["bytes"] == len(sbx._fs[final])
+
+
+@pytest.mark.asyncio
+async def test_w51_bounded_loop_terminates_and_falls_back_when_saturated():
+    """The numeric probe is bounded (1..1000). If every numbered slot is taken the
+    loop must still terminate and fall back to the seed (then a timestamp) suffix —
+    it can never spin forever."""
+
+    class _SaturatedSandbox(_FakeSandbox):
+        """Reports image.png and image-1.png … image-1000.png as ALL taken, so the
+        bounded numeric loop exhausts and the seed fallback must fire. Everything
+        else (including the seed-suffixed name) is free."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.taken: set[str] = {"image.png"} | {f"image-{n}.png" for n in range(1, 1001)}
+
+        async def file_exists(self, path: str) -> bool:
+            return path in self.taken
+
+    sbx = _SaturatedSandbox()
+    out = await ImageGenTool(backend=_PILProceduralBackend()).run(
+        ImageGenArgs(prompt="saturate", seed=4242, format="png"), _ctx(sbx)
+    )
+    assert out.success is True
+    assert out.structured is not None
+    # Numeric slots exhausted → seed fallback (seed=4242 was forced).
+    assert out.structured["path"] == "image-4242.png"
+    assert "image-4242.png" in sbx._fs
+    # And none of the 1000 numbered slots were overwritten.
+    assert sbx.writes == [("image-4242.png", sbx._fs["image-4242.png"])]
 
 
 # ---- registration + scoping ------------------------------------------------

@@ -69,6 +69,7 @@ from __future__ import annotations
 import hashlib
 import io
 import os
+import time
 from typing import Protocol
 
 import httpx
@@ -959,7 +960,29 @@ class ImageGenTool:
         safe_base = os.path.basename(args.filename)
         if not safe_base or safe_base in {".", ".."}:
             safe_base = "image"
+        # W-51 — collision-free naming. The default base is "image", so a build that
+        # generates several images would otherwise write "image.png" every time and
+        # silently overwrite the prior deliverable. Probe the sandbox's OWN namespace
+        # (file_exists resolves inside the box; see boundaries.py:92) and append a
+        # numeric suffix until the name is free: image.png, image-1.png, image-2.png…
+        # Bounded so a pathological workspace can never spin forever; if every probe is
+        # taken we fall back to the per-image seed (and, last resort, a timestamp), both
+        # of which are effectively unique.
         out_path = f"{safe_base}.{ext}"
+        if await ctx.sandbox.file_exists(out_path):
+            chosen: str | None = None
+            for n in range(1, 1001):
+                candidate = f"{safe_base}-{n}.{ext}"
+                if not await ctx.sandbox.file_exists(candidate):
+                    chosen = candidate
+                    break
+            if chosen is None:
+                seed_candidate = f"{safe_base}-{seed}.{ext}"
+                if not await ctx.sandbox.file_exists(seed_candidate):
+                    chosen = seed_candidate
+                else:
+                    chosen = f"{safe_base}-{int(time.time() * 1000)}.{ext}"
+            out_path = chosen
         await ctx.sandbox.write_file(out_path, image_bytes)
 
         # ---- success: short text summary, image bytes NEVER in content -
@@ -1005,7 +1028,10 @@ class ImageGenTool:
             artifacts=[out_path],
             structured={
                 "path": out_path,
-                "filename_base": safe_base,
+                # Reflect the FINAL written stem (post W-51 disambiguation), not the
+                # requested base — so a consumer that rebuilds a name from filename_base
+                # lands on the file that was actually written.
+                "filename_base": out_path[: -(len(ext) + 1)],
                 "format": actual_fmt,
                 "width": actual_w,
                 "height": actual_h,
