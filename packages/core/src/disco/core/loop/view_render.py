@@ -139,6 +139,7 @@ async def workspace_snapshot_message(
     stale: frozenset[str] | None = None,
     caps: ContextCaps | None = None,
     pin_full: bool = False,
+    out_pinned_full: set[str] | None = None,
 ) -> LLMMessage | None:
     """Re-derive the CURRENT on-disk content of the working-set files from the
     sandbox each turn and render it as an authoritative, always-fresh message.
@@ -284,6 +285,16 @@ async def workspace_snapshot_message(
             )
         else:
             shown = text
+            # CW-4 (truthful pointers): this file is rendered in FULL (untruncated)
+            # in the block this turn → record it so the caller's
+            # collapse_superseded_reads can truthfully point a superseded-read stub
+            # at the WORKSPACE block for this path. Truncated files (the `if` branch
+            # above) and pointer-collapsed / omitted / skipped files are NOT
+            # recorded → their stubs use the no-claim notice. Output-only side
+            # channel: it never affects the returned message bytes (assist-ON stays
+            # byte-identical when the caller ignores it).
+            if out_pinned_full is not None:
+                out_pinned_full.add(path)
         # Plain text delimiters — NOT markdown ``` fences. A fenced snapshot
         # invites the model to reflexively copy the ``` into its file_write
         # (models are trained to wrap code in ```), polluting the real file and
@@ -486,6 +497,11 @@ class ViewBuilder:
         # collapse (pin_full): the block must be byte-identical turn-over-turn for
         # an unchanged file to be a stable cache prefix. assist ON keeps the W2
         # pointer behavior + tail placement (byte-identical to today).
+        # CW-4 — collect the set of paths pinned in FULL in the block this turn, so
+        # the superseded-read collapse below can point a stub at the WORKSPACE block
+        # ONLY for paths whose current content is actually present there in full
+        # (assist-OFF). Output-only: it never changes the snapshot bytes.
+        pinned_full: set[str] = set()
         snapshot = await workspace_snapshot_message(
             sbx,
             events,
@@ -493,6 +509,7 @@ class ViewBuilder:
             stale=frozenset(stale),
             caps=caps,
             pin_full=not self._loop._assist,
+            out_pinned_full=pinned_full,
         )
         snap_tokens = len(snapshot.content) // 4 if snapshot is not None else 0
         est = signals.estimate_tokens(view) + snap_tokens
@@ -523,8 +540,18 @@ class ViewBuilder:
         # Rewrite every earlier file_read tool-result for a path to a short
         # "[superseded...]" stub; keep only the most-recent result in full.
         # This is a pure render-time compaction — the event log is unchanged.
+        # CW-4 — assist-OFF: pass the pinned-in-full set so a stub only claims
+        # "current content is in the WORKSPACE block" for paths that are actually
+        # there in full this turn; the rest get the no-claim notice. assist-ON: pass
+        # None → byte-identical to before CW-4 (every stub points to the block,
+        # matching that tier's tail-snapshot contract).
+        _pinned_arg = None if self._loop._assist else frozenset(pinned_full)
         view = view.model_copy(
-            update={"messages": collapse_superseded_reads(view.messages, events)}
+            update={
+                "messages": collapse_superseded_reads(
+                    view.messages, events, pinned_full_paths=_pinned_arg
+                )
+            }
         )
         # F8 — GATED mid-turn arg truncation (assist-tier context-window
         # reclaim). When assist is ON, replace the long `content` argument

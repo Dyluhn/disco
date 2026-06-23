@@ -293,24 +293,66 @@ def _f9_path_was_mutated_after(events: list[Event], path: str, after_seq: int) -
 # the CURRENT WORKSPACE block, which moved to the cacheable PREFIX (before history)
 # for capable models, so "shown later" is wrong. Name the block instead of pointing
 # in a direction.
+#
+# CW-4 (truthful pointers): this notice asserts the path's CURRENT content is in
+# the CURRENT WORKSPACE block — a TRUE claim ONLY when the path is actually pinned
+# in FULL in that block this turn. When the path is NOT pinned in full (omitted by
+# the snapshot's breadth/budget cap, head/tail-TRUNCATED there, or skipped as
+# binary/gone), the claim is a partial lie. The caller passes ``pinned_full_paths``
+# (assist-OFF) so this stub is used ONLY for paths confirmed pinned-in-full;
+# everything else gets ``_SUPERSEDED_READ_NOTICE_NO_PIN`` below (which makes no
+# "current content is here" claim — it only states a more-recent read exists and
+# tells the model to re-read for authority, both always TRUE because collapse keeps
+# the latest read in full).
 _SUPERSEDED_READ_NOTICE = (
     "[superseded file_read of {path} — current content is in the "
     "CURRENT WORKSPACE block in this prompt]"
 )
 
+# CW-4 — truthful stub for a superseded read whose path is NOT pinned in full this
+# turn. Makes NO claim about WHERE the current content lives (it may be only in a
+# more-recent file_read result, which could itself predate a later write → not
+# authoritative). Asserts only what is always TRUE when a stub is emitted: a more
+# recent read of this path is present (collapse keeps the latest read in full), and
+# the safe move for the authoritative copy is to file_read again. Location-
+# independent (no below/above/earlier/later) per REVISION 2.
+_SUPERSEDED_READ_NOTICE_NO_PIN = (
+    "[superseded file_read of {path} — a more recent file_read of this path is "
+    "present in this prompt; file_read again for the authoritative current content]"
+)
+
 
 def collapse_superseded_reads(
-    messages: list[LLMMessage], events: list[Event]
+    messages: list[LLMMessage],
+    events: list[Event],
+    *,
+    pinned_full_paths: frozenset[str] | None = None,
 ) -> list[LLMMessage]:
     """W2 RENDER-TIME transform — NOT assist-gated.
 
     For every file_read path in the prompt history, the LATEST tool-result
     message is kept in full; every EARLIER tool-result for the same path is
-    replaced with a ``_SUPERSEDED_READ_NOTICE`` stub.
+    replaced with a stub.
 
     Effect: eliminates repeated-read context (the same file read 5× across
     history → 4 full pages replaced by 4 one-liners each). The model sees
     the final current version and can identify that earlier copies existed.
+
+    CW-4 (truthful pointers): ``pinned_full_paths`` is the set of paths that ARE
+    pinned in FULL in the CURRENT WORKSPACE block this turn (computed by the
+    snapshot builder via ``out_pinned_full``). When it is provided (assist-OFF):
+
+      * a path IN the set → ``_SUPERSEDED_READ_NOTICE`` (which truthfully points to
+        the pinned, disk-fresh block);
+      * a path NOT in the set (omitted/truncated/skipped from the block) →
+        ``_SUPERSEDED_READ_NOTICE_NO_PIN`` (makes no false "current content is in
+        the block" claim — only that a more-recent read exists + re-read advice).
+
+    When ``pinned_full_paths`` is None (assist-ON and the back-compat / legacy
+    callers) the behavior is BYTE-IDENTICAL to before CW-4: every stub uses
+    ``_SUPERSEDED_READ_NOTICE``. This carve-out keeps the assist-ON render exactly
+    as today (the assist-ON snapshot lives in the tail and may pointer-collapse
+    unchanged files, so its truthfulness is governed by that tier's contract).
 
     Does NOT collapse:
       * The MOST RECENT tool-result for each path (the current authoritative
@@ -356,14 +398,17 @@ def collapse_superseded_reads(
         if msg.role == "tool" and msg.tool_call_id in file_read_calls:
             path = file_read_calls[msg.tool_call_id]
             if last_idx.get(path) != i:
-                # Earlier result for this path → replace with a stub.
-                out.append(
-                    msg.model_copy(
-                        update={
-                            "content": _SUPERSEDED_READ_NOTICE.format(path=path)
-                        }
-                    )
-                )
+                # Earlier result for this path → replace with a stub. CW-4:
+                # only claim "current content is in the WORKSPACE block" when the
+                # path is actually pinned in full there this turn; otherwise use
+                # the no-claim stub. When pinned_full_paths is None (assist-ON /
+                # back-compat) keep the block-pointing stub for every path (byte-
+                # identical to pre-CW-4).
+                if pinned_full_paths is None or path in pinned_full_paths:
+                    notice = _SUPERSEDED_READ_NOTICE.format(path=path)
+                else:
+                    notice = _SUPERSEDED_READ_NOTICE_NO_PIN.format(path=path)
+                out.append(msg.model_copy(update={"content": notice}))
                 continue
         out.append(msg)
     return out
