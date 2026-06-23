@@ -131,51 +131,121 @@ function SectionSkeleton({ title, state }: { title: string; state: "pending" | "
   );
 }
 
+/** W-11: presentational variety. Every section used to render through ONE
+ *  uniform template, so a whole report read as a flat wall of identical blocks.
+ *  We classify each section by its POSITION + its CONTENT SHAPE — both derived
+ *  from the real ReportSection, never fabricated — and vary only the chrome
+ *  (container framing, an eyebrow label, prose emphasis). The body itself still
+ *  renders through the same <Markdown>/<CitedText> pipeline, so citations and
+ *  grounding are byte-for-byte unchanged; this is layout, not content. */
+type SectionShape = "lead" | "figure" | "list" | "standard";
+
+/** A GFM table needs a pipe row AND a dash-separator row; a chart is the
+ *  fenced ```chart block the synthesis layer emits. Either makes the section a
+ *  "figure" worth surfacing more prominently. */
+function classifySection(markdown: string, index: number): SectionShape {
+  // The opening section is the report's lead — give it a standfirst treatment.
+  if (index === 0) return "lead";
+  const hasChart = markdown.includes("```chart");
+  const hasTable = /\n *\|.*\|/.test(markdown) && /\n *\|? *:?-{3,}/.test(markdown);
+  if (hasChart || hasTable) return "figure";
+  const lines = markdown
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (lines.length >= 2) {
+    const listLines = lines.filter((l) => /^([-*+]|\d+[.)])\s+/.test(l)).length;
+    if (listLines / lines.length >= 0.5) return "list";
+  }
+  return "standard";
+}
+
+/** Real Tailwind utilities + design tokens only (no invented classes that would
+ *  silently do nothing). `body` uses an arbitrary-variant selector to style the
+ *  lead standfirst / list markers without touching the markdown content. */
+const SHAPE_CHROME: Record<
+  SectionShape,
+  { section?: string; eyebrow?: string; body?: string }
+> = {
+  lead: {
+    section: "border-l-2 border-accent/50 pl-body",
+    eyebrow: "Key finding",
+    body: "[&>p:first-of-type]:text-[1.12rem] [&>p:first-of-type]:leading-relaxed [&>p:first-of-type]:text-text",
+  },
+  figure: {
+    section: "rounded-card border border-hairline bg-surface-1/40 px-body py-section",
+    eyebrow: "Figure",
+  },
+  list: {
+    body: "[&_ul]:marker:text-accent [&_ol]:marker:text-accent",
+  },
+  standard: {},
+};
+
 function SectionView({
   section,
   answer,
-  cid: _cid,
+  index,
 }: {
   section: AssemblingSection;
   answer: GroundedAnswer | null;
+  /** Position in the assembled report — drives the lead treatment + the
+   *  alternating rhythm on plain sections. */
+  index: number;
   /** Forwarded from DeepReportView — enables block-level downloads when
    *  DR emits sheet/slides/image artifacts (currently prose-only sections
-   *  have no blocks to download; this prop is reserved for that future path
-   *  and _cid is intentionally unused until BlockView calls appear here). */
+   *  have no blocks to download; this prop is reserved for that future path.
+   *  It is intentionally not destructured/read until BlockView calls appear
+   *  here — the call site still forwards it so the wiring stays in place). */
   cid?: string | null;
 }) {
   const real = section.section!;
   const conf = CONFIDENCE_VARIANT[real.confidence] ?? CONFIDENCE_VARIANT.high;
   const sectionUnsupported = real.unsupported_count ?? 0;
+  const shape = classifySection(real.markdown, index);
+  const chrome = SHAPE_CHROME[shape];
+  // Plain sections get a faint left rule on odd positions so a long run of them
+  // reads with rhythm instead of as one undifferentiated column.
+  const altRule = shape === "standard" && index % 2 === 1 ? "border-l border-hairline pl-body" : "";
   return (
-    <section id={section.id} className="pmx-rise scroll-mt-24">
-      <header className="mb-section flex flex-wrap items-baseline gap-inline border-b border-hairline pb-inline">
-        <h2 className="font-display text-[1.4rem] font-medium leading-tight tracking-tight text-text">
-          {real.title}
-        </h2>
-        <span className="ml-auto flex shrink-0 items-center gap-section">
-          {/* Per-section: only the HONEST datum the section carries —
-              unsupported_count. No fabricated "supported total". */}
-          {sectionUnsupported > 0 && (
-            <span
-              className="flex items-center gap-hair font-ui text-[0.72rem] uppercase tracking-wide text-unsupported"
-              title="Claims in this section NLI could not verify against the sources"
-            >
-              <span className="inline-block size-1.5 rounded-full bg-unsupported" />
-              {sectionUnsupported} unsupported
-            </span>
-          )}
-          <span
-            className={cn(
-              "flex items-center gap-hair font-ui text-[0.72rem] uppercase tracking-wide",
-              conf.tone,
+    <section
+      id={section.id}
+      className={cn("pmx-rise scroll-mt-24", chrome.section, altRule)}
+    >
+      <header className="mb-section border-b border-hairline pb-inline">
+        {chrome.eyebrow && (
+          <div className="mb-hair font-ui text-[0.66rem] font-semibold uppercase tracking-[0.12em] text-accent">
+            {chrome.eyebrow}
+          </div>
+        )}
+        <div className="flex flex-wrap items-baseline gap-inline">
+          <h2 className="font-display text-[1.4rem] font-medium leading-tight tracking-tight text-text">
+            {real.title}
+          </h2>
+          <span className="ml-auto flex shrink-0 items-center gap-section">
+            {/* Per-section: only the HONEST datum the section carries —
+                unsupported_count. No fabricated "supported total". */}
+            {sectionUnsupported > 0 && (
+              <span
+                className="flex items-center gap-hair font-ui text-[0.72rem] uppercase tracking-wide text-unsupported"
+                title="Claims in this section NLI could not verify against the sources"
+              >
+                <span className="inline-block size-1.5 rounded-full bg-unsupported" />
+                {sectionUnsupported} unsupported
+              </span>
             )}
-            title={`Per-claim NLI verification: ${real.confidence}`}
-          >
-            <span className={cn("inline-block size-1.5 rounded-full", conf.dot)} />
-            {conf.label}
+            <span
+              className={cn(
+                "flex items-center gap-hair font-ui text-[0.72rem] uppercase tracking-wide",
+                conf.tone,
+              )}
+              title={`Per-claim NLI verification: ${real.confidence}`}
+            >
+              <span className={cn("inline-block size-1.5 rounded-full", conf.dot)} />
+              {conf.label}
+            </span>
           </span>
-        </span>
+        </div>
       </header>
 
       {real.disputed_notes && real.disputed_notes.length > 0 && (
@@ -193,7 +263,7 @@ function SectionView({
         </aside>
       )}
 
-      <div className="prose-reading">
+      <div className={cn("prose-reading", chrome.body)}>
         <Markdown answer={answer}>{real.markdown}</Markdown>
       </div>
 
@@ -237,9 +307,9 @@ export function DeepReportView({ query, summary, assembling, report, cid }: Prop
           </section>
         )}
 
-        {assembling.map((s) =>
+        {assembling.map((s, i) =>
           s.state === "done" && s.section ? (
-            <SectionView key={s.id} section={s} answer={answer} cid={cid} />
+            <SectionView key={s.id} section={s} answer={answer} index={i} cid={cid} />
           ) : (
             // A section reaches "done" only once its ReportSection is present
             // (deriveAssemblingSections), so here state is "pending" | "writing".

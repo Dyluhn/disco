@@ -70,6 +70,16 @@ from .gather import GatherLegContext, SubQuestionResult
 
 EmitFn = Callable[[str, dict[str, Any]], Awaitable[None]]
 
+# W-11: a SMALL temperature bump for the section-synthesis PROSE only, so every
+# report doesn't read as the same deterministic mould. This affects token
+# sampling during generation; it does NOT touch the grounding contract — the
+# prompt still requires a [[id]] citation on every factual sentence, and the
+# per-claim NLI verification gate (`_verify_claims` → confidence/unsupported,
+# below) runs unchanged AFTER generation. Factuality is enforced downstream
+# regardless of temperature. The chart-fix retry stays deterministic (0.0) so a
+# malformed-JSON repair is reproducible, and the coherence summary stays at 0.0.
+_SYNTHESIS_TEMPERATURE = 0.4
+
 CHART_SCHEMA = {
     "type": "object",
     "properties": {
@@ -203,9 +213,16 @@ _SECTION_PROMPT = (
     "assessment is that' — so a reader can distinguish your inference from a "
     "cited fact. The inference still draws on cited sources, but its STATUS "
     "as an inference is flagged.\n\n"
-    "6. VISUALIZE DATA. If sources provide multiple numerical data points "
-    "suitable for comparison (trends, shares, distributions), include a chart. "
-    "Use this exact format:\n"
+    "6. VISUALIZE WHEN IT AIDS COMPREHENSION. Offer a visual whenever it lets "
+    "the reader grasp the section faster than prose would — not only for hard "
+    "numbers. Use a CHART when the cited sources give comparable quantities "
+    "(trends over time, shares, distributions, rankings). Use a compact "
+    "markdown TABLE to line a few entities up across the same handful of "
+    "attributes (e.g. approaches × tradeoffs, vendors × capabilities, options × "
+    "criteria). Build the visual ONLY from values that actually appear in the "
+    "cited sources — never invent, estimate, or round-fill a data point to "
+    "complete one, and cite the sources behind it. If the data isn't really "
+    "there, write prose instead. Charts use this exact format:\n"
     "```chart\n"
     "{{\n"
     "  \"chart_type\": \"bar\" | \"line\" | \"pie\" | \"scatter\",\n"
@@ -216,8 +233,16 @@ _SECTION_PROMPT = (
     "  // OR for scatter: \"data\": [{{\"x\": 1, \"y\": 2, \"group\": \"A\"}}]\n"
     "}}\n"
     "```\n\n"
-    "FORMAT: 4–7 short paragraphs of markdown. No section header (the report "
-    "renders one). Every factual sentence ends in [[id]]."
+    "FORMAT: roughly 3–7 short paragraphs of markdown, but VARY the structure "
+    "to fit the content rather than forcing every section into the same shape. "
+    "Where the section enumerates parallel items (options, criteria, steps, "
+    "examples), a short bulleted or numbered list reads clearer than prose; "
+    "where a couple of sentences carry the section's load-bearing finding, a "
+    "one-line blockquote callout (markdown '> ') can foreground it; reach for a "
+    "table or chart per rule 6 where it earns its place. Default to analytical "
+    "prose — these are accents, not a checklist to fill. No section header (the "
+    "report renders one). Every factual sentence — INCLUDING list items, table "
+    "cells, and callouts — still ends in [[id]] citations."
 )
 
 
@@ -376,7 +401,7 @@ async def synthesize_section(
             CompletionRequest(
                 profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
                 messages=leg_messages,
-                temperature=0.0,
+                temperature=_SYNTHESIS_TEMPERATURE,
                 max_tokens=1400,
             ),
             context=leg_context.call_context,
