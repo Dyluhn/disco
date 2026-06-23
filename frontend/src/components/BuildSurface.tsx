@@ -8,7 +8,7 @@
  * Data-flow discipline: reads only the useBuild() hook; never fetches.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useBuild } from "@/hooks/useBuild";
 import { useBuildNotifications } from "@/hooks/useBuildNotifications";
 import { cn } from "@/lib/cn";
@@ -16,6 +16,7 @@ import {
   deriveActivity,
   deriveDeliverable,
   deriveLiveSignal,
+  firstUserTask,
   latestAgentMessage,
 } from "@/lib/buildTrace";
 import { useReplay } from "@/lib/useReplay";
@@ -25,7 +26,7 @@ import { EmptyState, ErrorState } from "@/components/states";
 import { Markdown } from "@/components/Markdown";
 import { QueryInput } from "@/components/QueryInput";
 import { publishRunStatus } from "@/lib/runStatusBridge";
-import { Download, Loader2 } from "lucide-react";
+import { ChevronDown, Download, Loader2 } from "lucide-react";
 import { useDownloadProject, useExportManifest } from "@/hooks/useProjects";
 import { ActivityFeed } from "@/components/build/ActivityFeed";
 import { LiveSignalBar } from "@/components/build/LiveSignalBar";
@@ -117,6 +118,11 @@ export function BuildSurface({
   );
   const finalMessage = useMemo(() => latestAgentMessage(visibleEvents), [visibleEvents]);
   const deliverable = useMemo(() => deriveDeliverable(visibleEvents), [visibleEvents]);
+  // W-01: on resume, useBuild seeds the task with the internal "(resumed)"
+  // sentinel; recover the REAL task from the first user message so the H1 reads
+  // the project instead of literally "(resumed)". Sentinel stays internal.
+  const recoveredTask = useMemo(() => firstUserTask(b.events), [b.events]);
+  const taskLabel = b.task === "(resumed)" ? (recoveredTask ?? "Resumed project") : b.task;
 
   // Attention when tabbed away: badge the title + (best-effort) OS-notify when the
   // run finishes or needs the user while the tab is hidden.
@@ -138,6 +144,28 @@ export function BuildSurface({
   const feedScrollRef = useRef<HTMLDivElement>(null);
   const prevStatusRef = useRef(b.status);
   const prevDeliverableRef = useRef<string | null>(null);
+  // W-41: a floating "scroll to latest" chevron — shown only when the operator
+  // has scrolled up far enough (>200px from the bottom) to have lost the live
+  // tail; hidden once they're back at the bottom. The feed only auto-follows when
+  // already near the bottom (below), so without this affordance a user reading
+  // history has no quick way back to the live edge.
+  const [showScrollDown, setShowScrollDown] = useState(false);
+  const onFeedScroll = useCallback(() => {
+    const el = feedScrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setShowScrollDown(distanceFromBottom > 200);
+  }, []);
+  const scrollFeedToBottom = useCallback(() => {
+    const el = feedScrollRef.current;
+    if (!el) return;
+    if (typeof el.scrollTo === "function") {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    } else {
+      el.scrollTop = el.scrollHeight;
+    }
+    setShowScrollDown(false);
+  }, []);
   useEffect(() => {
     const el = feedScrollRef.current;
     const prevStatus = prevStatusRef.current;
@@ -156,7 +184,18 @@ export function BuildSurface({
     const statusTransitioned = b.status !== prevStatus;
     const newDeliverable = deliverableId !== null && deliverableId !== prevDeliverable;
 
-    if ((statusTransitioned && (needsInput || capstone)) || newDeliverable) {
+    // W-40: the plan-approval gate renders the PlanPanel FIRST, at the TOP of the
+    // feed — so scrolling to the bottom (as every other gate does) pushes the
+    // approval prompt off-screen, and after the first iteration only the top-left
+    // spinner hints that input is needed. Special-case it to pull the operator to
+    // the TOP. Confirm/decision/question gates + capstones still scroll to bottom.
+    if (statusTransitioned && b.status === "AWAITING_PLAN_APPROVAL") {
+      if (typeof el.scrollTo === "function") {
+        el.scrollTo({ top: 0, behavior: "smooth" });
+      } else {
+        el.scrollTop = 0;
+      }
+    } else if ((statusTransitioned && (needsInput || capstone)) || newDeliverable) {
       // Smooth in the browser; fall back to the scrollTop property (jsdom has no
       // scrollTo) so the behavior is testable.
       if (typeof el.scrollTo === "function") {
@@ -174,8 +213,15 @@ export function BuildSurface({
   useEffect(() => {
     const el = feedScrollRef.current;
     if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    if (nearBottom) el.scrollTop = el.scrollHeight;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceFromBottom < 120) {
+      el.scrollTop = el.scrollHeight;
+      setShowScrollDown(false);
+    } else {
+      // W-41: content grew while the user is scrolled up — re-evaluate so the
+      // chevron appears as the tail moves further out of view.
+      setShowScrollDown(distanceFromBottom > 200);
+    }
   }, [activity.length, b.streamingFile?.content]);
   // Steer is available whenever a conversation EXISTS to steer — including
   // STUCK/FINISHED, since the engine reopens on send_message (engine.py:671).
@@ -293,7 +339,7 @@ export function BuildSurface({
           />
           <div className="flex items-center justify-between gap-inline">
             <h1 className="font-display text-[1.3rem] font-medium leading-tight tracking-tight text-text">
-              {b.task}
+              {taskLabel}
             </h1>
             {/* Export the saved project as a zip — only available for resumed
                 projects and finished builds (a snapshot must exist on disk). */}
@@ -321,7 +367,7 @@ export function BuildSurface({
           </div>
         </div>
 
-        <div className="mt-section flex min-h-0 flex-1 flex-col px-body">
+        <div className="relative mt-section flex min-h-0 flex-1 flex-col px-body">
           <div className="flex items-baseline justify-between">
             <h2 className="font-ui text-[0.72rem] font-medium uppercase tracking-wide text-text-faint">
               Activity
@@ -339,6 +385,8 @@ export function BuildSurface({
           )}
           <div
             ref={feedScrollRef}
+            onScroll={onFeedScroll}
+            data-testid="build-activity-feed"
             className="mt-inline min-h-0 flex-1 overflow-y-auto pb-inline lg:pr-hair"
           >
             {b.status === "ERROR" ? (
@@ -414,6 +462,20 @@ export function BuildSurface({
               </>
             )}
           </div>
+          {/* W-41: floating jump-to-latest control, centered over the feed's
+              bottom edge; only mounted when scrolled up past the threshold. */}
+          {showScrollDown && (
+            <button
+              type="button"
+              onClick={scrollFeedToBottom}
+              aria-label="Scroll to latest activity"
+              title="Scroll to latest activity"
+              data-disco-control="build.scroll-to-bottom"
+              className="absolute bottom-section left-1/2 z-20 flex -translate-x-1/2 items-center justify-center rounded-full border border-hairline bg-surface-1 p-inline text-text-muted shadow-sm transition-colors hover:bg-surface-2 hover:text-text"
+            >
+              <ChevronDown className="size-4" aria-hidden />
+            </button>
+          )}
         </div>
 
         {/* gate · steer · re-plan — pinned under the feed */}

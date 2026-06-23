@@ -7,8 +7,28 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { deriveActivity, deriveBuildProgress, deriveDeliverable, deriveFiles } from "@/lib/buildTrace";
+import {
+  deriveActivity,
+  deriveBuildProgress,
+  deriveDeliverable,
+  deriveFiles,
+  firstUserTask,
+} from "@/lib/buildTrace";
 import type { AgentEvent } from "@/types/agent";
+
+function messageEvent(
+  id: string,
+  source: "user" | "agent" | "environment",
+  content: string,
+  role?: string,
+): AgentEvent {
+  return {
+    kind: "message",
+    id,
+    source,
+    message: { role: role ?? source, content },
+  } as AgentEvent;
+}
 
 function actionEvent(
   id: string,
@@ -82,6 +102,52 @@ function deliverableEvent(id: string, title: string, path: string, kind: "app" |
     source: "agent",
   } as AgentEvent;
 }
+
+describe("W-01: firstUserTask recovers the real task from the stream", () => {
+  it("returns the first user message's text", () => {
+    const events: AgentEvent[] = [
+      messageEvent("m1", "user", "build me a snake game"),
+      messageEvent("m2", "agent", "On it."),
+      messageEvent("m3", "user", "make it blue"),
+    ];
+    expect(firstUserTask(events)).toBe("build me a snake game");
+  });
+
+  it("skips leading agent/environment messages to find the FIRST user turn", () => {
+    const events: AgentEvent[] = [
+      messageEvent("e0", "environment", "Session resumed"),
+      messageEvent("a0", "agent", "thinking…"),
+      messageEvent("u0", "user", "port this to TypeScript"),
+    ];
+    expect(firstUserTask(events)).toBe("port this to TypeScript");
+  });
+
+  it("matches a user turn tagged only by message.role (no source)", () => {
+    const e = {
+      kind: "message",
+      id: "m1",
+      message: { role: "user", content: "summarize the report" },
+    } as AgentEvent;
+    expect(firstUserTask([e])).toBe("summarize the report");
+  });
+
+  it("trims whitespace and ignores blank user messages", () => {
+    const events: AgentEvent[] = [
+      messageEvent("m0", "user", "   "),
+      messageEvent("m1", "user", "  real task  "),
+    ];
+    expect(firstUserTask(events)).toBe("real task");
+  });
+
+  it("returns null when there is no user message (the caller falls back)", () => {
+    const events: AgentEvent[] = [
+      messageEvent("a0", "agent", "hello"),
+      messageEvent("e0", "environment", "note"),
+    ];
+    expect(firstUserTask(events)).toBeNull();
+    expect(firstUserTask([])).toBeNull();
+  });
+});
 
 describe("WALK-09: deliverable gate — panel only shows at FINISHED", () => {
   it("deriveDeliverable returns non-null the moment a DeliverableEvent exists (ungated derivation)", () => {

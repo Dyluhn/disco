@@ -531,6 +531,23 @@ export function latestAgentMessage(events: AgentEvent[]): string | null {
   return null;
 }
 
+/** W-01: recover the REAL task from the replayed event stream — the first user
+ * message's text. Build's resume path seeds `session.task` with the internal
+ * "(resumed)" sentinel (useBuild.ts), which must never reach the UI; the surface
+ * uses this to render the actual task instead, mirroring how DR recovers its query
+ * (useDeepResearch.ts). Matches on `source` OR `message.role` so it's robust to
+ * however the backend tags the human turn. Returns null before any user message
+ * exists (the caller falls back to a neutral "Resumed project" label). */
+export function firstUserTask(events: AgentEvent[]): string | null {
+  for (const e of events) {
+    if (e.kind === "message" && (e.source === "user" || e.message?.role === "user")) {
+      const content = e.message?.content?.trim();
+      if (content) return content;
+    }
+  }
+  return null;
+}
+
 // ---- deliverable handoff --------------------------------------------------
 
 export interface DeliverableView {
