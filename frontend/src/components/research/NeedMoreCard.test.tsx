@@ -146,17 +146,17 @@ describe("NeedMoreCard", () => {
   });
 
   // A5: the "Build a deck" handoff creates a conversation on the AGENT surface and
-  // navigates to it with the serialized report as the seed task. runthru-v2 #7+#2
-  // routes slide-making to the AGENT surface (task framing, not the build/live-preview
-  // framing) and DROPS autonomous so the user sees + approves the plan first —
-  // createBuildConversation(null, "agent", false) + navigate to /agent/<cid>.
-  it("A5: 'Build a deck' starts an agent run seeded with the report", async () => {
+  // navigates to it with the serialized report as the seed task. runthru-v2 #7 routes
+  // slide-making to the AGENT surface (task framing, not the build/live-preview
+  // framing); W-13 runs it AUTONOMOUS so the seeded slides plan auto-approves —
+  // createBuildConversation(null, "agent", true) + navigate to /agent/<cid>.
+  it("A5/W-13: 'Build a deck' starts an autonomous agent run seeded with the report", async () => {
     const user = userEvent.setup();
     renderCard();
 
     await user.click(screen.getByRole("button", { name: /Build a deck/i }));
 
-    await waitFor(() => expect(_createBuild).toHaveBeenCalledWith(null, "agent", false));
+    await waitFor(() => expect(_createBuild).toHaveBeenCalledWith(null, "agent", true));
     await waitFor(() => expect(_navMock).toHaveBeenCalled());
     const [path, opts] = _navMock.mock.calls[0] as [
       string,

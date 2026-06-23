@@ -754,11 +754,12 @@ export function NeedMoreCard({
         "Deep research report to turn into a polished slide deck " +
         "(use the slides_generate tool):\n\n" +
         serializeReportToMarkdown(report);
-      // runthru-v2 #7 + #2: route slide-making to the AGENT surface (task framing,
-      // not "software developer"/live-preview build framing), and DROP autonomous so
-      // the user SEES + APPROVES the plan (the deck handoff was auto-approving and
-      // skipping the gate). model_override=null → server uses the last-selected pick.
-      const newCid = await createBuildConversation(null, "agent", false);
+      // runthru-v2 #7: route slide-making to the AGENT surface (task framing, not the
+      // "software developer"/live-preview build framing). W-13: run it AUTONOMOUS
+      // (autonomous=true) so the seeded slides plan auto-approves for a frictionless
+      // "just build the deck" handoff — per-action risk gates still apply.
+      // model_override=null → server uses the last-selected pick.
+      const newCid = await createBuildConversation(null, "agent", true);
       navigate(`/agent/${newCid}`, { state: { seedTask, seedContext } });
     } catch {
       setBuilding(false); // surface stays; the button re-enables for a retry

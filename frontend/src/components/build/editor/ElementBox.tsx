@@ -184,6 +184,9 @@ export function ElementBox({
               height: "100%",
               border: "none",
               background: "rgba(255,255,255,0.92)",
+              // W-18: pin brand-ink text colour so the edit field never inherits the
+              // slide's ambient light text on the near-white edit background.
+              color: "#1a1813",
               resize: "none",
               fontFamily: "inherit",
               fontSize: "inherit",
@@ -210,6 +213,9 @@ export function ElementBox({
               height: "100%",
               border: "none",
               background: "rgba(255,255,255,0.92)",
+              // W-18: pin brand-ink text colour so the edit field never inherits the
+              // slide's ambient light text on the near-white edit background.
+              color: "#1a1813",
               fontFamily: "inherit",
               fontSize: "inherit",
               outline: "2px solid #6366f1",

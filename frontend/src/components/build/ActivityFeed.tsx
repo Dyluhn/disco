@@ -30,8 +30,7 @@ import {
 import { cn } from "@/lib/cn";
 import { splitThink } from "@/lib/think";
 import { agentHttpBase } from "@/api/client";
-import { useTemplates } from "@/hooks/useTemplates";
-import { TemplatePicker } from "@/components/research/TemplatePicker";
+import { DeckExportBar } from "@/components/build/DeckExportBar";
 import { rendererLabel } from "@/lib/slidesRenderer";
 import type { ActivityItem } from "@/lib/buildTrace";
 
@@ -120,28 +119,46 @@ export function SlidesDownload({
   slides: NonNullable<ActivityItem["expandable"]>["slides"];
   conversationId: string;
 }) {
-  const templates = useTemplates();
-  const [templateId, setTemplateId] = useState("disco-light");
   if (!slides) return null;
   const n = slides.slide_count ?? slides.slides?.length ?? 0;
   // An editable deck (authored sidecar) can be re-rendered with any template at
   // download time via /deck/export — pure render-on-demand, no live sandbox needed.
   // A non-editable deck (Marp) keeps the baked artifact link (no false affordance).
   const editable = Boolean(slides.editable && slides.base);
-  const staticHref = `${agentHttpBase()}/conversations/${conversationId}/artifacts/${encodeURI(slides.filename)}`;
-  const href = editable
-    ? `${agentHttpBase()}/conversations/${conversationId}/deck/export` +
-      `?path=${encodeURIComponent(slides.base!)}` +
-      `&template=${encodeURIComponent(templateId)}&fmt=pptx`
-    : staticHref;
-  const fmt = (editable ? "pptx" : slides.format || "html").toUpperCase();
   // R7: be honest about a DEGRADED fallback deck (Marp CLI unavailable) vs a real
   // structured render — otherwise the user can't tell a real deck from "HTML fake slides".
   const rl = rendererLabel(slides.renderer);
+  const meta =
+    n > 0 ? `${slides.filename} · ${n} slide${n !== 1 ? "s" : ""}` : slides.filename;
+
+  // W-16: an editable deck → the SHARED DeckExportBar (Theme picker + real pptx/html
+  // render-on-demand download links). One component, also used by the in-app editor.
+  if (editable) {
+    return (
+      <div className="mt-hair flex flex-col gap-hair">
+        {!rl.real && (
+          <p className="flex items-center gap-hair font-ui text-[0.7rem] text-unsupported">
+            <AlertTriangle className="size-3 shrink-0" aria-hidden />
+            Built with {rl.long} — not the full structured deck.
+          </p>
+        )}
+        <DeckExportBar
+          conversationId={conversationId}
+          base={slides.base!}
+          title={slides.title || slides.filename}
+        />
+        <span className="truncate px-inline font-mono text-[0.7rem] text-text-faint">{meta}</span>
+      </div>
+    );
+  }
+
+  // Non-editable deck (Marp/fallback) → the baked artifact link (no template re-render).
+  const staticHref = `${agentHttpBase()}/conversations/${conversationId}/artifacts/${encodeURI(slides.filename)}`;
+  const fmt = (slides.format || "html").toUpperCase();
   return (
     <div className="mt-hair flex flex-col gap-hair">
       <a
-        href={href}
+        href={staticHref}
         download
         data-disco-control="build.activity-download"
         data-download-kind="slides"
@@ -164,15 +181,6 @@ export function SlidesDownload({
           <AlertTriangle className="size-3 shrink-0" aria-hidden />
           Built with {rl.long} — not the full structured deck.
         </p>
-      )}
-      {editable && (
-        <TemplatePicker
-          templates={templates}
-          value={templateId}
-          onChange={setTemplateId}
-          label="Template"
-          id={`deck-template-${slides.base}`}
-        />
       )}
     </div>
   );

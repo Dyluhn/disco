@@ -21,6 +21,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "@/api/client";
 import { getDeckForEditor, getDeckRenderHtml, patchDeck } from "@/api/agent";
 import { DeckEditor } from "./editor/DeckEditor";
+import { DeckExportBar } from "./DeckExportBar";
 import type { JsonPatchOp, LoweredDeck } from "./editor/types";
 
 interface DeckEditorPaneProps {
@@ -154,6 +155,11 @@ export function DeckEditorPane({ cid, base }: DeckEditorPaneProps) {
       data-disco-control="build.deck-editor"
       data-deck-saving={saving ? "saving" : "idle"}
     >
+      {/* W-19: export bar — re-export the deck being edited (Theme + pptx/html) without
+          leaving the tab. Shares DeckExportBar with ActivityFeed's SlidesDownload (W-16). */}
+      <div className="shrink-0 border-b border-hairline px-body py-hair">
+        <DeckExportBar conversationId={cid} base={base} />
+      </div>
       {patchNotice && (
         <p
           role="alert"

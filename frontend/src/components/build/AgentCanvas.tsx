@@ -27,8 +27,8 @@ type TabId = "browser" | "artifacts" | "console" | "deck";
 /** The base name of the most-recent deck that carries an editable AuthoredDeck
  * sidecar (A2.0 sets structured.editable_source on the slides_generate C2 path).
  * That sidecar is what the in-app deck editor reads — its absence means the deck
- * is a Marp/markdown deck (no editable source), so the Edit Slides tab must not
- * appear (no false affordance). Latest editable deck wins. Null when none. */
+ * is a Marp/markdown deck (no editable source), so the Edit/Export Slides tab must
+ * not appear (no false affordance). Latest editable deck wins. Null when none. */
 export function latestEditableDeckBase(events: AgentEvent[]): string | null {
   // The LATEST render per base decides editability (mirrors the server's
   // _sidecar_is_current guard): a later non-editable regen of a base (Marp/fallback —
@@ -536,13 +536,13 @@ export function AgentCanvas({
     if (hasScreenshots) setTab("browser");
   }, [hasScreenshots]);
 
-  // A2: the Edit Slides tab appears ONLY when a deck with an editable AuthoredDeck
+  // A2: the Edit/Export Slides tab appears ONLY when a deck with an editable AuthoredDeck
   // sidecar exists AND there's a conversation to edit against (no false affordance).
   const editableDeckBase = useMemo(() => latestEditableDeckBase(events), [events]);
   const tabs = useMemo(
     () =>
       editableDeckBase && cid
-        ? [...BASE_TABS, { id: "deck" as TabId, label: "Edit Slides", icon: Presentation }]
+        ? [...BASE_TABS, { id: "deck" as TabId, label: "Edit/Export Slides", icon: Presentation }]
         : BASE_TABS,
     [editableDeckBase, cid],
   );
