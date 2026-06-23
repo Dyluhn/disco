@@ -53,6 +53,18 @@ from disco.tools.projects import (
 
 _LOG = logging.getLogger(__name__)
 
+# P-C: the gate states a conversation parks at while waiting on the human. The
+# idle sweep frees their sandbox but never resolves the gate, so they accumulate
+# as open gates — sweep_abandoned_gates_once reaps the genuinely-abandoned ones.
+_GATE_STATES = frozenset(
+    {
+        ConversationStatus.WAITING_FOR_CONFIRMATION,
+        ConversationStatus.AWAITING_PLAN_APPROVAL,
+        ConversationStatus.AWAITING_USER_DECISION,
+        ConversationStatus.AWAITING_USER_QUESTION,
+    }
+)
+
 
 class LifecycleManager:
     """Sandbox lifecycle logic; live runtime state via the back-ref."""
@@ -340,6 +352,90 @@ class LifecycleManager:
                 suspended += 1
         return suspended
 
+    async def sweep_abandoned_gates_once(
+        self, *, owner_id: str = DEFAULT_OWNER_ID
+    ) -> int:
+        """P-C: reap conversations parked at an AWAITING_* gate that the user never
+        answered. The idle sweep only frees the SANDBOX of a gated conversation —
+        it never resolves the gate, so a plan/decision/question the user walked away
+        from lingers as an open gate forever (it shows as "waiting for you" in
+        History and its terminal-cleanup never runs). After a GENEROUS TTL
+        (DISCO_ABANDONED_GATE_TTL_S, default 24 h) of no new events, route the
+        gate to STUCK + a note, so it terminalizes (the orphan-container sweep then
+        reclaims any leftover container) instead of accumulating.
+
+        Conservative by construction — a gate is reaped ONLY when:
+          • its latest status is one of the AWAITING_* / WAITING_FOR_CONFIRMATION
+            gate states (never a RUNNING / already-terminal conversation), AND
+          • no UI is currently connected (someone watching it is not abandonment),
+            AND
+          • its last event is older than the long TTL.
+        Returns the count reaped. Single-owner ('local') today, like
+        reconcile_orphaned_runs; extend across owners when auth lands."""
+        ttl_env = disco_env("ABANDONED_GATE_TTL_S", "86400")
+        assert ttl_env is not None  # default above is non-None
+        ttl_s = float(ttl_env)
+        now = datetime.now(tz=UTC)
+        reaped = 0
+        cursor: str | None = None
+        page = 200
+        while True:
+            ids = await self._rt._store.list_conversations(
+                owner_id=owner_id, limit=page, cursor=cursor
+            )
+            if not ids:
+                break
+            for cid in ids:
+                # One unreadable conversation must never abort the sweep.
+                with contextlib.suppress(Exception):
+                    state = await self._rt._store.get_state(cid)
+                    if state.execution_status not in _GATE_STATES:
+                        continue
+                    if self._rt._connections.get(cid, 0) > 0:
+                        continue  # UI attached — not abandoned
+                    events = await self._rt._store.get_events(
+                        cid,
+                        EventFilter(after_seq=state.last_seq - 1)
+                        if state.last_seq > 0
+                        else None,
+                    )
+                    if not events:
+                        continue
+                    last_ts = events[-1].timestamp
+                    if last_ts.tzinfo is None:
+                        last_ts = last_ts.replace(tzinfo=UTC)
+                    if (now - last_ts).total_seconds() < ttl_s:
+                        continue
+                    await self._rt._store.append(
+                        cid,
+                        MessageEvent(
+                            source=EventSource.ENVIRONMENT,
+                            message=LLMMessage(
+                                role="user",
+                                content=(
+                                    "⚠️ This run was waiting on your input and was left "
+                                    "idle, so it's been closed out. Start a new message "
+                                    "to pick the work back up."
+                                ),
+                            ),
+                        ),
+                    )
+                    await self._rt._store.append(
+                        cid,
+                        StatusEvent(
+                            status=ConversationStatus.STUCK,
+                            detail="reaped: abandoned at gate past TTL",
+                        ),
+                    )
+                    _LOG.info("reaped abandoned gate conversation %s", cid)
+                    reaped += 1
+            if len(ids) < page:
+                break
+            cursor = str((int(cursor) if cursor else 0) + len(ids))
+        if reaped:
+            _LOG.info("reaped %d abandoned gate conversation(s)", reaped)
+        return reaped
+
     async def _idle_sweep_loop(self) -> None:
         """Background task: periodically sweep idle sandboxes. Created by the app
         lifespan alongside reconcile_orphaned_runs; cancelled cleanly on shutdown.
@@ -364,6 +460,10 @@ class LifecycleManager:
             # becomes visibly STUCK instead of hanging RUNNING forever.
             with contextlib.suppress(Exception):
                 await self._rt.sweep_stranded_runs_once()
+            # P-C: reap conversations abandoned at an AWAITING_* gate past a long TTL
+            # so open gates don't accumulate (the idle sweep only frees their sandbox).
+            with contextlib.suppress(Exception):
+                await self._rt.sweep_abandoned_gates_once()
             with contextlib.suppress(Exception):
                 tts_idle_ttl = disco_env("TTS_IDLE_TTL_S", "1800")
                 assert tts_idle_ttl is not None  # default above is non-None

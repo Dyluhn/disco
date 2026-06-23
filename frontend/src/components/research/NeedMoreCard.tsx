@@ -3,7 +3,7 @@
  *
  * Three independent, resettable actions:
  *   1. Ask a Follow-Up  — reveals the ReportFollowUp input in-place (animated)
- *   2. Export as…       — Radix Dialog with MD / PDF / DOCX choices + File System
+ *   2. Export as…       — Radix Dialog with MD / PDF choices + File System
  *                         Access API save-picker (graceful fallback for Firefox/Safari)
  *   3. Audio Overview   — state machine (idle → generating → done | unavailable)
  *                         wired to a TODO stub; shows honest error, never fake success
@@ -21,7 +21,6 @@ import {
   ChevronDown,
   ChevronUp,
   Download,
-  File as FileIcon,
   FileText,
   FileType,
   Headphones,
@@ -33,7 +32,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
-// B1/B4: MD and PDF/DOCX non-FSA paths now use inline fetch+blob-URL
+// B1/B4: MD and PDF non-FSA paths now use inline fetch+blob-URL
 // so we no longer call exportReport / exportReportAsMarkdown from deepResearch.ts.
 import { agentHttpBase } from "@/api/client";
 import { createBuildConversation } from "@/api/agent";
@@ -157,7 +156,7 @@ interface ExportModalProps {
 
 function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportModalProps) {
   const exportCaps = useExportCapabilities();
-  const [exporting, setExporting] = useState<"md" | "pdf" | "docx" | null>(null);
+  const [exporting, setExporting] = useState<"md" | "pdf" | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   // Export template — a brand theme spin. Threaded into the POST body as `theme`
   // (registry name) + `mode` (split from the chosen catalogue entry). Default =
@@ -170,9 +169,9 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
   const hasFollowUps = Boolean(followUpSeqs && followUpSeqs.length > 0);
 
   // Shared helper: fetch export blob from server and trigger a download.
-  // Used by both FSA and non-FSA paths so all 4 export types get titles.
+  // Used by both FSA and non-FSA paths so all export types get titles.
   async function _fetchExportBlob(
-    fmt: "md" | "pdf" | "docx",
+    fmt: "md" | "pdf",
     bodyPayload: string | undefined,
   ): Promise<Blob> {
     const res = await fetch(
@@ -240,11 +239,10 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
   }, [report.query, cid, fsa, hasFollowUps, followUpSeqs, baseFilename, tpl]);
 
   const handleFmt = useCallback(
-    async (fmt: "pdf" | "docx") => {
+    async (fmt: "pdf") => {
       setExporting(fmt);
       setExportError(null);
-      // B2: include follow_ups for DOCX too (remove the old fmt!=="docx" guard).
-      // Thread theme+mode so PDF honours the chosen template; ignored for DOCX.
+      // Thread theme+mode so PDF honours the chosen template.
       const exportBody: { follow_up_seqs?: number[]; theme: string; mode: string } = {
         theme: tpl.name,
         mode: tpl.mode,
@@ -253,11 +251,8 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
       const bodyPayload = JSON.stringify(exportBody);
 
       try {
-        const ext = fmt === "pdf" ? ".pdf" : ".docx";
-        const mimeType =
-          fmt === "pdf"
-            ? "application/pdf"
-            : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        const ext = ".pdf";
+        const mimeType = "application/pdf";
         const blob = await _fetchExportBlob(fmt, bodyPayload);
         if (fsa) {
           await saveViaPicker(blob, {
@@ -408,53 +403,6 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
                 dataControl="dr.export-template"
               />
             )}
-
-            {/* DOCX — gated on server capability */}
-            <button
-              type="button"
-              onClick={() => handleFmt("docx")}
-              disabled={!exportCaps.docx || exporting !== null}
-              aria-disabled={!exportCaps.docx}
-              title={
-                exportCaps.docx
-                  ? "Download as DOCX"
-                  : "DOCX export requires pandoc on the server"
-              }
-              data-disco-control="dr.export.modal.docx"
-              data-export-cap={String(exportCaps.docx)}
-              className={cn(
-                "flex items-center gap-inline rounded-control border p-inline",
-                "font-ui text-[0.85rem] transition-colors text-left",
-                exportCaps.docx
-                  ? "border-hairline text-text-muted hover:border-accent hover:text-accent"
-                  : "border-dashed border-hairline text-text-faint opacity-50 cursor-not-allowed",
-                exporting === "docx" && "opacity-60 cursor-wait",
-                exporting !== null && exporting !== "docx" && exportCaps.docx && "opacity-40",
-              )}
-            >
-              <FileIcon
-                className={cn("size-4 shrink-0", exportCaps.docx ? "text-accent" : "text-text-faint")}
-                aria-hidden
-              />
-              <div className="flex-1">
-                <div className={cn("font-medium", exportCaps.docx ? "text-text" : "text-text-faint")}>
-                  DOCX
-                </div>
-                <div className="text-[0.74rem] text-text-faint">
-                  {exportCaps.docx
-                    ? "Word-compatible document"
-                    : "Needs pandoc on the server"}
-                </div>
-              </div>
-              {exporting === "docx" ? (
-                <Loader2 className="size-4 animate-spin text-text-faint" aria-hidden />
-              ) : (
-                <ArrowDown
-                  className={cn("size-3.5", exportCaps.docx ? "text-text-faint" : "opacity-30 text-text-faint")}
-                  aria-hidden
-                />
-              )}
-            </button>
           </div>
 
           {exportError && (
@@ -819,7 +767,7 @@ function sanitizeFilename(name: string): string {
 export interface NeedMoreCardProps {
   /** The finished report (for client-side MD export + audio). */
   report: ReportEvent;
-  /** Conversation ID (for server-side PDF/DOCX export + future audio endpoint). */
+  /** Conversation ID (for server-side PDF export + future audio endpoint). */
   cid: string;
   /** Callback to submit a follow-up question. */
   onFollowUp: (question: string) => void;

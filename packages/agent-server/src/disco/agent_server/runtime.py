@@ -1883,6 +1883,9 @@ class ConversationRuntime:
     async def sweep_idle_once(self) -> int:
         return await self._lifecycle.sweep_idle_once()
 
+    async def sweep_abandoned_gates_once(self, *, owner_id: str = DEFAULT_OWNER_ID) -> int:
+        return await self._lifecycle.sweep_abandoned_gates_once(owner_id=owner_id)
+
     async def _idle_sweep_loop(self) -> None:
         return await self._lifecycle._idle_sweep_loop()
 

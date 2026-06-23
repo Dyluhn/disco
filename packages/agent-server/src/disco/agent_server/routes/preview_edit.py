@@ -26,7 +26,7 @@ What it does, per request:
 
 Selection-script single source of truth: the IIFE lives in the co-located package
 asset ``disco/agent_server/selection_agent.js`` (read here via
-``importlib.resources``, exactly like report_export's bundled reference.docx). The
+``importlib.resources`` so an installed package still finds it). The
 frontend imports the SAME file via a Vite ``?raw`` import (selectionAgent.ts), so
 the script the browser runs and the script injected here can never drift — there
 is no second copy. We do NOT duplicate the script text in this module.
@@ -109,8 +109,8 @@ _SIBLING_MEDIA_TYPES = {
 def _load_selection_agent_script() -> str:
     """Read the canonical in-frame selection-agent IIFE from the co-located
     package asset. Single source of truth shared with the frontend (which imports
-    the same file via Vite ``?raw``). Mirrors report_export._reference_docx_path's
-    importlib.resources pattern so an installed package still finds it."""
+    the same file via Vite ``?raw``). Uses the importlib.resources pattern so an
+    installed package still finds it."""
     return (
         importlib.resources.files("disco.agent_server")
         .joinpath("selection_agent.js")

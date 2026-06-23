@@ -576,7 +576,6 @@ def _validate_report_export(
     _locate_deliverables never sees it — this is what makes it discoverable + validatable by
     disco-verify. Must be reachable, 2xx, non-empty, and pass the format's byte check:
       • pdf  → validate_pdf on the downloaded bytes
-      • docx → a valid OOXML zip (PK signature)
       • md   → non-empty, UTF-8-decodable text
     """
     label = f"report.export[{fmt}]"
@@ -593,11 +592,6 @@ def _validate_report_export(
         local = dest_dir / "report_export.pdf"
         local.write_bytes(body)
         return [f"{label}: {p}" for p in _av.validate_pdf(str(local))]
-    if low == "docx":
-        # OOXML docx is a zip — must start with the PK signature.
-        if not body.startswith(b"PK"):
-            return [f"{label}: not a valid .docx (missing zip/PK signature)"]
-        return []
     if low == "md":
         try:
             text = body.decode("utf-8")

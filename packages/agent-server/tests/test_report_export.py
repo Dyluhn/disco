@@ -2,10 +2,10 @@
 
 Covers:
   1. Markdown byte-parity — captured sample vs serialize_markdown
-  2. Format dispatch — md/pdf/docx → correct media_type + bytes
+  2. Format dispatch — md/pdf → correct media_type + bytes
   3. 404 — missing report
   4. 400 — unknown fmt
-  5. PDF/DOCX — skip cleanly if binary absent, assert call shape + non-empty bytes
+  5. PDF — skip cleanly if binary absent, assert call shape + non-empty bytes
      when present
 """
 
@@ -17,7 +17,6 @@ from disco.agent_server.report_export import (
     _markdown_to_html,
     export_report,
     pdf_available,
-    serialize_docx,
     serialize_markdown,
     serialize_pdf,
 )
@@ -28,38 +27,6 @@ from disco.core import (
     SqliteEventStore,
 )
 from fastapi.testclient import TestClient
-
-
-class _FakeRenderSandbox:
-    """Minimal sandbox stand-in for the DOCX render path: records the md written
-    in, runs a scripted pandoc result, and hands back canned .docx bytes."""
-
-    def __init__(self, *, exit_code: int = 0, stderr: str = "", out: bytes = b"PKfake-docx"):
-        self.exit_code = exit_code
-        self.stderr = stderr
-        self.out = out
-        self.written: dict[str, bytes] = {}
-        self.commands: list[str] = []
-
-    async def write_file(self, path: str, data: bytes) -> None:
-        self.written[path] = data
-
-    async def exec_shell(self, cmd: str, *, timeout_s: int):
-        self.commands.append(cmd)
-
-        class _Res:
-            pass
-
-        r = _Res()
-        r.exit_code = self.exit_code
-        r.stdout = ""
-        r.stderr = self.stderr
-        r.timed_out = False
-        return r
-
-    async def read_file(self, path: str) -> bytes:
-        return self.out
-
 
 # ---- shared helpers --------------------------------------------------------
 
@@ -319,6 +286,27 @@ def test_endpoint_400_bad_fmt(client_with_runtime: TestClient) -> None:
     assert "Unknown" in r.json()["detail"] or "epub" in r.json()["detail"]
 
 
+def test_endpoint_400_docx_removed(client_with_runtime: TestClient) -> None:
+    """W-12: docx is no longer a valid export format — the route rejects it as
+    an unknown format (md/pdf only) instead of spinning a render sandbox."""
+    r = client_with_runtime.post("/api/conversations/conv_any/report/export?fmt=docx")
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "docx" in detail
+    assert "md, pdf" in detail  # advertised valid set no longer lists docx
+
+
+def test_capabilities_omits_docx(client_with_runtime: TestClient) -> None:
+    """W-12: the export-capabilities probe no longer advertises docx; only md
+    (always) and pdf (weasyprint-gated)."""
+    r = client_with_runtime.get("/api/export/capabilities")
+    assert r.status_code == 200, r.text
+    caps = r.json()
+    assert caps["md"] is True
+    assert "pdf" in caps
+    assert "docx" not in caps
+
+
 def test_endpoint_md_export_with_report(
     store: SqliteEventStore, client_with_runtime: TestClient
 ) -> None:
@@ -379,29 +367,6 @@ def test_markdown_to_html_produces_valid_html() -> None:
     assert "<table>" in table_html and "| A |" not in table_html
 
 
-# ---- DOCX tests (acceptance #4) --------------------------------------------
-
-
-async def test_serialize_docx_renders_in_sandbox() -> None:
-    """serialize_docx writes the report markdown into the sandbox, runs pandoc
-    in-box, and returns the .docx bytes it reads back."""
-    report = _make_sample_report()
-    sbx = _FakeRenderSandbox(out=b"PKzipdocx")
-    result = await serialize_docx(report, sbx)
-    assert result == b"PKzipdocx"
-    # the markdown was written into the sandbox and pandoc was invoked there
-    assert "_export.md" in sbx.written
-    assert any("pandoc" in c and "-t docx" in c for c in sbx.commands)
-
-
-async def test_serialize_docx_sandbox_failure_raises() -> None:
-    """A non-zero pandoc exit in the sandbox surfaces a clear RuntimeError."""
-    report = _make_sample_report()
-    sbx = _FakeRenderSandbox(exit_code=1, stderr="pandoc: bad input")
-    with pytest.raises(RuntimeError, match="pandoc failed in the sandbox"):
-        await serialize_docx(report, sbx)
-
-
 # ---- Export report function edge cases --------------------------------------
 
 
@@ -422,11 +387,11 @@ def test_export_report_pdf_named_tuple_if_present() -> None:
     assert ext == ".pdf"
 
 
-def test_export_report_docx_not_in_process() -> None:
-    """export_report (the in-process md/pdf path) refuses docx — it renders in a
-    sandbox via serialize_docx(report, sandbox), driven by the runtime."""
+def test_export_report_rejects_docx() -> None:
+    """W-12: docx is no longer a valid export format — export_report rejects it
+    as an unknown format (md/pdf only)."""
     report = _make_sample_report()
-    with pytest.raises(ValueError, match="docx is rendered in a sandbox"):
+    with pytest.raises(ValueError, match="Unknown export format"):
         export_report(report, "docx")
 
 
@@ -661,16 +626,6 @@ def test_pdf_html_cover_falls_back_to_query() -> None:
     theme = resolve_theme("disco", "light")
     html = _build_pdf_html(report, None, theme, None)
     assert "<title>What is the airspeed velocity of an unladen swallow?</title>" in html
-
-
-async def test_serialize_docx_threads_title_into_markdown() -> None:
-    """W-10: DOCX (md→pandoc) carries the generated title into the rendered
-    markdown handed to pandoc."""
-    report = _make_sample_report()
-    sandbox = _FakeRenderSandbox()
-    await serialize_docx(report, sandbox, None, "Swallow Airspeed Field Study")
-    md = sandbox.written["_export.md"].decode("utf-8")
-    assert md.splitlines()[0] == "# Deep Research: Swallow Airspeed Field Study"
 
 
 def test_endpoint_md_export_uses_stored_title(

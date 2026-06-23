@@ -19,7 +19,7 @@ import {
   createDeepResearchConversation,
   exportReportAsMarkdown,
   // Aliased: a local legacy `exportReport` (the MD-only button) used to SHADOW this
-  // import, so pdf/docx exports silently ran the markdown exporter instead.
+  // import, so pdf exports silently ran the markdown exporter instead.
   exportReport as exportReportApi,
   type ReportExportFmt,
 } from "@/api/deepResearch";
@@ -280,7 +280,7 @@ export function useDeepResearch(
         exportMd(followUps);
         return;
       }
-      // Server-side export for pdf/docx. The UI reports errors via toast/surface.
+      // Server-side export for pdf. The UI reports errors via toast/surface.
       // fix-c #4: mark pending around the await so the top-bar button can show
       // a spinner + disable itself (mirrors the ExportModal pattern in
       // NeedMoreCard — those buttons would deadlock-looking because the

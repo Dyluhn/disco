@@ -25,7 +25,7 @@
  * subscription, the Build status state machine.
  */
 
-import { Ban, File, FilePlus, FileText, FileType, Loader2, Navigation, Play, RotateCcw, Settings as SettingsIcon, Square } from "lucide-react";
+import { Ban, FilePlus, FileText, FileType, Loader2, Navigation, Play, RotateCcw, Settings as SettingsIcon, Square } from "lucide-react";
 import { UploadComposer } from "@/components/build/BuildSurface";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { publishRunStatus } from "@/lib/runStatusBridge";
@@ -349,34 +349,9 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId,
                   )}
                   PDF
                 </button>
-                <button
-                  type="button"
-                  onClick={() => handleTopBarExport("docx")}
-                  disabled={!exportCaps.docx || r.exportPending !== null}
-                  aria-disabled={!exportCaps.docx || r.exportPending !== null}
-                  data-disco-control="dr.export.topbar.docx"
-                  data-export-cap={String(exportCaps.docx)}
-                  className={exportCaps.docx ? CTRL_BTN : PENDING_BTN}
-                  title={
-                    exportCaps.docx
-                      ? "Download as DOCX"
-                      : "DOCX export unavailable — the server has no pandoc"
-                  }
-                >
-                  {r.exportPending === "docx" ? (
-                    <Loader2 className="size-3.5 animate-spin" aria-hidden />
-                  ) : (
-                    <File className="size-3.5" aria-hidden />
-                  )}
-                  DOCX
-                </button>
-                {!(exportCaps.pdf && exportCaps.docx) && (
+                {!exportCaps.pdf && (
                   <span className="font-ui text-[0.68rem] text-text-faint">
-                    {!exportCaps.pdf && !exportCaps.docx
-                      ? "PDF / DOCX need the export toolchain on the server"
-                      : !exportCaps.pdf
-                        ? "PDF needs WeasyPrint on the server"
-                        : "DOCX needs pandoc on the server"}
+                    PDF needs WeasyPrint on the server
                   </span>
                 )}
               </>

@@ -1,11 +1,9 @@
-"""Report export serializers — MD / PDF / DOCX (RP-07 + DR-2 / §1.5).
+"""Report export serializers — MD / PDF (RP-07 + DR-2 / §1.5).
 
-Exports a finished deep-research ReportEvent to three formats:
+Exports a finished deep-research ReportEvent to two formats:
   - Markdown (ported verbatim from deepResearch.ts:88-127 — byte-identical)
   - PDF via WeasyPrint — structured HTML from the ReportEvent model (sections,
     citations, follow-ups, appendix), branded via core.brand theme engine
-  - DOCX via pandoc subprocess (md → docx) inside a sandbox, with a styled
-    reference.docx bundled here
 
 The PDF path was re-written for DR-2 / §1.5:
   _build_pdf_html(report, follow_ups, theme) → structured HTML (NOT flattened
@@ -13,11 +11,10 @@ The PDF path was re-written for DR-2 / §1.5:
   print_skeleton_css() from core.brand.  The disco definition mark appears on
   the cover when theme.branded.  No nl2br; dropcap is an inline <span>.
 
-pandoc and WeasyPrint are imported/invoked lazily so the module imports even
-when the binaries/libs are absent.  These run in the AGENT-SERVER process
-(this is an export endpoint over a stored, server-generated ReportEvent —
-there is no sandbox in this path), so PDF needs `weasyprint` importable and
-DOCX needs `pandoc` on PATH wherever the agent-server runs.
+WeasyPrint is imported/invoked lazily so the module imports even when the
+libs are absent.  PDF renders in the AGENT-SERVER process (this is an export
+endpoint over a stored, server-generated ReportEvent — there is no sandbox in
+this path), so it needs `weasyprint` importable wherever the agent-server runs.
 `export_capabilities()` reports which formats are actually usable so the UI
 never offers a button that 500s.
 
@@ -27,14 +24,10 @@ The MD path is UNCHANGED (byte-identical to the pre-DR-2 baseline).
 from __future__ import annotations
 
 import html as _html
-import importlib.resources
-import io
 import json
 import logging
 import re
-import zipfile
-from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Literal, cast
 
 import markdown as _md
 from disco.core import ReportEvent
@@ -502,244 +495,19 @@ def serialize_pdf(
         raise RuntimeError(f"WeasyPrint PDF generation failed: {exc}") from exc
 
 
-# ---- Reference DOCX generator -----------------------------------------------
-
-
-def _reference_docx_path() -> Path:
-    """Return the path to the bundled reference.docx.
-
-    The file is stored alongside this module as a static asset.  If it doesn't
-    exist (first run or clean checkout), _generate_reference_docx() creates it.
-    """
-    pkg = importlib.resources.files("disco.agent_server")
-    ref_path = Path(str(pkg)) / "reference.docx"
-    if not ref_path.exists():
-        _generate_reference_docx(ref_path)
-    return ref_path
-
-
-def _generate_reference_docx(dest: Path) -> None:
-    """Generate a minimal styled reference.docx for pandoc --reference-doc.
-
-    Creates a ZIP-based OOXML document with brand-inspired Heading1/Heading2/
-    Normal/Title styles.  Pandoc reads the named styles and applies them to the
-    converted document.  Uses only Python stdlib (zipfile + io).
-    """
-    content_types = """\
-<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/word/document.xml"
-    ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
-  <Override PartName="/word/styles.xml"
-    ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
-</Types>"""
-
-    rels = """\
-<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1"
-    Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
-    Target="word/document.xml"/>
-</Relationships>"""
-
-    word_rels = """\
-<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1"
-    Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles"
-    Target="styles.xml"/>
-</Relationships>"""
-
-    document = """\
-<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:body>
-    <w:p><w:r><w:t>Disco Research Report</w:t></w:r></w:p>
-  </w:body>
-</w:document>"""
-
-    # styles.xml — named styles pandoc uses (Heading1/2/3, Normal, Title, etc.)
-    styles = """\
-<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:docDefaults>
-    <w:rPrDefault>
-      <w:rPr>
-        <w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/>
-        <w:sz w:val="22"/><w:szCs w:val="22"/>
-        <w:color w:val="1A1813"/>
-      </w:rPr>
-    </w:rPrDefault>
-  </w:docDefaults>
-
-  <w:style w:type="paragraph" w:default="1" w:styleId="Normal">
-    <w:name w:val="Normal"/>
-    <w:pPr><w:spacing w:after="160" w:line="280" w:lineRule="auto"/></w:pPr>
-    <w:rPr>
-      <w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/>
-      <w:sz w:val="22"/><w:szCs w:val="22"/>
-      <w:color w:val="1A1813"/>
-    </w:rPr>
-  </w:style>
-
-  <w:style w:type="paragraph" w:styleId="Heading1">
-    <w:name w:val="heading 1"/>
-    <w:basedOn w:val="Normal"/>
-    <w:pPr>
-      <w:spacing w:before="360" w:after="120"/>
-      <w:outlineLvl w:val="0"/>
-    </w:pPr>
-    <w:rPr>
-      <w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/>
-      <w:b/><w:sz w:val="36"/><w:szCs w:val="36"/>
-      <w:color w:val="1A1813"/>
-    </w:rPr>
-  </w:style>
-
-  <w:style w:type="paragraph" w:styleId="Heading2">
-    <w:name w:val="heading 2"/>
-    <w:basedOn w:val="Normal"/>
-    <w:pPr>
-      <w:spacing w:before="280" w:after="80"/>
-      <w:outlineLvl w:val="1"/>
-    </w:pPr>
-    <w:rPr>
-      <w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/>
-      <w:b/><w:sz w:val="28"/><w:szCs w:val="28"/>
-      <w:color w:val="4077A3"/>
-    </w:rPr>
-  </w:style>
-
-  <w:style w:type="paragraph" w:styleId="Heading3">
-    <w:name w:val="heading 3"/>
-    <w:basedOn w:val="Normal"/>
-    <w:pPr>
-      <w:spacing w:before="200" w:after="60"/>
-      <w:outlineLvl w:val="2"/>
-    </w:pPr>
-    <w:rPr>
-      <w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/>
-      <w:b/><w:sz w:val="24"/><w:szCs w:val="24"/>
-      <w:color w:val="5A5853"/>
-    </w:rPr>
-  </w:style>
-
-  <w:style w:type="paragraph" w:styleId="Title">
-    <w:name w:val="Title"/>
-    <w:basedOn w:val="Normal"/>
-    <w:pPr><w:spacing w:before="240" w:after="120"/></w:pPr>
-    <w:rPr>
-      <w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/>
-      <w:b/><w:sz w:val="48"/><w:szCs w:val="48"/>
-      <w:color w:val="1A1813"/>
-    </w:rPr>
-  </w:style>
-
-  <w:style w:type="paragraph" w:styleId="Subtitle">
-    <w:name w:val="Subtitle"/>
-    <w:basedOn w:val="Normal"/>
-    <w:pPr><w:spacing w:before="80" w:after="200"/></w:pPr>
-    <w:rPr>
-      <w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/>
-      <w:i/><w:sz w:val="24"/><w:szCs w:val="24"/>
-      <w:color w:val="5A5853"/>
-    </w:rPr>
-  </w:style>
-
-  <w:style w:type="paragraph" w:styleId="BodyText">
-    <w:name w:val="Body Text"/>
-    <w:basedOn w:val="Normal"/>
-    <w:pPr><w:spacing w:after="120"/></w:pPr>
-    <w:rPr>
-      <w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/>
-      <w:sz w:val="22"/><w:szCs w:val="22"/>
-      <w:color w:val="1A1813"/>
-    </w:rPr>
-  </w:style>
-
-  <w:style w:type="character" w:styleId="Hyperlink">
-    <w:name w:val="Hyperlink"/>
-    <w:rPr>
-      <w:color w:val="39688E"/>
-      <w:u w:val="single"/>
-    </w:rPr>
-  </w:style>
-</w:styles>"""
-
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("[Content_Types].xml", content_types)
-        zf.writestr("_rels/.rels", rels)
-        zf.writestr("word/_rels/document.xml.rels", word_rels)
-        zf.writestr("word/document.xml", document)
-        zf.writestr("word/styles.xml", styles)
-    dest.write_bytes(buf.getvalue())
-
-
-# ---- DOCX serializer (md → pandoc, INSIDE a sandbox) ----------------------
-
-
-async def serialize_docx(
-    report: ReportEvent,
-    sandbox: Any,
-    follow_ups: list[tuple[str, str]] | None = None,
-    title: str | None = None,
-) -> bytes:
-    """Serialize a ReportEvent to DOCX via `pandoc` INSIDE a sandbox container.
-
-    pandoc ships in the sandbox image (NOT the host), so the runtime creates a
-    transient render sandbox and passes it here: the report markdown is written
-    into the jailed workspace, pandoc renders it to .docx in-box, the bytes are
-    read back, and the runtime destroys the throwaway sandbox. No host install,
-    jailed like marp.
-
-    DR-2 / §11.3: passes --reference-doc (a styled reference.docx bundled
-    here) and --toc to pandoc for a branded, bookmarked output.
-    Raises RuntimeError on failure.
-    """
-    md = serialize_markdown(report, follow_ups, title)
-    await sandbox.write_file("_export.md", md.encode("utf-8"))
-    # Write the reference.docx into the sandbox workspace
-    ref_flag = ""
-    try:
-        ref_bytes = _reference_docx_path().read_bytes()
-        await sandbox.write_file("_reference.docx", ref_bytes)
-        ref_flag = "--reference-doc=_reference.docx"
-    except Exception as exc:
-        logger.warning("Could not load reference.docx: %s — proceeding without it", exc)
-    toc_flag = "--toc"
-    parts = ["pandoc _export.md -f markdown -t docx"]
-    if ref_flag:
-        parts.append(ref_flag)
-    parts.append(toc_flag)
-    parts.append("-o _export.docx")
-    pandoc_cmd = " ".join(parts)
-    res = await sandbox.exec_shell(pandoc_cmd, timeout_s=60)
-    if getattr(res, "timed_out", False):
-        raise RuntimeError("pandoc timed out after 60s")
-    if res.exit_code != 0:
-        detail = (res.stderr or "").strip() or f"exit code {res.exit_code}"
-        raise RuntimeError(f"pandoc failed in the sandbox: {detail}")
-    return await sandbox.read_file("_export.docx")
-
-
 # ---- Format dispatch -------------------------------------------------------
 
 
-_EXPORT_FORMATS = frozenset({"md", "pdf", "docx"})
+_EXPORT_FORMATS = frozenset({"md", "pdf"})
 
 MEDIA_TYPES: dict[str, str] = {
     "md": "text/markdown;charset=utf-8",
     "pdf": "application/pdf",
-    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 
 EXTENSIONS: dict[str, str] = {
     "md": ".md",
     "pdf": ".pdf",
-    "docx": ".docx",
 }
 
 
@@ -753,11 +521,8 @@ def export_report(
 ) -> tuple[bytes, str, str]:
     """Export a ReportEvent to MD or PDF (both rendered in-process).
 
-    DOCX is NOT handled here — it renders inside a transient sandbox (pandoc
-    ships in the sandbox image, not the host), so the runtime calls
-    `serialize_docx` directly with a sandbox instance.  Returns (payload,
-    media_type, suffix).  Raises ValueError for unknown formats or unknown
-    theme (caller converts to 400).
+    Returns (payload, media_type, suffix).  Raises ValueError for unknown
+    formats or unknown theme (caller converts to 400).
 
     ``follow_ups`` is forwarded to the serializer so selected follow-up Q&A
     pairs appear in the exported document (WALK-20).
@@ -767,14 +532,12 @@ def export_report(
     ValueError.
     """
     if fmt not in _EXPORT_FORMATS:
-        raise ValueError(f"Unknown export format: {fmt!r}. Valid: md, pdf, docx")
+        raise ValueError(f"Unknown export format: {fmt!r}. Valid: md, pdf")
 
     if fmt == "md":
         payload = serialize_markdown(report, follow_ups, title).encode("utf-8")
     elif fmt == "pdf":
         payload = serialize_pdf(report, follow_ups, theme=theme, mode=mode, title=title)
-    elif fmt == "docx":
-        raise ValueError("docx is rendered in a sandbox — call serialize_docx(report, sandbox)")
     else:
         raise ValueError(f"Unknown export format: {fmt!r}")  # pragma: no cover
 

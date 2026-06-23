@@ -72,7 +72,7 @@ export async function createDeepResearchConversation(
 }
 
 /** Export format for the report export endpoint. */
-export type ReportExportFmt = "md" | "pdf" | "docx";
+export type ReportExportFmt = "md" | "pdf";
 
 /** Export a finished ReportEvent as a markdown document downloaded to the
  * user's machine. Reuses Projects' Blob → URL.createObjectURL → invisible
@@ -85,10 +85,10 @@ export function exportReportAsMarkdown(
   downloadBlob(new Blob([md], { type: "text/markdown;charset=utf-8" }), report.query, ".md");
 }
 
-/** Server-side report export (PDF / DOCX). Hits the new backend endpoint.
+/** Server-side report export (PDF). Hits the new backend endpoint.
  * For `md`, we still use the client-side serializer to avoid the round-trip.
- * The UI should gate pdf/docx: if the call returns a non-OK response (e.g.
- * the sandbox image hasn't been rebuilt yet), surface the error to the user.
+ * The UI should gate pdf: if the call returns a non-OK response (e.g.
+ * weasyprint isn't installed), surface the error to the user.
  * Never silent — missing report → error detail; unknown fmt → error detail.
  *
  * ``followUpSeqs`` — optional list of USER MessageEvent seq values whose Q&A
@@ -123,8 +123,7 @@ export async function exportReport(
     throw new Error(`Export failed (${res.status}): ${detail}`);
   }
   const blob = await res.blob();
-  const ext = fmt === "pdf" ? ".pdf" : ".docx";
-  downloadBlob(blob, `report-${cid}`, ext);
+  downloadBlob(blob, `report-${cid}`, ".pdf");
   return true;
 }
 

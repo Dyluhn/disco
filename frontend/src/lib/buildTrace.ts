@@ -74,12 +74,25 @@ const VERB: Record<string, (a: Record<string, unknown>) => string> = {
   file_write: (a) => `Wrote ${a.path}`,
   file_edit: (a) => `Edited ${a.path}`,
   file_read: (a) => `Read ${a.path}`,
-  file_list: (a) => `Listed ${a.path ?? "the workspace"}`,
+  file_list: (a) => (_isWorkspaceRoot(a.path) ? `Listed the workspace` : `Listed ${a.path}`),
   shell: () => `Ran a command`,
   code_exec: (a) => `Ran ${a.language ?? "python"} code`,
   search: (a) => `Searched the web for "${a.query}"`,
   extract: () => `Read a web page`,
 };
+
+/** W-14/W-28: a `file_list` whose path is the workspace ROOT (".", "./", "",
+ * "/", undefined). The agent's orientation step lists the root before any real
+ * work, and the naïve `Listed ${path}` rendered the bare "Listed ." stub as the
+ * very FIRST feed row across slides/build/agent — output hygiene noise that
+ * looked like a broken empty placeholder. We both relabel it ("Listed the
+ * workspace") AND suppress the row entirely in deriveActivity so nothing renders
+ * until there is real content. Path normalization is the single source of truth. */
+function _isWorkspaceRoot(path: unknown): boolean {
+  if (path == null) return true;
+  const p = String(path).trim();
+  return p === "" || p === "." || p === "./" || p === "/";
+}
 
 /** Split an MCP qualified tool name `mcp__<server>__<tool>` into {server, tool};
  * null for a non-MCP name. MCP calls otherwise read as gibberish in the feed. */
@@ -247,6 +260,11 @@ export function deriveActivity(
     const e = events[idx];
     if (e.kind === "action" && e.tool_call && !META_TOOLS.has(e.tool_call.tool_name)) {
       const tc = e.tool_call;
+      // W-14/W-28: a workspace-root `file_list` is the agent's silent orientation
+      // step — suppress it so the feed shows nothing until there's real content
+      // (no "Listed ." first-output stub). A list of a real subdirectory still
+      // renders ("Listed src/").
+      if (tc.tool_name === "file_list" && _isWorkspaceRoot(tc.arguments.path)) continue;
       const risk = e.meta?.risk_assessment?.risk ?? e.self_assessed_risk;
       const isPending = e.id === pendingActionId;
       let st: ActivityItem["status"];

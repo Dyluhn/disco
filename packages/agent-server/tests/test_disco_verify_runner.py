@@ -904,20 +904,6 @@ async def test_report_export_unreachable_fails(tmp_path: Path) -> None:
     assert any("not reachable" in p for p in result.validator_problems)
 
 
-async def test_report_export_docx_needs_zip_signature(tmp_path: Path) -> None:
-    client = FakeVerifyClient(
-        final_state={"execution_status": "FINISHED"},
-        export_response=(200, b"not a zip"),
-    )
-    scenario = Scenario(
-        id="report_docx", prompt="research X",
-        expect={"terminal_status": "FINISHED"}, report_export="docx",
-    )
-    result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
-    assert not result.passed
-    assert any("docx" in p for p in result.validator_problems)
-
-
 # ---------------------------------------------------------------------------
 # Tests: gap #98 — deterministic schedule "fire now" seam (REGRESSION)
 # ---------------------------------------------------------------------------

@@ -59,15 +59,16 @@ describe("exportReport", () => {
     expect(init.method).toBe("POST");
   });
 
-  it("POSTs to agent-server base, not bare /api (docx)", async () => {
-    const stub = makeFetchStub(200, new Blob(["data"], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }));
+  it("POSTs to agent-server base, not bare /api (pdf, no docx)", async () => {
+    // W-12: docx export was removed; pdf still routes to the agent-server base.
+    const stub = makeFetchStub(200, new Blob(["data"], { type: "application/pdf" }));
     vi.stubGlobal("fetch", stub);
 
-    await exportReport("conv_xyz", "docx");
+    await exportReport("conv_xyz", "pdf");
 
     expect(stub).toHaveBeenCalledOnce();
     const [url] = stub.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("http://agent:8123/api/conversations/conv_xyz/report/export?fmt=docx");
+    expect(url).toBe("http://agent:8123/api/conversations/conv_xyz/report/export?fmt=pdf");
     // URL must NOT be a bare relative path
     expect(url).not.toMatch(/^\/api\//);
   });

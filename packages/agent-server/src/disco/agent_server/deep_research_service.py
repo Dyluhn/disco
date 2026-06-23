@@ -9,7 +9,7 @@ constructed once in `ConversationRuntime`:
   - live grounded answer stream: _research / research_stream
   - the kick-path driver: _maybe_run_deep_research / _propose_deep_research_plan /
     _execute_deep_research / _has_fresh_user_message / _follow_up_deep_research
-  - report export: export_report / _render_docx_in_sandbox
+  - report export: export_report
 
 `DeepResearchService` reaches the runtime's wiring (`_store`, `_router_now`,
 `_compose_mcp_retrieval`, `_config_store`, `_model_override`,
@@ -19,8 +19,8 @@ via a back-reference. Every method called by the app's routes, by a staying
 runtime method (`_loop_for` → `_compose_deep_research_loop`,
 `_retrieval_handlers` → `_research`, `_run_with_persistence` →
 `_maybe_run_deep_research`), or directly by a test keeps a one-line delegator
-on `ConversationRuntime`; only the two DR-internal helpers
-(`_follow_up_deep_research`, `_render_docx_in_sandbox`) move without one.
+on `ConversationRuntime`; only the DR-internal helper
+(`_follow_up_deep_research`) moves without one.
 
 Internal cross-calls that have a delegator route through `self._rt` so a
 test's monkeypatch on the runtime (`rt._execute_deep_research = …`) is
@@ -1032,7 +1032,7 @@ class DeepResearchService:
         *,
         owner_id: str = DEFAULT_OWNER_ID,
     ) -> tuple[bytes, str, str] | None:
-        """Export the latest ReportEvent from a conversation as MD, PDF, or DOCX.
+        """Export the latest ReportEvent from a conversation as MD or PDF.
 
         Returns (payload_bytes, media_type, filename_extension) on success,
         or None when no ReportEvent exists for this conversation (the caller
@@ -1050,33 +1050,5 @@ class DeepResearchService:
         # The latest report (deep research emits only one; safe for future
         # multi-report conversations).
         report = reports[-1]
-        if fmt == "docx":
-            # DOCX renders via pandoc INSIDE a transient sandbox (pandoc ships in
-            # the sandbox image, not the host) — jailed like marp, no host install.
-            from .report_export import EXTENSIONS, MEDIA_TYPES
-
-            payload = await self._render_docx_in_sandbox(report, owner_id=owner_id)
-            return payload, MEDIA_TYPES["docx"], EXTENSIONS["docx"]
         payload, media_type, ext = _export(report, fmt)  # md, pdf — in-process
         return payload, media_type, ext
-
-    async def _render_docx_in_sandbox(self, report: Any, *, owner_id: str) -> bytes:
-        """Spin a throwaway render sandbox, render the report to .docx via pandoc
-        in-box, read the bytes, destroy the sandbox. The export endpoint isn't tied
-        to a live conversation sandbox, so it gets its own transient one."""
-        import uuid as _uuid
-
-        from .report_export import serialize_docx
-
-        svc = self._rt._sandbox_service_now()
-        cid = f"export-docx-{_uuid.uuid4().hex[:12]}"
-        instance = await svc.create(
-            self._rt._sandbox_spec, owner_id=owner_id, conversation_id=cid
-        )
-        try:
-            return await serialize_docx(report, instance)
-        finally:
-            try:
-                await instance.destroy()
-            except Exception:  # noqa: BLE001 — teardown best-effort
-                _LOG.exception("export render sandbox teardown failed (cid=%s)", cid)

@@ -128,12 +128,12 @@ describe("Deep Research surface — full lifecycle", () => {
     expect(screen.getByRole("tab", { name: /Cited/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Reviewed/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Discovered/i })).toBeInTheDocument();
-    // export controls (RP-07): MD downloads now; PDF/DOCX are gated on the real
-    // server capability (/api/export/capabilities). Offline/fixture defaults to
-    // md-only, so PDF/DOCX are disabled here — no false affordance.
+    // export controls (RP-07): MD downloads now; PDF is gated on the real server
+    // capability (/api/export/capabilities). Offline/fixture defaults to md-only,
+    // so PDF is disabled here — no false affordance. W-12: DOCX export removed.
     expect(screen.getByRole("button", { name: /^MD$/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^PDF$/ })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /^DOCX$/ })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /^DOCX$/ })).not.toBeInTheDocument();
     expect(screen.getByText(/need(s)? .*server/i)).toBeInTheDocument();
   });
 });

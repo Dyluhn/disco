@@ -23,7 +23,6 @@ from disco.agent_server import ConversationRuntime, create_app
 from disco.agent_server.report_export import (
     _build_pdf_html,
     export_report,
-    serialize_docx,
     serialize_markdown,
     serialize_pdf,
 )
@@ -483,66 +482,6 @@ def test_endpoint_valid_theme_returns_payload(
     assert r.status_code == 200
     # MD is byte-identical regardless of theme
     assert CAPTURED_MARKDOWN.encode("utf-8") == r.content
-
-
-# ---- 13. DOCX serialize retains reference.docx wiring -----------------------
-
-
-class _FakeSandbox:
-    def __init__(self, *, exit_code: int = 0, stderr: str = "", out: bytes = b"PKfake"):
-        self.exit_code = exit_code
-        self.stderr = stderr
-        self.out = out
-        self.written: dict[str, bytes] = {}
-        self.commands: list[str] = []
-
-    async def write_file(self, path: str, data: bytes) -> None:
-        self.written[path] = data
-
-    async def exec_shell(self, cmd: str, *, timeout_s: int):
-        self.commands.append(cmd)
-
-        class _R:
-            pass
-
-        r = _R()
-        r.exit_code = self.exit_code
-        r.stdout = ""
-        r.stderr = self.stderr
-        r.timed_out = False
-        return r
-
-    async def read_file(self, path: str) -> bytes:
-        return self.out
-
-
-async def test_serialize_docx_includes_reference_doc() -> None:
-    """serialize_docx writes _reference.docx into the sandbox and passes --reference-doc."""
-    report = _make_sample_report()
-    sbx = _FakeSandbox(out=b"PKzipdocx")
-    result = await serialize_docx(report, sbx)
-    assert result == b"PKzipdocx"
-    # reference.docx was written to the sandbox
-    assert "_reference.docx" in sbx.written
-    assert len(sbx.written["_reference.docx"]) > 0
-    # pandoc command includes --reference-doc and --toc
-    assert any("--reference-doc" in c for c in sbx.commands)
-    assert any("--toc" in c for c in sbx.commands)
-
-
-async def test_serialize_docx_reference_docx_is_valid_zip() -> None:
-    """The reference.docx bundled in agent-server is a valid OOXML ZIP."""
-    import io
-    import zipfile
-
-    from disco.agent_server.report_export import _reference_docx_path
-
-    path = _reference_docx_path()
-    assert path.exists()
-    with zipfile.ZipFile(io.BytesIO(path.read_bytes())) as zf:
-        names = zf.namelist()
-    assert "[Content_Types].xml" in names
-    assert "word/styles.xml" in names
 
 
 # ---- 14. bounded_by note present when set ------------------------------------

@@ -22,13 +22,12 @@ import type { ReportEvent } from "@/types/agent";
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
-// Mutable export capabilities so individual tests can enable PDF/DOCX.
-// Default mirrors a server without WeasyPrint/pandoc (pdf:false, docx:false).
+// Mutable export capabilities so individual tests can enable PDF.
+// Default mirrors a server without WeasyPrint (pdf:false).
 const _caps = vi.hoisted(() => ({
-  current: { md: true, pdf: false, docx: false } as {
+  current: { md: true, pdf: false } as {
     md: boolean;
     pdf: boolean;
-    docx: boolean;
   },
 }));
 vi.mock("@/hooks/useExportCapabilities", () => ({
@@ -190,8 +189,8 @@ function renderCard(overrides?: Partial<React.ComponentProps<typeof NeedMoreCard
 describe("NeedMoreCard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Restore default capabilities (pdf/docx off) before each test.
-    _caps.current = { md: true, pdf: false, docx: false };
+    // Restore default capabilities (pdf off) before each test.
+    _caps.current = { md: true, pdf: false };
   });
 
   // (a) All three buttons render
@@ -291,8 +290,8 @@ describe("NeedMoreCard", () => {
     expect(onFollowUp).toHaveBeenCalledWith("What about the cost curve?");
   });
 
-  // (c) Export modal opens, shows MD/PDF/DOCX, closes, REOPENS
-  it("Export modal opens showing MD/PDF/DOCX choices, closes, and reopens", async () => {
+  // (c) Export modal opens, shows MD/PDF (W-12: DOCX removed), closes, REOPENS
+  it("Export modal opens showing MD/PDF choices, closes, and reopens", async () => {
     const user = userEvent.setup();
     renderCard();
 
@@ -305,7 +304,8 @@ describe("NeedMoreCard", () => {
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByRole("button", { name: /Markdown/i })).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: /PDF/i })).toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: /DOCX/i })).toBeInTheDocument();
+    // W-12: DOCX export was removed end to end — no DOCX choice in the modal.
+    expect(within(dialog).queryByRole("button", { name: /DOCX/i })).not.toBeInTheDocument();
 
     // Close via the X button
     await user.click(within(dialog).getByRole("button", { name: /Close export dialog/i }));
@@ -319,17 +319,16 @@ describe("NeedMoreCard", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
-  it("Export modal shows PDF/DOCX as disabled when server lacks the toolchain", async () => {
+  it("Export modal shows PDF as disabled when server lacks WeasyPrint", async () => {
     const user = userEvent.setup();
     renderCard();
 
     await user.click(screen.getByRole("button", { name: /Export as/i }));
     const dialog = await screen.findByRole("dialog");
 
-    // useExportCapabilities mock returns pdf:false, docx:false
+    // useExportCapabilities mock returns pdf:false
     // Button names include subtitle text so we use substring regex.
     expect(within(dialog).getByRole("button", { name: /PDF/i })).toBeDisabled();
-    expect(within(dialog).getByRole("button", { name: /DOCX/i })).toBeDisabled();
     // MD is always enabled
     expect(within(dialog).getByRole("button", { name: /Markdown/i })).toBeEnabled();
   });
@@ -599,7 +598,7 @@ describe("NeedMoreCard", () => {
     }
 
     it("defaults to Disco and POSTs theme:disco mode:light when exporting PDF", async () => {
-      _caps.current = { md: true, pdf: true, docx: true };
+      _caps.current = { md: true, pdf: true };
       stubBlobAndUrl();
       const user = userEvent.setup();
       renderCard();
@@ -621,7 +620,7 @@ describe("NeedMoreCard", () => {
     });
 
     it("selecting Midnight then exporting PDF POSTs theme:midnight mode:dark", async () => {
-      _caps.current = { md: true, pdf: true, docx: true };
+      _caps.current = { md: true, pdf: true };
       stubBlobAndUrl();
       const user = userEvent.setup();
       renderCard();

@@ -9,7 +9,7 @@ import posixpath
 from pathlib import Path
 from typing import Any
 
-from disco.core import DEFAULT_OWNER_ID, MessageEvent, ReportEvent
+from disco.core import MessageEvent, ReportEvent
 from disco.core.store.sqlite import SqliteEventStore
 from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
@@ -123,11 +123,11 @@ async def _resolve_export_payload(
 ) -> tuple[bytes, str | None, str]:
     """Resolve ``(payload, media_type, ext)`` for a report export.
 
-    All formats serialize inline (md/pdf in-process, docx in a transient render
-    sandbox) — bypassing ConversationRuntime so follow-ups, theme/mode, AND the
-    generated title (W-10) can be threaded without touching runtime.py / the
-    DR-service module.  Raises HTTPException(404) when no report exists, (400)
-    on a serializer error or unknown theme.
+    Both formats serialize inline (md/pdf in-process) — bypassing
+    ConversationRuntime so follow-ups, theme/mode, AND the generated title
+    (W-10) can be threaded without touching runtime.py / the DR-service module.
+    Raises HTTPException(404) when no report exists, (400) on a serializer
+    error or unknown theme.
     """
     # Validate the theme early so callers get a clear 400 before any I/O. Validate
     # against the GALLERY catalogue ("{theme}-{mode}") — stricter than resolve_theme,
@@ -145,10 +145,9 @@ async def _resolve_export_payload(
                 status_code=400, detail=f"Unknown template {theme!r}/{mode!r}"
             )
 
-    # ALL formats serialize inline so theme/mode, follow-ups, AND the generated
+    # Both formats serialize inline so theme/mode, follow-ups, AND the generated
     # TITLE (W-10) are honored.  The runtime.export_report path threads none of
-    # these, so we no longer route through it — docx renders in a transient
-    # render sandbox here (same lifecycle the DR service uses), with the title.
+    # these, so we no longer route through it.
     from ..report_export import (
         EXTENSIONS,
         MEDIA_TYPES,
@@ -179,44 +178,14 @@ async def _resolve_export_payload(
                 MEDIA_TYPES[fmt],
                 EXTENSIONS[fmt],
             )
-        if fmt == "pdf":
-            return (
-                serialize_pdf(report, follow_ups, theme=theme, mode=mode, title=title),
-                MEDIA_TYPES[fmt],
-                EXTENSIONS[fmt],
-            )
-        # docx — render via pandoc inside a throwaway sandbox (pandoc ships in
-        # the sandbox image, not the host), passing the title through.
-        payload = await _render_docx_with_title(runtime, report, follow_ups, title)
-        return payload, MEDIA_TYPES["docx"], EXTENSIONS["docx"]
+        # pdf
+        return (
+            serialize_pdf(report, follow_ups, theme=theme, mode=mode, title=title),
+            MEDIA_TYPES[fmt],
+            EXTENSIONS[fmt],
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-async def _render_docx_with_title(
-    runtime: ConversationRuntime,
-    report: ReportEvent,
-    follow_ups: list[tuple[str, str]],
-    title: str | None,
-) -> bytes:
-    """Render a report to DOCX inside a transient render sandbox, threading the
-    generated title (W-10).  Mirrors the DR service's ``_render_docx_in_sandbox``
-    lifecycle (spin → render → destroy) but lives in the route so the title can
-    be passed without touching the runtime / DR-service modules."""
-    import uuid as _uuid
-
-    from ..report_export import serialize_docx as _serialize_docx
-
-    svc = runtime._sandbox_service_now()
-    cid = f"export-docx-{_uuid.uuid4().hex[:12]}"
-    instance = await svc.create(
-        runtime._sandbox_spec, owner_id=DEFAULT_OWNER_ID, conversation_id=cid
-    )
-    try:
-        return await _serialize_docx(report, instance, follow_ups, title)
-    finally:
-        with contextlib.suppress(Exception):
-            await instance.destroy()
 
 
 async def _resolve_audio_inputs(
@@ -273,9 +242,9 @@ def make_report_router(
         fmt: str = Query(...),
         body: ExportBody = ExportBody(),
     ) -> Response:
-        """Export the latest Deep Research report as MD, PDF, or DOCX.
+        """Export the latest Deep Research report as MD or PDF.
 
-        Query param ``fmt`` must be md, pdf, or docx.  Optional JSON body
+        Query param ``fmt`` must be md or pdf.  Optional JSON body
         ``{"follow_up_seqs": [5, 12]}`` includes the selected follow-up Q&A
         pairs in the exported document (WALK-20).
 
@@ -287,11 +256,11 @@ def make_report_router(
                 status_code=503, detail={"ok": False, "reason": "no_runtime"}
             )
 
-        valid_fmts = frozenset({"md", "pdf", "docx"})
+        valid_fmts = frozenset({"md", "pdf"})
         if fmt not in valid_fmts:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unknown export format: {fmt!r}. Valid: md, pdf, docx",
+                detail=f"Unknown export format: {fmt!r}. Valid: md, pdf",
             )
 
         # Resolve the export bytes (follow-up-aware md/pdf inline, else runtime path).

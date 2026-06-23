@@ -433,3 +433,45 @@ describe("deriveBuildProgress — declarative full-state snapshot (#3)", () => {
     expect(deriveBuildProgress(events, "STUCK").get(1)).toBe("stalled");
   });
 });
+
+describe("deriveActivity — W-14/W-28: no 'Listed .' workspace-root stub", () => {
+  function fileListEvent(id: string, path: unknown): AgentEvent {
+    return {
+      kind: "action",
+      id,
+      thought: "",
+      tool_call: { tool_name: "file_list", arguments: { path }, call_id: id },
+    } as AgentEvent;
+  }
+
+  it.each([".", "./", "", "/", undefined])(
+    "suppresses a workspace-root file_list (path=%p) so nothing renders before real content",
+    (path) => {
+      const items = deriveActivity([fileListEvent("ls-1", path)], null, "RUNNING");
+      expect(items).toHaveLength(0);
+      // and never the bare "Listed ." stub
+      expect(items.some((i) => /^Listed \.?$/.test(i.label))).toBe(false);
+    },
+  );
+
+  it("the root list is suppressed but later real work still renders", () => {
+    const events: AgentEvent[] = [
+      fileListEvent("ls-1", "."),
+      {
+        kind: "action",
+        id: "w-1",
+        thought: "",
+        tool_call: { tool_name: "file_write", arguments: { path: "index.html" }, call_id: "w-1" },
+      } as AgentEvent,
+    ];
+    const items = deriveActivity(events, null, "RUNNING");
+    expect(items).toHaveLength(1);
+    expect(items[0].label).toBe("Wrote index.html");
+  });
+
+  it("a real SUBDIRECTORY file_list still renders (not noise)", () => {
+    const items = deriveActivity([fileListEvent("ls-2", "src")], null, "RUNNING");
+    expect(items).toHaveLength(1);
+    expect(items[0].label).toBe("Listed src");
+  });
+});
