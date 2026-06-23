@@ -23,7 +23,14 @@ engine import (no cycle).
 
 from __future__ import annotations
 
-from ..events import ActionEvent, AgentErrorEvent, Event, LLMMessage, ObservationEvent
+from ..events import (
+    ActionEvent,
+    AgentErrorEvent,
+    Event,
+    LLMMessage,
+    MessageEvent,
+    ObservationEvent,
+)
 
 # A8 (file-state survival): single-file tools whose `path` arg names a file the
 # agent has touched — the working set re-read from disk each turn by
@@ -510,3 +517,189 @@ def _f9_dedupable_read(
         )
         return (True, e.id, pointer)
     return (False, "", "")
+
+
+# ---------------------------------------------------------------------------
+# W-39 — GATED advisory shell-verify reminder (assist-tier).
+#
+# A weak model that re-runs an IDEMPOTENT verify it already passed (Dylan saw
+# DeepSeek re-run `ls -la`) — the SHELL analogue of the F9 read-loop. F9 +
+# collapse_superseded_reads cover ONLY file_read (_WORKSPACE_READ_TOOLS); the
+# SHELL channel is NOT covered, so once condensation drops the earlier
+# success observation the model loses the evidence that the verify already
+# passed and re-runs it (the redundant verify/debug loop).
+#
+# Unlike F9 (which SKIPS the duplicate read), this is ADVISORY ONLY: a shell
+# command may have side effects, so we NEVER auto-skip / block. When a shell
+# command is byte-identical to one that produced a SUCCESSFUL observation
+# earlier AND nothing in the workspace has MUTATED since (REUSES the A8
+# mutating-tool set — the same "no mutation since" signal F9's
+# _f9_path_was_mutated_after is built on), we inject ONE system-reminder
+# noting it already passed, then the command executes normally. The model
+# decides whether to proceed.
+#
+# Anti-spam: exactly one reminder per passed-and-unmutated streak for a given
+# command — once reminded, we do not remind again until a workspace mutation
+# resets the streak (a fresh write means re-verifying is legit again).
+#
+# Mutation tracking is PATH-AGNOSTIC here (a shell command has no single
+# `path` arg): ANY mutating tool call after the prior successful run resets
+# the streak. F9's _f9_path_was_mutated_after is path-scoped; W-39 needs the
+# any-path variant (_w39_latest_mutation_seq) because a shell verify can
+# depend on the whole workspace.
+#
+# GATED on the assist tier by its caller (mirrors F9). Assist OFF
+# (capable-model default) → never invoked; byte-identical to today. Even when
+# ON the command ALWAYS executes — the only observable change is one extra
+# advisory MessageEvent before the (still-executed) call.
+# ---------------------------------------------------------------------------
+
+# The shell-exec tools whose re-run is a redundant verify when idempotent.
+# Both carry the `command` arg (see ShellTool / ShellExecTool in
+# packages/tools/.../builtin). code_exec is intentionally excluded — re-running
+# code is more often a deliberate re-execution and it uses a different arg key.
+_W39_SHELL_TOOLS = frozenset({"shell", "shell_exec"})
+
+# Window of recent shell calls to scan back through (mirrors _F9_WINDOW_SIZE):
+# a re-verify a model loops on is always recent, and a bounded window keeps
+# the walk cheap.
+_W39_WINDOW_SIZE = 8
+
+# Stable marker so the anti-spam scan can recognize a prior W-39 reminder in
+# the event log (and so logs/tests have a single source of truth).
+_W39_REMINDER_SENTINEL = "[W-39 verify-dedup]"
+
+# Length cap on the command echoed into the reminder so a giant heredoc/script
+# doesn't bloat it — the command is identifiable by its prefix. The SAME
+# shortened string is used for the anti-spam match (so truncation can't cause
+# a false non-match).
+_W39_COMMAND_MAX_CHARS = 200
+
+# Advisory reminder text. ADVISORY ONLY — it never asserts "nothing changed"
+# in absolute terms; it puts the judgment on the model ("re-run only if you
+# changed something"). format-only (single source of truth).
+_W39_REMINDER_TEMPLATE = (
+    "<system-reminder>\n"
+    "{sentinel} You already ran `{command}` earlier (step {step}) and it "
+    "passed, and nothing has been written to the workspace since. Re-run it "
+    "only if you have changed something relevant — otherwise act on the "
+    "result you already have instead of re-verifying.\n"
+    "</system-reminder>"
+)
+
+
+def _w39_short_command(command: str) -> str:
+    """W-39 — bound the command echoed into the reminder (and used for the
+    anti-spam match) so a giant script doesn't bloat the reminder."""
+    s = command.strip()
+    if len(s) > _W39_COMMAND_MAX_CHARS:
+        s = s[: _W39_COMMAND_MAX_CHARS - 1] + "…"
+    return s
+
+
+def _w39_latest_mutation_seq(events: list[Event], *, before_seq: int | None = None) -> int:
+    """W-39 — seq of the MOST RECENT workspace-mutating tool call (the A8
+    mutating set: file_write / file_edit / file_append / file_replace_lines /
+    file_insert_lines), or 0 if there has been none. Path-agnostic analogue of
+    _f9_path_was_mutated_after — a shell verify has no single `path`, so ANY
+    file mutation resets the 'already passed' streak. `before_seq` bounds the
+    scan to events strictly before the current action (defensive)."""
+    latest = 0
+    for e in events:
+        seq = e.seq or 0
+        if before_seq is not None and seq >= before_seq:
+            continue
+        if (
+            isinstance(e, ActionEvent)
+            and e.tool_call is not None
+            and e.tool_call.tool_name in _WORKSPACE_MUTATING_TOOLS
+        ):
+            latest = max(latest, seq)
+    return latest
+
+
+def _w39_reminder_emitted_after(events: list[Event], short_command: str, after_seq: int) -> bool:
+    """W-39 anti-spam — has a W-39 reminder for `short_command` already been
+    emitted with seq > after_seq? Keeps the advisory one-shot per
+    passed-and-unmutated streak (no spam if the model loops 3+ times)."""
+    for e in events:
+        if (e.seq or 0) <= after_seq:
+            continue
+        if isinstance(e, MessageEvent) and e.message is not None:
+            content = e.message.content
+            if (
+                isinstance(content, str)
+                and _W39_REMINDER_SENTINEL in content
+                and short_command in content
+            ):
+                return True
+    return False
+
+
+def _w39_shell_verify_reminder(
+    current_tool: str | None,
+    current_args: dict | None,
+    events: list[Event],
+    *,
+    window: int = _W39_WINDOW_SIZE,
+) -> tuple[bool, int, str]:
+    """W-39 — ADVISORY (never skip). Return ``(should_remind, prior_seq,
+    reminder_text)`` when the current shell call is byte-identical to a recent
+    SUCCESSFUL shell call AND no workspace mutation has happened since AND we
+    have not already reminded for this command in the current streak.
+
+    Pure function over ``events`` (the CURRENT action is ``events[-1]``; the
+    walk scans ``events[:-1]``). The caller (assist-gated) emits the reminder
+    MessageEvent and then executes the command normally — NOTHING is skipped.
+
+    Returns ``(False, 0, "")`` when no reminder should fire (not a shell tool,
+    no identical prior success, a mutation since, or already reminded).
+    """
+    if current_tool not in _W39_SHELL_TOOLS or not isinstance(current_args, dict):
+        return (False, 0, "")
+    command = current_args.get("command")
+    if not isinstance(command, str) or not command:
+        return (False, 0, "")
+
+    prior_events = events[:-1] if events else []
+    # Streak boundary: the most recent workspace mutation resets the
+    # "already passed" streak (0 = no mutation this run). Reused for BOTH the
+    # mutation gate and the anti-spam window so they stay consistent.
+    streak_start_seq = _w39_latest_mutation_seq(prior_events)
+
+    short_command = _w39_short_command(command)
+    shell_calls_seen = 0
+    for e in reversed(prior_events):
+        if not isinstance(e, ActionEvent) or e.tool_call is None:
+            continue
+        tool_name = e.tool_call.tool_name
+        if tool_name in _W39_SHELL_TOOLS:
+            shell_calls_seen += 1
+            if shell_calls_seen > window:
+                break  # window exhausted — give up (mirrors F9 eviction)
+        if tool_name != current_tool:
+            continue
+        if (e.tool_call.arguments or {}) != current_args:
+            continue  # not byte-identical args — keep walking back
+        # Same shell tool + identical args. Validate it SUCCEEDED earlier.
+        if not _f9_has_successful_observation(events, e.id):
+            # Failed / no-observation earlier run — re-running is legit
+            # (the bug is re-running PASSED verifies). Keep looking for an
+            # earlier identical SUCCESS.
+            continue
+        prior_seq = e.seq or 0
+        # No workspace mutation since the prior successful run? If a write
+        # landed after it, re-running the verify is legitimate (test b) —
+        # do NOT remind, and an older run would be even more stale.
+        if streak_start_seq >= prior_seq:
+            return (False, 0, "")
+        # Anti-spam: one reminder per passed-and-unmutated streak.
+        if _w39_reminder_emitted_after(events, short_command, streak_start_seq):
+            return (False, 0, "")
+        reminder = _W39_REMINDER_TEMPLATE.format(
+            sentinel=_W39_REMINDER_SENTINEL,
+            command=short_command,
+            step=prior_seq,
+        )
+        return (True, prior_seq, reminder)
+    return (False, 0, "")

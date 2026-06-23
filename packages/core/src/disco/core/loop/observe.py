@@ -27,7 +27,7 @@ from ..events import (
 )
 from ..llm import LLMContextWindowExceeded
 from ..view import View
-from .dedup import _f9_dedupable_read
+from .dedup import _f9_dedupable_read, _w39_shell_verify_reminder
 from .messages import _workspace_paths_from_events
 
 if TYPE_CHECKING:
@@ -190,6 +190,13 @@ class Observer:
         # executor.execute(). The persisted event shape is unchanged
         # (ActionEvent + ObservationEvent pair) — only the observation
         # content differs.
+        # W-39 — ADVISORY shell-verify reminder text, decided BEFORE execution
+        # (it reads the prior event log, where this action is the last event)
+        # but EMITTED AFTER the success observation below, so it never
+        # interleaves between the tool-call action and its result (strict
+        # provider tool-pairing) — mirrors maybe_emit_sandbox_restart's
+        # after-the-fact placement. None ⇒ no reminder this call.
+        _w39_text: str | None = None
         if self._loop._assist and action.tool_call is not None:
             _f9_events = await self._loop._events()
             _f9_deduped, _f9_prior_id, _f9_pointer = _f9_dedupable_read(
@@ -217,6 +224,28 @@ class Observer:
                     )
                 )
                 return
+            # W-39 — the SHELL analogue of the F9 read-loop: when this shell
+            # command is byte-identical to one that already SUCCEEDED earlier
+            # and nothing has been written to the workspace since (reusing the
+            # A8 mutating-tool tracking F9 is built on), queue ONE advisory
+            # system-reminder that it already passed. ADVISORY ONLY — the
+            # command is NEVER skipped (shell may have side effects); we just
+            # nudge the model not to re-verify next time. Anti-spam: at most
+            # one reminder per passed-and-unmutated streak.
+            _w39_remind, _w39_prior_seq, _w39_text_candidate = _w39_shell_verify_reminder(
+                action.tool_call.tool_name,
+                action.tool_call.arguments,
+                _f9_events,
+            )
+            if _w39_remind:
+                _LOG.info(
+                    "W-39 shell-verify reminder: %s already passed at step %s "
+                    "(call_id=%s) — advisory, executing anyway",
+                    action.tool_call.tool_name,
+                    _w39_prior_seq,
+                    action.tool_call.call_id,
+                )
+                _w39_text = _w39_text_candidate
         # K1 — elision-marker execution guard. A weak model can copy the
         # `_snip_args` placeholder (rendered into the action history as a context-
         # saving stand-in for content it already wrote) back into a REAL tool
@@ -283,6 +312,18 @@ class Observer:
             return
         if result.success:
             await self._loop._emit(ObservationEvent(tool_result=result, action_id=action.id))
+            # W-39 — emit the advisory shell-verify reminder AFTER the
+            # observation (so it never splits the action/result pair). Only on
+            # a SUCCESSFUL re-run: if the re-run actually FAILED, the workspace
+            # must have changed and re-verifying was legitimate — a "you already
+            # passed this" nudge would be wrong, so it's suppressed.
+            if _w39_text is not None:
+                await self._loop._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(role="user", content=_w39_text),
+                    )
+                )
             # C18 — advisory done-condition probe. If this was a
             # `plan_step(idx, 'done')` for a step that had a `done_condition`
             # attached, evaluate the predicate and emit a visible
