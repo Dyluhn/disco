@@ -222,3 +222,111 @@ async def test_evict_stale_backend_noop_when_backend_unchanged():
 
     rt._evict_stale_backend("c1")
     assert "c1" in rt._executors and "c1" in rt._loops and not sess.destroyed
+
+
+# ---- W-48 P1-2: gate-parked convs are NOT evicted on a backend change ---------
+
+
+async def test_evict_stale_backend_skips_gated_conversation():
+    """A conv PARKED at a gate (no active task) keeps its mid-gate workspace: the
+    sync evict path skips it via the in-process last-status cache, even though its
+    cached session runs the now-stale backend."""
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)
+    _set_backend(rt, "local")  # NEW backend
+
+    stale = _FakeSession("gvisor")  # OLD backend — would normally be evicted
+    rt._executors["c1"] = types.SimpleNamespace(_sandbox=stale)
+    rt._loops["c1"] = object()
+    rt._last_status["c1"] = ConversationStatus.AWAITING_PLAN_APPROVAL  # parked at a gate
+
+    rt._evict_stale_backend("c1")
+    await asyncio.sleep(0)
+
+    assert "c1" in rt._executors and "c1" in rt._loops  # NOT evicted mid-gate
+    assert not stale.destroyed
+
+
+async def test_evict_stale_backend_evicts_idle_conversation():
+    """The companion case: a truly IDLE conv with a stale backend IS evicted."""
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)
+    _set_backend(rt, "local")
+
+    stale = _FakeSession("gvisor")
+    rt._executors["c1"] = types.SimpleNamespace(_sandbox=stale)
+    rt._loops["c1"] = object()
+    rt._last_status["c1"] = ConversationStatus.IDLE  # not a gate
+
+    rt._evict_stale_backend("c1")
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert "c1" not in rt._executors and "c1" not in rt._loops
+    assert stale.destroyed
+
+
+async def test_reconcile_skips_gated_conversation():
+    """The async reconcile reads the store authoritatively: a gated conv is skipped,
+    an idle one is reconciled."""
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)
+    _set_backend(rt, "local")
+
+    # c1: gated (store says AWAITING_PLAN_APPROVAL) → skipped.
+    gated = _FakeSession("gvisor")
+    rt._executors["c1"] = types.SimpleNamespace(_sandbox=gated)
+    rt._loops["c1"] = object()
+    await store.append("c1", StatusEvent(status=ConversationStatus.AWAITING_PLAN_APPROVAL))
+    # c2: idle (no gate event) → reconciled.
+    idle = _FakeSession("gvisor")
+    rt._executors["c2"] = types.SimpleNamespace(_sandbox=idle)
+    rt._loops["c2"] = object()
+
+    n = await rt.reconcile_sandbox_backend()
+
+    assert n == 1
+    assert not gated.destroyed and "c1" in rt._executors  # gated → preserved
+    assert idle.destroyed and "c2" not in rt._executors  # idle → reconciled
+
+
+# ---- W-48 P1-3: eviction clears the _rehydrated marker (+ siblings) -----------
+
+
+async def test_evict_stale_backend_clears_rehydrated_marker():
+    """Backend-change eviction must clear the rehydrate-once marker (mirroring normal
+    teardown) — otherwise the next run SKIPS rehydrate and starts in an EMPTY
+    workspace, silently losing prior work."""
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)
+    _set_backend(rt, "local")
+
+    stale = _FakeSession("gvisor")
+    rt._executors["c1"] = types.SimpleNamespace(_sandbox=stale)
+    rt._loops["c1"] = object()
+    rt._rehydrated = {"c1"}  # marker set by a prior rehydrate
+    rt._wake_locks["c1"] = asyncio.Lock()
+    rt._last_sessions["c1"] = [object()]  # type: ignore[list-item]
+
+    rt._evict_stale_backend("c1")
+    await asyncio.sleep(0)
+
+    assert "c1" not in rt._rehydrated  # marker cleared — next run rehydrates
+    assert "c1" not in rt._wake_locks  # sibling per-session markers cleared too
+    assert "c1" not in rt._last_sessions
+
+
+async def test_reconcile_clears_rehydrated_marker():
+    """The async reconcile path clears the marker too."""
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)
+    _set_backend(rt, "local")
+
+    stale = _FakeSession("gvisor")
+    rt._executors["c1"] = types.SimpleNamespace(_sandbox=stale)
+    rt._loops["c1"] = object()
+    rt._rehydrated = {"c1"}
+
+    await rt.reconcile_sandbox_backend()
+
+    assert "c1" not in rt._rehydrated

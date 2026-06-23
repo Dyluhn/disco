@@ -92,6 +92,60 @@ async def test_process_backend_healthcheck_ok(tmp_path):
     assert await asyncio.wait_for(svc.healthcheck(), _BOUND_S) is None
 
 
+# ---- W-48 P1: docker-over-SSH preflight is BOUNDED (no leaked ssh thread) ----
+
+
+def test_ssh_probe_command_carries_connecttimeout_and_batchmode():
+    """The preflight SSH probe must invoke ssh with ConnectTimeout (so ssh itself
+    dies fast on an unreachable host instead of hanging for minutes) + BatchMode
+    (no interactive auth hang), mirroring docker-py's `-l user`/`-p port` layout."""
+    from disco.tools.sandbox.gvisor import _ssh_probe_command
+
+    argv = _ssh_probe_command("ssh://sandbox@100.81.82.115:2222", connect_timeout=8)
+    assert argv[0] == "ssh"
+    assert "ConnectTimeout=8" in argv  # ssh's own deadline — the leak fix
+    assert "BatchMode=yes" in argv  # no prompt hang under to_thread
+    assert "-l" in argv and "sandbox" in argv  # user
+    assert "-p" in argv and "2222" in argv  # port
+    assert argv[-1] == "true"  # liveness check, not the docker dial
+
+
+async def test_ssh_preflight_unreachable_is_bounded_and_typed(monkeypatch):
+    """An unreachable ssh:// host must return the TYPED error FAST — the bounded probe
+    runs BEFORE the leaky docker-py path, so the worker thread/subprocess can't linger
+    for ssh's multi-minute TCP timeout. We simulate the bound (no real network): the
+    probe's subprocess.run raises TimeoutExpired exactly as a black-holed ssh would
+    once ConnectTimeout / the backstop fires."""
+    import subprocess
+    import time
+
+    seen: dict[str, object] = {}
+
+    def _fake_run(args, **kwargs):
+        seen["args"] = args
+        seen["timeout"] = kwargs.get("timeout")
+        # ssh gave up at ConnectTimeout / the backstop killed it — the child is reaped.
+        raise subprocess.TimeoutExpired(cmd=args, timeout=kwargs.get("timeout"))
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    cfg = SandboxConfig(backend="gvisor", docker_socket="ssh://sandbox@10.255.255.1")
+    svc = GvisorSandboxService(cfg)
+
+    t0 = time.monotonic()
+    with pytest.raises(SandboxUnavailableError) as ei:
+        await asyncio.wait_for(svc.healthcheck(), _BOUND_S)
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < _BOUND_S  # bounded — not ssh's minutes-long default
+    assert "ssh://sandbox@10.255.255.1" in str(ei.value)  # endpoint NAMED
+    assert "unreachable" in str(ei.value).lower()
+    # The probe is what ran (docker-py's leaky path was never reached) AND it carried
+    # the bound + a hard subprocess backstop.
+    assert "ConnectTimeout=8" in seen["args"] and "BatchMode=yes" in seen["args"]
+    assert seen["timeout"] is not None and seen["timeout"] <= 8 + 4
+
+
 def test_service_from_config_maps_each_backend():
     assert service_from_config(SandboxConfig(backend="gvisor")).name == "gvisor"
     assert service_from_config(SandboxConfig(backend="local")).name == "local"

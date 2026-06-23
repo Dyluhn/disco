@@ -113,7 +113,7 @@ from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
 
 from .control_ops import ControlOps
 from .deep_research_service import DeepResearchService
-from .lifecycle import LifecycleManager
+from .lifecycle import _GATE_STATES, LifecycleManager
 from .mcp_manager import McpManager
 from .preview_service import PreviewService
 from .resume_service import ResumeService
@@ -620,6 +620,14 @@ class ConversationRuntime:
         # transient drop, then terminalize honestly to STUCK so a wedged build is
         # VISIBLE, never RUNNING forever. Reset whenever a run reaches a real status.
         self._nonterminal_rekicks: dict[str, int] = {}
+        # [W-48 P1] Last status a run task ENDED at, per cid (in-process). The sync
+        # `_evict_stale_backend` (called at kick) can't await the store, so it reads
+        # this to SKIP a conversation PARKED at a gate — evicting a gated conv on a
+        # backend change would discard its mid-gate workspace. Sound because eviction
+        # only ever touches an IN-PROCESS cached session, and the only way to reach a
+        # gate with such a session is a run that ended here (→ _finalize_clean_return,
+        # which records it). After a restart the caches are empty → nothing to evict.
+        self._last_status: dict[str, ConversationStatus] = {}
         # Cooperative-cancellation flags for Deep Research (whose engine isn't an
         # AgentLoop and can't be soft-cancelled the loop's way). Stop sets the flag;
         # the engine polls it at each sub-question/section boundary and halts,
@@ -1592,6 +1600,10 @@ class ConversationRuntime:
             logger.exception("clean-return finalize could not read state for %s", conversation_id)
             return
         status = state.execution_status
+        # [W-48 P1] Remember where this run ENDED so the sync backend-eviction path can
+        # tell a gate-parked conv (don't evict — preserve its mid-gate workspace) from
+        # a truly idle/finished one (safe to evict).
+        self._last_status[conversation_id] = status
         if status in self._CONCLUDED_STATUSES or status in self._RUN_PARKED_STATUSES:
             # Healthy ending → reset the per-cid re-kick budget for the next segment.
             self._nonterminal_rekicks.pop(conversation_id, None)
@@ -1834,15 +1846,39 @@ class ConversationRuntime:
         with contextlib.suppress(Exception):
             await session.destroy()
 
+    def _clear_evicted_session_markers(self, conversation_id: str) -> None:
+        """[W-48 P1] Mirror the per-session marker cleanup that `_teardown_sandbox`
+        does, for the backend-eviction paths (which pop the loop/executor caches
+        directly rather than going through teardown). Most load-bearing: clearing the
+        `_rehydrated` marker — leaving it set makes the next run SKIP rehydrate and
+        start in an EMPTY workspace (silently losing prior work). The view-cache /
+        wake-lock / last-session entries are dropped too so a stale handle can't ghost
+        the fresh backend's session."""
+        for key in [k for k in self._session_view_cache if k[0] == conversation_id]:
+            del self._session_view_cache[key]
+        for key in [k for k in self._session_view_locks if k[0] == conversation_id]:
+            del self._session_view_locks[key]
+        self._wake_locks.pop(conversation_id, None)
+        self._last_sessions.pop(conversation_id, None)
+        rehydrated = getattr(self, "_rehydrated", None)
+        if rehydrated is not None:
+            rehydrated.discard(conversation_id)
+        with contextlib.suppress(Exception):
+            from disco.tools.builtin.files import clear_conversation_read_state
+
+            clear_conversation_read_state(conversation_id)
+
     def _evict_stale_backend(self, conversation_id: str) -> None:
         """[W-48(c)] On a persisted sandbox-backend change, reconcile THIS conversation:
         if its cached session runs a DIFFERENT backend than the now-configured one (the
         user switched backends in Settings), evict the cached loop/executor/pending
         session so the NEXT compose builds a fresh sandbox on the new backend, and
         best-effort tear the old box down (never leak the old backend's session).
-        No-op when the backend is unchanged, a backend override is injected (tests), or
-        a live run is in flight (never reconnect mid-turn). Called synchronously at the
-        top of kick(); the async teardown is scheduled so kick() stays non-blocking."""
+        No-op when the backend is unchanged, a backend override is injected (tests), a
+        live run is in flight (never reconnect mid-turn), or the conversation is PARKED
+        at a gate (P1 — evicting mid-gate would discard its workspace). Called
+        synchronously at the top of kick(); the async teardown is scheduled so kick()
+        stays non-blocking."""
         if self._injected_sandbox is not None:
             return  # injected backend is authoritative; Settings backend is ignored
         try:
@@ -1852,6 +1888,12 @@ class ConversationRuntime:
         task = self._tasks.get(conversation_id)
         if task is not None and not task.done():
             return  # mid-turn — don't reconnect
+        # [W-48 P1] A gate-parked conv has no active task but its mid-gate workspace
+        # lives in the OLD backend's box — evicting it on a backend change would lose
+        # that state. Treat a gate like an active task: skip. (Sync path → the
+        # in-process last-status cache; see _last_status.)
+        if self._last_status.get(conversation_id) in _GATE_STATES:
+            return
         stale: list[SandboxSession] = []
         executor = self._executors.get(conversation_id)
         sess = getattr(executor, "_sandbox", None) if executor is not None else None
@@ -1863,6 +1905,8 @@ class ConversationRuntime:
         if pending is not None and pending.backend_name != current:
             self._pending_sessions.pop(conversation_id, None)
             stale.append(pending)
+        if stale:
+            self._clear_evicted_session_markers(conversation_id)
         for s in stale:
             with contextlib.suppress(RuntimeError):  # no running loop (shutdown) → skip
                 asyncio.create_task(self._best_effort_destroy_session(s))
@@ -1885,6 +1929,14 @@ class ConversationRuntime:
             task = self._tasks.get(cid)
             if task is not None and not task.done():
                 continue  # mid-turn — don't reconnect
+            # [W-48 P1] Skip a conv PARKED at a gate — evicting mid-gate would discard
+            # its workspace. This path is async, so read the store authoritatively.
+            try:
+                state = await self._store.get_state(cid)
+            except Exception:  # noqa: BLE001 — one bad cid must not abort the sweep
+                state = None
+            if state is not None and state.execution_status in _GATE_STATES:
+                continue
             executor = self._executors.get(cid)
             sess = getattr(executor, "_sandbox", None) if executor is not None else None
             pending = self._pending_sessions.get(cid)
@@ -1896,6 +1948,8 @@ class ConversationRuntime:
             if pending is not None and pending.backend_name != current:
                 self._pending_sessions.pop(cid, None)
                 mismatched.append(pending)
+            if mismatched:
+                self._clear_evicted_session_markers(cid)
             for s in mismatched:
                 await self._best_effort_destroy_session(s)
                 reconciled += 1

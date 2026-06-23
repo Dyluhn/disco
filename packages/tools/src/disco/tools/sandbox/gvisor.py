@@ -63,6 +63,77 @@ def _preview_host(docker_socket: str) -> str:
     return "localhost"
 
 
+# [W-48 P1] Bound the docker-over-SSH preflight. docker-py's `use_ssh_client` path
+# (transport.SSHSocket) builds its `ssh` command with NO ConnectTimeout/BatchMode, so
+# an UNREACHABLE host leaves that ssh subprocess — and the `asyncio.to_thread` worker
+# blocked reading its pipe — alive until ssh's OWN multi-minute TCP timeout, even
+# though the asyncio `wait_for` around the probe returns bounded. Repeated bad-config
+# probes then pile up leaked threads/subprocesses. We probe reachability with a
+# bounded `ssh … true` BEFORE the docker-py call so the slow path can't leak.
+_SSH_CONNECT_TIMEOUT_S = 8
+
+
+def _ssh_probe_command(
+    docker_socket: str, connect_timeout: int = _SSH_CONNECT_TIMEOUT_S
+) -> list[str]:
+    """Build a BOUNDED `ssh … true` reachability probe for an `ssh://user@host[:port]`
+    Docker endpoint. Mirrors docker-py's own arg layout (`-l user`, `-p port`, `--`,
+    host) but adds the two bounds docker-py's SSHSocket OMITS: `ConnectTimeout` (ssh
+    itself gives up fast — no minutes-long hang) and `BatchMode=yes` (no interactive
+    auth prompt that would hang the worker). Runs `true`, not the docker dial — a pure
+    liveness check ahead of the leaky docker-py path."""
+    rest = docker_socket.removeprefix("ssh://")
+    user: str | None = None
+    if "@" in rest:
+        user, rest = rest.split("@", 1)
+    host = rest.split("/", 1)[0]  # strip any trailing path
+    port: str | None = None
+    if ":" in host:
+        host, port = host.split(":", 1)
+    args = ["ssh", "-o", f"ConnectTimeout={connect_timeout}", "-o", "BatchMode=yes"]
+    if user:
+        args += ["-l", user]
+    if port:
+        args += ["-p", port]
+    args += ["--", host, "true"]
+    return args
+
+
+def _probe_ssh_reachable(
+    docker_socket: str, connect_timeout: int = _SSH_CONNECT_TIMEOUT_S
+) -> None:
+    """Run the bounded SSH probe BEFORE handing the endpoint to docker-py, so a dead
+    host raises a typed error in ~`connect_timeout`s and the leaky `use_ssh_client`
+    path is never reached for it. `subprocess.run(timeout=…)` is a hard backstop: even
+    if ssh ignored ConnectTimeout the child is killed and reaped, so the worker thread
+    can't leak. Raises SandboxUnavailableError on any unreachable/failed probe."""
+    import subprocess
+
+    args = _ssh_probe_command(docker_socket, connect_timeout)
+    try:
+        proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
+            args,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=connect_timeout + 4,  # backstop kill if ssh ignores ConnectTimeout
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise SandboxUnavailableError(
+            f"Docker host unreachable over SSH at {docker_socket}: ssh probe timed out "
+            f"after ~{connect_timeout}s (ConnectTimeout)"
+        ) from exc
+    except OSError as exc:  # ssh binary missing / spawn failure
+        raise SandboxUnavailableError(
+            f"could not run the SSH reachability probe for {docker_socket}: {exc}"
+        ) from exc
+    if proc.returncode != 0:
+        tail = (proc.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+        msg = tail[-1] if tail else f"ssh exited {proc.returncode}"
+        raise SandboxUnavailableError(
+            f"Docker host unreachable over SSH at {docker_socket}: {msg}"
+        )
+
+
 def _put_file(container: Any, dir_path: str, name: str, data: bytes) -> None:
     """`put_archive` a single file into a container dir — used to drop the
     stdlib-only egress proxy script into the sidecar (no image rebuild)."""
@@ -134,6 +205,10 @@ class GvisorSandboxService:
                 if base_url.startswith("ssh://"):
                     # Docker-over-SSH: use the SYSTEM ssh client so the host's auth
                     # (e.g. keyless Tailscale SSH) applies, not docker-py's paramiko.
+                    # [W-48 P1] Probe reachability with a BOUNDED ssh first — docker-py's
+                    # use_ssh_client path omits ConnectTimeout/BatchMode, so a dead host
+                    # would leak the ssh subprocess + its to_thread worker for minutes.
+                    _probe_ssh_reachable(base_url)
                     kwargs["use_ssh_client"] = True
                 client = docker.DockerClient(**kwargs)
                 client.ping()
