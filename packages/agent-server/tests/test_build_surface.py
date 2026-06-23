@@ -12,6 +12,9 @@ Real composition (RouterAgent + DefaultToolExecutor + agent tools + ProcessSandb
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+
 from disco.agent_server import ConversationRuntime
 from disco.core import (
     ActionEvent,
@@ -29,6 +32,7 @@ from disco.core.llm import (
     CompletionResponse,
     DefaultLLMRouter,
     ModelEntry,
+    ModelRole,
     OperatingMode,
     ProposedToolCall,
     RouterConfig,
@@ -42,7 +46,16 @@ CID = "c1"
 
 class _ScriptedProvider:
     """A model double whose response varies per call. `steps`: list of
-    (text, [ProposedToolCall]); an empty tool-call list means 'finish'."""
+    (text, [ProposedToolCall]); an empty tool-call list means 'finish'.
+
+    Role-aware: a SUMMARIZER-role request answers with a canned title and does
+    NOT advance the positional step counter. The runtime's `kick` fires the
+    async auto-titler (`title_service.schedule` → `router.complete` with the
+    SUMMARIZER role) through this same shared provider; if it consumed a step it
+    would silently eat the scripted build steps (notably step 0 = submit_plan),
+    desyncing the build driver. A real stateless LLM wouldn't desync either, so
+    making the double role-aware keeps it faithful and immunizes EVERY positional
+    test in this file at once."""
 
     name = "fake"
 
@@ -51,6 +64,17 @@ class _ScriptedProvider:
         self.calls = 0
 
     async def complete(self, req, *, model):
+        if req.profile.role == ModelRole.SUMMARIZER:
+            # The auto-titler — answer out-of-band; don't touch the step counter.
+            return CompletionResponse(
+                text="Scripted Build Task",
+                tool_calls=[],
+                usage=TokenUsage(input_tokens=1, output_tokens=1),
+                finish_reason="stop",
+                model_used=model,
+                request_id=req.request_id,
+                routing=None,
+            )
         i = min(self.calls, len(self._steps) - 1)
         self.calls += 1
         text, tcs = self._steps[i]
@@ -151,9 +175,36 @@ _PUBLISH = [
 
 
 async def _await_task(runtime: ConversationRuntime) -> None:
-    task = runtime._tasks.get(CID)
-    if task is not None:
-        await task
+    """Drain the runtime loop for CID to a stable resting state.
+
+    The supervisor's silent-stall recovery (`_on_run_task_done` → schedules
+    `_finalize_clean_return` → which may `kick` again) can REPLACE `_tasks[CID]`
+    with a fresh task AFTER the original resolves — and it does so via chained
+    `asyncio.create_task` callbacks, so right after `await task` returns there may
+    briefly be NO live task while a successor is still being scheduled. Awaiting a
+    single snapshot handle therefore returns mid-flight, letting assertions run
+    while a re-kicked task is still terminalizing (the STUCK flake). Instead: await
+    whatever handle is current, yield so pending done-callbacks/re-kicks can install
+    a successor, and stop only once the conversation has settled at a concluded or
+    parked status with no live task left."""
+    settled = runtime._CONCLUDED_STATUSES | runtime._RUN_PARKED_STATUSES
+    for _ in range(500):  # generous bound; each pass awaits a task or yields one tick
+        task = runtime._tasks.get(CID)
+        if task is not None and not task.done():
+            with contextlib.suppress(Exception):
+                await task
+            continue
+        # No live task right now — let any scheduled done-callback / re-kick run,
+        # then re-check (a successor task may appear, or the status may settle).
+        await asyncio.sleep(0)
+        if runtime._tasks.get(CID) is not None:
+            continue  # a re-kick landed; loop back to await it
+        try:
+            status = (await runtime._store.get_state(CID)).execution_status
+        except Exception:  # noqa: BLE001 — a test-helper drain, never surface
+            return
+        if status in settled:
+            return
 
 
 async def _approve_plan_and_run(runtime: ConversationRuntime) -> None:
