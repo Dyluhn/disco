@@ -133,11 +133,15 @@ def test_consecutive_noops_helper_counts_and_resets():
 
 
 def test_consecutive_noops_resets_at_resume_marker():
-    """Fix B — a resume reinjection is a fresh actionless boundary. The streak
-    must NOT walk past the pause+resume and keep counting pre-pause noops
-    (which made a resumed MiniMax-M3 build re-pause after ~1 turn). The resume
-    marker is ENVIRONMENT (StatusEvent RUNNING/resumed), not USER, so it needs
-    its own reset."""
+    """Fix B P1 — a resume is a fresh actionless boundary. The streak must NOT
+    walk past the pause+resume and keep counting pre-pause noops (which made a
+    resumed MiniMax-M3 build re-pause after ~1 turn).
+
+    The REAL resume path emits the runway boundary producer-agnostically: the
+    live `AgentLoop.resume()` flip is a *bare* StatusEvent(RUNNING) with NO
+    detail (the original detail=='resumed'-only check NEVER matched it), so the
+    reset keys on the PAUSED that the resume follows — everything after the most
+    recent pause is the post-resume segment."""
     from disco.core import LLMMessage
 
     def agent_msg(text):
@@ -146,22 +150,40 @@ def test_consecutive_noops_resets_at_resume_marker():
         )
 
     paused = StatusEvent(status=ConversationStatus.PAUSED, detail="actionless")
-    resumed = StatusEvent(status=ConversationStatus.RUNNING, detail="resumed")
+    # The ACTUAL live resume marker: AgentLoop.resume() emits a BARE RUNNING,
+    # and run() re-emits a bare RUNNING at the top of every (re)entry — neither
+    # carries detail="resumed". The reset must key on the PAUSED boundary, not
+    # this marker, or it never fires on the real path.
+    bare_resume = StatusEvent(status=ConversationStatus.RUNNING)
 
-    # [noop, noop, PAUSED, resume-marker, noop] → only the single post-resume
-    # noop counts; the pre-pause streak is behind the resume boundary.
-    seq = [agent_msg("a"), agent_msg("b"), paused, resumed, agent_msg("c")]
+    # [noop, noop, PAUSED, <real bare-RUNNING resume marker>, noop] → only the
+    # single post-resume noop counts; the pre-pause streak is behind the PAUSED
+    # boundary even though the resume marker carries no detail.
+    seq = [agent_msg("a"), agent_msg("b"), paused, bare_resume, agent_msg("c")]
     assert signals.consecutive_noops(seq) == 1
 
-    # Without a resume marker, the spam cap still accumulates normally (the real
-    # serve/prose caps are untouched).
+    # The resume_service flip (RUNNING/detail="resumed") still resets too — an
+    # IDLE-with-unfinished-plan resume has no preceding PAUSED, so this marker is
+    # the only boundary there.
+    resumed = StatusEvent(status=ConversationStatus.RUNNING, detail="resumed")
+    seq_idle_resume = [agent_msg("a"), agent_msg("b"), resumed, agent_msg("c")]
+    assert signals.consecutive_noops(seq_idle_resume) == 1
+
+    # Without a pause/resume, the spam cap still accumulates normally (the real
+    # serve/prose caps are untouched) — a degenerate run WITHOUT a resume pauses.
     seq_no_resume = [agent_msg("a"), agent_msg("b"), agent_msg("c"), agent_msg("d")]
     assert signals.consecutive_noops(seq_no_resume) == 4
 
-    # A PAUSED with no following resume does NOT reset (only the resume marker
-    # is a boundary) — the streak walks through it.
-    seq_paused_only = [agent_msg("a"), paused, agent_msg("b"), agent_msg("c")]
-    assert signals.consecutive_noops(seq_paused_only) == 3
+    # A mid-run BARE RUNNING that is NOT a resume-after-pause (e.g. run()'s
+    # top-of-loop RUNNING in a normal run) must NOT wrongly reset the streak —
+    # only a PAUSED (or RUNNING/resumed) boundary does.
+    seq_midrun_running = [
+        agent_msg("a"),
+        bare_resume,
+        agent_msg("b"),
+        agent_msg("c"),
+    ]
+    assert signals.consecutive_noops(seq_midrun_running) == 3
 
 
 # ---- the circuit breaker (distinct failures → hand off to user) -------------

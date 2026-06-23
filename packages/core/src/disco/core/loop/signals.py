@@ -195,16 +195,26 @@ def consecutive_noops(events: list[Event]) -> int:
             if tool in _BOOKKEEPING_TOOLS:
                 continue  # plan shuffling: neither real work nor spam signal
             break
-        # A resume reinjection is a fresh boundary: a resumed run gets a clean
-        # actionless runway. Without this the streak walks PAST the pause+resume
-        # (the resume marker is ENVIRONMENT, not USER) and keeps counting the
-        # pre-pause noops, so resume re-pauses after ~1 turn (live MiniMax-M3
-        # build, 2026-06). Treat the resume marker like a USER turn for the
-        # streak reset.
-        if (
-            isinstance(e, StatusEvent)
-            and e.status == ConversationStatus.RUNNING
-            and e.detail == "resumed"
+        # A resume is a fresh boundary: a resumed run gets a clean actionless
+        # runway. Without this the streak walks PAST the pause+resume (the resume
+        # marker is ENVIRONMENT, not USER) and keeps counting the pre-pause
+        # noops, so resume re-pauses after ~1 turn (live MiniMax-M3 build,
+        # 2026-06). Key on the REAL resume boundary, producer-agnostically:
+        #   * a PAUSED StatusEvent — everything after the most recent pause is
+        #     the post-resume segment, so the PAUSED is the runway boundary. This
+        #     covers BOTH resume producers: resume_service appends a RUNNING flip
+        #     after the PAUSED, AND AgentLoop.resume() emits a *bare* RUNNING with
+        #     no detail (the original detail=="resumed" check NEVER matched that
+        #     path, so a resumed build still re-counted pre-pause noops and
+        #     re-paused — the codex P1). A PAUSED only lands when the loop
+        #     actually paused and returned; any later events are post-resume, so
+        #     this never resets mid-run (a normal run's bare RUNNING is neutral).
+        #   * RUNNING/detail="resumed" — the resume_service flip, kept so an
+        #     IDLE-with-unfinished-plan resume (legal, but with NO preceding
+        #     PAUSED in the log) still resets.
+        if isinstance(e, StatusEvent) and (
+            e.status == ConversationStatus.PAUSED
+            or (e.status == ConversationStatus.RUNNING and e.detail == "resumed")
         ):
             break
         if isinstance(e, MessageEvent) and e.source == EventSource.USER:
