@@ -12,7 +12,7 @@ W2 changes three things:
 
 1. **Pointer for unchanged known files.** When a ``FileStateTracker`` is
    supplied, files whose disk SHA matches the last-seen SHA are collapsed to
-   a one-line "✓ {path} — current, shown earlier" pointer. Full body is
+   a one-line "✓ {path} — current on disk, unchanged since last shown" pointer. Full body is
    emitted only for (stale ∪ never-shown-in-tracker).
 
 2. **Stale notice (silent when nothing changed).** ``file_state_notice``
@@ -176,7 +176,7 @@ def test_file_state_notice_single_path():
 
 def test_unchanged_file_shown_once_then_pointer():
     """An unchanged file is shown with full BEGIN/END body on the first call,
-    then collapsed to a one-line "✓ … current, shown earlier" pointer on the
+    then collapsed to a one-line "✓ … current on disk, unchanged since last shown" pointer on the
     second call (disk SHA matches tracker SHA → not stale → pointer).
 
     This is the core W2 fix: windows.js was re-dumped 20× because every turn
@@ -200,7 +200,7 @@ def test_unchanged_file_shown_once_then_pointer():
         "second call must NOT re-dump the body (file unchanged)"
     )
     assert "app.js" in text2
-    assert "current, shown earlier" in text2
+    assert "unchanged since last shown" in text2
 
 
 def test_pointer_uses_checkmark_format():
@@ -372,7 +372,7 @@ def test_oversize_file_with_tracker_shows_pointer_after_first_display():
         "second turn must show pointer, not the truncated body again"
     )
     assert "windows.js" in t2
-    assert "current, shown earlier" in t2
+    assert "unchanged since last shown" in t2
 
 
 # ---------------------------------------------------------------------------

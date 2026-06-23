@@ -245,7 +245,7 @@ class Observer:
                             "ALREADY wrote — it is NOT the content itself, and it was "
                             "NOT executed. Do not copy it into a tool call. Read the "
                             "actual current content from the CURRENT WORKSPACE block "
-                            "above (or call file_read) and resend the FULL argument."
+                            "in this prompt (or call file_read) and resend the FULL argument."
                         ),
                         action_id=action.id,
                         tool_call_id=action.tool_call.call_id,

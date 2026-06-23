@@ -27,7 +27,7 @@ from typing import Any, Literal
 
 import httpx
 
-from ..events import LLMMessage
+from ..events import WORKSPACE_SNAPSHOT_SENTINEL, LLMMessage
 from .errors import (
     LLMAuthError,
     LLMContentFiltered,
@@ -365,12 +365,15 @@ class OpenAIProvider:
 
     @staticmethod
     def _mark_anthropic_cache(body: dict) -> None:
-        """Add Anthropic `cache_control: ephemeral` breakpoints on the two big stable
-        blocks — the system prompt and the last tool definition — so Claude caches
-        the prefix. Converts the system message's string content into the single-
-        text-block array Anthropic requires for the marker; non-system turns and
-        OpenAI-shaped payloads are left untouched."""
-        for m in body.get("messages", []):
+        """Add Anthropic `cache_control: ephemeral` breakpoints on the big stable
+        prefix blocks so Claude caches them — the system prompt, the last tool
+        definition, and (CW-3) the pinned CURRENT WORKSPACE snapshot when it sits in
+        the cacheable prefix. Converts a string content into the single-text-block
+        array Anthropic requires for the marker; non-marked turns and OpenAI-shaped
+        payloads are left untouched."""
+        msgs = body.get("messages", [])
+        sys_idx: int | None = None
+        for i, m in enumerate(msgs):
             if m.get("role") == "system" and isinstance(m.get("content"), str):
                 m["content"] = [
                     {
@@ -379,7 +382,28 @@ class OpenAIProvider:
                         "cache_control": {"type": "ephemeral"},
                     }
                 ]
+                sys_idx = i
                 break  # one breakpoint at the end of the system prompt is enough
+        # CW-3 — the pinned workspace block is positioned in the PREFIX (immediately
+        # after the system prompt) for capable models, so a breakpoint AFTER it caches
+        # the system+tools+workspace prefix as a unit. GATED on the block actually
+        # being in that prefix slot: assist-ON keeps it in the volatile TAIL (not at
+        # sys_idx+1) → not marked → byte-identical to today.
+        if sys_idx is not None and sys_idx + 1 < len(msgs):
+            nxt = msgs[sys_idx + 1]
+            c = nxt.get("content")
+            if (
+                nxt.get("role") == "user"
+                and isinstance(c, str)
+                and c.startswith(WORKSPACE_SNAPSHOT_SENTINEL)
+            ):
+                nxt["content"] = [
+                    {
+                        "type": "text",
+                        "text": c,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
         tools = body.get("tools")
         if tools:
             # The tool surface is stable too — a breakpoint after the last tool caches it.

@@ -15,6 +15,7 @@ import os
 from typing import TYPE_CHECKING
 
 from ..events import (
+    WORKSPACE_SNAPSHOT_SENTINEL,
     ActionEvent,
     AgentErrorEvent,
     Event,
@@ -137,6 +138,7 @@ async def workspace_snapshot_message(
     tracker: FileStateTracker | None = None,
     stale: frozenset[str] | None = None,
     caps: ContextCaps | None = None,
+    pin_full: bool = False,
 ) -> LLMMessage | None:
     """Re-derive the CURRENT on-disk content of the working-set files from the
     sandbox each turn and render it as an authoritative, always-fresh message.
@@ -163,7 +165,8 @@ async def workspace_snapshot_message(
         _workspace_snapshot_message delegator and legacy tests).
       * tracker provided: emit FULL body only for files in
         (stale ∪ never-shown-in-tracker); collapse every other file to a
-        one-line "✓ {path} — current, shown earlier" pointer. The stale set
+        one-line "✓ {path} — current on disk, unchanged since last shown" pointer.
+        The stale set
         is pre-computed by ViewBuilder.build (via FileStateTracker.stale_paths)
         and passed in so the snapshot does not re-read just for staleness.
         After showing a file in full, the tracker is updated.
@@ -181,18 +184,22 @@ async def workspace_snapshot_message(
     ordered = mutated + read_only  # mutated first → never evicted by reads (#1)
     if not ordered:
         return None
+    # CW-3 (REVISION 2) — LOCATION-INDEPENDENT wording. This block now renders in
+    # the cacheable PREFIX (before the event history) for capable models, so any
+    # directional reference ("below"/"above") to the history would be WRONG. The
+    # preamble names itself ("the CURRENT WORKSPACE block in this prompt") instead.
     preamble = (
-        "# CURRENT WORKSPACE — your files on disk RIGHT NOW (authoritative).\n"
-        "Below is the live, exact content of the files you are working on, "
-        "re-read from disk this turn. It OVERRIDES any earlier or elided copy of "
-        "these files shown above; trust THIS over your memory.\n"
+        f"{WORKSPACE_SNAPSHOT_SENTINEL} — your files on disk RIGHT NOW (authoritative).\n"
+        "This block contains the live, exact content of the files you are working "
+        "on, re-read from disk this turn. It OVERRIDES any other copy of these "
+        "files shown elsewhere in this prompt; trust THIS over your memory.\n"
         "To change a file: for a SMALL change, prefer `file_edit` (pass the exact "
         "text you see as `old`) or `file_replace_lines` / `file_insert_lines` (use "
-        "the line numbers shown below). For a full rewrite, use `file_write` with "
-        "the FULL new content — but you MUST call `file_read` on this file first "
-        "if you have written to it before, or the write will be refused. Keep "
-        "every existing function, constant, and docstring you are not deliberately "
-        "removing — do not drop code you did not mean to delete.\n"
+        "the line numbers shown for each file in this block). For a full rewrite, "
+        "use `file_write` with the FULL new content — but you MUST call `file_read` "
+        "on this file first if you have written to it before, or the write will be "
+        "refused. Keep every existing function, constant, and docstring you are not "
+        "deliberately removing — do not drop code you did not mean to delete.\n"
         "**SILENT CONTEXT** — use this block without narrating it. Do NOT "
         "acknowledge the snapshot in your reply (no 'I can see the files', "
         "'the workspace shows…', 'good, the content is here', etc.). "
@@ -241,12 +248,22 @@ async def workspace_snapshot_message(
         # a one-line pointer instead of re-dumping the whole body. This is the
         # primary context-reduction mechanism: a file shown on turn 1 that
         # hasn't changed costs 1 line on every subsequent turn.
+        #
+        # CW-3 — `pin_full` SUPPRESSES the pointer collapse. When the block lives
+        # in the cacheable PREFIX (capable models), a turn-dependent full→pointer
+        # transition would make the block bytes DIFFER turn-over-turn for an
+        # UNCHANGED file → never a stable cache prefix. With pin_full the block is
+        # a pure function of (on-disk content + working-set order): byte-identical
+        # across turns until a file actually changes, so prompt caching rebills it
+        # at ~10%. The tracker is STILL updated below (so external-change staleness
+        # detection keeps working); only the pointer shortcut is skipped.
         if (
-            tracker is not None
+            not pin_full
+            and tracker is not None
             and tracker.is_known(path)
             and path not in _stale
         ):
-            pointer = f"✓ {path} — current, shown earlier"
+            pointer = f"✓ {path} — current on disk, unchanged since last shown"
             budget -= len(pointer)
             blocks.append(pointer)
             shown_count += 1
@@ -464,12 +481,18 @@ class ViewBuilder:
         # W2: call the module-level function directly (bypasses the loop's
         # _workspace_snapshot_message delegator) so we can pass the tracker +
         # pre-computed stale set. The loop delegator is kept for back-compat tests.
+        # CW-3 — capable models (assist OFF) pin the working set in FULL and place
+        # the block in the cacheable PREFIX, so suppress the per-turn pointer
+        # collapse (pin_full): the block must be byte-identical turn-over-turn for
+        # an unchanged file to be a stable cache prefix. assist ON keeps the W2
+        # pointer behavior + tail placement (byte-identical to today).
         snapshot = await workspace_snapshot_message(
             sbx,
             events,
             tracker=self._file_tracker,
             stale=frozenset(stale),
             caps=caps,
+            pin_full=not self._loop._assist,
         )
         snap_tokens = len(snapshot.content) // 4 if snapshot is not None else 0
         est = signals.estimate_tokens(view) + snap_tokens
@@ -520,21 +543,40 @@ class ViewBuilder:
                     "messages": self._loop._f8_shrink_file_write_args(view.messages, events),
                 }
             )
-        # W2 — assemble trailing context: stale notice (if any) + snapshot.
-        # Stale notice goes BEFORE the snapshot so the model reads "these
-        # files changed" immediately before seeing the authoritative content.
-        # Both are appended AFTER all history transforms (F8, collapse) so
-        # they are never accidentally shrunk or collapsed.
-        extra: list[LLMMessage] = []
+        # W2 — the stale notice (if any) is appended AFTER all history transforms
+        # (F8, collapse) so it is never accidentally shrunk or collapsed. It is a
+        # VOLATILE per-turn alert (present only on a change turn), so it stays in
+        # the tail next to the action regardless of tier — keeping it out of the
+        # cacheable prefix.
         stale_msg = file_state_notice(stale)
-        if stale_msg is not None:
-            extra.append(stale_msg)
         if snapshot is not None:
             _LOG.info(
                 "A8 workspace snapshot injected: %d chars across the working set",
                 len(snapshot.content),
             )
-            extra.append(snapshot)
-        if extra:
-            view = view.model_copy(update={"messages": [*view.messages, *extra]})
+        # CW-3 — POSITION the pinned snapshot block.
+        #   assist OFF (capable): the block is byte-stable (pin_full) → move it to
+        #     the PREFIX (front of view.messages, which lands immediately after the
+        #     system prompt once routing prepends it, BEFORE the event history). The
+        #     system+tools+workspace prefix then caches as a unit; an unchanged turn
+        #     rebills it at ~10% instead of re-billing the whole ~60k block. The
+        #     stale notice stays in the tail (volatile).
+        #   assist ON (small): UNCHANGED — stale notice then snapshot in the TAIL,
+        #     byte-identical to before this change (the W2 pointer block is volatile,
+        #     so it belongs in the recent, high-attention window, not a cache prefix).
+        if self._loop._assist:
+            tail: list[LLMMessage] = []
+            if stale_msg is not None:
+                tail.append(stale_msg)
+            if snapshot is not None:
+                tail.append(snapshot)
+            if tail:
+                view = view.model_copy(update={"messages": [*view.messages, *tail]})
+        else:
+            prefix = [snapshot] if snapshot is not None else []
+            tail = [stale_msg] if stale_msg is not None else []
+            if prefix or tail:
+                view = view.model_copy(
+                    update={"messages": [*prefix, *view.messages, *tail]}
+                )
         return view

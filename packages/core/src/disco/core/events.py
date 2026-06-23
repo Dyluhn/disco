@@ -296,6 +296,15 @@ def snip_content(content: str, *, max_chars: int, head: int, tail: int) -> str:
 # model the file exists + to file_read it).
 _ARG_SNIP_CHARS = 1_500
 
+# CW-3 — the leading marker of the always-fresh workspace snapshot block (the pinned
+# CURRENT WORKSPACE message rendered by view_render.workspace_snapshot_message). Shared
+# here (the lowest common module both the loop renderer and the provider import) so the
+# provider can locate the block to place an Anthropic cache breakpoint after it, and so
+# recovery/pointer prose can reference it by a LOCATION-INDEPENDENT name ("the CURRENT
+# WORKSPACE block in this prompt" — never "below"/"above": the block moved to the
+# cacheable prefix, so directional words are wrong).
+WORKSPACE_SNAPSHOT_SENTINEL = "# CURRENT WORKSPACE"
+
 
 # K1 — the elision-marker family. `_snip_args` renders an over-long arg as a
 # placeholder in the action history. A weak model can COPY that placeholder back
@@ -315,7 +324,7 @@ def _snip_args(arguments: dict[str, Any]) -> dict[str, Any]:
         if isinstance(v, str) and len(v) > _ARG_SNIP_CHARS:
             out[k] = (
                 f"<{len(v):,} chars — full content is in the CURRENT WORKSPACE block "
-                "below; do not copy this placeholder into a tool argument>"
+                "in this prompt; do not copy this placeholder into a tool argument>"
             )
         else:
             out[k] = v

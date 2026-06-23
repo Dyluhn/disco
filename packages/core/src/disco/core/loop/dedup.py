@@ -289,8 +289,13 @@ def _f9_path_was_mutated_after(events: list[Event], path: str, after_seq: int) -
 # information). This W2 collapse is render-only and always safe.
 # ---------------------------------------------------------------------------
 
+# CW-3 (REVISION 2) — LOCATION-INDEPENDENT: the current content is now pinned in
+# the CURRENT WORKSPACE block, which moved to the cacheable PREFIX (before history)
+# for capable models, so "shown later" is wrong. Name the block instead of pointing
+# in a direction.
 _SUPERSEDED_READ_NOTICE = (
-    "[superseded file_read of {path} — current content shown later in this prompt]"
+    "[superseded file_read of {path} — current content is in the "
+    "CURRENT WORKSPACE block in this prompt]"
 )
 
 
