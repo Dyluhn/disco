@@ -54,6 +54,12 @@ class ToolContext(BaseModel):
     owner_id: str
     conversation_id: str
     assist: bool = False
+    # CW-6: the capability-derived file_read page budget (chars), threaded from the
+    # runtime's derive_context_caps(assist, driver_context_window) so a file that
+    # fits the assist-OFF snapshot pin can also be read in ONE shot. None ⇒ the tool
+    # falls back to its static _READ_CHAR_BUDGET (behavior-preserving for executors
+    # that don't thread it — assist-ON resolves to that same value).
+    read_char_budget: int | None = None
     # ROOT-5: the conversation's EFFECTIVE driver endpoint (override-aware) for
     # LLM-using tools (e.g. slides_generate), as (base_url, model_id, api_key_env).
     # NEVER the resolved key — only the env-var NAME (§6, no raw secrets in ctx);

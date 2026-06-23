@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Annotated, Any, Literal
@@ -263,6 +264,17 @@ _OBS_SNIP_CHARS = 8_000
 _OBS_SNIP_HEAD = 5_000
 _OBS_SNIP_TAIL = 2_000
 
+# CW-6 — per-build override for the observation snip cap. to_llm_message() is a pure
+# projection method with no tier/window access, but the snip MUST be raised for the
+# assist-OFF (capable) tier in tandem with the read budget — otherwise a large
+# file_read observation is snipped to a corrupted head/tail and the model re-reads
+# forever. ViewBuilder.build sets this from the derived ContextCaps for the duration
+# of a build; default None → the byte-identical assist-ON 8k snip. Task-local
+# (ContextVar) so concurrent conversations of different tiers never cross-contaminate.
+obs_snip_override: ContextVar[int | None] = ContextVar(
+    "disco_obs_snip_override", default=None
+)
+
 
 def snip_content(content: str, *, max_chars: int, head: int, tail: int) -> str:
     """Trim an over-long string to head + tail with a recoverable marker. Pure +
@@ -334,13 +346,24 @@ class ObservationEvent(BaseEvent, LLMConvertible):
 
     def to_llm_message(self) -> LLMMessage:
         # A-S2 Snip: cap a single large observation before it hits the context.
+        # CW-6: assist-OFF raises this cap (in tandem with the read budget) so a
+        # large file_read observation is not snipped to a corrupted head/tail. The
+        # override is set per-build by ViewBuilder from the derived caps; when unset
+        # (assist-ON / no window) it is the byte-identical 8k calibration below.
+        max_chars, head, tail = _OBS_SNIP_CHARS, _OBS_SNIP_HEAD, _OBS_SNIP_TAIL
+        override = obs_snip_override.get()
+        if override is not None and override > _OBS_SNIP_CHARS:
+            # Scale head/tail to the raised cap using the same 5:2 ratio so a
+            # genuinely-oversize output (beyond the raised cap) still degrades
+            # gracefully; the cap itself is what spares an in-budget read.
+            max_chars, head, tail = override, override * 5 // 8, override * 2 // 8
         return LLMMessage(
             role="tool",
             content=snip_content(
                 self.tool_result.content,
-                max_chars=_OBS_SNIP_CHARS,
-                head=_OBS_SNIP_HEAD,
-                tail=_OBS_SNIP_TAIL,
+                max_chars=max_chars,
+                head=head,
+                tail=tail,
             ),
             tool_call_id=self.tool_result.call_id,
         )

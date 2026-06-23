@@ -65,6 +65,7 @@ from disco.core.loop import (
     ResearchAgent,
     RouterAgent,
 )
+from disco.core.loop.context_budget import derive_context_caps  # noqa: E402
 from disco.core.security import RuleBasedAnalyzer
 from disco.core.store.sqlite import SqliteEventStore
 from disco.retrieval.deep_research import (
@@ -1300,6 +1301,14 @@ class ConversationRuntime:
         # file_str_replace is excluded from ARTIFACT_TOOLS regardless of policy.
         _art_mode = self._effective_artifact_mode(conversation_id)
         _scope = artifact_scope() if _art_mode else agent_scope(model_policy=model_policy)
+        # CW-6: derive the capability-aware file_read page budget from the SAME
+        # (assist, live-context-window) inputs the snapshot caps use, so a file that
+        # fits the assist-OFF snapshot pin also reads in ONE shot. assist-ON resolves
+        # to the static 7k default → byte-identical to today.
+        _read_char_budget = derive_context_caps(
+            assist=model_policy.assist,
+            context_window=self._driver_context_window(),
+        ).read_char_budget
         executor = DefaultToolExecutor(
             build_default_registry(),
             _scope,
@@ -1316,6 +1325,8 @@ class ConversationRuntime:
             # ROOT-5: the conversation's effective (override-aware) driver endpoint, so
             # LLM-using tools (slides_generate) author with the model the user picked.
             driver_llm=self._effective_driver_endpoint(conversation_id),
+            # CW-6: capability-derived file_read page budget (see above).
+            read_char_budget=_read_char_budget,
         )
         # RP-05 rung A+B: extend the registry with MCP tools from the pool
         # snapshot (stdio) AND the HTTP-managed tools (rung B streamable_http).

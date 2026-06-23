@@ -301,6 +301,14 @@ class FileReadTool:
         # A page that fits under the snip cap, line-numbered from the absolute start
         # so line numbers are correct. If `limit` is given, respect it but still cap
         # by chars so a huge limit can't corrupt the result.
+        #
+        # CW-6: the page budget is capability-derived. The runtime stamps
+        # ctx.read_char_budget from derive_context_caps(assist, driver_context_window)
+        # so an assist-OFF (capable) model reads a file that fits the snapshot pin in
+        # ONE shot — and the matching _OBS_SNIP_CHARS override keeps that large
+        # observation from being render-snipped to a corrupted head/tail. Unset
+        # (assist-ON / executors that don't thread it) ⇒ the static 7k default.
+        read_budget = ctx.read_char_budget or _READ_CHAR_BUDGET
         out: list[str] = []
         width = len(str(total)) or 1
         used = 0
@@ -308,7 +316,7 @@ class FileReadTool:
         cap = start + args.limit if args.limit is not None else total
         while i < min(cap, total):
             line = f"{i + 1:>{width}}\t{lines[i]}"
-            if out and used + len(line) + 1 > _READ_CHAR_BUDGET:
+            if out and used + len(line) + 1 > read_budget:
                 break
             out.append(line)
             used += len(line) + 1

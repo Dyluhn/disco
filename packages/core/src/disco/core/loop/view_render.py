@@ -21,10 +21,12 @@ from ..events import (
     LLMMessage,
     MessageEvent,
     ObservationEvent,
+    obs_snip_override,
 )
 from ..llm import Difficulty, OverflowSignal
 from ..view import View, microcompact
 from . import signals
+from .context_budget import ContextCaps, derive_context_caps
 from .dedup import (
     _F8_PREFIX_CHARS,
     _F8_TRUNCATION_MARKER_TEMPLATE,
@@ -40,9 +42,21 @@ if TYPE_CHECKING:
 
 _LOG = logging.getLogger("disco.loop")
 
+# CW-2 — the assist-ON baseline snapshot caps (today's weak-model calibration).
+# These are the byte-identical fallback when no derived caps are threaded in (the
+# engine's back-compat delegator + legacy tests). assist-OFF caps scale with the
+# live context window via context_budget.derive_context_caps.
 _WS_MAX_FILES = 8  # cap the snapshot breadth (most-recently-touched first)
 _WS_PER_FILE_CHARS = 6_000  # per-file cap; larger files head/tail-truncate with a marker
 _WS_TOTAL_CHARS = 16_000  # total snapshot budget (~4k tokens), bounded vs the condenser
+# The assist-ON baseline as a ContextCaps bundle (the default when caps is None).
+_BASELINE_CAPS = ContextCaps(
+    max_files=_WS_MAX_FILES,
+    per_file_chars=_WS_PER_FILE_CHARS,
+    total_chars=_WS_TOTAL_CHARS,
+    read_char_budget=7_000,
+    obs_snip_chars=8_000,
+)
 _WS_READ_TIMEOUT_S = 2.0  # per-file read cap — the snapshot runs under the conversation
 #                           lock, so a hung sandbox read must never freeze control ops
 
@@ -122,6 +136,7 @@ async def workspace_snapshot_message(
     *,
     tracker: FileStateTracker | None = None,
     stale: frozenset[str] | None = None,
+    caps: ContextCaps | None = None,
 ) -> LLMMessage | None:
     """Re-derive the CURRENT on-disk content of the working-set files from the
     sandbox each turn and render it as an authoritative, always-fresh message.
@@ -157,6 +172,10 @@ async def workspace_snapshot_message(
     getattr(self.executor, "sandbox", None) seam as _execute_and_observe."""
     if sbx is None:
         return None
+    # CW-2: assist-OFF derives larger caps from the live window; the default
+    # (caps is None) is the byte-identical assist-ON baseline used by the engine's
+    # back-compat delegator and legacy tests.
+    _caps = caps if caps is not None else _BASELINE_CAPS
     _stale: frozenset[str] = stale if stale is not None else frozenset()
     mutated, read_only = _workspace_paths_from_events(events)
     ordered = mutated + read_only  # mutated first → never evicted by reads (#1)
@@ -185,7 +204,7 @@ async def workspace_snapshot_message(
     # rendered as a BEGIN/END block (binary, deleted, permission). The
     # model can then `file_read` it itself when it needs the content.
     omitted_notes: list[str] = []
-    budget = _WS_TOTAL_CHARS - len(preamble)
+    budget = _caps.total_chars - len(preamble)
     shown_count = 0
     # E4 (T8) — .disco-spill-* are T10's overflow logs (head/tail markers
     # of an oversize stdout), not deliverables. They pollute the working
@@ -195,7 +214,7 @@ async def workspace_snapshot_message(
     # might use (e.g. /workspace/.disco-spill-abc.log) is caught too.
     spill_basename_prefix = ".disco-spill-"
     for path in ordered:
-        if shown_count >= _WS_MAX_FILES or budget <= 0:
+        if shown_count >= _caps.max_files or budget <= 0:
             break
         # E4 (T8) — skip T10's overflow-log paths up-front
         if os.path.basename(path).startswith(spill_basename_prefix):
@@ -234,7 +253,7 @@ async def workspace_snapshot_message(
             continue
         # Full body: file is stale, never-shown-in-tracker, or tracker is None
         # (backward-compat mode). Render head + tail when oversize.
-        cap = min(_WS_PER_FILE_CHARS, budget)
+        cap = min(_caps.per_file_chars, budget)
         if len(text) > cap:
             head = cap * 3 // 4
             tail = cap - head
@@ -384,7 +403,37 @@ class ViewBuilder:
         # loop's conversation lock.
         self._file_tracker: FileStateTracker = FileStateTracker()
 
+    def _resolve_caps(self) -> ContextCaps:
+        """CW-2/CW-6 — resolve this turn's context caps from the capability gate
+        (`assist`) and the LIVE driver context window. Reuses the SAME cached
+        `_driver_context_window()` the condenser budgets against (runtime); does not
+        re-probe. Best-effort: a loop without the runtime method (legacy/mock) →
+        unknown window → the assist baseline (byte-identical to today)."""
+        window: int | None = None
+        probe = getattr(self._loop, "_driver_context_window", None)
+        if callable(probe):
+            try:
+                result = probe()
+                window = int(result) if isinstance(result, int) else None
+            except Exception:  # noqa: BLE001 — never block view build on a probe miss
+                window = None
+        return derive_context_caps(assist=bool(self._loop._assist), context_window=window)
+
     async def build(self, events: list[Event]) -> View:
+        # CW-2/CW-6 — derive the per-turn caps once and thread them into the
+        # snapshot (pin breadth/size) + the observation snip. assist-ON → the
+        # baseline caps + a None snip override → byte-identical to today.
+        caps = self._resolve_caps()
+        # Pass the derived snip cap unconditionally: events.py only HONORS it when
+        # it strictly exceeds the 8k baseline, so the assist-ON / small-window caps
+        # (obs_snip_chars == 8k) are a no-op there → byte-identical to today.
+        snip_token = obs_snip_override.set(caps.obs_snip_chars)
+        try:
+            return await self._build(events, caps)
+        finally:
+            obs_snip_override.reset(snip_token)
+
+    async def _build(self, events: list[Event], caps: ContextCaps) -> View:
         # S3 Microcompact (GAP A): a cheap, no-model pass FIRST — tombstone no-op
         # turns (a failed call an identical later call superseded) so the lossy
         # model-summarization condenser fires on a smaller, denser residue (or not
@@ -420,6 +469,7 @@ class ViewBuilder:
             events,
             tracker=self._file_tracker,
             stale=frozenset(stale),
+            caps=caps,
         )
         snap_tokens = len(snapshot.content) // 4 if snapshot is not None else 0
         est = signals.estimate_tokens(view) + snap_tokens

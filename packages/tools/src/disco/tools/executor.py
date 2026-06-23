@@ -155,6 +155,7 @@ class DefaultToolExecutor:
         default_timeout_s: int = 300,
         model_policy: ModelExecutionPolicy = _STANDARD_POLICY,
         driver_llm: tuple[str, str, str | None] | None = None,
+        read_char_budget: int | None = None,
     ) -> None:
         self._registry = registry
         self._scope = scope
@@ -162,6 +163,10 @@ class DefaultToolExecutor:
         # ROOT-5: the conversation's effective (override-aware) driver endpoint,
         # stamped onto every ToolContext for LLM-using tools (slides_generate).
         self._driver_llm = driver_llm
+        # CW-6: the capability-derived file_read page budget, stamped onto every
+        # ToolContext so files.py can read a file that fits the snapshot pin in one
+        # shot. None ⇒ files.py uses its static default (assist-ON parity).
+        self._read_char_budget = read_char_budget
         self._broker = broker or CapabilityBroker()
         self._owner_id = owner_id
         # Generate a unique per-instance id when none is given so the F3 read-state
@@ -329,6 +334,7 @@ class DefaultToolExecutor:
             conversation_id=self._conversation_id,
             assist=self._model_policy.assist,
             driver_llm=self._driver_llm,
+            read_char_budget=self._read_char_budget,
         )
 
     def _fail(
