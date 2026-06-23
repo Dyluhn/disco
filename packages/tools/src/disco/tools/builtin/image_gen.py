@@ -4,32 +4,28 @@ a deliverable artifact.
 
 Backend design
 --------------
-The tool is structured around an `ImageBackend` protocol with THREE tiers, the
-same universal bundled/self-host/paid pattern the rest of the stack uses:
-- `_PILProceduralBackend`: the keyless DEFAULT — a deterministic procedural
-  pattern generator built on Pillow (no network, no API key, no model deps).
+The tool is structured around an `ImageBackend` protocol with real, configured
+backends only — the universal self-host/paid pattern:
 - `_ComfyUIBackend`: Self-hosted ComfyUI graph API (real diffusion on your own
-  GPU box; keyless).
+  GPU box; keyless, needs a base_url).
 - `_OpenAIImageBackend`: OpenAI-compatible /v1/images/generations API (paid).
+- `_OpenRouterImageBackend`: OpenRouter chat-completions image models (paid).
 
 Real diffusion runs out-of-process (ComfyUI or a paid API), NOT in-process: an
 in-process `diffusers`+`torch` backend was deliberately SCRAPPED — it would pin
 multi-GB of weights to the app process and break the 8 GB keyless ship target,
 and ComfyUI already gives a local-GPU path without that cost.
 
-The `select_image_backend()` factory reads from ConfigStore and chooses the
-appropriate backend based on the saved provider setting. Falls back to procedural
-when no valid provider is configured.
-
-Why a procedural backend is honest for a keyless default
----------------------------------------------------------
-The point of a "keyless" tier is to ship SOMETHING that produces a valid
-binary image, so the tool's full surface (binary write → deliverable emission
-→ magic-bytes check) is exercised end-to-end without an external dependency.
-A small geometric pattern, seeded from the prompt (with an optional explicit
-seed), satisfies the binary-safe-write contract and is visibly distinct across
-seeds. For photoreal / subject-accurate images, point the tool at ComfyUI or a
-paid API in Settings.
+W-50 — NO bundled procedural tier
+---------------------------------
+The old `_PILProceduralBackend` (a keyless Pillow pattern generator) was REMOVED.
+It was a false affordance: it always "succeeded" with an abstract pattern, so the
+tool looked wired even when no real generator was connected, and `select_image_backend`
+silently fell back to it on any missing config. Now `select_image_backend()` raises
+`ImageGenNotConfigured` when the selected tier isn't fully configured (no ComfyUI
+base_url, no stored OpenAI/OpenRouter key, or an unknown provider). Callers handle
+that explicitly: the `image_generate` tool returns a NOT-CONFIGURED failure, and the
+slides pipeline DEGRADES to image-less slides (never crashes).
 
 Binary safety
 -------------
@@ -78,6 +74,25 @@ from disco.core.llm.secrets import SecretStore
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+
+# W-50: the operator-facing "no real image backend is configured" message, shared by
+# every caller (the tool's NOT-CONFIGURED outcome, the slides degrade path, probes).
+_NOT_CONFIGURED_MSG = (
+    "Image generation isn't configured — set ComfyUI (base URL), an OpenAI-compatible "
+    "API (base URL + key), or OpenRouter (store the OpenRouter key) in "
+    "Settings → Image generation."
+)
+
+
+class ImageGenNotConfigured(RuntimeError):
+    """Raised by `select_image_backend()` when the selected image-gen tier is not
+    fully configured (W-50). Replaces the old silent fallback to a procedural
+    placeholder: callers handle it explicitly (tool → NOT-CONFIGURED outcome;
+    slides → image-less degrade) instead of shipping fake art."""
+
+    def __init__(self, message: str = _NOT_CONFIGURED_MSG) -> None:
+        super().__init__(message)
+
 
 # ---- binary formats ---------------------------------------------------------
 
@@ -148,9 +163,8 @@ class ImageGenArgs(BaseModel):
         min_length=1,
         max_length=1024,
         description=(
-            "Text description of the image to generate. Seeds the keyless "
-            "procedural backend (deterministic per prompt); consumed as the "
-            "conditioning prompt by the ComfyUI / OpenAI tiers when configured."
+            "Text description of the image to generate — the conditioning prompt "
+            "for the configured ComfyUI / OpenAI / OpenRouter backend."
         ),
     )
     filename: str = Field(
@@ -192,11 +206,10 @@ class ImageGenArgs(BaseModel):
 class ImageBackend(Protocol):
     """The interface a real image-gen backend must speak. The tool only
     depends on this shape — the implementation is injected at runtime, so any
-    new provider backend can replace `_PILProceduralBackend` without touching
-    the tool's `run()` body."""
+    new provider backend can be slotted in without touching the tool's `run()` body."""
 
-    name: str  # surfaced in the deliverable summary ("backend": "pil-procedural")
-    is_remote: bool  # network-bound? (False for both current backends)
+    name: str  # surfaced in the deliverable summary ("backend": "comfyui" / "openai-…")
+    is_remote: bool  # network-bound? (True for every real backend)
 
     def generate(
         self,
@@ -223,88 +236,6 @@ def _prompt_seed(prompt: str) -> int:
     return int.from_bytes(h[:4], "big", signed=False)
 
 
-class _PILProceduralBackend:
-    """Keyless / local / default backend. No network, no model download, no
-    API key — Pillow + numpy are the only deps, both already in the tools
-    package's runtime.
-
-    Renders a small, deterministic geometric pattern: a base hue seeded from
-    the prompt, a concentric ring count + thickness from the seed, and a
-    three-color palette. Same prompt + same seed → byte-identical PNG
-    (PNG encoding is deterministic for the same input array + same PIL
-    build), which is what the round-trip test asserts.
-
-    NOTE — this is NOT a generative model; it's the keyless DEFAULT that
-    guarantees `image_generate` always produces a valid image file offline.
-    For photoreal / subject-accurate output, configure the ComfyUI (self-host)
-    or OpenAI-compatible (paid) tier in Settings — both speak the same
-    `ImageBackend` protocol and route through this same binary write path.
-    """
-
-    name = "pil-procedural"
-    is_remote = False
-
-    def generate(
-        self,
-        *,
-        prompt: str,
-        width: int,
-        height: int,
-        seed: int,
-        fmt: str,
-    ) -> bytes:
-        # Lazy imports keep the tools package importable even on a Pillow-less
-        # minimal install (the build is fully headless otherwise). The tool
-        # only needs them at run-time, in the sandbox, when the model asks
-        # for an image.
-        from PIL import Image, ImageDraw
-
-        rng_state = seed & 0xFFFFFFFF
-        # A three-color palette derived from the seed — the visual signal
-        # that "different prompt → different image" holds in the round-trip
-        # test (asserted via SHA-256 of the bytes, not by eye).
-        hue1 = (rng_state >> 0) & 0xFF
-        hue2 = (rng_state >> 8) & 0xFF
-        hue3 = (rng_state >> 16) & 0xFF
-        c1 = (hue1, (hue1 * 7) & 0xFF, 255 - hue1)
-        c2 = (hue2, 255 - (hue2 * 3) & 0xFF, hue2)
-        c3 = (255 - hue3, hue3, (hue3 * 5) & 0xFF)
-        bg = ((seed * 13) & 0xFF, (seed * 17) & 0xFF, (seed * 23) & 0xFF)
-
-        img = Image.new("RGB", (width, height), bg)
-        draw = ImageDraw.Draw(img)
-
-        # Concentric rings: count + thickness from the seed. Always renders,
-        # even at 8x8, so a tiny test image still looks like "something".
-        n_rings = 3 + (seed % 4)
-        for i in range(n_rings):
-            t = (i + 1) / n_rings
-            inset = int(min(width, height) * (1 - t) / 2)
-            color = (c1, c2, c3)[i % 3]
-            draw.rectangle(
-                (inset, inset, width - 1 - inset, height - 1 - inset),
-                outline=color,
-                width=max(1, (seed >> (i * 2)) % 3 + 1),
-            )
-
-        # A diagonal accent: a single line from corner to corner, also
-        # seed-driven, so two different seeds don't accidentally produce
-        # the same byte stream.
-        draw.line((0, 0, width - 1, height - 1), fill=c3, width=1)
-
-        # PIL's PNG encoder is deterministic for a given input array + build
-        # version, which is what makes the round-trip test "byte-identical"
-        # hold without needing a fixed binary build. JPEG is NOT deterministic
-        # at the bit level across encoders (the JFIF spec leaves a few
-        # encoder-chosen fields free), so PNG is the default and the test
-        # asserts on PNG magic — JPEG is supported but the test focuses on
-        # PNG.
-        out_fmt = "JPEG" if fmt == "jpeg" else "PNG"
-        buf = io.BytesIO()
-        img.save(buf, format=out_fmt)
-        return buf.getvalue()
-
-
 class _OpenAIImageBackend:
     """OpenAI-compatible images API backend (OpenAI, ImageRouter, Together, Azure …).
 
@@ -321,7 +252,7 @@ class _OpenAIImageBackend:
     `output_format` field that a different provider might 400 on.
 
     This is a PAID backend: it requires an API key to be configured via Settings.
-    Without a key, it falls back to procedural.
+    Without a key, image generation is NOT CONFIGURED (the factory raises).
     """
 
     name = "openai-compatible"
@@ -749,20 +680,19 @@ def select_image_backend() -> ImageBackend:
     """Factory function to select the image generation backend based on settings.
 
     Reads the provider configuration from ConfigStore and returns the appropriate
-    backend. Falls back to the procedural backend when:
-    - No provider is configured (first run)
-    - The configured provider requires a key but none is available
-    - The configured provider is unknown
+    real backend. RAISES `ImageGenNotConfigured` (W-50 — no silent procedural
+    fallback) when the selected tier is not fully configured:
+    - openai: no API key available (encrypted store or env)
+    - openrouter: no OpenRouter key stored
+    - comfyui: no base URL set
+    - an unknown provider
 
-    Returns a keyless local backend by default so image-gen works out of the box.
+    Callers handle the exception explicitly (tool → NOT-CONFIGURED outcome; slides
+    → image-less degrade), so the UI never advertises fake placeholder art.
     """
     config = ConfigStore().load()
     settings = config.image_gen
     provider = settings.provider
-
-    # If procedural (default), return the bundled keyless backend
-    if provider == "procedural":
-        return _PILProceduralBackend()
 
     # For openai, we need a key. base_url is the ORIGIN only — _OpenAIImageBackend.generate
     # appends "/v1/images/generations", so the default must NOT include /v1 (else /v1/v1/…).
@@ -780,8 +710,8 @@ def select_image_backend() -> ImageBackend:
             api_key = SecretStore().get_secret(api_key_env) or os.environ.get(api_key_env)
             if api_key:
                 return _OpenAIImageBackend(base_url, api_key, model=settings.model)
-        # No key available - fall back to procedural
-        return _PILProceduralBackend()
+        # No key available — NOT configured (no silent placeholder fallback).
+        raise ImageGenNotConfigured()
 
     # For openrouter image gen, the key is the OpenRouter key (reserved "openrouter"
     # SecretStore slot, the same one the LLM router uses), NOT a user-named api_key_env.
@@ -804,8 +734,8 @@ def select_image_backend() -> ImageBackend:
             return _OpenRouterImageBackend(
                 "https://openrouter.ai/api/v1", api_key, model=settings.model
             )
-        # No OpenRouter key stored - fall back to procedural
-        return _PILProceduralBackend()
+        # No OpenRouter key stored — NOT configured.
+        raise ImageGenNotConfigured()
 
     # For comfyui, we need a base_url
     if provider == "comfyui":
@@ -816,34 +746,34 @@ def select_image_backend() -> ImageBackend:
                 model=settings.model,
                 workflow_json=settings.workflow_json,
             )
-        # No URL configured - fall back to procedural
-        return _PILProceduralBackend()
+        # No URL configured — NOT configured.
+        raise ImageGenNotConfigured()
 
-    # Unknown provider - fall back to procedural
-    return _PILProceduralBackend()
+    # Unknown / unset provider — NOT configured.
+    raise ImageGenNotConfigured()
 
 
 # ---- tool implementation ----------------------------------------------------
 
 
 class ImageGenTool:
-    """Generate an image from a text prompt and write it to the workspace
-    as a binary deliverable. The default backend is keyless/local (PIL
-    procedural); real diffusion comes from the ComfyUI or OpenAI-compatible
-    tier configured in Settings."""
+    """Generate an image from a text prompt and write it to the workspace as a
+    binary deliverable. Real diffusion comes from the ComfyUI (self-host), OpenAI-
+    compatible (paid), or OpenRouter (paid) tier configured in Settings. When none
+    is configured the tool returns a NOT-CONFIGURED failure (W-50 — there is no
+    bundled placeholder backend)."""
 
     definition = ToolDef(
         name="image_generate",
         description=(
             "Generate an image from a text prompt and save it to the workspace "
             "as a binary deliverable (PNG by default), surfaced in the "
-            "deliverables panel. IMPORTANT: the keyless default backend renders "
-            "a deterministic PROCEDURAL PATTERN seeded from the prompt — it is "
-            "NOT photoreal or subject-accurate (asking for 'a cat' yields an "
-            "abstract pattern, not a cat). Photoreal generation requires the "
-            "ComfyUI (self-host) or OpenAI-compatible (paid) tier configured in "
-            "Settings → Image generation. Use a fixed `seed` for reproducible "
-            "results. Format: 'png' (lossless, default) or 'jpeg' (smaller)."
+            "deliverables panel. Requires a configured image backend — ComfyUI "
+            "(self-host), an OpenAI-compatible API (paid), or OpenRouter (paid) — "
+            "set in Settings → Image generation; if none is configured the tool "
+            "fails with a NOT-CONFIGURED message (there is no placeholder fallback). "
+            "Use a fixed `seed` for reproducible results. Format: 'png' (lossless, "
+            "default) or 'jpeg' (smaller)."
         ),
         args_model=ImageGenArgs,
         needs=frozenset({Capability.FILESYSTEM}),
@@ -861,21 +791,26 @@ class ImageGenTool:
         # call without a restart, matching the Settings contract (and the TTS tier, which
         # likewise re-reads config per call rather than snapshotting at registry build).
         self._injected = backend
-        self._backend: ImageBackend = backend or _PILProceduralBackend()
 
     def _resolve_backend(self) -> ImageBackend:
+        # May raise ImageGenNotConfigured (W-50) when no real tier is configured —
+        # callers (run(), backend_name) handle that explicitly.
         return self._injected if self._injected is not None else select_image_backend()
 
     @property
     def backend_name(self) -> str:
-        # Report the LIVE backend (re-resolved from config), not the constructor default,
-        # so this stays consistent with what run() actually uses per call.
-        return self._resolve_backend().name
+        # Report the LIVE backend (re-resolved from config), not a constructor default,
+        # so this stays consistent with what run() actually uses per call. When no tier
+        # is configured, say so rather than naming a backend that won't run.
+        try:
+            return self._resolve_backend().name
+        except ImageGenNotConfigured:
+            return "not-configured"
 
     async def run(self, args: ImageGenArgs, ctx: ToolContext) -> ToolOutcome:
-        # Resolve the seed. The procedural backend needs an int; if the model
-        # didn't pass one, derive it from the prompt (deterministic per
-        # prompt) so the round-trip property still holds.
+        # Resolve the seed. The backend needs an int; if the model didn't pass one,
+        # derive it from the prompt (deterministic per prompt) so the round-trip
+        # property still holds.
         seed = args.seed if args.seed is not None else _prompt_seed(args.prompt)
         fmt = args.format.lower()
         if fmt not in _SUPPORTED_FORMATS:
@@ -890,7 +825,16 @@ class ImageGenTool:
 
         # Re-resolve the backend per call so a provider change saved in Settings is
         # honored on the NEXT image_generate (no restart, no stale per-conversation cache).
-        backend = self._resolve_backend()
+        # W-50: when no real tier is configured, fail loudly with a Settings pointer —
+        # never a silent procedural placeholder.
+        try:
+            backend = self._resolve_backend()
+        except ImageGenNotConfigured as e:
+            return ToolOutcome(
+                success=False,
+                content=str(e),
+                error="image_gen_not_configured",
+            )
 
         # ---- generate (the backend hands us raw `bytes`) ---------------
         try:
@@ -1002,28 +946,15 @@ class ImageGenTool:
         except Exception:  # noqa: BLE001 — fall back to requested dims if decode fails
             actual_w, actual_h = args.width, args.height
 
-        # The procedural backend ALWAYS "succeeds" (it emits a valid PNG), so without
-        # an explicit signal the agent can't tell it isn't really connected to a
-        # generative model — and will retry the same prompt expecting a photo it can
-        # never get. Make the placeholder nature UNMISTAKABLE in the observation and
-        # tell the agent NOT to retry. (The remote tiers raise/fail loudly instead, so
-        # this note only rides the keyless procedural default.)
-        is_placeholder = backend.name == "pil-procedural"
-        placeholder_note = (
-            " — NOTE: this is an ABSTRACT PROCEDURAL PLACEHOLDER, not a depiction of "
-            "the prompt: no real image-generation backend is connected. Retrying will "
-            "NOT change this. Use it only as decorative/background art; for real or "
-            "photoreal images a ComfyUI (self-host) or OpenAI-compatible (paid) backend "
-            "must be configured in Settings → Image generation."
-            if is_placeholder
-            else ""
-        )
+        # W-50: every reachable backend here is a REAL configured generator (the keyless
+        # procedural placeholder was removed; an unconfigured tier raises before this
+        # point). So a produced image is always a real generation — no placeholder note.
         return ToolOutcome(
             success=True,
             content=(
                 f"Image written: {len(image_bytes)} bytes to {out_path} "
                 f"({actual_w}x{actual_h} {actual_fmt.upper()}, "
-                f"seed={seed}, backend={backend.name}){placeholder_note}"
+                f"seed={seed}, backend={backend.name})"
             ),
             artifacts=[out_path],
             structured={
@@ -1038,10 +969,9 @@ class ImageGenTool:
                 "seed": seed,
                 "prompt": args.prompt,
                 "backend": backend.name,
-                # The agent (and the UI) can branch on these: a placeholder is NOT a
-                # real generation, and retrying won't connect a backend.
-                "placeholder": is_placeholder,
-                "backend_connected": not is_placeholder,
+                # Every reachable backend is a real, connected generator now.
+                "placeholder": False,
+                "backend_connected": True,
                 "bytes": len(image_bytes),
                 # Hex of the first 8 bytes (the magic) — useful for the
                 # deliverable panel to render a thumbnail / sanity-check

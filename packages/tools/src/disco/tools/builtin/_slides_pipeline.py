@@ -472,7 +472,7 @@ async def _stage_fill(
 async def _stage_assets(
     authored: AuthoredDeck,
     ctx: ToolContext,
-    backend: ImageBackend,
+    backend: ImageBackend | None,
     filename_base: str,
 ) -> dict[int, bytes]:
     """For each slide with image_prompt, generate the image, write it to the sandbox
@@ -487,13 +487,12 @@ async def _stage_assets(
     import hashlib
 
     assets: dict[int, bytes] = {}
-    # W3: never embed PROCEDURAL placeholder art into a deliverable deck. The keyless
-    # default backend draws abstract test-pattern graphics (nested rectangles + a diagonal)
-    # — honest for an "image-gen as a tool" demo, garish in a finished presentation. With no
-    # real image provider configured, omit images (text-only slides) instead of shipping
-    # placeholders. Configure ComfyUI/OpenAI/OpenRouter to include real images.
-    if getattr(backend, "name", "") == "pil-procedural":
-        _LOG.info("image provider is the procedural placeholder — omitting deck images")
+    # W-50: image generation is OPTIONAL for a deck. When no real image backend is
+    # configured (select_image_backend() raised → caller passed None), DEGRADE to
+    # text-only slides — omit images rather than crash. Configure ComfyUI/OpenAI/
+    # OpenRouter in Settings → Image generation to include real images.
+    if backend is None:
+        _LOG.info("no image backend configured — generating image-less (text-only) slides")
         return assets
     for i, slide in enumerate(authored.slides):
         if not slide.image_prompt:
@@ -555,7 +554,7 @@ async def generate_deck(
     goal: str,
     filename: str,
     ctx: ToolContext,
-    backend: ImageBackend,
+    backend: ImageBackend | None,
     *,
     slide_count: int = 5,
 ) -> tuple[Deck | None, str | None, str | None, str | None]:

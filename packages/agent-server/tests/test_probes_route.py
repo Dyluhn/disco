@@ -72,22 +72,14 @@ def test_tts_openai_happy_path_with_stubbed_synth(client, cfg_path, monkeypatch)
 # ---- T4.4 image generation ---------------------------------------------------
 
 
-def test_image_procedural_is_honest_ok(client, cfg_path):
-    """Default procedural tier really produces bytes — ok, but flagged procedural
-    so the chip never implies real diffusion ran."""
-    ConfigStore(cfg_path).save_image_gen(ImageGenSettings(provider="procedural"))
-    body = client.post("/api/image-gen/test").json()
-    assert body["ok"] is True and body["status"] == "ok"
-    assert body["procedural"] is True and body["byte_count"] > 0
-
-
-def test_image_remote_without_config_reports_fallback(client, cfg_path):
-    """comfyui selected but no base URL → select_image_backend falls back to
-    procedural; the probe SAYS procedural-fallback (#76) instead of faking ok."""
+def test_image_remote_without_config_reports_misconfigured(client, cfg_path):
+    """W-50: comfyui selected but no base URL → select_image_backend raises
+    ImageGenNotConfigured; the probe SAYS `misconfigured` (no procedural fallback)."""
     ConfigStore(cfg_path).save_image_gen(ImageGenSettings(provider="comfyui", base_url=""))
     body = client.post("/api/image-gen/test").json()
-    assert body["ok"] is False and body["status"] == "procedural-fallback"
-    assert body["procedural"] is True
+    assert body["ok"] is False and body["status"] == "misconfigured"
+    assert body["procedural"] is False
+    assert "configured" in body["detail"].lower()
 
 
 # ---- T4.5 MCP ----------------------------------------------------------------

@@ -17,7 +17,7 @@ import { cn } from "@/lib/cn";
 import type { AgentEvent, ConversationStatus, IsolationInfo } from "@/types/agent";
 import { useModels } from "@/hooks/useModels";
 import { calculateUsageCost, formatCost } from "@/lib/cost";
-import { isFree, type TokenUsage } from "@/types/models";
+import { isMetered, type TokenUsage } from "@/types/models";
 
 const STATUS_LABEL: Record<ConversationStatus, string> = {
   IDLE: "Stopped",
@@ -285,9 +285,11 @@ function CostMeter({ events, modelId }: { events: AgentEvent[]; modelId: string 
     let anyPaid = false;
     let usageSeen = false;
 
-    // The current session model's rate decides whether we're in "paid" mode.
+    // The current session model's rate decides whether we're in "paid" mode. Only
+    // METERED (per-token) models drive the $ meter — a subscription model has a flat
+    // plan fee and no usage-derived cost (W-05), so it must not show a meter.
     const currentModel = models?.find((m) => m.id === modelId);
-    if (currentModel && !isFree(currentModel)) anyPaid = true;
+    if (currentModel && isMetered(currentModel)) anyPaid = true;
 
     for (const e of events) {
       if (e.kind !== "action") continue;
@@ -298,7 +300,7 @@ function CostMeter({ events, modelId }: { events: AgentEvent[]; modelId: string 
       const mId = (e.meta?.model_id as string) || modelId;
       const m = models?.find((m) => m.id === mId);
 
-      if (m && !isFree(m)) {
+      if (m && isMetered(m)) {
         anyPaid = true;
         if (usage) {
           total += calculateUsageCost(m, usage);

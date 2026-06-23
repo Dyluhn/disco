@@ -74,6 +74,21 @@ export const MODEL_CATALOGUE: ModelInfo[] = [
     context_window: 512,
   },
   {
+    id: "driver-minimax",
+    label: "Driver Minimax — minimax-m2",
+    provider: "openrouter",
+    price_in_per_m: 0,
+    price_out_per_m: 0,
+    // W-05: a SUBSCRIPTION model — flat plan fee, no per-token price. Renders
+    // "Subscription" (never "Free", never a $ rate) across every cost surface.
+    pricing_mode: "subscription",
+    capabilities: ["tool_calling", "json_mode", "long_context"],
+    note: "200K ctx · localhost:8080 · subscription",
+    model_id: "minimax/minimax-m2",
+    base_url: "http://localhost:8080/v1",
+    context_window: 200000,
+  },
+  {
     id: "driver-overflow",
     label: "Driver Overflow — claude-3.5-sonnet",
     provider: "openrouter",

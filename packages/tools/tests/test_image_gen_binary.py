@@ -15,9 +15,10 @@ Acceptance (per the D9 brief):
 
 Backend note: in-process `diffusers`+`torch` Stable-Diffusion was SCRAPPED
 (it would pin multi-GB of weights to the app process and break the 8 GB ship
-target; ComfyUI gives the local-GPU path out-of-process). The default backend
-is `_PILProceduralBackend` (keyless, local, no network), which proves the
-binary-write + deliverable + magic-bytes contract end-to-end.
+target; ComfyUI gives the local-GPU path out-of-process). W-50 removed the
+bundled `_PILProceduralBackend` placeholder, so these contract tests inject a
+tiny `_FakePNGBackend` (real, deterministic PNG bytes) to exercise the
+binary-write + deliverable + magic-bytes path without an external service.
 """
 
 from __future__ import annotations
@@ -33,9 +34,9 @@ from disco.tools.builtin import ImageGenTool, build_default_registry
 from disco.tools.builtin.image_gen import (
     _PNG_MAGIC,
     ImageGenArgs,
+    ImageGenNotConfigured,
     _ComfyUIBackend,
     _OpenAIImageBackend,
-    _PILProceduralBackend,
     _prompt_seed,
     select_image_backend,
 )
@@ -82,46 +83,45 @@ def _ctx(sandbox: _FakeSandbox) -> ToolContext:
     )
 
 
+class _FakePNGBackend:
+    """A real-bytes stand-in for the deleted procedural backend (W-50). Renders a
+    deterministic small image (same prompt+dims+seed+fmt → byte-identical output, a
+    different seed/prompt → different bytes) so the binary-write, round-trip, and
+    W-51 disambiguation contracts are exercised end-to-end without a network service."""
+
+    name = "fake-png"
+    is_remote = True
+
+    def generate(self, *, prompt: str, width: int, height: int, seed: int, fmt: str) -> bytes:
+        digest = hashlib.sha256(f"{prompt}|{seed}".encode()).digest()
+        img = Image.new("RGB", (width, height), (digest[0], digest[1], digest[2]))
+        img.putpixel((0, 0), (digest[3], digest[4], digest[5]))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG" if fmt == "jpeg" else "PNG")
+        return buf.getvalue()
+
+
 # ---- backend sanity (no tool plumbing) -------------------------------------
 
 
-def test_pil_procedural_backend_produces_valid_png():
-    """The default backend returns a PNG whose first 8 bytes match the
-    RFC 2083 signature \\x89PNG\\r\\n\\x1a\\n. A test that just decodes
-    the bytes with PIL proves the same thing structurally — both must pass
-    for the deliverable to be considered non-corrupt."""
-    backend = _PILProceduralBackend()
-    raw = backend.generate(
-        prompt="a sunset over the sea",
-        width=32,
-        height=32,
-        seed=42,
-        fmt="png",
-    )
+def test_fake_png_backend_produces_valid_png():
+    """The fake test backend returns a PNG whose first 8 bytes match the RFC 2083
+    signature, and PIL can fully decode it — proving the contract tests below run
+    against real, non-corrupt image bytes."""
+    backend = _FakePNGBackend()
+    raw = backend.generate(prompt="a sunset over the sea", width=32, height=32, seed=42, fmt="png")
     assert isinstance(raw, bytes), "backend must return raw bytes, not str"
-    assert raw.startswith(_PNG_MAGIC), (
-        f"first 8 bytes should be the PNG signature, got {raw[:8]!r}"
-    )
-    # PIL can decode it: the bytes are a real image, not a renamed/empty
-    # file with a coincidentally-matching prefix.
+    assert raw.startswith(_PNG_MAGIC), f"first 8 bytes should be the PNG signature, got {raw[:8]!r}"
     img = Image.open(io.BytesIO(raw))
     img.load()  # forces a full decode — would raise on a corrupt PNG
     assert img.format == "PNG"
     assert img.size == (32, 32)
-
-
-def test_pil_procedural_backend_deterministic_per_seed():
-    """Same prompt + same seed → byte-identical PNG. This is the property
-    the round-trip test relies on (it compares the bytes on disk to the
-    bytes the backend produced, so determinism proves no silent
-    re-encoding happened in the write path)."""
-    backend = _PILProceduralBackend()
-    a = backend.generate(prompt="x", width=16, height=16, seed=7, fmt="png")
-    b = backend.generate(prompt="x", width=16, height=16, seed=7, fmt="png")
-    assert a == b
-    # Different seed → different bytes (the pattern is visibly distinct).
-    c = backend.generate(prompt="x", width=16, height=16, seed=8, fmt="png")
-    assert a != c
+    # Deterministic per (prompt, seed); different seed → different bytes.
+    again = backend.generate(prompt="a sunset", width=32, height=32, seed=42, fmt="png")
+    repeat = backend.generate(prompt="a sunset", width=32, height=32, seed=42, fmt="png")
+    assert again == repeat
+    other = backend.generate(prompt="a sunset", width=32, height=32, seed=43, fmt="png")
+    assert again != other
 
 
 def test_prompt_seed_is_stable():
@@ -141,7 +141,7 @@ async def test_image_generate_writes_byte_identical_png_to_sandbox():
     sandbox byte-for-byte (no text-mode round-trip, no encoding step). The
     on-disk file also starts with the PNG signature, so the file is a real
     decodable image — the deliverable contract."""
-    backend = _PILProceduralBackend()
+    backend = _FakePNGBackend()
     sbx = _FakeSandbox()
     tool = ImageGenTool(backend=backend)
 
@@ -165,7 +165,7 @@ async def test_image_generate_writes_byte_identical_png_to_sandbox():
     assert out.structured["format"] == "png"
     assert out.structured["width"] == 24
     assert out.structured["height"] == 24
-    assert out.structured["backend"] == "pil-procedural"
+    assert out.structured["backend"] == "fake-png"
     assert out.structured["bytes"] == len(sbx._fs["cover.png"])
 
     # 2. magic-bytes check: the on-disk file is a real PNG
@@ -216,7 +216,7 @@ async def test_imagegen_tool_resolves_backend_per_call(monkeypatch):
     """With no injected backend (the production path), ImageGenTool re-reads the
     configured provider via select_image_backend() on EVERY run() — so a provider
     saved in Settings is honored on the next call — and the deliverable metadata
-    reports the LIVE backend, not the procedural constructor default."""
+    reports the LIVE backend that run() actually used."""
 
     class _FakeLive:
         name = "fake-live"
@@ -224,7 +224,7 @@ async def test_imagegen_tool_resolves_backend_per_call(monkeypatch):
 
         def generate(self, *, prompt: str, width: int, height: int, seed: int, fmt: str) -> bytes:
             # Return a real, decodable PNG so the tool's magic-bytes + decode gate passes.
-            return _PILProceduralBackend().generate(
+            return _FakePNGBackend().generate(
                 prompt=prompt, width=width, height=height, seed=seed, fmt=fmt
             )
 
@@ -241,29 +241,33 @@ async def test_imagegen_tool_resolves_backend_per_call(monkeypatch):
     assert out.structured["backend"] == "fake-live", (
         "ImageGenTool().run() must report the per-call selected backend, not the default"
     )
-    # A real (non-procedural) backend is "connected" — not a placeholder, no anti-retry note.
+    # Every reachable backend is a real, connected generator now (W-50).
     assert out.structured["placeholder"] is False
     assert out.structured["backend_connected"] is True
     assert "PROCEDURAL PLACEHOLDER" not in out.content
 
 
 @pytest.mark.asyncio
-async def test_procedural_result_flags_placeholder_and_says_do_not_retry() -> None:
-    """The keyless procedural default ALWAYS emits a valid PNG, so the agent needs an
-    explicit signal that it isn't really connected — else it retries forever. The
-    result must flag placeholder=True/backend_connected=False and tell it NOT to retry."""
+async def test_run_returns_not_configured_when_no_backend(monkeypatch) -> None:
+    """W-50: with no injected backend and no configured tier, select_image_backend()
+    raises ImageGenNotConfigured — the tool must return a NOT-CONFIGURED failure with a
+    Settings pointer (never a silent placeholder), and write nothing to the sandbox."""
+    import disco.tools.builtin.image_gen as ig
+
+    def _raise() -> object:
+        raise ImageGenNotConfigured()
+
+    monkeypatch.setattr(ig, "select_image_backend", _raise)
     sbx = _FakeSandbox()
-    out = await ImageGenTool(backend=_PILProceduralBackend()).run(
+    out = await ImageGenTool().run(  # no injected backend → resolves via the factory
         ImageGenArgs(prompt="a photo of a cat", filename="cat", format="png"),
         _ctx(sbx),
     )
-    assert out.success is True
-    assert out.structured is not None
-    assert out.structured["placeholder"] is True
-    assert out.structured["backend_connected"] is False
-    # The agent-visible content must name it a placeholder and warn off retrying.
-    assert "PLACEHOLDER" in out.content.upper()
-    assert "not change" in out.content.lower() or "do not retry" in out.content.lower()
+    assert out.success is False
+    assert out.error == "image_gen_not_configured"
+    assert "isn't configured" in out.content
+    assert "Settings" in out.content
+    assert sbx.writes == [], "a not-configured run must not write any deliverable"
 
 
 @pytest.mark.asyncio
@@ -277,7 +281,7 @@ async def test_image_generate_does_not_leak_bytes_into_text_content():
     message would bloat the model's context and risk a downstream
     text-mode transport mangling the binary. This test pins the contract."""
     sbx = _FakeSandbox()
-    out = await ImageGenTool().run(
+    out = await ImageGenTool(backend=_FakePNGBackend()).run(
         ImageGenArgs(prompt="a binary-safe test", filename="safe", format="png"),
         _ctx(sbx),
     )
@@ -311,7 +315,7 @@ async def test_image_generate_jpeg_path_also_works():
     the magic-bytes sniff differ. A focused check that the JPEG branch
     also writes valid bytes and emits a deliverable."""
     sbx = _FakeSandbox()
-    out = await ImageGenTool().run(
+    out = await ImageGenTool(backend=_FakePNGBackend()).run(
         ImageGenArgs(
             prompt="jpeg test",
             filename="cover-jpg",
@@ -349,7 +353,7 @@ async def test_image_generate_preserves_f3_read_before_write_guard():
     # is a no-op for image_generate (it never sees the file), and the
     # tracker must reflect that.
     sbx = _FakeSandbox({"important.txt": b"do not clobber"})
-    out = await ImageGenTool().run(
+    out = await ImageGenTool(backend=_FakePNGBackend()).run(
         ImageGenArgs(prompt="isolated run", filename="art", format="png"),
         _ctx(sbx),
     )
@@ -401,7 +405,7 @@ async def test_w51_default_filename_does_not_overwrite_previous_image():
     first. The fix probes the sandbox and disambiguates: first → image.png, second →
     image-1.png. Both files survive on disk."""
     sbx = _FakeSandbox()
-    tool = ImageGenTool(backend=_PILProceduralBackend())
+    tool = ImageGenTool(backend=_FakePNGBackend())
 
     first = await tool.run(ImageGenArgs(prompt="alpha", format="png"), _ctx(sbx))
     second = await tool.run(ImageGenArgs(prompt="beta", format="png"), _ctx(sbx))
@@ -426,7 +430,7 @@ async def test_w51_explicit_unique_filename_is_unaffected():
     """A caller that supplies a distinct base each time gets exactly that name —
     the disambiguation only kicks in on an actual collision."""
     sbx = _FakeSandbox()
-    tool = ImageGenTool(backend=_PILProceduralBackend())
+    tool = ImageGenTool(backend=_FakePNGBackend())
 
     a = await tool.run(ImageGenArgs(prompt="x", filename="cover", format="png"), _ctx(sbx))
     b = await tool.run(ImageGenArgs(prompt="y", filename="hero", format="png"), _ctx(sbx))
@@ -447,7 +451,7 @@ async def test_w51_returned_path_artifacts_and_content_reflect_final_name():
     so the returned path matches the bytes that were actually written."""
     # Pre-seed the collision so the first run already has to disambiguate.
     sbx = _FakeSandbox({"image.png": b"\x89PNG\r\n\x1a\n-existing"})
-    out = await ImageGenTool(backend=_PILProceduralBackend()).run(
+    out = await ImageGenTool(backend=_FakePNGBackend()).run(
         ImageGenArgs(prompt="fresh", format="png"), _ctx(sbx)
     )
     assert out.success is True
@@ -482,7 +486,7 @@ async def test_w51_bounded_loop_terminates_and_falls_back_when_saturated():
             return path in self.taken
 
     sbx = _SaturatedSandbox()
-    out = await ImageGenTool(backend=_PILProceduralBackend()).run(
+    out = await ImageGenTool(backend=_FakePNGBackend()).run(
         ImageGenArgs(prompt="saturate", seed=4242, format="png"), _ctx(sbx)
     )
     assert out.success is True
@@ -523,8 +527,8 @@ def test_image_generate_tool_def_is_sandbox_and_mutating():
     assert d.name == "image_generate"
     assert d.runs_in == "sandbox"
     assert d.read_only is False
-    # Filesystem capability only — the procedural backend needs no
-    # network. The remote tiers (ComfyUI/OpenAI) are network-bound.
+    # Filesystem capability only — the remote tiers (ComfyUI/OpenAI/OpenRouter) are
+    # network-bound but route through the same binary write path.
     assert "filesystem" in {c.value for c in d.needs}
 
 
@@ -566,31 +570,9 @@ async def _run_with(backend, sbx):
 # ---- backend selection + factory --------------------------------------------
 
 
-def test_select_image_backend_returns_procedural_by_default(monkeypatch):
-    """When no provider is configured (procedural default), the factory
-    returns the keyless PIL procedural backend."""
-    from disco.tools.builtin.image_gen import _PILProceduralBackend
-
-    # Mock ConfigStore to return procedural provider
-    class _MockConfig:
-        image_gen = type('obj', (object,), {'provider': 'procedural', 'base_url': '', 'api_key_env': ''})()  # noqa: E501
-
-    class _MockStore:
-        def load(self):
-            return _MockConfig()
-
-    monkeypatch.setattr('disco.tools.builtin.image_gen.ConfigStore', lambda: _MockStore())
-
-    backend = select_image_backend()
-    assert isinstance(backend, _PILProceduralBackend)
-    assert backend.name == "pil-procedural"
-    assert backend.is_remote is False
-
-
-def test_select_image_backend_falls_back_to_procedural_when_openai_has_no_key(monkeypatch):
-    """When openai provider is configured but no API key is available,
-    the factory falls back to procedural."""
-    from disco.tools.builtin.image_gen import _PILProceduralBackend
+def test_select_image_backend_raises_when_openai_has_no_key(monkeypatch):
+    """W-50: openai provider configured but no API key → NOT configured (raise),
+    never a silent procedural placeholder."""
 
     class _MockConfig:
         image_gen = type('obj', (object,), {
@@ -612,14 +594,12 @@ def test_select_image_backend_falls_back_to_procedural_when_openai_has_no_key(mo
     monkeypatch.setattr('disco.tools.builtin.image_gen.ConfigStore', lambda: _MockStore())
     monkeypatch.setattr('disco.tools.builtin.image_gen.SecretStore', lambda: _MockSecrets())
 
-    backend = select_image_backend()
-    assert isinstance(backend, _PILProceduralBackend)
+    with pytest.raises(ImageGenNotConfigured, match="isn't configured"):
+        select_image_backend()
 
 
-def test_select_image_backend_falls_back_when_comfyui_has_no_url(monkeypatch):
-    """When comfyui provider is configured but no base_url is set,
-    the factory falls back to procedural."""
-    from disco.tools.builtin.image_gen import _PILProceduralBackend
+def test_select_image_backend_raises_when_comfyui_has_no_url(monkeypatch):
+    """W-50: comfyui provider configured but no base_url → NOT configured (raise)."""
 
     class _MockConfig:
         image_gen = type('obj', (object,), {
@@ -634,8 +614,8 @@ def test_select_image_backend_falls_back_when_comfyui_has_no_url(monkeypatch):
 
     monkeypatch.setattr('disco.tools.builtin.image_gen.ConfigStore', lambda: _MockStore())
 
-    backend = select_image_backend()
-    assert isinstance(backend, _PILProceduralBackend)
+    with pytest.raises(ImageGenNotConfigured):
+        select_image_backend()
 
 
 def test_select_image_backend_returns_openai_with_key(monkeypatch):
@@ -695,10 +675,8 @@ def test_select_image_backend_returns_comfyui_with_url(monkeypatch):
     assert backend._workflow_json == '{"1": {"class_type": "X"}}'
 
 
-def test_select_image_backend_unknown_provider_falls_back(monkeypatch):
-    """When an unknown provider is configured, the factory falls back
-    to procedural."""
-    from disco.tools.builtin.image_gen import _PILProceduralBackend
+def test_select_image_backend_unknown_provider_raises(monkeypatch):
+    """W-50: an unknown/unset provider → NOT configured (raise), no placeholder."""
 
     class _MockConfig:
         image_gen = type('obj', (object,), {
@@ -713,8 +691,8 @@ def test_select_image_backend_unknown_provider_falls_back(monkeypatch):
 
     monkeypatch.setattr('disco.tools.builtin.image_gen.ConfigStore', lambda: _MockStore())
 
-    backend = select_image_backend()
-    assert isinstance(backend, _PILProceduralBackend)
+    with pytest.raises(ImageGenNotConfigured):
+        select_image_backend()
 
 
 # ---- OpenAI-compatible backend tests ----------------------------------------

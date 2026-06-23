@@ -1,11 +1,12 @@
-"""W3 — slides/artifact contract.
+"""W3 / W-50 — slides/artifact contract.
 
 The runthru bug: a "make slides" request shipped a deck whose image slots rendered as
-garish procedural placeholder graphics (nested rectangles + diagonal), because the deck
-pipeline auto-generates an image per ``image_prompt`` slide and the image provider defaulted
-to the keyless ``pil-procedural`` backend. A presentable deck must NOT embed procedural
-placeholders — when no real image provider is configured, omit the image (text slide). Also:
-the slides tool default format must be a presentable deck (``pptx``), not raw ``html``.
+garish procedural placeholder graphics, because the deck pipeline auto-generated an image
+per ``image_prompt`` slide and the image provider defaulted to a keyless procedural
+backend. W-50 removed that backend entirely: when no real image provider is configured,
+``select_image_backend()`` raises and the slides tool passes ``backend=None`` so the deck
+DEGRADES to text-only (image omitted) — never a placeholder, never a crash. Also: the
+slides tool default format must be a presentable deck (``pptx``), not raw ``html``.
 """
 
 from __future__ import annotations
@@ -14,7 +15,6 @@ import pytest
 from disco.tools.anatomy import ToolContext
 from disco.tools.builtin._deck_schema import AuthoredDeck, AuthoredSlide
 from disco.tools.builtin._slides_pipeline import _stage_assets
-from disco.tools.builtin.image_gen import _PILProceduralBackend
 
 pytestmark = pytest.mark.boundary_contract
 
@@ -46,11 +46,12 @@ class _RealBackend:
         )
 
 
-async def test_procedural_backend_omits_deck_images():
-    """The placeholder backend must NOT embed images in the deck (no garish boxes)."""
+async def test_unconfigured_backend_omits_deck_images():
+    """W-50: no configured image backend (backend=None) → the deck degrades to
+    text-only (no images embedded), never a placeholder, never a crash."""
     ctx = ToolContext.model_construct(sandbox=None)
-    assets = await _stage_assets(_deck_with_image(), ctx, _PILProceduralBackend(), "f")
-    assert assets == {}, "procedural placeholder backend must not embed images into a deck"
+    assets = await _stage_assets(_deck_with_image(), ctx, None, "f")
+    assert assets == {}, "an unconfigured image backend must omit images, not crash"
 
 
 async def test_real_backend_still_stages_images():

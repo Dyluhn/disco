@@ -24,6 +24,7 @@ const BLANK: ModelUpsert = {
   capabilities: [],
   price_in_per_m: 0,
   price_out_per_m: 0,
+  pricing_mode: "metered",
 };
 
 function toUpsert(m: ModelInfo): ModelUpsert {
@@ -37,6 +38,9 @@ function toUpsert(m: ModelInfo): ModelUpsert {
     capabilities: [...m.capabilities],
     price_in_per_m: m.price_in_per_m,
     price_out_per_m: m.price_out_per_m,
+    // W-05: preserve the pay model on edit; derive a sensible default when unset.
+    pricing_mode:
+      m.pricing_mode ?? (m.price_in_per_m > 0 || m.price_out_per_m > 0 ? "metered" : "free"),
   };
 }
 
@@ -187,6 +191,18 @@ function ModelForm({
             value={form.price_out_per_m}
             onChange={(e) => set("price_out_per_m", Number(e.target.value))}
           />
+        </label>
+        <label className="col-span-2 flex flex-col gap-hair">
+          <span className={labelCls}>Pricing</span>
+          <select
+            className={field}
+            value={form.pricing_mode ?? "metered"}
+            onChange={(e) => set("pricing_mode", e.target.value as ModelUpsert["pricing_mode"])}
+          >
+            <option value="metered">Metered — pay per token (uses the prices above)</option>
+            <option value="subscription">Subscription — flat plan, shown as “Subscription”</option>
+            <option value="free">Free — no charge</option>
+          </select>
         </label>
       </div>
 

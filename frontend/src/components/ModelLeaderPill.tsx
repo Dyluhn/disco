@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { cn } from "@/lib/cn";
 import { costLabel, costTag } from "@/lib/cost";
 import { findModel, useAssignments, useModels } from "@/hooks/useModels";
-import { isFree, type ModelInfo, type ModelProvider } from "@/types/models";
+import { isFree, isMetered, type ModelInfo, type ModelProvider } from "@/types/models";
 import { CapabilityBadges } from "./CapabilityBadges";
 import { useToast } from "./Toast";
 
@@ -51,7 +51,9 @@ export function ModelLeaderPill({ value, onChange }: Props) {
     // (answering, rewriting, summarizing) — not just the answer. Say so once, so
     // nobody runs up a bill thinking they only changed one model. Free/local: silent.
     const m = id ? findModel(models, id) : null;
-    if (m && !isFree(m)) {
+    if (m && isMetered(m)) {
+      // Only METERED (per-token) picks run up a bill — a subscription model is a flat
+      // plan fee, so the "you'll run a bill" warning would be false for it (W-05).
       toast.show({
         tone: "cost",
         title: `Now using ${m.label} for all generative work`,

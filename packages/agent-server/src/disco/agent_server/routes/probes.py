@@ -154,15 +154,26 @@ def make_probes_router() -> APIRouter:
 
     @router.post("/api/image-gen/test")
     async def test_image_gen() -> ProbeResult:
-        """T4.4 — one tiny 64×64 generation via the configured tier. If a real
-        tier is selected but the run falls back to the keyless procedural
-        placeholder (#76), SAY so (procedural-fallback) instead of faking success."""
+        """T4.4 — one tiny 64×64 generation via the configured tier. W-50: if the
+        selected tier isn't fully configured, select_image_backend() raises
+        ImageGenNotConfigured → report `misconfigured` (no procedural fallback)."""
         from disco.core.llm import ConfigStore
-        from disco.tools.builtin.image_gen import select_image_backend
+        from disco.tools.builtin.image_gen import (
+            ImageGenNotConfigured,
+            select_image_backend,
+        )
 
         provider = ConfigStore().load().image_gen.provider
-        backend = select_image_backend()
-        is_procedural = not bool(getattr(backend, "is_remote", False))
+        try:
+            backend = select_image_backend()
+        except ImageGenNotConfigured as exc:
+            return ProbeResult(
+                ok=False,
+                status="misconfigured",
+                detail=str(exc),
+                provider=provider,
+                procedural=False,
+            )
         try:
             data = await asyncio.to_thread(
                 backend.generate,
@@ -178,7 +189,7 @@ def make_probes_router() -> APIRouter:
                 status="error",
                 detail=f"{provider} image generation failed: {exc}",
                 provider=provider,
-                procedural=is_procedural,
+                procedural=False,
             )
         n = len(data) if data else 0
         if n <= 0:
@@ -187,33 +198,7 @@ def make_probes_router() -> APIRouter:
                 status="error",
                 detail="The image backend returned no bytes.",
                 provider=provider,
-                procedural=is_procedural,
-            )
-        if provider != "procedural" and is_procedural:
-            # A real tier is selected but select_image_backend() fell back.
-            return ProbeResult(
-                ok=False,
-                status="procedural-fallback",
-                detail=(
-                    f"‘{provider}’ is selected but image-gen fell back to the "
-                    "keyless procedural placeholder — its required config (base URL / "
-                    "stored key / model) is missing, so no real diffusion ran."
-                ),
-                provider=provider,
-                procedural=True,
-                byte_count=n,
-            )
-        if is_procedural:
-            return ProbeResult(
-                ok=True,
-                status="ok",
-                detail=(
-                    f"Procedural placeholder produced {n} bytes — keyless in-process "
-                    "art (no real diffusion backend is configured)."
-                ),
-                provider=provider,
-                procedural=True,
-                byte_count=n,
+                procedural=False,
             )
         return ProbeResult(
             ok=True,

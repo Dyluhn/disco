@@ -431,7 +431,7 @@ class ConfigState:
         )
         return _tts_from(self._store.load())
 
-    # image generation: procedural / ComfyUI / OpenAI-compatible (persisted) -----
+    # image generation: ComfyUI / OpenAI-compatible / OpenRouter (persisted) ------
 
     def image_gen_config(self) -> ImageGenConfigDTO:
         return _image_gen_from(self._store.load())
@@ -439,8 +439,10 @@ class ConfigState:
     def update_image_gen_config(self, dto: ImageGenConfigDTO) -> ImageGenConfigDTO:
         """Persist the image generation provider choice. The agent-server reloads the
         config per request, so a change takes effect on the NEXT image-gen call.
-        `procedural` (default) is keyless; `comfyui` is self-hosted; `openai` is
-        paid and requires an api_key_env secret to be stored via /api/secrets."""
+        `comfyui` is self-hosted (needs base_url); `openai` is paid and requires an
+        api_key_env secret stored via /api/secrets; `openrouter` (default) is paid and
+        uses the stored OpenRouter key. No tier is configured until its requirement is
+        met — until then image generation fails NOT CONFIGURED (W-50, no placeholder)."""
         from disco.core.llm import ImageGenSettings
 
         self._store.save_image_gen(

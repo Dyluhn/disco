@@ -16,6 +16,11 @@ export const CAPABILITY_LABEL: Record<Capability, string> = {
   json_mode: "JSON mode",
 };
 
+/** How the user pays for a model — the single source of truth for the cost
+ * surfaces (W-05). "subscription" = a flat-rate plan: NO per-token price, shown as
+ * "Subscription" (never "Free", never a $ rate). undefined → derive from price. */
+export type PricingMode = "metered" | "subscription" | "free";
+
 export interface ModelInfo {
   id: string; // catalogue key, e.g. "driver-local"
   label: string; // human name shown in the UI
@@ -23,6 +28,8 @@ export interface ModelInfo {
   /** per-million-token prices; both 0 for local. */
   price_in_per_m: number;
   price_out_per_m: number;
+  /** how the user pays; undefined → derived (price 0 → free, else metered). */
+  pricing_mode?: PricingMode;
   capabilities: Capability[];
   /** optional provenance note (e.g. quantization) shown as a quiet caption. */
   note?: string;
@@ -76,11 +83,28 @@ export interface ModelUpsert {
   capabilities: Capability[];
   price_in_per_m: number;
   price_out_per_m: number;
+  pricing_mode?: PricingMode;
 }
 
-/** True for free local models — drives the "free" vs "$/Mtok" cost legibility. */
+/** A flat-rate subscription model (W-05): no per-token cost, not "free". */
+export function isSubscription(m: ModelInfo): boolean {
+  return m.pricing_mode === "subscription";
+}
+
+/** True for free models — drives the "Free" vs "$/Mtok" cost legibility. A
+ * subscription model is NEVER free (it costs a plan fee); an explicit
+ * pricing_mode wins, otherwise derive from provider/price for back-compat. */
 export function isFree(m: ModelInfo): boolean {
+  if (m.pricing_mode === "subscription") return false;
+  if (m.pricing_mode === "free") return true;
+  if (m.pricing_mode === "metered") return false;
   return m.provider === "local" || (m.price_in_per_m === 0 && m.price_out_per_m === 0);
+}
+
+/** Metered = pay per token → the $ rate / cost meter applies. A subscription or
+ * free model is NOT metered (no per-token bill). */
+export function isMetered(m: ModelInfo): boolean {
+  return !isFree(m) && !isSubscription(m);
 }
 
 /** The five roles the router assigns (llm-router contract §7). */
@@ -131,13 +155,15 @@ export interface TtsConfig {
   voice_b?: string;
 }
 
-/** Image generation provider — the wire mirror of the app-server's ImageGenConfigDTO
- * (the universal three-tier pattern). `procedural` (bundled Pillow, keyless default) |
- * `comfyui` (self-hosted graph API via `base_url`, keyless) | `openai` (paid
- * OpenAI-compatible /v1/images/generations via `base_url` + `api_key_env` naming the
- * secret, never the key itself). */
+/** Image generation provider — the wire mirror of the app-server's ImageGenConfigDTO.
+ * Real, configured backends only (W-50: the bundled `procedural` Pillow tier was
+ * removed — it was a false affordance). `comfyui` (self-hosted graph API via
+ * `base_url`, keyless) | `openai` (paid OpenAI-compatible /v1/images/generations via
+ * `base_url` + `api_key_env` naming the secret, never the key) | `openrouter` (paid,
+ * shared OpenRouter key). Until a tier is fully configured, image-gen is NOT
+ * configured and the tool fails loudly. */
 export interface ImageGenConfig {
-  provider: "procedural" | "comfyui" | "openai" | "openrouter";
+  provider: "comfyui" | "openai" | "openrouter";
   base_url?: string;
   api_key_env?: string;
   /** openai: image model id (e.g. "gpt-image-1"); comfyui: checkpoint filename. */

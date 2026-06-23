@@ -1,16 +1,19 @@
-import { isFree, type ModelInfo, type TokenUsage } from "@/types/models";
+import { isFree, isSubscription, type ModelInfo, type TokenUsage } from "@/types/models";
 
 /**
- * Cost legibility: every place a model is chosen shows its spend. Local → "Free";
- * paid → "$in / $out / Mtok". Kept terse for the pill/matrix where space is tight.
+ * Cost legibility: every place a model is chosen shows its spend. Free → "Free";
+ * subscription → "Subscription" (flat plan, no per-token rate — W-05); metered →
+ * "$in / $out / Mtok". Kept terse for the pill/matrix where space is tight.
  */
 export function costLabel(m: ModelInfo): string {
+  if (isSubscription(m)) return "Subscription";
   if (isFree(m)) return "Free";
   return `$${m.price_in_per_m} / $${m.price_out_per_m} / Mtok`;
 }
 
 /** A one-word cost tag for very tight spots (the pill face). */
 export function costTag(m: ModelInfo): string {
+  if (isSubscription(m)) return "Subscription";
   return isFree(m) ? "Free" : `$${m.price_in_per_m}/Mtok`;
 }
 
@@ -19,7 +22,9 @@ export function costTag(m: ModelInfo): string {
  * Note: prices are per-million tokens.
  */
 export function calculateUsageCost(m: ModelInfo, usage: TokenUsage): number {
-  if (isFree(m)) return 0;
+  // Free AND subscription models have no per-token bill (W-05): a subscription is a
+  // flat plan fee, so there is no usage-derived USD cost to meter.
+  if (isFree(m) || isSubscription(m)) return 0;
   // If the backend already calculated cost_usd (v1.2 router does this for OpenRouter),
   // use it as the source of truth; otherwise calculate from tokens.
   if (usage.cost_usd && usage.cost_usd > 0) return usage.cost_usd;

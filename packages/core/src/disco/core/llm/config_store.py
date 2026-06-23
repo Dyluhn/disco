@@ -116,15 +116,13 @@ class ConfigStore:
         return self.save(self.load().model_copy(update={"tts": tts}))
 
     def save_image_gen(self, image_gen: ImageGenSettings) -> RouterConfig:
-        """Persist the image generation provider (procedural/comfyui/openai/openrouter).
-        The agent-server reloads per-request; a change takes effect on the NEXT image-gen.
-        When the provider is bundled (procedural), base_url is cleared. OpenRouter has a
-        FIXED origin + uses the reserved OpenRouter key, so its base_url/api_key_env are
-        cleared too — a stale value from another provider must never carry over and get
-        the OpenRouter Bearer key sent to the wrong host."""
-        if image_gen.provider == "procedural":
-            image_gen = image_gen.model_copy(update={"base_url": ""})
-        elif image_gen.provider == "openrouter":
+        """Persist the image generation provider (comfyui/openai/openrouter — W-50: no
+        bundled procedural tier). The agent-server reloads per-request; a change takes
+        effect on the NEXT image-gen. OpenRouter has a FIXED origin + uses the reserved
+        OpenRouter key, so its base_url/api_key_env are cleared — a stale value from
+        another provider must never carry over and get the OpenRouter Bearer key sent to
+        the wrong host."""
+        if image_gen.provider == "openrouter":
             image_gen = image_gen.model_copy(update={"base_url": "", "api_key_env": ""})
         return self.save(self.load().model_copy(update={"image_gen": image_gen}))
 

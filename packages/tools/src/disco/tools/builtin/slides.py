@@ -27,7 +27,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
-from .image_gen import select_image_backend
+from .image_gen import ImageGenNotConfigured, select_image_backend
 
 # ---- args model --------------------------------------------------------------
 
@@ -384,7 +384,14 @@ class SlidesTool:
         from disco.tools.builtin._slides_pipeline import generate_deck
 
         assert args.goal is not None  # caller-checked
-        backend = select_image_backend()
+        # W-50: image generation is OPTIONAL for a deck. When no real image backend is
+        # configured, select_image_backend() raises — DEGRADE to image-less slides
+        # (text-only) rather than crashing the whole deck generation. The pipeline
+        # treats backend=None as "omit images".
+        try:
+            backend = select_image_backend()
+        except ImageGenNotConfigured:
+            backend = None
 
         c1_deck, fallback_md, err, authored_sidecar = await generate_deck(
             args.goal,

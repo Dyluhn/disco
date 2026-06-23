@@ -2,17 +2,17 @@
  * Settings → Image generation. Controls the provider the `image_generate` tool uses
  * when an agent or build task produces an image (slide art, website backgrounds, etc.).
  *
- * The universal THREE-tier provider pattern (same as Audio / Search / Extraction), each
- * a single honest, wired choice that persists to the app-server (the agent-server honors
- * it on the NEXT image-gen call — no restart). There is no "off": image-gen always works
- * because `procedural` is a keyless in-process fallback.
- *  - Bundled (procedural): in-process Pillow procedural patterns. Keyless, no network, no
- *    model download. Deterministic per (prompt, seed). The first-run default.
- *  - Self-hosted (ComfyUI): your ComfyUI graph API (`base_url`; empty → default), keyless.
+ * Real, configured backends only (W-50: the old bundled `procedural` Pillow tier was
+ * removed — it was a false affordance that always "succeeded" with abstract patterns).
+ * Each choice persists to the app-server (the agent-server honors it on the NEXT
+ * image-gen call — no restart). Until a tier is fully configured, image-gen is NOT
+ * configured and the tool fails loudly (slides degrade to text-only).
+ *  - Self-hosted (ComfyUI): your ComfyUI graph API (`base_url`; REQUIRED), keyless.
  *    Posts a workflow to /prompt and polls /history.
  *  - Paid API (OpenAI-compatible): a vendor like OpenAI gpt-image-1 / DALL·E via
  *    /v1/images/generations. Set the base URL and the secret/env-var NAME holding the key
  *    (never the key itself).
+ *  - OpenRouter: image models via chat-completions using the shared OpenRouter key.
  */
 
 import { useEffect, useState } from "react";
@@ -49,20 +49,14 @@ const orPrice = (m: {
   return "pricing on openrouter.ai";
 };
 
-type Provider = "procedural" | "comfyui" | "openai" | "openrouter";
+type Provider = "comfyui" | "openai" | "openrouter";
 
 const OPTIONS: { provider: Provider; Icon: typeof Cpu; label: string; help: string }[] = [
-  {
-    provider: "procedural",
-    Icon: Cpu,
-    label: "Bundled (procedural)",
-    help: "In-process Pillow procedural patterns. Keyless, no network, no model download — image-gen works out of the box. Deterministic per (prompt, seed). The default.",
-  },
   {
     provider: "comfyui",
     Icon: Server,
     label: "Self-hosted (ComfyUI)",
-    help: "Your ComfyUI graph API. Keyless, but the base URL is REQUIRED (without it, image-gen falls back to procedural). Ships a built-in SDXL/SD workflow — set Checkpoint to a model file that exists on your ComfyUI. For FLUX / SD3 / custom graphs, paste a 'Save (API Format)' workflow below.",
+    help: "Your ComfyUI graph API. Keyless, but the base URL is REQUIRED (without it, image-gen is unavailable). Ships a built-in SDXL/SD workflow — set Checkpoint to a model file that exists on your ComfyUI. For FLUX / SD3 / custom graphs, paste a 'Save (API Format)' workflow below.",
   },
   {
     provider: "openai",
@@ -169,18 +163,18 @@ export function ImageGenSection() {
     }
   })();
 
-  // Honesty: select_image_backend() silently falls back to procedural when a remote tier
-  // is selected without its required config (comfyui w/o base_url, openai w/o a stored key).
-  // Warn so the UI never claims a remote provider is active when procedural is what runs.
+  // Honesty (W-50): when a tier is selected without its required config, image-gen is
+  // NOT CONFIGURED — the tool fails loudly (no procedural placeholder) and slides render
+  // text-only. Warn so the UI never claims a provider is active when nothing will run.
   const fallbackWarning =
     data?.provider === "comfyui" && !(data.base_url ?? "").trim()
-      ? "Set a base URL below — until then, image generation silently falls back to procedural."
+      ? "Set a base URL below — until then, image generation is unavailable (not configured) and slides render text-only."
       : data?.provider === "openai" && !(data.api_key_env ?? "").trim()
-        ? "Set the API key env var below and store that key in Provider API keys — until then, image generation falls back to procedural."
+        ? "Set the API key env var below and store that key in Provider API keys — until then, image generation is unavailable (not configured)."
         : data?.provider === "openrouter" && !orKeyReady
-          ? "Store a decryptable OpenRouter key in Provider API keys — until then, image generation falls back to procedural."
+          ? "Store a decryptable OpenRouter key in Provider API keys — until then, image generation is unavailable (not configured)."
           : data?.provider === "openrouter" && !(data.model ?? "").trim()
-            ? "Set an image model id below — until then, image generation falls back to procedural."
+            ? "Set an image model id below — until then, image generation is unavailable (not configured)."
             : null;
 
   const fieldClass =
@@ -192,8 +186,9 @@ export function ImageGenSection() {
         <h2 className="font-display text-[1.3rem] tracking-tight text-text">Image generation</h2>
         <p className="mt-hair font-ui text-[0.86rem] text-text-muted">
           The provider the <code className="font-mono text-[0.8rem]">image_generate</code> tool uses
-          for slide art, website backgrounds, and other generated images. Bundled procedural by
-          default — keyless and offline; point it at ComfyUI or a paid API for real diffusion.
+          for slide art, website backgrounds, and other generated images. Point it at ComfyUI
+          (self-host) or a paid API (OpenAI / OpenRouter) — until one is configured, image
+          generation is unavailable and slides render text-only.
         </p>
       </header>
 
@@ -260,7 +255,6 @@ export function ImageGenSection() {
             disabled={!agentLive() || fieldsDirty}
             disabledHint={fieldsDirty ? "save changes to test" : "connect the agent server to test"}
           />
-          {/* the procedural-fallback fact for this section ties to the #76 warning above */}
 
           {/* Contextual fields — endpoint (self-host/paid) + model + key env (paid). */}
           {showFields && (
@@ -269,7 +263,7 @@ export function ImageGenSection() {
                 <p className="font-ui text-[0.78rem] leading-relaxed text-text-faint">
                   Uses your <strong className="text-text">OpenRouter key</strong> from{" "}
                   <em>Provider API keys</em> — store it there if you haven't, or image
-                  generation falls back to the procedural placeholder. Every OpenRouter image
+                  generation is unavailable (not configured). Every OpenRouter image
                   model is <strong className="text-text">paid</strong>; add credits at
                   openrouter.ai/settings/credits.
                 </p>

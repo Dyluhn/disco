@@ -38,7 +38,12 @@ let fixtureCatalogue: ModelInfo[] = MODEL_CATALOGUE.map((m) => ({ ...m }));
 
 /** Derive the display fields for a fixture-path upsert, mirroring the backend. */
 function toModelInfo(u: ModelUpsert): ModelInfo {
-  const humanized = u.id.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  // W-04: drop the `or-` OpenRouter prefix BEFORE humanizing so the label doesn't
+  // gain a bogus "Or " word (mirrors the backend mapper's _display_key).
+  const humanized = u.id
+    .replace(/^or-/, "")
+    .replace(/-/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
   const name = u.model_id.split("/").pop()!.replace(/\.gguf$/, "");
   const paid = u.price_in_per_m > 0 || u.price_out_per_m > 0;
   const ctx = u.context_window >= 1000 ? `${Math.floor(u.context_window / 1000)}K ctx` : `${u.context_window} ctx`;
@@ -50,6 +55,9 @@ function toModelInfo(u: ModelUpsert): ModelInfo {
     provider: paid ? "openrouter" : "local",
     price_in_per_m: u.price_in_per_m,
     price_out_per_m: u.price_out_per_m,
+    // W-05: derive when unset (subscription must be explicit — it has a 0 per-token
+    // price, so it can't be inferred); carry an explicit mode through verbatim.
+    pricing_mode: u.pricing_mode ?? (paid ? "metered" : "free"),
     capabilities: [...u.capabilities],
     note,
     model_id: u.model_id,
@@ -192,10 +200,10 @@ export async function updateTtsConfig(cfg: TtsConfig): Promise<TtsConfig> {
   return { ...fixtureTts };
 }
 
-// ---- image generation (procedural / comfyui / openai provider tiers) -------
+// ---- image generation (comfyui / openai / openrouter provider tiers) -------
 
 let fixtureImageGen: ImageGenConfig = {
-  provider: "procedural",
+  provider: "openrouter",
   base_url: "",
   api_key_env: "",
   model: "",
@@ -250,8 +258,8 @@ export async function testTts(): Promise<ProbeResult> {
   return agentSend<ProbeResult>("POST", "/api/tts/test");
 }
 
-/** T4.4 — one tiny generation via the configured image tier; flags procedural
- * fallback honestly (#76) (agent-server). */
+/** T4.4 — one tiny generation via the configured image tier; reports NOT-CONFIGURED
+ * honestly when no real backend is set up (W-50) (agent-server). */
 export async function testImageGen(): Promise<ProbeResult> {
   return agentSend<ProbeResult>("POST", "/api/image-gen/test");
 }

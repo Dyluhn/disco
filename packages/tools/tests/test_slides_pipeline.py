@@ -416,6 +416,62 @@ async def test_generate_deck_image_backend_called_for_image_prompts(tmp_workspac
     assert mock_backend.generate.call_count == len(image_slides)
 
 
+@pytest.mark.asyncio
+async def test_generate_deck_degrades_image_less_when_backend_none(tmp_workspace):
+    """W-50: when image-gen is unconfigured the slides tool passes backend=None.
+    generate_deck must DEGRADE to a text-only deck — a real Deck is still produced,
+    no images are embedded, and nothing crashes."""
+    sbx = _jailed_sandbox(tmp_workspace)
+    ctx = _ctx(sbx)
+
+    outline_raw = json.dumps(_SAMPLE_OUTLINE_JSON)
+    full_raw = json.dumps(_SAMPLE_DECK_JSON)
+
+    with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
+        mock_llm.side_effect = [outline_raw, full_raw]
+        deck, fallback_md, err, _ = await generate_deck(
+            "EV battery startup pitch",
+            "test-deck",
+            ctx,
+            None,  # W-50: no image backend configured → degrade, don't crash
+            slide_count=5,
+        )
+
+    assert deck is not None, f"deck must still render image-less; err={err}"
+    assert fallback_md is None
+    assert err is None
+    # No slide carries an embedded image (the image_prompt slides degrade to text-only).
+    assert not any(getattr(s, "image_url", None) for s in deck.slides)
+
+
+@pytest.mark.asyncio
+async def test_slides_tool_degrades_when_image_gen_unconfigured(tmp_workspace):
+    """W-50 end-to-end: SlidesTool._run_c2_pipeline catches ImageGenNotConfigured from
+    select_image_backend() and still produces a deck (slides render without images)."""
+    from disco.tools.builtin.image_gen import ImageGenNotConfigured
+
+    sbx = _jailed_sandbox(tmp_workspace)
+    ctx = _ctx(sbx)
+
+    outline_raw = json.dumps(_SAMPLE_OUTLINE_JSON)
+    full_raw = json.dumps(_SAMPLE_DECK_JSON)
+
+    def _raise() -> object:
+        raise ImageGenNotConfigured()
+
+    with (
+        patch("disco.tools.builtin.slides.select_image_backend", side_effect=_raise),
+        patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm,
+    ):
+        mock_llm.side_effect = [outline_raw, full_raw]
+        out = await SlidesTool().run(
+            SlidesGenerateArgs(goal="EV battery startup pitch", filename="deck", format="html"),
+            ctx,
+        )
+
+    assert out.success is True, f"slides must render image-less, not crash: {out.content}"
+
+
 # ---------------------------------------------------------------------------
 # Marp fallback wiring in slides.py
 # ---------------------------------------------------------------------------
@@ -763,8 +819,8 @@ def test_resolve_llm_key_reads_reserved_openrouter_slot(monkeypatch):
     """The OpenRouter driver key lives in the RESERVED 'openrouter' SecretStore slot,
     not under its env-var name — _resolve_llm_key must find it there (the canonical
     UI path), else a UI-configured OpenRouter author silently 401s."""
-    from disco.tools.builtin import _slides_pipeline as sp
     from disco.core.llm.secrets import OPENROUTER_API_KEY_ENV
+    from disco.tools.builtin import _slides_pipeline as sp
 
     monkeypatch.delenv(OPENROUTER_API_KEY_ENV, raising=False)
 

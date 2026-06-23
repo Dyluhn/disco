@@ -9,6 +9,8 @@ is itself imported by the stateful `config_state.ConfigState` orchestrator.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from disco.core.llm import ModelRole, RouterConfig
 from disco.core.llm.config import ModelEntry
 from disco.core.llm.types import Requirement
@@ -30,6 +32,24 @@ from .dtos import (
 
 def _humanize(key: str) -> str:
     return key.replace("-", " ").title()
+
+
+def _display_key(key: str) -> str:
+    """Humanize the catalogue key for the model LABEL, dropping the `or-` OpenRouter
+    prefix FIRST (W-04). Stripping before humanizing keeps `.title()` from turning the
+    bare `or` into a bogus 'Or ' word — so `or-gpt-4-turbo` reads 'Gpt 4 Turbo …', not
+    'Or Gpt 4 Turbo …'. Non-`or-` keys (e.g. 'driver-local') are unaffected."""
+    return _humanize(key.removeprefix("or-"))
+
+
+def _pricing_mode(entry: ModelEntry) -> Literal["metered", "subscription", "free"]:
+    """Resolve the effective pay model for the cost surfaces (W-05). An explicit
+    `entry.pricing_mode` wins; otherwise derive for back-compat: any price → metered,
+    else free. Always a concrete value on the wire so the frontend never has to guess
+    'subscription' (which is NOT derivable from price — it has a 0 per-token price)."""
+    if entry.pricing_mode is not None:
+        return entry.pricing_mode
+    return "metered" if (entry.price_in_per_m > 0 or entry.price_out_per_m > 0) else "free"
 
 
 def _provider_view(entry: ModelEntry) -> str:
@@ -74,10 +94,11 @@ def _models_from(config: RouterConfig) -> list[ModelDTO]:
         out.append(
             ModelDTO(
                 id=key,
-                label=f"{_humanize(key)} — {_model_name(entry.model_id)}",
+                label=f"{_display_key(key)} — {_model_name(entry.model_id)}",
                 provider=_provider_view(entry),
                 price_in_per_m=entry.price_in_per_m,
                 price_out_per_m=entry.price_out_per_m,
+                pricing_mode=_pricing_mode(entry),
                 capabilities=sorted(r.value for r in entry.capabilities),
                 note=_note(entry),
                 model_id=entry.model_id,
@@ -153,6 +174,7 @@ def _entry_from(upsert: ModelUpsert, *, provider: str) -> ModelEntry:
         quantization=upsert.quantization,
         price_in_per_m=upsert.price_in_per_m,
         price_out_per_m=upsert.price_out_per_m,
+        pricing_mode=upsert.pricing_mode,  # W-05: carry the pay model through edits
         base_url=upsert.base_url,
         api_key_env=upsert.api_key_env,
     )

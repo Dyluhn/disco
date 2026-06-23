@@ -60,8 +60,8 @@ function installFetch() {
       return jsonResponse({ api_key_env: ttsKeyEnv });
     }
     if (method === "GET" && url === "/api/image-gen/config") {
-      // useExpectedKeyNames() now also reads image-gen; procedural carries no key.
-      return jsonResponse({ provider: "procedural", base_url: "", api_key_env: "", model: "" });
+      // useExpectedKeyNames() now also reads image-gen; comfyui carries no api_key_env.
+      return jsonResponse({ provider: "comfyui", base_url: "", api_key_env: "", model: "" });
     }
     if (method === "POST" && url.endsWith("/test") && url.startsWith("/api/secrets/")) {
       // T4.1 probe: a real authenticated call would happen server-side; here the

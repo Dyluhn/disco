@@ -35,7 +35,8 @@ function installFetch() {
         lastPut = { url, body };
         return jsonResponse(body); // app-server echoes the saved config
       }
-      return jsonResponse({ provider: "procedural", base_url: "", api_key_env: "" });
+      // W-50: no bundled tier — default the test config to a real (paid) tier.
+      return jsonResponse({ provider: "openai", base_url: "", api_key_env: "", model: "" });
     }
     throw new Error(`unexpected fetch: ${url}`);
   });
@@ -60,12 +61,14 @@ afterEach(() => {
 });
 
 describe("ImageGenSection — A3 image-gen provider settings", () => {
-  it("renders the three tiers from the live config with procedural active", async () => {
+  it("renders the three real tiers from the live config with the configured tier active", async () => {
     render(createElement(ImageGenSection), { wrapper: makeWrapper() });
-    const procedural = await screen.findByRole("button", { name: /Bundled \(procedural\)/ });
-    expect(procedural).toHaveAttribute("aria-pressed", "true");
+    // W-50: there is NO bundled "Bundled (procedural)" tier anymore.
+    const paid = await screen.findByRole("button", { name: /Paid API/ });
+    expect(paid).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: /Self-hosted \(ComfyUI\)/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Paid API/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /OpenRouter/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Bundled \(procedural\)/ })).not.toBeInTheDocument();
   });
 
   it("PUTs the chosen provider and shows the ComfyUI base-URL field (required, no false default)", async () => {
@@ -113,8 +116,9 @@ describe("ImageGenSection — A3 image-gen provider settings", () => {
     expect(body.workflow_json).toBe(graph);
   });
 
-  it("warns that a remote tier selected without its required config falls back to procedural", async () => {
-    // openai persisted but no api_key_env → runtime silently uses procedural; the UI must say so.
+  it("warns that a remote tier selected without its required config is NOT configured (W-50)", async () => {
+    // openai persisted but no api_key_env → image-gen is NOT configured (no procedural
+    // fallback); the UI must say so rather than imply a backend is active.
     vi.unstubAllGlobals();
     vi.stubGlobal(
       "fetch",
@@ -127,10 +131,9 @@ describe("ImageGenSection — A3 image-gen provider settings", () => {
       ),
     );
     render(createElement(ImageGenSection), { wrapper: makeWrapper() });
-    // The warning is a role="status" element with the distinct "until then" phrasing —
-    // NOT the static ComfyUI help text (which also contains "falls back to procedural").
+    // The warning is a role="status" element with the distinct "until then" phrasing.
     const warning = await screen.findByRole("status");
-    expect(warning).toHaveTextContent(/until then.*falls back to procedural/i);
+    expect(warning).toHaveTextContent(/until then.*not configured/i);
   });
 });
 

@@ -44,6 +44,15 @@ class ModelEntry(BaseModel):
     # per-million-token prices for cost accounting; 0 for local. [VERIFY]
     price_in_per_m: float = 0.0
     price_out_per_m: float = 0.0
+    # W-05: how the user pays for this model — the single source of truth for the
+    # cost surfaces (pill / matrix / catalogue / status meter).
+    #   "metered"      — pay per token; the price_*_per_m fields drive the $ display.
+    #   "subscription" — a flat-rate plan (e.g. a MiniMax/Claude subscription proxied
+    #                    locally): NO per-token price, shown as "Subscription", not "Free".
+    #   "free"         — genuinely free (local / no charge).
+    # None → DERIVE for back-compat: price 0 → free, else metered (so existing
+    # catalogues keep working without a migration).
+    pricing_mode: Literal["metered", "subscription", "free"] | None = None
     # [EXTENSION] §8 requires a model family for prompt selection but §7's
     # ModelEntry omitted the field. Optional here: if None, the family is
     # derived from model_id (prompts.derive_family). Set it to pin a [VERIFY]
@@ -182,20 +191,23 @@ class ExtractionSettings(BaseModel):
 
 
 class ImageGenSettings(BaseModel):
-    """[settings] Image generation provider. The THREE tiers of the universal
-    design (same pattern as TTS / Search / Extraction):
-      (a) BUNDLED `procedural` — in-process Pillow-based deterministic procedural
-          patterns (keyless, no network, no model download). The FIRST-RUN DEFAULT
-          so image-gen works out of the box with zero config.
-      (b) self-host `comfyui` — a self-hosted ComfyUI graph API via `base_url`,
+    """[settings] Image generation provider. Real, configured backends only —
+    there is NO bundled keyless tier (W-50: the old `procedural` Pillow backend was
+    a false affordance — it always "succeeded" with abstract patterns, so the tool
+    looked wired when nothing real was connected). Until one of the tiers below is
+    fully configured, image generation is NOT CONFIGURED and the tool fails loudly:
+      (a) self-host `comfyui` — a self-hosted ComfyUI graph API via `base_url`,
           keyless (assumes local/network-accessible). Uses the /history poll pattern.
-      (c) paid `openai` — an OpenAI-compatible `/v1/images/generations` endpoint
+      (b) paid `openai` — an OpenAI-compatible `/v1/images/generations` endpoint
           (`base_url` + `api_key_env` naming the secret/env var, never the key
           itself), e.g. DALL-E 3.
-    The provider is persisted; the agent-server honors it on the next image-gen call.
-    This is NOT an LLM-router role assignment."""
+      (c) paid `openrouter` — image models via OpenRouter chat-completions using the
+          shared OpenRouter key (no api_key_env).
+    Default is `openrouter` (the lowest-friction real tier — reuses the OpenRouter
+    key) but it is INACTIVE until that key is stored. The provider is persisted; the
+    agent-server honors it on the next image-gen call. NOT an LLM-router role."""
 
-    provider: Literal["procedural", "comfyui", "openai", "openrouter"] = "procedural"
+    provider: Literal["comfyui", "openai", "openrouter"] = "openrouter"
     base_url: str = ""  # for comfyui (self-host) / openai-compatible endpoint; empty → default
     api_key_env: str = ""  # secrets key name for openai (never the key itself)
     # openrouter: image gen via /chat/completions (modalities:[image,text]); paid, uses
@@ -252,8 +264,9 @@ class RouterConfig(BaseModel):
     # install works with no keys; upgradeable to self-host or paid in Settings.
     search: SearchSettings = Field(default_factory=SearchSettings)
     extraction: ExtractionSettings = Field(default_factory=ExtractionSettings)
-    # image generation: bundled procedural (keyless) by default; upgradeable to
-    # self-host ComfyUI or paid OpenAI-compatible endpoint via Settings.
+    # image generation: real backends only (W-50). Default `openrouter` but INACTIVE
+    # until the OpenRouter key is stored; configure ComfyUI / OpenAI / OpenRouter in
+    # Settings. No bundled placeholder — unconfigured = the tool fails NOT CONFIGURED.
     image_gen: ImageGenSettings = Field(default_factory=ImageGenSettings)
     # MCP (Model Context Protocol) — external tool servers (RP-05).
     # Off by default; the pool is built at agent-server start when enabled.
@@ -395,6 +408,26 @@ def default_config() -> RouterConfig:
             family="anthropic",
             price_in_per_m=3.0,
             price_out_per_m=15.0,
+        ),
+        # W-05: a SUBSCRIPTION-tier driver — MiniMax accessed through a local,
+        # flat-rate proxy (e.g. the Pi relay). pricing_mode="subscription" so the
+        # cost surfaces show "Subscription" (NOT "Free" — it costs a flat plan fee —
+        # and NOT a per-token price, which doesn't apply). Dormant/assignable; the
+        # local relay must be running for it to actually answer.
+        "driver-minimax": ModelEntry(
+            model_id="minimax/minimax-m2",
+            provider="minimax",
+            base_url="http://localhost:8080/v1",
+            context_window=200_000,
+            capabilities=frozenset(
+                {
+                    Requirement.TOOL_CALLING,
+                    Requirement.JSON_MODE,
+                    Requirement.LONG_CONTEXT,
+                }
+            ),
+            family="minimax",
+            pricing_mode="subscription",
         ),
         # DF-08: Vision escalation target — Gemini 3 Flash via OpenRouter.
         # Proven 4/4 in the vision bake-off. Slug google/gemini-3-flash-preview

@@ -52,6 +52,38 @@ def test_models_catalogue_is_cost_and_capability_legible(client):
     assert by_id["driver-overflow"]["provider"] == "openrouter"
     assert by_id["driver-overflow"]["price_in_per_m"] == 3
     assert "vision" in by_id["driver-overflow"]["capabilities"]
+    # W-05: pricing_mode is threaded onto every model. Derived for the seeded ones
+    # (price 0 → free; priced → metered) and EXPLICIT subscription for driver-minimax.
+    assert by_id["driver-local"]["pricing_mode"] == "free"
+    assert by_id["driver-overflow"]["pricing_mode"] == "metered"
+    assert by_id["driver-minimax"]["pricing_mode"] == "subscription"
+    # driver-minimax is a subscription model: a flat plan, so it carries NO per-token
+    # price (it must never render as a $ rate or as "Free").
+    assert by_id["driver-minimax"]["price_in_per_m"] == 0
+
+
+def test_openrouter_model_label_drops_the_or_prefix(client):
+    """W-04: an or-* catalogue key keeps its KEY but the LABEL must not gain a bogus
+    'Or ' word — the `or-` prefix is stripped before humanizing."""
+    from disco.app_server.config.mappers import _models_from
+    from disco.core.llm.config import ModelEntry, RouterConfig
+
+    cfg = RouterConfig(
+        models={
+            "or-gpt-4-turbo": ModelEntry(
+                model_id="openai/gpt-4-turbo",
+                provider="openrouter",
+                context_window=128_000,
+                price_in_per_m=10.0,
+                price_out_per_m=30.0,
+            )
+        },
+        default_model="or-gpt-4-turbo",
+    )
+    [dto] = _models_from(cfg)
+    assert dto.id == "or-gpt-4-turbo", "the catalogue KEY is preserved"
+    assert not dto.label.startswith("Or "), f"label still has the 'Or ' prefix: {dto.label!r}"
+    assert dto.label == "Gpt 4 Turbo — gpt-4-turbo"
 
 
 def test_sandbox_config_get_and_put_round_trip(client):

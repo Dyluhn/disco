@@ -20,6 +20,9 @@ class ModelDTO(BaseModel):
     provider: str  # derived view: "local" (free) | "openrouter" (paid)
     price_in_per_m: float
     price_out_per_m: float
+    # W-05: pay model — "metered" | "subscription" | "free". None → the frontend
+    # derives it from price/provider for back-compat (price 0 → free, else metered).
+    pricing_mode: Literal["metered", "subscription", "free"] | None = None
     capabilities: list[str]
     note: str | None = None
     # raw editable fields (so the edit form prefills the real config, not a view):
@@ -44,6 +47,9 @@ class ModelUpsert(BaseModel):
     capabilities: list[str] = []
     price_in_per_m: float = 0.0
     price_out_per_m: float = 0.0
+    # W-05: how the user pays — threaded so an edited/added subscription model keeps
+    # its mode. None → derive (back-compat); not surfaced as free for "subscription".
+    pricing_mode: Literal["metered", "subscription", "free"] | None = None
 
 
 class OpenRouterModelDTO(BaseModel):
@@ -193,20 +199,21 @@ class TtsConfigDTO(BaseModel):
 
 
 class ImageGenConfigDTO(BaseModel):
-    """Image generation provider DTO — the universal THREE-tier provider pattern
-    (same shape as TTS / Search / Extraction):
-      - `procedural` (default) — bundled in-process Pillow-based procedural patterns
-        (keyless, no network, no model). First-run default so image-gen works
-        immediately.
-      - `comfyui` — self-hosted ComfyUI graph API (`base_url`; empty → default),
-        keyless (assumes local/network-accessible). Uses /prompt + /history poll.
+    """Image generation provider DTO — real, configured backends only (W-50: the old
+    bundled `procedural` Pillow tier was removed; it was a false affordance that
+    always "succeeded" with abstract patterns). Until a tier is fully configured,
+    image generation is NOT CONFIGURED and the tool fails loudly:
+      - `comfyui` — self-hosted ComfyUI graph API (`base_url`; required), keyless
+        (assumes local/network-accessible). Uses /prompt + /history poll.
       - `openai` — paid OpenAI-compatible `/v1/images/generations` endpoint
         (`base_url` + `api_key_env` naming the secret/env var, never the key
         itself), e.g. DALL-E 3.
+      - `openrouter` (default) — image models via OpenRouter chat-completions using
+        the shared OpenRouter key; inactive until that key is stored.
     Wire mirror of core's ImageGenSettings — the agent-server honors it on the
     next image-gen call. NOT an LLM-router role assignment."""
 
-    provider: Literal["procedural", "comfyui", "openai", "openrouter"] = "procedural"
+    provider: Literal["comfyui", "openai", "openrouter"] = "openrouter"
     base_url: str = ""
     api_key_env: str = ""
     model: str = ""  # openai: image model id; comfyui: checkpoint filename; empty → default
