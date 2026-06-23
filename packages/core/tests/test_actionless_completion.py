@@ -196,6 +196,131 @@ async def test_notify_user_with_plan_remaining_still_pauses():
     )
 
 
+async def test_unverified_web_completion_routes_through_browser_gate():
+    """W-32 — the completed_via_notify FINISH must NOT bypass the finish gates.
+    A WEB build (index.html written) that is NEVER browser-verified used to
+    force-finish DIRECTLY (StatusEvent(FINISHED)) the moment the actionless valve
+    tripped — an UNVERIFIED "done" with mid-action narration next to the FINISHED
+    chip. Now the branch routes through the SAME browser-verify gate a real
+    finish() clears: the gate injects its "verify your app" reminder and the run
+    CONTINUES (never a silent gate-bypass). Any completed_via_notify can only
+    appear AFTER that reminder, via the gate's own bounded 3-refusal release."""
+    from disco.core.llm import ToolSpec
+    from loop_fakes import FakeExecutor
+
+    agent = ScriptedAgent([
+        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+        action_step("file_write", {"path": "index.html", "content": "<html></html>"}),
+        action_step("plan_step", {"index": 1, "state": "done"}),
+        _notify("The site is built and ready."),
+        _notify("Everything is in place."),
+        _notify("All done — the app is complete."),
+    ])
+    executor = FakeExecutor(
+        tools=[
+            ToolSpec(name=n, description=n, parameters_schema={})
+            for n in ("file_write", "notify_user", "file_read")
+        ]
+    )
+    loop, store = build_loop(
+        executor=executor, agent=agent, planning_tools=frozenset(["file_read"])
+    )
+    loop.mode = OperatingMode.PLANNING
+    await loop.send_message("go")
+    await loop.run()
+    await loop.approve_plan()
+    await loop.run()
+    events = await store.get_events(CID)
+
+    # The browser-verify gate RAN and refused — its reminder is in the log.
+    nudges = [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.message
+        and "verify your app the way a user would" in (e.message.content or "")
+    ]
+    assert nudges, "browser-verify gate was bypassed — no verify reminder injected"
+    # The completed_via_notify FINISH (if it ever lands, via the bounded
+    # 3-refusal release) NEVER precedes the verify reminder — i.e. it did not
+    # bypass the gate on the first trip (the W-32 force-finish is gone).
+    first_nudge_seq = min(e.seq for e in nudges if e.seq is not None)
+    cvn = [
+        e
+        for e in events
+        if isinstance(e, StatusEvent) and e.detail == "completed_via_notify"
+    ]
+    assert all(e.seq is not None and e.seq > first_nudge_seq for e in cvn)
+
+
+async def test_verified_web_completion_finishes_via_notify():
+    """W-32 companion — when the web build IS browser-verified (a clean
+    http://127.0.0.1:8000/ observation, no console errors, since the last edit),
+    the completed_via_notify branch passes the browser-verify gate and DOES land a
+    clean FINISHED/completed_via_notify — no verify reminder needed. Proves the
+    gate-routing only BLOCKS the unverified case; a legitimately-verified build
+    still finishes."""
+    from disco.core import ToolResult
+    from disco.core.llm import ToolSpec
+    from loop_fakes import FakeExecutor
+
+    class _CleanBrowserExecutor(FakeExecutor):
+        async def execute(self, call):
+            self.calls.append(call)
+            if call.tool_name == "browser":
+                return ToolResult(
+                    call_id=call.call_id,
+                    tool_name="browser",
+                    success=True,
+                    content="navigated",
+                    structured={
+                        "url": "http://127.0.0.1:8000/",
+                        "console": [],
+                        "title": "My App",
+                        "text": "Welcome to the fully built static site.",
+                    },
+                )
+            return ToolResult(
+                call_id=call.call_id, tool_name=call.tool_name, success=True, content="ok"
+            )
+
+    agent = ScriptedAgent([
+        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+        action_step("file_write", {"path": "index.html", "content": "<html></html>"}),
+        action_step("plan_step", {"index": 1, "state": "done"}),
+        action_step("browser", {"action": "navigate", "url": "http://127.0.0.1:8000/"}),
+        _notify("Verified the site renders cleanly."),
+        _notify("Everything is in place."),
+        _notify("All done — the app is complete."),
+        finish_step(),
+    ])
+    executor = _CleanBrowserExecutor(
+        tools=[
+            ToolSpec(name=n, description=n, parameters_schema={})
+            for n in ("file_write", "notify_user", "file_read", "browser")
+        ]
+    )
+    loop, store = build_loop(
+        executor=executor, agent=agent, planning_tools=frozenset(["file_read"])
+    )
+    loop.mode = OperatingMode.PLANNING
+    await loop.send_message("go")
+    await loop.run()
+    await loop.approve_plan()
+    state = await loop.run()
+    events = await store.get_events(CID)
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert _last_status_detail(events) == "completed_via_notify"
+    # A verified build needs NO browser-verify reminder.
+    assert not any(
+        isinstance(e, MessageEvent)
+        and e.message
+        and "verify your app the way a user would" in (e.message.content or "")
+        for e in events
+    )
+
+
 async def test_no_plan_defaults_to_existing_noop_backstop():
     """No plan at all (ambiguous completeness) → the existing noop backstop
     governs (FINISHED/noop_limit), NOT the completion path. The monologue

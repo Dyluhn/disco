@@ -74,3 +74,49 @@ async def test_base_router_agent_back_compat_default():
     # Direct RouterAgent(router) callers keep the original v1 prose=finished
     # convention (so existing code/tests are unchanged).
     assert RouterAgent(_router())._prose_finishes is True
+
+
+# ---- W-32 (secondary): a batched `finish` must not preempt real work --------
+
+
+def _batched_router(tool_calls):
+    from loop_fakes import SequenceProvider
+
+    provider = SequenceProvider([{"text": "", "tool_calls": tool_calls}])
+    return DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+
+
+async def test_batched_finish_alongside_real_action_drops_finish():
+    """W-32 secondary — a model that BATCHES `finish` ALONGSIDE a real action in
+    ONE response must not let the finish preempt the work. RouterAgent.step picks
+    the first NON-finish call so the action executes; the affirmative finish must
+    come on its OWN later turn (where the finish gates run). Both orderings
+    ([finish, action] and [action, finish]) prefer the action."""
+    from disco.core.llm import ProposedToolCall
+
+    for tool_calls in (
+        [
+            ProposedToolCall(tool_name="finish", arguments={}),
+            ProposedToolCall(tool_name="shell", arguments={"command": "echo build"}),
+        ],
+        [
+            ProposedToolCall(tool_name="shell", arguments={"command": "echo build"}),
+            ProposedToolCall(tool_name="finish", arguments={}),
+        ],
+    ):
+        agent = BuildAgent(_batched_router(tool_calls))
+        step = await _step(agent, OperatingMode.LONG_HORIZON)
+        assert step.tool_call is not None
+        assert step.tool_call.tool_name == "shell"  # the real action, NOT finish
+        assert step.finished is False
+
+
+async def test_lone_finish_call_is_preserved():
+    """Guard: a finish on its own (no batched action) is still taken — the
+    drop-batched-finish rule only fires when a real action is present."""
+    from disco.core.llm import ProposedToolCall
+
+    agent = BuildAgent(_batched_router([ProposedToolCall(tool_name="finish", arguments={})]))
+    step = await _step(agent, OperatingMode.LONG_HORIZON)
+    assert step.tool_call is not None
+    assert step.tool_call.tool_name == "finish"

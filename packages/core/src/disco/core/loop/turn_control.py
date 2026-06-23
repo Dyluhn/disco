@@ -182,26 +182,19 @@ class Valve:
                 signals.plan_steps_complete(events)
                 and signals.productive_actions_since_approval(events) > 0
             ):
-                await self._loop._emit(
-                    MessageEvent(
-                        source=EventSource.ENVIRONMENT,
-                        message=LLMMessage(
-                            role="user",
-                            content=(
-                                "All plan steps are complete — the agent"
-                                " signaled completion without calling finish."
-                                " Marking the build finished."
-                            ),
-                        ),
-                    )
-                )
-                await self._loop._emit(
-                    StatusEvent(
-                        status=ConversationStatus.FINISHED,
-                        detail="completed_via_notify",
-                    )
-                )
-                return True
+                # W-32 — DO NOT force-finish directly. The old code emitted
+                # StatusEvent(FINISHED) here, BYPASSING every gate a real
+                # `finish()` must clear (execution-nudge, browser-verify, DoD).
+                # That let an UNVERIFIED "done" — signaled by notify_user-spam,
+                # with mid-action narration ("I need to press Enter to submit
+                # the Terminal command…") still in flight — land a FINISHED
+                # chip. Route through the SAME gate machinery a finish() call
+                # uses: only land FINISHED if they all pass; otherwise the gate
+                # injected its own "verify then finish" reminder and we CONTINUE
+                # (return False) — never PAUSE/STUCK — so the model verifies.
+                if await self._completed_via_notify_finish(events):
+                    return True
+                return False
             if incomplete:
                 await self._loop._emit(
                     MessageEvent(
@@ -284,6 +277,68 @@ class Valve:
                 )
             )
         return False
+
+    async def _completed_via_notify_finish(self, events: list[Event]) -> bool:
+        """W-32 — gate the actionless-valve's `completed_via_notify` FINISH through
+        the SAME finish gates a real `finish()` clears, so a "done" signaled via
+        notify_user-spam can no longer BYPASS browser-verify / DoD (the root cause:
+        the branch used to emit StatusEvent(FINISHED) directly). Returns True iff
+        every applicable gate passed and a clean FINISHED was emitted; False iff a
+        gate REFUSED — in which case it has already injected its own "verify then
+        finish" reminder and the caller must CONTINUE (no pause/stuck) so the model
+        verifies before finishing again."""
+        finish = self._loop._finish
+        # Synthetic finish step: the model never called finish() (it narrated
+        # "done" via notify_user), but the gates key off the EVENT LOG, not the
+        # step — the only field they read is step.thought (empty here, so nothing
+        # extra is surfaced). normalize_finish_step is intentionally NOT run: it
+        # asserts a real finish tool_call + runs the agent-attached `verify`
+        # command, neither of which exists on a notify-spam "finish"; its DoD half
+        # is invoked directly below instead.
+        finish_step = AgentStep(finished=True)
+        # (1) execution-nudge gate. Inert for this branch (we already required
+        # productive_actions_since_approval > 0 ⇒ productive_action_since_approval
+        # is True ⇒ FALLTHROUGH), but routed for parity + so the path is gated, not
+        # bypassed, if that precondition ever changes. CONTINUE = nudged (keep
+        # working); HALT = the gate's own cap-release already landed FINISHED.
+        disp = await finish.gate_execution_nudge(finish_step, events)
+        if disp is Disp.CONTINUE:
+            return False
+        if disp is Disp.HALT:
+            return True
+        # (2) browser-verify gate — THE W-32 catch for web builds: refuses to
+        # finish until a clean browser observation exists since the last
+        # state-changing edit (it drives its own probe + is bounded by a
+        # 3-refusal release). Re-poll first: gate_execution_nudge may have emitted.
+        events = await self._loop._events()
+        disp = await finish.gate_browser_verify(finish_step, events)
+        if disp is Disp.CONTINUE:
+            return False
+        # (3) external Definition-of-Done gate (no spec → no-op pass-through).
+        if not await finish.finish_dod_gate_passed():
+            return False
+        # All gates passed → land a clean FINISHED (same message + detail as the
+        # pre-W-32 force-finish, now EARNED rather than bypassed).
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(
+                    role="user",
+                    content=(
+                        "All plan steps are complete — the agent"
+                        " signaled completion without calling finish."
+                        " Marking the build finished."
+                    ),
+                ),
+            )
+        )
+        await self._loop._emit(
+            StatusEvent(
+                status=ConversationStatus.FINISHED,
+                detail="completed_via_notify",
+            )
+        )
+        return True
 
     async def post_noop_valve(self) -> Disp:
         """Shared actionless-valve tail for the non-blocking virtual-tool arms

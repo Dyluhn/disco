@@ -179,7 +179,16 @@ class RouterAgent:
 
         if resp.tool_calls:
             # One-action-per-iteration: take the FIRST proposed call (§3).
-            pc = resp.tool_calls[0]
+            # W-32 (secondary): when the model BATCHES a `finish` ALONGSIDE a real
+            # action in the same response, a bare tool_calls[0] could let the
+            # finish preempt the real work. Prefer the first NON-finish call so a
+            # batched [finish, real_action] still executes the work; the
+            # affirmative finish must then come on its own turn (where the finish
+            # gates run). All-finish / single-finish falls back to the first call.
+            pc = next(
+                (c for c in resp.tool_calls if c.tool_name != "finish"),
+                resp.tool_calls[0],
+            )
             return AgentStep(
                 thought=resp.text,
                 tool_call=ToolCall(tool_name=pc.tool_name, arguments=pc.arguments),
