@@ -15,6 +15,8 @@ from disco.core import (
     ConversationState,
     ConversationStatus,
     ErrorEvent,
+    EventSource,
+    MessageEvent,
 )
 from disco.core.llm import DefaultLLMRouter, LLMContentFiltered, ProposedToolCall
 from disco.core.loop import NeverConfirm, RouterAgent
@@ -72,6 +74,58 @@ async def test_loop_router_event_contracts_compose():
     replayed = ConversationState.reconstruct(CID, events)
     assert replayed.execution_status == ConversationStatus.FINISHED
     assert replayed == ConversationState.reconstruct(CID, events)  # pure
+
+
+async def test_truncated_prose_does_not_end_run_and_injects_continue_reminder():
+    """W-31 end-to-end — a prose turn the provider cut off mid-sentence
+    (finish_reason=="length", no tool call) must NOT silently end the run.
+    WITHOUT the fix a prose-finishing agent (RouterAgent) would FINISH on the
+    truncated fragment; WITH it, the loop records the partial text, injects a
+    'your message was cut off — continue it' reminder, and re-steps. The model
+    then does real work and finishes on a later turn."""
+    provider = SequenceProvider(
+        [
+            # turn 1: cut off mid-sentence with no tool call.
+            {"text": "…Let me take a real", "finish_reason": "length"},
+            # turn 2: a real action (proves the run continued past the fragment).
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "ls -la"})]},
+            # turn 3: affirmative finish (work has happened → gates pass).
+            {
+                "text": "all done",
+                "tool_calls": [
+                    ProposedToolCall(tool_name="finish", arguments={"summary": "listed the files"})
+                ],
+            },
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = RouterAgent(router, conversation_id=CID)  # prose_finishes=True — the hard case
+    executor = FakeExecutor()
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("build it")
+    state = await loop.run()
+
+    # The run did NOT end on the truncated fragment — it continued and finished.
+    assert state.execution_status == ConversationStatus.FINISHED
+    # The real action actually executed (proof the loop stepped past truncation).
+    assert any(c.tool_name == "shell" for c in executor.calls)
+
+    events = await store.get_events(CID)
+    # The partial assistant text was recorded, not dropped.
+    assert any(
+        isinstance(e, MessageEvent)
+        and e.source == EventSource.AGENT
+        and "Let me take a real" in (e.message.content or "")
+        for e in events
+    ), "the truncated fragment must be persisted as the assistant's partial turn"
+    # A continue reminder was injected on the ENVIRONMENT channel.
+    assert any(
+        isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and "cut off mid-sentence" in (e.message.content or "")
+        for e in events
+    ), "a 'continue where you left off' reminder must be injected after truncation"
 
 
 async def test_provider_error_reaches_the_user_with_real_content():

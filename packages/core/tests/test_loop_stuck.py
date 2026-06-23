@@ -363,6 +363,72 @@ def test_c7_pool_selector_is_deterministic_and_injective_across_attempts():
         )
 
 
+# ---- W-31: the STUCK breaker is NAMED (StuckResult.reason + StatusEvent.detail) --
+
+
+def test_stuck_result_names_the_breaker_per_pattern():
+    """W-31 — `evaluate().reason` NAMES the first stuck pattern that fired so the
+    halt can identify WHICH breaker caught the run. Not-stuck ⇒ reason is None;
+    the bool stays byte-identical to `is_stuck()`."""
+    # pattern 1: repeated action→observation (the W-30/W-31 repeated-reads case).
+    d1 = StuckDetector(StuckThresholds(repeat_action_observation=3))
+    r1 = d1.evaluate(_pairs_ao(3))
+    assert r1.is_stuck is True
+    assert r1.reason == "repeated_action_observation"
+
+    # pattern 2: repeated action→error.
+    d2 = StuckDetector(StuckThresholds(repeat_action_error=3))
+    errs = []
+    for _ in range(3):
+        errs += [action(thought="retry"), agent_error("same failure")]
+    r2 = d2.evaluate(errs)
+    assert r2.is_stuck is True
+    assert r2.reason == "repeated_action_error"
+
+    # pattern 3: agent monologue.
+    d3 = StuckDetector(StuckThresholds(agent_monologue=4))
+    r3 = d3.evaluate([agent_msg("a"), agent_msg("b"), agent_msg("c"), agent_msg("d")])
+    assert r3.is_stuck is True
+    assert r3.reason == "agent_monologue"
+
+    # not stuck ⇒ reason is None.
+    r_none = d1.evaluate(_pairs_ao(2))
+    assert r_none.is_stuck is False
+    assert r_none.reason is None
+
+
+async def test_stuck_status_event_names_the_breaker():
+    """W-31 — when gate_stuck halts the run, the STUCK StatusEvent must carry a
+    NON-EMPTY `detail` naming the breaker (here pattern 1 = repeated reads),
+    instead of an undifferentiated STUCK the operator has to infer. Every sibling
+    gate (stuck_escape / recovery_requested / bookkeeping_only / no_progress)
+    already stamps a detail — this matches that convention."""
+    agent = ScriptedAgent([action_step()] * 6 + [finish_step()])
+    loop, store = build_loop(
+        agent, stuck_thresholds=StuckThresholds(repeat_action_observation=3)
+    )
+    await loop.send_message("repeat please")
+    state = await loop.run()
+    assert state.execution_status == ConversationStatus.STUCK
+
+    events = await store.get_events(CID)
+    stuck_events = [
+        e
+        for e in events
+        if isinstance(e, StatusEvent) and e.status == ConversationStatus.STUCK
+    ]
+    assert stuck_events, "expected a STUCK StatusEvent on the log"
+    # The breaker is NAMED — detail is non-empty and identifies the pattern.
+    assert all(e.detail for e in stuck_events), (
+        f"every STUCK emit must carry a non-empty detail; "
+        f"got {[e.detail for e in stuck_events]}"
+    )
+    assert any(e.detail == "repeated_action_observation" for e in stuck_events), (
+        f"the gate_stuck STUCK halt must NAME pattern 1 (repeated reads); "
+        f"got details {[e.detail for e in stuck_events]}"
+    )
+
+
 async def test_loop_goes_stuck_then_resumes_on_new_message():
     # Same action forever → identical action→obs cycles → STUCK (after the reframe
     # escape is spent: 3 to trigger + ≥1 retry that's still stuck).

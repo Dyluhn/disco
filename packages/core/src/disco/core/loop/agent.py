@@ -203,10 +203,20 @@ class RouterAgent:
         #   - BuildAgent (prose_finishes=False): talking is NOT finishing. The
         #     run ends only via the affirmative `finish` tool the loop intercepts,
         #     so mid-run talk-back can't silently end a build.
+        #
+        # W-31 — TRUNCATION GUARD. `finish_reason=="length"` means the provider
+        # cut the message off mid-sentence (the output budget was exhausted —
+        # worst right after a re-steer, when a long <think> preamble eats it).
+        # A truncated prose turn is NOT a completed turn: surfacing it as
+        # finished (Research) — or as a clean no-op (Build) — is the bug. Flag it
+        # and force `finished=False` so the loop injects a "continue where you
+        # left off" reminder and re-steps instead of ending on a fragment.
+        truncated = resp.finish_reason == "length"
         return AgentStep(
             thought=resp.text,
             tool_call=None,
-            finished=self._prose_finishes,
+            finished=self._prose_finishes and not truncated,
+            truncated=truncated,
             llm_response_id=resp.request_id,
         )
 

@@ -189,11 +189,16 @@ class SequenceProvider:
         self.calls += 1
         spec = self._scripted[min(i, len(self._scripted) - 1)]
         tool_calls = spec.get("tool_calls", [])
+        # Honor an explicit finish_reason (e.g. "length" for W-31 truncation
+        # tests); default to the historical tool_calls-presence heuristic.
+        finish_reason = spec.get("finish_reason") or (
+            "tool_calls" if tool_calls else "stop"
+        )
         return CompletionResponse(
             text=spec.get("text", ""),
             tool_calls=tool_calls,
             usage=TokenUsage(input_tokens=1, output_tokens=1),
-            finish_reason="tool_calls" if tool_calls else "stop",
+            finish_reason=finish_reason,
             model_used=model,
             request_id=req.request_id,
             routing=None,

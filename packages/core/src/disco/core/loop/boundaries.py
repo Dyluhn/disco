@@ -42,6 +42,11 @@ class AgentStep(BaseModel):
     tool_call: ToolCall | None = None  # None => no action this step
     self_assessed_risk: SecurityRisk = SecurityRisk.UNKNOWN
     finished: bool = False  # agent declares the goal complete
+    # W-31 — the provider cut this assistant message off mid-sentence
+    # (finish_reason=="length") with no tool call. The loop must NOT surface it
+    # as a complete turn (it injects a "continue where you left off" reminder and
+    # re-steps). Only meaningful on a tool-less prose step.
+    truncated: bool = False
     llm_response_id: str | None = None  # carried into ActionEvent
 
 

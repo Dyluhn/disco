@@ -1248,6 +1248,20 @@ class AgentLoop:
                 # nudge counter so a recovered loop gets a fresh budget next time.
                 self._plan_nudges = 0
 
+                # (e.6) TRUNCATION (W-31). The provider cut the assistant message
+                # off mid-sentence (finish_reason=="length") with no tool call —
+                # worst right after a re-steer, when a long <think> preamble eats
+                # the output budget. The agent already forced finished=False, so
+                # this never reaches the finish path; intercept BEFORE the generic
+                # no-op handler to inject a "continue where you left off" reminder
+                # (vs silently recording a fragment) and re-step.
+                if step.truncated and step.tool_call is None:
+                    disp = await self._meta.handle_truncated_step(step, events)
+                    if disp is Disp.HALT:
+                        return await self.get_state()
+                    if disp is Disp.CONTINUE:
+                        continue
+
                 # (f) finish path — subject to stop-hook veto (§7.4)
                 if step.finished and step.tool_call is None:
                     disp = await self._finish.handle_finish_path(step, state, events)

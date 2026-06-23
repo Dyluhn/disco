@@ -119,6 +119,11 @@ class StuckResult(BaseModel):
     """
 
     is_stuck: bool
+    # W-31 — the NAME of the first stuck pattern that fired (None when not
+    # stuck). Stamped onto the gate_stuck STUCK StatusEvent's `detail` so logs/
+    # the UI identify WHICH breaker halted the run instead of an undifferentiated
+    # STUCK (Dylan had to infer it). Mirrors every sibling gate's `detail`.
+    reason: str | None = None
     rewrite_directive: RewriteDirective | None = None
 
 
@@ -183,17 +188,33 @@ class StuckDetector:
         gate is closed).
         """
         recent = _after_last_user_message(recent)
-        stuck = (
-            self._repeated_action_observation(recent)
-            or self._repeated_action_error(recent)
-            or self._agent_monologue(recent)
-            or self._alternating(recent)
-            or self._pure_repeat(recent)  # W1: Roo-style back-to-back action repeat
-        )
+        reason = self._stuck_reason(recent)
         rewrite_directive: RewriteDirective | None = None
         if self._assist:
             rewrite_directive = self._per_file_rewrite_directive(recent)
-        return StuckResult(is_stuck=stuck, rewrite_directive=rewrite_directive)
+        return StuckResult(
+            is_stuck=reason is not None,
+            reason=reason,
+            rewrite_directive=rewrite_directive,
+        )
+
+    def _stuck_reason(self, recent: list[Event]) -> str | None:
+        """W-31 — name the FIRST stuck pattern that fires (or None). The order
+        is the SAME short-circuit chain `evaluate` used before, so the stuck
+        bool is byte-identical; we just additionally surface which pattern won
+        so the gate_stuck STUCK emit can NAME the breaker. `recent` is already
+        sliced to after the last user message by the caller."""
+        if self._repeated_action_observation(recent):
+            return "repeated_action_observation"  # pattern 1 (W-30/W-31: repeated reads)
+        if self._repeated_action_error(recent):
+            return "repeated_action_error"  # pattern 2
+        if self._agent_monologue(recent):
+            return "agent_monologue"  # pattern 3
+        if self._alternating(recent):
+            return "alternating_actions"  # pattern 4
+        if self._pure_repeat(recent):
+            return "pure_repeat"  # W1 pattern 5
+        return None
 
     # -- W1 pattern 5: Roo-style pure-repeat (back-to-back identical actions) ----
     #

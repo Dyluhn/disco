@@ -432,7 +432,8 @@ class Valve:
             isinstance(e, ActionEvent) and e.seq is not None and e.seq > escape_seq
             for e in events
         )
-        if self._loop._stuck.is_stuck(self._loop._recent(events)):
+        stuck_result = self._loop._stuck.evaluate(self._loop._recent(events))
+        if stuck_result.is_stuck:
             if escape_seq is None:
                 # First time in this user turn: drop a `stuck_escape` MARKER
                 # (a status event) AND inject a C7 escape reminder (from the
@@ -465,7 +466,15 @@ class Valve:
                 return Disp.CONTINUE
             if acted_since_escape:
                 # The high-temp retry happened and it's STILL stuck → halt now.
-                await self._loop._emit(StatusEvent(status=ConversationStatus.STUCK))
+                # W-31: NAME the breaker that fired (`detail`) so logs/UI don't
+                # surface an undifferentiated STUCK — every sibling gate stamps a
+                # detail (stuck_escape / recovery_requested / …); match that.
+                await self._loop._emit(
+                    StatusEvent(
+                        status=ConversationStatus.STUCK,
+                        detail=stuck_result.reason or "stuck",
+                    )
+                )
                 return Disp.HALT
             # else: escape just marked, model hasn't retried yet → fall through
             # and let it act this iteration (with the bumped temperature below).
@@ -992,6 +1001,47 @@ class MetaToolHandlers:
             # Nothing persisted — invisible to every event-derived
             # detector, so the instance counter has to carry it.
             self._loop._invisible_steps += 1
+        if await self._loop._post_noop_valve() is Disp.HALT:
+            return Disp.HALT
+        return Disp.CONTINUE
+
+    async def handle_truncated_step(self, step: AgentStep, events: list[Event]) -> Disp:
+        """W-31 — the model's message was cut off mid-sentence
+        (`finish_reason=="length"`) with no tool call. Persist the partial text
+        as the assistant's turn (so the model sees its own fragment), then inject
+        an ENVIRONMENT reminder telling it to CONTINUE from where it stopped —
+        not restart. The reminder is a non-USER message, so it does NOT reset the
+        stuck detector (a truncation storm still trips gate_stuck). Falls through
+        the same no-progress valve as a no-op so a run can never spin forever on
+        repeated truncations."""
+        if step.thought.strip():
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.AGENT,
+                    message=LLMMessage(role="assistant", content=step.thought),
+                )
+            )
+        else:
+            # Nothing persisted — invisible to every event-derived detector, so
+            # the instance counter has to carry it (same as handle_noop_step).
+            self._loop._invisible_steps += 1
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(
+                    role="user",
+                    content=(
+                        "<system-reminder>\n"
+                        "Your previous message was cut off mid-sentence — it hit "
+                        "the output length limit. Continue it from exactly where "
+                        "it stopped; do NOT restart or repeat what you already "
+                        "wrote. Be more concise this time, and if you were about "
+                        "to take an action, take it now with a tool call.\n"
+                        "</system-reminder>"
+                    ),
+                ),
+            )
+        )
         if await self._loop._post_noop_valve() is Disp.HALT:
             return Disp.HALT
         return Disp.CONTINUE

@@ -20,6 +20,12 @@ def _router(text="hello"):
     return DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
 
 
+def _truncated_router(text="…Let me take a real"):
+    # A prose turn the provider cut off mid-sentence (finish_reason=="length").
+    provider = SequenceProvider([{"text": text, "finish_reason": "length"}])
+    return DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+
+
 async def _step(agent, mode):
     return await agent.step(
         View(messages=[], visible_seqs=[], total_events=0, forgotten_count=0),
@@ -109,6 +115,37 @@ async def test_batched_finish_alongside_real_action_drops_finish():
         assert step.tool_call is not None
         assert step.tool_call.tool_name == "shell"  # the real action, NOT finish
         assert step.finished is False
+
+
+# ---- W-31: truncated prose (finish_reason=="length") is NOT a complete turn --
+
+
+async def test_truncated_prose_step_is_flagged_and_not_finished():
+    """W-31 — a tool-less prose turn the provider cut off mid-sentence
+    (finish_reason=="length") must be FLAGGED truncated and must NOT be treated
+    as finished, even for a prose-finishing agent (Research). Surfacing a cut-off
+    fragment as a complete answer is the bug."""
+    for agent in (
+        ResearchAgent(_truncated_router()),  # prose_finishes=True
+        BuildAgent(_truncated_router()),     # prose_finishes=False
+    ):
+        step = await _step(agent, OperatingMode.LONG_HORIZON)
+        assert step.truncated is True
+        assert step.tool_call is None
+        assert step.finished is False  # cut-off fragment is never a completed turn
+        assert "Let me take a real" in step.thought  # partial text preserved
+
+
+async def test_normal_finish_reason_stop_is_not_truncated():
+    """W-31 guard: a normal prose turn (finish_reason=="stop") is UNAFFECTED —
+    not flagged truncated, and Research still finishes / Build still doesn't."""
+    research = await _step(ResearchAgent(_router("the answer is 42")), OperatingMode.LONG_HORIZON)
+    assert research.truncated is False
+    assert research.finished is True
+
+    build = await _step(BuildAgent(_router("working on it…")), OperatingMode.LONG_HORIZON)
+    assert build.truncated is False
+    assert build.finished is False
 
 
 async def test_lone_finish_call_is_preserved():
