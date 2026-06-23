@@ -7,6 +7,8 @@ gate forever. ``sweep_abandoned_gates_once`` reaps the genuinely-abandoned ones
 leaving active/recent gates and non-gate conversations untouched.
 """
 
+import asyncio
+import contextlib
 import os
 from unittest.mock import MagicMock
 
@@ -104,6 +106,43 @@ async def test_connected_gate_not_reaped_even_past_ttl(monkeypatch):
     assert reaped == 0
     state = await store.get_state(cid)
     assert state.execution_status is ConversationStatus.AWAITING_USER_DECISION
+
+
+@pytest.mark.asyncio
+async def test_active_run_gate_not_reaped_even_past_ttl(monkeypatch):
+    """A gate WITH a live in-memory run task — e.g. just resumed, a decision in
+    flight, a background step executing — is NEVER reaped even past the TTL: its
+    last persisted event can be stale while the run is mid-flight, so reaping on
+    status+age alone would corrupt the live run. A genuinely dormant gate (no
+    live task) sitting alongside it IS still reaped."""
+    store = SqliteEventStore(":memory:")
+    rt = _runtime(store)
+    active = await _gated_conv(store, "conv_active_run", ConversationStatus.AWAITING_USER_DECISION)
+    dormant = await _gated_conv(store, "conv_dormant", ConversationStatus.AWAITING_USER_DECISION)
+
+    # Register a LIVE (not-done) run task for the active conversation — the same
+    # ground truth running_conversation_ids() reads.
+    async def _never() -> None:
+        await asyncio.Event().wait()
+
+    task = asyncio.ensure_future(_never())
+    rt._tasks[active] = task
+    try:
+        assert active in rt.running_conversation_ids()
+
+        monkeypatch.setenv("DISCO_ABANDONED_GATE_TTL_S", "0")
+        reaped = await rt.sweep_abandoned_gates_once()
+
+        # Only the dormant one is reaped; the live run is untouched.
+        assert reaped == 1
+        assert (await store.get_state(active)).execution_status is (
+            ConversationStatus.AWAITING_USER_DECISION
+        )
+        assert (await store.get_state(dormant)).execution_status is ConversationStatus.STUCK
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 @pytest.mark.asyncio

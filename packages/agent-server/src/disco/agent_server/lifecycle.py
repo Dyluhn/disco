@@ -367,6 +367,10 @@ class LifecycleManager:
         Conservative by construction — a gate is reaped ONLY when:
           • its latest status is one of the AWAITING_* / WAITING_FOR_CONFIRMATION
             gate states (never a RUNNING / already-terminal conversation), AND
+          • there is NO live in-memory run/task for it (a just-resumed gate, a
+            decision in flight, or any background run is the GROUND TRUTH of
+            "executing right now" — cached gate status can lag a live run, so
+            reaping on status alone could corrupt an active conversation), AND
           • no UI is currently connected (someone watching it is not abandonment),
             AND
           • its last event is older than the long TTL.
@@ -376,6 +380,11 @@ class LifecycleManager:
         assert ttl_env is not None  # default above is non-None
         ttl_s = float(ttl_env)
         now = datetime.now(tz=UTC)
+        # Live-run ground truth (in-memory not-done run tasks in THIS process). A
+        # gate with an active run — e.g. just resumed, a decision being processed,
+        # a background step executing — must NEVER be reaped even past the TTL: its
+        # last persisted event can be stale while the run is mid-flight.
+        live_run_ids = self._rt.running_conversation_ids()
         reaped = 0
         cursor: str | None = None
         page = 200
@@ -391,6 +400,8 @@ class LifecycleManager:
                     state = await self._rt._store.get_state(cid)
                     if state.execution_status not in _GATE_STATES:
                         continue
+                    if cid in live_run_ids:
+                        continue  # a live in-memory run/task is driving it — not abandoned
                     if self._rt._connections.get(cid, 0) > 0:
                         continue  # UI attached — not abandoned
                     events = await self._rt._store.get_events(
