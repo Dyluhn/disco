@@ -290,9 +290,9 @@ def test_no_directional_words_in_recovery_markers():
     assert "in this prompt" in superseded
 
     # CW P1-a/P1-c — `_snip_args` itself renders the assist-ON / pre-CW-3 DIRECTIONAL
-    # marker ("below"); the location-independent marker is the assist-OFF retarget
-    # output. Retargeting a PINNED-path elided arg yields the location-independent,
-    # directional-word-free marker.
+    # marker ("below"); the assist-OFF retarget output is the NEUTRAL, directional-word-
+    # free, non-dangling marker (it claims only re-issue / file_read recovery — never a
+    # workspace-block pointer, since an elided arg value is not in the block).
     from disco.core.events import retarget_elided_arg_markers
 
     raw = _snip_args({"content": "x" * 4_000})["content"]
@@ -306,7 +306,8 @@ def test_no_directional_words_in_recovery_markers():
             "arguments": {"path": "app.js", "content": raw},
         }],
     )
-    out = retarget_elided_arg_markers([msg], frozenset({"app.js"}))
+    out = retarget_elided_arg_markers([msg])
     snipped = out[0].tool_calls[0]["arguments"]["content"]
     assert _DIRECTIONAL.search(snipped) is None, snipped
-    assert "CURRENT WORKSPACE block in this prompt" in snipped
+    assert "CURRENT WORKSPACE block" not in snipped  # neutral — no dangling block claim
+    assert "re-issue the call or file_read the path" in snipped

@@ -48,27 +48,29 @@ _SNAPSHOT_WINDOW_FRACTION = 0.50  # ~50% of the window (in chars) for the pinned
 _PER_FILE_CEILING = 48_000  # a big source file fits in full, but never unbounded
 _MAX_FILES_OFF = 20  # raised breadth for the larger working set (16-24 range)
 
-# CW P1-b — read-budget RENDER headroom. The per-file pin cap (`per_file_chars`) caps
-# a file's RAW chars, but file_read returns it LINE-NUMBERED: each line carries a
-# right-aligned line-number + a tab, and the read tool's budget counter also charges
-# the trailing newline (~width+1 chars BEYOND the raw line). So a raw file that fits
-# the pin renders LARGER than the pin, and "fits the pin ⇒ reads in one shot" only
-# holds if `read_char_budget` carries headroom for that numbering overhead — otherwise
-# a pin-sized file still pages (re-opening the read loop CW-6 closed). We model the
-# realistic worst case as SHORT lines (~_RENDER_SHORT_LINE_CHARS raw chars/line); the
-# per-line overhead is then a bounded fraction of the raw size. (A pathological
-# all-blank-lines file is not a realistic source artifact and is out of scope.)
-_RENDER_SHORT_LINE_CHARS = 8  # realistic short-line floor (raw chars incl. newline)
+# CW P1-b (round-2) — the OBSERVATION-snip floor for a one-shot read. file_read now
+# budgets the PAGE on RAW file chars (the SAME unit the pin uses; see files.py), so a
+# raw file <= per_file_chars reads in ONE shot. But file_read returns it LINE-NUMBERED
+# (each line carries a right-aligned line-number + a tab), so the RENDERED observation
+# is larger than raw — and that render must survive the observation snip intact. So the
+# numbering overhead lands HERE, on the obs-snip cap, NOT on the read budget (raising the
+# read budget would let a single non-pinned read dump huge rendered pages). We model the
+# realistic worst case as 2-raw-char lines ("x\n" — the codex x\n×24000 file): every line
+# adds a line-number (width digits) + a tab. (A 1-char all-blank-line file is not a source
+# artifact and stays out of scope.) A small margin covers the "[lines a-b of N]" header.
+_RENDER_SHORT_LINE_CHARS = 2  # realistic short-line floor: 1 content char + newline
+_RENDER_HEADER_MARGIN = 256  # the "[lines …]" header + join/rounding slack
 
 
-def _rendered_read_budget(per_file_chars: int) -> int:
-    """Chars needed to read a RAW ``per_file_chars`` file in ONE shot once file_read
-    renders it line-numbered, modeling short (~8-char) lines (the worst realistic
-    case). Returns per_file_chars + the line-numbering overhead for that line count."""
-    lines = max(1, per_file_chars // _RENDER_SHORT_LINE_CHARS)
+def _rendered_obs_floor(raw_budget: int) -> int:
+    """Chars an OBSERVATION must hold to keep the line-numbered render of a ONE-SHOT
+    file_read of ``raw_budget`` RAW chars intact (worst realistic case: ~2-char lines).
+    Used to raise the assist-OFF obs-snip cap so a pin-fitting read is never snipped to a
+    corrupted head/tail. Returns raw_budget + the line-numbering overhead + a header margin."""
+    lines = max(1, raw_budget // _RENDER_SHORT_LINE_CHARS)
     width = len(str(lines))  # digits in the largest line number
     per_line_overhead = width + 1  # line-number digits + tab (the newline is in raw)
-    return per_file_chars + lines * per_line_overhead
+    return raw_budget + lines * per_line_overhead + _RENDER_HEADER_MARGIN
 
 
 @dataclass(frozen=True)
@@ -110,13 +112,13 @@ def derive_context_caps(*, assist: bool, context_window: int | None) -> ContextC
     # Per-file pin: large enough for a real source file (ceiling 48k), but never
     # more than half the total (so multiple files still fit), never below baseline.
     per_file_chars = max(ASSIST_PER_FILE_CHARS, min(_PER_FILE_CEILING, total_chars // 2))
-    # CW-6 consistency: the read budget must be >= the per-file pin (a file that
-    # fits the pin reads in one shot) and the obs snip must be >= the read budget
-    # (the large read observation survives the render snip intact, not corrupted).
-    # CW P1-b: budget the RENDERED (line-numbered) size, not the raw per-file cap, so
-    # a raw pin-sized file with many short lines still reads in one shot.
-    read_char_budget = max(ASSIST_READ_CHAR_BUDGET, _rendered_read_budget(per_file_chars))
-    obs_snip_chars = max(ASSIST_OBS_SNIP_CHARS, read_char_budget)
+    # CW-6 + CW P1-b (round-2) consistency: the read budget is in RAW chars (file_read
+    # budgets the page on raw file chars) and must be >= the per-file pin so a file that
+    # fits the pin reads in ONE shot. The obs snip must then cover the LINE-NUMBERED
+    # RENDER of that one-shot read (the numbering overhead lands on the snip cap, not the
+    # read budget) so the large observation survives intact, never corrupted-truncated.
+    read_char_budget = max(ASSIST_READ_CHAR_BUDGET, per_file_chars)
+    obs_snip_chars = max(ASSIST_OBS_SNIP_CHARS, _rendered_obs_floor(read_char_budget))
     return ContextCaps(
         max_files=_MAX_FILES_OFF,
         per_file_chars=per_file_chars,

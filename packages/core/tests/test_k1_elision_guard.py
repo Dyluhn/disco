@@ -14,8 +14,11 @@ later turn. If executed, that would:
 The guard, in `observe.Observer.execute_and_observe` (BEFORE `executor.execute`),
 rejects any tool call whose arguments carry an elision marker: it emits an
 `AgentErrorEvent` (one observation per action — the contract) telling the model
-the argument is a placeholder, was NOT executed, and to resend the FULL content
-from the live CURRENT WORKSPACE snapshot. It NEVER runs the tool with a marker.
+the argument is a placeholder, was NOT executed, and to resend the FULL content.
+The RECOVERY WORDING is tier-gated — assist-ON keeps the pre-CW-3 directional
+workspace-block pointer; assist-OFF uses a neutral file_read pointer (an elided arg
+is a write body, not the file's current content, so a block claim would dangle).
+It NEVER runs the tool with a marker.
 
 The detector (`find_elided_arg_markers`) matches the marker STRUCTURE
 (`<N chars … {elided|full content} …>`), not the exact wording, so the marker can
@@ -74,7 +77,8 @@ class _NoOpCondenser:
         return None
 
 
-def _make_loop(*, executor=None):  # noqa: ANN202
+def _make_loop(*, executor=None, assist=False):  # noqa: ANN202
+    from disco.core.llm.exec_policy import ModelExecutionPolicy
     from disco.core.loop.engine import AgentLoop
 
     if executor is None:
@@ -83,6 +87,14 @@ def _make_loop(*, executor=None):  # noqa: ANN202
                 call_id="ignored", tool_name="ignored", success=True, content="ok"
             )
         )
+    # K1 is tier-INDEPENDENT — the guard FIRES for every tier. Only the recovery WORDING
+    # is tier-gated (assist-ON keeps the pre-CW-3 directional block pointer; assist-OFF
+    # uses a neutral file_read pointer). assist defaults to False (standard policy).
+    policy = (
+        ModelExecutionPolicy(tier="weak", anchored_edit=True)
+        if assist
+        else ModelExecutionPolicy.standard()
+    )
     return AgentLoop(
         CID,
         SqliteEventStore(":memory:"),
@@ -94,8 +106,7 @@ def _make_loop(*, executor=None):  # noqa: ANN202
         _NoOpCondenser(),
         FakeSummarizer(),
         mode=OperatingMode.LONG_HORIZON,
-        # K1 is tier-INDEPENDENT — must fire for capable models too; no model_policy arg
-        # means the default ModelExecutionPolicy.standard() (assist=False) applies
+        model_policy=policy,
     )
 
 
@@ -142,11 +153,40 @@ async def test_marker_in_write_body_is_rejected_and_not_executed():
     assert errs[0].tool_call_id == action.tool_call.call_id
     # No success observation was emitted (the contract: one observation, an error).
     assert not [e for e in events if isinstance(e, ObservationEvent)]
-    # The error tells the model what happened + how to recover.
+    # The error tells the model what happened + how to recover. This loop is assist-OFF
+    # (standard policy) → the recovery wording is NEUTRAL: it points at file_read, NOT at
+    # the workspace block (an elided arg is a write body, not the file's current content,
+    # so a "it's in the workspace block" claim would be a dangling pointer).
     msg = errs[0].error
     assert "content" in msg  # names the offending key
-    assert "CURRENT WORKSPACE" in msg
+    assert "file_read" in msg
+    assert "CURRENT WORKSPACE" not in msg  # neutral for assist-OFF — no block pointer
     assert "NOT" in msg  # "was NOT executed" / "do not copy"
+
+
+# ---------------------------------------------------------------------------
+# (1b) the recovery WORDING is tier-gated — assist-ON keeps the pre-CW-3 block pointer
+# ---------------------------------------------------------------------------
+
+
+async def test_rejection_wording_is_tier_gated():
+    marker = _snip_args({"content": "x" * 5000})["content"]
+    # assist-ON: the pre-CW-3 directional block pointer ("...block above (or call
+    # file_read)..."), byte-identical to before CW-3.
+    loop_on = _make_loop(assist=True)
+    events_on = await _drive_execute(
+        loop_on, _write_action("call_on", path="a.js", content=marker)
+    )
+    msg_on = [e for e in events_on if isinstance(e, AgentErrorEvent)][0].error
+    assert "current content from the CURRENT WORKSPACE block above (or call file_read)" in msg_on
+    # assist-OFF: the neutral file_read pointer, NO workspace-block claim.
+    loop_off = _make_loop(assist=False)
+    events_off = await _drive_execute(
+        loop_off, _write_action("call_off", path="a.js", content=marker)
+    )
+    msg_off = [e for e in events_off if isinstance(e, AgentErrorEvent)][0].error
+    assert "CURRENT WORKSPACE" not in msg_off
+    assert "call file_read on the path for the authoritative content" in msg_off
 
 
 # ---------------------------------------------------------------------------

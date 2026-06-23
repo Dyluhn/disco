@@ -578,21 +578,17 @@ class ViewBuilder:
                 )
             }
         )
-        # CW P1-a — assist-OFF: retarget the elided tool-call ARGUMENT markers so each
-        # only claims "the full content is in the CURRENT WORKSPACE block" when that
-        # call's target path is actually pinned in FULL this turn; every other elided
-        # arg (path omitted/truncated from the block, or no file path at all) gets a
-        # non-dangling marker. `_snip_args` rendered the directional pre-CW-3 marker
-        # inside View.of (no tier/pin context there); this fixes the reachable dangling
-        # pointer on the assist-OFF prefix-placed block. assist-ON keeps the directional
+        # CW P1-a (round-2) — assist-OFF: retarget every elided tool-call ARGUMENT marker
+        # to the NEUTRAL non-dangling marker (re-issue / file_read recovery only). An
+        # elided arg is a write/edit body — NOT the file's current content — so it is not
+        # in the CURRENT WORKSPACE block even when the path is pinned; the old per-pin
+        # "it's in the block" pointer was therefore a dangling claim. `_snip_args` rendered
+        # the directional pre-CW-3 marker inside View.of (no tier context there); this pass
+        # neutralizes it for the prefix-placed block. assist-ON keeps the directional
         # marker (correct for its tail-placed block + byte-identical to pre-CW-3).
         if not self._loop._assist:
             view = view.model_copy(
-                update={
-                    "messages": retarget_elided_arg_markers(
-                        view.messages, frozenset(pinned_full)
-                    )
-                }
+                update={"messages": retarget_elided_arg_markers(view.messages)}
             )
         # F8 — GATED mid-turn arg truncation (assist-tier context-window
         # reclaim). When assist is ON, replace the long `content` argument

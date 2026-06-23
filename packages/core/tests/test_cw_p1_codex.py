@@ -1,11 +1,12 @@
 """Codex P1 fixes on the context-management change (CW-1..CW-7).
 
 P1-a (CORRECTNESS — reachable dangling pointer): the elided tool-call ARGUMENT
-marker unconditionally claimed the full content was "in the CURRENT WORKSPACE
-block". For assist-OFF a file can be omitted/truncated from that block (snapshot
-breadth/budget cap), so the claim was a reachable LIE. The marker is now retargeted
-per tier/path: pinned-in-full → truthful block pointer; otherwise a NON-DANGLING
-marker (re-issue / file_read recovery only).
+marker claimed the full content was "in the CURRENT WORKSPACE block". For assist-OFF
+that is a reachable LIE: an elided arg is a write/edit BODY (an attempted or new
+value), NOT the file's current content, so the block never carries it — even when the
+call's target path is pinned in full. assist-OFF now rewrites EVERY elided arg to the
+NEUTRAL non-dangling marker (re-issue / file_read recovery only); the K1 rejection text
+is likewise tier-gated to a neutral file_read pointer for assist-OFF.
 
 P1-c (assist-ON strict byte-identity): CW-3 reworded assist-ON-visible prose
 (preamble / pointer / arg marker) for the location-independent PREFIX placement —
@@ -117,11 +118,14 @@ def _assistant_tool_args(view: View, path: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# P1-a — the snip marker is truthful per pinned-in-full path (assist-OFF)
+# P1-a (round-2) — the assist-OFF arg marker is ALWAYS the NEUTRAL non-dangling
+# marker (no "it's in the workspace block" claim), even when the path IS pinned:
+# an elided arg is a write/edit body, NOT the file's current content, so the block
+# does not carry it. No per-arg pinned-vs-omitted guessing.
 # ---------------------------------------------------------------------------
 
 
-def test_retarget_pinned_path_points_at_block_unpinned_does_not():
+def test_retarget_uses_neutral_marker_for_pinned_and_unpinned_alike():
     long = "x" * (_ARG_SNIP_CHARS + 1)
     msg = LLMMessage(
         role="assistant",
@@ -133,13 +137,15 @@ def test_retarget_pinned_path_points_at_block_unpinned_does_not():
              "arguments": _snip_args({"path": "omitted.py", "content": long})},
         ],
     )
-    out = retarget_elided_arg_markers([msg], frozenset({"pinned.py"}))
+    out = retarget_elided_arg_markers([msg])
     pinned = out[0].tool_calls[0]["arguments"]["content"]
     unpinned = out[0].tool_calls[1]["arguments"]["content"]
-    # Pinned path → truthful block pointer.
-    assert "CURRENT WORKSPACE block in this prompt" in pinned
-    # NON-pinned path → NO false "in the block" claim; only re-issue/file_read recovery.
+    # BOTH get the neutral marker — NEITHER claims the content is in the block (the
+    # arg value is a write body, not the file's current content, so the block does not
+    # carry it even for the pinned path).
+    assert "CURRENT WORKSPACE block" not in pinned
     assert "CURRENT WORKSPACE block" not in unpinned
+    assert "re-issue the call or file_read the path" in pinned
     assert "re-issue the call or file_read the path" in unpinned
     # Both stay detectable by the K1 copy-back execution guard.
     assert find_elided_arg_markers({"content": pinned}) == ["content"]
@@ -156,16 +162,16 @@ def test_retarget_argument_without_a_path_uses_nondangling_marker():
         tool_calls=[{"id": "c1", "name": "shell",
                      "arguments": _snip_args({"command": long})}],
     )
-    out = retarget_elided_arg_markers([msg], frozenset({"pinned.py"}))
+    out = retarget_elided_arg_markers([msg])
     marker = out[0].tool_calls[0]["arguments"]["command"]
     assert "CURRENT WORKSPACE block" not in marker
     assert "re-issue the call or file_read the path" in marker
 
 
-def test_assist_off_build_marks_truncated_path_nondangling():
-    # End-to-end through ViewBuilder (assist OFF): a small file is pinned in FULL
-    # (truthful pointer) while an oversize file is TRUNCATED in the snapshot (NOT
-    # pinned) → its write's elided arg must use the non-dangling marker.
+def test_assist_off_build_marks_every_elided_arg_nondangling():
+    # End-to-end through ViewBuilder (assist OFF): a small file is pinned in FULL and an
+    # oversize file is TRUNCATED in the snapshot — but BOTH writes' elided ARG values get
+    # the neutral non-dangling marker (the arg is the attempted body, never in the block).
     caps = derive_context_caps(assist=False, context_window=192_000)
     big = b"z" * (caps.per_file_chars + 20_000)  # exceeds the per-file pin → truncated
     sbx = _FakeSandbox({"small.py": b"const x = 1;\n", "big.py": big})
@@ -176,10 +182,10 @@ def test_assist_off_build_marks_truncated_path_nondangling():
     view = asyncio.run(builder.build(events))
     small_marker = _assistant_tool_args(view, "small.py")["content"]
     big_marker = _assistant_tool_args(view, "big.py")["content"]
-    # small.py is pinned in full → truthful pointer.
-    assert "CURRENT WORKSPACE block in this prompt" in small_marker
-    # big.py is truncated (not pinned) → non-dangling, no false block claim.
+    # NEITHER arg marker claims the content is in the block (pinned or not).
+    assert "CURRENT WORKSPACE block" not in small_marker
     assert "CURRENT WORKSPACE block" not in big_marker
+    assert "re-issue the call or file_read the path" in small_marker
     assert "re-issue the call or file_read the path" in big_marker
 
 

@@ -309,6 +309,14 @@ class FileReadTool:
         # observation from being render-snipped to a corrupted head/tail. Unset
         # (assist-ON / executors that don't thread it) ⇒ the static 7k default.
         read_budget = ctx.read_char_budget or _READ_CHAR_BUDGET
+        # CW P1-b (round-2): assist-OFF budgets the page on RAW file chars (the SAME unit
+        # the snapshot pin uses), so a file whose RAW size fits the per-file pin reads in
+        # ONE shot; line numbers are applied to the selected slice AFTER this check, and
+        # their render overhead is absorbed by the assist-OFF observation-snip cap (raised
+        # in tandem — see context_budget). assist-ON keeps the obs-snip at the 8k baseline,
+        # so its page must stay under it: that tier keeps charging the LINE-NUMBERED render
+        # (byte-identical to today) so a short-line page can't render past the snip cap.
+        budget_raw = not ctx.assist
         out: list[str] = []
         width = len(str(total)) or 1
         used = 0
@@ -316,10 +324,11 @@ class FileReadTool:
         cap = start + args.limit if args.limit is not None else total
         while i < min(cap, total):
             line = f"{i + 1:>{width}}\t{lines[i]}"
-            if out and used + len(line) + 1 > read_budget:
+            charge = (len(lines[i]) + 1) if budget_raw else (len(line) + 1)
+            if out and used + charge > read_budget:
                 break
             out.append(line)
-            used += len(line) + 1
+            used += charge
             i += 1
         shown_to = i
         # there's more file to read below if we didn't reach the end (whether we

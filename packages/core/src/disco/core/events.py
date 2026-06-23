@@ -325,8 +325,8 @@ _ELISION_COUNT_RE = re.compile(r"<\s*(\d[\d,]*)\s*chars\b")
 # For assist-ON the CURRENT WORKSPACE block stays in the TAIL (after the history), so
 # "below" is CORRECT, and this is the byte-identical pre-CW-3 wording. `_snip_args`
 # (the View.of render, which has no tier context) always emits THIS; assist-OFF then
-# rewrites it via `retarget_elided_arg_markers` (below) because that tier moved the
-# block to the cacheable PREFIX, where a directional word would be wrong.
+# rewrites it via `retarget_elided_arg_markers` (below) to the NEUTRAL marker because
+# that tier moved the block to the cacheable PREFIX, where a directional word is wrong.
 def _arg_snip_marker_below(n: int) -> str:
     return (
         f"<{n:,} chars — full content is in the CURRENT WORKSPACE block "
@@ -334,23 +334,16 @@ def _arg_snip_marker_below(n: int) -> str:
     )
 
 
-# CW P1-a — assist-OFF, the call's target path IS pinned in FULL in the block this
-# turn: location-independent (the block moved to the prefix) and TRUTHFUL (the content
-# really is there in full). Same bytes CW-3 introduced for the snip marker.
-def _arg_snip_marker_pinned(n: int) -> str:
-    return (
-        f"<{n:,} chars — full content is in the CURRENT WORKSPACE block "
-        "in this prompt; do not copy this placeholder into a tool argument>"
-    )
-
-
-# CW P1-a — assist-OFF, the path is NOT pinned in full (omitted/truncated by the
-# snapshot breadth/budget cap, or no identifiable file path): NON-DANGLING marker. It
-# claims only what is ALWAYS true — the full content is recoverable by re-issuing the
-# call or file_read'ing the path — so it never points at a block that doesn't carry
-# the content. Kept angle-bracketed + "elided"/"full content" so the K1 execution
-# guard (`_ELISION_MARKER_RE`) still detects a copy-back.
-def _arg_snip_marker_unpinned(n: int) -> str:
+# CW P1-a (round-2) — the assist-OFF elided-arg marker: a NON-DANGLING, ALWAYS-TRUE
+# marker, used UNCONDITIONALLY (no per-arg pinned-vs-omitted guessing). It claims only
+# what is universally true — the full content is recoverable by re-issuing the call or
+# file_read'ing the path. A "the content is in the CURRENT WORKSPACE block" pointer is
+# UNSAFE for an elided arg even when the call's target path is pinned: an elided arg is
+# a write/edit ARG VALUE (an attempted or NEW body), NOT the file's current content, so
+# the block does not carry it. (And a pinned file is already fully visible in the block,
+# so the model needs no pointer to it anyway.) Kept angle-bracketed + "elided"/"full
+# content" so the K1 execution guard (`_ELISION_MARKER_RE`) still detects a copy-back.
+def _arg_snip_marker_neutral(n: int) -> str:
     return (
         f"<{n:,} chars elided — re-issue the call or file_read the path for the "
         "full content; do not copy this placeholder into a tool argument>"
@@ -369,23 +362,18 @@ def _snip_args(arguments: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def retarget_elided_arg_markers(
-    messages: list[LLMMessage], pinned_full: frozenset[str]
-) -> list[LLMMessage]:
-    """CW P1-a — assist-OFF render pass: rewrite each elided tool-call argument marker
-    so its claim about WHERE the full content lives is TRUTHFUL.
+def retarget_elided_arg_markers(messages: list[LLMMessage]) -> list[LLMMessage]:
+    """CW P1-a (round-2) — assist-OFF render pass: rewrite each elided tool-call
+    ARGUMENT marker to the NEUTRAL, non-dangling marker.
 
     `_snip_args` emits the directional `_arg_snip_marker_below` unconditionally (it runs
-    inside `View.of`, which has no tier/pin context). For assist-OFF the CURRENT
-    WORKSPACE block moved to the cacheable PREFIX and only the paths pinned in FULL
-    this turn actually carry their content there. This pass — run by ViewBuilder AFTER
-    the snapshot is built (so `pinned_full` is known) — rewrites every elided arg:
-
-      * the tool call's target ``path`` IS in ``pinned_full`` → `_arg_snip_marker_pinned`
-        (location-independent, truthfully names the block);
-      * otherwise (path omitted/truncated from the block, or no ``path`` arg at all) →
-        `_arg_snip_marker_unpinned` (a NON-DANGLING marker that claims only re-issue /
-        file_read recovery — never a false "it's in the block" pointer).
+    inside `View.of`, which has no tier context). For assist-OFF the CURRENT WORKSPACE
+    block moved to the cacheable PREFIX, where the directional "below" is wrong AND a
+    "the content is in the block" pointer is UNSAFE: an elided arg is a write/edit body
+    (an attempted or NEW value), NOT the file's current content, so the block does not
+    carry it even when the call's target path is pinned in full. So this pass rewrites
+    EVERY elided arg to `_arg_snip_marker_neutral` — which claims only the always-true
+    re-issue / file_read recovery — with NO per-arg pinned-vs-omitted guessing.
 
     assist-ON never calls this (the directional marker is correct + pre-CW-3 byte-
     identical for the tail-placed block). Pure: returns a new list; input unchanged.
@@ -405,8 +393,6 @@ def retarget_elided_arg_markers(
             if not isinstance(args, dict):
                 new_tcs.append(tc)
                 continue
-            path = args.get("path")
-            path_pinned = isinstance(path, str) and path in pinned_full
             new_args: dict[str, Any] | None = None
             for k, v in args.items():
                 if not isinstance(v, str):
@@ -415,9 +401,7 @@ def retarget_elided_arg_markers(
                 if count is None or _ELISION_MARKER_RE.search(v) is None:
                     continue  # not one of our markers — leave the model's arg alone
                 n = int(count.group(1).replace(",", ""))
-                replacement = (
-                    _arg_snip_marker_pinned(n) if path_pinned else _arg_snip_marker_unpinned(n)
-                )
+                replacement = _arg_snip_marker_neutral(n)
                 if replacement == v:
                     continue
                 if new_args is None:

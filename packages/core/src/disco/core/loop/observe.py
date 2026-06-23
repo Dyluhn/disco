@@ -236,6 +236,20 @@ class Observer:
                     _k1_bad,
                     action.tool_call.call_id,
                 )
+                # CW P1-a (round-2) — the recovery clause is tier-gated. assist-ON keeps
+                # the pre-CW-3 directional bytes (its workspace block sits in the tail,
+                # "above" the action). assist-OFF uses a NEUTRAL file_read pointer: its
+                # block moved to the cacheable PREFIX and, regardless, a copied-back arg
+                # marker may have come from a write/edit body that is NOT in the block at
+                # all — so any "it's in the workspace block" claim would be a dangling
+                # pointer. file_read on the path is always the authoritative recovery.
+                _k1_recover = (
+                    "actual current content from the CURRENT WORKSPACE block "
+                    "above (or call file_read) and resend the FULL argument."
+                    if self._loop._assist
+                    else "actual current content — call file_read on the path for the "
+                    "authoritative content — and resend the FULL argument."
+                )
                 await self._loop._emit(
                     AgentErrorEvent(
                         error=(
@@ -244,8 +258,7 @@ class Observer:
                             "That marker is a context-saving stand-in for content you "
                             "ALREADY wrote — it is NOT the content itself, and it was "
                             "NOT executed. Do not copy it into a tool call. Read the "
-                            "actual current content from the CURRENT WORKSPACE block "
-                            "in this prompt (or call file_read) and resend the FULL argument."
+                            + _k1_recover
                         ),
                         action_id=action.id,
                         tool_call_id=action.tool_call.call_id,

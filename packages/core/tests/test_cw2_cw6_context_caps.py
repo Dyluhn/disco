@@ -88,11 +88,17 @@ def test_huge_window_is_capped_not_unbounded():
     caps = derive_context_caps(assist=False, context_window=1_000_000)
     # Per-file is ceilinged at 48k regardless of how large the window grows.
     assert caps.per_file_chars == 48_000
-    # CW P1-b: the read budget carries RENDER headroom over the raw per-file pin (so a
-    # pin-sized file with many short lines still reads in one shot), bounded — not
-    # unbounded. 48k raw at the ~8-char short-line model → 78k rendered budget.
-    assert caps.read_char_budget == 78_000
-    assert caps.read_char_budget > caps.per_file_chars  # headroom holds
+    # CW P1-b (round-2): the read budget is in RAW chars and EQUALS the raw per-file pin
+    # (file_read budgets the page on raw file chars), so a raw pin-sized file reads in
+    # ONE shot. The line-numbering render overhead lands on the OBS-SNIP cap, not the
+    # read budget (so a single non-pinned read can't dump a huge rendered page).
+    assert caps.read_char_budget == 48_000
+    assert caps.read_char_budget == caps.per_file_chars
+    # The obs snip covers the worst-case line-numbered render of a one-shot read of the
+    # raw budget (~2-char lines, the x\n×24000 case) → a pin-fitting read is never snipped.
+    from disco.core.loop.context_budget import _rendered_obs_floor
+
+    assert caps.obs_snip_chars == _rendered_obs_floor(caps.read_char_budget)
     assert caps.obs_snip_chars >= caps.read_char_budget
 
 
