@@ -434,6 +434,28 @@ class DeepResearchService:
             )
             return
 
+        # W-35-fu: the NEXT call (decompose_query) runs via QUERY_REWRITER, NOT
+        # RAG_ANSWERER. The RAG_ANSWERER pre-flight above does NOT cover a
+        # DIFFERENT, black-holed QUERY_REWRITER model: an immediate exception is
+        # caught below and surfaced as ERROR, but a TRUE black-hole (endpoint
+        # accepts the socket and never responds) would stall the DR kick
+        # unboundedly with the conversation pinned RUNNING. Pre-flight
+        # QUERY_REWRITER too (bounded by _DRIVER_PREFLIGHT_TIMEOUT_S inside
+        # _preflight_driver) BEFORE setting RUNNING so EVERY role on the kick
+        # path is genuinely bounded. When override pins all roles to one model
+        # this is a cache hit (no added latency).
+        rewriter_reason = await self._rt._preflight_driver(
+            conversation_id, override=override, role=ModelRole.QUERY_REWRITER
+        )
+        if rewriter_reason is not None:
+            await self._rt._store.append(
+                conversation_id,
+                StatusEvent(
+                    status=ConversationStatus.ERROR, detail=rewriter_reason[:200]
+                ),
+            )
+            return
+
         await self._rt._store.append(
             conversation_id,
             StatusEvent(status=ConversationStatus.RUNNING),

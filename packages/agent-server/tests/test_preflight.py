@@ -228,6 +228,49 @@ async def test_deep_research_kick_decompose_failure_goes_error_not_stuck():
     assert "decomposition failed" in (statuses[-1].detail or "").lower()
 
 
+async def test_deep_research_kick_bounds_query_rewriter_role():
+    """W-35-fu: decompose_query runs via QUERY_REWRITER, NOT RAG_ANSWERER. A
+    black-holed QUERY_REWRITER (endpoint accepts the socket, never answers) that
+    the RAG_ANSWERER probe didn't cover must be caught by the QUERY_REWRITER
+    pre-flight → bounded → StatusEvent(ERROR), NOT a kick stuck RUNNING forever.
+    Both roles are probed before RUNNING; the rewriter probe is what fails here.
+    """
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)  # no injected router → preflight path active
+    rt.set_surface("c1", "deep_research")
+
+    probed: list[ModelRole] = []
+
+    async def _by_role(cid, *, override=None, role=ModelRole.AGENT_DRIVER):
+        probed.append(role)
+        if role is ModelRole.QUERY_REWRITER:
+            # Exactly the bounded-timeout reason _preflight_driver returns for a
+            # black hole (see test_preflight_driver_is_wall_bounded_on_black_hole).
+            return "Driver 'rw' unreachable: no response within 8s (pre-flight timed out)"
+        return None  # RAG_ANSWERER healthy
+
+    rt._preflight_driver = _by_role  # type: ignore[assignment]
+
+    await store.append(
+        "c1",
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="research X"),
+        ),
+    )
+    await rt._propose_deep_research_plan("c1", await store.get_events("c1"))
+
+    events = await store.get_events("c1")
+    statuses = [e for e in events if isinstance(e, StatusEvent)]
+    # The rewriter role WAS probed, and the kick errored on it.
+    assert ModelRole.QUERY_REWRITER in probed
+    assert statuses and statuses[-1].status == ConversationStatus.ERROR
+    assert "timed out" in (statuses[-1].detail or "")
+    # NEVER set RUNNING and never decomposed/planned → not stuck (genuinely bounded).
+    assert not any(s.status == ConversationStatus.RUNNING for s in statuses)
+    assert not any(isinstance(e, PlanEvent) for e in events)
+
+
 async def test_deep_research_preflights_rag_answerer_role():
     """P1-3: the DR answer stream pre-flights the role it GENERATES with —
     RAG_ANSWERER — not AGENT_DRIVER (which DR generation never uses)."""

@@ -32,14 +32,29 @@ export function BuildModelPicker({
   const effectiveId = value ?? lastSelected ?? defaultId;
   const current = models.find((m) => m.id === effectiveId);
 
-  const local = models.filter((m) => m.provider === "local");
-  const overflow = models.filter((m) => m.provider === "openrouter");
+  // W-05-fu: a subscription model has price 0/token but is NOT free (it costs a
+  // flat plan fee) — give it its OWN cost tag + group so it never reads as "free".
+  const isSub = (m: DriverModel) => m.pricing_mode === "subscription";
+  const free = models.filter((m) => m.free && !isSub(m));
+  const subscription = models.filter(isSub);
+  const overflow = models.filter((m) => !m.free && !isSub(m));
+
+  const costTag = (m: DriverModel) =>
+    isSub(m) ? "subscription" : m.free ? "free" : "paid";
+  const costClass = (m: DriverModel) =>
+    isSub(m) ? "text-text-muted" : m.free ? "text-supported" : "text-weak";
 
   const select = (m: DriverModel) => {
     onChange(m.id === defaultId ? null : m.id);
-    // Cost honesty (A2): the build driver IS the whole agent — a paid pick bills
-    // every step. Say it once on a paid pick; free/local stays silent.
-    if (!m.free) {
+    // Cost honesty (A2): the build driver IS the whole agent — a paid/subscription
+    // pick drives every step. Say it once; a genuinely free model stays silent.
+    if (isSub(m)) {
+      toast.show({
+        tone: "cost",
+        title: `Now building with ${m.label}`,
+        body: "This subscription model drives every step of the agent (flat-rate plan, not per-token).",
+      });
+    } else if (!m.free) {
       toast.show({
         tone: "cost",
         title: `Now building with ${m.label}`,
@@ -55,9 +70,7 @@ export function BuildModelPicker({
     >
       <Check className={cn("size-3.5 shrink-0", m.id === effectiveId ? "text-accent" : "opacity-0")} aria-hidden />
       <span className="flex-1 truncate">{m.label}</span>
-      <span className={cn("shrink-0 font-ui text-[0.7rem]", m.free ? "text-supported" : "text-weak")}>
-        {m.free ? "free" : "paid"}
-      </span>
+      <span className={cn("shrink-0 font-ui text-[0.7rem]", costClass(m))}>{costTag(m)}</span>
     </Dropdown.Item>
   );
 
@@ -71,9 +84,7 @@ export function BuildModelPicker({
         <Cpu className="size-3.5 shrink-0" aria-hidden />
         <span className="truncate">{current?.label ?? "Default model"}</span>
         {current && (
-          <span className={cn("shrink-0", current.free ? "text-supported" : "text-weak")}>
-            {current.free ? "· free" : "· paid"}
-          </span>
+          <span className={cn("shrink-0", costClass(current))}>· {costTag(current)}</span>
         )}
         <ChevronDown className="size-3 shrink-0 opacity-60" aria-hidden />
       </Dropdown.Trigger>
@@ -83,19 +94,32 @@ export function BuildModelPicker({
           sideOffset={6}
           className="z-50 min-w-[14rem] rounded-card border border-hairline bg-bg p-px shadow-none"
         >
-          {local.length > 0 && (
+          {free.length > 0 && (
             <>
               <Dropdown.Label className="px-inline py-hair font-ui text-[0.66rem] uppercase tracking-wide text-text-faint">
                 Local — free
               </Dropdown.Label>
-              {local.map((m) => (
+              {free.map((m) => (
+                <Row key={m.id} m={m} />
+              ))}
+            </>
+          )}
+          {subscription.length > 0 && (
+            <>
+              {free.length > 0 && <Dropdown.Separator className="my-hair h-px bg-hairline" />}
+              <Dropdown.Label className="px-inline py-hair font-ui text-[0.66rem] uppercase tracking-wide text-text-faint">
+                Subscription
+              </Dropdown.Label>
+              {subscription.map((m) => (
                 <Row key={m.id} m={m} />
               ))}
             </>
           )}
           {overflow.length > 0 && (
             <>
-              <Dropdown.Separator className="my-hair h-px bg-hairline" />
+              {(free.length > 0 || subscription.length > 0) && (
+                <Dropdown.Separator className="my-hair h-px bg-hairline" />
+              )}
               <Dropdown.Label className="px-inline py-hair font-ui text-[0.66rem] uppercase tracking-wide text-text-faint">
                 Overflow — paid
               </Dropdown.Label>

@@ -1098,12 +1098,21 @@ class ConversationRuntime:
             )
             label = _model_label(live["model_id"] or m.model_id)
             ctx = live["n_ctx"] or m.context_window
+            # W-05-fu: expose pricing_mode so the picker can tell a SUBSCRIPTION
+            # model (flat-rate plan, price 0/token) apart from a genuinely FREE
+            # one. None → derive for back-compat (price 0 → free, else metered),
+            # matching the frontend isFree/isSubscription helpers. `free` is then
+            # keyed off the effective mode so a subscription model is NOT free.
+            pricing_mode = m.pricing_mode
+            if pricing_mode is None:
+                pricing_mode = "free" if m.price_out_per_m == 0.0 else "metered"
             models.append(
                 {
                     "id": key,
                     "label": label,
                     "provider": "openrouter" if m.provider == "openrouter" else "local",
-                    "free": m.price_out_per_m == 0.0,
+                    "free": pricing_mode == "free",
+                    "pricing_mode": pricing_mode,
                     "context_window": ctx,
                 }
             )

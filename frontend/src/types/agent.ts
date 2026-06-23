@@ -319,6 +319,10 @@ export interface DriverModel {
   label: string;
   provider: "local" | "openrouter";
   free: boolean;
+  // W-05-fu: how the user pays — distinguishes a flat-rate SUBSCRIPTION model
+  // (price 0/token but NOT free) from a genuinely free one. The server always
+  // sends an effective mode (derives "free"/"metered" when unset).
+  pricing_mode?: "metered" | "subscription" | "free";
   context_window: number;
 }
 export interface DriverModels {
