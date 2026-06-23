@@ -185,4 +185,6 @@ def test_tool_context_has_no_secret_field():
         # ROOT-5: (base_url, model_id, api_key_env) — the conversation's effective driver
         # endpoint. The api_key_env is the env-var NAME, NOT the secret value (§6 holds).
         "driver_llm",
+        # CW-6: the capability-derived file_read page budget (an int, not a secret).
+        "read_char_budget",
     }
