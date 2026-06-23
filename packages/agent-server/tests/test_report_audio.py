@@ -752,3 +752,140 @@ def test_all_empty_turns_skipped_gracefully(
 
     # Must not raise; the output is a silent-frame MP3 (0 real turns).
     assert mp3_path.exists() and mp3_path.stat().st_size > 0
+
+
+# ---- W-08 / W-09: progress channel ----------------------------------------
+
+
+def _collect_progress(monkeypatch, *, model_present: bool):
+    """Run generate_report_audio capturing every on_progress event; force the
+    bundled-model presence so we can assert the download stage is honest."""
+    import disco.agent_server.tts_local as tts_local
+
+    monkeypatch.setattr(tts_local, "model_files_present", lambda: model_present)
+    return []
+
+
+def test_progress_emits_real_stages_no_download(
+    configure_tts, tts_enabled, tmp_path, monkeypatch
+) -> None:
+    """W-09: the pipeline emits preparing → synthesizing(N/total) → mixing.
+    W-08: when the voice model is already present, NO downloading_model event."""
+    configure_tts(tts_enabled)
+    events = _collect_progress(monkeypatch, model_present=True)
+
+    async def _on_progress(ev: dict) -> None:
+        events.append(ev)
+
+    out_dir = tmp_path / "conv_prog" / "audio"
+    asyncio.run(
+        report_audio_mod.generate_report_audio(
+            _make_report(),
+            tts_settings=tts_enabled,
+            out_dir=out_dir,
+            on_progress=_on_progress,
+        )
+    )
+    stages = [e["stage"] for e in events]
+    assert "preparing" in stages
+    assert "mixing" in stages
+    # No false download note when the model files already exist (W-08).
+    assert "downloading_model" not in stages
+    # Real staged synthesis — one event per turn, with current/total (W-09).
+    synth = [e for e in events if e["stage"] == "synthesizing"]
+    assert len(synth) == 4  # _GOOD_TURN_SCRIPT has 4 turns
+    assert synth[0]["current"] == 1 and synth[0]["total"] == 4
+    assert synth[-1]["current"] == 4 and synth[-1]["total"] == 4
+    # Ordering: preparing before any synthesizing before mixing.
+    assert stages.index("preparing") < stages.index("synthesizing")
+    assert stages.index("synthesizing") < stages.index("mixing")
+
+
+def test_progress_emits_download_only_when_missing(
+    configure_tts, tts_enabled, tmp_path, monkeypatch
+) -> None:
+    """W-08: the downloading_model event fires ONLY when the bundled model files
+    are genuinely absent (a real first-run download)."""
+    configure_tts(tts_enabled)
+    events = _collect_progress(monkeypatch, model_present=False)
+
+    async def _on_progress(ev: dict) -> None:
+        events.append(ev)
+
+    out_dir = tmp_path / "conv_dl" / "audio"
+    asyncio.run(
+        report_audio_mod.generate_report_audio(
+            _make_report(),
+            tts_settings=tts_enabled,
+            out_dir=out_dir,
+            on_progress=_on_progress,
+        )
+    )
+    stages = [e["stage"] for e in events]
+    assert "downloading_model" in stages
+    # The download note must precede synthesis.
+    assert stages.index("downloading_model") < stages.index("synthesizing")
+
+
+def test_progress_cache_hit_no_download(
+    configure_tts, tts_enabled, tmp_path, monkeypatch
+) -> None:
+    """W-08: a warm-cache run emits cache_hit and NEVER downloading_model — even
+    when the model files happen to be absent (a cache hit needs no synth)."""
+    configure_tts(tts_enabled)
+    out_dir = tmp_path / "conv_cache" / "audio"
+    # First run populates the cache.
+    asyncio.run(
+        report_audio_mod.generate_report_audio(
+            _make_report(), tts_settings=tts_enabled, out_dir=out_dir
+        )
+    )
+    # Second run with the model 'missing' — should still skip the download.
+    events = _collect_progress(monkeypatch, model_present=False)
+
+    async def _on_progress(ev: dict) -> None:
+        events.append(ev)
+
+    asyncio.run(
+        report_audio_mod.generate_report_audio(
+            _make_report(),
+            tts_settings=tts_enabled,
+            out_dir=out_dir,
+            on_progress=_on_progress,
+        )
+    )
+    stages = [e["stage"] for e in events]
+    assert stages == ["cache_hit"]
+    assert "downloading_model" not in stages
+
+
+def test_audio_stream_endpoint_emits_sse(
+    client, store, configure_tts, tts_enabled, monkeypatch
+) -> None:
+    """W-09: the SSE endpoint streams real staged frames + a final done event."""
+    import disco.agent_server.tts_local as tts_local
+
+    monkeypatch.setattr(tts_local, "model_files_present", lambda: True)
+    configure_tts(tts_enabled)
+    cid = _create_conv(client)
+    _seed_report(store, cid)
+
+    r = client.post(f"/conversations/{cid}/report/audio/stream?mode=podcast")
+    assert r.status_code == 200, r.text
+    assert "text/event-stream" in r.headers.get("content-type", "")
+    body = r.text
+    assert '"stage": "preparing"' in body
+    assert '"stage": "synthesizing"' in body
+    assert '"stage": "mixing"' in body
+    assert '"stage": "done"' in body
+    assert '"mp3_url"' in body
+    # No false download note when the model is present.
+    assert "downloading_model" not in body
+
+
+def test_audio_stream_endpoint_no_report_404(client) -> None:
+    """W-09: the stream endpoint 404s (before opening the stream) with no report,
+    so the FE falls back / surfaces the error rather than hanging."""
+    cid = _create_conv(client)
+    r = client.post(f"/conversations/{cid}/report/audio/stream?mode=podcast")
+    assert r.status_code == 404

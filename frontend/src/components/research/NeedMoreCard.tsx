@@ -59,9 +59,25 @@ const ACTIVE_BTN =
 
 type AudioMode = "podcast" | "single";
 
+// W-08 / W-09: real pipeline stages streamed from the server (SSE). The UI keys
+// its status copy on these so the "downloading voice model…" note ONLY shows on
+// a genuine first-run download — never on a warm cache or remote backend.
+type AudioStage =
+  | "preparing"
+  | "downloading_model"
+  | "synthesizing"
+  | "mixing"
+  | "cache_hit";
+
+interface AudioProgress {
+  stage: AudioStage;
+  current?: number;
+  total?: number;
+}
+
 type AudioState =
   | { status: "idle" }
-  | { status: "generating" }
+  | { status: "generating"; progress?: AudioProgress }
   | { status: "done"; audioUrl: string }
   | { status: "unavailable"; reason: string };
 
@@ -69,6 +85,35 @@ type AudioState =
 // query param can be threaded through without touching the shared deepResearch.ts
 // API file (owned by another lane).  The mode is chosen via a popup dialog before
 // generation starts (WALK-21 / D3).
+
+/** Map a server error reason to a human message. */
+function audioReasonMessage(reason: string): string {
+  if (reason === "tts_disabled") {
+    return "Audio overview is disabled in Settings → Audio — enable it to generate.";
+  }
+  return `Audio overview failed: ${reason}`;
+}
+
+/** Human-readable label for the current generation stage (W-09). */
+function audioStageLabel(progress: AudioProgress | undefined): string {
+  if (!progress) return "Generating audio…";
+  switch (progress.stage) {
+    case "preparing":
+      return "Preparing script…";
+    case "downloading_model":
+      return "Downloading voice model…";
+    case "synthesizing":
+      return progress.total
+        ? `Synthesizing turns ${progress.current ?? 0}/${progress.total}…`
+        : "Synthesizing audio…";
+    case "mixing":
+      return "Mixing audio…";
+    case "cache_hit":
+      return "Loading cached audio…";
+    default:
+      return "Generating audio…";
+  }
+}
 
 // ── File System Access API types ──────────────────────────────────────────────
 
@@ -546,22 +591,95 @@ function AudioSection({
   // Called after the user picks a mode in the dialog.
   // Calls the endpoint directly (not via requestReportAudio from deepResearch.ts)
   // so we can thread the ?mode= query param + JSON body without editing that file.
+  //
+  // W-09: prefer the SSE streaming endpoint so the UI shows REAL staged progress
+  // ("Synthesizing turns 3/8…", "Mixing…"). The blocking POST is kept as a
+  // fallback (W-08/W-09 robustness): if streaming can't start or yields no
+  // terminal event, we re-issue the blocking request.
   const generate = useCallback(
     async (mode: AudioMode) => {
       onModeOpenChange(false);
       setAudio({ status: "generating" });
-      try {
-        const bodyPayload =
-          followUpSeqs && followUpSeqs.length > 0
-            ? JSON.stringify({ follow_up_seqs: followUpSeqs })
-            : undefined;
+
+      const bodyPayload =
+        followUpSeqs && followUpSeqs.length > 0
+          ? JSON.stringify({ follow_up_seqs: followUpSeqs })
+          : undefined;
+      const headers = bodyPayload
+        ? { "Content-Type": "application/json" }
+        : undefined;
+
+      // Returns true once a terminal (done / error) event was handled, false to
+      // fall back to the blocking endpoint.
+      const viaStream = async (): Promise<boolean> => {
+        let res: Response;
+        try {
+          res = await fetch(
+            `${agentHttpBase()}/conversations/${cid}/report/audio/stream?mode=${mode}`,
+            { method: "POST", headers, body: bodyPayload },
+          );
+        } catch {
+          return false; // network / endpoint unavailable → fall back
+        }
+        if (!res.ok || !res.body) return false;
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let handled = false;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let sep: number;
+          while ((sep = buffer.indexOf("\n\n")) >= 0) {
+            const frame = buffer.slice(0, sep);
+            buffer = buffer.slice(sep + 2);
+            const dataLine = frame
+              .split("\n")
+              .find((l) => l.startsWith("data:"));
+            if (!dataLine) continue;
+            let ev: {
+              stage?: string;
+              current?: number;
+              total?: number;
+              mp3_url?: string;
+              reason?: string;
+            };
+            try {
+              ev = JSON.parse(dataLine.slice(5).trim());
+            } catch {
+              continue;
+            }
+            if (ev.stage === "done" && ev.mp3_url) {
+              setAudio({ status: "done", audioUrl: `${agentHttpBase()}${ev.mp3_url}` });
+              handled = true;
+            } else if (ev.stage === "error") {
+              setAudio({
+                status: "unavailable",
+                reason: audioReasonMessage(ev.reason ?? "unknown"),
+              });
+              handled = true;
+            } else if (ev.stage) {
+              setAudio({
+                status: "generating",
+                progress: {
+                  stage: ev.stage as AudioStage,
+                  current: ev.current,
+                  total: ev.total,
+                },
+              });
+            }
+          }
+        }
+        return handled;
+      };
+
+      // Blocking fallback — the original single-shot POST.
+      const viaBlocking = async (): Promise<void> => {
         const res = await fetch(
           `${agentHttpBase()}/conversations/${cid}/report/audio?mode=${mode}`,
-          {
-            method: "POST",
-            headers: bodyPayload ? { "Content-Type": "application/json" } : undefined,
-            body: bodyPayload,
-          },
+          { method: "POST", headers, body: bodyPayload },
         );
         if (!res.ok) {
           let reason = `${res.status}`;
@@ -576,16 +694,15 @@ function AudioSection({
           } catch {
             /* opaque */
           }
-          if (reason === "tts_disabled") {
-            throw new Error(
-              "Audio overview is disabled in Settings → Audio — enable it to generate.",
-            );
-          }
-          throw new Error(`Audio overview failed: ${reason}`);
+          throw new Error(audioReasonMessage(reason));
         }
         const data = (await res.json()) as { mp3_url: string };
-        // Prefix the agent-server base so the AudioPlayer fetches from the right origin.
         setAudio({ status: "done", audioUrl: `${agentHttpBase()}${data.mp3_url}` });
+      };
+
+      try {
+        const streamed = await viaStream();
+        if (!streamed) await viaBlocking();
       } catch (e: unknown) {
         const reason = e instanceof Error ? e.message : String(e);
         setAudio({ status: "unavailable", reason });
@@ -612,16 +729,21 @@ function AudioSection({
       />
 
       {audio.status === "generating" && (
-        <div className="flex flex-col gap-hair">
+        <div className="flex flex-col gap-hair" data-tts-stage={audio.progress?.stage ?? ""}>
           <div className="flex items-center gap-hair">
             <Loader2 className="size-3.5 animate-spin text-text-faint" aria-hidden />
-            <span className="font-ui text-[0.78rem] text-text-muted">Generating audio…</span>
+            <span className="font-ui text-[0.78rem] text-text-muted">
+              {audioStageLabel(audio.progress)}
+            </span>
           </div>
-          {/* WALK-13 / D1: static notice so users know why first-run is slow */}
-          <span className="font-ui text-[0.73rem] text-text-faint">
-            Downloading voice model (~300 MB, first run only) if needed — this may take a
-            minute.
-          </span>
+          {/* W-08: the ~300 MB download note is HONEST — shown only while a
+              genuine first-run voice-model download is actually happening, never
+              on a warm cache or a remote TTS backend. */}
+          {audio.progress?.stage === "downloading_model" && (
+            <span className="font-ui text-[0.73rem] text-text-faint">
+              Downloading voice model (~300 MB, first run only) — this may take a minute.
+            </span>
+          )}
         </div>
       )}
 

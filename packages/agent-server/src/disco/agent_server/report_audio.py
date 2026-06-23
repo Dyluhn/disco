@@ -26,10 +26,11 @@ Differences from the sandboxed BUILD tool:
 from __future__ import annotations
 
 import hashlib
+import inspect
 import logging
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -239,6 +240,30 @@ def report_to_overview_text(
     return "\n".join(parts).strip() or report.query
 
 
+# ---- Progress channel (W-08 / W-09) ----------------------------------------
+
+# A progress callback receives small JSON-able dicts describing the CURRENT
+# stage of the audio pipeline (e.g. {"stage": "synthesizing", "current": 3,
+# "total": 8}).  It may be sync or async; both are awaited safely.  The stages
+# are tied to the REAL pipeline steps — never fabricated.  `None` disables it
+# (the blocking path passes nothing and behaves exactly as before).
+ProgressCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
+
+
+async def _emit(on_progress: ProgressCallback | None, event: dict[str, Any]) -> None:
+    """Invoke the progress callback, tolerating sync or async callbacks and
+    swallowing any callback error (progress is best-effort — it must never
+    abort or corrupt the generation itself)."""
+    if on_progress is None:
+        return
+    try:
+        result = on_progress(event)
+        if inspect.isawaitable(result):
+            await result
+    except Exception:  # progress is advisory; never let it break generation
+        logger.debug("audio progress callback failed for %r", event, exc_info=True)
+
+
 # ---- The pipeline ----------------------------------------------------------
 
 
@@ -341,6 +366,7 @@ async def generate_report_audio(
     mode: str = "podcast",
     resolve_key: Callable[[str | None], str | None] | None = None,
     follow_ups: list[tuple[str, str]] | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> tuple[Path, Path]:
     """Run the audio-overview pipeline for `report` and write the artifacts into
     `out_dir` (one cid-scoped subdir, created on demand).  Returns
@@ -394,6 +420,9 @@ async def generate_report_audio(
     # step.  This makes the endpoint idempotent (idempotency is good for
     # retries, and the UI can re-press the button without re-spending RAM).
     if mp3_path.exists() and transcript_path.exists():
+        # Cache hit — instant, no synth, no download.  Tell the UI so it shows
+        # "ready" rather than a false "downloading voice model…" note (W-08).
+        await _emit(on_progress, {"stage": "cache_hit"})
         return mp3_path, transcript_path
 
     voice_a = getattr(tts_settings, "voice_a", "af_heart")
@@ -409,6 +438,7 @@ async def generate_report_audio(
     is_remote = provider != "bundled"
 
     # --- Step 1: turn-script ------------------------------------------------
+    await _emit(on_progress, {"stage": "preparing"})
     overview_text = report_to_overview_text(report, follow_ups)
     turns = await _generate_turn_script(overview_text, mode)
     backend = {
@@ -417,12 +447,28 @@ async def generate_report_audio(
         "openai": "paid OpenAI-compatible",
     }.get(provider, provider)
 
+    # --- Step 1b: voice-model download (bundled only, first run) ------------
+    # W-08: only signal "downloading voice model…" when a download is GENUINELY
+    # about to happen — i.e. the bundled backend is selected AND its weight
+    # files aren't on disk yet.  Remote backends and warm-cache runs skip this,
+    # so the UI never shows the false download note.
+    if not is_remote:
+        from . import tts_local
+
+        if not tts_local.model_files_present():
+            await _emit(on_progress, {"stage": "downloading_model"})
+
     # --- Step 2: synthesize each turn to PCM --------------------------------
     # C1: normalize the text fed to TTS — strip markdown so the engine speaks
     # clean prose, not raw markup.  The transcript (Step 4) is built from the
     # ORIGINAL turn.text so it stays raw and readable as markdown.
     pcm_turns: list[Any] = []
+    total_turns = len(turns)
     for i, turn in enumerate(turns):
+        await _emit(
+            on_progress,
+            {"stage": "synthesizing", "current": i + 1, "total": total_turns},
+        )
         voice = voice_a if turn.speaker == "A" else voice_b
         tts_text = _normalize_for_tts(turn.text)
         # D4 robustness: if the normalizer strips ALL content (e.g. a turn
@@ -475,6 +521,7 @@ async def generate_report_audio(
         pcm_turns.append(pcm)
 
     # --- Step 3: mix in PCM, encode the whole overview once -----------------
+    await _emit(on_progress, {"stage": "mixing"})
     mixed_pcm = mix_pcm(
         pcm_turns, silence_ms=SILENCE_MS_DEFAULT, sample_rate=audio_overview.TTS_SAMPLE_RATE
     )

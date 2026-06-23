@@ -62,6 +62,7 @@ logger = logging.getLogger(__name__)
 def serialize_markdown(
     report: ReportEvent,
     follow_ups: list[tuple[str, str]] | None = None,
+    title: str | None = None,
 ) -> str:
     """Serialize a ReportEvent to markdown.
 
@@ -75,9 +76,15 @@ def serialize_markdown(
     ``## Follow-up Q&A`` section is appended after the passages footer.
     When absent or empty the output is byte-identical to the baseline
     (backwards-compatible — the byte-parity test still passes).
+
+    ``title`` — W-10: a real generated conversation title for the H1 title
+    line, instead of echoing the raw user question. When ``None``/empty it
+    falls back to ``report.query`` (byte-identical to the baseline — the
+    byte-parity test passes ``title=None``).
     """
+    display_title = (title or "").strip() or report.query
     lines: list[str] = []
-    lines.append(f"# Deep Research: {report.query}")
+    lines.append(f"# Deep Research: {display_title}")
     lines.append("")
     lines.append("## Executive Summary")
     lines.append("")
@@ -259,6 +266,7 @@ def _build_pdf_html(
     report: ReportEvent,
     follow_ups: list[tuple[str, str]] | None,
     theme: Theme,
+    title: str | None = None,
 ) -> str:
     """Build a branded, structured HTML document from a ReportEvent.
 
@@ -290,13 +298,16 @@ def _build_pdf_html(
     )
 
     # ---- cover ----
-    query_escaped = _html.escape(report.query)
-    if query_escaped:
-        first_char = query_escaped[0]
-        rest_title = query_escaped[1:]
+    # W-10: the cover title page uses the real generated title, falling back to
+    # the raw question only when no title is available.
+    display_title = (title or "").strip() or report.query
+    title_escaped = _html.escape(display_title)
+    if title_escaped:
+        first_char = title_escaped[0]
+        rest_title = title_escaped[1:]
         title_html = f'<span class="dropcap">{first_char}</span>{rest_title}'
     else:
-        title_html = query_escaped
+        title_html = title_escaped
 
     cover_mark = definition_mark_html("colophon") if theme.branded else ""
     depth_label = _html.escape(report.depth_tier or "standard_deep")
@@ -423,7 +434,7 @@ def _build_pdf_html(
         '<html lang="en">\n'
         "<head>\n"
         '<meta charset="utf-8">\n'
-        f"<title>{_html.escape(report.query)}</title>\n"
+        f"<title>{title_escaped}</title>\n"
         "<style>\n"
         f"{brand_css}\n"
         "</style>\n"
@@ -457,6 +468,7 @@ def serialize_pdf(
     follow_ups: list[tuple[str, str]] | None = None,
     theme: str = "disco",
     mode: str = "light",
+    title: str | None = None,
 ) -> bytes:
     """Serialize a ReportEvent to PDF via WeasyPrint.
 
@@ -477,7 +489,7 @@ def serialize_pdf(
     # and @font-face declaration, causing glitchy PDF output.  We rely solely
     # on the inline CSS here and pass only font_config so WeasyPrint's Pango
     # engine picks up the embedded OFL font families.
-    doc_html = _build_pdf_html(report, follow_ups, resolved)
+    doc_html = _build_pdf_html(report, follow_ups, resolved, title)
     try:
         from weasyprint.text.fonts import FontConfiguration
 
@@ -673,6 +685,7 @@ async def serialize_docx(
     report: ReportEvent,
     sandbox: Any,
     follow_ups: list[tuple[str, str]] | None = None,
+    title: str | None = None,
 ) -> bytes:
     """Serialize a ReportEvent to DOCX via `pandoc` INSIDE a sandbox container.
 
@@ -686,7 +699,7 @@ async def serialize_docx(
     here) and --toc to pandoc for a branded, bookmarked output.
     Raises RuntimeError on failure.
     """
-    md = serialize_markdown(report, follow_ups)
+    md = serialize_markdown(report, follow_ups, title)
     await sandbox.write_file("_export.md", md.encode("utf-8"))
     # Write the reference.docx into the sandbox workspace
     ref_flag = ""
@@ -736,6 +749,7 @@ def export_report(
     follow_ups: list[tuple[str, str]] | None = None,
     theme: str = "disco",
     mode: str = "light",
+    title: str | None = None,
 ) -> tuple[bytes, str, str]:
     """Export a ReportEvent to MD or PDF (both rendered in-process).
 
@@ -756,9 +770,9 @@ def export_report(
         raise ValueError(f"Unknown export format: {fmt!r}. Valid: md, pdf, docx")
 
     if fmt == "md":
-        payload = serialize_markdown(report, follow_ups).encode("utf-8")
+        payload = serialize_markdown(report, follow_ups, title).encode("utf-8")
     elif fmt == "pdf":
-        payload = serialize_pdf(report, follow_ups, theme=theme, mode=mode)
+        payload = serialize_pdf(report, follow_ups, theme=theme, mode=mode, title=title)
     elif fmt == "docx":
         raise ValueError("docx is rendered in a sandbox — call serialize_docx(report, sandbox)")
     else:

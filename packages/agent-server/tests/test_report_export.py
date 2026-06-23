@@ -614,3 +614,92 @@ def test_templates_endpoint_lists_catalog() -> None:
             assert disco["default"] is True
             assert disco["accent"].startswith("#") and disco["label"]
     asyncio.run(run())
+
+
+# ---- W-10: export cover/title page uses the generated title ----------------
+
+
+def test_markdown_title_uses_generated_title() -> None:
+    """W-10: serialize_markdown uses the generated TITLE for the H1, not the raw
+    question."""
+    report = _make_sample_report()
+    out = serialize_markdown(report, None, "Swallow Airspeed Field Study")
+    assert out.splitlines()[0] == "# Deep Research: Swallow Airspeed Field Study"
+    # The raw question must not be echoed on the title line.
+    assert "unladen swallow" not in out.splitlines()[0]
+
+
+def test_markdown_title_none_falls_back_to_query() -> None:
+    """W-10 graceful fallback: no title → the question (byte-identical baseline)."""
+    report = _make_sample_report()
+    assert serialize_markdown(report, None, None) == CAPTURED_MARKDOWN
+    assert serialize_markdown(report, None, "") == CAPTURED_MARKDOWN
+
+
+def test_pdf_html_cover_uses_title() -> None:
+    """W-10: the PDF cover title page renders the generated title (and the <title>
+    head), not the raw question."""
+    from disco.agent_server.report_export import _build_pdf_html
+    from disco.core.brand import resolve_theme
+
+    report = _make_sample_report()
+    theme = resolve_theme("disco", "light")
+    html = _build_pdf_html(report, None, theme, "Swallow Airspeed Field Study")
+    # cover-title block carries the generated title (dropcap splits the 1st char).
+    assert "Swallow Airspeed Field Study"[1:] in html
+    assert "<title>Swallow Airspeed Field Study</title>" in html
+    # The raw question is NOT used as the cover/title.
+    assert "<title>What is the airspeed" not in html
+
+
+def test_pdf_html_cover_falls_back_to_query() -> None:
+    """W-10 fallback: no title → the question is used (unchanged from baseline)."""
+    from disco.agent_server.report_export import _build_pdf_html
+    from disco.core.brand import resolve_theme
+
+    report = _make_sample_report()
+    theme = resolve_theme("disco", "light")
+    html = _build_pdf_html(report, None, theme, None)
+    assert "<title>What is the airspeed velocity of an unladen swallow?</title>" in html
+
+
+async def test_serialize_docx_threads_title_into_markdown() -> None:
+    """W-10: DOCX (md→pandoc) carries the generated title into the rendered
+    markdown handed to pandoc."""
+    report = _make_sample_report()
+    sandbox = _FakeRenderSandbox()
+    await serialize_docx(report, sandbox, None, "Swallow Airspeed Field Study")
+    md = sandbox.written["_export.md"].decode("utf-8")
+    assert md.splitlines()[0] == "# Deep Research: Swallow Airspeed Field Study"
+
+
+def test_endpoint_md_export_uses_stored_title(
+    store: SqliteEventStore, client_with_runtime: TestClient
+) -> None:
+    """W-10 end-to-end: the export endpoint reads the stored conversation title
+    and puts it on the title page instead of the raw question."""
+    cid = _create_conversation(client_with_runtime)
+    _seed_event(store, cid, _make_sample_report())
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(store.update_title(cid, "Swallow Airspeed Field Study"))
+    finally:
+        loop.close()
+    r = client_with_runtime.post(f"/api/conversations/{cid}/report/export?fmt=md")
+    assert r.status_code == 200, r.text
+    first_line = r.content.decode("utf-8").splitlines()[0]
+    assert first_line == "# Deep Research: Swallow Airspeed Field Study"
+
+
+def test_endpoint_md_export_no_title_falls_back_to_query(
+    store: SqliteEventStore, client_with_runtime: TestClient
+) -> None:
+    """W-10 fallback: with no stored title the export echoes the question
+    (byte-identical to the pre-W-10 baseline)."""
+    cid = _create_conversation(client_with_runtime)
+    _seed_event(store, cid, _make_sample_report())
+    r = client_with_runtime.post(f"/api/conversations/{cid}/report/export?fmt=md")
+    assert r.status_code == 200, r.text
+    assert r.content == CAPTURED_MARKDOWN.encode("utf-8")

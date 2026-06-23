@@ -48,6 +48,20 @@ def _data_dir() -> Path:
     return d
 
 
+def model_files_present() -> bool:
+    """True when both bundled Kokoro weight files already exist on disk (so a
+    generation run will NOT trigger a download).
+
+    W-08: the audio pipeline keys the "downloading voice model…" UI status on
+    this — the note is honest only when a download is genuinely about to happen.
+    Mirrors the same exists-and-nonzero check `_fetch` uses to skip the download.
+    """
+    d = _data_dir()
+    model = d / "kokoro-v1.0.onnx"
+    voices = d / "voices-v1.0.bin"
+    return all(p.exists() and p.stat().st_size > 0 for p in (model, voices))
+
+
 def _sha256(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:

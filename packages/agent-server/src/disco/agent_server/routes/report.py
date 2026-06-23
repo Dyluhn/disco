@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import json
 import posixpath
+from pathlib import Path
 from typing import Any
 
 from disco.core import DEFAULT_OWNER_ID, MessageEvent, ReportEvent
 from disco.core.store.sqlite import SqliteEventStore
 from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ..report_audio import (
@@ -119,11 +123,11 @@ async def _resolve_export_payload(
 ) -> tuple[bytes, str | None, str]:
     """Resolve ``(payload, media_type, ext)`` for a report export.
 
-    With ``follow_up_seqs`` (md/pdf) gather the selected Q&A pairs and serialize
-    inline — bypassing ConversationRuntime so follow-ups can be threaded without
-    touching runtime.py.  Otherwise use the existing runtime export path.
-    Raises HTTPException(404) when no report exists, (400) on a serializer error
-    or unknown theme.
+    All formats serialize inline (md/pdf in-process, docx in a transient render
+    sandbox) — bypassing ConversationRuntime so follow-ups, theme/mode, AND the
+    generated title (W-10) can be threaded without touching runtime.py / the
+    DR-service module.  Raises HTTPException(404) when no report exists, (400)
+    on a serializer error or unknown theme.
     """
     # Validate the theme early so callers get a clear 400 before any I/O. Validate
     # against the GALLERY catalogue ("{theme}-{mode}") — stricter than resolve_theme,
@@ -141,52 +145,118 @@ async def _resolve_export_payload(
                 status_code=400, detail=f"Unknown template {theme!r}/{mode!r}"
             )
 
-    # md/pdf ALWAYS serialize inline so theme/mode (and any follow-ups) are honored.
-    # The runtime.export_report path below does NOT thread theme/mode — routing
-    # md/pdf through it dropped dark-mode PDFs to light. Only docx (sandbox/pandoc)
-    # needs the runtime path.
-    if fmt in ("md", "pdf"):
-        from ..report_export import (
-            EXTENSIONS,
-            MEDIA_TYPES,
-            serialize_markdown,
-            serialize_pdf,
+    # ALL formats serialize inline so theme/mode, follow-ups, AND the generated
+    # TITLE (W-10) are honored.  The runtime.export_report path threads none of
+    # these, so we no longer route through it — docx renders in a transient
+    # render sandbox here (same lifecycle the DR service uses), with the title.
+    from ..report_export import (
+        EXTENSIONS,
+        MEDIA_TYPES,
+        serialize_markdown,
+        serialize_pdf,
+    )
+
+    events = await store.get_events(conversation_id)
+    report: ReportEvent | None = next(
+        (e for e in reversed(events) if isinstance(e, ReportEvent)), None
+    )
+    if report is None:
+        raise HTTPException(
+            status_code=404, detail={"ok": False, "reason": "no_report"}
         )
 
-        events = await store.get_events(conversation_id)
-        report: ReportEvent | None = next(
-            (e for e in reversed(events) if isinstance(e, ReportEvent)), None
-        )
-        if report is None:
-            raise HTTPException(
-                status_code=404, detail={"ok": False, "reason": "no_report"}
-            )
+    # W-10: prefer the real generated conversation title for the cover/title
+    # page; the serializers fall back to report.query when it's None/empty.
+    title: str | None = None
+    with contextlib.suppress(Exception):
+        title = await store.get_title(conversation_id)
 
-        follow_ups = _gather_follow_up_pairs(events, report, follow_up_seqs)
-        try:
-            if fmt == "md":
-                return (
-                    serialize_markdown(report, follow_ups).encode("utf-8"),
-                    MEDIA_TYPES[fmt],
-                    EXTENSIONS[fmt],
-                )
+    follow_ups = _gather_follow_up_pairs(events, report, follow_up_seqs)
+    try:
+        if fmt == "md":
             return (
-                serialize_pdf(report, follow_ups, theme=theme, mode=mode),
+                serialize_markdown(report, follow_ups, title).encode("utf-8"),
                 MEDIA_TYPES[fmt],
                 EXTENSIONS[fmt],
             )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    try:
-        result = await runtime.export_report(
-            conversation_id, fmt, owner_id=DEFAULT_OWNER_ID
-        )
+        if fmt == "pdf":
+            return (
+                serialize_pdf(report, follow_ups, theme=theme, mode=mode, title=title),
+                MEDIA_TYPES[fmt],
+                EXTENSIONS[fmt],
+            )
+        # docx — render via pandoc inside a throwaway sandbox (pandoc ships in
+        # the sandbox image, not the host), passing the title through.
+        payload = await _render_docx_with_title(runtime, report, follow_ups, title)
+        return payload, MEDIA_TYPES["docx"], EXTENSIONS["docx"]
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if result is None:
+
+
+async def _render_docx_with_title(
+    runtime: ConversationRuntime,
+    report: ReportEvent,
+    follow_ups: list[tuple[str, str]],
+    title: str | None,
+) -> bytes:
+    """Render a report to DOCX inside a transient render sandbox, threading the
+    generated title (W-10).  Mirrors the DR service's ``_render_docx_in_sandbox``
+    lifecycle (spin → render → destroy) but lives in the route so the title can
+    be passed without touching the runtime / DR-service modules."""
+    import uuid as _uuid
+
+    from ..report_export import serialize_docx as _serialize_docx
+
+    svc = runtime._sandbox_service_now()
+    cid = f"export-docx-{_uuid.uuid4().hex[:12]}"
+    instance = await svc.create(
+        runtime._sandbox_spec, owner_id=DEFAULT_OWNER_ID, conversation_id=cid
+    )
+    try:
+        return await _serialize_docx(report, instance, follow_ups, title)
+    finally:
+        with contextlib.suppress(Exception):
+            await instance.destroy()
+
+
+async def _resolve_audio_inputs(
+    store: SqliteEventStore,
+    conversation_id: str,
+    mode: str,
+    follow_up_seqs: list[int],
+) -> tuple[ReportEvent, list[tuple[str, str]] | None, Any, Path]:
+    """Resolve (report, follow_ups, tts_settings, out_dir) for an audio request.
+
+    Shared by the blocking POST and the SSE-streaming endpoint so they agree
+    exactly on inputs / cache key.  Raises HTTPException(400) on a bad mode and
+    (404) when no ReportEvent exists for the conversation.
+    """
+    if mode not in ("podcast", "single"):
+        raise HTTPException(
+            status_code=400,
+            detail={"ok": False, "reason": "invalid_mode", "detail": f"Unknown mode {mode!r}"},
+        )
+
+    report: ReportEvent | None = None
+    all_events: list[Any] = []
+    with contextlib.suppress(Exception):
+        all_events = await store.get_events(conversation_id)
+        for e in reversed(all_events):
+            if isinstance(e, ReportEvent):
+                report = e
+                break
+    if report is None:
         raise HTTPException(status_code=404, detail={"ok": False, "reason": "no_report"})
-    return result
+
+    follow_ups: list[tuple[str, str]] | None = None
+    if follow_up_seqs:
+        follow_ups = _gather_follow_up_pairs(all_events, report, follow_up_seqs)
+
+    from disco.core.llm import ConfigStore
+
+    tts = ConfigStore().load().tts
+    out_dir = report_audio_cache_dir() / conversation_id
+    return report, follow_ups, tts, out_dir
 
 
 # ── Router factory ────────────────────────────────────────────────────────────
@@ -275,35 +345,9 @@ def make_report_router(
         404 → no ReportEvent; 400 → unknown mode; 503 → TTS disabled in
         Settings; 502 → synth/LLM failure. 200 →
         ``{"ok": True, "mp3_url": ..., "transcript_url": ...}``."""
-        if mode not in ("podcast", "single"):
-            raise HTTPException(
-                status_code=400,
-                detail={"ok": False, "reason": "invalid_mode", "detail": f"Unknown mode {mode!r}"},
-            )
-
-        report: ReportEvent | None = None
-        all_events: list[Any] = []
-        with contextlib.suppress(Exception):
-            all_events = await store.get_events(conversation_id)
-            for e in reversed(all_events):
-                if isinstance(e, ReportEvent):
-                    report = e
-                    break
-        if report is None:
-            raise HTTPException(
-                status_code=404, detail={"ok": False, "reason": "no_report"}
-            )
-
-        # WALK-20: gather follow-up Q&A pairs for the selected seqs.
-        follow_ups: list[tuple[str, str]] | None = None
-        follow_up_seqs = body.follow_up_seqs or []
-        if follow_up_seqs:
-            follow_ups = _gather_follow_up_pairs(all_events, report, follow_up_seqs)
-
-        from disco.core.llm import ConfigStore
-
-        tts = ConfigStore().load().tts
-        out_dir = report_audio_cache_dir() / conversation_id
+        report, follow_ups, tts, out_dir = await _resolve_audio_inputs(
+            store, conversation_id, mode, body.follow_up_seqs or []
+        )
         try:
             mp3_path, transcript_path = await generate_report_audio(
                 report,
@@ -332,6 +376,96 @@ def make_report_router(
                 f"/conversations/{conversation_id}/report/audio/{transcript_path.name}"
             ),
         }
+
+    @router.post("/conversations/{conversation_id}/report/audio/stream")
+    async def report_audio_stream(
+        conversation_id: str,
+        mode: str = Query("podcast"),
+        body: AudioBody | None = None,
+    ) -> StreamingResponse:
+        """SSE variant of the audio endpoint that streams REAL staged progress
+        (W-09).  Emits one ``data: {json}`` frame per pipeline stage:
+
+          - ``{"stage": "preparing"}``           — generating the turn-script
+          - ``{"stage": "downloading_model"}``   — ONLY on a genuine first-run
+                                                    bundled-model download (W-08)
+          - ``{"stage": "synthesizing", "current": n, "total": m}`` — per turn
+          - ``{"stage": "mixing"}``              — mixing + encoding
+          - ``{"stage": "cache_hit"}``           — warm cache, instant
+          - ``{"stage": "done", "mp3_url": ..., "transcript_url": ...}`` — final
+          - ``{"stage": "error", "reason": ..., "detail": ...}`` — failure
+
+        The blocking POST endpoint above remains the fallback (the FE falls back
+        to it if streaming is unavailable).  Bad mode → 400, no report → 404
+        (raised before the stream opens)."""
+        body = body or AudioBody()
+        report, follow_ups, tts, out_dir = await _resolve_audio_inputs(
+            store, conversation_id, mode, body.follow_up_seqs or []
+        )
+
+        queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+        async def _on_progress(event: dict[str, Any]) -> None:
+            await queue.put(event)
+
+        async def _run() -> None:
+            try:
+                mp3_path, transcript_path = await generate_report_audio(
+                    report,
+                    tts_settings=tts,
+                    out_dir=out_dir,
+                    mode=mode,
+                    follow_ups=follow_ups,
+                    resolve_key=runtime._resolve_secret if runtime is not None else None,
+                    on_progress=_on_progress,
+                )
+                await queue.put(
+                    {
+                        "stage": "done",
+                        "mp3_url": (
+                            f"/conversations/{conversation_id}/report/audio/{mp3_path.name}"
+                        ),
+                        "transcript_url": (
+                            f"/conversations/{conversation_id}/report/audio/{transcript_path.name}"
+                        ),
+                    }
+                )
+            except TtsDisabled:
+                await queue.put({"stage": "error", "reason": "tts_disabled"})
+            except (TtsBackendError, TurnScriptError) as exc:
+                await queue.put(
+                    {"stage": "error", "reason": "tts_backend", "detail": str(exc)}
+                )
+            except Exception as exc:  # never hang the stream on an unexpected error
+                await queue.put(
+                    {"stage": "error", "reason": "internal", "detail": str(exc)}
+                )
+            finally:
+                await queue.put(None)  # sentinel: generation finished
+
+        async def _events():
+            task = asyncio.create_task(_run())
+            try:
+                while True:
+                    event = await queue.get()
+                    if event is None:
+                        break
+                    yield f"data: {json.dumps(event)}\n\n"
+            finally:
+                # Client disconnect / generator close: stop the background run.
+                if not task.done():
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await task
+
+        return StreamingResponse(
+            _events(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @router.get("/conversations/{conversation_id}/report/audio/{name}")
     async def report_audio_file(conversation_id: str, name: str) -> Response:

@@ -61,6 +61,55 @@ const _fetchMock = vi.fn().mockResolvedValue({
 });
 vi.stubGlobal("fetch", _fetchMock);
 
+// Build a fake SSE Response whose body.getReader() yields the given progress
+// events as `data: {json}` frames, then HANGS (read never resolves) so the UI
+// stays on the last emitted stage — letting a test observe mid-stream status.
+function makeSseHangingResponse(events: Array<Record<string, unknown>>) {
+  const enc = new TextEncoder();
+  const chunks = events.map((e) => enc.encode(`data: ${JSON.stringify(e)}\n\n`));
+  let idx = 0;
+  return {
+    ok: true,
+    headers: { get: () => "text/event-stream" },
+    body: {
+      getReader() {
+        return {
+          read() {
+            if (idx < chunks.length) {
+              return Promise.resolve({ done: false, value: chunks[idx++] });
+            }
+            return new Promise(() => {}); // hang: hold the last stage on screen
+          },
+        };
+      },
+    },
+  };
+}
+
+// A fake SSE Response that emits the events and then closes (done) — used for the
+// happy terminal-event path (e.g. a final "done" frame).
+function makeSseResponse(events: Array<Record<string, unknown>>) {
+  const enc = new TextEncoder();
+  const chunks = events.map((e) => enc.encode(`data: ${JSON.stringify(e)}\n\n`));
+  let idx = 0;
+  return {
+    ok: true,
+    headers: { get: () => "text/event-stream" },
+    body: {
+      getReader() {
+        return {
+          read() {
+            if (idx < chunks.length) {
+              return Promise.resolve({ done: false, value: chunks[idx++] });
+            }
+            return Promise.resolve({ done: true, value: undefined });
+          },
+        };
+      },
+    },
+  };
+}
+
 // A5: spy on navigation + the build-conversation create for the "Build a deck" handoff.
 const _navMock = vi.hoisted(() => vi.fn());
 vi.mock("react-router-dom", async (orig) => ({
@@ -415,8 +464,11 @@ describe("NeedMoreCard", () => {
 
   it("audio failure surfaces an honest reason and is resettable to idle", async () => {
     const user = userEvent.setup();
-    _fetchMock.mockResolvedValueOnce({
+    // Both the SSE stream attempt and the blocking fallback return the error
+    // (the stream's non-OK response makes the FE fall back, which re-surfaces it).
+    _fetchMock.mockResolvedValue({
       ok: false,
+      body: null,
       json: vi.fn().mockResolvedValue({ detail: { reason: "tts_disabled" } }),
     });
     renderCard();
@@ -437,10 +489,12 @@ describe("NeedMoreCard", () => {
     expect(screen.queryAllByText(/disabled in Settings/i)).toHaveLength(0);
   });
 
-  // (h) Generating state shows the static "Downloading voice model" notice (WALK-13 / D1)
-  it("generating state shows the static download notice", async () => {
+  // (h) W-08: the generating state shows an honest label and NO false download
+  // notice when no download is happening (the blocking fallback has no progress).
+  it("generating state shows a generic label without a false download notice", async () => {
     const user = userEvent.setup();
-    // Hang the fetch so we can observe the "generating" state
+    // Hang the FIRST fetch (the SSE stream attempt) so we observe "generating"
+    // with no progress events — the download notice must NOT appear.
     let resolveHang!: (value: unknown) => void;
     _fetchMock.mockReturnValueOnce(new Promise((res) => { resolveHang = res; }));
     renderCard();
@@ -449,15 +503,78 @@ describe("NeedMoreCard", () => {
     const modeDialog = await screen.findByRole("dialog", { name: /Generate audio overview/i });
     await user.click(within(modeDialog).getByRole("button", { name: /Podcast style/i }));
 
-    // While generating, the download notice must be visible
+    await waitFor(() =>
+      expect(screen.getByText(/Generating audio…/i)).toBeInTheDocument(),
+    );
+    // W-08: no genuine download → the ~300 MB notice must NOT be shown.
+    expect(screen.queryByText(/Downloading voice model/i)).not.toBeInTheDocument();
+
+    // Unblock with a non-stream response → falls back to the blocking endpoint.
+    resolveHang({ ok: false, body: null, json: vi.fn().mockResolvedValue({}) });
+  });
+
+  // (h2) W-08: the download notice appears ONLY when the stream reports a real
+  // first-run voice-model download.
+  it("shows the honest download notice only on the downloading_model stage", async () => {
+    const user = userEvent.setup();
+    _fetchMock.mockResolvedValueOnce(
+      makeSseHangingResponse([{ stage: "preparing" }, { stage: "downloading_model" }]),
+    );
+    renderCard();
+
+    await user.click(screen.getByRole("button", { name: /Audio Overview/i }));
+    const modeDialog = await screen.findByRole("dialog", { name: /Generate audio overview/i });
+    await user.click(within(modeDialog).getByRole("button", { name: /Podcast style/i }));
+
     await waitFor(() =>
       expect(
         screen.getByText(/Downloading voice model.*first run only/i),
       ).toBeInTheDocument(),
     );
+  });
 
-    // Unblock so the component can clean up
-    resolveHang({ ok: true, json: vi.fn().mockResolvedValue({ mp3_url: "/test.mp3" }) });
+  // (h3) W-09: the stream's synthesizing stage renders staged progress, and the
+  // download notice is NOT shown during synthesis.
+  it("renders staged synthesizing progress from the SSE stream", async () => {
+    const user = userEvent.setup();
+    _fetchMock.mockResolvedValueOnce(
+      makeSseHangingResponse([{ stage: "synthesizing", current: 3, total: 8 }]),
+    );
+    renderCard();
+
+    await user.click(screen.getByRole("button", { name: /Audio Overview/i }));
+    const modeDialog = await screen.findByRole("dialog", { name: /Generate audio overview/i });
+    await user.click(within(modeDialog).getByRole("button", { name: /Podcast style/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/Synthesizing turns 3\/8/i)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/Downloading voice model/i)).not.toBeInTheDocument();
+  });
+
+  // (h4) W-09: a terminal "done" frame from the stream resolves to the player.
+  it("finishes via the SSE stream's done event", async () => {
+    const user = userEvent.setup();
+    _fetchMock.mockResolvedValueOnce(
+      makeSseResponse([
+        { stage: "preparing" },
+        { stage: "synthesizing", current: 1, total: 2 },
+        { stage: "mixing" },
+        {
+          stage: "done",
+          mp3_url: "/conversations/c1/report/audio/audio_overview_podcast.mp3",
+        },
+      ]),
+    );
+    renderCard();
+
+    await user.click(screen.getByRole("button", { name: /Audio Overview/i }));
+    const modeDialog = await screen.findByRole("dialog", { name: /Generate audio overview/i });
+    await user.click(within(modeDialog).getByRole("button", { name: /Podcast style/i }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Export MP3/i })).toBeInTheDocument(),
+    );
   });
 
   // (i) The PDF template selector threads `theme` + `mode` into the export POST body.
