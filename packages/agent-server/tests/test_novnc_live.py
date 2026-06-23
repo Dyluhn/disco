@@ -282,6 +282,136 @@ def test_live_url_route_daemon_down_returns_503():
     asyncio.run(run())
 
 
+def test_live_ready_route_disabled_no_side_effect():
+    """W-47: GET /browser/live-ready returns {ready:False, reason:'disabled'} with a 200
+    (a poll must never error-spam) and triggers NO live_start / wake_for_preview."""
+    import asyncio
+
+    import httpx
+
+    app = _enabled_app(session=None, upstream="unused")  # session None → no_sandbox path
+    # Override the config to disabled via the same runtime mock the helper built.
+    # Simpler: build a fresh disabled app inline.
+    from unittest.mock import MagicMock
+
+    from disco.agent_server.app import create_app
+    from disco.core.llm import ModelEntry
+    from disco.core.llm.config import LiveBrowserSettings, RouterConfig
+    from disco.core.store.sqlite import SqliteEventStore
+
+    entry = ModelEntry(model_id="m", provider="local", context_window=8192)
+    cfg = RouterConfig(
+        models={"m": entry}, default_model="m", live_browser=LiveBrowserSettings(enabled=False)
+    )
+    store = MagicMock(spec=SqliteEventStore)
+    runtime = MagicMock()
+    runtime._config_store.load.return_value = cfg
+    app = create_app(store, runtime=runtime)
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/conversations/conv_aabbccdd11223344/browser/live-ready")
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            assert body["ready"] is False
+            assert body["reason"] == "disabled"
+    asyncio.run(run())
+    # live_session is never even reached for the disabled case; wake_for_preview not called.
+    runtime.wake_for_preview.assert_not_called()
+
+
+def test_live_ready_route_no_sandbox_returns_not_ready():
+    """W-47: enabled but no sandbox → {ready:False, reason:'no_sandbox'}, still 200."""
+    import asyncio
+
+    import httpx
+
+    app = _enabled_app(session=None, upstream="unused")
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/conversations/conv_aabbccdd11223344/browser/live-ready")
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            assert body["ready"] is False
+            assert body["reason"] == "no_sandbox"
+
+    asyncio.run(run())
+
+
+def test_live_ready_route_healthy_daemon_is_ready_with_NO_live_start():
+    """W-47 KEY INVARIANT: a healthy daemon → {ready:True}. The probe issues ONLY the
+    read-only /health curl — NEVER the live_start POST and NEVER wake_for_preview (the
+    side-effects that make /browser/live-url unpollable). Built inline so we can hold the
+    runtime mock and assert wake_for_preview was never awaited."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    import httpx
+    from disco.agent_server.app import create_app
+    from disco.core.llm import ModelEntry
+    from disco.core.llm.config import LiveBrowserSettings, RouterConfig
+    from disco.core.store.sqlite import SqliteEventStore
+
+    # A session whose exec_shell would yield a live_start JSON if (wrongly) called twice.
+    session = _fake_session([
+        _shell_result(0, "OK"),  # the health curl
+        _shell_result(0, '{"ok": true}'),  # MUST NOT be consumed (no live_start)
+    ])
+
+    entry = ModelEntry(model_id="m", provider="local", context_window=8192)
+    cfg = RouterConfig(
+        models={"m": entry}, default_model="m", live_browser=LiveBrowserSettings(enabled=True)
+    )
+    store = MagicMock(spec=SqliteEventStore)
+    runtime = MagicMock()
+    runtime._config_store.load.return_value = cfg
+    runtime.live_session.return_value = session
+    runtime.wake_for_preview = AsyncMock(return_value="http://192.168.1.77:49213")
+    app = create_app(store, runtime=runtime)
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/conversations/conv_aabbccdd11223344/browser/live-ready")
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            assert body["ready"] is True
+            assert body["reason"] == "ready"
+
+    asyncio.run(run())
+
+    # Exactly ONE exec_shell (the /health probe) — NOT the second live_start curl.
+    assert session.exec_shell.await_count == 1
+    only_call = session.exec_shell.await_args_list[0]
+    assert "/health" in only_call.args[0]
+    # The side-effecting port-expose was NEVER triggered by the readiness probe.
+    runtime.wake_for_preview.assert_not_called()
+
+
+def test_live_ready_route_daemon_down_not_ready():
+    """W-47: enabled + sandbox but the /health curl fails → {ready:False, no_daemon}."""
+    import asyncio
+
+    import httpx
+
+    session = _fake_session([_shell_result(7, "")])  # curl exit 7 = connection refused
+    app = _enabled_app(session=session, upstream="unused")
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/conversations/conv_aabbccdd11223344/browser/live-ready")
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            assert body["ready"] is False
+            assert body["reason"] == "no_daemon"
+
+    asyncio.run(run())
+
+
 def test_live_url_route_no_upstream_returns_503():
     """Daemon brought the stack up but the proxy hasn't exposed NOVNC_PORT yet →
     503 no_upstream rather than a 200 pointing at a dead URL (no false affordance)."""

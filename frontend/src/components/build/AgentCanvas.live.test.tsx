@@ -80,6 +80,9 @@ describe("AgentCanvas — Live browser toggle", () => {
     });
     wrap(<AgentCanvas {...baseProps} />);
     const liveBtn = await screen.findByRole("button", { name: /live/i });
+    // W-47: the button is gated on the side-effect-free /browser/live-ready poll
+    // (mocked agentGet → {ready:true}); wait until it's enabled before clicking.
+    await waitFor(() => expect(liveBtn).toBeEnabled());
     await userEvent.click(liveBtn);
     await waitFor(() => {
       const iframe = screen.getByTestId("novnc-iframe") as HTMLIFrameElement;
@@ -111,6 +114,7 @@ describe("AgentCanvas — Live browser toggle", () => {
     const { rerender } = render(ui("conv_aabbccdd11223344"));
 
     const liveBtn = await screen.findByRole("button", { name: /live/i });
+    await waitFor(() => expect(liveBtn).toBeEnabled());
     await userEvent.click(liveBtn);
     await screen.findByTestId("novnc-iframe");
     (agentSend as ReturnType<typeof vi.fn>).mockClear();
@@ -130,5 +134,30 @@ describe("AgentCanvas — Live browser toggle", () => {
       "POST",
       expect.stringContaining("conv_bbbbbbbb99887766/browser/live-stop"),
     );
+  });
+
+  it("W-47: keeps the Live button DISABLED until live-ready reports ready, with the reason as tooltip", async () => {
+    const { useLiveBrowserConfig } = await import("@/hooks/useModels");
+    (useLiveBrowserConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { enabled: true },
+      isLoading: false,
+    });
+    // The readiness probe says the agent hasn't opened a browser yet → not streamable.
+    const { agentGet } = await import("@/api/client");
+    (agentGet as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ready: false,
+      reason: "no_daemon",
+    });
+    wrap(<AgentCanvas {...baseProps} />);
+    const liveBtn = await screen.findByRole("button", { name: /live/i });
+    // Button stays disabled and its tooltip explains why (the no_daemon reason text).
+    await waitFor(() => expect(liveBtn).toBeDisabled());
+    expect(liveBtn.getAttribute("title")).toMatch(/browser/i);
+    // Restore the ready default so later runs/files don't inherit ready:false.
+    (agentGet as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ready: true,
+      novnc_path: "/vnc.html?autoconnect=1&view_only=1",
+      port: 6080,
+    });
   });
 });

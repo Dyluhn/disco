@@ -89,6 +89,20 @@ function fmtBytes(n: number): string {
   return n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`;
 }
 
+/** W-47: human tooltip for each /browser/live-ready `reason`. The Live button is
+ * disabled until the backend reports `ready` (a sandbox is up AND the browser daemon
+ * is healthy), so the tooltip explains WHY it isn't clickable yet instead of letting
+ * the user click into a 503 error spam. */
+const LIVE_REASON_LABEL: Record<string, string> = {
+  no_runtime: "Live view unavailable.",
+  disabled: "Enable Live browser in Settings → Agent.",
+  config_unavailable: "Live view unavailable.",
+  no_sandbox: "Start the agent first — no sandbox is running yet.",
+  no_daemon: "Waiting for the agent to open a browser…",
+  unreachable: "Checking live-view readiness…",
+  ready: "Open live browser view (noVNC)",
+};
+
 function Empty({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-hair px-body text-center font-ui text-[0.82rem] text-text-faint">
@@ -153,6 +167,11 @@ function BrowserPane({
   >(null);
   const [liveLoading, setLiveLoading] = useState(false);
   const [liveError, setLiveError] = useState<string | null>(null);
+  // W-47: streamability gate. The button must NOT be clickable until the side-effect-free
+  // /browser/live-ready probe reports the sandbox + browser daemon are actually up —
+  // otherwise toggleLive's live-url call 503s (no_sandbox/no_daemon) and spams errors.
+  const [liveReady, setLiveReady] = useState(false);
+  const [liveReason, setLiveReason] = useState<string | null>(null);
   // Mirror live state into a ref so the unmount-cleanup effect (empty deps) reads the
   // latest value without re-subscribing on every change.
   const liveViewRef = useRef(liveView);
@@ -196,6 +215,42 @@ function BrowserPane({
       setLiveLoading(false);
     }
   };
+
+  // W-47: poll the side-effect-free readiness endpoint while the feature is enabled and
+  // the view is NOT already open, so the button reflects real streamability. We stop
+  // polling once the live view is open (the session is up by definition) and when the
+  // feature is off / there's no cid (nothing to stream). The probe has no side-effects,
+  // so polling it can never start a stack or map a port (unlike live-url).
+  useEffect(() => {
+    if (!liveBrowserEnabled || !cid || liveView) {
+      setLiveReady(false);
+      setLiveReason(null);
+      return;
+    }
+    let cancelled = false;
+    const probe = async () => {
+      try {
+        const r = await agentGet<{ ready: boolean; reason: string }>(
+          `/conversations/${encodeURIComponent(cid)}/browser/live-ready`,
+        );
+        if (!cancelled) {
+          setLiveReady(!!r.ready);
+          setLiveReason(r.reason ?? null);
+        }
+      } catch {
+        if (!cancelled) {
+          setLiveReady(false);
+          setLiveReason("unreachable");
+        }
+      }
+    };
+    void probe();
+    const id = setInterval(() => void probe(), 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [liveBrowserEnabled, cid, liveView]);
 
   // Tear the OWNING conversation's stack down when the feature is disabled in Settings,
   // OR when the surface switches to a different conversation while a live view is open
@@ -248,17 +303,27 @@ function BrowserPane({
             <button
               type="button"
               onClick={toggleLive}
-              disabled={liveLoading}
+              // W-47: not clickable until the readiness probe says the sandbox + browser
+              // daemon are up (or while a toggle is in flight). The `reason` is the tooltip.
+              disabled={liveLoading || (!liveView && !liveReady)}
               aria-pressed={!!liveView}
               aria-label={liveView ? "Close live browser view" : "Open live browser view (noVNC)"}
               data-disco-control="agent.live-browser"
-              title={liveView ? "Close live view" : "Open live browser view (noVNC)"}
+              data-live-ready={liveView || liveReady ? "true" : "false"}
+              title={
+                liveView
+                  ? "Close live view"
+                  : liveReady
+                    ? "Open live browser view (noVNC)"
+                    : (liveReason && LIVE_REASON_LABEL[liveReason]) ??
+                      "Live view not ready yet."
+              }
               className={cn(
                 "flex shrink-0 items-center gap-hair rounded-control border px-inline py-px font-ui text-[0.72rem] transition-colors",
                 liveView
                   ? "border-accent/50 bg-accent/10 text-accent"
                   : "border-hairline text-text-faint hover:border-hairline-strong hover:text-text",
-                liveLoading && "opacity-60",
+                (liveLoading || (!liveView && !liveReady)) && "cursor-not-allowed opacity-60",
               )}
             >
               <span

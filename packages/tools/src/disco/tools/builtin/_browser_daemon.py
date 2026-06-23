@@ -42,6 +42,26 @@ CAPTURE_RETRY_INTERVAL_MS = 250
 # div-based dock/button that is briefly un-clickable doesn't stall a full turn.
 CLICK_TIMEOUT_MS = 3000
 
+# W-46: rich sites behind a WAF (Akamai/CF) fingerprint the headless browser and
+# serve the lite/challenge variant — egress is fine, the *fingerprint* is the tell.
+# A realistic desktop-Chrome UA (no "HeadlessChrome") makes the request/headers look
+# like a normal browser. Keep this a recent, plausible stable-channel Chrome string.
+_REALISTIC_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+# W-46: injected into every page BEFORE its own scripts run, to erase the cheap
+# JS-visible headless tells: navigator.webdriver===true, an empty plugins array,
+# and a missing/odd languages list. HONEST LIMIT: this closes ~80% of bot checks
+# (the header/webdriver heuristics); sophisticated anti-bot (Akamai/CF behavioral
+# scoring, canvas/WebGL fingerprinting, TLS JA3) can STILL challenge — this is the
+# high-value, low-cost evasion, not a full stealth stack.
+_STEALTH_INIT_SCRIPT = """
+    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+    Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+    Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+"""
+
 class BrowserState:
     def __init__(self):
         self.playwright = None
@@ -56,16 +76,29 @@ class BrowserState:
     def start(self, display: str | None = None):
         self.playwright = sync_playwright().start()
         # gVisor is the isolation boundary, hence --no-sandbox is acceptable HERE only.
+        # W-46: --disable-blink-features=AutomationControlled removes the Blink flag
+        # that otherwise sets navigator.webdriver=true and trips WAF bot heuristics.
+        launch_args = ["--no-sandbox", "--disable-blink-features=AutomationControlled"]
         if display:
             import os as _os
             _os.environ["DISPLAY"] = display
-            self.browser = self.playwright.chromium.launch(
-                headless=False,
-                args=["--no-sandbox", f"--display={display}"],
-            )
+            launch_args.append(f"--display={display}")
+            self.browser = self.playwright.chromium.launch(headless=False, args=launch_args)
         else:
-            self.browser = self.playwright.chromium.launch(headless=True, args=["--no-sandbox"])
-        self.context = self.browser.new_context(viewport={"width": 1280, "height": 800})
+            self.browser = self.playwright.chromium.launch(headless=True, args=launch_args)
+        # W-46: a realistic desktop-Chrome context — UA without "HeadlessChrome", a
+        # locale/timezone, and an Accept-Language header — so a server fingerprinting
+        # the request sees a normal browser. Same sandbox egress; only the fingerprint
+        # changes (lite.cnn worked already; full CNN's WAF keyed on these tells).
+        self.context = self.browser.new_context(
+            viewport={"width": 1280, "height": 800},
+            user_agent=_REALISTIC_UA,
+            locale="en-US",
+            timezone_id="America/New_York",
+            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+        )
+        # W-46: erase the JS-visible headless tells before any page script runs.
+        self.context.add_init_script(_STEALTH_INIT_SCRIPT)
         self.page = self.context.new_page()
         self.page.on("console", self._add_console)
         self.page.on("pageerror", self._add_pageerror)

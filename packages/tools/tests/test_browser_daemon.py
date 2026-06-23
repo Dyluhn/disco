@@ -336,6 +336,120 @@ def test_capture_blank_page_returns_empty_after_bounded_cap(tmp_path, monkeypatc
     assert len(retry_sleeps) == daemon_mod.CAPTURE_RETRY_MAX - 1
 
 
+def test_daemon_start_applies_anti_fingerprint(monkeypatch):
+    """W-46: state.start() must launch with the anti-automation flag + a realistic
+    desktop-Chrome context (UA without 'HeadlessChrome', locale/timezone/Accept-Language)
+    and inject the stealth init-script that erases the webdriver/plugins/languages tells.
+    Asserts the actual launch/new_context kwargs via a fake playwright (no real browser)."""
+    import disco.tools.builtin._browser_daemon as daemon_mod
+
+    rec: dict = {}
+
+    class _FakeStartPage:
+        def on(self, *a, **k):
+            pass
+
+    class _FakeContext:
+        def add_init_script(self, script):
+            rec["init_script"] = script
+
+        def new_page(self):
+            return _FakeStartPage()
+
+    class _FakeBrowser:
+        def new_context(self, **kwargs):
+            rec["context_kwargs"] = kwargs
+            return _FakeContext()
+
+    class _FakeChromium:
+        def launch(self, **kwargs):
+            rec["launch_kwargs"] = kwargs
+            return _FakeBrowser()
+
+    class _FakePlaywright:
+        chromium = _FakeChromium()
+
+        def stop(self):
+            pass
+
+    class _FakePWManager:
+        def start(self):
+            return _FakePlaywright()
+
+    monkeypatch.setattr(daemon_mod, "sync_playwright", lambda: _FakePWManager())
+
+    state = daemon_mod.BrowserState()
+    state.start()
+
+    # launch: headless + the anti-automation blink flag (the navigator.webdriver source).
+    assert rec["launch_kwargs"]["headless"] is True
+    assert "--disable-blink-features=AutomationControlled" in rec["launch_kwargs"]["args"]
+
+    # context: realistic desktop UA (NO HeadlessChrome) + locale/timezone + Accept-Language.
+    ck = rec["context_kwargs"]
+    assert ck["user_agent"] == daemon_mod._REALISTIC_UA
+    assert "HeadlessChrome" not in ck["user_agent"]
+    assert ck["locale"] == "en-US"
+    assert ck["timezone_id"]
+    assert "Accept-Language" in ck["extra_http_headers"]
+
+    # init-script erases the three cheap JS tells before any page script runs.
+    assert "webdriver" in rec["init_script"]
+    assert "plugins" in rec["init_script"]
+    assert "languages" in rec["init_script"]
+
+
+def test_daemon_start_headed_keeps_anti_fingerprint(monkeypatch):
+    """W-46: the live (headed) restart on :1 must carry the SAME anti-fingerprint
+    context + flag, plus the --display arg — the fingerprint is consistent across the
+    headless→headed transition."""
+    import disco.tools.builtin._browser_daemon as daemon_mod
+
+    rec: dict = {}
+
+    class _FakeStartPage:
+        def on(self, *a, **k):
+            pass
+
+    class _FakeContext:
+        def add_init_script(self, script):
+            rec["init_script"] = script
+
+        def new_page(self):
+            return _FakeStartPage()
+
+    class _FakeBrowser:
+        def new_context(self, **kwargs):
+            rec["context_kwargs"] = kwargs
+            return _FakeContext()
+
+    class _FakeChromium:
+        def launch(self, **kwargs):
+            rec["launch_kwargs"] = kwargs
+            return _FakeBrowser()
+
+    class _FakePlaywright:
+        chromium = _FakeChromium()
+
+        def stop(self):
+            pass
+
+    class _FakePWManager:
+        def start(self):
+            return _FakePlaywright()
+
+    monkeypatch.setattr(daemon_mod, "sync_playwright", lambda: _FakePWManager())
+
+    state = daemon_mod.BrowserState()
+    state.start(display=":1")
+
+    assert rec["launch_kwargs"]["headless"] is False
+    assert "--disable-blink-features=AutomationControlled" in rec["launch_kwargs"]["args"]
+    assert "--display=:1" in rec["launch_kwargs"]["args"]
+    assert rec["context_kwargs"]["user_agent"] == daemon_mod._REALISTIC_UA
+    assert "webdriver" in rec["init_script"]
+
+
 @pytest.mark.asyncio
 async def test_browser_ensure_daemon_restart_on_failure():
     tool = BrowserTool()

@@ -200,6 +200,46 @@ def make_preview_router(
             "port": NOVNC_PORT,
         })
 
+    @router.get("/conversations/{conversation_id}/browser/live-ready")
+    async def browser_live_ready(conversation_id: str) -> Response:
+        """W-47: side-effect-FREE readiness probe for the Live button. Mirrors the
+        guard checks of /browser/live-url (runtime present → feature enabled → a sandbox
+        session exists → the browser daemon is healthy) but triggers NO live_start and
+        exposes NO port, so the frontend can POLL it every few seconds to gate the button
+        WITHOUT the error-spam and side-effects of calling live-url. Always 200; `ready`
+        plus a machine `reason` (which doubles as the button tooltip) carry the state.
+
+        The daemon /health is a read-only GET (returns 200 once the agent has actually
+        opened the browser), so this never starts the headed stack or maps a host port."""
+        if runtime is None:
+            return JSONResponse({"ready": False, "reason": "no_runtime"})
+
+        try:
+            cfg = runtime._config_store.load()
+            if not cfg.live_browser.enabled:
+                return JSONResponse({"ready": False, "reason": "disabled"})
+        except Exception:  # noqa: BLE001 — config unavailable is "not ready", never a 500
+            return JSONResponse({"ready": False, "reason": "config_unavailable"})
+
+        # Read-only accessor (live_session never CREATES a sandbox — see runtime.py).
+        session = runtime.live_session(conversation_id)
+        if session is None:
+            return JSONResponse({"ready": False, "reason": "no_sandbox"})
+
+        # Probe the browser daemon's read-only /health endpoint ONLY. No live_start POST,
+        # no wake_for_preview/port expose — a poll must have zero side-effects.
+        try:
+            res = await session.exec_shell(
+                "curl -sf http://127.0.0.1:8901/health",
+                timeout_s=3,
+            )
+        except Exception:  # noqa: BLE001 — a readiness probe must never 500
+            return JSONResponse({"ready": False, "reason": "no_daemon"})
+        if res.exit_code != 0:
+            return JSONResponse({"ready": False, "reason": "no_daemon"})
+
+        return JSONResponse({"ready": True, "reason": "ready"})
+
     @router.post("/conversations/{conversation_id}/browser/live-touch")
     async def browser_live_touch(conversation_id: str) -> Response:
         """Heartbeat from the open Live pane — refresh the sandbox idle watchdog so an

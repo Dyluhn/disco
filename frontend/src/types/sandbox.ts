@@ -26,6 +26,13 @@ export interface BackendMeta {
   fields: SandboxField[]; // which connection fields this backend uses
   defaultRuntime: string;
   confirmNote: string; // the isolation → confirmation coupling, surfaced
+  // W-49: progressive disclosure. `primaryField` is the ONE connection field that
+  // varies per backend and is shown up-front (null = none → zero typing). Every other
+  // field (runtime is dropped from the form entirely; image/workspace_root and any
+  // non-primary connection field) collapses under "Advanced" with its saved default.
+  primaryField: SandboxField | null;
+  primaryLabel?: string; // friendlier label for the primary field at the point of use
+  provides: string; // the short "what you provide" subline
 }
 
 const FIELD_LABEL: Record<SandboxField, string> = {
@@ -54,6 +61,9 @@ export const BACKEND_META: BackendMeta[] = [
     fields: ["docker_socket", "runtime", "image", "workspace_root"],
     defaultRuntime: "runsc",
     confirmNote: "Strong sandbox → by default the agent only pauses on HIGH-risk actions.",
+    primaryField: "docker_socket",
+    primaryLabel: "Remote host (Tailscale)",
+    provides: "You provide: the remote host to reach over Tailscale SSH. Everything else has a default.",
   },
   {
     id: "local",
@@ -67,6 +77,8 @@ export const BACKEND_META: BackendMeta[] = [
     defaultRuntime: "runc",
     confirmNote:
       "Lower isolation → the confirmation default leans TIGHTER: risky actions pause at MEDIUM, not just HIGH.",
+    primaryField: null,
+    provides: "You provide: nothing — it runs on this host with sensible defaults. Save and go.",
   },
   {
     id: "podman",
@@ -79,6 +91,8 @@ export const BACKEND_META: BackendMeta[] = [
     fields: ["podman_url", "runtime", "image"],
     defaultRuntime: "crun",
     confirmNote: "Container-grade behind a host boundary — not for adversarial workloads.",
+    primaryField: null,
+    provides: "You provide: the rootless Podman URL under Advanced. A stub here — configures but doesn't run.",
   },
 ];
 
