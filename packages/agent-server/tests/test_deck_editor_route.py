@@ -69,10 +69,66 @@ class _Session:
         self.writes.append(path)
 
 
+class _FakeExec:
+    """A minimal ExecResult stand-in for the throwaway PDF-render sandbox."""
+
+    def __init__(self, exit_code: int = 0, stderr: str = "", timed_out: bool = False) -> None:
+        self.exit_code = exit_code
+        self.stderr = stderr
+        self.timed_out = timed_out
+
+
+class _FakeSandboxInstance:
+    """Records the convert command + serves a soffice-shaped %PDF on read."""
+
+    def __init__(self, exec_result: _FakeExec, pdf_bytes: bytes) -> None:
+        self._exec = exec_result
+        self._pdf = pdf_bytes
+        self.cmds: list[str] = []
+        self.destroyed = False
+        self.written: dict[str, bytes] = {}
+
+    async def write_file(self, path: str, data: bytes) -> None:
+        self.written[path] = data
+
+    async def exec_shell(self, cmd: str, *, timeout_s: int) -> _FakeExec:
+        self.cmds.append(cmd)
+        return self._exec
+
+    async def read_file(self, path: str) -> bytes:
+        return self._pdf
+
+    async def destroy(self) -> None:
+        self.destroyed = True
+
+
+class _FakeSandboxService:
+    def __init__(self, name: str, instance: _FakeSandboxInstance) -> None:
+        self.name = name
+        self._instance = instance
+        self.created = False
+
+    async def create(
+        self, spec: object, *, owner_id: str, conversation_id: str
+    ) -> _FakeSandboxInstance:
+        self.created = True
+        return self._instance
+
+
 class _LiveRuntime:
-    def __init__(self, session: _Session | None, ps: object = None) -> None:
+    def __init__(
+        self,
+        session: _Session | None,
+        ps: object = None,
+        *,
+        backend: str = "process",
+        sandbox_service: _FakeSandboxService | None = None,
+    ) -> None:
         self._session = session
         self._ps = ps
+        self._backend = backend
+        self._svc = sandbox_service
+        self._sandbox_spec = object()
 
     def set_surface(self, cid: str, surface: object) -> None: ...
     def set_model_override(self, cid: str, model: object) -> None: ...
@@ -80,7 +136,11 @@ class _LiveRuntime:
     def get_last_selected_model(self) -> str | None:
         return None
     def sandbox_backend_name(self) -> str | None:
-        return "process"
+        return self._backend
+
+    def _sandbox_service_now(self) -> _FakeSandboxService:
+        assert self._svc is not None, "no sandbox service injected"
+        return self._svc
 
     def live_session(self, cid: str) -> _Session | None:
         return self._session
@@ -303,7 +363,8 @@ def test_put_no_live_session_409(tmp_path) -> None:
     assert r.status_code == 409, r.text
     assert r.json()["detail"]["reason"] == "no_live_sandbox"
     # The snapshot was NOT mutated (no write path on a finished run).
-    assert json.loads((ws / "deck.authored.json").read_text())["slides"][0]["title"] == "Q4 Highlights"
+    snapshot = json.loads((ws / "deck.authored.json").read_text())
+    assert snapshot["slides"][0]["title"] == "Q4 Highlights"
 
 
 def test_put_undeclared_404() -> None:
@@ -489,6 +550,72 @@ def test_render_uses_deck_own_theme_when_no_template() -> None:
     r = client.get(f"/conversations/{cid}/deck/editor/render?path=deck")
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
+
+
+# ---- W-22: themed deck → PDF export (throwaway-sandbox soffice) -------------
+
+
+def _pdf_client(
+    session: _Session | None, *, backend: str, svc: _FakeSandboxService | None
+) -> tuple[TestClient, SqliteEventStore]:
+    store = SqliteEventStore(":memory:")
+    rt = _LiveRuntime(session, None, backend=backend, sandbox_service=svc)
+    client = TestClient(create_app(store, runtime=rt))  # type: ignore[arg-type]
+    return client, store
+
+
+def test_export_pdf_container_backend_returns_real_pdf() -> None:
+    """fmt=pdf on a container backend renders the .pptx (real render_pptx) then converts
+    it in a THROWAWAY sandbox; the route returns application/pdf %PDF bytes and tears the
+    box down. The soffice convert command is the expected headless one."""
+    inst = _FakeSandboxInstance(_FakeExec(exit_code=0), b"%PDF-1.7\n<<soffice output>>\n%%EOF")
+    svc = _FakeSandboxService("gvisor", inst)
+    session = _Session(_AUTHORED)
+    client, store = _pdf_client(session, backend="gvisor", svc=svc)
+    cid = _create(client)
+    _declare_editable_slides(store, cid)
+
+    r = client.get(f"/conversations/{cid}/deck/export?path=deck&fmt=pdf&template=disco-light")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "application/pdf"
+    assert 'filename="deck.pdf"' in r.headers.get("content-disposition", "")
+    assert r.content.startswith(b"%PDF")
+    # The throwaway sandbox actually ran soffice and was destroyed.
+    assert svc.created is True
+    assert inst.destroyed is True
+    assert "_deck.pptx" in inst.written
+    assert any("soffice --headless --convert-to pdf" in c for c in inst.cmds)
+
+
+def test_export_pdf_no_container_backend_409_typed_reason() -> None:
+    """fmt=pdf on the host `process` backend → 409 with a typed no_container_backend
+    reason (the UI hides the button on the same gate — no false affordance). No sandbox
+    is created and no render work is done."""
+    svc = _FakeSandboxService("process", _FakeSandboxInstance(_FakeExec(), b""))
+    session = _Session(_AUTHORED)
+    client, store = _pdf_client(session, backend="process", svc=svc)
+    cid = _create(client)
+    _declare_editable_slides(store, cid)
+
+    r = client.get(f"/conversations/{cid}/deck/export?path=deck&fmt=pdf")
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"]["reason"] == "no_container_backend"
+    assert svc.created is False  # gated BEFORE any sandbox spin / render
+
+
+def test_export_pdf_soffice_failure_422() -> None:
+    """A non-zero soffice exit inside the sandbox → 422 render_failed (box still torn down)."""
+    inst = _FakeSandboxInstance(_FakeExec(exit_code=1, stderr="boom"), b"")
+    svc = _FakeSandboxService("local", inst)
+    session = _Session(_AUTHORED)
+    client, store = _pdf_client(session, backend="local", svc=svc)
+    cid = _create(client)
+    _declare_editable_slides(store, cid)
+
+    r = client.get(f"/conversations/{cid}/deck/export?path=deck&fmt=pdf")
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"]["reason"] == "render_failed"
+    assert inst.destroyed is True
 
 
 def test_put_no_pdf_means_not_stale() -> None:

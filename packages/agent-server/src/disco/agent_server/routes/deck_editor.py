@@ -22,7 +22,7 @@ import json
 import posixpath
 from typing import Any
 
-from disco.core import ObservationEvent
+from disco.core import DEFAULT_OWNER_ID, ObservationEvent
 from disco.core.store.sqlite import SqliteEventStore
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -89,6 +89,60 @@ async def _reload_deck_image_assets(
         if data and (data.startswith(b"\x89PNG\r\n\x1a\n") or data[:3] == b"\xff\xd8\xff"):
             assets[i] = data
     return assets
+
+
+# [W-22] Deck PDF export renders the .pptx → .pdf with LibreOffice, which ships ONLY
+# in the sandbox CONTAINER image (pmx-sandbox: gvisor / local / podman) — NOT on the
+# host. The `process` (dev) backend runs tools directly on the host with no such image,
+# so PDF would have nothing to convert with. These are the backends that can produce a
+# deck PDF; everything else → 409 + the PDF affordance is hidden (no false affordance).
+_PDF_CAPABLE_BACKENDS: frozenset[str] = frozenset({"gvisor", "local", "podman"})
+
+
+def _deck_pdf_capable(runtime: ConversationRuntime) -> bool:
+    """True iff the active sandbox backend is a container with LibreOffice. Mirrors the
+    frontend's `deckPdfCapableBackend` gate so the 409 and the hidden button agree."""
+    name = runtime.sandbox_backend_name()
+    return name in _PDF_CAPABLE_BACKENDS
+
+
+async def _render_deck_pdf_in_sandbox(
+    runtime: ConversationRuntime, pptx_bytes: bytes, *, owner_id: str
+) -> bytes:
+    """Spin a THROWAWAY sandbox, write the rendered .pptx in-box, convert it to .pdf
+    with headless LibreOffice (`soffice`), read the bytes back, and tear the box down.
+
+    Mirrors the transient-sandbox pattern of the (now-removed) DR `_render_docx_in_sandbox`:
+    the deck export isn't tied to a live conversation sandbox, so it gets its own
+    short-lived one. Uses ONLY the existing sandbox compose/exec API
+    (`create`/`write_file`/`exec_shell`/`read_file`/`destroy`). Raises RuntimeError on a
+    converter failure/timeout; the caller maps it to a 422 render_failed."""
+    import uuid as _uuid
+
+    svc = runtime._sandbox_service_now()
+    cid = f"export-deck-pdf-{_uuid.uuid4().hex[:12]}"
+    instance = await svc.create(runtime._sandbox_spec, owner_id=owner_id, conversation_id=cid)
+    try:
+        await instance.write_file("_deck.pptx", pptx_bytes)
+        # soffice --convert-to pdf writes "<stem>.pdf" into --outdir; "." = the jailed
+        # workspace root where we wrote the input.
+        res = await instance.exec_shell(
+            "soffice --headless --convert-to pdf --outdir . _deck.pptx", timeout_s=120
+        )
+        if getattr(res, "timed_out", False):
+            raise RuntimeError("soffice timed out after 120s")
+        if res.exit_code != 0:
+            detail = (res.stderr or "").strip() or f"exit code {res.exit_code}"
+            raise RuntimeError(f"soffice failed in the sandbox: {detail}")
+        pdf = await instance.read_file("_deck.pdf")
+        if not pdf.startswith(b"%PDF"):
+            raise RuntimeError("soffice produced no valid PDF (missing %PDF header)")
+        return pdf
+    finally:
+        try:
+            await instance.destroy()
+        except Exception:  # noqa: BLE001 — teardown best-effort
+            pass
 
 
 class DeckPatchBody(BaseModel):
@@ -188,15 +242,23 @@ def make_deck_editor_router(
         conversation_id: str,
         path: str = Query(..., description="Deck base name (no extension)."),
         template: str = Query("disco-light", description="Template id, '{name}-{mode}'."),
-        fmt: str = Query("pptx", description="'pptx' or 'html'."),
+        fmt: str = Query("pptx", description="'pptx', 'html', or 'pdf'."),
     ) -> Any:
         """Render the deck with a chosen TEMPLATE and return it as a download.
 
         Pure render-on-demand from the stored ``{base}.authored.json`` (live session
         OR host snapshot via ``_read_artifact_bytes``) — re-themed via the lower_deck
         ``theme_override`` WITHOUT mutating the sidecar. Needs no live session, so the
-        slide-deck template selector works on finished decks too (mirrors the PDF
-        export's render-from-stored-data path). 400 on an unknown template / fmt."""
+        slide-deck template selector works on finished decks too. 400 on an unknown
+        template / fmt.
+
+        ``pptx`` and ``html`` render in-process. ``pdf`` (W-22) renders the .pptx first
+        (the SAME ``render_pptx`` path pptx export uses) then converts it to PDF with
+        headless LibreOffice inside a THROWAWAY sandbox — so it requires a container
+        backend (the sandbox image ships LibreOffice; the host self-hoster may not). On
+        the ``process`` (no-container) backend the route returns 409
+        {"reason": "no_container_backend"} and the UI hides the PDF button (no false
+        affordance)."""
         from disco.core.brand import is_valid_template
         from disco.tools.builtin._deck_schema import AuthoredDeck, lower_deck
         from disco.tools.builtin._pptx_render import render_html, render_pptx
@@ -218,8 +280,24 @@ def make_deck_editor_router(
         # outside it — e.g. "ink-dark", which resolve_theme would silently light-fall-back).
         if not is_valid_template(template):
             raise HTTPException(status_code=400, detail=f"Unknown template {template!r}")
-        if fmt not in ("pptx", "html"):
-            raise HTTPException(status_code=400, detail="fmt must be 'pptx' or 'html'")
+        if fmt not in ("pptx", "html", "pdf"):
+            raise HTTPException(status_code=400, detail="fmt must be 'pptx', 'html', or 'pdf'")
+        # W-22 capability gate: deck PDF needs a container backend (LibreOffice ships in
+        # the sandbox image, not on the host). Fail BEFORE any render work so the cost is
+        # only paid when it can succeed. The UI hides the PDF button on the same gate.
+        if fmt == "pdf" and not _deck_pdf_capable(runtime):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "reason": "no_container_backend",
+                    "message": (
+                        "Deck PDF export needs a container sandbox backend "
+                        "(gVisor / local / podman) — LibreOffice ships in the sandbox "
+                        "image, not on the host. The active backend is "
+                        f"{runtime.sandbox_backend_name() or 'none'}."
+                    ),
+                },
+            )
 
         raw = await _read_artifact_bytes(runtime, conversation_id, authored_rel)
         if raw is None:
@@ -236,12 +314,23 @@ def make_deck_editor_router(
                 body: bytes = render_html(deck).encode("utf-8")
                 media = "text/html; charset=utf-8"
                 ext = "html"
+            elif fmt == "pdf":
+                # Same render_pptx path as pptx export → convert to PDF in a throwaway
+                # sandbox (W-22 / W-23 hardened the pptx renderer; we call it unchanged).
+                pptx_bytes = render_pptx(deck)
+                body = await _render_deck_pdf_in_sandbox(
+                    runtime, pptx_bytes, owner_id=DEFAULT_OWNER_ID
+                )
+                media = "application/pdf"
+                ext = "pdf"
             else:
                 body = render_pptx(deck)
                 media = (
                     "application/vnd.openxmlformats-officedocument.presentationml.presentation"
                 )
                 ext = "pptx"
+        except HTTPException:
+            raise
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
                 status_code=422, detail={"reason": "render_failed", "message": str(exc)}

@@ -39,3 +39,16 @@ export function isolationForBackend(backend: string | null | undefined): Isolati
   if (!backend) return null;
   return BACKEND_MAP[backend] ?? null;
 }
+
+/**
+ * [W-22] The container backends whose sandbox image ships LibreOffice — the only
+ * ones that can render a deck → PDF (the `process` dev backend runs on the host with
+ * no such image). Must match the server's `_PDF_CAPABLE_BACKENDS` so the hidden PDF
+ * button and the route's 409 agree (no false affordance).
+ */
+const PDF_CAPABLE_BACKENDS = new Set(["gvisor", "local", "podman"]);
+
+/** True iff the active sandbox backend can render a themed deck → PDF (W-22). */
+export function deckPdfCapableBackend(backend: string | null | undefined): boolean {
+  return !!backend && PDF_CAPABLE_BACKENDS.has(backend);
+}
