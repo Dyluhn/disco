@@ -286,10 +286,14 @@ class DeepResearchService:
         from disco.retrieval.streaming import stream_research_answer
 
         deps = self._rt._research()
-        # W-35: pre-flight the resolved answerer model (the pill reassigns all
-        # generative roles → AGENT_DRIVER covers the answerer when a pill is set).
+        # W-35 + P1-3: pre-flight the model the ANSWER STREAM actually uses for
+        # generation — RAG_ANSWERER (streaming.py), NOT AGENT_DRIVER. With those
+        # roles assigned to different endpoints, probing AGENT_DRIVER would both
+        # FALSE-BLOCK a healthy answerer and MISS a dead one. When a pill is set
+        # the override pins every role to the same model, so RAG_ANSWERER still
+        # resolves to the picked model.
         driver_reason = await self._rt._preflight_driver(
-            conversation_id, override=model_override
+            conversation_id, override=model_override, role=ModelRole.RAG_ANSWERER
         )
         if driver_reason is not None:
             yield {"type": "error", "message": driver_reason}
@@ -410,6 +414,26 @@ class DeepResearchService:
         if not query or not query.strip():
             return  # nothing to plan; wait
 
+        # P1-2: the DR INITIAL KICK previously bypassed the driver pre-flight (it
+        # lived only in the build path of _run_with_persistence and in the
+        # post-approval _execute_deep_research). A dead/unauthed model would set
+        # RUNNING below, fail inside decompose_query, and leave the conversation
+        # stuck RUNNING with only a system-reminder. Pre-flight the role the run
+        # uses for generation (RAG_ANSWERER) BEFORE setting RUNNING; on failure
+        # emit a NAMED StatusEvent(ERROR) and do NOT start.
+        override = self._rt._model_override.get(conversation_id)
+        preflight_reason = await self._rt._preflight_driver(
+            conversation_id, override=override, role=ModelRole.RAG_ANSWERER
+        )
+        if preflight_reason is not None:
+            await self._rt._store.append(
+                conversation_id,
+                StatusEvent(
+                    status=ConversationStatus.ERROR, detail=preflight_reason[:200]
+                ),
+            )
+            return
+
         await self._rt._store.append(
             conversation_id,
             StatusEvent(status=ConversationStatus.RUNNING),
@@ -446,6 +470,19 @@ class DeepResearchService:
                             "</system-reminder>"
                         ),
                     ),
+                ),
+            )
+            # P1-2: a decompose failure (e.g. a dead/unauthed QUERY_REWRITER the
+            # RAG_ANSWERER pre-flight above did not cover) must take the
+            # conversation to ERROR — NOT leave it stuck RUNNING with only the
+            # reminder above (the conversation would otherwise spin forever).
+            await self._rt._store.append(
+                conversation_id,
+                StatusEvent(
+                    status=ConversationStatus.ERROR,
+                    detail=(
+                        f"Plan decomposition failed: {type(exc).__name__}: {exc}"
+                    )[:200],
                 ),
             )
             return
@@ -539,8 +576,10 @@ class DeepResearchService:
         from disco.core import ErrorEvent
 
         override = self._rt._model_override.get(conversation_id)
+        # P1-3: the DR engine synthesises/judges with RAG_ANSWERER — probe THAT
+        # role, not AGENT_DRIVER (which DR generation does not use).
         preflight_reason = await self._rt._preflight_driver(
-            conversation_id, override=override
+            conversation_id, override=override, role=ModelRole.RAG_ANSWERER
         ) or await self._preflight_encoders(deps, required=("reranker", "nli"))
         if preflight_reason is not None:
             await self._rt._store.append(

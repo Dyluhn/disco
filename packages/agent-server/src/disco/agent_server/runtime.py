@@ -1682,6 +1682,14 @@ class ConversationRuntime:
 
     # W-35: how long a SUCCESSFUL driver pre-flight is trusted before re-probing.
     _DRIVER_PREFLIGHT_TTL_S = 60.0
+    # W-35 P1-1: HARD wall-clock bound on a SINGLE pre-flight probe. The whole
+    # point of pre-flight is to FAIL FAST — so it must NOT inherit the router's 5
+    # same-model transient retries (routing.py _MAX_ATTEMPTS) × the provider's
+    # 180s timeout (openai_provider.py). A black-holed driver would otherwise
+    # stall kick()/research_stream() for MINUTES before any error. We cap the
+    # entire probe (including any internal retries) at this deadline via
+    # asyncio.wait_for; a timeout is ITSELF an "unreachable" verdict.
+    _DRIVER_PREFLIGHT_TIMEOUT_S = 10.0
 
     async def _preflight_driver(
         self,
@@ -1726,8 +1734,21 @@ class ConversationRuntime:
             max_tokens=1,
         )
         try:
-            await router.complete(
-                req, context=CallContext(conversation_id=cid, model_override=override)
+            # P1-1: bound the probe so it FAILS FAST. asyncio.wait_for caps the
+            # whole call (resolution + any same-model transient retries + the
+            # provider round-trip) at _DRIVER_PREFLIGHT_TIMEOUT_S; a black-holed
+            # driver is cancelled at the deadline instead of stalling for minutes.
+            await asyncio.wait_for(
+                router.complete(
+                    req,
+                    context=CallContext(conversation_id=cid, model_override=override),
+                ),
+                self._DRIVER_PREFLIGHT_TIMEOUT_S,
+            )
+        except TimeoutError:
+            return (
+                f"Driver '{key}' unreachable: no response within "
+                f"{self._DRIVER_PREFLIGHT_TIMEOUT_S:.0f}s (pre-flight timed out)"
             )
         except (LLMContentFiltered, LLMContextWindowExceeded):
             pass  # the endpoint answered → reachable

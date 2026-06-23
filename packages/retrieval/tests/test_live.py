@@ -262,3 +262,67 @@ async def test_nli_probe_ok_and_named_failure():
             "http://dead:8092", transport=httpx.MockTransport(dead)
         ).probe()
     assert "NLI" in str(ei.value) and "dead:8092" in str(ei.value)
+
+
+# ---- P1-4: catch ALL httpx errors (incl. InvalidURL) + deadline-bound -------
+
+
+async def test_reranker_probe_converts_invalid_url_to_named_unavailable():
+    """P1-4: a malformed URL (e.g. an invalid port) raises httpx.InvalidURL — NOT
+    an httpx.HTTPError — when the request is built. The probe must convert it to a
+    NAMED EncoderUnavailable, never let it escape uncaught."""
+    import pytest
+    from disco.retrieval.local_encoders import EncoderUnavailable
+
+    # No transport: the real client raises httpx.InvalidURL parsing the bad port.
+    with pytest.raises(EncoderUnavailable) as ei:
+        await TeiReranker("http://host:notaport").probe()
+    assert "reranker" in str(ei.value)
+
+
+async def test_embedder_probe_converts_invalid_url_to_named_unavailable():
+    """P1-4: same InvalidURL coverage for the embedder probe."""
+    import pytest
+    from disco.retrieval.local_encoders import EncoderUnavailable
+
+    with pytest.raises(EncoderUnavailable) as ei:
+        await OpenAIEmbedder("http://host:notaport").probe()
+    assert "embedder" in str(ei.value)
+
+
+async def test_nli_probe_converts_invalid_url_to_named_unavailable():
+    """P1-4: same InvalidURL coverage for the NLI probe (the sync-transport path).
+    The InvalidURL raised inside the worker thread must propagate out as a NAMED
+    EncoderUnavailable, not an uncaught error."""
+    import pytest
+    from disco.retrieval.local_encoders import EncoderUnavailable
+
+    with pytest.raises(EncoderUnavailable) as ei:
+        await SidecarNLIVerifier("http://host:notaport").probe()
+    assert "NLI" in str(ei.value)
+
+
+async def test_nli_probe_is_deadline_bounded(monkeypatch):
+    """P1-4: the sync NLI probe runs under an OUTER asyncio.wait_for deadline, so a
+    hung sidecar (a transport that blocks past its own timeout) can NEVER stall
+    Deep Research. Proven: a handler that blocks far longer than the deadline still
+    returns a NAMED EncoderUnavailable within the (tiny) deadline window."""
+    import time
+
+    import disco.retrieval.live as live_mod
+    import pytest
+    from disco.retrieval.local_encoders import EncoderUnavailable
+
+    monkeypatch.setattr(live_mod, "_PROBE_DEADLINE_S", 0.05)
+
+    def slow(req: httpx.Request) -> httpx.Response:
+        time.sleep(0.6)  # block the worker thread well past the deadline
+        return httpx.Response(200, json={})
+
+    nli = SidecarNLIVerifier("http://slow:8092", transport=httpx.MockTransport(slow))
+    t0 = time.monotonic()
+    with pytest.raises(EncoderUnavailable) as ei:
+        await nli.probe()
+    elapsed = time.monotonic() - t0
+    assert elapsed < 0.4  # bounded by the 0.05s deadline, NOT the 0.6s block
+    assert "NLI" in str(ei.value)

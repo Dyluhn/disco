@@ -34,6 +34,17 @@ from .nli import Entailment
 # needs to confirm the host ANSWERS (any HTTP status counts) — a dead endpoint
 # must fail FAST so Deep Research surfaces a named error instead of hanging.
 _PROBE_TIMEOUT_S = 5.0
+# P1-4: a HARD outer deadline on every probe (slightly above the httpx client
+# timeout so httpx's own connect/read error — which is more descriptive — wins
+# normally, while this asyncio.wait_for backstop guarantees the probe can NEVER
+# hang the event loop even if the transport ignores its timeout).
+_PROBE_DEADLINE_S = _PROBE_TIMEOUT_S + 2.0
+
+# P1-4: httpx splits its failures across two unrelated bases — httpx.HTTPError
+# (connect/read/timeout/transport/status) and httpx.InvalidURL (a malformed URL,
+# e.g. an invalid port, raised when the request is built). A probe must convert
+# BOTH to a named EncoderUnavailable, never let one escape uncaught.
+_PROBE_HTTP_ERRORS = (httpx.HTTPError, httpx.InvalidURL)
 
 ExtractStatus = Literal["ok", "paywalled", "blocked", "not_found", "error"]
 
@@ -293,11 +304,17 @@ class TeiReranker:
             async with httpx.AsyncClient(
                 timeout=min(self._timeout, _PROBE_TIMEOUT_S), transport=self._transport
             ) as client:
-                await client.get(self._base)
-        except httpx.HTTPError as exc:
+                await asyncio.wait_for(client.get(self._base), _PROBE_DEADLINE_S)
+        except _PROBE_HTTP_ERRORS as exc:
             raise EncoderUnavailable(
                 f"Deep Research needs the reranker, but it isn't reachable at "
                 f"{self._base} ({type(exc).__name__}: {exc}). Check the reranker "
+                "service, or switch encoders to in-process (local)."
+            ) from exc
+        except TimeoutError as exc:
+            raise EncoderUnavailable(
+                f"Deep Research needs the reranker, but it didn't answer within "
+                f"{_PROBE_DEADLINE_S:.0f}s at {self._base}. Check the reranker "
                 "service, or switch encoders to in-process (local)."
             ) from exc
 
@@ -357,11 +374,17 @@ class OpenAIEmbedder:
             async with httpx.AsyncClient(
                 timeout=min(self._timeout, _PROBE_TIMEOUT_S), transport=self._transport
             ) as client:
-                await client.get(self._base)
-        except httpx.HTTPError as exc:
+                await asyncio.wait_for(client.get(self._base), _PROBE_DEADLINE_S)
+        except _PROBE_HTTP_ERRORS as exc:
             raise EncoderUnavailable(
                 f"Deep Research needs the embedder, but it isn't reachable at "
                 f"{self._base} ({type(exc).__name__}: {exc}). Check the embedder "
+                "service, or switch encoders to in-process (local)."
+            ) from exc
+        except TimeoutError as exc:
+            raise EncoderUnavailable(
+                f"Deep Research needs the embedder, but it didn't answer within "
+                f"{_PROBE_DEADLINE_S:.0f}s at {self._base}. Check the embedder "
                 "service, or switch encoders to in-process (local)."
             ) from exc
 
@@ -431,12 +454,21 @@ class SidecarNLIVerifier:
                 client.get(self._base)
 
         try:
-            await asyncio.to_thread(_ping)
-        except httpx.HTTPError as exc:
+            # P1-4: the sync GET runs off the event loop via to_thread; wrap it in
+            # an OUTER asyncio deadline so a hung sidecar (a transport that ignores
+            # its own timeout) can never block Deep Research indefinitely.
+            await asyncio.wait_for(asyncio.to_thread(_ping), _PROBE_DEADLINE_S)
+        except _PROBE_HTTP_ERRORS as exc:
             raise EncoderUnavailable(
                 f"Deep Research needs the verifier (NLI), but it isn't reachable at "
                 f"{self._base} ({type(exc).__name__}: {exc}). Check the NLI sidecar, "
                 "or switch encoders to in-process (local)."
+            ) from exc
+        except TimeoutError as exc:
+            raise EncoderUnavailable(
+                f"Deep Research needs the verifier (NLI), but it didn't answer "
+                f"within {_PROBE_DEADLINE_S:.0f}s at {self._base}. Check the NLI "
+                "sidecar, or switch encoders to in-process (local)."
             ) from exc
 
     def _verify(self, premise: str, hypothesis: str) -> dict:
