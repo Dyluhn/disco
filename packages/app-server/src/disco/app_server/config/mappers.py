@@ -53,8 +53,13 @@ def _pricing_mode(entry: ModelEntry) -> Literal["metered", "subscription", "free
 
 
 def _provider_view(entry: ModelEntry) -> str:
-    # The frontend distinguishes only local (free) vs paid; derive it from price so
-    # a user-added paid model reads correctly regardless of its endpoint key.
+    # The frontend distinguishes only local (free) vs paid; the paid bucket is keyed
+    # as "openrouter" (the grouped "Overflow — paid" header). A SUBSCRIPTION tier (W-05)
+    # is a PAID flat plan whose per-token price is 0, so deriving purely from price would
+    # wrongly collapse it into the "local/free" group — group it as paid. Otherwise fall
+    # back to price so a user-added paid model reads correctly regardless of its key.
+    if entry.pricing_mode == "subscription":
+        return "openrouter"
     return "openrouter" if (entry.price_in_per_m > 0 or entry.price_out_per_m > 0) else "local"
 
 

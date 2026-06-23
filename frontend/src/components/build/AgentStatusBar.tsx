@@ -17,7 +17,7 @@ import { cn } from "@/lib/cn";
 import type { AgentEvent, ConversationStatus, IsolationInfo } from "@/types/agent";
 import { useModels } from "@/hooks/useModels";
 import { calculateUsageCost, formatCost } from "@/lib/cost";
-import { isMetered, type TokenUsage } from "@/types/models";
+import { isMetered, isSubscription, type TokenUsage } from "@/types/models";
 
 const STATUS_LABEL: Record<ConversationStatus, string> = {
   IDLE: "Stopped",
@@ -279,15 +279,16 @@ export function AgentStatusBar({
 function CostMeter({ events, modelId }: { events: AgentEvent[]; modelId: string }) {
   const { data: models } = useModels();
 
-  const { cost, hasMissingUsage, allFree, sawUsage } = useMemo(() => {
+  const { cost, hasMissingUsage, mode, sawUsage } = useMemo(() => {
     let total = 0;
     let missing = false;
     let anyPaid = false;
     let usageSeen = false;
 
-    // The current session model's rate decides whether we're in "paid" mode. Only
-    // METERED (per-token) models drive the $ meter — a subscription model has a flat
-    // plan fee and no usage-derived cost (W-05), so it must not show a meter.
+    // The current session model's pay model decides the meter mode. Only METERED
+    // (per-token) models drive the $ meter; a SUBSCRIPTION model is a flat plan fee
+    // with no usage-derived cost (W-05) — it must read "Subscription", never "Free"
+    // and never a price; a truly free model reads "Free".
     const currentModel = models?.find((m) => m.id === modelId);
     if (currentModel && isMetered(currentModel)) anyPaid = true;
 
@@ -309,22 +310,44 @@ function CostMeter({ events, modelId }: { events: AgentEvent[]; modelId: string 
         }
       }
     }
-    return { cost: total, hasMissingUsage: missing, allFree: !anyPaid, sawUsage: usageSeen };
+    // Precedence: any real per-token spend → metered $; else a subscription current
+    // model → "Subscription"; else "Free". A subscription model NEVER collapses to
+    // "Free" and NEVER shows a per-token price (W-05).
+    const resolved: "metered" | "subscription" | "free" = anyPaid
+      ? "metered"
+      : currentModel && isSubscription(currentModel)
+        ? "subscription"
+        : "free";
+    return { cost: total, hasMissingUsage: missing, mode: resolved, sawUsage: usageSeen };
   }, [events, models, modelId]);
 
-  // #21: when paid-but-no-usage-yet we render NO visible meter (a meter pinned at
+  // #21: when metered-but-no-usage-yet we render NO visible meter (a meter pinned at
   // "$0.00" would be a false lower bound). Emit a zero-size, aria-hidden sentinel
   // carrying data-cost-state="hidden" so a test can deterministically assert the
   // branch — it is a regression seam, not a visible affordance.
-  if (!allFree && !sawUsage)
+  if (mode === "metered" && !sawUsage)
     return <span hidden aria-hidden data-disco-control="build.cost-meter" data-cost-state="hidden" />;
+
+  // W-05: a subscription model is a flat plan — show "Subscription" (never "Free",
+  // never a $ rate), so nobody reads a paid plan as free.
+  if (mode === "subscription")
+    return (
+      <span
+        data-disco-control="build.cost-meter"
+        data-cost-state="subscription"
+        title="This model is on a flat-rate subscription plan — no per-token charge"
+        className="flex items-center gap-hair rounded-full border border-hairline px-inline py-px font-ui text-[0.7rem] text-text-muted"
+      >
+        Subscription
+      </span>
+    );
 
   return (
     <span
       data-disco-control="build.cost-meter"
-      data-cost-state={allFree ? "free" : "usd"}
+      data-cost-state={mode === "free" ? "free" : "usd"}
       title={
-        allFree
+        mode === "free"
           ? "This model is free"
           : hasMissingUsage
             ? "Usage data is missing for some turns; this is a lower bound."
@@ -332,7 +355,7 @@ function CostMeter({ events, modelId }: { events: AgentEvent[]; modelId: string 
       }
       className="flex items-center gap-hair rounded-full border border-hairline px-inline py-px font-ui text-[0.7rem] text-text-muted"
     >
-      {allFree ? (
+      {mode === "free" ? (
         "Free"
       ) : (
         <>

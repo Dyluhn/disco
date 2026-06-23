@@ -69,6 +69,32 @@ def test_corrupt_overlay_falls_back_to_base(tmp_path):
     )
 
 
+def test_legacy_procedural_image_gen_provider_migrates_on_load(tmp_path):
+    """W-50 P1: an existing config persisted with the now-removed
+    `image_gen.provider="procedural"` must NOT crash the load. The `provider` Literal
+    no longer admits "procedural", so without the migration `RouterConfig.model_validate`
+    raises and load() silently falls back to the SEED — discarding the user's whole
+    catalogue. The migration rewrites it to the safe default ("openrouter") so an
+    existing config upgrades silently and the user's edits survive."""
+    # A FULL config (has "models" key → the model_validate path) carrying both the
+    # legacy provider AND a user-added model, so we can prove the catalogue survives.
+    data = default_config().model_dump(mode="json")
+    data["image_gen"]["provider"] = "procedural"
+    data["models"]["my-custom"] = {
+        "model_id": "custom.gguf",
+        "provider": "custom",
+        "context_window": 4096,
+        "base_url": "http://custom/v1",
+    }
+    (tmp_path / "config.json").write_text(json.dumps(data))
+
+    cfg = _store(tmp_path).load()
+    # Migrated, not crashed-to-seed: provider upgraded …
+    assert cfg.image_gen.provider == "openrouter"
+    # … and the user's catalogue edit is intact (proof we did NOT fall back to the seed).
+    assert "my-custom" in cfg.models
+
+
 def test_add_update_remove_model_round_trips(tmp_path):
     store = _store(tmp_path)
     # add

@@ -1167,6 +1167,41 @@ def test_select_image_backend_openrouter_uses_reserved_slot(monkeypatch):
     assert be._api_key == "sk-or-reserved"
 
 
+def test_select_image_backend_openrouter_empty_model_raises(monkeypatch):
+    """W-50 P1: provider=openrouter with a stored key but an EMPTY image model is NOT
+    configured — the factory must raise ImageGenNotConfigured, not silently fall back to
+    a hardcoded default model the user never chose. Settings already shows this tier as
+    unavailable until a model id is set; the factory must enforce the same."""
+    class _Cfg:
+        image_gen = type("o", (object,), {
+            "provider": "openrouter", "base_url": "", "api_key_env": "",
+            "model": "", "workflow_json": "",
+        })()
+
+    monkeypatch.setattr("disco.tools.builtin.image_gen.ConfigStore", lambda: type("S", (), {"load": lambda s: _Cfg()})())  # noqa: E501
+    monkeypatch.setattr("disco.tools.builtin.image_gen.SecretStore",
+                        lambda: type("K", (), {"get_openrouter_key": lambda s: "sk-or"})())
+
+    with pytest.raises(ImageGenNotConfigured):
+        select_image_backend()
+
+
+def test_select_image_backend_openrouter_whitespace_model_raises(monkeypatch):
+    """A model id of only whitespace is just as unconfigured as empty — must raise."""
+    class _Cfg:
+        image_gen = type("o", (object,), {
+            "provider": "openrouter", "base_url": "", "api_key_env": "",
+            "model": "   ", "workflow_json": "",
+        })()
+
+    monkeypatch.setattr("disco.tools.builtin.image_gen.ConfigStore", lambda: type("S", (), {"load": lambda s: _Cfg()})())  # noqa: E501
+    monkeypatch.setattr("disco.tools.builtin.image_gen.SecretStore",
+                        lambda: type("K", (), {"get_openrouter_key": lambda s: "sk-or"})())
+
+    with pytest.raises(ImageGenNotConfigured):
+        select_image_backend()
+
+
 def test_select_openrouter_ignores_stale_base_url(monkeypatch):
     """SECURITY: a stale base_url left from another provider must NOT be used for
     OpenRouter (it would send the OpenRouter Bearer key to the wrong host)."""

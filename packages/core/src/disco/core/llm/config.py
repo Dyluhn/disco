@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ..env import disco_env
 from .types import ModelRole, Requirement
@@ -221,6 +221,22 @@ class ImageGenSettings(BaseModel):
     # checkpoint). Tokens substituted per call: %prompt% %negative% %seed% %width%
     # %height% %ckpt%. Lets FLUX / SD3 / custom shapes work without code changes.
     workflow_json: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_provider(cls, data: object) -> object:
+        """W-50 migration: an older persisted config may still name the REMOVED
+        `procedural` Pillow tier. The `provider` Literal no longer admits it, so a
+        raw ``RouterConfig.model_validate`` would raise — and ``ConfigStore.load()``
+        catches that and silently falls back to the SEED, discarding the user's whole
+        catalogue + assignments. Rewrite the legacy value to the safe default
+        (``openrouter`` — the lowest-friction real tier, INACTIVE until its key is
+        stored) so an existing `procedural` config upgrades silently on load instead
+        of crashing the whole config. base_url/api_key_env are left as-is; the
+        OpenRouter tier ignores them (it pins its own origin + reserved key)."""
+        if isinstance(data, dict) and data.get("provider") == "procedural":
+            return {**data, "provider": "openrouter"}
+        return data
 
 
 class McpSettings(BaseModel):

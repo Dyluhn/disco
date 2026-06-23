@@ -60,6 +60,35 @@ def test_models_catalogue_is_cost_and_capability_legible(client):
     # driver-minimax is a subscription model: a flat plan, so it carries NO per-token
     # price (it must never render as a $ rate or as "Free").
     assert by_id["driver-minimax"]["price_in_per_m"] == 0
+    # W-05 P1: a subscription tier is PAID (flat plan), so it must GROUP on the paid
+    # ("openrouter") side — never collapse into "local/free" despite its 0 price.
+    assert by_id["driver-minimax"]["provider"] == "openrouter"
+
+
+def test_provider_view_groups_subscription_as_paid_not_local():
+    """W-05 P1: `_provider_view` must consider pricing_mode. A subscription model has a
+    0 per-token price, so a price-only derivation would file it under 'local/free' (the
+    'Local — free' picker group). It must read as paid ('openrouter')."""
+    from disco.app_server.config.mappers import _provider_view
+    from disco.core.llm.config import ModelEntry
+
+    sub = ModelEntry(
+        model_id="minimax/minimax-m2",
+        provider="minimax",
+        context_window=200_000,
+        pricing_mode="subscription",
+        price_in_per_m=0.0,
+        price_out_per_m=0.0,
+    )
+    assert _provider_view(sub) == "openrouter"
+    # Genuinely-free (no pricing_mode, 0 price) still groups local.
+    free = ModelEntry(model_id="x", provider="local", context_window=8192)
+    assert _provider_view(free) == "local"
+    # A priced metered model groups paid.
+    paid = ModelEntry(
+        model_id="y", provider="openrouter", context_window=8192, price_in_per_m=3.0
+    )
+    assert _provider_view(paid) == "openrouter"
 
 
 def test_openrouter_model_label_drops_the_or_prefix(client):

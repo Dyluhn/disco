@@ -170,28 +170,43 @@ function ModelForm({
       </fieldset>
 
       <div className="grid grid-cols-2 gap-body">
-        <label className="flex flex-col gap-hair">
-          <span className={labelCls}>Price in / Mtok (0 = free)</span>
-          <input
-            type="number"
-            step="0.01"
-            min={0}
-            className={field}
-            value={form.price_in_per_m}
-            onChange={(e) => set("price_in_per_m", Number(e.target.value))}
-          />
-        </label>
-        <label className="flex flex-col gap-hair">
-          <span className={labelCls}>Price out / Mtok</span>
-          <input
-            type="number"
-            step="0.01"
-            min={0}
-            className={field}
-            value={form.price_out_per_m}
-            onChange={(e) => set("price_out_per_m", Number(e.target.value))}
-          />
-        </label>
+        {form.pricing_mode === "subscription" ? (
+          // W-05: a subscription is a flat plan — there is NO per-token price. Hide the
+          // price fields entirely (a "0" here reads as free, the exact bug we're fixing)
+          // and say plainly how it renders. Metered/free keep the price fields below.
+          <p
+            data-disco-flag="model-subscription-no-price"
+            className="col-span-2 rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.8rem] text-text-muted"
+          >
+            Subscription — a flat-rate plan. No per-token price; this model shows as
+            “Subscription” everywhere (never “Free”, never a $/Mtok rate).
+          </p>
+        ) : (
+          <>
+            <label className="flex flex-col gap-hair">
+              <span className={labelCls}>Price in / Mtok (0 = free)</span>
+              <input
+                type="number"
+                step="0.01"
+                min={0}
+                className={field}
+                value={form.price_in_per_m}
+                onChange={(e) => set("price_in_per_m", Number(e.target.value))}
+              />
+            </label>
+            <label className="flex flex-col gap-hair">
+              <span className={labelCls}>Price out / Mtok</span>
+              <input
+                type="number"
+                step="0.01"
+                min={0}
+                className={field}
+                value={form.price_out_per_m}
+                onChange={(e) => set("price_out_per_m", Number(e.target.value))}
+              />
+            </label>
+          </>
+        )}
         <label className="col-span-2 flex flex-col gap-hair">
           <span className={labelCls}>Pricing</span>
           <select

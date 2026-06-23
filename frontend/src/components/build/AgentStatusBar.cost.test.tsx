@@ -19,6 +19,13 @@ vi.mock("@/hooks/useModels", () => ({
         price_in_per_m: 0,
         price_out_per_m: 0,
       },
+      {
+        id: "sub",
+        provider: "openrouter",
+        price_in_per_m: 0,
+        price_out_per_m: 0,
+        pricing_mode: "subscription",
+      },
     ],
   }),
 }));
@@ -36,10 +43,30 @@ describe("AgentStatusBar cost meter", () => {
     expect(screen.getByText("Free")).toBeDefined();
   });
 
+  it("shows 'Subscription' (never 'Free', never a price) for a subscription model", () => {
+    render(
+      <AgentStatusBar
+        status="RUNNING"
+        isolation={null}
+        onKill={() => {}}
+        modelId="sub"
+      />
+    );
+    const meter = screen.getByText("Subscription");
+    expect(meter).toBeDefined();
+    expect(meter.getAttribute("data-cost-state")).toBe("subscription");
+    // W-05: a subscription must NEVER read as free, and NEVER show a per-token price.
+    expect(screen.queryByText("Free")).toBeNull();
+    expect(screen.queryByText(/\$/)).toBeNull();
+  });
+
   it("calculates cumulative cost from events", () => {
-    const events: any[] = [
+    const events: AgentEvent[] = [
       {
         kind: "action",
+        id: "a1",
+        thought: "",
+        tool_call: null,
         meta: {
           model_id: "paid",
           usage: { input_tokens: 100_000, output_tokens: 50_000 },
@@ -47,6 +74,9 @@ describe("AgentStatusBar cost meter", () => {
       },
       {
         kind: "action",
+        id: "a2",
+        thought: "",
+        tool_call: null,
         meta: {
           model_id: "paid",
           usage: { input_tokens: 200_000, output_tokens: 100_000 },
@@ -71,9 +101,12 @@ describe("AgentStatusBar cost meter", () => {
   });
 
   it("shows '≥' when usage is missing for some turns", () => {
-    const events: any[] = [
+    const events: AgentEvent[] = [
       {
         kind: "action",
+        id: "a1",
+        thought: "",
+        tool_call: null,
         meta: {
           model_id: "paid",
           usage: { input_tokens: 100_000, output_tokens: 50_000 },
@@ -81,6 +114,9 @@ describe("AgentStatusBar cost meter", () => {
       },
       {
         kind: "action",
+        id: "a2",
+        thought: "",
+        tool_call: null,
         meta: { model_id: "paid" }, // missing usage
       },
     ];

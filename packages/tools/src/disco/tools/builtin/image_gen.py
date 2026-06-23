@@ -726,7 +726,12 @@ def select_image_backend() -> ImageBackend:
             or os.environ.get(OPENROUTER_API_KEY_ENV)
             or os.environ.get(OPENROUTER_API_KEY_ENV_LEGACY)
         )
-        if api_key:
+        # An empty image model is NOT configured: OpenRouter has no usable provider
+        # default (every image model is paid + model-specific), and Settings already
+        # shows this tier as "unavailable" until a model id is set — so the factory must
+        # enforce the same, never silently fall back to a hardcoded model the user never
+        # chose (a false affordance: Settings says off, the tool would run anyway).
+        if api_key and settings.model.strip():
             # SECURITY: pin the OpenRouter origin. The UI exposes NO endpoint field for
             # this tier, so any persisted base_url can only be stale config left over from
             # another provider — and we must never send the OpenRouter Bearer key to an
@@ -734,7 +739,7 @@ def select_image_backend() -> ImageBackend:
             return _OpenRouterImageBackend(
                 "https://openrouter.ai/api/v1", api_key, model=settings.model
             )
-        # No OpenRouter key stored — NOT configured.
+        # No OpenRouter key stored, or no image model id set — NOT configured.
         raise ImageGenNotConfigured()
 
     # For comfyui, we need a base_url
