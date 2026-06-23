@@ -113,8 +113,11 @@ def test_local_publishes_curated_port_set_when_network_granted():
     assert sealed["ports"] is None  # sealed box exposes nothing
 
 
-def test_podman_expose_port_is_a_stub():
-    # the Podman instance overrides expose_port to a labeled None (stub in this env)
+def test_podman_expose_port_inherits_shared_impl():
+    # [P-B / FIX6 parity] the Podman instance NO LONGER overrides expose_port with a
+    # labeled-None stub — it INHERITS the shared `_resolve_mapping`-backed impl (the
+    # filtered box's preview is reached through the egress sidecar's published port +
+    # inbound forwarder), exactly like gVisor.
     from disco.tools.sandbox.podman import PodmanSandboxInstance
 
-    assert PodmanSandboxInstance.expose_port is not ContainerInstance.expose_port
+    assert PodmanSandboxInstance.expose_port is ContainerInstance.expose_port

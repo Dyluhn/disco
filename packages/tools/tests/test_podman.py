@@ -215,8 +215,8 @@ async def test_filtered_podman_spec_uses_proxied_egress_not_sealed():
     await svc.create(
         SandboxSpec(egress_allow=frozenset({"api.example.com"})), owner_id="o", conversation_id="c"
     )
-    # 1) NOT the old fail-safe seal.
-    assert "network_mode" not in client.last.create_kwargs
+    # 1) NOT the old fail-safe seal (it's bridge-mode netns, not network_mode="none").
+    assert client.last.create_kwargs.get("network_mode") != "none"
     # 2) the sandbox IS on the internal no-NAT net (proxied route out).
     networks = client.last.create_kwargs.get("networks") or {}
     assert networks and next(iter(networks)).startswith("disco-egr-")
@@ -266,3 +266,132 @@ def test_config_is_podman_and_crun_and_cli_url():
     assert cfg.backend == "podman" and cfg.runtime == "crun"
     svc = PodmanSandboxService(cfg)
     assert svc._cli_url.startswith("ssh://") and not svc._cli_url.startswith("http+")
+
+
+# ---------------------------------------------------------------------------
+# P-B — FIX6 parity: inbound sidecar preview forwarder + inherited expose_port.
+# Mirrors the gVisor FIX6 unit proofs (test_fix6_inbound_forward.py) for podman.
+# ---------------------------------------------------------------------------
+
+
+def _filtered_spec() -> SandboxSpec:
+    return SandboxSpec(egress_allow=frozenset({"api.example.com"}))
+
+
+def _wire_sandbox_ip(client: FakePodmanClient, ip: str) -> None:
+    """Make the SANDBOX container report an internal-net IP under the egress net
+    (the sidecar — `disco-egr-…` — is created first, so its name is the net name).
+    The forwarder reads this to target `host:PORT -> <sandbox_ip>:PORT`."""
+    orig = client.create
+
+    def _create(**kwargs):
+        c = orig(**kwargs)
+        if kwargs.get("name", "").startswith("disco-sbx-"):
+            egr = next(x for x in client.created if x.name.startswith("disco-egr-"))
+            c.attrs = {"NetworkSettings": {"Networks": {egr.name: {"IPAddress": ip}}}}
+        return c
+
+    client.create = _create  # type: ignore[method-assign]
+
+
+async def test_filtered_sidecar_published_with_preview_ports_sandbox_not():
+    from disco.tools.sandbox._container import PUBLISHED_PORTS
+
+    svc, client, _ = _svc()
+    await svc.create(_filtered_spec(), owner_id="o", conversation_id="c")
+    # The SIDECAR (disco-egr-…, created first) carries the published preview set —
+    # it's the only member on bridge that CAN publish; the sandbox is internal-only.
+    sidecar = client.created[0]
+    assert sidecar.name.startswith("disco-egr-")
+    assert sidecar.create_kwargs.get("ports") == {
+        f"{p}/tcp": None for p in sorted(PUBLISHED_PORTS)
+    }
+    # The SANDBOX publishes NOTHING (containment).
+    assert "ports" not in client.last.create_kwargs
+
+
+async def test_inbound_forwarder_launched_on_sidecar_via_cli_one_shell():
+    from disco.tools.sandbox._container import PUBLISHED_PORTS
+
+    svc, client, cli = _svc()
+    _wire_sandbox_ip(client, "10.89.0.7")
+    await svc.create(_filtered_spec(), owner_id="o", conversation_id="c")
+    # The forwarder is launched on the SIDECAR via the CLI native remote
+    # (`podman --url … exec <sidecar> sh -c …`) — podman-py exec_run is broken over
+    # the remote API. The command shape mirrors gVisor's FIX6 base64 ONE-SHELL.
+    launched = [
+        c for c in cli.calls if any("inbound_forward.py" in str(a) for a in c)
+    ]
+    assert launched, "inbound forwarder was not launched on the sidecar"
+    argv = launched[0]
+    # Targets the SIDECAR (egress net name), via the proven CLI exec path.
+    assert argv[:4] == ["podman", "--url", svc._cli_url, "exec"]
+    assert argv[4].startswith("disco-egr-")
+    joined = " ".join(argv)
+    # base64 one-shell: write + run share one process (no cross-exec gofer gap).
+    assert "base64 -d > /inbound_forward.py" in joined, joined
+    assert "python3 /inbound_forward.py" in joined, joined
+    # backgrounded so the `podman exec` returns (the egress-proxy launch pattern).
+    assert joined.rstrip().endswith("&"), joined
+    # targets the SANDBOX's internal IP + every published port.
+    assert "10.89.0.7" in joined, joined
+    for port in sorted(PUBLISHED_PORTS):
+        assert str(port) in joined, f"port {port} missing: {joined}"
+
+
+async def test_no_forwarder_without_sandbox_ip():
+    # No internal IP (reload returned nothing) → forwarder is NOT launched (it would
+    # forward to nowhere); best-effort, never raises.
+    svc, client, cli = _svc()  # sandbox attrs stay {} → no IP
+    await svc.create(_filtered_spec(), owner_id="o", conversation_id="c")
+    assert not any("inbound_forward.py" in str(a) for c in cli.calls for a in c)
+
+
+async def test_expose_port_inherits_base_impl_no_stub():
+    # The podman-only `expose_port` STUB (returned None) is GONE — the class now
+    # inherits the shared `_resolve_mapping`-backed impl, same as gVisor.
+    from disco.tools.sandbox.podman import PodmanSandboxInstance
+
+    assert "expose_port" not in PodmanSandboxInstance.__dict__
+
+
+async def test_expose_port_reads_sidecar_binding_for_filtered():
+    svc, client, _ = _svc()
+    _wire_sandbox_ip(client, "10.89.0.7")
+    inst = await svc.create(_filtered_spec(), owner_id="o", conversation_id="c")
+    sidecar, sandbox = client.created[0], client.last
+    # The SIDECAR holds the real host-published mapping (it published the ports).
+    sidecar.attrs = {"NetworkSettings": {"Ports": {"8000/tcp": [{"HostPort": "49160"}]}}}
+    # A decoy binding on the sandbox must be IGNORED for a filtered box.
+    sandbox.attrs.setdefault("NetworkSettings", {})["Ports"] = {
+        "8000/tcp": [{"HostPort": "1"}]
+    }
+    url = inst.expose_port(8000)
+    assert url is not None and url.endswith(":49160"), url  # sidecar's port, not decoy
+    # preview host comes from the remote CLI url (default tailnet host).
+    assert "100.73.110.47" in url, url
+
+
+async def test_expose_port_reads_sandbox_binding_when_no_sidecar():
+    svc, client, _ = _svc()
+    inst = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")  # sealed
+    assert inst._egress_sidecar is None
+    client.last.attrs = {"NetworkSettings": {"Ports": {"8000/tcp": [{"HostPort": "33333"}]}}}
+    url = inst.expose_port(8000)
+    assert url is not None and url.endswith(":33333"), url
+
+
+def test_preview_host_derived_from_cli_url():
+    from disco.tools.sandbox.podman import _preview_host
+
+    assert _preview_host("ssh://sandbox@100.73.110.47/run/user/1000/podman/podman.sock") == (
+        "100.73.110.47"
+    )
+    assert _preview_host("ssh://user@host.example:22/run/podman.sock") == "host.example"
+    assert _preview_host("unix:///run/user/1000/podman/podman.sock") == "localhost"
+
+
+async def test_instance_preview_host_set_from_cli_url():
+    svc, _client, _cli = _svc()
+    inst = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+    assert inst._preview_host == "100.73.110.47"  # default podman_url tailnet host

@@ -30,7 +30,9 @@ The host running this backend needs the `podman` CLI + system `ssh` on PATH.
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
+import logging
 import pathlib
 import posixpath
 import subprocess
@@ -41,8 +43,10 @@ from collections.abc import Callable
 from typing import Any
 
 from . import egress_proxy as _egress_proxy_mod
+from . import inbound_forward as _inbound_forward_mod
 from ._container import (
     EGRESS_PROXY_PORT,
+    PUBLISHED_PORTS,
     TIMEOUT_EXIT_CODES,
     ContainerInstance,
     egress_mode,
@@ -74,8 +78,22 @@ _PODMAN_DEAD_MARKERS = ("no such container", "no container with", "is not runnin
 
 _CPU_PERIOD = 100_000  # cgroup CPU period (100ms); quota/period = cpus
 
+_LOG = logging.getLogger(__name__)
+
 # A CLI runner: argv -> (exit_code, stdout, stderr). Injectable for hermetic tests.
 CliRunner = Callable[[list[str], float], "tuple[int, bytes, bytes]"]
+
+
+def _preview_host(cli_url: str) -> str:
+    """The host a published preview port is reachable at, derived from the podman
+    CLI url (mirrors `gvisor._preview_host` for the docker socket). For the remote
+    Podman native remote (`ssh://user@host//run/.../podman.sock`) that's the remote
+    host's tailnet IP — it runs the published port and is reachable over the proven
+    keyless tailnet. A LOCAL socket url (`unix://…`) → localhost."""
+    if cli_url.startswith("ssh://"):
+        host = cli_url.removeprefix("ssh://").split("@")[-1]
+        return host.split("/")[0].split(":")[0]  # strip any socket path / port
+    return "localhost"
 
 
 def _default_cli_runner(argv: list[str], timeout: float) -> tuple[int, bytes, bytes]:
@@ -107,6 +125,7 @@ class PodmanSandboxInstance(ContainerInstance):
         container_name: str,
         cli_runner: CliRunner,
         workspace_uid: int = 1000,
+        preview_host: str = "localhost",
         reload_timeout_s: float = 0.5,
     ) -> None:
         super().__init__(
@@ -118,18 +137,18 @@ class PodmanSandboxInstance(ContainerInstance):
             container_workspace=container_workspace,
             stop_timeout_s=stop_timeout_s,
             workspace_uid=workspace_uid,
+            preview_host=preview_host,
             reload_timeout_s=reload_timeout_s,
         )
         self._cli_url = cli_url
         self._name = container_name
         self._runner = cli_runner
 
-    def expose_port(self, port: int) -> str | None:
-        """[STUB in this environment] Preview port exposure for the Podman backend is not
-        wired here (VM 202 destroyed). The Podman backend code is real + verified, but the
-        preview tunnel for it is completed at the Meta deployment. Returns None (the
-        agent-server surfaces the honest labeled reason) — never a fake URL."""
-        return None
+    # [FIX6 parity] `expose_port` is INHERITED from `ContainerInstance` (the shared
+    # `_resolve_mapping` reads the SIDECAR's published binding for a filtered box,
+    # the sandbox's for sealed/open) — the old podman-only STUB that returned None is
+    # gone, exactly like gvisor. The inbound forwarder (below) makes the sidecar's
+    # published port actually pipe to the internal sandbox, so the URL is real.
 
     def _exec(self, argv: list[str], timeout: float) -> tuple[int, bytes, bytes]:
         return self._runner(["podman", "--url", self._cli_url, "exec", self._name, *argv], timeout)
@@ -304,36 +323,33 @@ class PodmanSandboxService:
         labels = {LABEL_CONV: conversation_id} if conversation_id else {}
         # The network carries the same label as the containers so the orphan
         # sweep can find it — its NAME is instance-keyed, not conversation-keyed.
-        network = client.networks.create(net_name, internal=True, labels=labels)
+        network = client.networks.create(
+            net_name, driver="bridge", internal=True, labels=labels
+        )
         # (1) create on bridge → connect internal → start, so the sidecar's
         # `bridge` NIC (the route to the internet, the proxy's upstream) AND its
         # internal-net NIC BOTH exist before any sandbox traffic.
-        # FIX6-PODMAN-PARITY (needs live podman verify — VM 202 destroyed):
-        #   The gVisor backend now makes a FILTERED box's preview host-reachable by
-        #   (a) PUBLISHING PUBLISHED_PORTS on this SIDECAR's create() and (b) running
-        #   the stdlib `inbound_forward.py` on the sidecar (host:PORT ->
-        #   sandbox_ip:PORT) — see gvisor.py `_setup_filtered_egress` /
-        #   `_launch_inbound_forwarder` and the shared `_container.py
-        #   _resolve_mapping` (already reads `self._egress_sidecar` when set, so it
-        #   covers podman too). To finish parity here:
-        #     1. Publish on the sidecar create() below. podman-py's port-mapping
-        #        kwarg/format differs from docker-py's `{"8000/tcp": None}` (podman
-        #        uses `ports={container_port: host_port}` / PortMapping records) and
-        #        MUST be confirmed live before trusting it.
-        #     2. After the sandbox starts in `_start_container`, read the sandbox's
-        #        internal-net IP from its attrs, then launch the forwarder on the
-        #        sidecar via `self._sidecar_cli_run(sidecar.name, ["sh","-c",
-        #        f"python3 /inbound_forward.py {sbx_ip} {ports} >/var/log/inbound.log 2>&1 &"])`
-        #        after put_archive'ing `_inbound_forward_mod` onto the sidecar.
-        #     3. Replace the `expose_port` STUB (returns None today) with the shared
-        #        `_resolve_mapping` path. Reading published bindings back from
-        #        podman `container.attrs` NetworkSettings.Ports also differs from
-        #        docker-py and needs live confirmation.
-        #   Implemented for gVisor (live-proven on runsc) + the shared _container.py
-        #   change; podman left as this exact TODO pending a live podman host.
+        # [FIX6 parity — live-verified on local podman 5.8.2] PUBLISH the preview
+        # ports on the SIDECAR (it's on bridge → it CAN publish; the sandbox is
+        # internal-only and can't). The sidecar's inbound forwarder (launched after
+        # the sandbox starts, in `_start_container`) bridges each published host
+        # port to the sandbox's internal IP — host reaches the preview, the sandbox
+        # keeps zero direct egress. Ports must be declared at create() (podman can't
+        # add mappings to a running container). podman-py accepts the SAME docker-py
+        # `{"8000/tcp": None}` format AND reads it back as the same
+        # `NetworkSettings.Ports` shape (verified live), so the shared
+        # `_container._resolve_mapping` reads the binding unchanged.
         sidecar = client.containers.create(
             image=self._cfg.image,
             command=["sh", "-c", "exec sleep infinity"],
+            # [FIX6 parity] dual-home the sidecar: a BRIDGE route (the proxy's
+            # upstream + the host's path to the published preview ports) AND, after
+            # `network.connect` below, the internal no-NAT net it shares with the
+            # sandbox. gVisor passes docker-py's `network="bridge"`; the rootless
+            # podman equivalent is `network_mode="bridge"` (verified live — a bare
+            # create defaults to pasta, which an internal net cannot attach to).
+            network_mode="bridge",
+            ports={f"{p}/tcp": None for p in sorted(PUBLISHED_PORTS)},  # FIX6: preview publish
             mem_limit="256m",
             detach=True,
             name=net_name,
@@ -377,6 +393,59 @@ class PodmanSandboxService:
         env = proxy_env(proxy_ip, EGRESS_PROXY_PORT)
         return network, sidecar, env, net_name
 
+    def _launch_inbound_forwarder(self, sidecar: Any, container: Any, net_name: str) -> None:
+        """[FIX6 parity — port of `gvisor._launch_inbound_forwarder`] Make a FILTERED
+        box's preview ports host-reachable WITHOUT breaking containment. The sandbox is
+        internal-only (no published port); the dual-homed egress SIDECAR publishes the
+        preview ports (see `_setup_filtered_egress`) and runs a stdlib TCP forwarder that
+        bridges each published host port to the sandbox's internal IP —
+        `host:PORT -> <sandbox_ip>:PORT`. Transparent byte pipe → websockets / Vite HMR
+        pass through; the sandbox keeps zero direct egress.
+
+        Best-effort: on ANY failure the preview is unreachable but the box still works
+        (the agent-server surfaces the honest no-URL state), so we never raise here and
+        leak the just-started sandbox.
+
+        Delivery mirrors gVisor's FIX6 (base64 ONE-SHELL — write + run share a process,
+        so there is no cross-exec gofer-visibility gap), but launched via the CLI runner
+        (`_sidecar_cli_run`): podman-py's `exec_run` is broken over the remote API, so the
+        `podman --url … exec` path is the only correct one-shot. It is backgrounded with
+        `&` (the podman exec returns, the forwarder keeps running) — the same launch
+        pattern the egress proxy uses above; gVisor instead relies on docker's
+        `exec_run(detach=True)`."""
+        try:
+            container.reload()
+            sbx_ip = (
+                container.attrs.get("NetworkSettings", {})
+                .get("Networks", {})
+                .get(net_name, {})
+                .get("IPAddress", "")
+            )
+            if not sbx_ip:
+                _LOG.warning(
+                    "filtered sandbox has no internal IP on %s; preview unreachable", net_name
+                )
+                return
+            script = pathlib.Path(_inbound_forward_mod.__file__).read_bytes()
+            b64 = base64.b64encode(script).decode("ascii")
+            ports_arg = " ".join(str(p) for p in sorted(PUBLISHED_PORTS))
+            self._sidecar_cli_run(
+                sidecar.name,
+                [
+                    "sh",
+                    "-c",
+                    f"echo {b64} | base64 -d > /inbound_forward.py && "
+                    f"python3 /inbound_forward.py {sbx_ip} {ports_arg} "
+                    f">/var/log/inbound.log 2>&1 &",
+                ],
+                15,
+            )
+        except Exception:  # noqa: BLE001 — best-effort; preview unreachable, box still works
+            _LOG.warning(
+                "failed to launch the inbound preview forwarder on the egress sidecar",
+                exc_info=True,
+            )
+
     def _start_container(
         self, spec: SandboxSpec, instance_id: str, conversation_id: str = ""
     ) -> tuple[Any, str, Any, Any]:
@@ -412,14 +481,20 @@ class PodmanSandboxService:
         net_kwargs: dict[str, Any] = {}
         environment: dict[str, str] = {}
         egress_network = egress_sidecar = None
+        egress_net_name = ""
         if mode == "filtered":
             egress_network, egress_sidecar, environment, net_name = self._setup_filtered_egress(
                 client, spec, instance_id, conversation_id
             )
+            egress_net_name = net_name
             # podman-py's `containers.create` attaches user-defined networks via
             # `networks={name: per-net-config}`; the sandbox's ONLY interface
             # will be the internal no-NAT net (the proxy is the only route out).
-            net_kwargs = {"networks": {net_name: {}}}
+            # `network_mode="bridge"` sets the netns nsmode (rootless podman defaults
+            # netns to pasta, which REFUSES a `networks=` list → 500; verified live).
+            # It declares the namespace TYPE only — `networks` still pins the box to
+            # the single internal net (no default bridge attached → no egress).
+            net_kwargs = {"network_mode": "bridge", "networks": {net_name: {}}}
         elif mode == "open":
             net_kwargs = {"network_mode": "bridge"}  # explicit raw egress
         else:  # sealed
@@ -445,6 +520,11 @@ class PodmanSandboxService:
                 detach=True,
             )
             container.start()
+            # [FIX6 parity] sandbox is up + on the internal net — launch the inbound
+            # preview forwarder on the SIDECAR (host:PORT -> sandbox_ip:PORT).
+            # Best-effort: never raises, so it can't leak the just-started box.
+            if mode == "filtered" and egress_sidecar is not None:
+                self._launch_inbound_forwarder(egress_sidecar, container, egress_net_name)
             return container, name, egress_network, egress_sidecar
         except SandboxUnavailableError:
             raise
@@ -488,6 +568,10 @@ class PodmanSandboxService:
             cli_url=self._cli_url,
             container_name=name,
             cli_runner=self._cli_runner,
+            # [FIX6 parity] the host a published preview port is reachable at: the
+            # remote podman host's tailnet IP (from the CLI url), or an explicit
+            # config override — mirrors gvisor's preview_host wiring.
+            preview_host=self._cfg.preview_host or _preview_host(self._cli_url),
             # Wedge-guard timeout (Dispo #25, E5 wiring) — untouched in E8.
             reload_timeout_s=self._cfg.reload_timeout_s,
         )

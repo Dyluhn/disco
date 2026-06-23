@@ -76,19 +76,22 @@ async def test_filtered_podman_spec_yields_proxied_network_not_none():
     assert sidecar.started is True, "sidecar must be started (so both NICs exist)"
     assert net.connected and net.connected[0][0] is sidecar
 
-    # (c) The SANDBOX is on the internal net (proxied) — NOT `network_mode="none"`
-    # and NOT `network_mode="bridge"`. The relaxation is to the allowlist, never
-    # to an open bridge.
+    # (c) The SANDBOX is PINNED to the internal net (proxied) — NOT `network_mode="none"`
+    # (the old seal) and NOT the bare open bridge. It carries `network_mode="bridge"`
+    # ONLY as the rootless-podman netns nsmode (a bare `networks=` defaults netns to
+    # pasta, which podman refuses → 500); the `networks` list pins it to the single
+    # internal no-NAT net (no default bridge → no egress). The distinction from the
+    # "open" branch is the `networks` pin, NOT the absence of network_mode.
     sb_kwargs = sandbox.create_kwargs
-    assert "network_mode" not in sb_kwargs, (
-        f"filtered must NOT be sealed with network_mode; got {sb_kwargs.get('network_mode')!r}"
-    )
-    assert "network_mode" not in sb_kwargs or sb_kwargs.get("network_mode") != "bridge", (
-        "filtered must NOT be open bridge; relaxation is to the allowlist ONLY"
+    assert sb_kwargs.get("network_mode") != "none", (
+        f"filtered must NOT be sealed; got {sb_kwargs.get('network_mode')!r}"
     )
     sb_networks = sb_kwargs.get("networks") or {}
     assert sb_networks, "sandbox must be attached to the internal net via `networks`"
     assert net.name in sb_networks, "sandbox must be on the egress internal net"
+    assert set(sb_networks) == {net.name}, (
+        "sandbox must be ONLY on the internal net (no default bridge → no egress)"
+    )
 
     # (d) The allowlist env is wired (defense in depth atop the no-route net).
     env = sb_kwargs["environment"]
@@ -122,9 +125,18 @@ async def test_filtered_podman_spec_never_relaxes_to_open_bridge():
         conversation_id="c",
     )
     sandbox = client.created[-1]
-    # The relaxation surface is binary: filtered -> proxied, open -> bridge.
-    # A filtered spec must not produce the open-branch kwarg.
-    assert sandbox.create_kwargs.get("network_mode") != "bridge"
+    # The relaxation surface is binary: filtered -> proxied (pinned to the internal
+    # net via `networks`), open -> bare bridge (network_mode bridge, NO `networks`).
+    # A filtered spec must be PINNED to the internal net — never the bare open bridge.
+    kw = sandbox.create_kwargs
+    sb_networks = kw.get("networks") or {}
+    assert sb_networks and all(n.startswith("disco-egr-") for n in sb_networks), (
+        f"filtered must be pinned to the internal egress net, got networks={sb_networks!r}"
+    )
+    # NOT the open branch: open is network_mode=bridge with NO `networks` pin.
+    assert not (kw.get("network_mode") == "bridge" and not sb_networks), (
+        "filtered must NOT be the bare open bridge"
+    )
 
 
 # ---------------------------------------------------------------------------
