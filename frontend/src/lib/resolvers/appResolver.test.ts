@@ -15,7 +15,27 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { formatEditSteer, humanLabel, parseOid } from "@/lib/resolvers/appResolver";
+import {
+  formatEditSteer,
+  formatSelectionContext,
+  humanLabel,
+  parseOid,
+} from "@/lib/resolvers/appResolver";
+import type { SelectionEnvelope } from "@/lib/selectionBridge";
+
+const NONCE = "aabbccddeeff00112233445566778899";
+function envelope(over: Partial<SelectionEnvelope>): SelectionEnvelope {
+  return {
+    v: 1,
+    channel: "disco-select",
+    nonce: NONCE,
+    type: "disco:selection",
+    selection_ref: { kind: "source", oid: "index.html:42", file: "index.html", line: 42 },
+    human_label: "index.html:42 — “Q3 Revenue”",
+    rect: { x: 0, y: 0, width: 10, height: 10 },
+    ...over,
+  };
+}
 
 describe("parseOid", () => {
   it("parses a real file:line oid", () => {
@@ -84,5 +104,51 @@ describe("formatEditSteer", () => {
 
   it("returns null for a blank instruction (no steer on empty input)", () => {
     expect(formatEditSteer({ file: "a.html", line: 3 }, "   ")).toBeNull();
+  });
+});
+
+describe("formatSelectionContext (W-26)", () => {
+  it("names a source element with its file:line, not duplicating the location", () => {
+    // human_label already leads with the location (humanLabel's shape) → no repeat.
+    const out = formatSelectionContext(envelope({}));
+    expect(out).toBe(
+      "Let's discuss the element I selected in the preview: index.html:42 — “Q3 Revenue”.",
+    );
+  });
+
+  it("appends file:line when the label does NOT already carry it", () => {
+    const out = formatSelectionContext(
+      envelope({
+        selection_ref: { kind: "source", oid: "app.tsx:7", file: "app.tsx", line: 7 },
+        human_label: "button.cta — “Submit”",
+      }),
+    );
+    expect(out).toBe(
+      "Let's discuss the element I selected in the preview: button.cta — “Submit” (app.tsx:7).",
+    );
+  });
+
+  it("names a deck element by slide + element ref", () => {
+    const out = formatSelectionContext(
+      envelope({
+        selection_ref: { kind: "deck", slide_id: "s3", element_id: "title" },
+        human_label: "h2.title — “Revenue”",
+      }),
+    );
+    expect(out).toBe(
+      "Let's discuss the element I selected in the preview: h2.title — “Revenue” (slide s3 · element title).",
+    );
+  });
+
+  it("falls back to the bare ref when there is no human label", () => {
+    const out = formatSelectionContext(
+      envelope({
+        selection_ref: { kind: "deck", slide_id: "s1", element_id: "img" },
+        human_label: "",
+      }),
+    );
+    expect(out).toBe(
+      "Let's discuss the element I selected in the preview: slide s1 · element img.",
+    );
   });
 });

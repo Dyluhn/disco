@@ -10,7 +10,7 @@ import { useElementSelect } from "@/hooks/useElementSelect";
 import { SelectionOverlay } from "@/components/build/canvas/SelectionOverlay";
 import { EditAffordance } from "@/components/build/canvas/EditAffordance";
 import { SELECTION_AGENT_SCRIPT } from "@/lib/selectionAgent";
-import { formatEditSteer, parseOid } from "@/lib/resolvers/appResolver";
+import { formatEditSteer, formatSelectionContext, parseOid } from "@/lib/resolvers/appResolver";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
 /** One phase-aware pane (replacing the redundant Preview + Live tabs). When the agent's
@@ -392,6 +392,18 @@ export function PreviewPane({
             onArm={srcdocArm}
             onDisarm={srcdocDisarm}
             onWalkUp={srcdocWalkUp}
+            // W-26 — Discuss is offered for ANY selection kind whenever steering is
+            // available (onSteer defined ⇒ steerable). Forwards the named-element
+            // context to the agent via the steer → send_message path, then clears.
+            onDiscuss={
+              onSteer
+                ? (sel) => {
+                    onSteer(formatSelectionContext(sel));
+                    srcdocResetSelection();
+                    srcdocDisarm();
+                  }
+                : undefined
+            }
           />
           {/* A1.4 — inline edit box. Appears ONLY for a source-kind selection that
               carries a real stamped file:line; a deck/non-source/blank selection

@@ -12,10 +12,17 @@
  *  6. Null rect: no rect highlight when selection is null.
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { SelectionOverlay } from "@/components/build/canvas/SelectionOverlay";
 import type { SelectionEnvelope } from "@/lib/selectionBridge";
+
+// Seed the W-27 inspect-tip "seen" flag so the first-run tip (whose "Dismiss inspect
+// tip" button otherwise also matches /inspect/i) doesn't interfere with these
+// arm/disarm assertions. Deterministic in isolation, not order-dependent.
+beforeEach(() => {
+  window.localStorage.setItem("disco-inspect-tip-seen", "1");
+});
 
 // ─── Fixture ──────────────────────────────────────────────────────────────────
 
@@ -187,6 +194,73 @@ describe("SelectionOverlay — mirrors selection rect + label", () => {
     );
     fireEvent.click(screen.getByTitle(/parent element/i));
     expect(onWalkUp).toHaveBeenCalledOnce();
+  });
+});
+
+// ─── W-26: Discuss with agent (steerable-gated) ─────────────────────────────────
+
+describe("SelectionOverlay — Discuss with agent (W-26)", () => {
+  it("does NOT render Discuss when onDiscuss is absent (non-steerable)", () => {
+    render(
+      <SelectionOverlay
+        armed={true}
+        untrusted={false}
+        selection={makeSelection()}
+        onArm={vi.fn()}
+        onDisarm={vi.fn()}
+        onWalkUp={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /discuss/i })).toBeNull();
+  });
+
+  it("renders Discuss for a selection when onDiscuss is wired (steerable)", () => {
+    render(
+      <SelectionOverlay
+        armed={true}
+        untrusted={false}
+        selection={makeSelection()}
+        onArm={vi.fn()}
+        onDisarm={vi.fn()}
+        onWalkUp={vi.fn()}
+        onDiscuss={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /discuss/i })).toBeInTheDocument();
+  });
+
+  it("does NOT render Discuss when there is no selection (nothing to discuss)", () => {
+    render(
+      <SelectionOverlay
+        armed={true}
+        untrusted={false}
+        selection={null}
+        onArm={vi.fn()}
+        onDisarm={vi.fn()}
+        onWalkUp={vi.fn()}
+        onDiscuss={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /discuss/i })).toBeNull();
+  });
+
+  it("fires onDiscuss with the current selection when clicked", () => {
+    const onDiscuss = vi.fn();
+    const selection = makeSelection();
+    render(
+      <SelectionOverlay
+        armed={true}
+        untrusted={false}
+        selection={selection}
+        onArm={vi.fn()}
+        onDisarm={vi.fn()}
+        onWalkUp={vi.fn()}
+        onDiscuss={onDiscuss}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /discuss/i }));
+    expect(onDiscuss).toHaveBeenCalledOnce();
+    expect(onDiscuss).toHaveBeenCalledWith(selection);
   });
 });
 

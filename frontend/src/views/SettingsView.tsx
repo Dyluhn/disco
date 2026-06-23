@@ -1,4 +1,5 @@
 import { AudioSection } from "@/components/settings/AudioSection";
+import { ChatVerbositySection } from "@/components/settings/ChatVerbositySection";
 import { DataSourcesSection } from "@/components/settings/DataSourcesSection";
 import { EncoderSection } from "@/components/settings/EncoderSection";
 import { ImageGenSection } from "@/components/settings/ImageGenSection";
@@ -27,6 +28,7 @@ export function SettingsView() {
         </header>
 
         <ModelMatrix />
+        <ChatVerbositySection />
         <ProviderKeysSection />
         <EncoderSection />
         <AudioSection />

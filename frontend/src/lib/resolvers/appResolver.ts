@@ -16,6 +16,8 @@
  * @module appResolver
  */
 
+import type { SelectionEnvelope } from "@/lib/selectionBridge";
+
 /** A parsed `data-oid`: the workspace-relative source file + its 1-based line. */
 export interface AppRef {
   /** Workspace-relative path of the source HTML file (e.g. "index.html"). */
@@ -73,4 +75,31 @@ export function formatEditSteer(ref: AppRef, instruction: string): string | null
   const trimmed = instruction.trim();
   if (!trimmed) return null;
   return `In ${ref.file} near line ${ref.line}, ${trimmed}`;
+}
+
+/**
+ * W-26 — turn ANY selection envelope (source OR deck OR non-source) into a steer
+ * string that names the element, for the "Discuss with agent" affordance. Unlike
+ * `formatEditSteer` (source-only, requires an instruction), this works for every
+ * selection kind and carries no instruction — it just hands the agent the context
+ * of WHAT the user clicked so a conversation can begin. It lands via the existing
+ * steer → send_message path (no backend change).
+ *
+ * - source: `{file}:{line}` plus the human label (de-duped if the label already
+ *   leads with the location, which `humanLabel` produces).
+ * - deck:   `slide {slide_id} · element {element_id}` plus the human label.
+ */
+export function formatSelectionContext(sel: SelectionEnvelope): string {
+  const ref = sel.selection_ref;
+  const label = sel.human_label?.trim() ?? "";
+  let target: string;
+  if (ref.kind === "source") {
+    const loc = `${ref.file}:${ref.line}`;
+    // humanLabel() already prefixes the location for source refs — don't repeat it.
+    target = label ? (label.startsWith(loc) ? label : `${label} (${loc})`) : loc;
+  } else {
+    const loc = `slide ${ref.slide_id} · element ${ref.element_id}`;
+    target = label ? `${label} (${loc})` : loc;
+  }
+  return `Let's discuss the element I selected in the preview: ${target}.`;
 }

@@ -25,7 +25,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { ChevronUp, MousePointer2, X } from "lucide-react";
+import { ChevronUp, MessageSquare, MousePointer2, X } from "lucide-react";
 import type { SelectionEnvelope } from "@/lib/selectionBridge";
 
 /** W-27: a self-dismissing first-run hint explaining the Inspect feature.
@@ -113,6 +113,11 @@ interface Props {
   onDisarm: () => void;
   /** Called when the user clicks the "↑ parent" button. */
   onWalkUp: () => void;
+  /** W-26 — when provided, a "Discuss with agent" button appears on the selection
+   * label bar for ANY selection kind (source / deck / non-source). The parent only
+   * passes this when steering is actually available (`steerable`), so the action is
+   * never a false affordance during disabled/non-steerable states. */
+  onDiscuss?: (sel: SelectionEnvelope) => void;
 }
 
 export function SelectionOverlay({
@@ -122,6 +127,7 @@ export function SelectionOverlay({
   onArm,
   onDisarm,
   onWalkUp,
+  onDiscuss,
 }: Props) {
   const rect = selection?.rect ?? null;
   const label = selection?.human_label ?? null;
@@ -202,6 +208,23 @@ export function SelectionOverlay({
           <span className="max-w-[180px] truncate font-mono text-[0.62rem] leading-none text-white">
             {label}
           </span>
+          {/* W-26 — "Discuss with agent": delivers the selection context to the
+              agent (send_message). Shown ONLY when `onDiscuss` is wired, which the
+              parent does only when steering is available — so no false affordance
+              appears during disabled / non-steerable states. Works for ALL
+              selection kinds (source / deck / non-source), not just source edits. */}
+          {onDiscuss && selection && (
+            <button
+              type="button"
+              onClick={() => onDiscuss(selection)}
+              title="Discuss this element with the agent"
+              data-disco-control="build.selection-discuss"
+              className="flex shrink-0 items-center gap-px rounded px-0.5 py-px font-ui text-[0.6rem] leading-none text-white/85 hover:text-white"
+            >
+              <MessageSquare className="size-3" aria-hidden />
+              Discuss
+            </button>
+          )}
           <button
             type="button"
             onClick={onWalkUp}

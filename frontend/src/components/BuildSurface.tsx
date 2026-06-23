@@ -29,6 +29,8 @@ import { publishRunStatus } from "@/lib/runStatusBridge";
 import { ChevronDown, Download, Loader2 } from "lucide-react";
 import { useDownloadProject, useExportManifest } from "@/hooks/useProjects";
 import { ActivityFeed } from "@/components/build/ActivityFeed";
+import { AgentStageCard } from "@/components/build/AgentStageCard";
+import { useVerboseAgentChat } from "@/lib/useVerboseAgentChat";
 import { LiveSignalBar } from "@/components/build/LiveSignalBar";
 import { ResizableSplit } from "@/components/build/ResizableSplit";
 import { AgentStatusBar } from "@/components/build/AgentStatusBar";
@@ -235,6 +237,14 @@ export function BuildSurface({
     b.status === "FINISHED" ||
     b.status === "PAUSED";
   const settled = b.status === "FINISHED" || b.status === "IDLE" || b.status === "STUCK";
+  // W-43 — Verbose Agent Chat. Default ON (full feed). When OFF, once the first plan
+  // is approved (a plan exists and we're past the approval gate), collapse the
+  // running narrative to the compact AgentStageCard. The gates (confirm/decision/
+  // question) and the deliverable download/open panel render OUTSIDE this branch, so
+  // they always show; the full feed stays reachable via the card's expand and the
+  // inspector's "Agent History" tab (codex P1 — no affordance is hidden).
+  const { verbose: verboseChat } = useVerboseAgentChat();
+  const collapseFeed = !verboseChat && b.plan != null && !b.awaitingPlan;
   // Front-door "drafting…" moment: the run is live but no plan exists yet (the
   // agent is exploring + composing the first plan). Show a skeleton so the surface
   // never reads as frozen between submit and the plan-approval gate.
@@ -435,10 +445,23 @@ export function BuildSurface({
                     />
                   </div>
                 )}
-                <ActivityFeed items={activity} conversationId={b.cid ?? undefined} />
-                <div className="mt-inline">
-                  <LiveSignalBar signal={liveSignal} />
-                </div>
+                {collapseFeed ? (
+                  // Quiet mode: one glanceable stage card (click-to-expand reveals the
+                  // full feed inline, preserving every inline artifact affordance).
+                  <AgentStageCard
+                    events={b.events}
+                    status={b.status}
+                    activity={activity}
+                    conversationId={b.cid ?? undefined}
+                  />
+                ) : (
+                  <>
+                    <ActivityFeed items={activity} conversationId={b.cid ?? undefined} />
+                    <div className="mt-inline">
+                      <LiveSignalBar signal={liveSignal} />
+                    </div>
+                  </>
+                )}
                 {finalMessage &&
                   (b.status === "FINISHED" ||
                     b.status === "STUCK" ||
@@ -575,7 +598,14 @@ export function BuildSurface({
         // Build → the software IDE inspector (Files/Terminal/Preview). Agent → the
         // lighter operator canvas (Browser/Artifacts/Console). Build is unchanged.
         framing === "agent" ? (
-          <AgentCanvas events={visibleEvents} status={b.status} cid={b.cid} />
+          <AgentCanvas
+            events={visibleEvents}
+            status={b.status}
+            cid={b.cid}
+            // W-26 — steer the agent from the artifact-preview "Discuss with agent"
+            // action. Same wire as the steer composer; only when steering is available.
+            onSteer={steerable ? b.steer : undefined}
+          />
         ) : (
           <ExecutionCanvas
             events={visibleEvents}

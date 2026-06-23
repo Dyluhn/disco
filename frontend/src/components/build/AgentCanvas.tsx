@@ -10,19 +10,21 @@
 
 import { useMemo, useRef, useState, useEffect } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
-import { Download, FileCode2, FileSpreadsheet, FileText, Globe, Package, Presentation, SquareTerminal } from "lucide-react";
+import { Download, FileCode2, FileSpreadsheet, FileText, Globe, History, Package, Presentation, SquareTerminal } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { deriveFiles, deriveSrcDoc, deriveTerminal, deriveLiveSignal } from "@/lib/buildTrace";
+import { deriveActivity, deriveFiles, deriveSrcDoc, deriveTerminal, deriveLiveSignal } from "@/lib/buildTrace";
 import type { WorkspaceFile } from "@/lib/buildTrace";
 import { agentGet, agentSend, agentHttpBase, previewHostUrl } from "@/api/client";
 import { useElementSelect } from "@/hooks/useElementSelect";
 import { SelectionOverlay } from "@/components/build/canvas/SelectionOverlay";
+import { ActivityFeed } from "@/components/build/ActivityFeed";
+import { formatSelectionContext } from "@/lib/resolvers/appResolver";
 import { SELECTION_AGENT_SCRIPT } from "@/lib/selectionAgent";
 import { useLiveBrowserConfig } from "@/hooks/useModels";
 import { DeckEditorPane } from "@/components/build/DeckEditorPane";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
-type TabId = "browser" | "artifacts" | "console" | "deck";
+type TabId = "browser" | "artifacts" | "console" | "history" | "deck";
 
 /** The base name of the most-recent deck that carries an editable AuthoredDeck
  * sidecar (A2.0 sets structured.editable_source on the slides_generate C2 path).
@@ -401,10 +403,14 @@ function ArtifactsPane({
   events,
   cid,
   untrusted,
+  onSteer,
 }: {
   events: AgentEvent[];
   cid: string | null;
   untrusted: boolean;
+  /** W-26 — steer the agent from the artifact-preview selection ("Discuss with
+   * agent"). Undefined when steering isn't available (no false affordance). */
+  onSteer?: (text: string) => void;
 }) {
   const files = useMemo(() => deriveFiles(events), [events]);
   // §4.1 C-EDIT-1: inject selection agent for trusted (non-untrusted) iframes.
@@ -421,6 +427,7 @@ function ArtifactsPane({
     disarm: artifactDisarm,
     selection: artifactSelection,
     walkUp: artifactWalkUp,
+    resetSelection: artifactResetSelection,
   } = useElementSelect(artifactIframeRef, "null");
 
   if (files.length === 0)
@@ -453,6 +460,17 @@ function ArtifactsPane({
               onArm={artifactArm}
               onDisarm={artifactDisarm}
               onWalkUp={artifactWalkUp}
+              // W-26 — Discuss is offered whenever steering is available (onSteer
+              // defined). Delivers the named-element context to the agent, then clears.
+              onDiscuss={
+                onSteer
+                  ? (sel) => {
+                      onSteer(formatSelectionContext(sel));
+                      artifactResetSelection();
+                      artifactDisarm();
+                    }
+                  : undefined
+              }
             />
           </div>
         </div>
@@ -498,10 +516,28 @@ function ConsolePane({ events }: { events: AgentEvent[] }) {
   );
 }
 
+/** W-43 — Agent History: the FULL ActivityFeed surfaced as an inspector tab, so the
+ * complete narrative (and every inline artifact/download/screenshot/deck-export
+ * affordance it carries) stays reachable even when the left chat pane is collapsed to
+ * the stage card (Verbose Agent Chat OFF). Derived from the same event stream. */
+function HistoryPane({ events, status, cid }: { events: AgentEvent[]; status: ConversationStatus; cid: string | null }) {
+  // No pending-confirmation context in the inspector → pass null; the gate panels
+  // live on the chat pane, this is the read-only chronological log.
+  const activity = useMemo(() => deriveActivity(events, null, status), [events, status]);
+  if (activity.length === 0)
+    return <Empty>The agent's step-by-step history — messages, tool calls, and outputs — shows here.</Empty>;
+  return (
+    <div className="h-full overflow-auto px-body py-inline">
+      <ActivityFeed items={activity} conversationId={cid ?? undefined} />
+    </div>
+  );
+}
+
 const BASE_TABS: { id: TabId; label: string; icon: typeof Globe }[] = [
   { id: "browser", label: "Browser", icon: Globe },
   { id: "artifacts", label: "Artifacts", icon: Package },
   { id: "console", label: "Console", icon: SquareTerminal },
+  { id: "history", label: "Agent History", icon: History },
 ];
 
 export function AgentCanvas({
@@ -509,12 +545,16 @@ export function AgentCanvas({
   status,
   cid,
   untrusted = false,
+  onSteer,
 }: {
   events: AgentEvent[];
   status: ConversationStatus;
   cid: string | null;
   /** Third-party events (shared/imported run) → harden the artifact preview iframe. */
   untrusted?: boolean;
+  /** W-26 — steer the agent from the artifact-preview "Discuss with agent" action.
+   * Undefined when steering isn't available (no false affordance). */
+  onSteer?: (text: string) => void;
 }) {
   // A screenshot to show → Browser is the hero; else artifacts exist → Artifacts;
   // else Browser (empty state). Initial only — don't yank the user's tab as the
@@ -580,10 +620,13 @@ export function AgentCanvas({
           <BrowserPane events={events} status={status} cid={cid} />
         </Tabs.Content>
         <Tabs.Content value="artifacts" className="h-full focus:outline-none">
-          <ArtifactsPane events={events} cid={cid} untrusted={untrusted} />
+          <ArtifactsPane events={events} cid={cid} untrusted={untrusted} onSteer={onSteer} />
         </Tabs.Content>
         <Tabs.Content value="console" className="h-full focus:outline-none">
           <ConsolePane events={events} />
+        </Tabs.Content>
+        <Tabs.Content value="history" className="h-full focus:outline-none">
+          <HistoryPane events={events} status={status} cid={cid} />
         </Tabs.Content>
         {editableDeckBase && cid && (
           <Tabs.Content value="deck" className="h-full focus:outline-none">
