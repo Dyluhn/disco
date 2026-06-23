@@ -169,11 +169,21 @@ def _set_slide_bg(slide, hex_color: str) -> None:  # type: ignore[type-arg]
 
 
 def _add_textbox(slide, left: int, top: int, w: int, h: int):  # type: ignore[return,type-arg]
-    """Add a textbox at absolute EMU coordinates and return its text_frame."""
+    """Add a textbox at absolute EMU coordinates and return its text_frame.
+
+    W-23: every frame gets ``TEXT_TO_FIT_SHAPE`` autofit (emits ``<a:normAutofit/>``
+    in the slide XML) so that when a viewer substitutes the brand font (not
+    installed in LibreOffice / Google Slides → different metrics → an extra wrap
+    line) the text SHRINKS to stay inside the box instead of spilling out and
+    overlapping the next element. Applies the safety to ordinary title / subtitle
+    / kicker frames; grouped bullet frames add margins + anchor on top of this.
+    """
+    from pptx.enum.text import MSO_AUTO_SIZE
     from pptx.util import Emu
     shape = slide.shapes.add_textbox(Emu(left), Emu(top), Emu(w), Emu(h))
     tf = shape.text_frame
     tf.word_wrap = True
+    tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
     return tf
 
 
@@ -589,6 +599,96 @@ _MINIMAL_LAYOUT_FNS = {
 # C1 Element renderer — maps each Element to a python-pptx shape
 # ---------------------------------------------------------------------------
 
+def _is_bullet_el(el: Element) -> bool:
+    """A bullet body Element: a text Element whose text carries the "• " prefix.
+
+    The C1 lowerer (`_deck_schema._layout_bullets` / `_layout_image_right` /
+    `_layout_two_column` / `_layout_comparison`) emits each bullet as an
+    independent absolutely-positioned textbox with this prefix; W-23 regroups
+    them at render time so a wrapped 2nd line cannot spill into the next box.
+    """
+    return el.kind == "text" and el.text.startswith("• ")
+
+
+def _render_bullet_group(prs_slide, group: list[Element], theme: Theme) -> None:  # type: ignore[type-arg]
+    """W-23: render consecutive bullet Elements as ONE auto-fit text frame —
+    one PARAGRAPH per bullet — instead of one absolute textbox per bullet.
+
+    The per-bullet model (`top = body_top + i*line_h`, `height = line_h*1.15`)
+    reserves NO space for a wrapped 2nd line; under font substitution in
+    LibreOffice / Google Slides that 2nd line spilled into the next bullet's
+    absolute box → overlap. Grouping into one flowing frame (word_wrap + TOP
+    anchor + zero margins + small `space_after`, autofit via `_add_textbox`)
+    lets bullets flow and never overlap. Text keeps its "• " prefix so the
+    deck stays editable as plain paragraphs.
+    """
+    from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
+    from pptx.util import Emu, Pt
+
+    _ALIGN_MAP = {"LEFT": PP_ALIGN.LEFT, "CENTER": PP_ALIGN.CENTER, "RIGHT": PP_ALIGN.RIGHT}
+
+    first = group[0]
+    left = int(first.left)
+    width = int(first.width)
+    top = int(first.top)
+    # Span down to the bottom safe-area margin so wrapped bullets have room to
+    # flow; normAutofit (set in _add_textbox) only shrinks if even that overflows.
+    height = max(int(first.height), (_SLIDE_H - _MARGIN) - top)
+
+    tf = _add_textbox(prs_slide, left, top, width, height)
+    tf.word_wrap = True
+    tf.vertical_anchor = MSO_ANCHOR.TOP
+    tf.margin_left = Emu(0)
+    tf.margin_right = Emu(0)
+    tf.margin_top = Emu(0)
+    tf.margin_bottom = Emu(0)
+
+    for i, el in enumerate(group):
+        p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+        p.alignment = _ALIGN_MAP.get(el.align, PP_ALIGN.LEFT)
+        p.line_spacing = 1.05
+        p.space_after = Pt(6)
+        run = p.add_run()
+        _set_run_style(
+            run, el.text,
+            el.font_name or "Helvetica",
+            el.font_size_pt,
+            el.hex_color or "#1a1813",
+            bold=el.bold,
+            italic=el.italic,
+        )
+
+
+def _render_slide_elements(prs_slide, slide: Slide, theme: Theme) -> None:  # type: ignore[type-arg]
+    """Render a slide's Elements, grouping consecutive bullet text Elements that
+    share the same left/width into ONE auto-fit frame (W-23).
+
+    Same-left/width grouping keeps the left vs right columns of two_column /
+    comparison layouts as separate frames (their bullets differ by `left`), and
+    leaves non-bullet elements (title, accent bar, image, labels) untouched.
+    """
+    group: list[Element] = []
+
+    def _flush() -> None:
+        if group:
+            _render_bullet_group(prs_slide, list(group), theme)
+            group.clear()
+
+    for el in slide.elements:
+        if _is_bullet_el(el) and (
+            not group
+            or (int(el.left) == int(group[0].left) and int(el.width) == int(group[0].width))
+        ):
+            group.append(el)
+            continue
+        _flush()
+        if _is_bullet_el(el):
+            group.append(el)
+        else:
+            _render_element(prs_slide, el, theme)
+    _flush()
+
+
 def _render_element(prs_slide, el: Element, theme: Theme) -> None:  # type: ignore[type-arg]
     """Render one C1 Element to a python-pptx slide shape."""
 
@@ -729,8 +829,7 @@ def _render_pptx_c1(deck: Deck) -> bytes:
             from disco.tools.builtin._c8_chart_layouts import layout_table_slide_pptx
             layout_table_slide_pptx(prs_slide, slide, deck.theme)
         else:
-            for el in slide.elements:
-                _render_element(prs_slide, el, deck.theme)
+            _render_slide_elements(prs_slide, slide, deck.theme)
 
             if slide.notes:
                 _ntf = prs_slide.notes_slide.notes_text_frame

@@ -659,3 +659,98 @@ def test_lower_deck_image_assets_default_none_is_backcompat():
                                                   image_prompt="x")])
     deck = lower_deck(authored)  # no image_assets
     assert all(el.image_bytes is None for s in deck.slides for el in s.elements)
+
+
+# ---------------------------------------------------------------------------
+# W-23 — grouped bullets into one auto-fit frame (no LibreOffice/Google overlap)
+# ---------------------------------------------------------------------------
+
+def _long_bullet_deck():
+    """A bullets slide whose lines are long enough to wrap under font
+    substitution — the case that produced absolute-box overlap before W-23."""
+    from disco.tools.builtin._deck_schema import AuthoredDeck, AuthoredSlide, lower_deck
+
+    authored = AuthoredDeck(
+        title="W-23 Overlap Repro",
+        theme="disco-light",
+        slides=[
+            AuthoredSlide(
+                type="bullets",
+                title="Bullets that wrap",
+                body=[
+                    "This is a deliberately long first bullet that will wrap onto a "
+                    "second line once the brand font is substituted by LibreOffice.",
+                    "A second bullet, also long enough to wrap, which used to be "
+                    "overlapped by the spillover of the first bullet's second line.",
+                    "A third bullet line to make the stacking unmistakable in XML.",
+                ],
+            )
+        ],
+    )
+    return lower_deck(authored)
+
+
+def _bullet_frames(slide):
+    """Text frames on *slide* whose first paragraph is a bullet ('• ' prefix)."""
+    frames = []
+    for shape in slide.shapes:
+        if not shape.has_text_frame:
+            continue
+        paras = shape.text_frame.paragraphs
+        if paras and paras[0].runs and paras[0].runs[0].text.startswith("• "):
+            frames.append(shape.text_frame)
+    return frames
+
+
+def test_pptx_w23_bullets_grouped_into_one_autofit_frame():
+    """W-23: the bullets render as ONE text frame with MULTIPLE bullet paragraphs
+    + normAutofit — NOT several overlapping absolute single-bullet textboxes."""
+    import io
+
+    from pptx import Presentation
+
+    data = render_pptx(_long_bullet_deck())
+    prs = Presentation(io.BytesIO(data))
+    slide = prs.slides[0]
+
+    frames = _bullet_frames(slide)
+    assert len(frames) == 1, (
+        f"expected ONE grouped bullet frame, got {len(frames)} "
+        "(per-bullet absolute boxes regressed → overlap risk)"
+    )
+
+    tf = frames[0]
+    bullet_paras = [p for p in tf.paragraphs if p.runs and p.runs[0].text.startswith("• ")]
+    assert len(bullet_paras) == 3, (
+        f"expected 3 bullet paragraphs in the one frame, got {len(bullet_paras)}"
+    )
+
+    # The frame must carry TEXT_TO_FIT_SHAPE autofit → <a:normAutofit/> in the XML,
+    # so a substituted-font wrap shrinks the text instead of spilling.
+    xml = tf._txBody.xml
+    assert "normAutofit" in xml, "grouped bullet frame is missing <a:normAutofit/> autofit"
+
+
+def test_pptx_w23_two_column_keeps_separate_column_frames():
+    """W-23 grouping is keyed on left/width, so a two_column slide still yields
+    one frame per column (bullets differ by `left`)."""
+    import io
+
+    from disco.tools.builtin._deck_schema import AuthoredDeck, AuthoredSlide, lower_deck
+    from pptx import Presentation
+
+    authored = AuthoredDeck(
+        title="Two Col",
+        theme="disco-light",
+        slides=[
+            AuthoredSlide(
+                type="two_column",
+                title="Split",
+                body=["Left one", "Left two", "Right one", "Right two"],
+            )
+        ],
+    )
+    data = render_pptx(lower_deck(authored))
+    prs = Presentation(io.BytesIO(data))
+    frames = _bullet_frames(prs.slides[0])
+    assert len(frames) == 2, f"expected 2 column frames, got {len(frames)}"
