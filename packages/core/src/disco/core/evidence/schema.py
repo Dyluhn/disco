@@ -71,6 +71,27 @@ _COMPILED: list[re.Pattern[str]] = [
 
 _REDACTED = "***REDACTED***"
 
+# Numeric token-COUNT telemetry fields. These key names contain "token" and so
+# match a REDACTION_KEY_PATTERN, but they carry an integer *count* (in/out/cached
+# tokens per model call) — not a secret. Allowlist them so the debug trace can
+# MEASURE cache-hit ratio + token cost. The pass-through is intentionally narrow:
+# it applies ONLY when the value is a plain number (int/float, not bool). A list
+# or string under one of these keys could still hold real auth tokens, so those
+# stay redacted.
+_TOKEN_COUNT_KEYS: frozenset[str] = frozenset(
+    {"in_tokens", "out_tokens", "cached_tokens", "tokens"}
+)
+
+
+def _is_token_count(key: str, value: Any) -> bool:
+    """True when *key* is an allowlisted token-count field holding a plain number."""
+    return (
+        key.lower() in _TOKEN_COUNT_KEYS
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
+    )
+
+
 # ---------------------------------------------------------------------------
 # String-content secret scrubber
 # ---------------------------------------------------------------------------
@@ -152,7 +173,12 @@ def redact(obj: Any) -> Any:
         result: dict[Any, Any] = {}
         for k, v in obj.items():
             if isinstance(k, str) and _key_is_sensitive(k):
-                result[k] = _REDACTED
+                # Numeric token-count telemetry is not a secret — pass it through
+                # as a number so the debug trace can measure cache hits / cost.
+                if _is_token_count(k, v):
+                    result[k] = v
+                else:
+                    result[k] = _REDACTED
             else:
                 result[k] = redact(v)
         return result

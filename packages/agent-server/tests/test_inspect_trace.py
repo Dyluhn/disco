@@ -56,7 +56,7 @@ class _ScriptedProvider:
         return CompletionResponse(
             text=text,
             tool_calls=list(tcs),
-            usage=TokenUsage(input_tokens=3, output_tokens=5),
+            usage=TokenUsage(input_tokens=3, output_tokens=5, cached_tokens=2),
             finish_reason="stop",
             model_used=model,
             request_id=req.request_id,
@@ -189,6 +189,25 @@ async def test_build_conversation_is_traced_and_readable_over_rest(monkeypatch):
     step_ends = [s for s in spans if s.get("span") == "agent.step" and s.get("event") == "end"]
     assert step_ends, spans
     assert any(s.get("model") == "m" and "out_tokens" in s for s in step_ends)
+    # CW-7: the span also records cached_tokens (mirrors in/out) so cache-hit
+    # ratio is measurable, and the count survives the debug-trace redactor.
+    assert any(
+        s.get("in_tokens") == 3 and s.get("out_tokens") == 5 and s.get("cached_tokens") == 2
+        for s in step_ends
+    ), step_ends
+
+    # ...and the REST trace returns those counts as NUMBERS (not ***REDACTED***),
+    # even though the key names contain "token".
+    client_counts = TestClient(create_app(store, runtime=runtime))
+    trace_body = client_counts.get(f"/api/debug/trace/{CID}").json()
+    rest_step_ends = [
+        s
+        for s in trace_body["spans"]
+        if s.get("span") == "agent.step" and s.get("event") == "end"
+    ]
+    assert any(
+        s.get("in_tokens") == 3 and s.get("cached_tokens") == 2 for s in rest_step_ends
+    ), rest_step_ends
 
     # (d) the interleaved stream is ordered by true emission order (seq monotonic)
     seqs = [e["seq"] for e in snap["events"]]

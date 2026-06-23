@@ -174,6 +174,7 @@ class RouterAgent:
             span["model"] = resp.model_used
             span["in_tokens"] = resp.usage.input_tokens
             span["out_tokens"] = resp.usage.output_tokens
+            span["cached_tokens"] = resp.usage.cached_tokens
             span["finish"] = str(resp.finish_reason)
 
         if resp.tool_calls:

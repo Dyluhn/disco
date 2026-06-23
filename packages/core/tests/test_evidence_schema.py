@@ -185,6 +185,47 @@ def test_redaction_key_patterns_non_empty() -> None:
     assert len(REDACTION_KEY_PATTERNS) >= 5, "expected at least 5 redaction patterns"
 
 
+def test_redact_numeric_token_counts_pass_through() -> None:
+    """CW-7: numeric token-COUNT fields are telemetry, not secrets — they match the
+    "token" key pattern but must survive redaction as numbers so the debug trace can
+    measure cache-hit ratio / token cost. A real secret-shaped field in the same
+    span still gets redacted."""
+    span = {
+        "span": "agent.step",
+        "in_tokens": 123,
+        "out_tokens": 45,
+        "cached_tokens": 67,
+        "tokens": 235,
+        "access_token": "sk-deadbeefdeadbeefdeadbeef0001",  # a real secret
+    }
+    result = redact(span)
+    assert isinstance(result, dict)
+    # counts pass through unchanged, as numbers
+    assert result["in_tokens"] == 123
+    assert result["out_tokens"] == 45
+    assert result["cached_tokens"] == 67
+    assert result["tokens"] == 235
+    # the actual secret-bearing token field is still redacted
+    assert result["access_token"] == "***REDACTED***"
+
+
+def test_redact_token_count_keys_only_passthrough_numbers() -> None:
+    """The allowlist is value-typed: a non-numeric value under a count key (a list
+    or string that could hold real tokens) stays redacted. Bools are not counts."""
+    data = {
+        "tokens": ["secret-a", "secret-b"],  # a list of real tokens, NOT a count
+        "in_tokens": "not-a-number",
+        "cached_tokens": True,  # bool is not a count
+        "out_tokens": 0,  # a genuine zero count passes through
+    }
+    result = redact(data)
+    assert isinstance(result, dict)
+    assert result["tokens"] == "***REDACTED***"
+    assert result["in_tokens"] == "***REDACTED***"
+    assert result["cached_tokens"] == "***REDACTED***"
+    assert result["out_tokens"] == 0
+
+
 # ---------------------------------------------------------------------------
 # 3. make_traceparent / parse_traceparent
 # ---------------------------------------------------------------------------
