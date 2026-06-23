@@ -62,6 +62,10 @@ _NON_PRODUCTIVE_TOOLS = frozenset(
         "shell_view",
         "shell_wait",
         "browser",
+        # W-45: verify_web_app is a PROBE (self-test), not a productive edit — it
+        # must not move _last_productive_seq, or the finish-gate loop breaker
+        # (same verdict since the last edit ⇒ stuck) could never key on it.
+        "verify_web_app",
     }
 )
 

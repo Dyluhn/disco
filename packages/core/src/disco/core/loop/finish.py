@@ -332,6 +332,49 @@ def _latest_browser_error(events: list[Event]) -> str | None:
     return None
 
 
+# W-45 — verify_web_app verdict readers. The build agent's `verify_web_app` tool
+# returns a STRUCTURED pass/fail verdict (server-up + HTTP + console/network +
+# blank-render → one decision). The finish gate consumes that verdict instead of
+# re-deriving a verdict from raw browser observations (which it could never
+# CONCLUDE on — the 25-40× reload loop). The marker StatusEvent carries the
+# verdict's `failure_fingerprint` so a repeat of the SAME failure WITHOUT a
+# productive edit is recognized as no-progress and halts, rather than re-looping.
+_VERIFY_MARKER_PREFIX = "verify_no_progress:"
+
+
+def _latest_verify_verdict(events: list[Event], since_seq: int) -> dict | None:
+    """Structured verdict of the LATEST `verify_web_app` observation since
+    `since_seq`. None when no verdict exists since the last productive edit — the
+    cache key is (since_seq), so a non-productive probe (browser/navigate/
+    verify_web_app itself) does NOT move `since_seq` and a re-verify reads the
+    SAME cached verdict (no real re-run). A productive edit advances `since_seq`
+    past the stale verdict → None → the gate drives a fresh verify."""
+    for ev in reversed(events):
+        if ev.seq is None or ev.seq <= since_seq:
+            continue
+        if isinstance(ev, ObservationEvent) and ev.tool_result.tool_name == "verify_web_app":
+            res = ev.tool_result
+            if res.success and res.structured:
+                return res.structured
+    return None
+
+
+def _prior_verify_marker_fp(events: list[Event], since_seq: int) -> str | None:
+    """failure_fingerprint stamped on the most recent `verify_no_progress:<fp>`
+    marker since `since_seq`. None when the gate has not yet refused for the
+    current served output. If a later marker carries the SAME fingerprint as the
+    current verdict, the gate has already nudged for this exact failure with no
+    productive edit in between → no new information → stop (the loop breaker)."""
+    for ev in reversed(events):
+        if ev.seq is None or ev.seq <= since_seq:
+            continue
+        if isinstance(ev, StatusEvent) and ev.detail and ev.detail.startswith(
+            _VERIFY_MARKER_PREFIX
+        ):
+            return ev.detail[len(_VERIFY_MARKER_PREFIX):]
+    return None
+
+
 class _DoDWorkspaceUnavailable(Exception):
     """The C1c gate cannot resolve a workspace_root (no sandbox, no
     `workspace_path` attribute on the executor). Raised by
@@ -499,6 +542,40 @@ class FinishGate:
         if signals.hard_deny_reason(action) is not None:
             return False
 
+        await self._loop._emit(action)
+        await self._loop._execute_and_observe(action)
+        events_after = await self._loop._events()
+        obs = next(
+            (e for e in reversed(events_after) if getattr(e, "action_id", None) == action.id),
+            None,
+        )
+        return isinstance(obs, ObservationEvent) and obs.tool_result.success
+
+    def _verify_tool_available(self) -> bool:
+        """W-45 — is the `verify_web_app` tool in the execution set? Present on the
+        build surface; absent on browserless backends and the legacy tests, where
+        the gate falls back to its raw browser-observation check."""
+        try:
+            tool_names = {
+                getattr(t, "name", None) for t in self._loop.executor.available_tools()
+            }
+        except Exception:  # noqa: BLE001 — introspection failure → degrade safely
+            return False
+        return "verify_web_app" in tool_names
+
+    async def _drive_verify_web_app(self) -> bool:
+        """W-45 ACTIVE verify: DRIVE one `verify_web_app` call when the agent
+        declares done without a fresh verdict. Mirrors `_drive_finish_browser_probe`
+        — the probe ActionEvent is tagged `verify_probe` so it never counts as
+        agent work. Returns True iff the call produced a usable observation."""
+        call = ToolCall(tool_name="verify_web_app", arguments={})
+        action = ActionEvent(
+            thought="Verifying the app: running verify_web_app on the running preview.",
+            tool_call=call,
+            meta={"verify_probe": True},
+        )
+        if signals.hard_deny_reason(action) is not None:
+            return False
         await self._loop._emit(action)
         await self._loop._execute_and_observe(action)
         events_after = await self._loop._events()
@@ -894,6 +971,133 @@ class FinishGate:
         self._loop._execution_nudges = 0
         return Disp.FALLTHROUGH
 
+    async def _gate_verify_web_app(self, events: list[Event]) -> Disp:
+        """W-45 — the verdict-consuming finish gate (the loop-killer).
+
+        Replaces `_browser_verified()` as the PRIMARY completion check for web
+        builds with "the latest `verify_web_app` verdict since the last productive
+        edit". If none exists when the agent calls finish, the gate DRIVES
+        `verify_web_app` itself (ONE call). pass → finish; fail → emit the verdict's
+        summary + first concrete error + screenshot + next_action and CONTINUE.
+
+        LOOP BREAKER: the verdict is cached by `_last_productive_seq` — a browser/
+        navigate/verify probe is NOT a productive edit, so re-verifying without an
+        edit reads the SAME cached verdict (no real re-run). When the SAME
+        `failure_fingerprint` recurs without a productive edit that changes the
+        served output, the gate marks the run STUCK/no_progress (W-31 detail
+        naming) instead of reloading 25-40×. The 3-refusal release no longer
+        silently converts repeated failed verification into 'done' — it finishes
+        ONLY with an explicit blocked/incomplete summary."""
+        since_seq = _last_productive_seq(events)
+        verdict = _latest_verify_verdict(events, since_seq)
+        if verdict is None:
+            # No fresh verdict — the agent may have overclaimed. Drive ONE verify.
+            if await self._drive_verify_web_app():
+                events = await self._loop._events()
+                verdict = _latest_verify_verdict(events, since_seq)
+        if verdict is None:
+            # Could not produce a verdict (tool failed / browserless) — degrade to
+            # passive (don't deadlock the finish on an un-runnable check).
+            return Disp.FALLTHROUGH
+
+        if verdict.get("passed"):
+            self._loop._browser_verify_refusals = 0  # clean pass → reset the streak
+            if _vision_mode():
+                shot = str(verdict.get("screenshot_path") or "")
+                if shot:
+                    await self._loop._emit(
+                        StatusEvent(
+                            status=ConversationStatus.RUNNING,
+                            detail=f"vision_artifact:{shot}",
+                        )
+                    )
+            return Disp.FALLTHROUGH
+
+        # FAIL / DEGRADED. Build the concrete next-step payload from the verdict.
+        fp = str(verdict.get("failure_fingerprint") or "")
+        summary = str(verdict.get("summary") or "verify_web_app did not pass")
+        next_action = str(verdict.get("next_action") or "")
+        screenshot = str(verdict.get("screenshot_path") or "")
+        errs = verdict.get("console_errors") or []
+        nets = verdict.get("network_failures") or []
+        first_error = ""
+        if errs:
+            e0 = errs[0]
+            where = f" @ {e0.get('source')}" if e0.get("source") else ""
+            first_error = f"{e0.get('text', '')}{where}"
+        elif nets:
+            n0 = nets[0]
+            marker = n0.get("status") or n0.get("failure") or "failed"
+            first_error = f"{n0.get('method', 'GET')} {n0.get('url', '')} -> {marker}"
+
+        prior_fp = _prior_verify_marker_fp(events, since_seq)
+        if prior_fp is not None and prior_fp == fp:
+            # LOOP BREAKER: the SAME failure verdict has recurred since the last
+            # productive edit and the gate already nudged for it — no new
+            # information. Halt STUCK (named) instead of re-loading forever.
+            blocked = (
+                "⚠ Stopped: verify_web_app keeps returning the SAME failure with no "
+                "progress since the last edit — re-loading won't help.\n"
+                f"{summary}\n"
+                + (f"error: {first_error}\n" if first_error else "")
+                + (f"next: {next_action}" if next_action else "")
+            )
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(role="user", content=blocked),
+                )
+            )
+            await self._loop._emit(
+                StatusEvent(
+                    status=ConversationStatus.STUCK,
+                    detail=f"{_VERIFY_MARKER_PREFIX}{fp}",
+                )
+            )
+            return Disp.HALT
+
+        if self._loop._browser_verify_refusals < 3:
+            self._loop._browser_verify_refusals += 1
+            payload = (
+                f"verify_web_app did not pass ({verdict.get('verdict')}). {summary}\n"
+                + (f"first error: {first_error}\n" if first_error else "")
+                + (f"screenshot: {screenshot}\n" if screenshot else "")
+                + (f"next step: {next_action}" if next_action else "Fix the issue, then finish.")
+            )
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(role="user", content=payload),
+                )
+            )
+            # Stamp the fingerprint so a repeat WITHOUT a productive edit trips the
+            # loop breaker above on the next finish attempt.
+            await self._loop._emit(
+                StatusEvent(
+                    status=ConversationStatus.RUNNING,
+                    detail=f"{_VERIFY_MARKER_PREFIX}{fp}",
+                )
+            )
+            return Disp.CONTINUE
+
+        # 3-refusal release — but NOT a silent 'done': finish ONLY with an explicit
+        # blocked/incomplete summary so repeated failed verification is never
+        # converted into a clean pass (the W-32-adjacent escape, closed here).
+        warn = (
+            "⚠ Finished WITHOUT a passing verify_web_app verdict (3 attempts) — the "
+            f"deliverable is INCOMPLETE. {summary}"
+            + (f" Outstanding: {next_action}" if next_action else "")
+            + " Note this clearly in your summary."
+        )
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(role="user", content=warn),
+            )
+        )
+        self._loop._browser_verify_refusals = 0
+        return Disp.FALLTHROUGH
+
     async def gate_browser_verify(self, step: AgentStep, events: list[Event]) -> Disp:
         # BROWSER-VERIFY GATE — §BP-05. If web deliverable holds, refuse finish
         # until a clean browser observation (zero console errors) exists
@@ -903,6 +1107,14 @@ class FinishGate:
             and self._loop.mode != OperatingMode.PLANNING
             and _is_web_deliverable(events)
         ):
+            # W-45: when the structured `verify_web_app` tool is in the execution
+            # set (the build surface), consume its VERDICT as the primary check —
+            # the clean actionable signal that kills the reload loop. The legacy
+            # raw-observation path below stays for browserless backends / tests
+            # without the tool (non-web + assist paths are untouched: this whole
+            # block is gated on _is_web_deliverable).
+            if self._verify_tool_available():
+                return await self._gate_verify_web_app(events)
             since_seq = _last_productive_seq(events)
             ok, _ = _browser_verified(events, since_seq)
             if not ok:
@@ -1029,6 +1241,11 @@ class FinishGate:
         disp = await self.gate_browser_verify(step, events)
         if disp is Disp.CONTINUE:
             return Disp.CONTINUE
+        if disp is Disp.HALT:
+            # W-45 loop breaker: the verify gate marked the run STUCK (same failure
+            # fingerprint with no productive edit) and already emitted the terminal
+            # status — propagate the halt so the engine exits the loop.
+            return Disp.HALT
 
         disp = await self.finalize_finish(step, state, events)
         if disp is Disp.CONTINUE:

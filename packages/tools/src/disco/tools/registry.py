@@ -83,6 +83,9 @@ AGENT_TOOLS = frozenset(
         "shell_kill_process",
         "code_exec",
         "browser",
+        # W-45 — verify_web_app: structured web-app self-test → the finish gate's
+        # clean pass/fail verdict (kills the 25-40× browser reload verify-loop).
+        "verify_web_app",
         "deploy_preview",
         "server_status",
         # plan-mode meta tools: propose a plan (planning) + report capstones (execution).

@@ -38,6 +38,7 @@ from .slides import SlidesTool
 from .subagent import DelegateExploreTool
 from .system import CodeExecTool, ShellTool
 from .think import ThinkTool
+from .verify_app import VerifyWebAppTool
 
 __all__ = [
     "AudioOverviewTool",
@@ -69,6 +70,7 @@ __all__ = [
     "SubmitPlanTool",
     "UpdatePlanProgressTool",
     "ThinkTool",
+    "VerifyWebAppTool",
     "build_default_registry",
 ]
 
@@ -95,6 +97,7 @@ def build_default_registry() -> ToolRegistry:
         SearchTool(),
         ExtractTool(),
         BrowserTool(),
+        VerifyWebAppTool(),  # W-45: structured web-app self-test → clean finish-gate verdict
         ServerStatusTool(),
         SubmitPlanTool(),  # plan-mode: proposed plan (intercepted by the loop)
         PlanStepTool(),  # plan-mode: capstone progress reports (legacy incremental)

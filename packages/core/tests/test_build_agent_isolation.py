@@ -226,6 +226,9 @@ _EXPECTED_AGENT_TOOLS = [
     # runthru-v2 (#3): declarative full-state progress snapshot — capable models
     # (assist OFF) use this in place of plan_step; prompt-gated, never gates finish.
     "update_plan_progress",
+    # W-45: verify_web_app — structured web-app self-test feeding the finish gate's
+    # clean pass/fail verdict (kills the browser reload verify-loop).
+    "verify_web_app",
 ]
 
 

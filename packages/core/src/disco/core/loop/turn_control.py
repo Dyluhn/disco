@@ -314,6 +314,10 @@ class Valve:
         disp = await finish.gate_browser_verify(finish_step, events)
         if disp is Disp.CONTINUE:
             return False
+        if disp is Disp.HALT:
+            # W-45: the verify gate halted the run STUCK (repeated same-fingerprint
+            # failure with no progress) and emitted the terminal status itself.
+            return True
         # (3) external Definition-of-Done gate (no spec → no-op pass-through).
         if not await finish.finish_dod_gate_passed():
             return False
