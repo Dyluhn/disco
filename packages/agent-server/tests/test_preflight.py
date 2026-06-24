@@ -159,6 +159,91 @@ async def test_preflight_driver_is_wall_bounded_on_black_hole():
     assert elapsed < 5.0  # bounded by the deadline, not the 60s stall / 5×180s
 
 
+async def test_preflight_driver_retries_then_proceeds_on_transient_timeout():
+    """Resilience: a single pre-flight timeout must NOT hard-fail the run. A driver
+    that times out on the first probe but answers on the next is reachable → the
+    pre-flight retries and returns None (the run PROCEEDS, no terminal reason)."""
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)  # no injected router → real preflight path
+    rt._DRIVER_PREFLIGHT_BACKOFF_S = 0.0  # keep the test fast
+
+    class _FlakyRouter:
+        def __init__(self):
+            self.calls = 0
+
+        async def complete(self, req, *, context=None):
+            self.calls += 1
+            if self.calls == 1:
+                raise TimeoutError  # the deadline fired once (slow remote model)
+            return  # answered on the retry
+
+    flaky = _FlakyRouter()
+    rt._router_now = lambda **kw: flaky
+    assert await rt._preflight_driver("c1") is None  # proceeds, not terminal
+    assert flaky.calls == 2  # one miss, then a successful re-probe
+
+
+async def test_preflight_driver_soft_degrades_for_already_working_conversation():
+    """An established run that ALREADY proved the driver reachable in THIS
+    conversation must not be hard-failed by a later transient blip: a probe that
+    now always times out soft-degrades to a warning and PROCEEDS (the real call
+    will surface a genuine error if the driver is truly down)."""
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)
+    rt._DRIVER_PREFLIGHT_BACKOFF_S = 0.0
+
+    class _SwitchRouter:
+        def __init__(self):
+            self.fail = False
+            self.timeout_calls = 0
+
+        async def complete(self, req, *, context=None):
+            if self.fail:
+                self.timeout_calls += 1
+                raise TimeoutError
+            return  # healthy
+
+    router = _SwitchRouter()
+    rt._router_now = lambda **kw: router
+
+    # First kick: the driver is healthy → the conversation is marked "proven".
+    assert await rt._preflight_driver("c1") is None
+    assert "c1" in rt._driver_proven
+
+    # Simulate a later kick after the success cache's TTL has lapsed (30 turns in):
+    rt._driver_preflight_ok.clear()  # force a real re-probe
+    router.fail = True  # the remote model is now transiently slow on every probe
+
+    # Soft-degrade: a proven conversation PROCEEDS despite the transient timeout.
+    assert await rt._preflight_driver("c1") is None
+    assert router.timeout_calls >= 1  # the real re-probe WAS attempted
+
+
+async def test_preflight_driver_still_terminal_when_genuinely_unreachable():
+    """The safety stays: a driver that NEVER answers (wrong endpoint/key) on a
+    conversation that never proved it still ends in a NAMED terminal reason —
+    after the bounded retries, not on the first miss, and not forever."""
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)
+    rt._DRIVER_PREFLIGHT_BACKOFF_S = 0.0
+
+    class _DeadRouter:
+        def __init__(self):
+            self.calls = 0
+
+        async def complete(self, req, *, context=None):
+            self.calls += 1
+            raise TimeoutError  # black hole: never answers
+
+    dead = _DeadRouter()
+    rt._router_now = lambda **kw: dead
+    reason = await rt._preflight_driver("c2")  # never proven
+    assert reason is not None
+    assert "timed out" in reason and "unreachable" in reason
+    assert dead.calls == rt._DRIVER_PREFLIGHT_ATTEMPTS  # retried, still bounded
+    assert "c2" not in rt._driver_proven
+
+
 async def test_deep_research_kick_blocks_on_dead_driver():
     """P1-2: the DR INITIAL KICK pre-flights the driver. A dead/unauthed model
     emits StatusEvent(ERROR) and does NOT leave the conversation stuck RUNNING

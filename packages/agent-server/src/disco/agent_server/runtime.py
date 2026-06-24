@@ -587,6 +587,13 @@ class ConversationRuntime:
         # healthy driver is re-probed at most once per _DRIVER_PREFLIGHT_TTL_S, so
         # back-to-back kicks don't each pay a live round-trip.
         self._driver_preflight_ok: dict[str, float] = {}
+        # W-35 (resilience): conversation ids whose driver has ALREADY answered a
+        # pre-flight (or run) successfully in THIS process. An established run that
+        # has proven the driver reachable must NOT be hard-failed by a single
+        # transient pre-flight timeout (a remote reasoning model — e.g. minimax —
+        # is intermittently slow under load): for these we soft-degrade a transient
+        # probe failure to a warning and let the REAL call surface a genuine error.
+        self._driver_proven: set[str] = set()
         if config_store is not None:
             self._config_store = config_store
         elif config is not None:
@@ -1711,6 +1718,15 @@ class ConversationRuntime:
     # entire probe (including any internal retries) at this deadline via
     # asyncio.wait_for; a timeout is ITSELF an "unreachable" verdict.
     _DRIVER_PREFLIGHT_TIMEOUT_S = 10.0
+    # W-35 (resilience): a slow remote reasoning model can miss a SINGLE probe yet
+    # be perfectly reachable (other calls succeed seconds before/after). Retry the
+    # probe a few times with a short escalating backoff before declaring the driver
+    # unreachable, so a momentary latency blip does not hard-fail a working run. The
+    # total stays bounded (ATTEMPTS × TIMEOUT + backoffs) so a genuinely-dead driver
+    # still fails reasonably fast. Only TRANSIENT verdicts (timeout / LLMTransientError)
+    # are retried; a hard verdict (auth / misconfig / unavailable) fails immediately.
+    _DRIVER_PREFLIGHT_ATTEMPTS = 3
+    _DRIVER_PREFLIGHT_BACKOFF_S = 0.5
 
     async def _preflight_driver(
         self,
@@ -1747,6 +1763,7 @@ class ConversationRuntime:
                 key = "?"
         cached = self._driver_preflight_ok.get(key)
         if cached is not None and time.monotonic() - cached < self._DRIVER_PREFLIGHT_TTL_S:
+            self._driver_proven.add(cid)
             return None
         router = self._router_now(pick=override, conversation_id=cid)
         req = CompletionRequest(
@@ -1754,36 +1771,70 @@ class ConversationRuntime:
             messages=[LLMMessage(role="user", content="ping")],
             max_tokens=1,
         )
-        try:
-            # P1-1: bound the probe so it FAILS FAST. asyncio.wait_for caps the
-            # whole call (resolution + any same-model transient retries + the
-            # provider round-trip) at _DRIVER_PREFLIGHT_TIMEOUT_S; a black-holed
-            # driver is cancelled at the deadline instead of stalling for minutes.
-            await asyncio.wait_for(
-                router.complete(
-                    req,
-                    context=CallContext(conversation_id=cid, model_override=override),
-                ),
-                self._DRIVER_PREFLIGHT_TIMEOUT_S,
-            )
-        except TimeoutError:
-            return (
-                f"Driver '{key}' unreachable: no response within "
-                f"{self._DRIVER_PREFLIGHT_TIMEOUT_S:.0f}s (pre-flight timed out)"
-            )
-        except (LLMContentFiltered, LLMContextWindowExceeded):
-            pass  # the endpoint answered → reachable
-        except NoEligibleModel as exc:
-            return f"Driver '{key}' is misconfigured: {exc}"
-        except LLMAuthError as exc:
-            return f"Driver '{key}' rejected the API key: {exc}"
-        except LLMProviderUnavailable as exc:
-            return f"Driver '{key}' is unavailable: {exc}"
-        except LLMTransientError as exc:
-            return f"Driver '{key}' unreachable: {exc}"
-        except LLMError as exc:
-            return f"Driver '{key}' error: {exc}"
+        # A TRANSIENT verdict (timeout / LLMTransientError) is retried up to
+        # _DRIVER_PREFLIGHT_ATTEMPTS before it counts; a HARD verdict (auth /
+        # misconfig / unavailable / other) returns immediately. transient_reason
+        # holds the last transient verdict; it is cleared the moment a probe
+        # reaches the endpoint (a real answer OR a content-filter/context reply).
+        transient_reason: str | None = None
+        for attempt in range(self._DRIVER_PREFLIGHT_ATTEMPTS):
+            try:
+                # P1-1: bound the probe so it FAILS FAST. asyncio.wait_for caps the
+                # whole call (resolution + any same-model transient retries + the
+                # provider round-trip) at _DRIVER_PREFLIGHT_TIMEOUT_S; a black-holed
+                # driver is cancelled at the deadline instead of stalling for minutes.
+                await asyncio.wait_for(
+                    router.complete(
+                        req,
+                        context=CallContext(conversation_id=cid, model_override=override),
+                    ),
+                    self._DRIVER_PREFLIGHT_TIMEOUT_S,
+                )
+                transient_reason = None
+                break  # reachable
+            except TimeoutError:
+                transient_reason = (
+                    f"Driver '{key}' unreachable: no response within "
+                    f"{self._DRIVER_PREFLIGHT_TIMEOUT_S:.0f}s (pre-flight timed out)"
+                )
+            except (LLMContentFiltered, LLMContextWindowExceeded):
+                transient_reason = None
+                break  # the endpoint answered → reachable
+            except NoEligibleModel as exc:
+                return f"Driver '{key}' is misconfigured: {exc}"
+            except LLMAuthError as exc:
+                return f"Driver '{key}' rejected the API key: {exc}"
+            except LLMProviderUnavailable as exc:
+                return f"Driver '{key}' is unavailable: {exc}"
+            except LLMTransientError as exc:
+                transient_reason = f"Driver '{key}' unreachable: {exc}"
+            except LLMError as exc:
+                return f"Driver '{key}' error: {exc}"
+            # transient verdict: brief escalating backoff, then re-probe (unless
+            # this was the final attempt).
+            if attempt + 1 < self._DRIVER_PREFLIGHT_ATTEMPTS:
+                await asyncio.sleep(self._DRIVER_PREFLIGHT_BACKOFF_S * (attempt + 1))
+
+        if transient_reason is not None:
+            # Every probe failed with a TRANSIENT verdict. If this driver has
+            # ALREADY proven itself in THIS conversation (e.g. a build that ran for
+            # many turns), a momentary slow remote model must NOT terminate the run:
+            # soft-degrade to a warning and PROCEED — the real generation will
+            # surface a genuine error if the driver is actually down. A driver that
+            # has NEVER answered in this conversation is more legitimately terminal,
+            # so for a first-ever call we keep the named terminal reason.
+            if cid in self._driver_proven:
+                logger.warning(
+                    "driver pre-flight for %r failed transiently (%s) but the driver "
+                    "already succeeded in conversation %s — proceeding (soft-degrade)",
+                    key,
+                    transient_reason,
+                    cid or "<none>",
+                )
+                return None
+            return transient_reason
         self._driver_preflight_ok[key] = time.monotonic()
+        self._driver_proven.add(cid)
         return None
 
     # W-48: HARD wall-clock bound on a SINGLE sandbox connectivity pre-flight. Like
