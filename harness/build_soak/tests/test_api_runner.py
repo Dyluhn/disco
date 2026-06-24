@@ -96,6 +96,11 @@ class FakeTransport:
         self.posts.append((path, body))
         if path == "/conversations":
             return 200, {"conversation_id": self.cid, "surface": "build"}
+        if path.endswith("/resume"):
+            # The REAL resume body carries a STATE string under "status" — a regression
+            # guard for the http-int/state-string key collision (Bug 11): merging this
+            # under "status" used to clobber the HTTP code and crash int(resp["status"]).
+            return 200, {"ok": True, "status": "RUNNING"}
         return 200, {"event_id": "e", "seq": 1}
 
     async def get_json(self, path):
@@ -333,6 +338,162 @@ async def test_collect_workspace_falls_back_to_proxy_without_projects_root(tmp_p
     assert manifest["index.html"]["present"] is True
     assert manifest["index.html"]["source"] == "preview_proxy"
     assert "Build Smoke OK" in manifest["index.html"]["content"]
+
+
+# ---- Bug 10: durable PREVIEW collection (no ephemeral-proxy false-fail) ------
+
+
+class _DeadPreviewTransport(FakeTransport):
+    """The post-FINISH reality: the model's ephemeral static server is torn down, so the
+    preview proxy 404s for the root AND every path (while /preview still says available)."""
+
+    async def get_text(self, path):
+        if "/preview-app/" in path:
+            return 404, "", {}
+        return await super().get_text(path)
+
+
+def _verify_obs(seq, passed):
+    """A verify_web_app observation carrying the in-run pass/fail in structured.passed."""
+    return {
+        "id": f"evt_{seq}",
+        "seq": seq,
+        "kind": "observation",
+        "source": "environment",
+        "tool_result": {
+            "tool_name": "verify_web_app",
+            "success": True,
+            "structured": {"passed": passed, "url": "http://127.0.0.1:8080/"},
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_collect_preview_uses_durable_snapshot_when_proxy_404s(tmp_path):
+    # Bug 10: the proxy 404s post-FINISH, but the build genuinely served + verified during
+    # the run and the served-root file is durable in the snapshot → use it, classify alive.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    _plant_snapshot(proj, _CID, {"index.html": "<h1>Build Smoke OK</h1>"})
+    _seed_db(db, _CID, [_verify_obs(1, True)])  # in-run verify PASSED
+    transport = _DeadPreviewTransport(db, states=["FINISHED"])
+    client = DiscoApiClient(
+        transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj)
+    )
+
+    preview = await client.collect_preview(_CID)
+
+    assert preview["health"]["status"] == 200
+    assert "Build Smoke OK" in preview["content"]
+    assert preview["source"] == "snapshot_static"
+
+
+@pytest.mark.asyncio
+async def test_collect_preview_does_not_mask_failing_in_run_verify(tmp_path):
+    # A genuinely-broken preview is NOT masked: the build's LAST in-run verify FAILED, so
+    # the durable snapshot is NOT substituted — the live 404 stands → FALSE_FINISH_PREVIEW_BROKEN.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    _plant_snapshot(proj, _CID, {"index.html": "<h1>Build Smoke OK</h1>"})
+    _seed_db(db, _CID, [_verify_obs(1, True), _verify_obs(2, False)])  # last verify FAILED
+    transport = _DeadPreviewTransport(db, states=["FINISHED"])
+    client = DiscoApiClient(
+        transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj)
+    )
+
+    preview = await client.collect_preview(_CID)
+
+    assert preview["health"]["status"] == 404
+    assert preview.get("source") != "snapshot_static"
+
+
+@pytest.mark.asyncio
+async def test_collect_preview_no_durable_deliverable_stays_broken(tmp_path):
+    # No served-root file in the snapshot (no static deliverable) → no substitution; the
+    # honest 404 stands so a no-output preview still FAILs.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    _plant_snapshot(proj, _CID, {"notes.txt": "no served root here"})  # no index.html
+    _seed_db(db, _CID, [_verify_obs(1, True)])
+    transport = _DeadPreviewTransport(db, states=["FINISHED"])
+    client = DiscoApiClient(
+        transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj)
+    )
+
+    preview = await client.collect_preview(_CID)
+
+    assert preview["health"]["status"] == 404
+
+
+@pytest.mark.asyncio
+async def test_collect_preview_live_proxy_wins_over_snapshot(tmp_path):
+    # When the live proxy IS up, it is the truth — the (possibly stale) snapshot is NOT used.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    _plant_snapshot(proj, _CID, {"index.html": "<h1>STALE SNAPSHOT</h1>"})
+    _seed_db(db, _CID, [_verify_obs(1, True)])
+    transport = FakeTransport(db, states=["FINISHED"], preview_html="<h1>LIVE Build Smoke OK</h1>")
+    client = DiscoApiClient(
+        transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj)
+    )
+
+    preview = await client.collect_preview(_CID)
+
+    assert preview["health"]["status"] == 200
+    assert "LIVE" in preview["content"]
+    assert preview.get("source") != "snapshot_static"
+
+
+@pytest.mark.asyncio
+async def test_static_build_classifies_pass_with_dead_proxy_via_durable_sources(tmp_path):
+    # End-to-end mirror of the live PASS: with the post-FINISH preview proxy DOWN, BOTH the
+    # workspace (Bug 9) and the preview (Bug 10) come from the durable snapshot → PASS.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    _seed_db(db, _CID, clean_smoke_log())
+    _plant_snapshot(proj, _CID, {"index.html": "<h1>Build Smoke OK</h1>"})
+    transport = _DeadPreviewTransport(
+        db, states=["AWAITING_PLAN_APPROVAL", "FINISHED", "FINISHED", "FINISHED"]
+    )
+    client = DiscoApiClient(
+        transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj)
+    )
+    scenario = _smoke_scenario()
+    run = await drive_scenario(client, scenario, model="m", autonomous=False, timeout_s=5)
+    base = assemble_dossier(
+        tmp_path / "out", "run_b10_pass", scenario, run, model="m", autonomous=False
+    )
+    classification = classify_dossier(base, scenario, run, autonomous=False)
+    assert classification["status"] == "PASS", classification
+
+
+@pytest.mark.asyncio
+async def test_durable_preview_does_not_mask_wrong_content(tmp_path):
+    # The durable substitution uses the REAL snapshot html (never a fabricated 200/blank),
+    # so a wrong-content static deliverable still FAILs on truth — it is NOT masked into a
+    # PASS. (Workspace + preview read the same index.html, so the workspace oracle catches
+    # the missing needle first with ARTIFACT_TRUTH_MISMATCH — either truth-mismatch is fine;
+    # the point is no false PASS.)
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    _seed_db(db, _CID, clean_smoke_log())
+    _plant_snapshot(proj, _CID, {"index.html": "<h1>WRONG</h1>"})  # missing the needle
+    transport = _DeadPreviewTransport(
+        db, states=["AWAITING_PLAN_APPROVAL", "FINISHED", "FINISHED", "FINISHED"]
+    )
+    client = DiscoApiClient(
+        transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj)
+    )
+    scenario = _smoke_scenario()
+    run = await drive_scenario(client, scenario, model="m", autonomous=False, timeout_s=5)
+    base = assemble_dossier(
+        tmp_path / "out", "run_b10_wrong", scenario, run, model="m", autonomous=False
+    )
+    classification = classify_dossier(base, scenario, run, autonomous=False)
+    assert classification["status"] == "FAIL"
+    assert classification["code"] in ("ARTIFACT_TRUTH_MISMATCH", "PREVIEW_TRUTH_MISMATCH"), (
+        classification
+    )
 
 
 # ---- infra gate fires ONLY pre-create (codex #3) ----------------------------

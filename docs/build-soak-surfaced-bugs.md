@@ -364,17 +364,44 @@ and the classification advances PAST `FALSE_FINISH_NO_OUTPUT` (the workspace tru
 Pinned: `test_api_runner.test_collect_workspace_{reads_snapshot_when_preview_proxy_404s,
 genuinely_missing_file_is_omitted,falls_back_to_proxy_without_projects_root}`.
 
-### Bug 10 — runner PREVIEW-collection has the SAME ephemeral-proxy fragility (HARNESS) — OPEN
+### Bug 10 — runner PREVIEW-collection has the SAME ephemeral-proxy fragility (HARNESS) — FIXED
 
 Surfaced by the Bug 9 live re-run: with the workspace manifest now correct, the SAME
 `static_html_minimal` smoke fails one step later with **`FALSE_FINISH_PREVIEW_BROKEN`**
-(`preview_health_status: 404`). `collect_preview` reads the preview via the same fragile
+(`preview_health_status: 404`). `collect_preview` read the preview via the same fragile
 `GET …/preview-app/` proxy, which 404s post-FINISH because the model's served preview
 (`python3 -m http.server 8080 -d /workspace`, a backgrounded shell process) is torn down when the
 run ends. This is NOT a bad build and NOT Bug 9: the event log PROVES the preview served correctly
 DURING the run (`verify_web_app` on :8080 → passed; `shell curl …8080 | grep 'Build Smoke OK'` →
-exit 0). `…/preview-edit/index.html` (which reads the snapshot) returns 200, so the deliverable is
-durably present. The fix is the Bug-9 pattern applied to preview, but it needs a DECISION on preview
-semantics (does a static build's post-FINISH non-serving count as broken, or should the preview
-oracle adjudicate the LAST live serve evidence / the snapshot-served root?) so it does not MASK a
-genuinely-broken dynamic preview. Tracked as the next repair; out of Bug 9's scope.
+exit 0); `…/preview-edit/index.html` (snapshot-backed) returns 200, so the deliverable is durable.
+
+**Fix (this commit, HARNESS-only `adapters/disco_api.py` `collect_preview`).** When the LIVE proxy
+serves (status < 400 AND non-empty), that IS the truth and is used unchanged. When it is down, the
+DURABLE static preview is substituted — but TIGHTLY scoped so a real failure is never masked:
+accepted ONLY when (1) a served-root file (`index.html`, root-preferred then shallowest, symlink-
+jailed) is actually present in the host snapshot — `_snapshot_served_root` — AND (2) the build's own
+LAST in-run `verify_web_app` did NOT fail (`structured.passed` is not False) — `_in_run_verify_failed`.
+The substituted `content` is the REAL snapshot HTML (never a fabricated 200/blank), so a wrong-content
+deliverable still trips a truth-mismatch; a missing served-root or a failing in-run verify leaves the
+honest 404 → `FALSE_FINISH_PREVIEW_BROKEN`. Dynamic-app previews (a live server with no durable static
+root) are explicitly NOT covered here — that remains the documented follow-up. **LIVE-PROVEN PASS**
+(`static_html_minimal` over `conv_75881694…`): proxy down post-FINISH, preview substituted from the
+snapshot (`served.html` = raw `index.html`, health 200), OutputTruthOracle PASS, overall **PASS**.
+Pinned: `test_api_runner.test_collect_preview_{uses_durable_snapshot_when_proxy_404s,
+does_not_mask_failing_in_run_verify,no_durable_deliverable_stays_broken,live_proxy_wins_over_snapshot}`,
+`test_static_build_classifies_pass_with_dead_proxy_via_durable_sources`,
+`test_durable_preview_does_not_mask_wrong_content`.
+
+### Bug 11 — runner crashes the whole drive on a normal PAUSE→resume (HARNESS) — FIXED
+
+Surfaced live during the Bug 10 re-run: a build that PAUSED (the cooperative valve), then was resumed
+by the runner (acting as the user, ≤3×, the Bug 8 design), crashed the entire drive with
+`ValueError: invalid literal for int() with base 10: 'RUNNING'` → the run degraded to `INVALID_RUN`.
+Root cause: `DiscoApiClient.resume` returned `{"status": <http_int>, **body}`, but the resume body is
+`{"ok": true, "status": "RUNNING"}` — the body's STATE STRING clobbered the HTTP int under the shared
+`status` key, so the caller's `int(resp["status"])` blew up the moment any build paused. The
+deterministic tests missed it because the fake transport returned no `status` in the resume body.
+**Fix (this commit):** `resume` returns the HTTP code under the non-colliding `http_status` key (body
+fields, including the state `status`, preserved); the caller reads `http_status`. The fake transport
+now returns the REALISTIC resume body (`{"ok": true, "status": "RUNNING"}`) so the existing
+`test_paused_*` resume tests are a permanent regression guard.

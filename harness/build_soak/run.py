@@ -131,8 +131,9 @@ async def _drive_to_terminal(
                 # run (BUILD_DID_NOT_FINISH), never a silent pass.
                 resumes += 1
                 resp = await client.resume(cid)
-                timeline.append(f"resumed PAUSED run (resume {resumes}, http {resp.get('status')})")
-                if int(resp.get("status", 0)) >= 400:
+                http_status = int(resp.get("http_status", 0))
+                timeline.append(f"resumed PAUSED run (resume {resumes}, http {http_status})")
+                if http_status >= 400:
                     # not resumable (409) — stop retrying; let the oracle judge.
                     timeline.append("resume rejected (not resumable) — stopping")
                     return status

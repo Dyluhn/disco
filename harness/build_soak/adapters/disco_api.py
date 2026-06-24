@@ -233,11 +233,17 @@ class DiscoApiClient:
         """Resume a PAUSED (cooperative / actionless) run — the runner ACTS AS THE
         USER who hits Resume. POST /conversations/{cid}/resume (conversations.py:284,
         the same mode-agnostic path the WS `resume` frame uses). A 409 (not resumable)
-        is returned as-is so the caller can stop retrying."""
+        is returned as-is so the caller can stop retrying.
+
+        The HTTP code is returned under `http_status` (NOT `status`): the resume body
+        itself carries a ``status`` field (e.g. ``{"ok": true, "status": "RUNNING"}``), so
+        merging it under the same key would clobber the HTTP int with the body's STATE
+        STRING — the caller's ``int(resp["status"])`` then crashed the whole drive with
+        ``ValueError: invalid literal for int() ... 'RUNNING'`` the moment a build paused."""
         status, data = await self._t.post_json(
             f"/conversations/{conversation_id}/resume", {}
         )
-        return {"status": status, **(data if isinstance(data, dict) else {})}
+        return {"http_status": status, **(data if isinstance(data, dict) else {})}
 
     async def send_followup(
         self, conversation_id: str, text: str, *, kind: str = "message"
@@ -492,18 +498,96 @@ class DiscoApiClient:
     async def collect_preview(self, conversation_id: str) -> dict[str, Any]:
         """Capture preview truth: availability + the served ROOT html + its HTTP
         health status. Shape consumed by OutputTruthOracle:
-        {"health": {"status": <code>}, "content": <html>, "available": <bool>}."""
+        {"health": {"status": <code>}, "content": <html>, "available": <bool>}.
+
+        Bug 10 (same ephemeral-proxy fragility as Bug 9): post-FINISH the live preview
+        proxy 404s because the model's served preview (a backgrounded ``python -m
+        http.server``) is torn down when the run ends — false `FALSE_FINISH_PREVIEW_BROKEN`.
+        When the LIVE proxy is up we use it (best truth). When it is down, we fall back to
+        the DURABLE source for a STATIC build: the served-root file (``index.html``) that is
+        still in the host snapshot. This is scoped TIGHTLY so a real failure is never masked:
+          * accepted ONLY when a served-root file is actually present in the snapshot
+            (no deliverable / empty workspace → stays 404 → FALSE_FINISH_PREVIEW_BROKEN);
+          * the substituted ``content`` is the REAL snapshot HTML, so a wrong-content
+            deliverable still trips PREVIEW_TRUTH_MISMATCH (the oracle's must_contain);
+          * NOT accepted when the build's own in-run web-app verification ENDED in failure
+            (`verify_web_app` last `passed` is False) — a genuinely-broken preview still FAILs;
+          * dynamic-app previews (a live server with no durable static root) are NOT covered
+            here — that's the documented follow-up.
+        """
         avail_status, avail = await self._t.get_json(
             f"/conversations/{conversation_id}/preview"
         )
         status, text, _hdrs = await self._t.get_text(
             f"/conversations/{conversation_id}/preview-app/"
         )
-        return {
+        live = {
             "health": {"status": status},
             "content": text,
             "available": bool(avail.get("available")) if avail_status < 400 else False,
         }
+        # The live preview proxy actually served → that IS the truth.
+        if status < 400 and text:
+            return live
+        # Live proxy down (post-FINISH teardown). Substitute the durable static preview
+        # ONLY when a served-root file is in the snapshot AND the in-run verify didn't fail.
+        if self._projects_root is not None and not self._in_run_verify_failed(conversation_id):
+            served = self._snapshot_served_root(conversation_id)
+            if served is not None:
+                return {
+                    "health": {"status": 200},
+                    "content": served,
+                    "available": True,
+                    "source": "snapshot_static",
+                }
+        return live  # honest 404 → FALSE_FINISH_PREVIEW_BROKEN (no durable deliverable)
+
+    def _snapshot_served_root(self, conversation_id: str) -> str | None:
+        """The durable served-root HTML for a STATIC build: ``index.html`` at the snapshot
+        workspace root (preferred), else the shallowest ``index.html`` in the tree (mirrors
+        the product's ``_find_snapshot_index``). Symlink-jailed. None ⇒ no static deliverable
+        (so the caller does NOT substitute — a genuinely-absent preview stays broken)."""
+        ws = self._snapshot_workspace_dir(conversation_id)
+        if ws is None:
+            return None
+        candidates: list[Path] = []
+        root_index = ws / "index.html"
+        if root_index.is_file():
+            candidates = [root_index]
+        else:
+            try:
+                candidates = sorted(
+                    ws.rglob("index.html"), key=lambda p: (len(p.relative_to(ws).parts), str(p))
+                )
+            except OSError:
+                return None
+        for cand in candidates:
+            try:
+                resolved = cand.resolve()
+                if not resolved.is_relative_to(ws) or not resolved.is_file():
+                    continue
+                return resolved.read_bytes().decode("utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+        return None
+
+    def _in_run_verify_failed(self, conversation_id: str) -> bool:
+        """True iff the build's LAST in-run ``verify_web_app`` observation FAILED
+        (``structured.passed`` is False). A failing final verification means the preview is
+        genuinely broken — never substitute the durable snapshot for it. No verify at all ⇒
+        False (a static deliverable that finished without an explicit serve-check is not a
+        proven failure; its served-root presence is adjudicated above)."""
+        last_passed: bool | None = None
+        for e in self._read_events(conversation_id):
+            if e.get("kind") != "observation":
+                continue
+            tr = _payload(e).get("tool_result") or {}
+            if tr.get("tool_name") != "verify_web_app":
+                continue
+            structured = tr.get("structured") or {}
+            if isinstance(structured, dict) and "passed" in structured:
+                last_passed = bool(structured.get("passed"))
+        return last_passed is False
 
     # -- internal: race-free DB read ------------------------------------------
 
