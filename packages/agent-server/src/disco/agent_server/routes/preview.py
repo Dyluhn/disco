@@ -101,7 +101,7 @@ def make_preview_router(
                 return Response(
                     _json.dumps({
                         "reason": "disabled",
-                        "message": "Live browser is off — enable it in Settings → Agent → Live browser.",
+                        "message": "Live browser is off — enable it in Settings → Agent.",
                     }),
                     status_code=503,
                     media_type="application/json",
@@ -118,6 +118,23 @@ def make_preview_router(
                 _json.dumps({
                     "reason": "no_sandbox",
                     "message": "No sandbox running for this conversation — start the agent first.",
+                }),
+                status_code=503,
+                media_type="application/json",
+            )
+
+        # HONESTY GATE (fixes the live_start_failed bug): only a backend that ships the
+        # Xvfb/x11vnc/websockify stack (gVisor — see LIVE_VIEW_BACKENDS) can run the live
+        # view. On the process dev / local / podman backends live_start would shell out to
+        # an Xvfb binary that isn't there and fail with "Failed to start live view stack".
+        # Refuse up-front with an honest reason so the frontend falls back to screenshots
+        # rather than surfacing a scary failure. live-ready reports the same truth, so the
+        # auto-stream path never even reaches here on an unsupported backend.
+        if not getattr(session, "supports_live_view", False):
+            return Response(
+                _json.dumps({
+                    "reason": "unsupported_backend",
+                    "message": "Live browser needs the gVisor sandbox — this backend can't run it.",
                 }),
                 status_code=503,
                 media_type="application/json",
@@ -225,6 +242,13 @@ def make_preview_router(
         session = runtime.live_session(conversation_id)
         if session is None:
             return JSONResponse({"ready": False, "reason": "no_sandbox"})
+
+        # HONESTY GATE: a backend that can't run the Xvfb/x11vnc/websockify stack is NOT
+        # streamable — report it as such (NOT-ready) so the frontend shows screenshots and
+        # never auto-starts a doomed stack (the live_start_failed case). Only gVisor ships
+        # the stack + carries the accepted live-jail security model (LIVE_VIEW_BACKENDS).
+        if not getattr(session, "supports_live_view", False):
+            return JSONResponse({"ready": False, "reason": "unsupported_backend"})
 
         # Probe the browser daemon's read-only /health endpoint ONLY. No live_start POST,
         # no wake_for_preview/port expose — a poll must have zero side-effects.

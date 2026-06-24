@@ -1,15 +1,21 @@
 /**
- * P4 tests: Live toggle renders only when enable_live_browser=true;
- * iframe with view_only=1 appears when enabled + clicked.
+ * Live-browser (noVNC) REDESIGN tests. There is NO manual "Live" button anymore:
+ *  - disabled in Settings        → no button, screenshots, no live anything.
+ *  - enabled + NOT streamable     → no button, screenshots, NO error banner.
+ *  - enabled + streamable         → AUTO-starts (live-url called with NO click), iframe
+ *                                    shows, green-blink "Live" badge appears on iframe load.
+ *  - session ends (live-ready→F)  → live-stop called, reverts to screenshots.
+ *  - auto-start FAILS             → silent screenshot fallback, no "Live view unavailable".
+ *  - owner-cid teardown on switch still fires.
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { AgentCanvas } from "./AgentCanvas";
+import type { AgentEvent } from "@/types/agent";
 
-// Mock the live-browser config hook
+// Mock the live-browser config hook (per-test overridden).
 vi.mock("@/hooks/useModels", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/hooks/useModels")>();
   return {
@@ -19,19 +25,42 @@ vi.mock("@/hooks/useModels", async (importOriginal) => {
   };
 });
 
-// Mock agentGet for the live-url call. The route now returns ONLY {ready, novnc_path,
-// port} — NO raw url — and the client builds the {cid8}-6080.localhost proxy URL via
-// the real previewHostUrl (kept from importOriginal) using agentHttpBase() as the base.
+// agentGet is path-aware: /browser/live-ready drives streamability, /browser/live-url
+// performs the auto-start. Per-test we override these via the `live` controller.
+const OK_URL = { ready: true, novnc_path: "/vnc.html?autoconnect=1&view_only=1", port: 6080 };
+const live = {
+  ready: { ready: true, reason: "ready" } as Record<string, unknown>,
+  urlCalls: 0,
+  // Per-call live-url behaviour: given the 1-based call index, return the resolved body
+  // or throw to reject. Default: always succeed. A rejection's message carries the JSON
+  // {reason} body (mirrors ApiError) so the component can tell doomed from transient.
+  urlFor: (n: number): Record<string, unknown> => {
+    void n;
+    return OK_URL;
+  },
+};
+
+function rejectReason(reason: string): never {
+  throw new Error(JSON.stringify({ reason, message: reason }));
+}
+
 vi.mock("@/api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api/client")>();
   return {
     ...actual,
-    agentGet: vi.fn().mockResolvedValue({
-      ready: true,
-      novnc_path: "/vnc.html?autoconnect=1&view_only=1",
-      port: 6080,
+    agentGet: vi.fn((path: string) => {
+      if (path.includes("/browser/live-ready")) return Promise.resolve(live.ready);
+      if (path.includes("/browser/live-url")) {
+        live.urlCalls += 1;
+        try {
+          return Promise.resolve(live.urlFor(live.urlCalls));
+        } catch (e) {
+          return Promise.reject(e);
+        }
+      }
+      return Promise.resolve({});
     }),
-    agentSend: vi.fn().mockResolvedValue({ ok: true }), // live-stop teardown call
+    agentSend: vi.fn().mockResolvedValue({ ok: true }),
     agentHttpBase: vi.fn(() => "http://localhost:8000"),
   };
 });
@@ -41,123 +70,169 @@ function wrap(ui: React.ReactElement) {
   return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
 }
 
-const baseProps = { events: [], status: "IDLE" as const, cid: "conv_aabbccdd11223344" };
+async function enable(enabled: boolean) {
+  const { useLiveBrowserConfig } = await import("@/hooks/useModels");
+  (useLiveBrowserConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+    data: { enabled },
+    isLoading: false,
+  });
+}
 
-describe("AgentCanvas — Live browser toggle", () => {
+const baseProps = { events: [] as AgentEvent[], status: "RUNNING" as const, cid: "conv_aabbccdd11223344" };
+
+describe("AgentCanvas — live browser (auto-stream redesign)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    live.ready = { ready: true, reason: "ready" };
+    live.urlCalls = 0;
+    live.urlFor = () => OK_URL;
   });
 
-  it("does NOT render the Live toggle when live_browser.enabled=false", async () => {
-    const { useLiveBrowserConfig } = await import("@/hooks/useModels");
-    (useLiveBrowserConfig as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: { enabled: false },
-      isLoading: false,
-    });
+  it("(a) disabled → NO Live control, screenshots empty-state, no live anything", async () => {
+    await enable(false);
     wrap(<AgentCanvas {...baseProps} />);
-    // No Live button should appear
+    // never a Live button/badge, and the screenshot empty-state copy shows.
+    expect(screen.queryByRole("button", { name: /live/i })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("live-badge")).not.toBeInTheDocument();
+    expect(screen.getByText(/frame-by-frame reel, not a live video/i)).toBeInTheDocument();
+    // never probes live-ready when disabled.
+    const { agentGet } = await import("@/api/client");
+    expect(agentGet).not.toHaveBeenCalledWith(expect.stringContaining("/browser/live-ready"));
+  });
+
+  it("(b) enabled but NOT streamable → no button, screenshots, NO error banner", async () => {
+    await enable(true);
+    live.ready = { ready: false, reason: "unsupported_backend" };
+    wrap(<AgentCanvas {...baseProps} />);
+    const { agentGet } = await import("@/api/client");
+    // it polls live-ready…
+    await waitFor(() =>
+      expect(agentGet).toHaveBeenCalledWith(expect.stringContaining("/browser/live-ready")),
+    );
+    // …but NEVER auto-starts (no live-url), shows no iframe, no badge, NO scary banner.
+    expect(agentGet).not.toHaveBeenCalledWith(expect.stringContaining("/browser/live-url"));
+    expect(screen.queryByTestId("novnc-iframe")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("live-badge")).not.toBeInTheDocument();
+    expect(screen.queryByText(/live view unavailable/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /live/i })).not.toBeInTheDocument();
   });
 
-  it("renders the Live toggle when live_browser.enabled=true", async () => {
-    const { useLiveBrowserConfig } = await import("@/hooks/useModels");
-    (useLiveBrowserConfig as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: { enabled: true },
-      isLoading: false,
-    });
+  it("(c) enabled + streamable → AUTO-starts (no click) and shows the green-blink Live badge on iframe load", async () => {
+    await enable(true);
     wrap(<AgentCanvas {...baseProps} />);
-    // Switch to browser tab first (it may already be active since no screenshots)
+    const { agentGet } = await import("@/api/client");
+    // auto-start: live-url is called WITHOUT any user click.
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /live/i })).toBeInTheDocument()
+      expect(agentGet).toHaveBeenCalledWith(expect.stringContaining("/browser/live-url")),
     );
+    const iframe = (await screen.findByTestId("novnc-iframe")) as HTMLIFrameElement;
+    expect(iframe.src).toContain("view_only=1");
+    expect(iframe.src).toContain("aabbccdd-6080.localhost"); // single-origin proxy, not raw host:port
+    expect(iframe.getAttribute("sandbox")).not.toContain("allow-same-origin");
+    // badge only AFTER the iframe genuinely loads (honest "actually streaming").
+    expect(screen.queryByTestId("live-badge")).not.toBeInTheDocument();
+    fireEvent.load(iframe);
+    const badge = await screen.findByTestId("live-badge");
+    expect(badge).toHaveAttribute("data-streaming", "true");
+    expect(badge).toHaveTextContent(/live/i);
   });
 
-  it("opens noVNC iframe with view_only=1 when Live is clicked", async () => {
-    const { useLiveBrowserConfig } = await import("@/hooks/useModels");
-    (useLiveBrowserConfig as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: { enabled: true },
-      isLoading: false,
-    });
+  it("(d) session ends (live-ready flips false) → live-stop called, reverts to screenshots", async () => {
+    await enable(true);
     wrap(<AgentCanvas {...baseProps} />);
-    const liveBtn = await screen.findByRole("button", { name: /live/i });
-    // W-47: the button is gated on the side-effect-free /browser/live-ready poll
-    // (mocked agentGet → {ready:true}); wait until it's enabled before clicking.
-    await waitFor(() => expect(liveBtn).toBeEnabled());
-    await userEvent.click(liveBtn);
-    await waitFor(() => {
-      const iframe = screen.getByTestId("novnc-iframe") as HTMLIFrameElement;
-      expect(iframe).toBeInTheDocument();
-      expect(iframe.src).toContain("view_only=1");
-      // The proxy URL is the {cid8}-6080.localhost single-origin path, NOT a raw host:port.
-      expect(iframe.src).toContain("aabbccdd-6080.localhost");
-      // The iframe sandbox must NOT include allow-same-origin (security)
-      expect(iframe.getAttribute("sandbox")).not.toContain("allow-same-origin");
-    });
+    const iframe = (await screen.findByTestId("novnc-iframe")) as HTMLIFrameElement;
+    fireEvent.load(iframe);
+    await screen.findByTestId("live-badge");
+
+    const { agentSend } = await import("@/api/client");
+    (agentSend as ReturnType<typeof vi.fn>).mockClear();
+    // The browser session ends → the probe now reports not-ready. After 2 consecutive
+    // misses (~8s) the view must tear down. Polling is every 4s; advance fake timers.
+    live.ready = { ready: false, reason: "no_daemon" };
+    await waitFor(
+      () =>
+        expect(agentSend).toHaveBeenCalledWith(
+          "POST",
+          expect.stringContaining("conv_aabbccdd11223344/browser/live-stop"),
+        ),
+      { timeout: 16000 },
+    );
+    await waitFor(() => expect(screen.queryByTestId("novnc-iframe")).not.toBeInTheDocument());
+    expect(screen.queryByTestId("live-badge")).not.toBeInTheDocument();
+  }, 20000);
+
+  it("(e) auto-start FAILS → silent screenshot fallback, no 'Live view unavailable' banner", async () => {
+    await enable(true);
+    live.urlFor = () => rejectReason("no_upstream"); // live-ready streamable, but the start blows up
+    wrap(<AgentCanvas {...baseProps} />);
+    const { agentGet } = await import("@/api/client");
+    await waitFor(() =>
+      expect(agentGet).toHaveBeenCalledWith(expect.stringContaining("/browser/live-url")),
+    );
+    // no iframe, no badge, and crucially NO scary banner — just the screenshot empty-state.
+    await waitFor(() =>
+      expect(screen.getByText(/frame-by-frame reel, not a live video/i)).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId("novnc-iframe")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("live-badge")).not.toBeInTheDocument();
+    expect(screen.queryByText(/live view unavailable/i)).not.toBeInTheDocument();
   });
 
-  it("tears down the OWNING conversation's stack when switching conversations while live", async () => {
-    // Regression for the re-review BLOCK: BrowserPane is not keyed by cid, so a
-    // conversation switch must stop the conversation that OPENED the view, never the
-    // now-current cid (else the old VNC stack leaks).
-    const { useLiveBrowserConfig } = await import("@/hooks/useModels");
-    (useLiveBrowserConfig as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: { enabled: true },
-      isLoading: false,
-    });
+  it("(g) TRANSIENT live-url failure (no_upstream) does NOT latch — retries and succeeds once the browser is up", async () => {
+    await enable(true);
+    // First start attempt fails with the normal transient no_upstream (live_start ok but
+    // the port isn't exposed yet); every later attempt succeeds.
+    live.urlFor = (n) => (n === 1 ? rejectReason("no_upstream") : OK_URL);
+    wrap(<AgentCanvas {...baseProps} />);
+    // The first attempt fails (no iframe yet)…
+    await waitFor(() => expect(live.urlCalls).toBeGreaterThanOrEqual(1));
+    // …but it is NOT permanently latched: the next readiness tick (~4s) retries and the
+    // live view appears. This is the codex-P1 regression — a transient blip must not
+    // disable auto-start forever.
+    const iframe = (await screen.findByTestId("novnc-iframe", undefined, {
+      timeout: 16000,
+    })) as HTMLIFrameElement;
+    expect(iframe.src).toContain("view_only=1");
+    expect(live.urlCalls).toBeGreaterThanOrEqual(2); // it genuinely retried
+  }, 20000);
+
+  it("(h) DOOMED live-url failure (unsupported_backend) latches — no retry-storm (called once, no tight loop)", async () => {
+    await enable(true);
+    live.urlFor = () => rejectReason("unsupported_backend"); // a hard capability error
+    wrap(<AgentCanvas {...baseProps} />);
+    await waitFor(() => expect(live.urlCalls).toBe(1));
+    // Wait across several poll ticks; a doomed result must NOT keep hammering live-url.
+    await new Promise((r) => setTimeout(r, 9000));
+    expect(live.urlCalls).toBe(1); // still exactly one — latched, no storm
+    expect(screen.queryByTestId("novnc-iframe")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("live-badge")).not.toBeInTheDocument();
+  }, 15000);
+
+  it("(f) tears down the OWNING conversation's stack when switching conversations while live", async () => {
+    await enable(true);
     const { agentSend } = await import("@/api/client");
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const ui = (cid: string) => (
       <QueryClientProvider client={qc}>
-        <AgentCanvas events={[]} status="IDLE" cid={cid} />
+        <AgentCanvas events={[]} status="RUNNING" cid={cid} />
       </QueryClientProvider>
     );
     const { rerender } = render(ui("conv_aabbccdd11223344"));
-
-    const liveBtn = await screen.findByRole("button", { name: /live/i });
-    await waitFor(() => expect(liveBtn).toBeEnabled());
-    await userEvent.click(liveBtn);
-    await screen.findByTestId("novnc-iframe");
+    await screen.findByTestId("novnc-iframe"); // auto-started
     (agentSend as ReturnType<typeof vi.fn>).mockClear();
 
     // Switch to a DIFFERENT conversation while the live view is open.
     rerender(ui("conv_bbbbbbbb99887766"));
-
-    await waitFor(() => {
-      // Teardown must target the ORIGINAL (owning) cid, not the new one.
+    await waitFor(() =>
       expect(agentSend).toHaveBeenCalledWith(
         "POST",
         expect.stringContaining("conv_aabbccdd11223344/browser/live-stop"),
-      );
-    });
-    // And never the wrong (newly-current) conversation.
+      ),
+    );
+    // never the wrong (newly-current) conversation.
     expect(agentSend).not.toHaveBeenCalledWith(
       "POST",
       expect.stringContaining("conv_bbbbbbbb99887766/browser/live-stop"),
     );
-  });
-
-  it("W-47: keeps the Live button DISABLED until live-ready reports ready, with the reason as tooltip", async () => {
-    const { useLiveBrowserConfig } = await import("@/hooks/useModels");
-    (useLiveBrowserConfig as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: { enabled: true },
-      isLoading: false,
-    });
-    // The readiness probe says the agent hasn't opened a browser yet → not streamable.
-    const { agentGet } = await import("@/api/client");
-    (agentGet as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ready: false,
-      reason: "no_daemon",
-    });
-    wrap(<AgentCanvas {...baseProps} />);
-    const liveBtn = await screen.findByRole("button", { name: /live/i });
-    // Button stays disabled and its tooltip explains why (the no_daemon reason text).
-    await waitFor(() => expect(liveBtn).toBeDisabled());
-    expect(liveBtn.getAttribute("title")).toMatch(/browser/i);
-    // Restore the ready default so later runs/files don't inherit ready:false.
-    (agentGet as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ready: true,
-      novnc_path: "/vnc.html?autoconnect=1&view_only=1",
-      port: 6080,
-    });
   });
 });

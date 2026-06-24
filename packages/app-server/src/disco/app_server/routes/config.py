@@ -104,6 +104,15 @@ def make_config_router(state: ConfigState) -> APIRouter:
 
     @router.put("/api/live-browser/config")
     async def put_live_browser_config(dto: LiveBrowserConfigDTO) -> LiveBrowserConfigDTO:
-        return state.update_live_browser_config(dto)
+        """Persist the noVNC toggle. Enabling it on a sandbox backend that can't run the
+        live stack (anything but gVisor) is rejected with 400 + a typed reason so the UI
+        flags it instead of silently persisting a setting that only ever fails at runtime."""
+        try:
+            return state.update_live_browser_config(dto)
+        except ConfigValidationError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"reason": exc.reason, "message": exc.detail or exc.reason},
+            ) from exc
 
     return router

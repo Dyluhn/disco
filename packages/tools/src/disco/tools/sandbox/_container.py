@@ -56,6 +56,19 @@ USER_PORTS: frozenset[int] = frozenset({8000, 3000, 5173, 8080, 5000, 4321, NOVN
 INTERNAL_PORTS: frozenset[int] = frozenset({8899})
 PUBLISHED_PORTS: frozenset[int] = USER_PORTS | INTERNAL_PORTS
 
+# The SINGLE source of truth for which sandbox backends can actually run the noVNC
+# live-view stack (Xvfb + x11vnc + websockify). Those binaries ship ONLY in the
+# container image (deploy/sandbox/Dockerfile) AND the live-jail security model (P5:
+# loopback-bound x11vnc, view-only, per-conversation jail, gated published port) was
+# designed/accepted for the strong-isolation gVisor backend. So gVisor is the only
+# backend that gets the live stream: the `process` dev backend has no stack at all
+# (Xvfb isn't on the host → live_start fails — the "live_start_failed" bug); the
+# `local` shared-kernel backend and the `podman` deployment stub do not stream here.
+# Everything reads THIS set — the runtime live-ready/live-url honesty (preview.py via
+# SandboxSession.supports_live_view), the Settings enable-guard (config_state), and the
+# frontend's BACKEND_META mirror — so the answer can never diverge across surfaces.
+LIVE_VIEW_BACKENDS: frozenset[str] = frozenset({"gvisor"})
+
 
 def sealed(spec: SandboxSpec) -> bool:
     """Network is SEALED unless the capability set grants it (§7 deny-by-default):

@@ -262,6 +262,53 @@ def test_port_upstream_gates_novnc_when_disabled():
     assert _svc(False).port_upstream("conv_aabbccdd11223344", 5173) == "http://host:40000"
 
 
+def test_port_upstream_gates_novnc_on_unsupported_backend_even_if_enabled():
+    """codex-P1: the NOVNC_PORT proxy gate must require BOTH the feature enabled AND a
+    live-view-capable session (supports_live_view ⇐ LIVE_VIEW_BACKENDS), not just the
+    persisted flag. The exploit it closes: a user enables Live on gVisor (enabled=true
+    persisted), then SWITCHES the sandbox backend to local/podman. The stale enabled flag
+    would otherwise hold the noVNC port OPEN on a backend that can't (and shouldn't) serve
+    it. A normal USER port stays unaffected by the live capability."""
+    from unittest.mock import MagicMock
+
+    from disco.agent_server.preview_service import PreviewService
+    from disco.core.llm import ModelEntry
+    from disco.core.llm.config import LiveBrowserSettings, RouterConfig
+    from disco.tools.sandbox._container import NOVNC_PORT
+
+    entry = ModelEntry(model_id="m", provider="local", context_window=8192)
+
+    def _svc(*, supports_live_view: bool) -> PreviewService:
+        # enabled stays TRUE the whole time (the stale persisted flag after a backend switch).
+        cfg = RouterConfig(
+            models={"m": entry},
+            default_model="m",
+            live_browser=LiveBrowserSettings(enabled=True),
+        )
+        rt = MagicMock()
+        rt._config_store.load.return_value = cfg
+        sess = MagicMock()
+        # a non-gVisor backend that does NOT support live view (e.g. switched to local)
+        sess._service.name = "local"
+        sess.supports_live_view = supports_live_view
+        sess.expose_port.return_value = "http://host:40000"
+        executor = MagicMock()
+        executor._sandbox = sess
+        rt._executors = {"conv_aabbccdd11223344": executor}
+        return PreviewService(rt)
+
+    # enabled=True but the session can't stream → noVNC port stays CLOSED (the fix).
+    svc_unsupported = _svc(supports_live_view=False)
+    assert svc_unsupported.port_upstream("conv_aabbccdd11223344", NOVNC_PORT) is None
+    # …yet a normal dev-server USER port is unaffected by the live-view capability.
+    assert svc_unsupported.port_upstream("conv_aabbccdd11223344", 5173) == "http://host:40000"
+    # A live-view-capable session (gVisor) + enabled → noVNC port resolves normally.
+    assert (
+        _svc(supports_live_view=True).port_upstream("conv_aabbccdd11223344", NOVNC_PORT)
+        == "http://host:40000"
+    )
+
+
 def test_live_url_route_daemon_down_returns_503():
     """enabled + sandbox but the browser daemon health curl fails → 503 no_daemon
     (no false 'live' affordance when the agent never started the browser tool)."""
@@ -410,6 +457,75 @@ def test_live_ready_route_daemon_down_not_ready():
             assert body["reason"] == "no_daemon"
 
     asyncio.run(run())
+
+
+def test_live_ready_unsupported_backend_not_ready():
+    """HONESTY GATE: a sandbox whose backend can't run the stack (supports_live_view
+    False — e.g. the process/local/podman backend) reports {ready:False,
+    reason:'unsupported_backend'} and NEVER probes the daemon. This is what stops the
+    frontend from auto-starting a doomed stack (the old live_start_failed bug)."""
+    import asyncio
+
+    import httpx
+
+    # A session that WOULD answer /health, but the backend can't stream.
+    session = _fake_session([_shell_result(0, "OK")])
+    session.supports_live_view = False
+    app = _enabled_app(session=session, upstream="unused")
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/conversations/conv_aabbccdd11223344/browser/live-ready")
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            assert body["ready"] is False
+            assert body["reason"] == "unsupported_backend"
+
+    asyncio.run(run())
+    # The daemon /health probe is NEVER reached on an unsupported backend.
+    assert session.exec_shell.await_count == 0
+
+
+def test_live_url_unsupported_backend_returns_503():
+    """Defense in depth: even a direct GET /browser/live-url on an unsupported backend
+    returns 503 unsupported_backend BEFORE any daemon health / live_start curl — so a
+    stale frontend can never coax a doomed stack into a 'Failed to start' error."""
+    import asyncio
+
+    import httpx
+
+    session = _fake_session([_shell_result(0, "OK"), _shell_result(0, '{"ok": true}')])
+    session.supports_live_view = False
+    app = _enabled_app(session=session, upstream="http://192.168.1.77:49213")
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/conversations/conv_aabbccdd11223344/browser/live-url")
+            assert resp.status_code == 503
+            assert resp.json()["reason"] == "unsupported_backend"
+
+    asyncio.run(run())
+    # No daemon health probe / live_start curl was issued.
+    assert session.exec_shell.await_count == 0
+
+
+def test_session_supports_live_view_only_gvisor():
+    """SandboxSession.supports_live_view sources the ONE LIVE_VIEW_BACKENDS set: only the
+    gVisor backend can stream; process/local/podman cannot — so the Settings gate and the
+    runtime live-ready can't drift."""
+    from types import SimpleNamespace
+
+    from disco.tools.sandbox._container import LIVE_VIEW_BACKENDS
+    from disco.tools.sandbox.session import SandboxSession
+
+    assert LIVE_VIEW_BACKENDS == frozenset({"gvisor"})
+    cases = (("gvisor", True), ("local", False), ("process", False), ("podman", False))
+    for name, expected in cases:
+        sess = SandboxSession.__new__(SandboxSession)
+        sess._service = SimpleNamespace(name=name)
+        assert sess.supports_live_view is expected, name
 
 
 def test_live_url_route_no_upstream_returns_503():

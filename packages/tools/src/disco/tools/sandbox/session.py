@@ -137,6 +137,20 @@ class SandboxSession:
         return self._service.name
 
     @property
+    def supports_live_view(self) -> bool:
+        """True only when THIS session's backend can actually run + stream the noVNC
+        live-view stack (Xvfb/x11vnc/websockify). The honest streamability truth read by
+        the agent-server's /browser/live-ready & /browser/live-url routes so the UI never
+        auto-starts (or claims) a stack a backend can't run — e.g. the process dev backend
+        has no Xvfb on the host, which is exactly the source of the old
+        "live_start_failed: Failed to start live view stack" error. Sourced from the ONE
+        LIVE_VIEW_BACKENDS set (see _container.py) so it can't drift from the Settings
+        enable-guard."""
+        from ._container import LIVE_VIEW_BACKENDS
+
+        return self._service.name in LIVE_VIEW_BACKENDS
+
+    @property
     def generation(self) -> int:
         """How many underlying instances this session has created (1 after the first
         use; >1 means it survived a death)."""
