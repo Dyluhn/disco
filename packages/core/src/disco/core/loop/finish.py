@@ -13,6 +13,7 @@ in-collaborator).
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING, cast
 
 from ..dod_evaluator import DoDEvaluator
@@ -31,6 +32,7 @@ from ..events import (
 )
 from ..llm import OperatingMode
 from ..state import ConversationState
+from ..view import effective_plan_progress
 from . import signals
 from .boundaries import AgentStep
 from .control import Disp
@@ -175,6 +177,133 @@ def _is_web_deliverable(events: list[Event]) -> bool:
                     session = line.split("[session: ")[1].split("]")[0]
                     if session != "preview":
                         return True
+    return False
+
+
+# ---- Bug 6: actionless honest-unverifiable-static finish helpers ------------
+# The existing honest-unverifiable finish (`_maybe_honest_unverifiable_static_finish`)
+# only fires at the FINISH GATE. When the plan's verify step is unsatisfiable on a
+# browserless backend the model never reaches that gate — it churns and the actionless
+# valve PAUSES it. These pure helpers feed the SAME honest-finish concept at the
+# actionless valve (RCA option 3a), under conservative guards so a missing/broken
+# deliverable or a genuine web failure never converts to a success (W-45 preserved).
+
+# Tools that mutate the static deliverable on disk (mirror of `_is_web_deliverable`).
+_FILE_WRITE_TOOLS = frozenset(
+    {"file_write", "file_edit", "file_append", "file_replace_lines", "file_insert_lines"}
+)
+# Shell tools that can run a non-browser (HTMLParser/static-parse) validation.
+_SHELL_TOOLS = frozenset({"shell", "shell_exec"})
+# Conservative verify-step lexicon: a not-done plan step counts as "verify-only"
+# iff its title/detail names a verification/render/test action — NOT new content.
+# Word-boundary + stem matched (verify/verifies/verification, validate/validation,
+# check/checks, render/renders, test/tests, qa, smoke).
+_VERIFY_STEP_RE = re.compile(
+    r"\b(?:verif\w*|validat\w*|check\w*|render\w*|test\w*|qa|smoke\w*)\b", re.IGNORECASE
+)
+# Distinctive substring of `browser.BROWSER_UNAVAILABLE_MSG` (kept inline rather than
+# imported — core must not depend on the tools package). Matched against the error/
+# content text a failed `browser` action leaves in the log.
+_BROWSER_UNAVAILABLE_TEXT = "browser verification is unavailable"
+
+
+def _missing_steps_all_verify(events: list[Event]) -> bool:
+    """Bug 6 — True iff a plan exists, is INCOMPLETE, and EVERY not-done
+    (missing/active) step is a verification-only step (its title/detail names a
+    verify/check/render/test action, not new content). Conservative: any not-done
+    step that is NOT clearly a verify step → False (real work remains, so the
+    actionless valve must PAUSE, never honest-finish). Returns False when the plan
+    is complete (no missing steps — the `completed_via_notify` branch owns that)."""
+    plan, states = effective_plan_progress(events)
+    if plan is None or not plan.steps:
+        return False
+    missing = [i for i in range(len(plan.steps)) if states.get(i + 1) != "done"]
+    if not missing:
+        return False  # complete → not this path
+    for i in missing:
+        step = plan.steps[i]
+        text = f"{step.title} {step.detail or ''}"
+        if not _VERIFY_STEP_RE.search(text):
+            return False
+    return True
+
+
+def _last_edit_seq(events: list[Event]) -> int:
+    """Seq of the last FILE write/edit action (a deliverable mutation), else 0.
+    The non-browser validation must have RUN AFTER this for its pass to count."""
+    for ev in reversed(events):
+        if isinstance(ev, ActionEvent) and ev.tool_call.tool_name in _FILE_WRITE_TOOLS:
+            return ev.seq or 0
+    return 0
+
+
+def _nonbrowser_static_validation_passed(events: list[Event]) -> bool:
+    """Bug 6 — True iff, AFTER the last file write/edit, a NON-browser shell
+    validation that referenced the static deliverable (`index.html`) RAN and
+    SUCCEEDED, with no later FAILED such validation. This is the file-level
+    parse/HTMLParser check the agent runs when the browser is unavailable — the
+    positive evidence the delivered file is well-formed. A FAILED validation
+    (error observation / non-success) yields False so a broken parse BLOCKS the
+    honest finish; no validation at all → False (we require a passing one)."""
+    edit_seq = _last_edit_seq(events)
+    # action_id -> the shell action's command references the static deliverable.
+    static_shell_actions: set[str] = set()
+    verdict: bool | None = None
+    for ev in events:
+        if isinstance(ev, ActionEvent) and ev.tool_call.tool_name in _SHELL_TOOLS:
+            cmd = " ".join(str(v) for v in (ev.tool_call.arguments or {}).values())
+            if "index.html" in cmd:
+                static_shell_actions.add(ev.id)
+        elif isinstance(ev, ObservationEvent):
+            if (ev.seq or 0) > edit_seq and ev.action_id in static_shell_actions:
+                verdict = bool(ev.tool_result.success)
+        elif isinstance(ev, AgentErrorEvent):
+            if (ev.seq or 0) > edit_seq and ev.action_id in static_shell_actions:
+                verdict = False
+    return verdict is True
+
+
+def _browser_unavailable_observed(events: list[Event]) -> bool:
+    """Bug 6 — True iff a `browser` action left an 'unavailable on this backend'
+    signal in the log: an ObservationEvent carrying `structured.browser_unavailable`,
+    or an Observation/AgentError whose text matches `BROWSER_UNAVAILABLE_MSG`. This
+    is the second of the two "browser genuinely unavailable" signals (the first is
+    `_browser_verification_unavailable` — no browser tool at all)."""
+    for ev in reversed(events):
+        if isinstance(ev, ObservationEvent) and ev.tool_result.tool_name == "browser":
+            res = ev.tool_result
+            if (res.structured or {}).get("browser_unavailable"):
+                return True
+            if _BROWSER_UNAVAILABLE_TEXT in (res.content or "") or _BROWSER_UNAVAILABLE_TEXT in (
+                res.error or ""
+            ):
+                return True
+        elif isinstance(ev, AgentErrorEvent):
+            if _BROWSER_UNAVAILABLE_TEXT in (ev.error or ""):
+                return True
+    return False
+
+
+def _real_web_failure_evidence(events: list[Event]) -> bool:
+    """Bug 6 (W-45 guard) — True iff there is genuine 'the app is BROKEN' evidence
+    (not mere infra-unavailability): a `verify_web_app` verdict or `browser`
+    observation with console errors, network failures, or a served-but-blank
+    render. ANY such evidence BLOCKS the honest actionless finish — only an
+    unverifiable (never a broken) build may finish honestly."""
+    for ev in events:
+        if not isinstance(ev, ObservationEvent):
+            continue
+        res = ev.tool_result
+        st = res.structured or {}
+        if res.tool_name == "verify_web_app":
+            if st.get("console_errors") or st.get("network_failures"):
+                return True
+            http_ok = 200 <= int(st.get("http_status") or 0) < 400
+            if http_ok and st.get("meaningful_content") is False:
+                return True  # served HTTP 200 but rendered nothing → broken, not unverifiable
+        elif res.tool_name == "browser":
+            if any(c.get("level") == "error" for c in (st.get("console") or [])):
+                return True
     return False
 
 
@@ -1354,6 +1483,75 @@ class FinishGate:
         )
         self._loop._browser_verify_refusals = 0
         return Disp.FALLTHROUGH
+
+    async def maybe_honest_unverifiable_static_actionless_finish(
+        self, events: list[Event]
+    ) -> bool:
+        """Bug 6 — the ACTIONLESS-VALVE twin of `_maybe_honest_unverifiable_static_finish`.
+
+        The finish-gate honest path only runs when the model REACHES the finish gate.
+        On a browserless backend with a final browser-verify plan step the model never
+        does — it churns on the unsatisfiable step and the actionless valve would PAUSE
+        a substantively-complete build. This applies the SAME honest-finish concept at
+        the valve: when (and ONLY when) the conservative conditions below all hold, emit
+        the honest marker + a clean terminal FINISHED and return True; otherwise return
+        False so the valve keeps its existing pause/stuck behavior.
+
+        Conservative conditions (ALL required — any failure ⇒ False ⇒ no honest finish):
+          1. a plan exists, is INCOMPLETE, and EVERY not-done step is verify-only;
+          2. real productive work happened since approval (APPROVE_PLAN_NO_EXECUTION —
+             a zero-action run can never honest-finish here);
+          3. the static deliverable (index.html) exists on disk;
+          4. a NON-browser validation PASSED after the last write/edit (a failed or
+             absent validation blocks);
+          5. browser verification is GENUINELY unavailable (no browser tool, OR a
+             browser observation/error carried the unavailable signal);
+          6. NO real web-failure evidence (console/network errors or a served-but-blank
+             render) — W-45: a genuinely BROKEN app is never converted to a success.
+        """
+        if not _missing_steps_all_verify(events):
+            return False
+        if signals.productive_actions_since_approval(events) <= 0:
+            return False
+        if not await self._static_deliverable_present():
+            return False
+        if not _nonbrowser_static_validation_passed(events):
+            return False
+        if not (
+            self._browser_verification_unavailable()
+            or _browser_unavailable_observed(events)
+        ):
+            return False
+        if _real_web_failure_evidence(events):
+            return False
+        # All guards hold — finish honestly instead of pausing actionless. Same honest
+        # marker as the finish-gate path, then a clean terminal FINISHED (NOT PAUSED).
+        await self._loop._emit(
+            StatusEvent(
+                status=ConversationStatus.RUNNING,
+                detail="unverifiable_static_finish",
+            )
+        )
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(
+                    role="user",
+                    content=(
+                        "⚠ Finished WITHOUT a live browser verification — the static "
+                        "deliverable (index.html) exists and a non-browser validation "
+                        "passed, but this backend cannot run a headless browser and no "
+                        "preview server is reachable, so the only remaining plan step "
+                        "(browser verification) could not run here. The files are "
+                        "delivered; note clearly in your summary that the render is "
+                        "UNVERIFIED."
+                    ),
+                ),
+            )
+        )
+        await self._loop._emit(StatusEvent(status=ConversationStatus.FINISHED))
+        self._loop._browser_verify_refusals = 0
+        return True
 
     async def _verifier_unavailable_disposition(self) -> Disp:
         """P1-2 — disposition when `verify_web_app` is advertised but produced NO

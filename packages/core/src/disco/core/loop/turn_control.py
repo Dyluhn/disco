@@ -306,6 +306,25 @@ class Valve:
                 if await self._completed_via_notify_finish(events):
                     return True
                 return False
+            # Bug 6 — HONEST unverifiable-static finish at the actionless valve. The
+            # finish-gate honest path (finish.py) only runs when the model REACHES the
+            # finish gate; here the model churns on an unsatisfiable browser-verify plan
+            # step on a browserless backend and would otherwise PAUSE actionless. When
+            # the build is substantively complete (a delivered index.html + a passing
+            # non-browser validation, only verify-only steps remaining) and browser
+            # verification is GENUINELY unavailable with NO real web-failure evidence,
+            # FINISH honestly instead of pausing. Every other case (missing/broken
+            # deliverable, real failure, non-verify work remaining, zero productive
+            # work) returns False and falls through to the pause/stuck ladder below —
+            # so W-45 and APPROVE_PLAN_NO_EXECUTION are preserved. Suppressed during a
+            # pending re-plan (BW-01) like the completion branch above.
+            if (
+                not pending_revision
+                and await self._loop._finish.maybe_honest_unverifiable_static_actionless_finish(
+                    events
+                )
+            ):
+                return True
             if incomplete:
                 # BW-02 — SECONDARY escalation. The first actionless pause is a
                 # useful stop (it waits for a human steer). But if the run is

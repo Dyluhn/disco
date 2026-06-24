@@ -244,6 +244,31 @@ unsatisfiable on the no-browser backend.) Evidence:
 > via the existing `verdict="unverifiable", passed=True` path. Regression: `test_verify_web_app_gate.py::`
 > `test_process_browser_unavailable_static_build_finishes_not_stuck` (+ two negatives).
 
+> **Bug 6 FIXED (repair #5)** on branch `fix-bug6-actionless-finish` (Build Soak repair #5). The
+> live soak REPRODUCED Bug 6 ×2 after repair #4 because the repair-#4 honest finish lives at the
+> FINISH GATE — and the model never reaches it here. It churns on the unsatisfiable browser-verify
+> plan step and the **actionless valve PAUSES it first** (`Valve.actionless_valve`,
+> `turn_control.py`), so the finish-gate honest path is unreachable. Fix = RCA option **3a**:
+> EXTEND the same honest-unverifiable finish to the actionless valve.
+> `FinishGate.maybe_honest_unverifiable_static_actionless_finish(events)` (`finish.py`) is called
+> from `Valve.actionless_valve` immediately before the incomplete-plan "actionless → PAUSE" branch;
+> when it returns True the valve emits the honest `StatusEvent(detail="unverifiable_static_finish")`
+> marker + a terminal **FINISHED** instead of PAUSED. Conservative guards (ALL required): a plan
+> exists, is incomplete, and EVERY not-done step is verify-only (title/detail matches a
+> verify/check/render/test lexicon); ≥1 productive action since approval; `index.html` on disk; a
+> NON-browser validation (shell HTMLParser/static parse referencing `index.html`) PASSED after the
+> last write/edit; browser verification is GENUINELY unavailable (no `browser` tool OR a browser
+> observation/error carrying `browser_unavailable` / the `BROWSER_UNAVAILABLE_MSG` text); and NO
+> real web-failure evidence (console/network errors or a served-but-blank render). NOT option 3b
+> (it does NOT auto-mark the verify step done — that would mutate advisory plan bookkeeping and hide
+> that browser verify never ran). Must-not-regress preserved: a real `verify_web_app` failure still
+> STUCKs (W-45); a missing deliverable or a FAILED static validation still PAUSE/STUCKs; a
+> zero-productive-work run still STUCKs `approve_plan_no_execution`; the pending-re-plan (BW-01)
+> suppression is honored. Proof = loop-fake reproduction (the running dev server is at the
+> pre-fix code, so a true server bounce was not done): `test_bug6_actionless_honest_finish.py` —
+> 1 positive (exact repro → FINISHED + honest marker, not PAUSED/STUCK) + 3 negatives (no
+> deliverable, failed validation, zero-work).
+
 ### Bug 7 — build preview/serve port == agent-server port (8000) collides on the `process` backend — PRODUCT/CONFIG — FIXED
 
 `static_html_minimal` (conv_b59521ba06054d5189722e1f319b63f7). The plan's serve/verify steps are
