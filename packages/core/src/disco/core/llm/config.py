@@ -109,14 +109,19 @@ class SandboxConnection(BaseModel):
 
 def _ssh_endpoint_hostless(endpoint: str) -> bool:
     """True when an ``ssh://``/``http+ssh://`` endpoint has NO host — e.g.
-    ``ssh://sandbox@`` (the exact value that produced "ssh: Could not resolve
-    hostname :" in the outage). A local ``unix://`` / ``tcp://`` socket is never
-    host-less by this rule (it has no ``user@host`` authority to drop)."""
+    ``ssh://sandbox@``, ``ssh://sandbox@:22``, ``http+ssh://sandbox@:22/path`` or
+    ``ssh://sandbox@/path`` (all of which produced "ssh: Could not resolve hostname"
+    in the outage). The HOST is the authority between ``@`` and the next ``:`` (port)
+    or ``/`` (path); if it's empty the endpoint is host-less, EVEN with a port. A local
+    ``unix://`` / ``tcp://`` socket is never host-less by this rule (no ``user@host``)."""
     scheme, sep, rest = endpoint.partition("://")
     if not sep or scheme not in ("ssh", "http+ssh"):
         return False
     authority = rest.split("/", 1)[0]  # user@host[:port]
-    host = authority.rsplit("@", 1)[-1]
+    hostport = authority.rsplit("@", 1)[-1].strip()
+    if hostport.startswith("["):  # IPv6 literal (e.g. [::1]:22) — bracketed = has a host
+        return hostport[1:].split("]", 1)[0].strip() == ""
+    host = hostport.split(":", 1)[0]  # drop any :port so ":22" alone reads as host-less
     return host.strip() == ""
 
 
@@ -141,6 +146,23 @@ def sandbox_connection_error(backend: str, conn: SandboxConnection) -> str | Non
         if _ssh_endpoint_hostless(url):
             return f"the Podman URL '{conn.podman_url}' has no host"
     return None
+
+
+def default_connection_for(backend: str) -> SandboxConnection:
+    """A CLEAN, backend-APPROPRIATE connection block for a backend with no saved setup.
+
+    The persistence fix needs this so switching TO a backend restores a sensible default
+    for THAT backend, never the previous backend's socket (the P1 bleed: an old flat
+    config's bad gvisor ``ssh://sandbox@`` must not carry into Local). gVisor seeds the
+    host-less ``ssh://sandbox@`` prefill (the user fills the Tailscale host — flagged
+    invalid on save until then, but gvisor-SHAPED, not an inherited local socket); local
+    seeds the LOCAL docker socket; podman seeds the rootless remote (crun)."""
+    if backend == "gvisor":
+        return SandboxConnection(docker_socket="ssh://sandbox@", runtime="runsc")
+    if backend == "podman":
+        return SandboxConnection(runtime="crun")  # keeps the default rootless podman_url
+    # local / process: the local Docker socket + runc (process ignores it at runtime).
+    return SandboxConnection(docker_socket="unix:///var/run/docker.sock", runtime="runc")
 
 
 class SandboxSettings(BaseModel):

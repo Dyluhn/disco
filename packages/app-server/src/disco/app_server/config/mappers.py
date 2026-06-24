@@ -250,31 +250,32 @@ def _data_sources_from(config: RouterConfig) -> DataSourcesConfigDTO:
 
 
 def _sandbox_from(config: RouterConfig) -> SandboxConfigDTO:
+    from disco.core.llm import default_connection_for
+
     s = config.sandbox
-    # Expose EVERY backend's saved connection block (persistence fix) so the UI can
-    # restore a backend's own setup on switch. Always include the ACTIVE backend's
-    # block — seeded from the flat fields — even on a fresh/legacy config whose
-    # `connections` map is still empty, so a first switch already has something to keep.
-    connections = {
-        bid: SandboxConnectionDTO(
+
+    def _conn_dto(c) -> SandboxConnectionDTO:
+        return SandboxConnectionDTO(
             docker_socket=c.docker_socket,
             podman_url=c.podman_url,
             runtime=c.runtime,
             image=c.image,
             workspace_root=c.workspace_root,
         )
-        for bid, c in s.connections.items()
-    }
-    connections.setdefault(
-        s.backend,
-        SandboxConnectionDTO(
-            docker_socket=s.docker_socket,
-            podman_url=s.podman_url,
-            runtime=s.runtime,
-            image=s.image,
-            workspace_root=s.workspace_root,
-        ),
-    )
+
+    # Expose EVERY backend's connection block so the UI restores a backend's OWN setup on
+    # switch, never the previous backend's socket (P1 bleed fix). Priority:
+    #   1. SAVED per-backend blocks (authoritative).
+    #   2. The ACTIVE backend ALWAYS reflects the live flat fields — this migrates an OLD
+    #      flat config (no `connections` map) by mapping the flat block to connections[
+    #      active] ONLY (it is NOT replicated to other backends).
+    #   3. CLEAN backend-appropriate defaults for every other known backend with no saved
+    #      block — so switching to Local/podman/process gets a clean slate, not a gvisor
+    #      ssh:// socket carried over.
+    connections = {bid: _conn_dto(c) for bid, c in s.connections.items()}
+    connections[s.backend] = _conn_dto(s.active_connection())  # migrate flat → active only
+    for bid in ("gvisor", "local", "podman", "process"):
+        connections.setdefault(bid, _conn_dto(default_connection_for(bid)))
     return SandboxConfigDTO(
         backend=s.backend,
         docker_socket=s.docker_socket,

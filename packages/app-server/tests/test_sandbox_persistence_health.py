@@ -108,19 +108,70 @@ def test_no_field_loss_round_trip_via_http(client):
     assert got["connections"]["gvisor"]["docker_socket"] == "ssh://sandbox@1.2.3.4"
 
 
+def test_old_flat_config_migrates_active_only_clean_defaults_for_others(state, store):
+    """P1 #2 migration: an OLD flat config (active gvisor + bad host-less socket, NO
+    `connections` map) maps the flat block to connections[ACTIVE] ONLY — every OTHER
+    backend gets a CLEAN backend-appropriate default, NOT the gvisor ssh socket. So
+    switching to Local never inherits the bad socket."""
+    from disco.core.llm import SandboxSettings
+
+    # Simulate a legacy persisted config: flat fields set, `connections` empty.
+    legacy = SandboxSettings(backend="gvisor", docker_socket="ssh://sandbox@", runtime="runsc")
+    store.save(store.load().model_copy(update={"sandbox": legacy}))
+
+    cfg = state.sandbox_config()
+    # active backend reflects the (bad) flat block — shown so the user can fix it
+    assert cfg.connections["gvisor"].docker_socket == "ssh://sandbox@"
+    # Local did NOT inherit the gvisor ssh socket — it got a clean local docker socket
+    assert "ssh://" not in cfg.connections["local"].docker_socket
+    assert cfg.connections["local"].docker_socket == "unix:///var/run/docker.sock"
+    assert cfg.connections["local"].runtime == "runc"
+    # process likewise has no ssh socket bled in
+    assert "ssh://" not in cfg.connections["process"].docker_socket
+
+
 # ---- B. validation: the unrunnable state is rejected, not silently saved ------
 
 
-@pytest.mark.parametrize("bad_socket", ["ssh://sandbox@", "", "   ", "ssh://sandbox@ "])
+@pytest.mark.parametrize(
+    "bad_socket",
+    [
+        "ssh://sandbox@",
+        "",
+        "   ",
+        "ssh://sandbox@ ",
+        "ssh://sandbox@:22",  # P1 #1: host-less WITH a port
+        "http+ssh://sandbox@:2222/run/docker.sock",
+        "ssh://sandbox@/run/docker.sock",  # host-less with a path
+    ],
+)
 def test_reject_gvisor_with_hostless_or_empty_socket(client, bad_socket):
-    """The exact outage config — a gvisor backend with a host-less/empty docker_socket —
-    is REJECTED 400 with a typed reason, never persisted."""
+    """The exact outage config — a gvisor backend with a host-less/empty docker_socket
+    (INCLUDING host-less-with-a-port, the P1 miss) — is REJECTED 400 with a typed reason,
+    never persisted."""
     r = client.put(
         "/api/sandbox/config",
         json=_dto(backend="gvisor", docker_socket=bad_socket, runtime="runsc"),
     )
     assert r.status_code == 400, r.text
     assert r.json()["detail"]["reason"] == "unrunnable_sandbox"
+
+
+@pytest.mark.parametrize(
+    "good_socket",
+    [
+        "ssh://sandbox@host",
+        "ssh://sandbox@host:22",
+        "ssh://sandbox@1.2.3.4:22/run/docker.sock",
+    ],
+)
+def test_accept_gvisor_with_valid_host_and_port(client, good_socket):
+    """A real host (with or without a port/path) is accepted."""
+    r = client.put(
+        "/api/sandbox/config",
+        json=_dto(backend="gvisor", docker_socket=good_socket, runtime="runsc"),
+    )
+    assert r.status_code == 200, r.text
 
 
 def test_reject_keeps_last_good_block(state):
