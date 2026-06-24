@@ -255,6 +255,133 @@ async def test_process_exec_shell_still_refuses_reserved_kill_and_arbitrary_bind
         await inst.destroy()
 
 
+async def test_process_exec_shell_refuses_host_signal_commands(monkeypatch):
+    # Bug 19 (P0): a process-backend build must NOT be able to signal/kill a HOST process
+    # (it shares the host PID namespace — a `kill <pid>` of a discovered PID took down the
+    # agent-server LIVE). Every host-signal shape is refused (exit 126, actionable message)
+    # and the real subprocess launcher is NEVER invoked for a refused command.
+    import asyncio
+    import tempfile
+    from pathlib import Path
+
+    from disco.tools.sandbox.process import ProcessSandboxInstance
+
+    launched: list[str] = []
+
+    async def _fake_create(cmd, **kwargs):  # pragma: no cover — must NOT be reached
+        launched.append(cmd)
+        raise AssertionError(f"launcher invoked for a refused command: {cmd!r}")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_create)
+
+    # Host-signal shapes the NEW Bug-19 net catches → the host-signal refusal message.
+    host_signal = (
+        "kill 12345",
+        "kill -9 12345",
+        "kill -TERM 12345",
+        "kill -s TERM 12345",
+        "pkill -f uvicorn",
+        "killall python",
+        "fuser -k 9001/tcp",  # non-reserved port — still a host-process kill
+        "lsof -ti:9001 | xargs -r kill",  # non-reserved + xargs -r form
+        "ss -lntp ; kill 931479",  # the exact live takedown shape (kill after a separator)
+    )
+    # Reserved-port kill shapes — refused EARLIER by the Bug-7/16 port check (its own
+    # port-specific message). Still exit 126, still never launched. Kept here to prove
+    # the additional Bug-19 net does not weaken the existing reserved-port refusal.
+    reserved_port_kill = (
+        "fuser -k 8000/tcp",
+        "lsof -ti:8000 | xargs kill",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        inst = ProcessSandboxInstance("i", "o", "c", SandboxSpec(), Path(tmp))
+        for cmd in host_signal:
+            res = await inst.exec_shell(cmd, timeout_s=10)
+            assert res.exit_code == 126, cmd
+            # starts with "refused:" so system.py surfaces it as the model-visible error
+            assert res.stderr.startswith("refused:"), cmd
+            assert "never" in res.stderr.lower() and "8080" in res.stderr, cmd
+        for cmd in reserved_port_kill:
+            res = await inst.exec_shell(cmd, timeout_s=10)
+            assert res.exit_code == 126, cmd
+            assert res.stderr.startswith("refused:"), cmd
+        assert launched == []  # the launcher was never reached for any refused command
+        # NB: no inst.destroy() here — destroy() itself uses the (patched) launcher for
+        # tmux cleanup; the TemporaryDirectory removes the workspace.
+
+
+async def test_process_exec_shell_allows_normal_build_commands(monkeypatch):
+    # Must-not-regress: normal build commands STILL reach the launcher — only host-signal
+    # shapes are refused. `kill`/`pkill`/`killall` must NOT match as substrings of harmless
+    # commands (`pytest -k kill_switch`, `echo "kill the build"`).
+    import asyncio
+    import tempfile
+    from pathlib import Path
+
+    from disco.tools.sandbox.process import ProcessSandboxInstance
+
+    captured: list[str] = []
+
+    class _FakeProc:
+        returncode = 0
+
+        async def communicate(self):
+            return (b"", b"")
+
+    async def _fake_create(cmd, **kwargs):
+        captured.append(cmd)
+        return _FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_create)
+
+    controls = (
+        "pytest --version",
+        "npm run build",
+        "python3 -m http.server 8080",  # SAFE-port serve still runs
+        "echo hi > new.txt && cat new.txt",  # file op
+        "pip install requests",
+        "pytest -k kill_switch",  # `kill` as a substring of a -k filter — NOT a kill cmd
+        'echo "kill the build cache"',  # `kill` inside a quoted echo arg — not the verb
+        "find . -name '*.pyc' | xargs rm",  # xargs without kill — not refused
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        inst = ProcessSandboxInstance("i", "o", "c", SandboxSpec(), Path(tmp))
+        for cmd in controls:
+            captured.clear()
+            res = await inst.exec_shell(cmd, timeout_s=10)
+            assert res.exit_code == 0, cmd
+            assert len(captured) == 1, cmd  # reached the launcher exactly once
+        await inst.destroy()
+
+
+async def test_container_backend_kill_path_unchanged():
+    # Bug 19 scope: the host-signal refusal is PROCESS-backend ONLY. The container/isolated
+    # backend has its OWN PID namespace (a kill there only hits sandbox processes), so its
+    # exec_shell must NOT refuse a kill — it runs it inside the container as before.
+    from disco.tools.sandbox._container import ContainerInstance
+
+    ran: list[list[str]] = []
+
+    class _FakeContainer:
+        def exec_run(self, cmd, demux=False, workdir=None):
+            ran.append(cmd)
+            return (0, (b"", b""))
+
+    inst = ContainerInstance(
+        id="i",
+        owner_id="o",
+        conversation_id="c",
+        spec=SandboxSpec(),
+        container=_FakeContainer(),
+        container_workspace="/workspace",
+        stop_timeout_s=5,
+    )
+    res = await inst.exec_shell("kill 12345", timeout_s=10)
+    assert res.exit_code == 0  # NOT refused — ran inside the container's PID namespace
+    # the kill reached the container exec (wrapped in `timeout … sh -c <cmd>`), not a 126
+    assert any("kill 12345" in part for part in ran[0])
+
+
 async def test_session_recreate_fires_rehydrate_hook():
     """bp-13 §2 (orchestrator fix): a mid-session death forces _recreate, which
     must invoke the owner's on_recreate hook AFTER the fresh instance is up —

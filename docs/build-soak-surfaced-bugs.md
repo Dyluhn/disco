@@ -861,6 +861,69 @@ currently holds port 3000 — not a regression of this change.)
 
 ---
 
+### Bug 19 — a process-backend build could KILL the agent-server (or any host process) via `kill <pid>` — PRODUCT — FIXED
+
+**P0, LIVE finding** (MiniMax-M3, `conv_68eeed23`, `multifile_static_site`, process backend). The model wanted
+to serve its preview on port 8000 (the default the build prompt teaches), ran `ss -lntp | grep ':8000'` + `curl
+http://127.0.0.1:8000/`, saw 8000 **occupied by the agent-server itself** (uvicorn pid 931479), and ran
+`kill 931479 2>&1 || true ; …` — which **killed the agent-server** and took down the whole dev stack (the next
+soak scenario got `INFRA_FAILURE/agent_server_unreachable`). The process backend shares the host PID namespace,
+so a `kill <pid>` of a discovered PID hits arbitrary host processes.
+
+**The gap.** The Bug-7/16 containment refused reserved-PORT bind/kill shapes **by port number**
+(`fuser -k 8000`, `lsof …:8000 | xargs kill`, `--port 8000`), but a **raw `kill <pid>`** of a PID the model
+discovered was NOT matched — nor `pkill`/`killall`/`kill -9`/`kill -TERM`. The security analyzer also rates
+`kill|pkill|killall` only *medium* (not hard-denied), so nothing stopped the trivial stack-takedown.
+
+**Fix** (`fix-bug19-process-kill-containment`). An ADDITIONAL refusal in the SAME containment boundary —
+`ProcessSandboxInstance.exec_shell` (`sandbox/process.py`), immediately after the reserved-port check, before
+`asyncio.create_subprocess_shell`. New module-level `process_backend_signal_command_violation(command)`
+**blanket-refuses host-process-signal command shapes** on the process backend — `kill`/`kill -9`/`kill -TERM`/
+`kill -s …`, `pkill`/`pkill -f`, `killall`, `fuser -k`, and the `lsof -ti:PORT | xargs [-r] kill` pipeline —
+returning `ExecResult(126, stderr="refused: …")` **without invoking the launcher**. The refusal is actionable
+and starts with `refused:` so `system.py` (`_exec_outcome`, Bug 16) surfaces it as the model-visible error:
+*"killing host processes is not permitted on this (process) backend … serve your preview on a non-reserved port
+such as 8080 (it runs in your named preview/dev session) … never `kill`/`pkill`/`killall`/`fuser -k` a host PID
+or free a port."* Each signal verb is matched only as a **command head** (string start or after a shell
+separator) so `kill`/`pkill`/`killall` buried in an `echo`/quoted arg, and `pytest -k kill_switch` (`-k` flag,
+no word boundary), are NOT falsely refused. A build has no legitimate need to signal host PIDs — its OWN
+foreground server is managed via the named preview/dev session (`shell_kill_process` →
+`ShellSessionManager.kill_foreground`), which is unaffected.
+
+**Scope / isolation (honest).** PROCESS backend ONLY — the dev-only weak-isolation backend that shares the
+host. This is **best-effort command-pattern matching** (like the reserved-port scan): trivially bypassable (a
+renamed binary, a raw `os.kill` inside `python -c`, env-indirection). The robust long-term answer is a
+**PID-namespaced/isolated backend** — the container/gVisor backend already has its own PID namespace, so a
+`kill` there only hits sandbox processes; its `exec_shell` (`_container.py`) is **NOT routed through this check
+and is left UNCHANGED**. The containment is the must-have safety net that stops the trivial stack-takedown
+until/unless any untrusted build is moved off the process backend.
+
+**Complementary build guidance — deferred (follow-up).** The build prompt still teaches `8000` as the
+user-visible preview port and says `shell_kill_process('preview')` to free it (`prompts.py:285/385`), which is
+**correct for the isolated/container backend** (8000 is genuinely the sandbox's own port there). A
+process-backend-only "8000 is platform-owned here; use 8080+; never kill processes or free ports" note would
+require threading backend/isolation-awareness into the (currently backend-agnostic) `PromptLibrary` and
+conditionalizing the port-8000 guidance — engine/prompt-internal sprawl that risks the container story. Left as
+a follow-up; the containment refusal is the load-bearing fix and stands alone.
+
+**Must-not-regress (verified).** Normal build commands still reach the launcher (`pytest --version`,
+`npm run build`, a SAFE-port serve `python3 -m http.server 8080`, file ops, installs, `pytest -k kill_switch`,
+`echo "kill …"`, `… | xargs rm`); reserved-port kill shapes (`fuser -k 8000`, `lsof …:8000 | xargs kill`) keep
+their existing port-specific refusal; the container backend's `kill` path is unchanged (own PID namespace);
+Bug 6/7/12/16 + W-45 intact.
+
+**Proof — LIVE stack in use, so per policy UNIT tests are the required proof** (no live soak, port 8000 never
+bound by this work): `test_sandbox.py` — `test_process_exec_shell_refuses_host_signal_commands` (every signal
+shape → 126 + actionable `refused:` text, the monkeypatched launcher NEVER invoked, incl. the exact live
+`ss … ; kill 931479` shape), `test_process_exec_shell_allows_normal_build_commands` (controls reach the
+launcher exactly once; no false-refuse of `pytest -k kill_switch` / quoted `kill` / `xargs rm`),
+`test_container_backend_kill_path_unchanged` (`ContainerInstance.exec_shell` runs `kill 12345` inside the
+container — NOT refused). Ruff + basedpyright clean, import-linter KEPT, preview/verify/shell suite green. (The
+same pre-existing `test_process_backend_expose_port_defense` env flake — LIVE soak holds port 3000 — is
+untouched by this change.)
+
+---
+
 ## Runner hygiene — kill abandoned conversations (harness only)
 
 **Symptom.** The runner left a build conversation **RUNNING** whenever it stopped watching —
