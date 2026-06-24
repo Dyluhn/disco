@@ -39,6 +39,7 @@ from .config.dtos import (
     ProbeResult,
     ProjectStorageConfigDTO,
     SandboxConfigDTO,
+    SandboxHealthDTO,
     SecretsListDTO,
     SecretStatus,
     SkillCreate,
@@ -378,8 +379,31 @@ class ConfigState:
         POST /api/sandbox/test) the Save flow runs after persisting, so a config is
         never LOST just because the host is momentarily down — the user saves, then
         sees the typed named reachability verdict and can fix the host. The
-        agent-server ALSO re-probes on first use (first-kick pre-flight)."""
-        from disco.core.llm import SandboxSettings
+        agent-server ALSO re-probes on first use (first-kick pre-flight).
+
+        STRUCTURAL validation (the outage guard): a `gvisor` backend with an empty /
+        host-less `docker_socket` (or `podman` with an empty `podman_url`) is REJECTED
+        with a typed ConfigValidationError → the endpoint maps it to 400, rather than
+        silently persisting an unrunnable config that fails every later run. The
+        per-backend `connections` map is preserved by the store, so the rejected save
+        leaves the last-good block for that backend intact."""
+        from disco.core.llm import SandboxConnection, SandboxSettings, sandbox_connection_error
+
+        reason = sandbox_connection_error(
+            dto.backend,
+            SandboxConnection(
+                docker_socket=dto.docker_socket,
+                podman_url=dto.podman_url,
+                runtime=dto.runtime,
+                image=dto.image,
+                workspace_root=dto.workspace_root,
+            ),
+        )
+        if reason is not None:
+            raise ConfigValidationError(
+                "unrunnable_sandbox",
+                detail=f"Can't save the {dto.backend} sandbox: {reason}.",
+            )
 
         self._store.save_sandbox(
             SandboxSettings(
@@ -392,6 +416,20 @@ class ConfigState:
             )
         )
         return _sandbox_from(self._store.load())
+
+    async def sandbox_health(self) -> SandboxHealthDTO:
+        """Reachability of the ACTIVE (persisted) sandbox backend — the cheap,
+        side-effect-free signal the app shell surfaces as a banner BEFORE a run is
+        started. Reuses the SAME `test_sandbox` probe (→ the same `healthcheck()` the
+        run path hits), so the banner and the real run can't disagree. Never raises:
+        a probe failure is a RESULT (reachable=False with a host-naming detail)."""
+        dto = self.sandbox_config()
+        probe = await self.test_sandbox(dto)
+        return SandboxHealthDTO(
+            reachable=probe.ok,
+            backend=dto.backend,
+            detail=probe.detail,
+        )
 
     # W-48: HARD wall-clock bound on the sandbox connectivity probe — a "test" must
     # feel instant and never hang Settings on a black-holed gVisor/Podman host. The

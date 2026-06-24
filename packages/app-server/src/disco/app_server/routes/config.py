@@ -17,6 +17,7 @@ from ..config.dtos import (
     ProbeResult,
     ProjectStorageConfigDTO,
     SandboxConfigDTO,
+    SandboxHealthDTO,
     TtsConfigDTO,
 )
 from ..config_state import ConfigState, ConfigValidationError
@@ -31,7 +32,17 @@ def make_config_router(state: ConfigState) -> APIRouter:
 
     @router.put("/api/sandbox/config")
     async def put_sandbox_config(dto: SandboxConfigDTO) -> SandboxConfigDTO:
-        return state.update_sandbox_config(dto)
+        """Persist the active backend + connection. Per-backend connection blocks are
+        retained by the store, so switching the active backend never clears the others'
+        setup. A structurally unrunnable config (gvisor/podman with an empty/host-less
+        endpoint) is rejected 400 with a typed reason rather than silently saved."""
+        try:
+            return state.update_sandbox_config(dto)
+        except ConfigValidationError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"reason": exc.reason, "message": exc.detail or exc.reason},
+            ) from exc
 
     @router.post("/api/sandbox/test")
     async def test_sandbox(dto: SandboxConfigDTO) -> ProbeResult:
@@ -39,6 +50,13 @@ def make_config_router(state: ConfigState) -> APIRouter:
         bounded probe of the configured endpoint, returning a typed host-naming verdict
         (HTTP 200 with ok=False on an expected failure, never a 500)."""
         return await state.test_sandbox(dto)
+
+    @router.get("/api/sandbox/health")
+    async def sandbox_health() -> SandboxHealthDTO:
+        """Reachability of the ACTIVE (persisted) sandbox backend — the cheap signal the
+        app shell polls to surface an unreachable sandbox BEFORE a run is started. Same
+        probe the run path hits, so the banner and the real run agree."""
+        return await state.sandbox_health()
 
     @router.get("/api/encoders/config")
     async def get_encoders_config() -> EncodersConfigDTO:

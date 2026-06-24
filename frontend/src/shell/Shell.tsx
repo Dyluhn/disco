@@ -2,6 +2,7 @@ import { Menu } from "lucide-react";
 import { useState } from "react";
 import { Outlet } from "react-router-dom";
 import { DemoDataBadge } from "@/components/DemoDataBadge";
+import { SandboxHealthBanner } from "@/components/SandboxHealthBanner";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { CommandPalette } from "@/components/CommandPalette";
 import { cn } from "@/lib/cn";
@@ -74,6 +75,7 @@ export function Shell() {
         </header>
 
         <DemoDataBadge />
+        <SandboxHealthBanner />
 
         <main className="min-h-0 flex-1 overflow-y-auto">
           <Outlet />

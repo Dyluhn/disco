@@ -5,6 +5,17 @@
  * that mirrors `tools/sandbox/isolation.py`; the editable config round-trips to the server.
  */
 
+/** One backend's saved connection block — mirrors the server's SandboxConnectionDTO.
+ * Carried in SandboxConfig.connections so switching to a backend RESTORES its own
+ * last-known setup instead of blanking it (the gVisor-socket-blanking outage fix). */
+export interface SandboxConnection {
+  docker_socket: string;
+  podman_url: string;
+  runtime: string;
+  image: string;
+  workspace_root: string;
+}
+
 export interface SandboxConfig {
   backend: string; // "process" | "gvisor" | "local" | "podman"
   docker_socket: string;
@@ -12,6 +23,17 @@ export interface SandboxConfig {
   runtime: string;
   image: string;
   workspace_root: string;
+  // per-backend saved connection blocks (backend id → its connection). Server-populated;
+  // the UI reads it to restore a backend's own connection when you flip to it.
+  connections?: Record<string, SandboxConnection>;
+}
+
+/** Reachability of the active sandbox backend — mirrors the server's SandboxHealthDTO.
+ * Polled by the app shell to surface an unreachable sandbox BEFORE a run is started. */
+export interface SandboxHealth {
+  reachable: boolean;
+  backend: string;
+  detail: string;
 }
 
 export type SandboxField = "docker_socket" | "podman_url" | "runtime" | "image" | "workspace_root";

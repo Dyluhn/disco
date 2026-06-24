@@ -124,16 +124,25 @@ export function SandboxSection() {
 
   const selectBackend = (id: string) => {
     const m = backendMeta(id);
+    // Persistence fix (2026-06-23 outage): RESTORE this backend's LAST-SAVED connection
+    // so flipping backends never blanks another's setup. The bug was a SHARED docker_socket
+    // + a prefill that overwrote gVisor's `ssh://sandbox@<host>` down to a host-less
+    // `ssh://sandbox@`, which then failed every run. The per-backend blocks come from the
+    // server (data.connections); we hydrate the draft from this backend's own block.
+    const saved = data?.connections?.[id];
     const next: SandboxConfig = {
       ...draft,
       backend: id,
-      runtime: m?.defaultRuntime ?? draft.runtime,
+      runtime: saved?.runtime ?? m?.defaultRuntime ?? draft.runtime,
+      docker_socket: saved?.docker_socket ?? draft.docker_socket,
+      podman_url: saved?.podman_url ?? draft.podman_url,
+      image: saved?.image ?? draft.image,
+      workspace_root: saved?.workspace_root ?? draft.workspace_root,
     };
-    // W-48(b): seed the ONE varying connection field with the backend's template when
-    // it's empty or still a WRONG-TIER default — e.g. the LOCAL docker socket left on
-    // the REMOTE gVisor tier, which would point docker-py at a local socket with no
-    // runsc. After this the user only edits the host part of `ssh://sandbox@<host>`.
-    if (m?.primaryField && m.primaryPrefill) {
+    // W-48(b): seed the ONE varying connection field with the backend's template ONLY when
+    // there's no saved block yet (first-time selection) — never overwrite a restored real
+    // host. After this the user only edits the host part of `ssh://sandbox@<host>`.
+    if (!saved && m?.primaryField && m.primaryPrefill) {
       const cur = next[m.primaryField];
       if (!cur || !cur.startsWith(m.primaryPrefill)) next[m.primaryField] = m.primaryPrefill;
     }

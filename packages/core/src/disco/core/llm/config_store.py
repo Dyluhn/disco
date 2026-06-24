@@ -102,8 +102,15 @@ class ConfigStore:
     # -- sandbox backend ------------------------------------------------------
 
     def save_sandbox(self, sandbox: SandboxSettings) -> RouterConfig:
-        """Persist the active sandbox backend + connection over the current config."""
-        return self.save(self.load().model_copy(update={"sandbox": sandbox}))
+        """Persist the active sandbox backend + connection over the current config.
+
+        PRESERVES every backend's saved connection block: the incoming settings carry
+        the now-ACTIVE backend's flat fields, and `with_preserved_connections` folds in
+        the previously-persisted per-backend map so switching the active backend never
+        clears the inactive backends' setup (the gVisor-socket-blanking outage)."""
+        previous = self.load().sandbox
+        merged = sandbox.with_preserved_connections(previous)
+        return self.save(self.load().model_copy(update={"sandbox": merged}))
 
     def save_encoders(self, encoders: EncodersSettings) -> RouterConfig:
         """Persist the encoder mode (bundled-local vs remote) over the current config.

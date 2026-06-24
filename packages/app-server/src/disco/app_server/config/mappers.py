@@ -26,6 +26,7 @@ from .dtos import (
     OpenRouterModelDTO,
     ProjectStorageConfigDTO,
     SandboxConfigDTO,
+    SandboxConnectionDTO,
     TtsConfigDTO,
 )
 
@@ -250,6 +251,30 @@ def _data_sources_from(config: RouterConfig) -> DataSourcesConfigDTO:
 
 def _sandbox_from(config: RouterConfig) -> SandboxConfigDTO:
     s = config.sandbox
+    # Expose EVERY backend's saved connection block (persistence fix) so the UI can
+    # restore a backend's own setup on switch. Always include the ACTIVE backend's
+    # block — seeded from the flat fields — even on a fresh/legacy config whose
+    # `connections` map is still empty, so a first switch already has something to keep.
+    connections = {
+        bid: SandboxConnectionDTO(
+            docker_socket=c.docker_socket,
+            podman_url=c.podman_url,
+            runtime=c.runtime,
+            image=c.image,
+            workspace_root=c.workspace_root,
+        )
+        for bid, c in s.connections.items()
+    }
+    connections.setdefault(
+        s.backend,
+        SandboxConnectionDTO(
+            docker_socket=s.docker_socket,
+            podman_url=s.podman_url,
+            runtime=s.runtime,
+            image=s.image,
+            workspace_root=s.workspace_root,
+        ),
+    )
     return SandboxConfigDTO(
         backend=s.backend,
         docker_socket=s.docker_socket,
@@ -257,6 +282,7 @@ def _sandbox_from(config: RouterConfig) -> SandboxConfigDTO:
         runtime=s.runtime,
         image=s.image,
         workspace_root=s.workspace_root,
+        connections=connections,
     )
 
 
