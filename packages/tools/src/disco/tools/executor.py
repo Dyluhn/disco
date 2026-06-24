@@ -15,6 +15,7 @@ from typing import Any
 from uuid import uuid4
 
 from disco.core import ToolCall, ToolResult
+from disco.core.events import find_elided_arg_markers
 from disco.core.llm import ModelExecutionPolicy, ToolSpec
 from pydantic import BaseModel, ValidationError
 
@@ -245,6 +246,32 @@ class DefaultToolExecutor:
                 call,
                 "unknown_tool",
                 f"unknown or out-of-scope tool {call.tool_name!r}; available: {available}",
+            )
+
+        # 1.5 K1 executor-boundary elision guard (generic; ALL tools / ALL paths).
+        # A weak model can COPY the `_snip_args` placeholder it sees in its own
+        # action history (`<N chars elided — re-issue the call or file_read …>`)
+        # back into a REAL tool argument — e.g. file_replace_lines.new_text. The
+        # Observer runs the same find_elided_arg_markers() check before it reaches
+        # here, but NOT every execution path goes through the Observer; this is the
+        # universal chokepoint every tool call funnels through, so guarding HERE
+        # makes the placeholder unable to mutate disk on ANY path (file_write,
+        # file_replace_lines, any future mutator, or a direct executor call). The
+        # detector anchors on the marker's STRUCTURE (count anchor or its signature
+        # tail prose), so a legitimate arg that merely mentions "elided" is NOT
+        # rejected. Returns a RECOVERABLE failure (invalid_arguments) — not a
+        # success, finish, or planning change — so the model can resend the FULL
+        # content; it never silently overwrites real content with the placeholder.
+        _elided = find_elided_arg_markers(call.arguments)
+        if _elided:
+            return self._fail(
+                call,
+                "invalid_arguments",
+                f"argument(s) {_elided} contain the elision placeholder text "
+                "('<N chars elided …>' / 'do not copy this placeholder into a tool "
+                "argument') instead of real content — this call was NOT executed. "
+                "Re-issue the call with the FULL content, or file_read the path "
+                "first to recover the current content, then resend.",
             )
 
         # 2. validate args (invalid_arguments with schema; never coerce/execute)

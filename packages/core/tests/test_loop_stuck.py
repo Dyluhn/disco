@@ -45,6 +45,68 @@ def test_repeated_action_error_triggers_at_threshold():
     assert d.is_stuck(events) is True
 
 
+# ---- pattern 2: the stuck detector compares RAW args, not rendered/snipped ones --
+#
+# Bug 14 (Build Soak repair #7) regression pin. The LLM-context view snips any
+# tool arg > _ARG_SNIP_CHARS to a SHORT placeholder marker keyed on the arg's
+# LENGTH (`<{n} chars …>`). Two file_replace_lines calls with DISTINCT new_text of
+# IDENTICAL length therefore RENDER to the SAME marker — but they are NOT the same
+# action. The detector MUST compare the raw ActionEvent.tool_call.arguments (which
+# differ), never the rendered/snipped view, or it would falsely flag two distinct
+# large edits as a repeat and STUCK a legitimately-progressing run. (The Bug 14 fix
+# is the executor-boundary elision guard; this pins the detector's correctness so a
+# future "compare rendered args" refactor can't silently reintroduce the false STUCK.)
+
+
+def _replace_action(new_text: str):  # noqa: ANN202
+    return action(
+        thought="patching",
+        tool="file_replace_lines",
+        args={"path": "src/app.js", "start_line": 1, "end_line": 40, "new_text": new_text},
+    )
+
+
+def test_distinct_large_edits_snip_to_same_marker_but_are_not_stuck():
+    from disco.core.events import _ARG_SNIP_CHARS, _snip_args
+
+    big = _ARG_SNIP_CHARS + 100
+    text_a = "a" * big
+    text_b = "b" * big  # distinct content, IDENTICAL length
+    # Premise: the rendered/snipped args collapse to the SAME marker (length-keyed).
+    marker_a = _snip_args({"new_text": text_a})["new_text"]
+    marker_b = _snip_args({"new_text": text_b})["new_text"]
+    assert marker_a == marker_b
+    # ...yet the raw args differ.
+    assert text_a != text_b
+
+    d = StuckDetector(StuckThresholds(repeat_action_error=2))
+    events = [
+        _replace_action(text_a),
+        agent_error("argument contains the elision placeholder"),
+        _replace_action(text_b),
+        agent_error("argument contains the elision placeholder"),
+    ]
+    # Two DISTINCT large edits → NOT stuck (the detector reads raw args, not the
+    # rendered marker that would make them look identical).
+    assert d.is_stuck(events) is False
+
+
+def test_repeated_identical_large_edit_is_still_stuck():
+    """The other half of the contract: the detector MUST still catch a TRULY
+    identical repeated action (same raw new_text) — Bug 14 must not weaken it."""
+    from disco.core.events import _ARG_SNIP_CHARS
+
+    same = "z" * (_ARG_SNIP_CHARS + 100)
+    d = StuckDetector(StuckThresholds(repeat_action_error=2))
+    events = [
+        _replace_action(same),
+        agent_error("argument contains the elision placeholder"),
+        _replace_action(same),
+        agent_error("argument contains the elision placeholder"),
+    ]
+    assert d.is_stuck(events) is True
+
+
 # ---- pattern 3: agent monologue ---------------------------------------------
 
 
