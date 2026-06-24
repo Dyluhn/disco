@@ -284,7 +284,7 @@ async def test_mode_off_fails_soft_and_unloads_model():
 async def test_mode_off_unload_is_safe_when_nothing_loaded():
     """`enabled=False` when the engine was never loaded must NOT raise. The
     disabled-branch `unload()` is a documented no-op on a cold engine, and the
-    lazy import must not blow up when the optional `tts` extra is missing."""
+    lazy import must not blow up when the bundled TTS module isn't importable."""
     from disco.agent_server import tts_local
 
     assert tts_local.is_loaded() is False

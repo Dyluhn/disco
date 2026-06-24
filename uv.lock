@@ -615,18 +615,14 @@ dependencies = [
     { name = "disco-retrieval" },
     { name = "disco-tools" },
     { name = "fastapi" },
+    { name = "kokoro-onnx" },
+    { name = "lameenc" },
     { name = "markdown" },
+    { name = "numpy" },
     { name = "python-multipart" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "weasyprint" },
     { name = "websockets" },
-]
-
-[package.optional-dependencies]
-tts = [
-    { name = "kokoro-onnx" },
-    { name = "lameenc" },
-    { name = "numpy" },
 ]
 
 [package.metadata]
@@ -636,16 +632,15 @@ requires-dist = [
     { name = "disco-retrieval", editable = "packages/retrieval" },
     { name = "disco-tools", editable = "packages/tools" },
     { name = "fastapi", specifier = ">=0.110" },
-    { name = "kokoro-onnx", marker = "extra == 'tts'", specifier = ">=0.4" },
-    { name = "lameenc", marker = "extra == 'tts'", specifier = ">=1.7" },
+    { name = "kokoro-onnx", specifier = ">=0.4" },
+    { name = "lameenc", specifier = ">=1.7" },
     { name = "markdown", specifier = ">=3.5" },
-    { name = "numpy", marker = "extra == 'tts'", specifier = ">=1.26" },
+    { name = "numpy", specifier = ">=1.26" },
     { name = "python-multipart", specifier = ">=0.0.12" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
     { name = "weasyprint", specifier = ">=63.0" },
     { name = "websockets", specifier = ">=12.0" },
 ]
-provides-extras = ["tts"]
 
 [[package]]
 name = "disco-app-server"

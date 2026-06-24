@@ -314,14 +314,14 @@ class AudioOverviewTool:
             # (PMX_TTS_IDLE_TTL_S, default 30 min). The bundled engine is
             # process-global in `disco.agent_server.tts_local`; `unload()` is a
             # no-op when nothing is loaded, so it's safe to call here. Lazy-
-            # imported + suppressed so the tools package stays importable
-            # without the optional `tts` extra installed.
+            # imported + suppressed so the tools package stays importable even
+            # where the agent-server (which hosts the bundled engine) isn't.
             try:
                 from disco.agent_server import tts_local as _tts_local
 
                 await _tts_local.unload()
             except ImportError:
-                pass  # tts extra not installed — nothing to unload
+                pass  # agent-server / bundled TTS not importable — nothing to unload
             return None, ToolOutcome(
                 success=False,
                 content=(

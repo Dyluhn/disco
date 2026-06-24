@@ -17,16 +17,10 @@ dependencies = [
     "cronsim>=2.6",
     "weasyprint>=63.0",  # RP-07: PDF export (md → HTML → WeasyPrint)
     "markdown>=3.5",  # RP-07: faithful md → HTML for the PDF path (tables/lists/etc.)
-]
-
-[project.optional-dependencies]
-# RP-09 in-process Kokoro TTS — OPTIONAL so the lean core install stays lean. Rides
-# the onnxruntime already pulled by fastembed (deliberately NOT torch). This extra is
-# on the MEMBER package, so install it with
-# `uv sync --package disco-agent-server --extra tts` (NOT a bare `uv sync
-# --extra tts`, which errors — the workspace root has no `tts` extra). Weights
-# download on first use.
-tts = [
+    # RP-09 in-process Kokoro TTS — BUNDLED tier, a default product surface, so it ships
+    # in CORE deps and a bare standard `uv sync` always installs it (no `--extra tts`
+    # needed). Rides the onnxruntime already pulled by fastembed (deliberately NOT torch).
+    # Weights download on first use. BYO/self-host/paid TTS tiers stay opt-in elsewhere.
     "kokoro-onnx>=0.4",
     "lameenc>=1.7",
     "numpy>=1.26",

@@ -111,8 +111,9 @@ def make_probes_router() -> APIRouter:
                 ok=False,
                 status="misconfigured",
                 detail=(
-                    "The bundled Kokoro TTS extra isn't installed on this server "
-                    f"({exc}). Install it or use a self-host/paid tier."
+                    "The bundled Kokoro TTS couldn't be imported on this server "
+                    f"({exc}). It ships in core deps — re-run `uv sync` — or use a "
+                    "self-host/paid tier."
                 ),
                 provider=provider,
             )

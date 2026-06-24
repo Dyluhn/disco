@@ -18,7 +18,7 @@ Run the live suite with:
   `pytest -m integration packages/agent-server/tests/test_report_audio_live.py -v`
 
 Environment needs:
-  - `kokoro_onnx` and `lameenc` installed (uv sync --package disco-agent-server --extra tts)
+  - `kokoro_onnx` and `lameenc` installed (bundled TTS is a core dep — a bare `uv sync` installs it)
   - Kokoro v1.0 model at ~/.cache/disco-tts/ (auto-downloaded on first use or pre-cached)
   - numpy in the venv (always present as a core dep)
 
@@ -50,9 +50,9 @@ def _kokoro_available() -> tuple[bool, str]:
     """Return (available, reason). Checks the Python package AND model files."""
     # Package check
     if importlib.util.find_spec("kokoro_onnx") is None:
-        return False, "kokoro_onnx package not installed (uv sync --package disco-agent-server --extra tts)"
+        return False, "kokoro_onnx not installed (bundled TTS is core — run `uv sync`)"
     if importlib.util.find_spec("lameenc") is None:
-        return False, "lameenc package not installed (uv sync --package disco-agent-server --extra tts)"
+        return False, "lameenc not installed (bundled TTS is core — run `uv sync`)"
     # Model-file check — mirrors tts_local._data_dir() logic
     from disco.core.env import disco_env
     base = disco_env("TTS_DIR") or os.path.expanduser("~/.cache/disco-tts")
