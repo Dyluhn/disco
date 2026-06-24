@@ -21,7 +21,9 @@ import {
   createOutboundWriter,
   createSerialQueue,
 } from "../src/index.ts";
+import { PiKernelRunner } from "../src/runner.ts";
 import type { KernelOutbound } from "../src/protocol.ts";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 describe("createLineReader (P1: inbound byte cap)", () => {
   it("emits an overflow for an over-cap line and keeps handling later valid lines", () => {
@@ -231,6 +233,120 @@ describe("createOutboundWriter (P1 #2: BOUNDED outbound queue)", () => {
     expect(frames.some((f) => f.type === "exit")).toBe(true);
     // exit is the last frame written.
     expect(frames[frames.length - 1]).toMatchObject({ type: "exit", code: 0 });
+  });
+});
+
+describe("createOutboundWriter (P1 round-3: error frames cannot OOM the queue)", () => {
+  it("coalesces a flood of identical NON-fatal diagnostic errors (queue stays bounded)", async () => {
+    const stream = new BlockingStream();
+    const writer = createOutboundWriter(stream as unknown as Writable, { maxQueue: 4 });
+    stream.block();
+
+    // A hostile peer spams the SAME malformed-input error frame thousands of
+    // times (the realistic OOM vector — index.ts emits a constant "malformed
+    // JSON line" message). Identical consecutive errors must coalesce instead of
+    // accumulating, so memory does NOT grow with the flood.
+    for (let i = 0; i < 10_000; i++) {
+      writer.write({ type: "error", message: "malformed JSON line" });
+    }
+
+    stream.release();
+    await writer.flushed();
+
+    const errors = stream.chunks
+      .map((c) => JSON.parse(c) as KernelOutbound)
+      .filter((f) => f.type === "error");
+    // 10k identical errors collapse to a tiny constant (the one parked in-flight
+    // on the stream + at most one queued), NOT 10k frames.
+    expect(errors.length).toBeLessThanOrEqual(2);
+    expect(errors.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("non-fatal errors are cap-ELIGIBLE (engage backpressure); only exit + FATAL errors stay cap-exempt", async () => {
+    const stream = new BlockingStream();
+    let backpressure = false;
+    const writer = createOutboundWriter(stream as unknown as Writable, {
+      maxQueue: 4,
+      onBackpressure: (active) => {
+        backpressure = active;
+      },
+    });
+    stream.block();
+
+    // DISTINCT non-fatal errors fill the cap and trip backpressure — proof they
+    // count toward the cap now (previously they were cap-exempt and unbounded).
+    let backedOff = false;
+    for (let i = 0; i < 100; i++) {
+      const ok = writer.write({ type: "error", message: `bad line ${i}` });
+      if (!ok) {
+        backedOff = true;
+        break;
+      }
+    }
+    expect(backedOff).toBe(true);
+    expect(backpressure).toBe(true);
+
+    // A FATAL error and the terminal exit are STILL cap-exempt and flush on teardown.
+    writer.write({ type: "error", message: "init failed", fatal: true });
+    writer.write({ type: "exit", code: 1 });
+
+    stream.release();
+    await writer.flushed();
+    const frames = stream.chunks.map((c) => JSON.parse(c) as KernelOutbound);
+    expect(frames.some((f) => f.type === "error" && f.fatal === true)).toBe(true);
+    expect(frames[frames.length - 1]).toMatchObject({ type: "exit", code: 1 });
+  });
+});
+
+describe("PiKernelRunner.forwardAgentEvent (P1 round-3: producer-side backpressure)", () => {
+  it("backpressures the in-flight prompt under a stalled stdout: queue bounded, nothing dropped, order kept", async () => {
+    const stream = new BlockingStream();
+    const cap = 8;
+    const writer = createOutboundWriter(stream as unknown as Writable, { maxQueue: cap });
+    const runner = new PiKernelRunner({
+      emit: (frame) => writer.write(frame),
+      whenWritable: () => writer.whenWritable(),
+    });
+
+    stream.block(); // permanently stalled reader
+
+    // Model the in-flight prompt as a producer emitting MANY agent_events,
+    // awaiting the runner's backpressure point before each (a cooperating
+    // producer — exactly what the EPIC C inference gateway will be).
+    const TOTAL = 500;
+    const produced: number[] = [];
+    let done = false;
+    const inFlightPrompt = (async () => {
+      for (let i = 0; i < TOTAL; i++) {
+        await runner.forwardAgentEvent({ type: "tok", n: i } as unknown as AgentSessionEvent);
+        produced.push(i);
+      }
+      done = true;
+    })();
+
+    // Let production run until it parks on backpressure.
+    await new Promise((r) => setTimeout(r, 20));
+
+    // The PRODUCER was paused far short of TOTAL — it awaited writer capacity
+    // instead of flooding the queue. Total buffered stays bounded by the cap.
+    expect(done).toBe(false);
+    expect(produced.length).toBeLessThanOrEqual(cap + 2);
+    // Only one frame reached the stalled stream; the rest never exceeded the cap.
+    expect(stream.chunks.length).toBe(1);
+
+    // Reader catches up: production resumes and everything emitted is delivered
+    // in order, none dropped.
+    stream.release();
+    await inFlightPrompt;
+    await writer.flushed();
+
+    expect(done).toBe(true);
+    const order = stream.chunks.map(
+      (c) => (JSON.parse(c) as { event: { raw: { n: number } } }).event.raw.n,
+    );
+    const expected = Array.from({ length: TOTAL }, (_, i) => i);
+    expect(order).toEqual(expected);
+    expect(produced).toEqual(expected);
   });
 });
 

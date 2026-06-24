@@ -51,6 +51,14 @@ export const DEFAULT_HEARTBEAT_MS = 1000;
 export interface RunnerOptions {
   /** Sink for every outbound protocol frame. */
   emit: (event: KernelOutbound) => void;
+  /**
+   * Producer-side backpressure seam (round-3 P1): resolves when the outbound
+   * writer has capacity for another data frame. {@link PiKernelRunner.forwardAgentEvent}
+   * awaits this BEFORE emitting each agent_event, so a stalled stdout pauses
+   * agent_event PRODUCTION from the in-flight prompt — not just inbound commands.
+   * Defaults to "always writable" (so in-process tests need not wire it).
+   */
+  whenWritable?: () => Promise<void>;
   /** Invoked exactly once after the `exit` frame is emitted. */
   onExit?: (code: number) => void;
   /** Default heartbeat cadence; an `init` config value overrides it. */
@@ -61,9 +69,17 @@ export interface RunnerOptions {
 
 export class PiKernelRunner {
   private readonly emit: (event: KernelOutbound) => void;
+  private readonly whenWritable: () => Promise<void>;
   private readonly onExit?: (code: number) => void;
   private readonly defaultHeartbeatMs: number;
   private readonly now: () => number;
+
+  /**
+   * Single-lane ordered tail for agent_event forwarding (round-3 P1). Each
+   * agent_event chains off this so frames stay in arrival order AND each awaits
+   * writer capacity before it is emitted — see {@link forwardAgentEvent}.
+   */
+  private emitChain: Promise<void> = Promise.resolve();
 
   private session?: AgentSession;
   private initOptions?: CreateAgentSessionOptions;
@@ -75,6 +91,7 @@ export class PiKernelRunner {
 
   constructor(options: RunnerOptions) {
     this.emit = options.emit;
+    this.whenWritable = options.whenWritable ?? (() => Promise.resolve());
     this.onExit = options.onExit;
     this.defaultHeartbeatMs = options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
     this.now = options.now ?? (() => Date.now());
@@ -172,9 +189,11 @@ export class PiKernelRunner {
       const { session } = await createAgentSession(options);
       this.session = session;
 
-      // Stream every Pi session event out as a mapped agent_event.
+      // Stream every Pi session event out as a mapped agent_event, through the
+      // producer-side backpressure point so a stalled stdout pauses event
+      // PRODUCTION rather than flooding the outbound queue (round-3 P1).
       this.unsubscribe = session.subscribe((event: AgentSessionEvent) => {
-        this.emit({ type: "agent_event", event: mapAgentEvent(event) });
+        void this.forwardAgentEvent(event);
       });
 
       this.emit({
@@ -238,6 +257,45 @@ export class PiKernelRunner {
     } catch (err) {
       this.error(`cancel failed: ${describeError(err)}`);
     }
+  }
+
+  /**
+   * Producer-side backpressure point for agent_events (round-3 P1).
+   *
+   * The real producer is the in-flight `session.prompt()` / `followUp()` turn,
+   * which fires events through Pi's SYNCHRONOUS `subscribe` listener — and Pi
+   * ignores that listener's return value (see `AgentSession._emit`), so the
+   * listener itself cannot pause the agent loop. Backpressure is therefore
+   * advisory here, exactly like Node's own `stream.write() === false`. We honor
+   * it at the single choke point: every agent_event is forwarded on a
+   * single-lane ordered chain that AWAITS the writer's capacity
+   * ({@link RunnerOptions.whenWritable}) BEFORE emitting. Consequences:
+   *  - a stalled stdout parks frames HERE, before they reach (and grow) the
+   *    writer's bounded queue — so the writer queue never exceeds its cap;
+   *  - a COOPERATING in-flight producer that `await`s this method is fully
+   *    bounded to one in-flight frame plus the writer cap (it stops producing
+   *    while stdout is stalled, instead of dropping events);
+   *  - ordering is preserved by the single lane; no agent_event is dropped.
+   *
+   * Returns a promise that settles once this frame has been emitted, so an
+   * awaiting producer is backpressured. The sync `subscribe` path calls it
+   * fire-and-forget (its return is ignored upstream, like any Pi listener).
+   *
+   * PUBLIC so the producer-side backpressure contract can be unit-tested against
+   * a stalled writer without a live model.
+   */
+  forwardAgentEvent(event: AgentSessionEvent): Promise<void> {
+    const frame: KernelOutbound = { type: "agent_event", event: mapAgentEvent(event) };
+    const next = this.emitChain.then(async () => {
+      await this.whenWritable();
+      this.emit(frame);
+    });
+    // A rejection on one link must not break ordering for the next frame.
+    this.emitChain = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
   }
 
   private async followup(text: string): Promise<void> {

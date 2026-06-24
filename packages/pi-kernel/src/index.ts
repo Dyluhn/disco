@@ -25,9 +25,18 @@
  *  - outbound writes respect backpressure (await `drain`), coalesce heartbeats
  *    under pressure, and are BOUNDED (round-2 P1 #2): when the queue reaches its
  *    cap the producer is told to back off (the inbound source is paused) instead
- *    of growing memory — but `agent_event` / `ready` are never dropped, and
- *    `error` / `exit` always flush (a reserved, cap-exempt path) so teardown can
- *    drain.
+ *    of growing memory — but `agent_event` / `ready` are never dropped;
+ *  - producer-side backpressure for the in-flight prompt (round-3 P1): a stalled
+ *    stdout cannot pause an already-running `session.prompt()`, and Pi's
+ *    `subscribe` listener is synchronous, so the runner forwards each
+ *    `agent_event` only after AWAITING writer capacity (`whenWritable`) — frames
+ *    park at the producer, before reaching the queue, so the queue stays at/under
+ *    its cap regardless of how fast the turn emits;
+ *  - only TERMINAL frames are cap-exempt (a reserved flush path so teardown can
+ *    drain): the final `exit` and FATAL `error`s. NON-fatal diagnostic `error`s
+ *    (malformed input, "prompt failed") are cap-ELIGIBLE and coalesce
+ *    consecutive duplicates, so a hostile peer cannot OOM the queue via error
+ *    frames either.
  *
  * The transport pieces below are exported so they can be unit-tested against
  * fake streams; `main()` only auto-runs when this module is the process entry.
@@ -144,8 +153,9 @@ export function createLineReader(
  * Default cap on the number of frames buffered for outbound delivery before the
  * producer is asked to back off. A stalled reader can park at most this many
  * data frames in memory; beyond it we apply UPSTREAM backpressure (pause the
- * inbound source) rather than growing the queue without bound. `error` / `exit`
- * frames are exempt (reserved flush path) so teardown always drains.
+ * inbound source AND, via `whenWritable`, the agent_event producer) rather than
+ * growing the queue without bound. Only TERMINAL frames are cap-exempt (reserved
+ * flush path so teardown always drains): the final `exit` and FATAL `error`s.
  */
 export const DEFAULT_MAX_OUTBOUND_QUEUE = 1024;
 
@@ -154,7 +164,8 @@ export interface OutboundWriter {
    * Enqueue a frame for ordered, backpressure-respecting delivery. Returns
    * `false` once the bounded queue is at/over its cap — a cooperating producer
    * MUST then pause and await {@link OutboundWriter.whenWritable} before writing
-   * more data frames. `error` / `exit` frames are always accepted (cap-exempt).
+   * more data frames. Only the terminal `exit` and FATAL `error`s are cap-exempt
+   * (always accepted); NON-fatal diagnostic `error`s are cap-eligible.
    */
   write: (frame: KernelOutbound) => boolean;
   /** Resolves when the queue has drained back below the cap (capacity is free). */
@@ -184,10 +195,13 @@ export interface OutboundWriterOptions {
  *    inbound source) stops — memory stays bounded instead of accumulating
  *    `agent_event` frames behind a stalled reader. No `agent_event` / `ready`
  *    is ever DROPPED; the producer is BLOCKED instead;
- *  - `heartbeat` frames coalesce under pressure (only the freshest is kept);
- *  - `error` / `exit` are cap-EXEMPT (a reserved flush path) so a final
- *    diagnostic / the terminal `exit` can always be enqueued and drained on
- *    teardown even while the data queue is saturated.
+ *  - `heartbeat` frames coalesce under pressure (only the freshest is kept), and
+ *    consecutive duplicate NON-fatal `error` frames coalesce too (a hostile peer
+ *    spamming malformed input cannot grow the queue);
+ *  - only the terminal `exit` and FATAL `error`s are cap-EXEMPT (a reserved
+ *    flush path) so the terminal `exit` can always be enqueued and drained on
+ *    teardown even while the data queue is saturated. NON-fatal diagnostic
+ *    `error`s are cap-ELIGIBLE — they engage backpressure like any data frame.
  */
 export function createOutboundWriter(
   stream: Writable,
@@ -201,10 +215,16 @@ export function createOutboundWriter(
   let idleResolvers: Array<() => void> = [];
   let writableResolvers: Array<() => void> = [];
 
-  // `error` / `exit` must always flush so teardown can drain — they bypass the
-  // cap and never engage producer backpressure.
+  // ONLY terminal teardown frames bypass the cap and are guaranteed to flush:
+  //  - the final `exit`;
+  //  - FATAL errors (e.g. init failure, which is immediately followed by
+  //    shutdown + `exit`).
+  // Non-fatal diagnostic errors (malformed input, "prompt failed", overflow)
+  // are deliberately NOT reserved: they count toward the cap (engaging upstream
+  // backpressure, which pauses stdin) and consecutive duplicates coalesce, so a
+  // hostile peer cannot OOM the queue with a flood of `error` frames.
   function isReservedFrame(frame: KernelOutbound): boolean {
-    return frame.type === "error" || frame.type === "exit";
+    return frame.type === "exit" || (frame.type === "error" && frame.fatal === true);
   }
 
   function notifyIdle(): void {
@@ -261,6 +281,22 @@ export function createOutboundWriter(
         const pending = queue.findIndex((f) => f.type === "heartbeat");
         if (pending >= 0) {
           queue[pending] = frame;
+          void pump();
+          return !backpressured;
+        }
+      }
+      if (frame.type === "error" && !isReservedFrame(frame)) {
+        // Coalesce a flood of identical NON-fatal diagnostic errors (e.g. a
+        // hostile peer spamming malformed lines → repeated "malformed JSON
+        // line"): collapse consecutive duplicates so they can't grow the queue.
+        // Distinct errors still enqueue and count toward the cap.
+        const tail = queue[queue.length - 1];
+        if (
+          tail !== undefined &&
+          tail.type === "error" &&
+          tail.message === frame.message &&
+          (tail.fatal ?? false) === (frame.fatal ?? false)
+        ) {
           void pump();
           return !backpressured;
         }
@@ -448,6 +484,10 @@ export async function main(): Promise<void> {
 
   const runner = new PiKernelRunner({
     emit: (event) => writer.write(event),
+    // Producer-side backpressure: an in-flight prompt's agent_events park here
+    // until the outbound queue has capacity, so a stalled stdout pauses event
+    // PRODUCTION instead of growing the queue without bound (round-3 P1).
+    whenWritable: () => writer.whenWritable(),
     onExit: (code) => {
       exited = true;
       // Flush every queued frame (incl. the final `exit`) before tearing down.
