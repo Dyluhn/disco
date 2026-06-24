@@ -87,6 +87,10 @@ AWAITING_PLAN_APPROVAL = "AWAITING_PLAN_APPROVAL"
 _WS_MANIFEST_MAX_BYTES = 5 * 1024 * 1024  # capture content for files up to 5 MiB
 _WS_MANIFEST_MAX_FILES = 2000
 _SNAPSHOT_POLL_S = 0.5  # re-read cadence while a just-finished build's snapshot flushes
+# Internal dirs the served-root index detection must skip — mirrors the product's
+# lifecycle._find_snapshot_index / SandboxSession._detect_serve_dir skip set exactly, so a
+# .pmx/.disco/node_modules index.html is NEVER mistaken for the build's served root.
+_SERVE_SKIP_DIRS = frozenset({".pmx", ".disco", "node_modules"})
 
 # Tools that DON'T count as a "file write" for the mid-run steer trigger (the
 # planning-safe read/ask set; mirrors ToolScopeOracle.PLANNING_SAFE_TOOLS).
@@ -407,26 +411,42 @@ class DiscoApiClient:
         text (so must_contain substring checks run on the real file); a binary / oversized
         file keeps present+size+sha256 with empty content.
 
-        Fallback: when no projects_root is configured (snapshot disabled) OR a declared
-        file is missing from the snapshot (e.g. a live, not-yet-snapshotted run), each
-        still-missing declared path is fetched via the preview proxy — so a no-storage
-        deployment is never WORSE than the old behavior, only better when a snapshot exists.
+        Fallback: ONLY when there is NO snapshot at all (no projects_root configured, or
+        the conversation's snapshot workspace dir never materialized), each declared path
+        is fetched via the preview proxy — so a no-storage deployment is never WORSE than
+        before. When the snapshot IS authoritative (its workspace dir exists), the proxy
+        is NEVER consulted: a declared file absent from the snapshot is genuinely missing
+        and is OMITTED, so the proxy can't mask a missing required deliverable with a
+        served/stale copy (anti-false-PASS hole #1).
         """
         declared = list(file_paths)
         manifest: dict[str, Any] = {}
+        snapshot_dir: Path | None = None
 
         if self._projects_root is not None:
             deadline = time.monotonic() + self._snapshot_wait_s
             while True:
-                manifest = self._read_snapshot_manifest(conversation_id, declared)
+                snapshot_dir = self._snapshot_workspace_dir(conversation_id)
+                manifest = (
+                    self._read_snapshot_manifest(conversation_id, declared, snapshot_dir)
+                    if snapshot_dir is not None
+                    else {}
+                )
                 missing = [p for p in declared if p not in manifest]
-                if not missing or time.monotonic() >= deadline:
+                # Stop when the snapshot exists AND is complete, or the wait budget elapsed.
+                # The wait also covers the snapshot DIR not yet existing (snapshot is written
+                # after FINISHED is appended inside loop.run()), so a not-yet-flushed run is
+                # not mistaken for "no snapshot" → proxy mask.
+                if (snapshot_dir is not None and not missing) or time.monotonic() >= deadline:
                     break
-                # snapshot mid-flush (FINISHED was appended before _maybe_snapshot wrote
-                # the workspace) — wait and re-read so a present file isn't called missing.
                 await asyncio.sleep(_SNAPSHOT_POLL_S)
 
-        # Fallback for any declared path the snapshot doesn't have: the preview proxy.
+        # The snapshot is AUTHORITATIVE: return it as-is. A declared file absent from the
+        # snapshot stays OMITTED — never proxy-substituted (hole #1).
+        if snapshot_dir is not None:
+            return manifest
+
+        # No snapshot at all → legacy preview-proxy fallback (no-storage deployments only).
         for path in declared:
             if path in manifest:
                 continue
@@ -441,13 +461,14 @@ class DiscoApiClient:
         return manifest
 
     def _read_snapshot_manifest(
-        self, conversation_id: str, declared: list[str]
+        self, conversation_id: str, declared: list[str], ws: Path | None = None
     ) -> dict[str, Any]:
         """Walk the host ProjectStore snapshot workspace for `conversation_id` and
         build the per-file manifest. Symlink-jailed (resolve + is_relative_to) so a
         planted ``leak.html -> /etc/passwd`` can never escape the workspace. Empty dict
         when no snapshot exists yet (caller retries / falls back to the preview proxy)."""
-        ws = self._snapshot_workspace_dir(conversation_id)
+        if ws is None:
+            ws = self._snapshot_workspace_dir(conversation_id)
         if ws is None:
             return {}
         manifest: dict[str, Any] = {}
@@ -544,9 +565,12 @@ class DiscoApiClient:
 
     def _snapshot_served_root(self, conversation_id: str) -> str | None:
         """The durable served-root HTML for a STATIC build: ``index.html`` at the snapshot
-        workspace root (preferred), else the shallowest ``index.html`` in the tree (mirrors
-        the product's ``_find_snapshot_index``). Symlink-jailed. None ⇒ no static deliverable
-        (so the caller does NOT substitute — a genuinely-absent preview stays broken)."""
+        workspace root (preferred), else the shallowest ``index.html`` in the tree —
+        MIRRORING the product's ``lifecycle._find_snapshot_index`` exactly, including its
+        skip set (``.pmx`` / ``.disco`` / ``node_modules``) so the runner never picks an
+        INTERNAL ``index.html`` (e.g. a ``.pmx`` tool asset) as the served root (hole #3).
+        Symlink-jailed. None ⇒ no static deliverable (so the caller does NOT substitute —
+        a genuinely-absent preview stays broken)."""
         ws = self._snapshot_workspace_dir(conversation_id)
         if ws is None:
             return None
@@ -557,7 +581,12 @@ class DiscoApiClient:
         else:
             try:
                 candidates = sorted(
-                    ws.rglob("index.html"), key=lambda p: (len(p.relative_to(ws).parts), str(p))
+                    (
+                        p
+                        for p in ws.rglob("index.html")
+                        if p.is_file() and not (_SERVE_SKIP_DIRS & set(p.relative_to(ws).parts))
+                    ),
+                    key=lambda p: (len(p.relative_to(ws).parts), str(p)),
                 )
             except OSError:
                 return None
@@ -572,22 +601,32 @@ class DiscoApiClient:
         return None
 
     def _in_run_verify_failed(self, conversation_id: str) -> bool:
-        """True iff the build's LAST in-run ``verify_web_app`` observation FAILED
-        (``structured.passed`` is False). A failing final verification means the preview is
-        genuinely broken — never substitute the durable snapshot for it. No verify at all ⇒
-        False (a static deliverable that finished without an explicit serve-check is not a
-        proven failure; its served-root presence is adjudicated above)."""
-        last_passed: bool | None = None
+        """True iff the build's LAST in-run ``verify_web_app`` FAILED — where FAILED means
+        ANY of: ``structured.passed`` is False; the tool FAILED TO EXECUTE
+        (``tool_result.success`` is False, which produces NO verdict — hole #2); or it ran
+        but the verdict/error signals failure. Only a verify that genuinely PASSED (ran
+        successfully AND ``passed`` truthy) leaves this False, so the durable-preview
+        substitution never fires off a verify that errored or failed. No verify at all ⇒
+        False (a static deliverable that finished with no serve-check is not a PROVEN
+        failure; the served-root presence + content truth still gate the substitution)."""
+        last: dict[str, Any] | None = None
         for e in self._read_events(conversation_id):
             if e.get("kind") != "observation":
                 continue
             tr = _payload(e).get("tool_result") or {}
-            if tr.get("tool_name") != "verify_web_app":
-                continue
-            structured = tr.get("structured") or {}
-            if isinstance(structured, dict) and "passed" in structured:
-                last_passed = bool(structured.get("passed"))
-        return last_passed is False
+            if tr.get("tool_name") == "verify_web_app":
+                last = tr
+        if last is None:
+            return False
+        if not last.get("success", True):
+            return True  # verifier EXECUTION failure — no verdict produced (hole #2)
+        raw_structured = last.get("structured")
+        structured: dict[str, Any] = raw_structured if isinstance(raw_structured, dict) else {}
+        if structured.get("passed") is False:
+            return True
+        if str(structured.get("verdict", "")).lower() in {"fail", "failed", "error", "broken"}:
+            return True
+        return bool(structured.get("error"))
 
     # -- internal: race-free DB read ------------------------------------------
 

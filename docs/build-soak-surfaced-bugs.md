@@ -356,13 +356,17 @@ A genuinely-missing declared file is OMITTED (never a `present:false` key — th
 `FALSE_FINISH_NO_OUTPUT` into `ARTIFACT_TRUTH_MISMATCH`), so a real missing deliverable still FAILs.
 A bounded re-read (`--snapshot-wait`, default 15s) absorbs the snapshot-vs-`FINISHED` flush race
 (the build appends `FINISHED` inside `loop.run()`, then `_maybe_snapshot` writes the workspace).
-When no `projects_root` is configured (snapshot disabled in the deterministic fake-transport tests)
-or a declared file is missing from the snapshot, it falls back to the preview proxy — never WORSE
-than before. **LIVE-PROVEN:** re-running `static_html_minimal` now populates the manifest from the
-snapshot (`index.html` present, content "Build Smoke OK", real sha256/size, `source≠preview_proxy`)
-and the classification advances PAST `FALSE_FINISH_NO_OUTPUT` (the workspace truth checks PASS).
-Pinned: `test_api_runner.test_collect_workspace_{reads_snapshot_when_preview_proxy_404s,
-genuinely_missing_file_is_omitted,falls_back_to_proxy_without_projects_root}`.
+**Snapshot is AUTHORITATIVE — no proxy mask (anti-false-PASS hardening).** The preview-proxy
+fallback fires ONLY when there is NO snapshot at all (no `projects_root`, or the conversation's
+snapshot workspace dir never materialized within `--snapshot-wait`). When the snapshot workspace dir
+exists, the proxy is NEVER consulted: a declared file absent from the snapshot is genuinely missing
+and is OMITTED — the proxy can't substitute a served/stale copy to mask a missing required deliverable
+(`FALSE_FINISH_NO_OUTPUT` preserved). **LIVE-PROVEN:** re-running `static_html_minimal` populates the
+manifest from the snapshot (`index.html` present, content "Build Smoke OK", real sha256/size,
+`source≠preview_proxy`) → workspace truth checks PASS. Pinned:
+`test_api_runner.test_collect_workspace_{reads_snapshot_when_preview_proxy_404s,
+genuinely_missing_file_is_omitted,falls_back_to_proxy_without_projects_root}`,
+`test_snapshot_authoritative_does_not_proxy_mask_missing_required_file`.
 
 ### Bug 10 — runner PREVIEW-collection has the SAME ephemeral-proxy fragility (HARNESS) — FIXED
 
@@ -378,15 +382,23 @@ exit 0); `…/preview-edit/index.html` (snapshot-backed) returns 200, so the del
 **Fix (this commit, HARNESS-only `adapters/disco_api.py` `collect_preview`).** When the LIVE proxy
 serves (status < 400 AND non-empty), that IS the truth and is used unchanged. When it is down, the
 DURABLE static preview is substituted — but TIGHTLY scoped so a real failure is never masked:
-accepted ONLY when (1) a served-root file (`index.html`, root-preferred then shallowest, symlink-
-jailed) is actually present in the host snapshot — `_snapshot_served_root` — AND (2) the build's own
-LAST in-run `verify_web_app` did NOT fail (`structured.passed` is not False) — `_in_run_verify_failed`.
-The substituted `content` is the REAL snapshot HTML (never a fabricated 200/blank), so a wrong-content
-deliverable still trips a truth-mismatch; a missing served-root or a failing in-run verify leaves the
-honest 404 → `FALSE_FINISH_PREVIEW_BROKEN`. Dynamic-app previews (a live server with no durable static
-root) are explicitly NOT covered here — that remains the documented follow-up. **LIVE-PROVEN PASS**
-(`static_html_minimal` over `conv_75881694…`): proxy down post-FINISH, preview substituted from the
-snapshot (`served.html` = raw `index.html`, health 200), OutputTruthOracle PASS, overall **PASS**.
+accepted ONLY when (1) a served-root file (`index.html`, root-preferred then shallowest) is actually
+present in the host snapshot — `_snapshot_served_root`, which now MIRRORS the product's
+`lifecycle._find_snapshot_index` skip set (`.pmx` / `.disco` / `node_modules`) so an internal tool
+`index.html` is never mistaken for the served root (anti-false-PASS hole #3) — AND (2) the build's own
+LAST in-run `verify_web_app` did NOT fail — `_in_run_verify_failed`, which now treats FAILURE as ANY
+of: `structured.passed is False`, the verifier FAILED TO EXECUTE (`tool_result.success is False`, which
+produces no verdict — anti-false-PASS hole #2), or a verdict/error signalling failure. So the
+substitution fires only off a verify that genuinely RAN and PASSED. The substituted `content` is the
+REAL snapshot HTML (never a fabricated 200/blank), so a wrong-content deliverable still trips a
+truth-mismatch; a missing served-root, a failing verify, OR a verifier execution error leaves the honest
+404 → `FALSE_FINISH_PREVIEW_BROKEN`. Dynamic-app previews (a live server with no durable static root)
+are explicitly NOT covered here — that remains the documented follow-up. **LIVE-PROVEN PASS**
+(`static_html_minimal` over `conv_75881694…`, re-confirmed `conv_e29cc4a2…`): proxy down post-FINISH,
+preview substituted from the snapshot (`served.html` = raw `index.html`, health 200), OutputTruthOracle
+PASS, overall **PASS**. Anti-false-PASS pins: `test_api_runner.test_collect_preview_does_not_substitute_
+on_verifier_execution_failure`, `test_snapshot_served_root_skips_internal_dirs`,
+`test_durable_preview_does_not_mask_wrong_content`.
 Pinned: `test_api_runner.test_collect_preview_{uses_durable_snapshot_when_proxy_404s,
 does_not_mask_failing_in_run_verify,no_durable_deliverable_stays_broken,live_proxy_wins_over_snapshot}`,
 `test_static_build_classifies_pass_with_dead_proxy_via_durable_sources`,

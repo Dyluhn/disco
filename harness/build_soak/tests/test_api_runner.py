@@ -340,6 +340,29 @@ async def test_collect_workspace_falls_back_to_proxy_without_projects_root(tmp_p
     assert "Build Smoke OK" in manifest["index.html"]["content"]
 
 
+@pytest.mark.asyncio
+async def test_snapshot_authoritative_does_not_proxy_mask_missing_required_file(tmp_path):
+    # Anti-false-PASS hole #1: when the snapshot IS authoritative (its workspace dir exists)
+    # but a DECLARED file is absent from it, the proxy must NOT be consulted — even though
+    # the proxy WOULD serve a (served/stale) copy. The file stays OMITTED so a genuinely
+    # missing required deliverable still trips FALSE_FINISH_NO_OUTPUT.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    _plant_snapshot(proj, _CID, {"other.txt": "snapshot exists, but no index.html"})
+    # the proxy WOULD serve index.html (a served/stale version) — it must be ignored:
+    transport = FakeTransport(
+        db, states=["FINISHED"], workspace={"index.html": "<h1>STALE SERVED COPY</h1>"}
+    )
+    client = DiscoApiClient(
+        transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj)
+    )
+
+    manifest = await client.collect_workspace(_CID, ["index.html"])
+
+    assert "index.html" not in manifest  # NOT proxy-masked → FALSE_FINISH_NO_OUTPUT preserved
+    assert manifest["other.txt"]["present"] is True
+
+
 # ---- Bug 10: durable PREVIEW collection (no ephemeral-proxy false-fail) ------
 
 
@@ -364,6 +387,22 @@ def _verify_obs(seq, passed):
             "tool_name": "verify_web_app",
             "success": True,
             "structured": {"passed": passed, "url": "http://127.0.0.1:8080/"},
+        },
+    }
+
+
+def _verify_exec_fail(seq):
+    """A verify_web_app observation where the VERIFIER ITSELF failed to execute:
+    tool_result.success is False with NO structured verdict (the hole #2 case)."""
+    return {
+        "id": f"evt_{seq}",
+        "seq": seq,
+        "kind": "observation",
+        "source": "environment",
+        "tool_result": {
+            "tool_name": "verify_web_app",
+            "success": False,
+            "error": "verifier crashed",
         },
     }
 
@@ -405,6 +444,56 @@ async def test_collect_preview_does_not_mask_failing_in_run_verify(tmp_path):
 
     assert preview["health"]["status"] == 404
     assert preview.get("source") != "snapshot_static"
+
+
+@pytest.mark.asyncio
+async def test_collect_preview_does_not_substitute_on_verifier_execution_failure(tmp_path):
+    # Anti-false-PASS hole #2: the last in-run verify FAILED TO EXECUTE (success=False, no
+    # structured verdict). That is a real failure — the durable snapshot must NOT be
+    # substituted even though a served-root index.html exists; the dead-proxy 404 stands →
+    # FALSE_FINISH_PREVIEW_BROKEN.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    _plant_snapshot(proj, _CID, {"index.html": "<h1>Build Smoke OK</h1>"})
+    _seed_db(db, _CID, [_verify_obs(1, True), _verify_exec_fail(2)])  # last verify ERRORED
+    transport = _DeadPreviewTransport(db, states=["FINISHED"])
+    client = DiscoApiClient(
+        transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj)
+    )
+
+    preview = await client.collect_preview(_CID)
+
+    assert preview["health"]["status"] == 404  # NOT substituted — execution failure respected
+    assert preview.get("source") != "snapshot_static"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_served_root_skips_internal_dirs(tmp_path):
+    # Anti-false-PASS hole #3: a .pmx/.disco/node_modules index.html must NEVER be picked as
+    # the served root — mirror the product's _find_snapshot_index skip set.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    # (a) a real top-level index.html alongside a .pmx one → the REAL root wins.
+    _plant_snapshot(
+        proj, _CID, {"index.html": "<h1>REAL ROOT</h1>", ".pmx/index.html": "<h1>PMX JUNK</h1>"}
+    )
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"]),
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(proj),
+    )
+    served = client._snapshot_served_root(_CID)
+    assert served is not None and "REAL ROOT" in served and "PMX JUNK" not in served
+
+    # (b) NO root index, only .pmx/index.html + a real subdir index → the subdir wins (the
+    #     .pmx one is skipped, exercising the skip filter past the root short-circuit).
+    cid2 = "conv_skipdir2"
+    _plant_snapshot(
+        proj, cid2, {".pmx/index.html": "<h1>PMX JUNK</h1>", "app/index.html": "<h1>REAL APP</h1>"}
+    )
+    served2 = client._snapshot_served_root(cid2)
+    assert served2 is not None and "REAL APP" in served2 and "PMX JUNK" not in served2
 
 
 @pytest.mark.asyncio
