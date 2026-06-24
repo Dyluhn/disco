@@ -37,6 +37,7 @@ from .dedup import (
 )
 from .file_state import FileStateTracker, file_state_notice
 from .messages import _workspace_paths_from_events
+from .observe import _ground_read
 
 if TYPE_CHECKING:
     from .boundaries import Sandbox
@@ -536,6 +537,16 @@ class ViewBuilder:
             pin_full=not self._loop._assist,
             out_pinned_full=pinned_full,
         )
+        # Every path pinned in FULL (untruncated) in the CURRENT WORKSPACE block
+        # this turn has its disk-fresh current content in front of the model — a
+        # subsequent file_write of it is grounded, NOT a blind rewrite-from-memory.
+        # Satisfy the read-before-write gate for those paths so the model is not
+        # forced into the read(only-a-pointer)/write(gated) deadlock that drove the
+        # live shell-exec fallback. Truncated/omitted files are NOT pinned-in-full
+        # (the model lacks their full content) → the gate still fires for them and
+        # a real file_read is required, exactly as today.
+        for _p in pinned_full:
+            _ground_read(self._loop, _p)
         snap_tokens = len(snapshot.content) // 4 if snapshot is not None else 0
         est = signals.estimate_tokens(view) + snap_tokens
         # H3: log the prompt size per step so cost regressions are visible (the 60k

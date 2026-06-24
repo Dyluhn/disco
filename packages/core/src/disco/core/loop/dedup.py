@@ -44,6 +44,28 @@ _WORKSPACE_MUTATING_TOOLS = frozenset({
 _WORKSPACE_READ_TOOLS = frozenset({"file_read"})
 
 
+def _canonical_path(path: str) -> str:
+    """Canonical workspace-path key, MIRRORING the read-before-write gate's
+    canonicalizer (``disco.tools.builtin.files._canonical`` →
+    ``posixpath.normpath(strip_redundant_workspace_prefix(path))``).
+
+    Replicated here because core may not import the tools layer (package
+    layering: core ← … ← tools). Both must agree, or two spellings of the SAME
+    file diverge: the gate sets/clears its bit under the canonical key, while F9
+    invalidation comparing RAW strings could miss a mutation recorded under a
+    different spelling ('x.py' read, './x.py' or 'workspace/x.py' written) — F9
+    would then dedup a STALE read AND ground a write against changed content. Strip
+    ONE leading 'workspace/' or '/workspace/' (matching strip_redundant_workspace_
+    prefix's one-prefix rule), then normpath to fold './', '//', '../'."""
+    import posixpath
+
+    for prefix in ("/workspace/", "workspace/"):
+        if path.startswith(prefix):
+            path = path[len(prefix):]
+            break
+    return posixpath.normpath(path)
+
+
 # ---------------------------------------------------------------------------
 # F8 — GATED mid-turn arg truncation (assist-tier context-window reclaim).
 #
@@ -264,6 +286,12 @@ def _f9_path_was_mutated_after(events: list[Event], path: str, after_seq: int) -
     """
     if not isinstance(path, str) or not path:
         return False
+    # Canonicalize BOTH sides so a mutation invalidates the matching read
+    # regardless of path spelling (matches the gate's canonical key — see
+    # _canonical_path). Raw '==' would let a write under './x.py' or
+    # 'workspace/x.py' fail to invalidate a read of 'x.py', leaving F9 to dedup
+    # AND ground a stale read.
+    canon = _canonical_path(path)
     for e in events:
         if (e.seq or 0) <= after_seq:
             continue
@@ -272,7 +300,7 @@ def _f9_path_was_mutated_after(events: list[Event], path: str, after_seq: int) -
         if e.tool_call.tool_name not in _WORKSPACE_MUTATING_TOOLS:
             continue
         ep = e.tool_call.arguments.get("path")
-        if isinstance(ep, str) and ep == path:
+        if isinstance(ep, str) and ep and _canonical_path(ep) == canon:
             return True
     return False
 

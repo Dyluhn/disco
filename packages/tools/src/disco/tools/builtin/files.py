@@ -76,6 +76,35 @@ def reset_read_tracker() -> None:
     _read_state.clear()
 
 
+def mark_read(conv_id: str, path: str) -> None:
+    """Set the read-since-write bit for `path` in `conv_id` WITHOUT executing a
+    real file_read.
+
+    The bit is normally set only inside ``FileReadTool.run`` (an explicit
+    model-issued read of disk bytes). But the agent loop can put a file's CURRENT
+    content in front of the model by OTHER grounded means that never reach the
+    tool:
+
+      * the CURRENT WORKSPACE snapshot pins the file's full, disk-fresh bytes in
+        the prompt this turn (view_render ``out_pinned_full``); and
+      * the F9 read-dedup short-circuits an identical re-read into a pointer at
+        the current bytes (the prior read's result), never calling the executor.
+
+    In BOTH cases the model HAS the file's current content — a subsequent
+    file_write is genuinely grounded, NOT a blind rewrite-from-memory. Yet the
+    read-before-write gate (keyed on this set) would refuse it because no
+    ``FileReadTool.run`` fired, leaving the model unable to read (it only gets a
+    pointer/snapshot) AND unable to write (gated) → the unrecoverable
+    file_write loop that drove the live shell-exec fallback. The loop calls this
+    to record those snapshot-/dedup-backed grounded reads so the gate clears.
+
+    Canonicalizes the path the same way the gate does, so a snapshot path and a
+    later write spelling resolve to one key."""
+    if not isinstance(path, str) or not path:
+        return
+    _conv_state(conv_id)["read_since_write"].add(_canonical(path))
+
+
 def clear_conversation_read_state(conv_id: str) -> None:
     """Remove the F1 tracker entry for a single conversation.
 

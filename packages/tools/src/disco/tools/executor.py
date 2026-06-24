@@ -19,7 +19,7 @@ from disco.core.llm import ModelExecutionPolicy, ToolSpec
 from pydantic import BaseModel, ValidationError
 
 from .anatomy import ToolContext, ToolDef, ToolExecutionError
-from .builtin.files import clear_conversation_read_state
+from .builtin.files import clear_conversation_read_state, mark_read
 from .registry import ToolRegistry, ToolScope
 from .sandbox.base import SandboxError, SandboxInstance
 from .secrets import CapabilityBroker, CapabilityDenied
@@ -307,6 +307,22 @@ class DefaultToolExecutor:
         # F3 teardown: remove this conversation's read/write tracker entry so the
         # module-level dict doesn't grow unbounded over the lifetime of the process.
         clear_conversation_read_state(self._conversation_id)
+
+    def note_grounding_read(self, path: str) -> None:
+        """Record that `path`'s CURRENT content was put in front of the model by a
+        grounded, non-tool channel this turn (the CURRENT WORKSPACE snapshot
+        pinning it in full, or an F9 read-dedup pointer at the prior read).
+
+        Satisfies the read-before-write gate for that path so a subsequent
+        file_write is allowed: the model is NOT writing blind from memory — it has
+        the current bytes — yet no ``FileReadTool.run`` fired to set the bit. The
+        agent loop calls this from the snapshot builder and the F9 short-circuit.
+        Without it, a deduped/snapshotted read leaves the model unable to read
+        (only a pointer) and unable to write (gated) — the unrecoverable
+        file_write loop. No-op on a killed executor."""
+        if self._killed:
+            return
+        mark_read(self._conversation_id, path)
 
     # ---- helpers ------------------------------------------------------------
 

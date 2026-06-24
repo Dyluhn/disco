@@ -457,6 +457,25 @@ def find_elided_arg_markers(arguments: dict[str, object]) -> list[str]:
     ]
 
 
+def value_is_only_elision_marker(value: object) -> bool:
+    """True when `value` is a string consisting of NOTHING BUT an elision
+    placeholder (plus surrounding whitespace) — i.e. the model copied the
+    `_snip_args` marker back verbatim with no real content of its own around it.
+
+    Used by the K1 recovery path: a PURE marker copy-back can be safely
+    re-expanded to the original content the marker stood in for (the engine still
+    holds it in the event log), because re-expansion can't clobber any real text
+    the model authored — there is none. A marker EMBEDDED in real text (the model
+    wrote a header, a marker, a footer) returns False so the recovery never
+    silently drops the model's surrounding edits; that case falls through to the
+    rejection-and-re-read path instead. Pure + deterministic."""
+    if not isinstance(value, str):
+        return False
+    stripped = _ELISION_PARAPHRASE_RE.sub("", _ELISION_MARKER_RE.sub("", value))
+    # Nothing matched ⇒ not a marker at all; or matched but real text remains.
+    return value != stripped and stripped.strip() == ""
+
+
 class ObservationEvent(BaseEvent, LLMConvertible):
     """The result of an ActionEvent's tool call (success path)."""
 

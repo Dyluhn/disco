@@ -16,6 +16,7 @@ import os
 from typing import TYPE_CHECKING
 
 from ..events import (
+    ActionEvent,
     AgentErrorEvent,
     Event,
     EventSource,
@@ -24,17 +25,92 @@ from ..events import (
     ObservationEvent,
     ToolResult,
     find_elided_arg_markers,
+    value_is_only_elision_marker,
 )
 from ..llm import LLMContextWindowExceeded
 from ..view import View
-from .dedup import _f9_dedupable_read, _w39_shell_verify_reminder
+from .dedup import (
+    _f8_confirmed_file_writes,
+    _f9_dedupable_read,
+    _w39_shell_verify_reminder,
+)
 from .messages import _workspace_paths_from_events
 
 if TYPE_CHECKING:
-    from ..events import ActionEvent
     from .engine import AgentLoop
 
 _LOG = logging.getLogger("disco.loop")
+
+
+def _ground_read(loop: AgentLoop, path: str) -> None:
+    """Satisfy the read-before-write gate for `path` via the executor when the
+    loop has put the file's CURRENT content in front of the model by a grounded,
+    non-tool channel (the CURRENT WORKSPACE snapshot pinning it in full, or an F9
+    read-dedup pointer). Defensive: a fake/legacy executor without
+    ``note_grounding_read`` is a silent no-op (the gate just stays as today)."""
+    ex = getattr(loop, "executor", None)
+    note = getattr(ex, "note_grounding_read", None)
+    if callable(note) and isinstance(path, str) and path:
+        try:
+            note(path)
+        except Exception:  # noqa: BLE001 — grounding is best-effort; never break the loop
+            _LOG.debug("note_grounding_read failed for %s", path, exc_info=True)
+
+
+def _recover_elided_file_write_content(
+    events: list[Event], path: str, *, before_id: str | None
+) -> str | None:
+    """K1 recovery: return the REAL content a copied-back elision marker stood in
+    for, recovered from the event log, or None if it can't be found.
+
+    When a model copies the `_snip_args` placeholder back as a `file_write`
+    `content`, the marker is a stand-in for content it ALREADY authored — the FULL
+    original is still on the prior ActionEvent in the log (`_snip_args` elides only
+    at RENDER time; the persisted event keeps the full bytes). We walk the log
+    backwards for the most-recent prior `file_write` to the SAME `path` whose
+    `content` is REAL (not itself a marker), and return that — so the engine can
+    re-expand the call instead of dead-ending the model into reproducing tens of
+    KB from memory (which it can't do reliably, and which re-collides with
+    elision). `before_id` excludes the current action (and anything at/after it).
+
+    SECURITY (fail closed): the prior write MUST have been ACCEPTED/EXECUTED — its
+    ActionEvent must be followed by a SUCCESSFUL ObservationEvent and carry no
+    AgentErrorEvent (the `_f8_confirmed_file_writes` contract). A BLIND write the
+    read-before-write gate REJECTED still sits in the log with its full `content`;
+    recovering THAT would re-expand + ground + execute a never-read body — the
+    exact blind clobber the gate exists to prevent. So only legitimately-written
+    content is ever a recovery source; an unread/rejected body fails closed and the
+    rejection stands (the model must do a real file_read to ground its write).
+
+    Path matching is RAW-string equality — consistent with the rest of the loop's
+    path bookkeeping; the copy-back case reuses the prior call's exact spelling.
+    Pure + deterministic."""
+    if not path:
+        return None
+    # Confirmed = ActionEvent + a SUCCESSFUL ObservationEvent + no AgentErrorEvent
+    # for the same call_id (single source of truth for "this write was accepted").
+    confirmed = _f8_confirmed_file_writes(events)
+    seen_current = before_id is None
+    for e in reversed(events):
+        if not isinstance(e, ActionEvent) or e.tool_call is None:
+            continue
+        if not seen_current:
+            if e.id == before_id:
+                seen_current = True
+            continue
+        if e.tool_call.tool_name != "file_write":
+            continue
+        if e.tool_call.arguments.get("path") != path:
+            continue
+        if e.tool_call.call_id not in confirmed:
+            continue  # SECURITY: not an accepted write (rejected/blind) — never a source
+        content = e.tool_call.arguments.get("content")
+        if not isinstance(content, str) or not content:
+            continue
+        if find_elided_arg_markers({"content": content}):
+            continue  # this prior write was itself a marker copy-back — skip it
+        return content
+    return None
 
 # The helper's input is the driver's `question` + `context` joined into one
 # prompt. Bound the size of each so a driver cannot grow the helper's input
@@ -212,6 +288,15 @@ class Observer:
                     action.tool_call.call_id,
                     _f9_prior_id,
                 )
+                # A deduped file_read returns a POINTER to the prior bytes instead
+                # of executing FileReadTool.run — so the read-before-write bit is
+                # never set, and a following file_write of the same path would be
+                # refused even though the model HAS the current content (the prior
+                # read's result, still in context). That is the unrecoverable
+                # file_write loop. Ground the read so the gate clears.
+                _f9_path = action.tool_call.arguments.get("path")
+                if isinstance(_f9_path, str) and _f9_path:
+                    _ground_read(self._loop, _f9_path)
                 await self._loop._emit(
                     ObservationEvent(
                         tool_result=ToolResult(
@@ -257,6 +342,36 @@ class Observer:
         # confirm, verify, finish) because every one funnels through here.
         if action.tool_call is not None:
             _k1_bad = find_elided_arg_markers(action.tool_call.arguments)
+            # K1 RECOVERY — re-expand instead of dead-ending. The most common,
+            # cleanly-recoverable shape is a `file_write` whose `content` is PURELY
+            # the copied-back marker (no real text around it). The full original
+            # content the marker stood in for is still in the event log
+            # (`_snip_args` elides only at render time). Recover it, ground the
+            # write (the engine is supplying the file's known content, so it is NOT
+            # a blind rewrite), and fall through to execute — the model never has to
+            # reproduce tens of KB from memory (which it can't do reliably and which
+            # re-collides with elision → the unrecoverable loop).
+            if (
+                _k1_bad == ["content"]
+                and action.tool_call.tool_name == "file_write"
+                and value_is_only_elision_marker(action.tool_call.arguments.get("content"))
+            ):
+                _wpath = action.tool_call.arguments.get("path")
+                if isinstance(_wpath, str) and _wpath:
+                    _orig = _recover_elided_file_write_content(
+                        await self._loop._events(), _wpath, before_id=action.id
+                    )
+                    if _orig is not None:
+                        _LOG.info(
+                            "K1 recovery: re-expanded elided file_write content for %s "
+                            "(%d chars, call_id=%s)",
+                            _wpath,
+                            len(_orig),
+                            action.tool_call.call_id,
+                        )
+                        action.tool_call.arguments["content"] = _orig
+                        _ground_read(self._loop, _wpath)
+                        _k1_bad = []  # recovered → fall through to normal execution below
             if _k1_bad:
                 _LOG.info(
                     "K1 guard: rejected %s — arg(s) %s carry an elision placeholder "
