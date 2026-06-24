@@ -130,6 +130,16 @@ class ProcessSandboxInstance:
         # — the load-bearing Bug-7 fix is that verify no longer targets these ports
         # (see preview_target.resolve_preview_port); a netns is the robust follow-up.
         # Scoped to this backend only; an isolated container's 8000 is its own.
+        #
+        # NOTE (Bug 16) — the RECOVERY for a reserved-port preview SERVE does NOT live
+        # here. This method receives an ALREADY-WRAPPED / arbitrary shell string (e.g.
+        # `tmux send-keys -t … -l '…'`), which cannot be parsed quote/heredoc-safely; a
+        # regex rewrite here would corrupt serve-shaped TEXT inside quotes. The remap is
+        # therefore done upstream on the model's CLEAN `shell_exec` command, before it is
+        # wrapped (see `ShellSessionManager.exec` + `remap_reserved_preview_serve`). What
+        # stays here is the BEST-EFFORT containment REFUSAL — which only ever REJECTS
+        # (never rewrites), so a false-refuse of an echo is harmless + recoverable, and it
+        # is the actionable refuse-and-guide net for any reserved bind that reaches us.
         from disco.core.loop.preview_target import (
             reserved_control_ports,
             reserved_port_command_violation,

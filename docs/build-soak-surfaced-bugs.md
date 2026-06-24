@@ -802,6 +802,62 @@ non-finished run classifies `BUILD_DID_NOT_FINISH` (NOT an infinite loop, NOT a 
 fail-closed test now pins an UNHANDLED gate (`AWAITING_USER_DECISION`). Ruff + basedpyright clean,
 import-linter KEPT, full build-soak suite green. **Live note:** the local 27B was busy with a running soak,
 so the unit tests (fake transport) are the proof for this fix.
+### Bug 16 — a reserved-port preview SERVE STUCKs the build (Bug-7 containment refused the bind but gave NO recovery) — PRODUCT — FIXED
+
+Surfaced by a §17 **no-fluke replay** (intermittent on the local 27B's port choice). The model served its
+static deliverable via the preview shell: `tmux send-keys -t disco-{cid8}-preview -l 'python3 -m http.server
+8000'`, then retried `5173`. Both are in the reserved control/UI set, so the Bug-7 process-backend
+containment (`reserved_port_command_violation`, `ProcessSandboxInstance.exec_shell`) correctly REJECTED the
+binds (they'd crash the agent-server / collide with vite) — but gave the model **no recovery path**: it never
+established a preview, so the resolver found no conversation-owned port, `verify_web_app` reported
+not-serving, and the build STUCKed `verify_no_progress`. (The existing `ensure_preview` remap covers only the
+default auto-serve, NOT a raw model-launched `http.server <reserved>` via shell/tmux.)
+
+**Fix** (`fix-bug16-reserved-port-serve`, remap at the preview-serve handling point + actionable refusal).
+Two review rounds converged on **where** the remap may safely live. Review #2 proved a regex over the
+ALREADY-WRAPPED/arbitrary `exec_shell` string can never be quote/heredoc-aware (`echo '; python3 -m
+http.server 8000'`, a heredoc body, a `python -c` literal all contain a "separator" + serve-shape inside
+quotes), so the remap was **relocated to the model's CLEAN command, before it is tmux-wrapped**:
+- **Remap (load-bearing) — on the clean `shell_exec` command** — `ShellSessionManager.exec`
+  (`sandbox/shell_sessions.py`) now calls `remap_reserved_preview_serve` (`preview_target.py`) on the model's
+  raw `command` BEFORE wrapping it into `tmux send-keys -l '<command>'`. The matcher is **anchored at the
+  START** of that clean command (`^\s*(python -m http.server <reserved>)`) — which is what makes it SAFE
+  without a shell parser: a leading `python` cannot be inside a quote/heredoc/echo-argument (nothing precedes
+  it), so serve-shaped TEXT is NEVER rewritten. A reserved-port serve is rewritten to the process-safe port
+  (`process_safe_preview_port()` → 3000); the remapped server runs in the conversation's tmux session → it is
+  conversation-owned → `resolve_preview_port(host_shared=True)` (the same resolver `verify_web_app({})` and
+  the finish gate use) targets it → the build can FINISH. Gated to SHARED-host backends via the SAME signal
+  the verify resolver uses (`workspace_path is not None` ⇒ process/local); an ISOLATED container keeps 8000
+  as its canonical app port and is never remapped. **The unsafe regex over arbitrary `exec_shell` strings was
+  REMOVED** — `ProcessSandboxInstance.exec_shell` no longer rewrites anything; it keeps ONLY the best-effort
+  containment REFUSAL (which never rewrites, just rejects). A serve buried after a `&&`/`;`/`|` separator or
+  in any non-leading position is intentionally left to that refusal — refuse-and-guide is safer than risking
+  a quoted-text rewrite.
+- **Actionable refusal** — `reserved_port_command_violation`'s message now names the rejected port, the whole
+  reserved set, AND a concrete safe replacement ("serve … on a non-reserved port such as 3000 instead"). And
+  `_exec_outcome` (`system.py`) promotes an `ExecResult(126, stderr="refused: …")` to the ToolOutcome `error`
+  text (not a bare "exited 126") so the model — whose loop drops tool `content` and emits only `error` —
+  actually SEES the recovery guidance. This is the standalone safety net: even where the remap does not fire,
+  the model is told a safe port and retries.
+
+**Must-not-regress (verified):** kills + arbitrary reserved binds still refused (exit 126, never launched);
+`exec_shell` rewrites NOTHING (an already-wrapped string is launched verbatim); `expose_port()` still None for
+reserved process ports; explicit verify URLs to 8000/8800/5173 on shared-host still rejected; isolated
+containers keep 8000 canonical; W-45 broken-app still fails verify.
+
+**Proof — LIVE soak was running (local 27B busy), so per policy the UNIT tests are the required proof** (no
+live soak run, port 8000 never bound by this work): `test_preview_target.py` (actionable message; remap of a
+leading serve incl. absolute python path + leading whitespace; **review-#2 bypass negatives — a serve-shaped
+string inside echo/printf/`python -c`/quotes/comment/heredoc/after-a-separator is NEVER rewritten**; the
+remap operates on the clean command, not the tmux wrapper; remap→conversation-owned→resolver-targets-safe-port
+composition), `test_shell_sessions.py` (`ShellSessionManager.exec` remaps a clean reserved serve on a
+shared-host fake → the `send-keys` literal carries the safe port; keeps 8000 canonical on an isolated fake;
+never rewrites serve-shaped text), `test_sandbox.py` (`exec_shell` launches an already-wrapped string verbatim
+— no rewrite; kills + arbitrary binds still refused 126 with the actionable message), `test_shell_spill.py` (a
+`refused:` 126 surfaces as the `error` text; ordinary nonzero exits keep the concise summary). Ruff +
+basedpyright clean, import-linter KEPT, preview/verify/shell suite green. (One pre-existing, untouched
+env-dependent assertion in `test_process_backend_expose_port_defense` fails only because the LIVE soak
+currently holds port 3000 — not a regression of this change.)
 
 ---
 

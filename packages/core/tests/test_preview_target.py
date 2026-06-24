@@ -10,6 +10,7 @@ from disco.core.loop.preview_target import (
     explicit_target_allowed,
     parse_port_ownership,
     process_safe_preview_port,
+    remap_reserved_preview_serve,
     reserved_control_ports,
     reserved_port_command_violation,
     resolve_preview_port,
@@ -237,3 +238,123 @@ def test_reserved_port_command_violation_allows_safe_commands():
         "python3 -c '...' 8000 5173 3000 8080 5000 4321",
     ):
         assert reserved_port_command_violation(cmd, r) is None, cmd
+
+
+def test_reserved_port_violation_message_is_actionable():
+    # Bug 16 (3a): the refusal must name the rejected port, the whole reserved set,
+    # AND a concrete safe replacement so the model can recover instead of STUCKing.
+    r = reserved_control_ports()
+    safe = str(process_safe_preview_port(reserved=r))
+    bind_msg = reserved_port_command_violation("python3 -m http.server 8000", r)
+    assert bind_msg is not None
+    assert "8000" in bind_msg                       # the rejected port
+    for p in r:                                      # the whole reserved set
+        assert str(p) in bind_msg
+    assert safe in bind_msg                          # a safe replacement
+    assert "refused:" in bind_msg
+    kill_msg = reserved_port_command_violation("fuser -k 8000/tcp", r)
+    assert kill_msg is not None and safe in kill_msg and "8000" in kill_msg
+
+
+# ---- Bug 16: reserved-port preview-serve REMAP ------------------------------
+
+
+def test_remap_reserved_http_server_serve_to_safe_port():
+    r = reserved_control_ports()
+    safe = process_safe_preview_port(reserved=r)
+    # bare serve on a reserved control port → rewritten to the safe port
+    out = remap_reserved_preview_serve("python3 -m http.server 8000 -d .", r)
+    assert out == f"python3 -m http.server {safe} -d ."
+    assert str(safe) != "8000"
+    # the Vite/UI port too
+    assert remap_reserved_preview_serve("python -m http.server 5173", r) == (
+        f"python -m http.server {safe}"
+    )
+
+
+def test_remap_operates_on_clean_command_not_the_tmux_wrapper():
+    # Bug-16 review #2: the remap operates on the model's CLEAN shell_exec command
+    # (BEFORE Disco wraps it into `tmux send-keys -l '...'`), so the function deliberately
+    # does NOT match an ALREADY-WRAPPED string — that arbitrary/quoted form is exactly
+    # what a regex cannot parse safely. The wrapper is handled upstream by remapping the
+    # clean inner command, so here the wrapped string comes back None (left as-is).
+    r = reserved_control_ports()
+    cmd = "tmux send-keys -t disco-conv_abc-preview -l 'python3 -m http.server 8000 -d .'"
+    assert remap_reserved_preview_serve(cmd, r) is None
+    # the CLEAN inner command (what ShellSessionManager.exec actually remaps) DOES match
+    safe = process_safe_preview_port(reserved=r)
+    assert remap_reserved_preview_serve("python3 -m http.server 8000 -d .", r) == (
+        f"python3 -m http.server {safe} -d ."
+    )
+
+
+def test_remap_leaves_non_reserved_and_non_serve_commands_untouched():
+    r = reserved_control_ports()
+    # already-safe http.server port → nothing to remap
+    assert remap_reserved_preview_serve("python3 -m http.server 3000", r) is None
+    # a reserved KILL is NOT a serve → never remapped (left for the refusal)
+    assert remap_reserved_preview_serve("fuser -k 8000/tcp", r) is None
+    assert remap_reserved_preview_serve("lsof -ti:8000 | xargs kill", r) is None
+    # an arbitrary reserved bind that is NOT http.server → not remapped
+    assert remap_reserved_preview_serve("uvicorn app:app --port 8000", r) is None
+    assert remap_reserved_preview_serve("serve -l 0.0.0.0:8000", r) is None
+
+
+def test_remap_never_touches_serve_shaped_text_in_quotes_heredocs_echo_print():
+    # Bug-16 review #2 (the unwinnable-by-regex bypasses): because the matcher anchors at
+    # the START of the CLEAN command, serve-shaped TEXT that does not BEGIN with
+    # `python -m http.server` is NEVER rewritten — no quote/heredoc parsing needed. Each
+    # must come back None so the model's intended output / string literal is never
+    # silently corrupted + executed. (These are the exact codex-#2 bypasses.)
+    r = reserved_control_ports()
+    for cmd in (
+        # a separator INSIDE quotes must not be treated as a command boundary
+        "echo '; python3 -m http.server 8000'",
+        'printf "%s" "; python3 -m http.server 8000"',
+        "python3 -c \"print('; python3 -m http.server 8000')\"",
+        # serve form as the ARGUMENT of echo (not a command) — must run verbatim
+        "echo python3 -m http.server 8000",
+        "echo 'python3 -m http.server 8000'",
+        # serve-shaped substring with no `-m http.server` invocation
+        "python3 -c \"print('http.server 8000')\"",
+        "echo 'http.server 8000'",
+        # a shell comment / a serve AFTER a separator (non-leading) — refuse-and-guide path
+        "# run python3 -m http.server 8000 to preview",
+        "ls  # python3 -m http.server 8000",
+        "cd build && python3 -m http.server 8000",
+        "true; python3 -m http.server 8000",
+        # a heredoc body line that happens to be a serve command
+        "cat <<'EOF'\npython3 -m http.server 8000\nEOF",
+        "cat <<'EOF'\n; python3 -m http.server 8000\nEOF",
+    ):
+        assert remap_reserved_preview_serve(cmd, r) is None, cmd
+
+
+def test_remap_matches_a_real_leading_serve_invocation():
+    # A genuine serve at the START of the clean command IS remapped — incl. an absolute
+    # python path and leading whitespace. (Non-leading positions are refuse-and-guide.)
+    r = reserved_control_ports()
+    safe = process_safe_preview_port(reserved=r)
+    assert remap_reserved_preview_serve("python3 -m http.server 8000", r) == (
+        f"python3 -m http.server {safe}"
+    )
+    assert remap_reserved_preview_serve("  python -m http.server 8000  ", r) == (
+        f"  python -m http.server {safe}  "
+    )
+    assert remap_reserved_preview_serve("/usr/bin/python3 -m http.server 5173", r) == (
+        f"/usr/bin/python3 -m http.server {safe}"
+    )
+
+
+def test_remap_then_resolver_targets_the_conversation_owned_safe_port():
+    # The full Bug-16 chain: remap → the safe port is served in disco-{cid8}-preview →
+    # conversation-owned → resolve_preview_port(host_shared=True) targets it (never 8000).
+    r = reserved_control_ports()
+    out = remap_reserved_preview_serve("python3 -m http.server 8000", r)
+    safe = process_safe_preview_port(reserved=r)
+    assert out == f"python3 -m http.server {safe}"
+    assert safe not in r
+    owned = {safe: PortOwnership(pid=4242, session="disco-conv_abc-preview")}
+    assert (
+        resolve_preview_port(host_shared=True, owned=owned, conversation_id=CID) == safe
+    )

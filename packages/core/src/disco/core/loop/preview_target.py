@@ -346,6 +346,11 @@ def reserved_port_command_violation(
     crash vector and the gate's own probes never bind)."""
     reserved = reserved_control_ports() if reserved is None else reserved
     low = command.lower()
+    # Bug 16 — the refusal must be ACTIONABLE: name the rejected port, the whole
+    # reserved set, AND a concrete safe replacement, so a model that hits it can recover
+    # to a non-reserved port instead of retrying the same reserved one and STUCKing.
+    reserved_csv = ", ".join(str(r) for r in sorted(reserved))
+    safe = process_safe_preview_port(reserved=reserved)
     for p in sorted(reserved):
         ps = re.escape(str(p))
         bind_patterns = (
@@ -364,16 +369,77 @@ def reserved_port_command_violation(
         for pat in bind_patterns:
             if re.search(pat, low):
                 return (
-                    f"refused: binds reserved control port {p} (the agent-server/"
-                    "app-server control port — serve your app on a different port)"
+                    f"refused: port {p} is reserved for the platform "
+                    f"(reserved control/UI ports: {reserved_csv}) — serve your app on a "
+                    f"non-reserved port such as {safe} instead"
                 )
         for pat in kill_patterns:
             if re.search(pat, low):
                 return (
-                    f"refused: targets reserved control port {p} (the agent-server/"
-                    "app-server control port)"
+                    f"refused: port {p} is reserved for the platform "
+                    f"(reserved control/UI ports: {reserved_csv}); do not kill it — serve "
+                    f"your own app on a non-reserved port such as {safe} instead"
                 )
     return None
+
+
+# A GENUINE `python -m http.server <port>` SERVE invocation, matched ONLY at the START of
+# a CLEAN command string — the model's raw `shell_exec` command, BEFORE Disco wraps it into
+# `tmux send-keys -l '<command>'`. Anchoring at the start is what makes this SAFE without a
+# shell parser: the leading `python` cannot be inside a quote / heredoc body / `echo`
+# argument (nothing precedes it), so — unlike a scan over an already-wrapped or arbitrary
+# shell string — it can NEVER rewrite serve-shaped TEXT the model meant to run verbatim
+# (`echo '; python3 -m http.server 8000'`, `python3 -c "print('http.server 8000')"`, a
+# heredoc line, …). We also require the real `python[3] -m http.server <port>` shape (so a
+# bare `http.server 8000` substring with no `-m http.server` never matches). A serve buried
+# after a separator (`cd x && python -m http.server 8000`) or any quoting is deliberately
+# NOT matched — it falls through to the actionable refuse-and-guide path. `cmd` is re-emitted
+# verbatim — only the reserved `port` is rewritten.
+_HTTP_SERVER_SERVE_RE = re.compile(
+    r"^(?P<cmd>\s*(?:[\w./-]*/)?python[\d.]*\s+-m\s+http\.server\s+)(?P<port>\d+)"
+)
+
+
+def remap_reserved_preview_serve(
+    command: str,
+    reserved: frozenset[int] | None = None,
+    safe_port: int | None = None,
+) -> str | None:
+    """Bug 16 — the RECOVERABLE counterpart to `reserved_port_command_violation`.
+
+    `command` MUST be the model's CLEAN, single `shell_exec` command (the preview-serve
+    handling point — `ShellSessionManager.exec`, BEFORE it is wrapped into `tmux
+    send-keys -l '<command>'`). If it BEGINS with a genuine `python -m http.server
+    <port>` SERVE on a RESERVED control/UI port, return it with that port rewritten to a
+    process-safe preview port; otherwise return None (nothing to remap).
+
+    On the process/local shared host a model that serves its deliverable on 8000/5173
+    would be refused by the containment scan — and, with no preview established, the
+    build STUCKs (`verify_no_progress`, the §17 no-fluke intermittency). Transparently
+    remapping the SERVE to a safe port keeps the Bug-7 crash vector CLOSED (we never bind
+    a reserved control port) while letting the build finish: the remapped server runs in
+    the conversation's `disco-{cid8}-<session>` tmux session, so it is conversation-owned
+    and `resolve_preview_port(host_shared=True)` targets it.
+
+    Scope (Bug-16 review #2): the rewrite is ANCHORED at the start of the clean command,
+    so it is SAFE without a shell parser — it can NEVER touch serve-shaped TEXT inside
+    quotes / a heredoc / an `echo`/`printf`/`python -c` argument (those don't BEGIN with
+    `python -m http.server`). A serve after a `&&`/`;`/`|` separator, or any non-leading
+    position, is intentionally left for `reserved_port_command_violation` to
+    refuse-with-guidance — safer than risking a rewrite of quoted text. Kills + other
+    reserved binds are likewise not a leading `http.server` serve and are refused."""
+    reserved = reserved_control_ports() if reserved is None else reserved
+    safe_port = (
+        process_safe_preview_port(reserved=reserved) if safe_port is None else safe_port
+    )
+
+    def _sub(m: re.Match[str]) -> str:
+        port = int(m.group("port"))
+        new_port = safe_port if port in reserved else port
+        return f"{m.group('cmd')}{new_port}"
+
+    new = _HTTP_SERVER_SERVE_RE.sub(_sub, command)
+    return new if new != command else None
 
 
 __all__ = [
@@ -383,6 +449,7 @@ __all__ = [
     "parse_port_ownership",
     "port_ownership_probe_command",
     "process_safe_preview_port",
+    "remap_reserved_preview_serve",
     "reserved_control_ports",
     "reserved_port_command_violation",
     "resolve_preview_port",

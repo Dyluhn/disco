@@ -214,3 +214,96 @@ async def test_integration_scenarios():
             
     finally:
         await inst.destroy()
+
+
+# ---- Bug 16: reserved-port preview-serve remap at the CLEAN-command point ----
+
+
+def _serve_canned(inst):
+    """Drive exec() through: ensure (has-session ok) → is_busy view → pre_cap →
+    post_cap-with-marker, so a single exec() completes deterministically."""
+    inst.canned_outputs["has-session"] = (0, "")
+    inst.canned_outputs["capture-pane_default"] = (0, "__DISCO_PS1__0__$ ")
+    inst.canned_outputs["capture-pane"] = [
+        (0, "__DISCO_PS1__0__$ "),                       # is_busy view
+        (0, "__DISCO_PS1__0__$ "),                       # pre_cap
+        (0, "__DISCO_PS1__0__$ \nserving\n__DISCO_PS1__0__$ "),  # post_cap w/ marker
+    ]
+
+
+def _sent_literals(inst):
+    """The `tmux send-keys ... -l '<command>'` literals exec() issued."""
+    return " ".join(c for c in inst.cmd_log if "send-keys" in c and " -l " in c)
+
+
+@pytest.mark.asyncio
+async def test_exec_remaps_reserved_preview_serve_on_shared_host():
+    # Bug 16 review #2: the remap fires on the model's CLEAN shell_exec command (here,
+    # before exec() wraps it into `tmux send-keys -l '...'`). On a SHARED-host backend
+    # (workspace_path set ⇒ process/local, where 8000 is the agent-server's control port)
+    # a leading `python -m http.server 8000` is remapped to the process-safe port — so the
+    # served port is conversation-owned + verifiable, and 8000/5173 is never wrapped/run.
+    from disco.core.loop.preview_target import (
+        process_safe_preview_port,
+        reserved_control_ports,
+    )
+
+    safe = str(process_safe_preview_port(reserved=reserved_control_ports()))
+    inst = FakeInstance()
+    inst.workspace_path = "/tmp/ws"  # shared-host (process) signal
+
+    async def get_inst():
+        return inst
+
+    manager = ShellSessionManager(get_inst, namespace="conv_abc-")
+    _serve_canned(inst)
+
+    await manager.exec("preview", "python3 -m http.server 8000", None)
+
+    sent = _sent_literals(inst)
+    assert f"http.server {safe}" in sent, inst.cmd_log
+    assert "http.server 8000" not in sent
+
+
+@pytest.mark.asyncio
+async def test_exec_keeps_8000_canonical_on_isolated_backend():
+    # Must-not-regress: an ISOLATED container (no workspace_path) keeps 8000 as its
+    # canonical app port — the remap must NOT fire there.
+    inst = FakeInstance()  # no workspace_path ⇒ isolated
+
+    async def get_inst():
+        return inst
+
+    manager = ShellSessionManager(get_inst)
+    _serve_canned(inst)
+
+    await manager.exec("preview", "python3 -m http.server 8000", None)
+
+    sent = _sent_literals(inst)
+    assert "http.server 8000" in sent  # canonical inside the box — unchanged
+
+
+@pytest.mark.asyncio
+async def test_exec_never_rewrites_serve_shaped_text_on_shared_host():
+    # Bug-16 review #2 bypasses: even on a shared host, serve-shaped TEXT that does not
+    # BEGIN with a real `python -m http.server` invocation (a separator inside quotes, an
+    # echo argument) is run VERBATIM — never port-rewritten.
+    inst = FakeInstance()
+    inst.workspace_path = "/tmp/ws"
+
+    async def get_inst():
+        return inst
+
+    manager = ShellSessionManager(get_inst, namespace="conv_abc-")
+
+    for command in (
+        "echo '; python3 -m http.server 8000'",
+        "echo python3 -m http.server 8000",
+        "cd build && python3 -m http.server 8000",
+    ):
+        inst.cmd_log.clear()
+        _serve_canned(inst)
+        await manager.exec("main", command, None)
+        sent = _sent_literals(inst)
+        assert "http.server 8000" in sent, command   # verbatim
+        assert "http.server 3000" not in sent, command

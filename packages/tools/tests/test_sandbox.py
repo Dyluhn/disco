@@ -191,6 +191,70 @@ async def test_process_backend_expose_port_defense():
         await inst.destroy()
 
 
+async def test_process_exec_shell_does_not_rewrite_arbitrary_wrapped_strings(monkeypatch):
+    # Bug-16 review #2: process.exec_shell receives ALREADY-WRAPPED / arbitrary shell
+    # (e.g. the `tmux send-keys -l '...'` wrapper) and must NEVER rewrite it — the remap
+    # now lives upstream on the CLEAN command (ShellSessionManager.exec). Here we prove
+    # exec_shell launches the wrapped serve string VERBATIM (no port rewrite), spying on
+    # the subprocess launcher so nothing is actually bound.
+    import asyncio
+    import tempfile
+    from pathlib import Path
+
+    from disco.tools.sandbox.process import ProcessSandboxInstance
+
+    captured: list[str] = []
+
+    class _FakeProc:
+        returncode = 0
+
+        async def communicate(self):
+            return (b"", b"")
+
+    async def _fake_create(cmd, **kwargs):
+        captured.append(cmd)
+        return _FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_create)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        inst = ProcessSandboxInstance("i", "o", "c", SandboxSpec(), Path(tmp))
+        # A serve form buried INSIDE a tmux send-keys literal is NOT a reserved-port BIND
+        # the containment scan flags (the bind regex keys on `http.server <reserved>`,
+        # which IS present here) — so this particular wrapper would actually be refused by
+        # containment. Use a wrapper around an ALREADY-SAFE port to prove the no-rewrite:
+        # it passes containment and is launched byte-for-byte, never port-rewritten.
+        captured.clear()
+        wrapped = "tmux send-keys -t disco-c-preview -l 'python3 -m http.server 3000'"
+        await inst.exec_shell(wrapped, timeout_s=10)
+        assert captured == [wrapped]  # verbatim — exec_shell never rewrites ports
+
+
+async def test_process_exec_shell_still_refuses_reserved_kill_and_arbitrary_bind():
+    # Must-not-regress: a reserved-port KILL and an arbitrary reserved BIND are STILL
+    # refused (exit 126) with the actionable message — the refusal returns BEFORE the
+    # real subprocess launcher. (The recovery REMAP lives upstream on the clean command;
+    # this containment net only ever REJECTS, never rewrites.)
+    import tempfile
+    from pathlib import Path
+
+    from disco.core.loop.preview_target import (
+        process_safe_preview_port,
+        reserved_control_ports,
+    )
+    from disco.tools.sandbox.process import ProcessSandboxInstance
+
+    safe = str(process_safe_preview_port(reserved=reserved_control_ports()))
+    with tempfile.TemporaryDirectory() as tmp:
+        inst = ProcessSandboxInstance("i", "o", "c", SandboxSpec(), Path(tmp))
+        for cmd in ("fuser -k 8000/tcp", "uvicorn app:app --port 8000"):
+            res = await inst.exec_shell(cmd, timeout_s=10)
+            assert res.exit_code == 126, cmd
+            assert res.stderr.startswith("refused:"), cmd
+            assert safe in res.stderr  # actionable: names a safe replacement
+        await inst.destroy()
+
+
 async def test_session_recreate_fires_rehydrate_hook():
     """bp-13 §2 (orchestrator fix): a mid-session death forces _recreate, which
     must invoke the owner's on_recreate hook AFTER the fresh instance is up —
