@@ -81,6 +81,12 @@ GATE_STATES = frozenset(
     }
 )
 AWAITING_PLAN_APPROVAL = "AWAITING_PLAN_APPROVAL"
+# The mid-build CLARIFY / CONFIRM gates the runner answers as the user (Bug 17): a
+# capable model may ask a clarifying question (AWAITING_USER_QUESTION) or pause for a
+# go-ahead (WAITING_FOR_CONFIRMATION) BEFORE/while building. The runner answers them so
+# an interactive build proceeds instead of false-stalling into NO_PLAN.
+AWAITING_USER_QUESTION = "AWAITING_USER_QUESTION"
+WAITING_FOR_CONFIRMATION = "WAITING_FOR_CONFIRMATION"
 
 # ---- progress-aware terminal-wait sentinels (Bug 15) ------------------------
 # The terminal wait is PROGRESS-AWARE, not a blind wall-clock: while the conversation

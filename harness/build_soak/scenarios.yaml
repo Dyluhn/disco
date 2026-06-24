@@ -10,6 +10,13 @@
 # sends each follow-up at its trigger point; an autonomous scenario sets
 # autonomous: true and never approves.
 #
+# Optional `clarification_answer` (string, Bug 17): if a build asks a clarifying
+# question mid-build (status AWAITING_USER_QUESTION), the runner ANSWERS it as the user
+# so the build proceeds instead of false-stalling into NO_PLAN. A scenario MAY supply
+# this exact answer; when omitted the runner sends a generic safe default that instructs
+# the model to use sensible defaults and not ask further questions. Bounded by
+# _MAX_CLARIFY so an endlessly-asking model is eventually let go to a real terminal.
+#
 # NOTE on §11.7 (WRITE_TOOL_ALLOWED_IN_PLANNING — a disallowed tool that stays
 # *callable* even when hidden): proving it needs the per-turn offered/allowed tool
 # scope, which the durable event log does NOT carry. Capturing it is a future
