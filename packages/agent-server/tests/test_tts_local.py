@@ -9,6 +9,10 @@ it first to stay independent.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import time
+
 import numpy as np
 import pytest
 from disco.agent_server import tts_local
@@ -133,3 +137,138 @@ async def test_explicit_unload(monkeypatch):
     pcm = await tts_local.synthesize("again", "af_heart")
     assert pcm.size == 240
     assert tts_local.is_loaded() is True
+
+
+# ---- W-08: ensure_model download + real byte/percent progress --------------
+
+
+async def test_ensure_model_noop_when_present(monkeypatch, tmp_path):
+    """When both weight files already exist, ensure_model downloads nothing and
+    emits ZERO progress events (the UI must not show a phantom download bar)."""
+    monkeypatch.setenv("DISCO_TTS_DIR", str(tmp_path))
+    monkeypatch.setattr(tts_local, "_data_dir", lambda: tmp_path)
+    (tmp_path / "kokoro-v1.0.onnx").write_bytes(b"x")
+    (tmp_path / "voices-v1.0.bin").write_bytes(b"y")
+
+    def _fail_fetch(*a, **k):  # must never be called
+        raise AssertionError("ensure_model fetched despite present weights")
+
+    monkeypatch.setattr(tts_local, "_fetch", _fail_fetch)
+    events: list[dict] = []
+    await tts_local.ensure_model(on_progress=lambda e: events.append(e))
+    assert events == []
+
+
+async def test_ensure_model_downloads_with_real_progress(monkeypatch, tmp_path):
+    """A missing weight file triggers a download whose REAL urllib byte counters
+    are surfaced as `downloading_model` events with monotonically rising pct that
+    reaches 100, plus correct file_index / file_total."""
+    monkeypatch.setattr(tts_local, "_data_dir", lambda: tmp_path)
+
+    def _fake_fetch(url, dest, sha, reporthook=None):
+        # Simulate a 100-byte download reported in two 50-byte blocks, then the
+        # file lands on disk — exactly the urlretrieve contract.
+        if reporthook is not None:
+            reporthook(1, 50, 100)
+            reporthook(2, 50, 100)
+        dest.write_bytes(b"z" * 100)
+
+    monkeypatch.setattr(tts_local, "_fetch", _fake_fetch)
+    events: list[dict] = []
+
+    async def _on_progress(e: dict) -> None:
+        events.append(e)
+
+    await tts_local.ensure_model(on_progress=_on_progress)
+
+    # Both files were "downloaded".
+    assert (tmp_path / "kokoro-v1.0.onnx").exists()
+    assert (tmp_path / "voices-v1.0.bin").exists()
+    # Every event is a real downloading_model frame with the wire shape the FE
+    # parses; pcts are within range and the final frame for each file hits 100.
+    assert events, "expected at least one progress event"
+    assert all(e["stage"] == "downloading_model" for e in events)
+    assert all(0 <= e["pct"] <= 100 for e in events)
+    assert {e["file_index"] for e in events} == {1, 2}
+    assert all(e["file_total"] == 2 for e in events)
+    # The last frame emitted for file 1 reports 100 % (downloaded == total).
+    file1 = [e for e in events if e["file_index"] == 1]
+    assert file1[-1]["pct"] == 100
+    assert file1[-1]["downloaded"] == file1[-1]["total"] == 100
+
+
+async def test_ensure_model_propagates_download_error(monkeypatch, tmp_path):
+    """A checksum / network failure inside the threaded fetch propagates out of
+    ensure_model so the route maps it to an honest error — never a silent skip."""
+    monkeypatch.setattr(tts_local, "_data_dir", lambda: tmp_path)
+
+    def _boom(url, dest, sha, reporthook=None):
+        raise RuntimeError("checksum mismatch")
+
+    monkeypatch.setattr(tts_local, "_fetch", _boom)
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
+        await tts_local.ensure_model(on_progress=None)
+
+
+# ---- single-flight: serialize the first-run download (codex objection) -----
+
+
+async def test_ensure_model_single_flight_no_double_download(monkeypatch, tmp_path):
+    """Two CONCURRENT ensure_model calls with the weights absent must download
+    each file EXACTLY ONCE — the second caller blocks on the file lock, then sees
+    the now-present file (no racing writes, no duplicated 300 MB fetch)."""
+    monkeypatch.setattr(tts_local, "_data_dir", lambda: tmp_path)
+    content = b"FAKE-KOKORO-WEIGHTS-" * 64
+    sha = hashlib.sha256(content).hexdigest()
+    monkeypatch.setattr(tts_local, "_MODEL_SHA", sha)
+    monkeypatch.setattr(tts_local, "_VOICES_SHA", sha)
+
+    calls: list[str] = []
+
+    def _fake_urlretrieve(url, filename, reporthook=None):
+        # Record the real fetch, hold the lock long enough to force the second
+        # caller to actually contend, then write the COMPLETE file to the temp.
+        calls.append(url)
+        if reporthook is not None:
+            reporthook(1, len(content), len(content))
+        time.sleep(0.4)
+        from pathlib import Path as _P
+
+        _P(filename).write_bytes(content)
+        return filename, None
+
+    monkeypatch.setattr(tts_local.urllib.request, "urlretrieve", _fake_urlretrieve)
+
+    # Run two ensure_model concurrently — exactly the DR-audio + Settings-test race.
+    await asyncio.gather(tts_local.ensure_model(), tts_local.ensure_model())
+
+    # Each weight file fetched once (2 files), NOT twice-per-file (would be 4).
+    assert len(calls) == 2, f"expected 1 fetch per file, got {calls}"
+    # Both files present, complete, and uncorrupted (atomic publish).
+    for name in ("kokoro-v1.0.onnx", "voices-v1.0.bin"):
+        f = tmp_path / name
+        assert f.exists() and f.read_bytes() == content
+    # No torn temp files left behind.
+    assert list(tmp_path.glob("*.part")) == []
+
+
+async def test_ensure_model_failed_download_leaves_no_corrupt_cache(monkeypatch, tmp_path):
+    """A checksum-failing download must leave NO file at the cache path (a reader
+    must never pick up a half-written / wrong-bytes weight) and no temp residue."""
+    monkeypatch.setattr(tts_local, "_data_dir", lambda: tmp_path)
+
+    def _fake_urlretrieve(url, filename, reporthook=None):
+        from pathlib import Path as _P
+
+        # Write GARBAGE → the pinned SHA256 won't match → _fetch must reject it.
+        _P(filename).write_bytes(b"corrupt-partial-bytes")
+        return filename, None
+
+    monkeypatch.setattr(tts_local.urllib.request, "urlretrieve", _fake_urlretrieve)
+
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
+        await tts_local.ensure_model(on_progress=None)
+
+    # The cache path was never published, and no temp/partial file remains.
+    assert not (tmp_path / "kokoro-v1.0.onnx").exists()
+    assert list(tmp_path.glob("*.part")) == []

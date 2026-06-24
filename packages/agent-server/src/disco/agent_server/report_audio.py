@@ -456,7 +456,12 @@ async def generate_report_audio(
         from . import tts_local
 
         if not tts_local.model_files_present():
-            await _emit(on_progress, {"stage": "downloading_model"})
+            # Real byte-level download progress (W-08).  ensure_model fetches the
+            # missing weight files BEFORE synthesis and emits per-poll
+            # `downloading_model` events carrying actual downloaded/total/pct — so
+            # the UI shows a GENUINE progress bar, not a static note.  When the
+            # weights are already on disk this whole block is skipped (no event).
+            await tts_local.ensure_model(on_progress=on_progress)
 
     # --- Step 2: synthesize each turn to PCM --------------------------------
     # C1: normalize the text fed to TTS — strip markdown so the engine speaks
