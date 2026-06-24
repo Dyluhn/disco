@@ -58,12 +58,22 @@ class PreviewService:
         the feature is disabled. This is the single chokepoint every proxy consumer
         (HostPreviewProxyMiddleware, the /port/{port} route, and the /browser/live-url
         route) flows through — gating here means disabling Live closes the network
-        surface, not merely the button, even if a stale stack is still listening on 6080."""
-        if port == NOVNC_PORT and not self._live_browser_enabled():
-            return None
+        surface, not merely the button, even if a stale stack is still listening on 6080.
+
+        SECURITY (capability gate): the noVNC port is opened ONLY when the feature is
+        enabled AND this conversation's sandbox can actually run + stream the stack
+        (`supports_live_view` ⇐ LIVE_VIEW_BACKENDS — gVisor only). The persisted
+        `enabled` flag is NOT sufficient on its own: a user who enables Live on gVisor and
+        then SWITCHES the backend to local/podman would otherwise leave a stale enabled
+        flag holding the noVNC port open on a non-gVisor session. Gating on the SAME
+        single-source-of-truth as live-ready/live-url keeps the surface consistent."""
         executor = self._rt._executors.get(conversation_id)
         session = getattr(executor, "_sandbox", None) if executor is not None else None
         if session is None:
+            return None
+        if port == NOVNC_PORT and not (
+            self._live_browser_enabled() and getattr(session, "supports_live_view", False)
+        ):
             return None
         if getattr(getattr(session, "_service", None), "name", "?") == "podman":
             return None  # stub here

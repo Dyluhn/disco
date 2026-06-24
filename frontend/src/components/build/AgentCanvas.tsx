@@ -89,6 +89,25 @@ function fmtBytes(n: number): string {
   return n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`;
 }
 
+/** The /browser/live-url `reason`s for which an auto-start is GENUINELY DOOMED — a hard
+ * capability/config error that won't fix itself, so we stop retrying for that cid. Every
+ * other failure (no_upstream, no_daemon, no_sandbox, network blip) is TRANSIENT: the
+ * readiness-gated poll retries it on the next tick once the browser is genuinely up. */
+const DOOMED_LIVE_URL_REASONS: ReadonlySet<string> = new Set(["unsupported_backend", "disabled"]);
+
+/** Pull the machine `reason` out of a failed agentGet (ApiError.message carries the raw
+ * JSON body `{reason, message}`). Returns null when there's no parseable reason — which
+ * is treated as TRANSIENT (retryable), the safe default (the poll bounds the retries). */
+function liveUrlReason(e: unknown): string | null {
+  const msg = e instanceof Error ? e.message : "";
+  try {
+    const o = JSON.parse(msg) as { reason?: unknown };
+    return typeof o?.reason === "string" ? o.reason : null;
+  } catch {
+    return null;
+  }
+}
+
 function Empty({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-hair px-body text-center font-ui text-[0.82rem] text-text-faint">
@@ -156,7 +175,6 @@ function BrowserPane({
   const [liveView, setLiveView] = useState<
     { url: string; novnc_path: string; ownerCid: string } | null
   >(null);
-  const [liveLoading, setLiveLoading] = useState(false);
   // Streamability TRUTH from the side-effect-free /browser/live-ready probe: true only
   // when this backend can actually run + stream the stack (gVisor) AND a sandbox + healthy
   // browser daemon are up. Drives BOTH auto-start (start only when genuinely startable)
@@ -169,10 +187,15 @@ function BrowserPane({
   // without re-subscribing on every change.
   const liveViewRef = useRef(liveView);
   liveViewRef.current = liveView;
-  // The cid we've already attempted an auto-start for, so a doomed start (backend can't
-  // run the stack) isn't retried every render. Reset when the session genuinely ends so
-  // a fresh browse can re-start.
-  const startAttemptRef = useRef<string | null>(null);
+  // The cid an auto-start is GENUINELY DOOMED for (a hard capability/config error like
+  // unsupported_backend) — only THIS suppresses further attempts. A TRANSIENT live-url
+  // failure (e.g. no_upstream: live_start succeeded but the port isn't exposed yet) must
+  // NOT latch, so the next readiness tick retries once the browser is genuinely up. Reset
+  // when the session ends / the conversation switches so a fresh browse can re-start.
+  const doomedRef = useRef<string | null>(null);
+  // Guards against overlapping live-url calls (a slow start spanning >1 poll tick). The
+  // poll cadence (4s) is the retry clock, so retries are bounded — never a render-storm.
+  const startInFlightRef = useRef(false);
 
   // Tell the sandbox to tear the live-view stack down. Best-effort + fire-and-forget:
   // teardown should never block on (or error from) the call.
@@ -183,9 +206,13 @@ function BrowserPane({
   };
 
   // Poll the side-effect-free readiness probe while the feature is enabled and there's a
-  // cid. We keep polling EVEN while the view is open, so a session that ENDS (daemon gone
-  // / sandbox reaped / unsupported backend) flips ready→false and we tear the view down +
-  // revert to screenshots. The probe has no side-effects (no live_start, no port map).
+  // cid. The poll is BOTH the auto-start clock AND the auto-stop watchdog:
+  //  • ready + no view open → AUTO-START the stack (the same server path the old button
+  //    used, no user action). Driving the start from the 4s poll means a transient
+  //    live-url failure retries on the NEXT tick — bounded, never a tight render loop.
+  //  • not ready while a view is open → the session ended → tear down + revert to
+  //    screenshots (2-miss debounce so a single blip doesn't kill a healthy stream).
+  // The probe itself has no side-effects (no live_start, no port map).
   useEffect(() => {
     if (!liveBrowserEnabled || !cid) {
       setLiveReady(false);
@@ -193,6 +220,7 @@ function BrowserPane({
     }
     let cancelled = false;
     let missStreak = 0;
+    doomedRef.current = null; // fresh conversation → clear any prior doomed verdict
     const probe = async () => {
       let ready = false;
       try {
@@ -207,6 +235,35 @@ function BrowserPane({
       setLiveReady(ready);
       if (ready) {
         missStreak = 0;
+        // AUTO-START (retry-safe, bounded to this 4s cadence). Only when no view is open,
+        // none is in flight, and this cid isn't already known-doomed.
+        if (!liveViewRef.current && !startInFlightRef.current && doomedRef.current !== cid) {
+          startInFlightRef.current = true;
+          try {
+            const data = await agentGet<{ ready: boolean; novnc_path: string; port: number }>(
+              `/conversations/${encodeURIComponent(cid)}/browser/live-url`,
+            );
+            // SECURITY: build the single-origin proxy URL client-side
+            // ({cid8}-6080.localhost). The server intentionally never returns a raw sandbox
+            // host:port — that would bypass the auth/cid-scoping proxy. previewHostUrl is
+            // the same helper the dev-server preview uses.
+            const base = previewHostUrl(cid, data.port, agentHttpBase());
+            if (!cancelled && base) {
+              setIframeConnected(false);
+              setLiveView({ url: base, novnc_path: data.novnc_path, ownerCid: cid });
+            }
+          } catch (e: unknown) {
+            // SILENT fallback — no banner, no false affordance. Distinguish DOOMED from
+            // TRANSIENT: a hard capability/config error latches (stop retrying); anything
+            // else (no_upstream / no_daemon / network blip) leaves doomedRef unset so the
+            // next poll tick retries once the browser is genuinely up.
+            if (DOOMED_LIVE_URL_REASONS.has(liveUrlReason(e) ?? "")) {
+              doomedRef.current = cid;
+            }
+          } finally {
+            startInFlightRef.current = false;
+          }
+        }
         return;
       }
       // Not streamable. If a view of THIS conversation is open, the session has ended —
@@ -218,7 +275,7 @@ function BrowserPane({
         stopLiveStack(lv.ownerCid);
         setLiveView(null);
         setIframeConnected(false);
-        startAttemptRef.current = null; // allow a fresh auto-start if browsing resumes
+        doomedRef.current = null; // allow a fresh auto-start if browsing resumes
       }
     };
     void probe();
@@ -229,42 +286,6 @@ function BrowserPane({
     };
   }, [liveBrowserEnabled, cid]);
 
-  // AUTO-START: enabled + a cid + genuinely streamable (live-ready true ⇒ the browser
-  // session is up on a backend that can run the stack) + not already up/starting → start
-  // the stack automatically, the same server path the old button used, with NO user
-  // action. A failure falls back SILENTLY to screenshots (no banner, no false affordance).
-  useEffect(() => {
-    if (!liveBrowserEnabled || !cid || liveView || liveLoading || !liveReady) return;
-    if (startAttemptRef.current === cid) return; // already tried for this session
-    startAttemptRef.current = cid;
-    let cancelled = false;
-    setLiveLoading(true);
-    void (async () => {
-      try {
-        const data = await agentGet<{ ready: boolean; novnc_path: string; port: number }>(
-          `/conversations/${encodeURIComponent(cid)}/browser/live-url`,
-        );
-        // SECURITY: build the single-origin proxy URL client-side ({cid8}-6080.localhost).
-        // The server intentionally never returns a raw sandbox host:port — that would
-        // bypass the auth/cid-scoping proxy. previewHostUrl is the same helper the
-        // dev-server preview uses.
-        const base = previewHostUrl(cid, data.port, agentHttpBase());
-        if (!cancelled && base) {
-          setIframeConnected(false);
-          setLiveView({ url: base, novnc_path: data.novnc_path, ownerCid: cid });
-        }
-      } catch {
-        // SILENT fallback — the backend couldn't start the stack. Show screenshots; never
-        // a "Live view unavailable" banner. startAttemptRef stays set so we don't hammer.
-      } finally {
-        if (!cancelled) setLiveLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [liveBrowserEnabled, cid, liveView, liveLoading, liveReady]);
-
   // Tear the OWNING conversation's stack down when the feature is disabled in Settings,
   // OR when the surface switches to a different conversation while a live view is open
   // (BrowserPane isn't keyed by cid, so we must stop liveView.ownerCid, not `cid`).
@@ -274,7 +295,7 @@ function BrowserPane({
       stopLiveStack(liveView.ownerCid);
       setLiveView(null);
       setIframeConnected(false);
-      startAttemptRef.current = null;
+      doomedRef.current = null;
     }
   }, [liveBrowserEnabled, liveView, cid]);
 

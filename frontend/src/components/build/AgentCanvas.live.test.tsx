@@ -26,13 +26,23 @@ vi.mock("@/hooks/useModels", async (importOriginal) => {
 });
 
 // agentGet is path-aware: /browser/live-ready drives streamability, /browser/live-url
-// performs the auto-start. Per-test we override these via READY/URL refs.
+// performs the auto-start. Per-test we override these via the `live` controller.
+const OK_URL = { ready: true, novnc_path: "/vnc.html?autoconnect=1&view_only=1", port: 6080 };
 const live = {
   ready: { ready: true, reason: "ready" } as Record<string, unknown>,
-  url: { ready: true, novnc_path: "/vnc.html?autoconnect=1&view_only=1", port: 6080 } as
-    | Record<string, unknown>
-    | "throw",
+  urlCalls: 0,
+  // Per-call live-url behaviour: given the 1-based call index, return the resolved body
+  // or throw to reject. Default: always succeed. A rejection's message carries the JSON
+  // {reason} body (mirrors ApiError) so the component can tell doomed from transient.
+  urlFor: (n: number): Record<string, unknown> => {
+    void n;
+    return OK_URL;
+  },
 };
+
+function rejectReason(reason: string): never {
+  throw new Error(JSON.stringify({ reason, message: reason }));
+}
 
 vi.mock("@/api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api/client")>();
@@ -41,8 +51,12 @@ vi.mock("@/api/client", async (importOriginal) => {
     agentGet: vi.fn((path: string) => {
       if (path.includes("/browser/live-ready")) return Promise.resolve(live.ready);
       if (path.includes("/browser/live-url")) {
-        if (live.url === "throw") return Promise.reject(new Error("live_start_failed"));
-        return Promise.resolve(live.url);
+        live.urlCalls += 1;
+        try {
+          return Promise.resolve(live.urlFor(live.urlCalls));
+        } catch (e) {
+          return Promise.reject(e);
+        }
       }
       return Promise.resolve({});
     }),
@@ -70,7 +84,8 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     live.ready = { ready: true, reason: "ready" };
-    live.url = { ready: true, novnc_path: "/vnc.html?autoconnect=1&view_only=1", port: 6080 };
+    live.urlCalls = 0;
+    live.urlFor = () => OK_URL;
   });
 
   it("(a) disabled → NO Live control, screenshots empty-state, no live anything", async () => {
@@ -148,7 +163,7 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
 
   it("(e) auto-start FAILS → silent screenshot fallback, no 'Live view unavailable' banner", async () => {
     await enable(true);
-    live.url = "throw"; // live-ready says streamable, but the start blows up
+    live.urlFor = () => rejectReason("no_upstream"); // live-ready streamable, but the start blows up
     wrap(<AgentCanvas {...baseProps} />);
     const { agentGet } = await import("@/api/client");
     await waitFor(() =>
@@ -162,6 +177,36 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
     expect(screen.queryByTestId("live-badge")).not.toBeInTheDocument();
     expect(screen.queryByText(/live view unavailable/i)).not.toBeInTheDocument();
   });
+
+  it("(g) TRANSIENT live-url failure (no_upstream) does NOT latch — retries and succeeds once the browser is up", async () => {
+    await enable(true);
+    // First start attempt fails with the normal transient no_upstream (live_start ok but
+    // the port isn't exposed yet); every later attempt succeeds.
+    live.urlFor = (n) => (n === 1 ? rejectReason("no_upstream") : OK_URL);
+    wrap(<AgentCanvas {...baseProps} />);
+    // The first attempt fails (no iframe yet)…
+    await waitFor(() => expect(live.urlCalls).toBeGreaterThanOrEqual(1));
+    // …but it is NOT permanently latched: the next readiness tick (~4s) retries and the
+    // live view appears. This is the codex-P1 regression — a transient blip must not
+    // disable auto-start forever.
+    const iframe = (await screen.findByTestId("novnc-iframe", undefined, {
+      timeout: 16000,
+    })) as HTMLIFrameElement;
+    expect(iframe.src).toContain("view_only=1");
+    expect(live.urlCalls).toBeGreaterThanOrEqual(2); // it genuinely retried
+  }, 20000);
+
+  it("(h) DOOMED live-url failure (unsupported_backend) latches — no retry-storm (called once, no tight loop)", async () => {
+    await enable(true);
+    live.urlFor = () => rejectReason("unsupported_backend"); // a hard capability error
+    wrap(<AgentCanvas {...baseProps} />);
+    await waitFor(() => expect(live.urlCalls).toBe(1));
+    // Wait across several poll ticks; a doomed result must NOT keep hammering live-url.
+    await new Promise((r) => setTimeout(r, 9000));
+    expect(live.urlCalls).toBe(1); // still exactly one — latched, no storm
+    expect(screen.queryByTestId("novnc-iframe")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("live-badge")).not.toBeInTheDocument();
+  }, 15000);
 
   it("(f) tears down the OWNING conversation's stack when switching conversations while live", async () => {
     await enable(true);
