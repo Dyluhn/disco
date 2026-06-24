@@ -40,13 +40,22 @@ were NOT touched here.
 > (no approval/follow-up to judge; a non-finished terminal that already surfaced its own
 > error/cancel), and all read content through the normalizer so they inherit fix #1.
 
-| # | Failure code | Severity | Test (xfail, strict) | Site | Spec |
-|---|---|---|---|---|---|
-| 1 | `WRITE_TOOL_ALLOWED_IN_PLANNING` | P0 | `test_build_plan_contract.py::test_write_tool_in_planning_produces_recoverable_rejection` | `engine.py:841` `_gate_planning_mode` | §11.1, §11.7, §20.1 |
-| 2 | `WRITE_TOOL_ALLOWED_IN_PLANNING` | P0 | `test_tool_rejection_recovery.py::test_disallowed_tool_call_visible_as_rejection` | `engine.py:841` `_gate_planning_mode` | §11.3, §20.3 |
-| 3 | `WRITE_BEFORE_REVISION_APPROVAL` | P1 | `test_build_replan_contract.py::test_agent_cannot_write_before_revised_plan_approval` | `engine.py:841` `_gate_planning_mode` (revision re-entry) | §11.4, §20.2 |
-| 4 | `APPROVE_PLAN_NO_EXECUTION` | P0 | `test_plan_approval_execution.py::test_kick_after_approval_produces_action_or_terminal_failure` | `finish.py` `gate_execution_nudge` (~L1008, `_EXECUTION_NUDGE_CAP` release) | §11.2, §20.4 |
-| 5 | `THINK_NOT_EXPOSED_IN_PLANNING` | P2 (gap) | `test_build_plan_contract.py::test_first_turn_planning_exposes_think` | `runtime.py:1467` planning allowlist | §11.1, §15.2, §20.1 |
+| # | Failure code | Severity | Status | Test | Site | Spec |
+|---|---|---|---|---|---|---|
+| 1 | `WRITE_TOOL_ALLOWED_IN_PLANNING` | P0 | **FIXED** (fix-planning-gate) | `test_build_plan_contract.py::test_write_tool_in_planning_produces_recoverable_rejection` (now passing) | `engine.py:841` `_gate_planning_mode` | §11.1, §11.7, §20.1 |
+| 2 | `WRITE_TOOL_ALLOWED_IN_PLANNING` | P0 | **FIXED** (fix-planning-gate) | `test_tool_rejection_recovery.py::test_disallowed_tool_call_visible_as_rejection` (now passing) | `engine.py:841` `_gate_planning_mode` | §11.3, §20.3 |
+| 3 | `WRITE_BEFORE_REVISION_APPROVAL` | P1 | **FIXED** (fix-planning-gate) | `test_build_replan_contract.py::test_agent_cannot_write_before_revised_plan_approval` (now passing) | `engine.py:841` `_gate_planning_mode` (revision re-entry) | §11.4, §20.2 |
+| 4 | `APPROVE_PLAN_NO_EXECUTION` | P0 | open (xfail, strict) | `test_plan_approval_execution.py::test_kick_after_approval_produces_action_or_terminal_failure` | `finish.py` `gate_execution_nudge` (~L1008, `_EXECUTION_NUDGE_CAP` release) | §11.2, §20.4 |
+| 5 | `THINK_NOT_EXPOSED_IN_PLANNING` | P2 (gap) | open (xfail, strict) | `test_build_plan_contract.py::test_first_turn_planning_exposes_think` | `runtime.py:1467` planning allowlist | §11.1, §15.2, §20.1 |
+
+> **Bugs 1–3 FIXED** on branch `fix-planning-gate`: `_gate_planning_mode` (engine.py) now
+> rejects any tool call that is not in the planning allowlist (`submit_plan` + `_plan_tool`
+> defensively, the read/explore tools `file_read`/`file_list`/`search`/`extract`, and the
+> virtual `ask_user`/`clarify`) with a recoverable, model-visible `AgentErrorEvent` paired by
+> `tool_call_id` (`Disp.CONTINUE`) — it NEVER falls through to execution. The three strict-xfail
+> markers were removed (the tests are now normal passing tests) and a dedicated real-loop
+> regression suite was added (`test_planning_write_rejection.py`). Bugs 4 + 5 are separate
+> fixes and remain strict-xfail.
 
 ## Root causes
 

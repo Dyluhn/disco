@@ -9,7 +9,6 @@ xfail(strict=True). See docs/build-soak-surfaced-bugs.md.
 
 from __future__ import annotations
 
-import pytest
 from _buildsoak_fakes import BuildExecutor, build_plan_loop
 from disco.core import (
     ActionEvent,
@@ -45,13 +44,6 @@ async def _drive(cid):
     return loop, store, executor
 
 
-@pytest.mark.xfail(
-    reason="BUG WRITE_TOOL_ALLOWED_IN_PLANNING: the disallowed write in PLANNING "
-    "FALLS THROUGH _gate_planning_mode (engine.py:841) and EXECUTES successfully "
-    "instead of producing a recoverable rejection observation visible to the model "
-    "(§11.3/§20.3) — repair-loop target",
-    strict=True,
-)
 async def test_disallowed_tool_call_visible_as_rejection():
     """The disallowed write emits an AgentErrorEvent (rejection) visible to the
     model — not a successful execution."""

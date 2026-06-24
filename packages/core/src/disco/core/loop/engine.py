@@ -901,11 +901,57 @@ class AgentLoop:
                 if await self._post_noop_valve() is Disp.HALT:
                     return Disp.HALT
                 return Disp.CONTINUE
-            # tc is a planning-allowed read tool — productive exploration.
-            # (B2/B6) Count it + force a plan at the cap (logic in Planner), then
-            # fall through to the normal action path. Phase-1 reads below the cap
-            # are unchanged.
-            await self._planner.note_planning_read_and_maybe_force()
+            # tc is a tool call that is NEITHER submit_plan NOR no-tool prose.
+            # Only the planning allowlist may run before plan approval:
+            #   - the read/explore tools (file_read/file_list/search/extract,
+            #     governed by _planning_tools),
+            #   - submit_plan (defensively included even where _planning_tools
+            #     omits it), and
+            #   - the virtual ask_user/clarify escape hatches.
+            # ANY OTHER tool (file_write, shell, browser, serve, finish, ...) must
+            # NOT mutate the workspace or execute before the plan is approved
+            # (spec §11.1/11.3/11.7). REJECT it — never execute — with a RECOVERABLE
+            # observation the model sees: record the attempted ActionEvent (so the
+            # assistant tool_call stays PAIRED with a tool-role result — KV
+            # stability, same discipline as the hard-deny path) + a paired
+            # AgentErrorEvent (kept visible by View), then hand the model another
+            # turn so it can submit_plan / read / ask. This ALSO closes the revision
+            # re-entry leak: enter_planning() puts the loop back in PLANNING, so a
+            # write before the revised plan is approved hits this same gate.
+            planning_virtuals = {"ask_user", "clarify"}
+            allowed = set(self._planning_tools) | {self._plan_tool} | planning_virtuals
+            if tc.tool_name not in allowed:
+                action = ActionEvent(
+                    thought=step.thought,
+                    tool_call=tc,
+                    self_assessed_risk=step.self_assessed_risk,
+                    llm_response_id=step.llm_response_id,
+                )
+                await self._emit(action)
+                await self._emit(
+                    AgentErrorEvent(
+                        error=(
+                            "<system-reminder>\n"
+                            f"REFUSED: `{tc.tool_name}` is not available in PLANNING "
+                            "mode. No workspace mutation or execution is allowed "
+                            "before plan approval. Call `submit_plan`, use a safe "
+                            "read tool (file_read/file_list/search/extract), or "
+                            "ask/clarify if details are missing.\n"
+                            "</system-reminder>"
+                        ),
+                        action_id=action.id,
+                        tool_call_id=tc.call_id,
+                    )
+                )
+                return Disp.CONTINUE
+            # An allowed planning tool. ask_user/clarify are virtual escape hatches
+            # handled by their own halt handlers downstream — do NOT count them as
+            # exploration reads. Only an ACTUAL read tool (file_read/file_list/
+            # search/extract) counts toward the explore cap + can force a plan at
+            # the cap (logic in Planner), then falls through to the normal action
+            # path. Phase-1 reads below the cap are unchanged.
+            if tc.tool_name not in planning_virtuals:
+                await self._planner.note_planning_read_and_maybe_force()
         return Disp.FALLTHROUGH
 
     async def _gate_hard_deny(self, action: ActionEvent) -> Disp:
