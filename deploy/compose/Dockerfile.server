@@ -53,6 +53,11 @@ FROM python:3.12-slim-bookworm
 # glibc heap, so freed transient pages get stranded mid-heap and malloc_trim can't
 # return them (the RSS floor never recedes). jemalloc's background_thread purges
 # dirty pages to the OS even under fragmentation — the real fix for that floor.
+# libreoffice-impress (+ fonts-liberation): deck→PDF export. When the operator
+# selects the `process` backend in Settings, the agent-server runs tools in THIS
+# image instead of a sibling sandbox container, so `soffice` must be present here
+# too (the sandbox image already ships it). Out-of-the-box deck→PDF, mirroring the
+# bundled-TTS bake-in. Absent soffice → render_deck() returns a clear error.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpango-1.0-0 \
         libpangoft2-1.0-0 \
@@ -62,6 +67,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libjemalloc2 \
         fontconfig \
         fonts-dejavu-core \
+        libreoffice-impress \
+        fonts-liberation \
         tmux \
     && rm -rf /var/lib/apt/lists/*
 
