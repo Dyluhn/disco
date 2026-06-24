@@ -14,17 +14,23 @@ fetched on first use to the app data dir (pinned URL + SHA256), NOT bundled.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import inspect
 import logging
 import os
 import time
 import urllib.request
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+try:  # POSIX advisory file lock — present on Linux/macOS (the deploy targets).
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover — non-POSIX (e.g. Windows); fall back to no x-proc lock
+    _fcntl = None  # type: ignore[assignment]
 from disco.core.env import disco_env
 
 _LOG = logging.getLogger(__name__)
@@ -73,6 +79,33 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+@contextlib.contextmanager
+def _download_lock(dest: Path) -> Iterator[None]:
+    """Single-flight guard around the first-run download of `dest`.
+
+    Holds an EXCLUSIVE advisory lock on a sidecar ``<dest>.lock`` file for the
+    duration of one download. A second caller — another asyncio task on the same
+    loop (each `_fetch` runs in its own worker thread), a different thread, OR a
+    different agent-server process — BLOCKS here until the holder finishes, then
+    re-checks presence and skips re-downloading. `flock` is per-open-file-
+    description, so separate `open()`s contend even within one process.
+
+    On a non-POSIX platform (no `fcntl`) this degrades to a no-op guard; the
+    atomic os.replace in `_fetch` still prevents a torn cache file.
+    """
+    if _fcntl is None:  # pragma: no cover — non-POSIX fallback
+        yield
+        return
+    lock_path = dest.with_suffix(dest.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "w") as lock_f:
+        _fcntl.flock(lock_f, _fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            _fcntl.flock(lock_f, _fcntl.LOCK_UN)
+
+
 def _fetch(
     url: str,
     dest: Path,
@@ -82,6 +115,12 @@ def _fetch(
     """Download `url` → `dest` on first use and verify its SHA256. A checksum
     mismatch raises (never caches garbage from a moved/replaced release).
 
+    SINGLE-FLIGHT + ATOMIC: the download is serialized by an advisory file lock
+    (`_download_lock`) so two concurrent callers never download the same weight
+    file at once, and the verified bytes are published with an atomic
+    ``os.replace`` from a per-process temp — so a concurrent reader never sees a
+    half-written file and a failed/partial download leaves NO cache file behind.
+
     Logs progress at 10 % intervals so the server log shows the download is
     alive — the first-run Kokoro download is ~300 MB and takes 30–90 s on a
     fast connection (WALK-13 / D1).
@@ -90,34 +129,53 @@ def _fetch(
     signature urllib uses) so a caller (`ensure_model`) can surface REAL
     byte/percent progress to the UI in addition to the server-log buckets.
     """
+    # Fast path: already present (no lock needed — the file only ever appears via
+    # the atomic replace below, so a non-zero size means a complete file).
     if dest.exists() and dest.stat().st_size > 0:
         return
-    _LOG.info(
-        "TTS: downloading %s → %s (~300 MB, first run only — this may take a minute)",
-        url,
-        dest,
-    )
-    tmp = dest.with_suffix(dest.suffix + ".part")
 
-    _last_bucket: list[int] = [-1]  # mutable closure for progress tracking
-
-    def _hook(count: int, block_size: int, total_size: int) -> None:
-        if reporthook is not None:
-            reporthook(count, block_size, total_size)
-        if total_size <= 0:
+    with _download_lock(dest):
+        # Re-check UNDER the lock: a holder we just waited on may have completed
+        # the download — never re-fetch (idempotent / no double-download).
+        if dest.exists() and dest.stat().st_size > 0:
             return
-        pct = min(100, count * block_size * 100 // total_size)
-        bucket = (pct // 10) * 10  # log at 0, 10, 20, …, 100 %
-        if bucket != _last_bucket[0]:
-            _last_bucket[0] = bucket
-            _LOG.info("TTS: download %d%% — %s", bucket, dest.name)
 
-    urllib.request.urlretrieve(url, tmp, reporthook=_hook)  # noqa: S310 — pinned GitHub release URL
-    got = _sha256(tmp)
-    if got != sha:
-        tmp.unlink(missing_ok=True)
-        raise RuntimeError(f"TTS weight checksum mismatch for {url}: got {got}, want {sha}")
-    tmp.rename(dest)
+        _LOG.info(
+            "TTS: downloading %s → %s (~300 MB, first run only — this may take a minute)",
+            url,
+            dest,
+        )
+        # Per-process temp so a stale lock (crashed holder) can't make two
+        # processes collide on one `.part` name; the os.replace is the real
+        # atomicity guarantee.
+        tmp = dest.with_suffix(dest.suffix + f".{os.getpid()}.part")
+
+        _last_bucket: list[int] = [-1]  # mutable closure for progress tracking
+
+        def _hook(count: int, block_size: int, total_size: int) -> None:
+            if reporthook is not None:
+                reporthook(count, block_size, total_size)
+            if total_size <= 0:
+                return
+            pct = min(100, count * block_size * 100 // total_size)
+            bucket = (pct // 10) * 10  # log at 0, 10, 20, …, 100 %
+            if bucket != _last_bucket[0]:
+                _last_bucket[0] = bucket
+                _LOG.info("TTS: download %d%% — %s", bucket, dest.name)
+
+        try:
+            urllib.request.urlretrieve(url, tmp, reporthook=_hook)  # noqa: S310 — pinned GitHub release URL
+            got = _sha256(tmp)
+            if got != sha:
+                raise RuntimeError(
+                    f"TTS weight checksum mismatch for {url}: got {got}, want {sha}"
+                )
+            os.replace(tmp, dest)  # atomic publish of the verified file
+        finally:
+            # Never leave a partial/failed temp behind (corruption guard). The
+            # final cache path was either atomically published or never created.
+            with contextlib.suppress(FileNotFoundError):
+                Path(tmp).unlink()
 
 
 # ---- W-08: real byte-level model download with progress --------------------
@@ -191,10 +249,14 @@ async def ensure_model(on_progress: DownloadProgress | None = None) -> None:
             await asyncio.sleep(0.3)
             await _emit()
         await task  # propagate a download / checksum-mismatch error to the caller
-        # Final 100 % frame (the poll may have stopped just shy of the last block).
-        counters["downloaded"] = counters["total"] or (
-            dest.stat().st_size if dest.exists() else counters["downloaded"]
-        )
+        # Final 100 % frame. Covers two cases: (a) the poll stopped just shy of the
+        # last block; (b) a SINGLE-FLIGHT WAITER whose `_fetch` blocked on the lock
+        # then found the file already complete — its reporthook never ran, so seed
+        # both counters from the on-disk size to show a clean 100 % rather than 0 %.
+        final_size = dest.stat().st_size if dest.exists() else counters["downloaded"]
+        if counters["total"] <= 0:
+            counters["total"] = final_size
+        counters["downloaded"] = counters["total"] or final_size
         await _emit()
 
 
