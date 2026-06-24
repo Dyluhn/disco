@@ -1097,3 +1097,264 @@ async def test_remaining_zero_reject_refunds_reservation(tmp_path) -> None:
     assert captured == []  # never reached upstream
     # The reservation was refunded — the budget is intact, not drained by the reject.
     assert store.validate(token).used_tokens == 0
+
+
+# ===========================================================================
+# Completeness sweep — NEW findings (2 P1 + 4 P2).
+# ===========================================================================
+
+# -- P1 #1: the reservation covers the COMPLETION budget, not just the prompt --
+
+
+async def test_completion_budget_reserved_concurrent_cannot_overspend(tmp_path) -> None:
+    """Two concurrent calls whose PROMPT estimates both fit (prompt-only reservation
+    would let both through) must still not both pass: the first call also reserves an
+    OUTPUT cap, so the second sees the completion budget consumed and is rejected. The
+    completion budget cannot be double-spent."""
+    store = PiInferenceTokenStore()
+    body = {"messages": [{"role": "user", "content": "hi"}]}
+    est = _estimate_prompt_tokens(body)
+    # Headroom so TWO prompt-only reservations (2*est) would fit — proving the gate is
+    # the OUTPUT reservation, not the prompt estimate.
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=est + 50,
+    )
+    assert 2 * est <= est + 50  # prompt-only reservations would NOT block the second
+    captured: list[httpx.Request] = []
+
+    # An async handler that holds the FIRST upstream call in flight, so the second
+    # call reserves while the first's full reservation (prompt + output cap) is still
+    # held — proving the completion budget cannot be double-spent (with an instant
+    # handler the first would settle before the second reserved).
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        await asyncio.sleep(0.05)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "hi"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            },
+        )
+
+    app = _make_app(store, tmp_path, handler=handler)
+    r1, r2 = await asyncio.gather(_post(app, token, body), _post(app, token, body))
+    assert sorted([r1.status_code, r2.status_code]) == [200, 429]
+    assert len(captured) == 1  # the completion reservation blocked the second call
+
+
+async def test_n_greater_than_one_forced_to_single_completion(tmp_path) -> None:
+    """``n`` is forwarded but unaccounted; ``n>1`` would multiply real spend past the
+    single reservation. The gateway forces ``n=1`` on the outbound request."""
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
+    )
+    captured: list[httpx.Request] = []
+    app = _make_app(store, tmp_path, handler=_capturing_handler(captured))
+    resp = await _post(
+        app, token, {"messages": [{"role": "user", "content": "hi"}], "n": 5}
+    )
+    assert resp.status_code == 200
+    assert json.loads(captured[0].content)["n"] == 1  # forced to a single completion
+
+
+async def test_provider_omitting_usage_charges_full_reservation(tmp_path) -> None:
+    """A provider that returns NO usage is charged the full reservation (prompt
+    estimate + reserved output cap), not just the prompt — so an unmetered call still
+    draws down the budget by what it could have generated."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": "hi"}}]}  # NO usage field
+        )
+
+    store = PiInferenceTokenStore()
+    body = {"messages": [{"role": "user", "content": "hi"}]}
+    est = _estimate_prompt_tokens(body)
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
+    )
+    app = _make_app(store, tmp_path, handler=handler)
+    resp = await _post(app, token, body)
+    assert resp.status_code == 200
+    # The whole budget was reserved (est + output cap == budget) and stands as the
+    # charge — far more than the prompt estimate alone.
+    used = store.validate(token).used_tokens
+    assert used == 1000
+    assert used > est
+
+
+# -- P1 #2: encoded redaction covers percent case-variants + JSON slash-escape --
+
+
+def test_lowercase_percent_key_form_is_redacted() -> None:
+    """Percent escapes are case-insensitive — a provider reflecting the request with
+    LOWERCASE percent hex (``%2f``) must be redacted as well as the canonical
+    uppercase (``%2F``) ``urllib.parse.quote`` emits."""
+    key = "sk-a/b c"  # '/' and ' ' percent-encode to %2F and %20
+    upper = urllib.parse.quote(key, safe="").encode("utf-8")  # sk-a%2Fb%20c
+    lower = upper.lower()  # NOTE: only the hex differs here (no other letters)
+    assert b"%2f" in lower and b"%2F" in upper  # the two spellings really differ
+    needles = _key_byte_needles(key)
+    assert lower in needles  # the lowercase percent spelling is covered
+    red = _redact_bytes(b"prefix " + lower + b" suffix", key)
+    assert lower not in red
+    assert b"[REDACTED]" in red
+
+
+def test_json_slash_escaped_key_form_is_redacted() -> None:
+    """A JSON encoder that escapes ``/`` as ``\\/`` produces a form ``json.dumps``
+    does not — it must still be redacted (a key with a ``/`` reflected JSON-escaped)."""
+    key = "sk-a/b/c"  # contains slashes
+    slash_escaped = key.replace("/", "\\/").encode("utf-8")  # sk-a\/b\/c
+    assert slash_escaped != key.encode("utf-8")
+    needles = _key_byte_needles(key)
+    assert slash_escaped in needles
+    red = _redact_bytes(b'{"k":"' + slash_escaped + b'"}', key)
+    assert slash_escaped not in red
+    assert b"[REDACTED]" in red
+
+
+# -- P2 #3: bounded request + upstream body buffering -----------------------
+
+
+async def test_oversized_request_body_rejected_413(tmp_path, monkeypatch) -> None:
+    """A request body larger than the limit is rejected with 413 before it is buffered
+    or parsed."""
+    monkeypatch.setattr(
+        "disco.agent_server.routes.pi_inference._MAX_REQUEST_BYTES", 256
+    )
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
+    )
+    captured: list[httpx.Request] = []
+    app = _make_app(store, tmp_path, handler=_capturing_handler(captured))
+    big = {"messages": [{"role": "user", "content": "x" * 5000}]}  # well over 256 bytes
+    resp = await _post(app, token, big)
+    assert resp.status_code == 413
+    assert captured == []  # never reached the provider
+
+
+async def test_oversized_upstream_body_is_capped(tmp_path, monkeypatch) -> None:
+    """An oversized upstream (non-stream) body is truncated to the cap + a note, not
+    buffered in full."""
+    monkeypatch.setattr(
+        "disco.agent_server.routes.pi_inference._MAX_UPSTREAM_BYTES", 128
+    )
+    huge = json.dumps({"filler": "Z" * 100_000}).encode("utf-8")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=huge, headers={"content-type": "application/json"})
+
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
+    )
+    app = _make_app(store, tmp_path, handler=handler)
+    resp = await _post(app, token, {"messages": [{"role": "user", "content": "hi"}]})
+    assert resp.status_code == 200
+    assert b"...[truncated]" in resp.content  # capped + noted
+    assert len(resp.content) < len(huge)  # not the full body
+    assert len(resp.content) <= 128 + len(b"\n...[truncated]")
+
+
+# -- P2 #4: streaming has a wall-clock + total-byte cap ---------------------
+
+
+async def test_stream_exceeding_byte_cap_is_terminated(tmp_path, monkeypatch) -> None:
+    """A stream whose total bytes exceed the ceiling is cut off rather than relayed in
+    full — the gateway stops pulling and closes the upstream."""
+    monkeypatch.setattr(
+        "disco.agent_server.routes.pi_inference._STREAM_MAX_BYTES", 200
+    )
+    chunk = b'data: {"choices":[{"delta":{"content":"' + b"y" * 100 + b'"}}]}\n\n'
+    full = chunk * 20  # ~3 KB, well over the 200-byte cap
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=full, headers={"content-type": "text/event-stream"})
+
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=100_000,
+    )
+    app = _make_app(store, tmp_path, handler=handler)
+    resp = await _post(
+        app, token, {"messages": [{"role": "user", "content": "hi"}], "stream": True}
+    )
+    assert resp.status_code == 200
+    assert len(resp.content) < len(full)  # terminated early, not the whole stream
+
+
+# -- P2 #5: a stream upstream error is a NON-200 to Pi (not a 200 SSE) -------
+
+
+async def test_stream_upstream_error_status_yields_non_200(tmp_path) -> None:
+    """A provider 401/500 on the STREAM path must surface as a non-200 to Pi
+    (consistent with the non-stream path), not a 200 SSE carrying an error body."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            content=json.dumps({"error": "nope", "leaked": _SECRET_VALUE}).encode("utf-8"),
+            headers={"content-type": "application/json"},
+        )
+
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
+    )
+    app = _make_app(store, tmp_path, handler=handler)
+    resp = await _post(
+        app, token, {"messages": [{"role": "user", "content": "hi"}], "stream": True}
+    )
+    assert resp.status_code == 401  # upstream status passed through, NOT a 200 SSE
+    assert _SECRET_VALUE not in resp.text  # the error body is never relayed
+    assert "nope" not in resp.text
+    assert resp.json()["error"]["message"] == "upstream request failed"  # generic
+
+
+# -- P2 #6: malformed usage is treated as absent, never crashes -------------
+
+
+def test_extract_usage_malformed_fields_treated_as_absent() -> None:
+    """A non-finite / non-numeric / wrong-typed usage field is treated as absent
+    (None) rather than raising TypeError/OverflowError/ValueError."""
+    from disco.agent_server.routes.pi_inference import _extract_usage
+
+    inf = float("inf")
+    assert _extract_usage({"usage": {"prompt_tokens": inf, "completion_tokens": 1}}) is None
+    assert _extract_usage({"usage": {"prompt_tokens": [1, 2], "completion_tokens": 1}}) is None
+    assert _extract_usage({"usage": {"prompt_tokens": "abc", "completion_tokens": 1}}) is None
+    assert _extract_usage({"usage": {"prompt_tokens": -5, "completion_tokens": 1}}) is None
+    # a well-formed usage still parses.
+    assert _extract_usage({"usage": {"prompt_tokens": 3, "completion_tokens": 4}}) == (3, 4)
+
+
+async def test_malformed_usage_does_not_crash_request(tmp_path) -> None:
+    """A provider returning a malformed ``usage`` field does not crash the request; the
+    usage is treated as absent and the reservation stands as the charge."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "hi"}}],
+                "usage": {"prompt_tokens": [99], "completion_tokens": "oops"},  # malformed
+            },
+        )
+
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
+    )
+    app = _make_app(store, tmp_path, handler=handler)
+    resp = await _post(app, token, {"messages": [{"role": "user", "content": "hi"}]})
+    assert resp.status_code == 200  # no crash
+    assert store.validate(token).used_tokens == 1000  # reservation stands (usage absent)

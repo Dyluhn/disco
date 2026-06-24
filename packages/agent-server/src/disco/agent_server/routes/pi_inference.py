@@ -36,7 +36,10 @@ import base64
 import ipaddress
 import json
 import logging
+import math
 import os
+import re
+import time
 import urllib.parse
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -87,6 +90,17 @@ _ROUTING_ALIASES = frozenset({"models", "provider", "route", "transforms"})
 # buffer keeps a huge generation from being re-accumulated in full just to read
 # the trailing token counts.
 _USAGE_TAIL_BYTES = 16_384
+
+# DoS guards — bound every place an arbitrary number of bytes could be buffered.
+# Pi's request body (rejected with 413 over-limit), a buffered NON-stream provider
+# body / error body (truncated + noted), and a STREAMED response (a wall-clock
+# deadline + a total-byte ceiling so a trickling upstream can't pin the gateway open
+# indefinitely under httpx's per-READ timeout).
+_MAX_REQUEST_BYTES = 4 * 1024 * 1024  # 4 MiB cap on Pi's inbound request body
+_MAX_UPSTREAM_BYTES = 8 * 1024 * 1024  # cap on a buffered non-stream / error body
+_STREAM_MAX_BYTES = 64 * 1024 * 1024  # cap on TOTAL bytes relayed from a stream
+_STREAM_MAX_DURATION_S = 600.0  # wall-clock deadline on a single streamed response
+_TRUNCATED_NOTE = b"\n...[truncated]"
 
 
 @dataclass(frozen=True)
@@ -194,16 +208,36 @@ def _outbound_headers(target: _UpstreamTarget) -> dict[str, str]:
     return headers
 
 
+_PCT_ESCAPE_RE = re.compile(r"%[0-9A-Fa-f]{2}")
+
+
+def _percent_case_variants(s: str) -> set[str]:
+    """Both case spellings of every ``%XX`` escape in ``s`` — percent escapes are
+    case-INSENSITIVE (``%2f`` == ``%2F``), so a provider reflecting the request
+    lowercase must still be caught. Only the two hex digits are re-cased; the rest of
+    the string (incl. un-encoded ASCII) is left byte-for-byte intact (whole-string
+    ``.lower()`` would corrupt un-encoded letters and miss the real reflected form)."""
+    return {
+        _PCT_ESCAPE_RE.sub(lambda m: m.group(0).lower(), s),
+        _PCT_ESCAPE_RE.sub(lambda m: m.group(0).upper(), s),
+    }
+
+
 def _encoded_forms(plain: str) -> set[str]:
     """The common ENCODED transforms a provider might apply when reflecting a request
-    string ``plain`` back to us — URL percent-encoding, JSON-string escaping, and
-    base64 (standard + url-safe, padded and unpadded) — PLUS the raw value itself.
+    string ``plain`` back to us — URL percent-encoding (lower- AND upper-case hex),
+    JSON-string escaping (incl. the optional ``\\/`` slash-escape), and base64
+    (standard + url-safe, padded and unpadded) — PLUS the raw value itself.
     Deliberately bounded to these specific, realistic forms (not a regex-of-everything)."""
     forms: set[str] = {plain}
-    # URL percent-encoding (safe="" → the whole string is encoded).
-    forms.add(urllib.parse.quote(plain, safe=""))
-    # JSON-string escaping (drop the quotes json.dumps wraps it in).
-    forms.add(json.dumps(plain)[1:-1])
+    # URL percent-encoding (safe="" → the whole string is encoded), in BOTH the
+    # lowercase and uppercase hex spellings a provider might echo (``%2f`` vs ``%2F``).
+    forms |= _percent_case_variants(urllib.parse.quote(plain, safe=""))
+    # JSON-string escaping (drop the quotes json.dumps wraps it in), PLUS the optional
+    # ``\/`` slash-escape some JSON encoders emit (json.dumps does NOT escape ``/``).
+    json_form = json.dumps(plain)[1:-1]
+    forms.add(json_form)
+    forms.add(json_form.replace("/", "\\/"))
     raw = plain.encode("utf-8")
     for enc in (base64.b64encode(raw), base64.urlsafe_b64encode(raw)):
         s = enc.decode("ascii")
@@ -315,18 +349,36 @@ def _estimate_prompt_tokens(body: dict) -> int:
     return max(1, len(text) // 4)
 
 
+def _coerce_token_count(value: object) -> int | None:
+    """A usage field validated as a FINITE, non-negative int — or None when it is
+    missing/malformed. A buggy/hostile provider can send a bad ``usage`` shape (a
+    list, a non-numeric string, NaN/inf); ``int(...)`` on those raises
+    TypeError/ValueError/OverflowError, which must never crash the request — an
+    unparseable count is treated as ABSENT by the caller."""
+    try:
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        n = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return n if n >= 0 else None
+
+
 def _extract_usage(obj: object) -> tuple[int, int] | None:
     """Pull (input_tokens, output_tokens) from an OpenAI-shaped ``usage`` object,
-    or None when absent."""
+    or None when absent OR malformed. Each field is validated as a finite,
+    non-negative int (``_coerce_token_count``); if either is unparseable the whole
+    usage is treated as ABSENT (None) rather than crashing or charging a bad count."""
     if not isinstance(obj, dict):
         return None
     usage = obj.get("usage")
     if not isinstance(usage, dict):
         return None
-    return (
-        int(usage.get("prompt_tokens", 0) or 0),
-        int(usage.get("completion_tokens", 0) or 0),
-    )
+    prompt = _coerce_token_count(usage.get("prompt_tokens", 0))
+    completion = _coerce_token_count(usage.get("completion_tokens", 0))
+    if prompt is None or completion is None:
+        return None
+    return (prompt, completion)
 
 
 def _usage_from_sse_tail(tail: str) -> tuple[int, int]:
@@ -349,6 +401,37 @@ def _usage_from_sse_tail(tail: str) -> tuple[int, int]:
         if u is not None:
             found = u
     return found
+
+
+async def _read_request_body_bounded(request: Request, limit: int) -> bytes | None:
+    """Read Pi's request body but ABORT once ``limit`` bytes are exceeded (returns
+    None → the caller answers 413). Streaming the body and counting as we go bounds
+    the buffer instead of letting ``request.json()`` materialize an arbitrary number
+    of bytes in memory (a trivial DoS otherwise)."""
+    total = 0
+    chunks: list[bytes] = []
+    async for chunk in request.stream():
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > limit:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def _read_capped(resp: httpx.Response, limit: int) -> tuple[bytes, bool]:
+    """Read an upstream (non-stream / error) body up to ``limit`` bytes, returning
+    ``(data, truncated)`` and ABORTING the download once the cap is hit. Bounds the
+    buffer so a giant provider body can't be fully materialized just to relay/log it."""
+    buf = bytearray()
+    async for chunk in resp.aiter_bytes():
+        if not chunk:
+            continue
+        buf.extend(chunk)
+        if len(buf) >= limit:
+            return bytes(buf[:limit]), True
+    return bytes(buf), False
 
 
 def make_pi_inference_router(
@@ -394,9 +477,16 @@ def make_pi_inference_router(
             )
         assert token is not None  # validate() raises on a falsy token; narrow for typing
 
-        # 3) Parse Pi's OpenAI-compatible body.
+        # 3) Parse Pi's OpenAI-compatible body — but BOUND the read first so an
+        #    arbitrarily large body can't be buffered into memory (DoS). Over-limit → 413.
+        raw_body = await _read_request_body_bounded(request, _MAX_REQUEST_BYTES)
+        if raw_body is None:
+            return JSONResponse(
+                {"error": {"message": "request body too large", "type": "payload_too_large"}},
+                status_code=413,
+            )
         try:
-            body = await request.json()
+            body = json.loads(raw_body) if raw_body else None
         except (json.JSONDecodeError, ValueError):
             body = None
         if not isinstance(body, dict):
@@ -437,10 +527,19 @@ def make_pi_inference_router(
             )
         stream = bool(clean.get("stream", False))
 
-        # 6) Budget: atomically RESERVE an up-front prompt estimate (the real gate —
-        #    a concurrent/oversized request cannot slip past), clamp max_tokens to the
-        #    remaining budget, and force usage emission on streams so usage always
-        #    accrues. Reconciled to actual usage after the call.
+        # 6) Budget. The reservation must cover the WHOLE call, not just the prompt —
+        #    otherwise two concurrent calls each see the completion budget as free and
+        #    both spend it, ``n>1`` multiplies the spend silently, and a provider that
+        #    omits ``usage`` is charged only the prompt. So: force ``n=1`` (one
+        #    completion per call), atomically reserve the prompt estimate FIRST (the
+        #    concurrency gate), then reserve an OUTPUT cap and clamp every generation
+        #    limit to it. ``reserved_total`` is settled against ACTUAL usage afterward,
+        #    refunding the unused part.
+        #
+        #    Force a single completion: ``n`` completions each up to the cap would
+        #    multiply real spend past the single reservation. (Spec: force n=1.)
+        if isinstance(clean.get("n"), int) and clean["n"] != 1:
+            clean["n"] = 1
         estimate = _estimate_prompt_tokens(clean)
         if not token_store.reserve(token, estimate):
             _LOG.info(
@@ -451,14 +550,14 @@ def make_pi_inference_router(
                 {"error": {"message": "token budget exhausted", "type": "budget_exceeded"}},
                 status_code=429,
             )
+        reserved_output = 0  # the completion budget held BEYOND the prompt estimate
         remaining = rec.budget_remaining()
         if remaining is not None:
             if remaining <= 0:
-                # The reservation consumed the last of the budget — there is no room
-                # to generate. Reject rather than force a min-1 cap (which would let a
-                # request through at an exhausted budget). REFUND the reservation: this
-                # request never reaches upstream, so it must not burn the budget it
-                # just reserved (otherwise a rejected request silently drains the cap).
+                # The prompt reservation consumed the last of the budget — there is no
+                # room to generate. Reject rather than force a min-1 cap. REFUND the
+                # reservation: this request never reaches upstream, so it must not burn
+                # the budget it just reserved.
                 token_store.release(token, estimate)
                 _LOG.info(
                     "pi-gateway no budget remaining after reserve token=%s used=%d budget=%d",
@@ -468,20 +567,27 @@ def make_pi_inference_router(
                     {"error": {"message": "token budget exhausted", "type": "budget_exceeded"}},
                     status_code=429,
                 )
-            cap = remaining
-            # Clamp max_tokens (injecting it when absent so generation is always
-            # capped to what the budget allows).
-            requested = clean.get("max_tokens")
-            if not isinstance(requested, int) or requested > cap:
-                clean["max_tokens"] = cap
-            # Clamp any OTHER whitelisted generation-limit field Pi may have set, so it
-            # cannot bypass the cap on a provider that honors it (e.g. OpenAI's
-            # ``max_completion_tokens``). Only clamp DOWN — never inject a field Pi did
-            # not send.
-            for gen_field in ("max_completion_tokens",):
-                val = clean.get(gen_field)
-                if isinstance(val, int) and val > cap:
-                    clean[gen_field] = cap
+            # The OUTPUT cap = the smallest generation limit Pi asked for, bounded by
+            # what the budget can still afford (``remaining`` after the prompt reserve).
+            gen_limits = [
+                v
+                for f in ("max_tokens", "max_completion_tokens")
+                if isinstance(v := clean.get(f), int) and v > 0
+            ]
+            requested_cap = min(gen_limits) if gen_limits else None
+            output_cap = remaining if requested_cap is None else min(requested_cap, remaining)
+            # RESERVE the completion budget too, so a concurrent call sees it consumed
+            # and cannot overspend the same tokens (output_cap <= remaining → fits).
+            if token_store.reserve(token, output_cap):
+                reserved_output = output_cap
+            # Clamp every generation limit DOWN to the reserved output cap (inject
+            # ``max_tokens`` when absent so generation is always capped; only clamp
+            # ``max_completion_tokens`` when Pi sent it).
+            clean["max_tokens"] = output_cap
+            mct = clean.get("max_completion_tokens")
+            if isinstance(mct, int) and mct > output_cap:
+                clean["max_completion_tokens"] = output_cap
+        reserved_total = estimate + reserved_output  # the full charge held pre-call
         if stream:
             opts = clean.get("stream_options")
             opts = dict(opts) if isinstance(opts, dict) else {}
@@ -501,14 +607,21 @@ def make_pi_inference_router(
 
         if not stream:
             try:
-                resp = await client.post(url, content=payload, headers=headers)
+                # Stream the non-stream response too, so the body is read under a byte
+                # CAP (``_read_capped``) instead of materializing an arbitrary-size
+                # ``resp.content`` in memory.
+                async with client.stream(
+                    "POST", url, content=payload, headers=headers
+                ) as resp:
+                    status = resp.status_code
+                    media = resp.headers.get("content-type", "application/json")
+                    data, truncated = await _read_capped(resp, _MAX_UPSTREAM_BYTES)
             except httpx.HTTPError as exc:
                 await client.aclose()
-                # Reconcile budget (no usage → reservation stands) and return a
-                # GENERIC error; the real (redacted) detail is logged server-side.
-                token_store.settle_usage(
-                    token, reserved=estimate, input_tokens=None, output_tokens=None
-                )
+                # Nothing was generated — refund the completion reservation (the prompt
+                # estimate stands as the charge for the attempt) and return a GENERIC
+                # error; the real (redacted) detail is logged server-side.
+                token_store.release(token, reserved_output)
                 _LOG.warning(
                     "pi-gateway upstream connection error token=%s detail=%s",
                     rec.fingerprint, _redact_text(str(exc), target.api_key),
@@ -517,17 +630,16 @@ def make_pi_inference_router(
                     {"error": {"message": _GENERIC_UPSTREAM_ERROR, "type": "upstream"}},
                     status_code=502,
                 )
-            data = resp.content
-            status = resp.status_code
+            await client.aclose()
+            if truncated:
+                data += _TRUNCATED_NOTE
             if status >= 400:
                 # An upstream error BODY can echo request data/headers (and thus the
                 # injected key). Never relay it: replace with the generic message (the
                 # status code may pass through, the body must not). Log the real,
-                # redacted body server-side only.
-                await client.aclose()
-                token_store.settle_usage(
-                    token, reserved=estimate, input_tokens=None, output_tokens=None
-                )
+                # redacted (capped) body server-side only. Refund the completion
+                # reservation — nothing was generated.
+                token_store.release(token, reserved_output)
                 _LOG.warning(
                     "pi-gateway upstream error status=%d token=%s body=%s",
                     status, rec.fingerprint,
@@ -537,18 +649,17 @@ def make_pi_inference_router(
                     {"error": {"message": _GENERIC_UPSTREAM_ERROR, "type": "upstream"}},
                     status_code=status,
                 )
-            media = _redact_text(
-                resp.headers.get("content-type", "application/json"), target.api_key
-            )
-            await client.aclose()
-            # Reconcile usage from the provider's report (or keep the reservation).
+            media = _redact_text(media, target.api_key)
+            # Reconcile usage from the provider's report against the FULL reservation
+            # (prompt estimate + reserved output cap), refunding the unused part. When
+            # the provider omits usage, the reservation stands as the charge.
             try:
                 u = _extract_usage(json.loads(data))
             except (json.JSONDecodeError, ValueError):
                 u = None
             token_store.settle_usage(
                 token,
-                reserved=estimate,
+                reserved=reserved_total,
                 input_tokens=(u[0] if u is not None else None),
                 output_tokens=(u[1] if u is not None else None),
             )
@@ -565,54 +676,106 @@ def make_pi_inference_router(
                 media_type=media,
             )
 
-        # Streaming: open the upstream stream and relay bytes through unchanged,
-        # observing the trailing usage for accounting without altering the stream.
+        # Streaming. PEEK the upstream status BEFORE returning a StreamingResponse, so
+        # an upstream error becomes a NON-200 to Pi (consistent with the non-stream
+        # path) instead of a 200 SSE carrying an error body. Open the stream manually
+        # (``send(stream=True)``) rather than inside the generator so the status is
+        # known up front.
+        req = client.build_request("POST", url, content=payload, headers=headers)
+        try:
+            resp = await client.send(req, stream=True)
+        except httpx.HTTPError as exc:
+            await client.aclose()
+            token_store.release(token, reserved_output)  # nothing generated → refund
+            _LOG.warning(
+                "pi-gateway upstream stream connect error token=%s detail=%s",
+                rec.fingerprint, _redact_text(str(exc), target.api_key),
+            )
+            return JSONResponse(
+                {"error": {"message": _GENERIC_UPSTREAM_ERROR, "type": "upstream"}},
+                status_code=502,
+            )
+        if resp.status_code >= 400:
+            # An upstream error BODY can echo request data/headers (and the injected
+            # key). Never relay it; return a NON-200 generic error (status passes
+            # through, body does not) — log the real, redacted (capped) body only.
+            status = resp.status_code
+            body, truncated = await _read_capped(resp, _MAX_UPSTREAM_BYTES)
+            if truncated:
+                body += _TRUNCATED_NOTE
+            await resp.aclose()
+            await client.aclose()
+            token_store.release(token, reserved_output)  # nothing generated → refund
+            _LOG.warning(
+                "pi-gateway upstream stream error status=%d token=%s body=%s",
+                status, rec.fingerprint,
+                _redact_text(body.decode("utf-8", "replace"), target.api_key),
+            )
+            return JSONResponse(
+                {"error": {"message": _GENERIC_UPSTREAM_ERROR, "type": "upstream"}},
+                status_code=status,
+            )
+
+        # Upstream is 2xx — relay the already-open stream, redacting the key across
+        # chunk boundaries and enforcing a wall-clock deadline + total-byte ceiling so
+        # a trickling/runaway upstream can't pin the gateway open under httpx's
+        # per-READ timeout.
         async def _proxy_stream() -> AsyncIterator[bytes]:
             tail = b""
+            total = 0
+            deadline = time.monotonic() + _STREAM_MAX_DURATION_S
 
             async def _raw() -> AsyncIterator[bytes]:
                 # Observe the ORIGINAL bytes for usage accounting; the redaction layer
                 # below relays the (cross-chunk-redacted) bytes to Pi.
-                nonlocal tail
+                nonlocal tail, total
                 async for chunk in resp.aiter_bytes():
                     if chunk:
-                        tail = (tail + chunk)[-_USAGE_TAIL_BYTES:]
-                        yield chunk
+                        # Bound RELAYED bytes to the ceiling even if the upstream sends
+                        # one huge chunk — truncate the chunk that crosses the cap.
+                        allowed = _STREAM_MAX_BYTES - total
+                        over_bytes = len(chunk) > allowed
+                        if over_bytes:
+                            chunk = chunk[: max(0, allowed)]
+                        if chunk:
+                            tail = (tail + chunk)[-_USAGE_TAIL_BYTES:]
+                            total += len(chunk)
+                            yield chunk
+                        if over_bytes:
+                            _LOG.warning(
+                                "pi-gateway stream byte cap hit token=%s bytes=%d",
+                                rec.fingerprint, total,
+                            )
+                            return
+                    if time.monotonic() > deadline:
+                        # Wall-clock deadline — stop pulling; the ``finally`` below
+                        # closes the upstream, cancelling the rest of the response.
+                        _LOG.warning(
+                            "pi-gateway stream time cap hit token=%s bytes=%d",
+                            rec.fingerprint, total,
+                        )
+                        return
 
             try:
-                async with client.stream(
-                    "POST", url, content=payload, headers=headers
-                ) as resp:
-                    if resp.status_code >= 400:
-                        # An upstream error BODY can echo request data/headers (and the
-                        # injected key). Never relay it — emit the generic message and
-                        # log the real, redacted body server-side only.
-                        body = await resp.aread()
-                        _LOG.warning(
-                            "pi-gateway upstream stream error status=%d token=%s body=%s",
-                            resp.status_code, rec.fingerprint,
-                            _redact_text(body.decode("utf-8", "replace"), target.api_key),
-                        )
-                        yield b'data: {"error": {"message": "upstream request failed"}}\n\n'
-                        return
-                    # Redact the provider key ACROSS chunk boundaries before it reaches
-                    # Pi (a key split between two SSE chunks would otherwise reassemble).
-                    async for out in _redact_stream(_raw(), target.api_key):
-                        yield out
+                async for out in _redact_stream(_raw(), target.api_key):
+                    yield out
             except httpx.HTTPError as exc:
-                # Generic Pi-facing error; real (redacted) detail logged server-side.
+                # A mid-stream transport error (already committed to a 200) — emit a
+                # generic SSE error; real (redacted) detail logged server-side.
                 _LOG.warning(
                     "pi-gateway upstream stream error token=%s detail=%s",
                     rec.fingerprint, _redact_text(str(exc), target.api_key),
                 )
                 yield b'data: {"error": {"message": "upstream request failed"}}\n\n'
             finally:
+                await resp.aclose()
                 await client.aclose()
                 in_tok, out_tok = _usage_from_sse_tail(tail.decode("utf-8", "replace"))
                 if in_tok or out_tok:
-                    # Reconcile the up-front reservation to actual stream usage.
+                    # Reconcile the full up-front reservation to actual stream usage.
                     token_store.settle_usage(
-                        token, reserved=estimate, input_tokens=in_tok, output_tokens=out_tok
+                        token, reserved=reserved_total,
+                        input_tokens=in_tok, output_tokens=out_tok,
                     )
                     _LOG.info(
                         "pi-gateway usage token=%s model=%s in=%d out=%d",
