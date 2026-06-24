@@ -28,8 +28,23 @@ export interface ThinkSplit {
 const OPEN = "<think>";
 const CLOSE = "</think>";
 
+// The model sometimes echoes the View's rotating "Reasoning:" / "Thought:" surface-form
+// decoration back into its own thought, and because each turn re-decorates, the prefix
+// STACKS — "Reasoning: Reasoning: Reasoning: …". The backend now strips this before
+// storing, but historical events (and any provider that slips through) still carry it,
+// so we defensively strip the leaked LEADING decorators here too.
+const DECOR_PREFIX = /^(?:\s*(?:reasoning|thought|observation|output)\s*:\s*)+/i;
+
+/** Strip leaked, stacked surface-form prefixes ("Reasoning: Reasoning: …") off the
+ * FRONT of a thought. Only leading repeated decorators are removed; a legitimate
+ * mid-sentence "Reasoning:" is untouched. Idempotent. */
+export function stripReasoningPrefixes(text: string | null | undefined): string {
+  return (text ?? "").replace(DECOR_PREFIX, "");
+}
+
 export function splitThink(text: string | null | undefined): ThinkSplit {
-  const src = text ?? "";
+  // Strip any leaked stacked "Reasoning:" decoration first so it never shows in the answer.
+  const src = stripReasoningPrefixes(text);
   if (!src) return { reasoning: "", answer: "" };
 
   const lower = src.toLowerCase();
