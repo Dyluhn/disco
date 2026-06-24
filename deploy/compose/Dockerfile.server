@@ -5,16 +5,17 @@
 # compose overrides `command` per service; the default CMD is the app-server.
 #
 # uv-workspace monorepo: packages/{core,tools,retrieval,agent-server,app-server}.
-# The agent-server's OPTIONAL `tts` extra (kokoro-onnx) lives on the MEMBER
-# package, so it is installed via `--all-packages --extra tts` (a bare
-# `uv sync --extra tts` errors — the workspace root has no `tts` extra). The
-# tools `browser` extra (Playwright/Chromium) is deliberately NOT installed: the
+# The agent-server's bundled Kokoro TTS (kokoro-onnx + lameenc) is a default
+# product tier, so it lives in the agent-server's CORE deps and a bare
+# `--all-packages` sync installs it — no `--extra` flag needed. The tools
+# `browser` extra (Playwright/Chromium) is deliberately NOT installed: the
 # browser belongs to the separate sandbox image (deploy/sandbox/Dockerfile).
 
 # ---------------------------------------------------------------------------
-# Stage 1 — builder: resolve + install BOTH servers + the agent-server tts extra
-# into a single self-contained venv at /app/.venv (workspace members go in as
-# editable installs whose .pth files point at /app/packages/*/src).
+# Stage 1 — builder: resolve + install BOTH servers (the agent-server's bundled
+# Kokoro TTS is a core dep, so it lands automatically) into a single
+# self-contained venv at /app/.venv (workspace members go in as editable
+# installs whose .pth files point at /app/packages/*/src).
 # ---------------------------------------------------------------------------
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
 
@@ -29,14 +30,14 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 COPY packages/ ./packages/
 
-# Single incantation that lands all 5 members + the agent-server `tts` extra
-# (kokoro-onnx, lameenc, numpy) + weasyprint, and NOT the browser extra:
+# Single incantation that lands all 5 members + the agent-server's bundled TTS
+# (kokoro-onnx, lameenc, numpy — now core deps) + weasyprint, and NOT the
+# browser extra:
 #   --all-packages : install every workspace member (core,tools,retrieval,
 #                    agent-server,app-server) into one venv
-#   --extra tts    : resolves against the member that defines it (agent-server)
 #   --frozen       : honour uv.lock exactly, never re-resolve
 #   --no-dev       : drop the shared dev toolchain (pytest/ruff/playwright/etc.)
-RUN uv sync --frozen --no-dev --all-packages --extra tts
+RUN uv sync --frozen --no-dev --all-packages
 
 # ---------------------------------------------------------------------------
 # Stage 2 — runtime: slim python with only the native libs the servers need.

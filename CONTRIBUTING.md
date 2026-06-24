@@ -32,14 +32,13 @@ the fastembed ONNX encoders on the first grounded answer.
 uv sync --all-packages     # provision the venv + install every workspace member
 ```
 
-Optional extras live on the **member** packages, not the workspace root, so install
-them with `--package`. A bare `uv sync --extra tts` errors (the root defines no `tts`
-extra):
+The bundled in-process Kokoro TTS (audio overviews) is a default product tier, so it
+ships in the agent-server's **core** dependencies — a bare `uv sync` installs
+`kokoro-onnx` + `lameenc` out of the box (weights download on first use). No `--extra`
+flag is needed. Bring-your-own / self-host / paid TTS tiers stay opt-in.
 
-```bash
-# Audio overviews — bundled in-process Kokoro TTS (weights download on first use):
-uv sync --package disco-agent-server --extra tts
-```
+Other optional extras still live on the **member** packages, not the workspace root,
+so install them with `--package` (e.g. the tools `browser` extra for Playwright).
 
 ### Running the servers
 

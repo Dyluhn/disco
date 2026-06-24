@@ -17,7 +17,7 @@ Hardened to handle malformed input gracefully (D4 — never crash the loop):
   * empty input → empty/silence-only MP3 bytes (not a crash)
 
 numpy + lameenc are lazy-imported inside the functions so the tools package stays
-importable without the optional `tts` extra installed (audio_overview only needs
+importable even where the bundled TTS deps aren't present (audio_overview only needs
 them when it actually synthesizes).
 """
 

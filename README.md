@@ -130,17 +130,14 @@ uv run ruff format .       # format
 cd frontend && npm install && npm run dev   # the web UI (fixtures unless VITE_API_BASE is set)
 ```
 
-Optional extras live on the member packages (not the workspace root), so install
-them with `--package`:
+Audio overviews (RP-09) use the **bundled** in-process Kokoro TTS — `kokoro-onnx` +
+`lameenc`. This is a default product tier, so it ships in the agent-server's core
+dependencies: a bare `uv sync` (or `uv sync --all-packages`) installs it out of the
+box, no `--extra` flag needed. Weights (~0.3 GB) download to `~/.cache/disco-tts` on
+first use. Bring-your-own / self-host / paid TTS tiers stay opt-in.
 
-```bash
-# Audio overviews (RP-09): bundled in-process Kokoro TTS — kokoro-onnx + lameenc.
-# Weights (~0.3 GB) download to ~/.cache/disco-tts on first use.
-uv sync --package disco-agent-server --extra tts
-```
-
-A bare `uv sync --extra tts` errors — the root defines no `tts` extra. Without this
-extra installed, the audio-overview tool stays importable but fails soft when run.
+Other optional extras live on the member packages (not the workspace root), so install
+them with `--package` (e.g. the tools `browser` extra for Playwright).
 
 ## License
 

@@ -454,8 +454,9 @@ class LifecycleManager:
         Also reclaims the bundled audio-overview TTS model (RP-09): the in-process
         Kokoro engine stays resident after a synth, so this sweep unloads it once it
         has been idle past its TTL — freeing ~0.5 GB without the user toggling Audio
-        off. Lazy-imported and suppressed so the optional `tts` extra need not be
-        installed, and a sweep failure never disturbs the sandbox sweep."""
+        off. The bundled Kokoro engine ships in core deps, but the import stays lazy
+        and suppressed so a missing/broken native onnxruntime can't wedge startup, and
+        a sweep failure never disturbs the sandbox sweep."""
         while True:
             sweep_interval = disco_env("IDLE_SWEEP_INTERVAL_S", "60")
             assert sweep_interval is not None  # default above is non-None
