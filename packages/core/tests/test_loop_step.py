@@ -547,6 +547,83 @@ async def test_pick_low_risk_alternative_executes_on_pick_no_regression() -> Non
     )
 
 
+async def test_pick_hard_denied_alternative_is_refused_not_executed() -> None:
+    """SECURITY (close `rm -rf /` bypass): picking an alternative whose tool is
+    HARD-DENIED must be REFUSED before the confirm gate — exactly like a direct
+    call of a catastrophic command. The command must NOT execute (no observation,
+    executor never ran it), a REFUSED error must be emitted so the agent adapts,
+    and the proposed action must still be recorded for audit.
+
+    Pre-fix this FAILS: pick_alternative only threaded _gate_risk_confirm, so a
+    hard-denied picked command executed directly via _execute_and_observe."""
+    from disco.core import ActionEvent, AgentErrorEvent, ConversationStatus, ObservationEvent
+
+    alt_call = action_step(
+        tool="ask_user",
+        args={
+            "summary": "the build dir is wedged",
+            "options": [
+                {
+                    "id": "a",
+                    "title": "Nuke everything",
+                    "description": "wipe the root",
+                    "tool_name": "shell",
+                    "arguments": {"command": "rm -rf /"},
+                },
+                {
+                    "id": "b",
+                    "title": "Skip",
+                    "description": "do nothing",
+                    "tool_name": "shell",
+                    "arguments": {"command": "true"},
+                },
+            ],
+        },
+    )
+    # Real work first (fresh-session backstop); after the refusal the agent's next
+    # scripted step cleanly finishes. Hard-deny is signature-based (signals.
+    # hard_deny_reason), independent of the injected analyzer/policy — so the
+    # default build_loop wiring is the same one the normal-path hard-deny tests use.
+    agent = ScriptedAgent([action_step("shell", {}), alt_call, finish_step()])
+    loop, store = build_loop(agent)
+    await loop.send_message("clean up")
+    await loop.run()
+    assert (
+        await store.get_state(CID)
+    ).execution_status == ConversationStatus.AWAITING_USER_DECISION
+
+    await loop.pick_alternative("a")
+
+    events = await store.get_events(CID)
+    # The proposed action is recorded for audit...
+    synthesized = [
+        e
+        for e in events
+        if isinstance(e, ActionEvent)
+        and e.tool_call is not None
+        and e.tool_call.arguments.get("command") == "rm -rf /"
+    ]
+    assert len(synthesized) == 1
+    # ...but it NEVER executed (no observation, executor never saw `rm -rf /`).
+    assert [
+        e
+        for e in events
+        if isinstance(e, ObservationEvent) and e.action_id == synthesized[0].id
+    ] == []
+    assert all(c.arguments.get("command") != "rm -rf /" for c in loop.executor.calls)
+    # A REFUSED/hard-denied error was emitted so the agent sees it and adapts.
+    refusals = [
+        e
+        for e in events
+        if isinstance(e, AgentErrorEvent)
+        and "REFUSED" in e.error
+        and "hard-denied" in e.error
+    ]
+    assert len(refusals) == 1
+    # The loop resumed (never parked at the confirm gate) and finished.
+    assert (await store.get_state(CID)).execution_status == ConversationStatus.FINISHED
+
+
 async def test_pick_label_only_alternative_replies_with_the_label_no_tool() -> None:
     """BW-03 end-to-end: an option with NO tool_name is the user's ANSWER, not a
     runnable action. Picking it injects the option's label as a USER reply and

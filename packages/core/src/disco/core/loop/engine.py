@@ -1576,27 +1576,45 @@ class AgentLoop:
                     ),
                 )
                 # SECURITY — a picked RUNNABLE alternative is gated EXACTLY like a
-                # direct tool call of the same tool. A confirm-required tool
-                # (HIGH-risk / BlastRadiusConfirm publish-guard / unknown-scope)
-                # offered as an ask_user option must still hit the risk-confirm
-                # gate: the user's PICK selects the action, it is NOT consent to
-                # its blast radius. Mirror the run-loop call site (engine.py
-                # ~:1345): route the synthesized action through _gate_risk_confirm
-                # under the same lock BEFORE executing.
-                #   - HALT  → the gate has already emitted the PROPOSED action and
-                #             the WAITING_FOR_CONFIRMATION status (pending_action_id
-                #             now points at it). Stop here without executing or
-                #             transitioning to RUNNING; confirm()/reject() drive it
-                #             from the gate, identical to a direct call.
-                #   - FALLTHROUGH → not gated: emit the action + RUNNING and execute
-                #             below (preserving the existing pick UX for non-risky
-                #             tools). The scope-aware analysis uses the SAME injected
-                #             analyzer/policy the normal path uses — no tool list is
-                #             hardcoded in core.
-                disp, action = await self._gate_risk_confirm(action)
-                if disp is Disp.HALT:
-                    return await self.get_state()
-                emitted = await self._emit(action)
+                # direct tool call of the same tool, in the SAME order the run-loop
+                # call site uses (engine.py ~:1341): hard-deny FIRST, then
+                # risk-confirm. The user's PICK selects an action; it is NOT a
+                # licence to bypass either gate.
+                #
+                # (1) HARD DENY — a catastrophic command (e.g. `rm -rf /`) offered
+                # as an option must NEVER run, regardless of the pick. Mirror the
+                # run loop's `Disp.CONTINUE` branch: _gate_hard_deny has already
+                # emitted the PROPOSED action + the refusal (AgentErrorEvent); we
+                # must NOT execute. The run loop `continue`s so the agent sees the
+                # refusal and adapts — here we do the same by resuming RUNNING and
+                # re-running the loop (emitted stays None → run() after the lock;
+                # run() itself takes self._lock, so the resume cannot happen while
+                # we still hold it).
+                disp = await self._gate_hard_deny(action)
+                if disp is not Disp.CONTINUE:
+                    # (2) RISK CONFIRM — a confirm-required tool (HIGH-risk /
+                    # BlastRadiusConfirm publish-guard / unknown-scope) must still
+                    # hit the risk-confirm gate. Mirror the run-loop call site
+                    # (engine.py ~:1345) under the same lock BEFORE executing.
+                    #   - HALT  → the gate has already emitted the PROPOSED action
+                    #             and the WAITING_FOR_CONFIRMATION status
+                    #             (pending_action_id now points at it). Stop here
+                    #             without executing or transitioning to RUNNING;
+                    #             confirm()/reject() drive it from the gate,
+                    #             identical to a direct call.
+                    #   - FALLTHROUGH → not gated: emit the action + RUNNING and
+                    #             execute below (preserving the existing pick UX
+                    #             for non-risky tools). The scope-aware analysis
+                    #             uses the SAME injected analyzer/policy the normal
+                    #             path uses — no tool list is hardcoded in core.
+                    disp, action = await self._gate_risk_confirm(action)
+                    if disp is Disp.HALT:
+                        return await self.get_state()
+                    emitted = await self._emit(action)
+                # Resume RUNNING for both survivors: a hard-denied pick (emitted
+                # stays None → the loop re-runs below so the agent adapts to the
+                # refusal) AND a non-risky/fell-through risky pick (emitted set →
+                # executed below). A risk-confirm HALT already returned above.
                 await self._emit(
                     StatusEvent(
                         status=ConversationStatus.RUNNING,
