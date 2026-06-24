@@ -1,0 +1,73 @@
+# Build Soak — surfaced product bugs (repair-loop backlog)
+
+The §20 bare-Build contract tests assert the SPEC contract (`docs/build-soak-guidelines.md`).
+Where the product violates the spec, the test is marked `@pytest.mark.xfail(strict=True)`
+with the failure code below, so the suite stays green AND the bug flips to a HARD failure
+the moment the product is fixed (a strict xfail that starts passing fails the run). This is
+the repair-loop backlog: **do not remove an xfail without a real product fix** (no
+gate-weakening, no assertion-weakening — guidelines §18/§19).
+
+These were surfaced by the FOUNDATION slice (deterministic harness + contract tests). The
+product fixes happen in a SEPARATE later repair step — engine.py / messages.py / recitation.py
+were NOT touched here.
+
+| # | Failure code | Severity | Test (xfail, strict) | Site | Spec |
+|---|---|---|---|---|---|
+| 1 | `WRITE_TOOL_ALLOWED_IN_PLANNING` | P0 | `test_build_plan_contract.py::test_write_tool_in_planning_produces_recoverable_rejection` | `engine.py:841` `_gate_planning_mode` | §11.1, §11.7, §20.1 |
+| 2 | `WRITE_TOOL_ALLOWED_IN_PLANNING` | P0 | `test_tool_rejection_recovery.py::test_disallowed_tool_call_visible_as_rejection` | `engine.py:841` `_gate_planning_mode` | §11.3, §20.3 |
+| 3 | `WRITE_BEFORE_REVISION_APPROVAL` | P1 | `test_build_replan_contract.py::test_agent_cannot_write_before_revised_plan_approval` | `engine.py:841` `_gate_planning_mode` (revision re-entry) | §11.4, §20.2 |
+| 4 | `APPROVE_PLAN_NO_EXECUTION` | P0 | `test_plan_approval_execution.py::test_kick_after_approval_produces_action_or_terminal_failure` | `finish.py` `gate_execution_nudge` (~L1008, `_EXECUTION_NUDGE_CAP` release) | §11.2, §20.4 |
+| 5 | `THINK_NOT_EXPOSED_IN_PLANNING` | P2 (gap) | `test_build_plan_contract.py::test_first_turn_planning_exposes_think` | `runtime.py:1467` planning allowlist | §11.1, §15.2, §20.1 |
+
+## Root causes
+
+### Bugs 1–3 — the planning gate lets non-plan tool calls fall through (one root cause)
+
+`engine.py:841 _gate_planning_mode` intercepts only two cases while in `OperatingMode.PLANNING`:
+
+1. a `submit_plan` call → intercepted into a `PlanEvent` (halts for approval);
+2. a no-tool prose turn → acknowledged + nudged back toward `submit_plan`.
+
+**Any other tool call returns `Disp.FALLTHROUGH`** and is then EXECUTED via the normal
+`_execute_and_observe` path. The planner's tool set is filtered by
+`driver.tools_for_step` (a write tool is not *advertised*), but §11.7 is explicit: *a hidden
+tool is still unsafe if it remains callable*. A scripted / adversarial / confused model that
+emits `file_write` during PLANNING has it run — a real workspace mutation before plan
+approval — instead of getting a recoverable rejection observation.
+
+This single fall-through produces all three of:
+- **Bug 1/2** `WRITE_TOOL_ALLOWED_IN_PLANNING` — a write executes in first-turn PLANNING
+  instead of being rejected (no `AgentErrorEvent`, the file is written).
+- **Bug 3** `WRITE_BEFORE_REVISION_APPROVAL` — after a follow-up re-enters PLANNING
+  (`request_plan` → `enter_planning`), the same fall-through lets a write run before the
+  revised plan is approved.
+
+Repair shape (later step, do NOT weaken the gate): in `_gate_planning_mode`, when the tool
+call is neither `submit_plan` nor a planning-allowed read tool, REJECT it with an
+`AgentErrorEvent` (recoverable, visible to the model) and `Disp.CONTINUE` — never fall
+through to execution. The `ToolScopeOracle` already codes the attempt
+(`WRITE_TOOL_ATTEMPTED_IN_PLANNING`) from the event log; the fix makes the product reject it.
+
+The classifier's event-only `ToolScopeOracle` can prove `WRITE_TOOL_ATTEMPTED_IN_PLANNING`
+(a mutating action before approval). It CANNOT prove `WRITE_TOOL_ALLOWED_IN_PLANNING` from
+events alone (the offered/allowed tool schemas are not persisted) — that needs the live
+runner to capture per-turn tool scope (the S3 slice). The §20 contract test proves the
+ALLOWED/rejection contract directly against the real loop.
+
+### Bug 4 — approval can finish with zero execution
+
+After `approve_plan`, an agent that immediately tries to finish without doing any work is
+nudged up to `_EXECUTION_NUDGE_CAP` (3) times by `finish.py gate_execution_nudge`, then the
+gate RELEASES to `FINISHED` with a loud warning (proven by `test_w5_execution_nudge_cap.py`).
+Per §11.2 / §20.4 the post-approval contract is "at least one action OR a terminal explicit
+failure" — a `FINISHED` with no action and no `ERROR` violates it. Repair shape: the nudge-cap
+release should land a terminal FAILURE (or surface a clear unexecuted-plan error), not a
+silent `FINISHED`. (Do NOT just raise the cap — that hides the problem.)
+
+### Bug 5 — `think` not offered in PLANNING (minor gap)
+
+§20.1 / §15.2 list `think` among the allowed first moves in PLANNING, but the production
+planning allowlist (`runtime.py:1467`) is `{submit_plan, file_list, file_read, search,
+extract}` — `think` is omitted, so the planner can't use the no-op reasoning scratchpad
+before proposing a plan. Quality gap, not a safety hole. Repair shape: add `think` to the
+planning allowlist (it is `read_only`-safe — a no-op scratchpad).
