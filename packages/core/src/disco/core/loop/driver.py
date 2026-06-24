@@ -169,6 +169,51 @@ class Driver:
         except Exception:  # noqa: BLE001 — never let tool-listing crash the loop
             return None
 
+    def planning_allowed_tool_names(self) -> frozenset[str]:
+        """The names a tool call may legitimately carry while in PLANNING mode —
+        the SAME read-only-capability ∩ name-allowlist intersection that
+        `tools_for_step()` uses to decide tool VISIBILITY, so the execute-time
+        phase gate (`engine._gate_planning_mode`) and the advertise-time filter
+        can never drift. A model can only be offered, and only run, this set
+        before its plan is approved.
+
+        Composed of:
+          - executor tools that pass the planning filter: read-only per the
+            capability backstop (when the executor reports it) AND within the
+            operator's `_planning_tools` name allowlist (when configured) — the
+            exact `_planner_ok` predicate from `tools_for_step()`;
+          - the plan tool itself (loop-intercepted, never executed) — always
+            allowed even if the executor doesn't advertise it or `_planning_tools`
+            omits it;
+          - the virtual ask_user / clarify escape hatches — ALWAYS permitted
+            (even in autonomous mode, where they are withheld from *advertisement*
+            so the planner doesn't stall on a human): a hallucinated ask/clarify
+            must reach its downstream handler / the autonomous-stall guard, not be
+            rejected by this gate.
+        """
+        readonly = self.readonly_tool_names()  # frozenset | None (None=unknown)
+        allow = self._loop._planning_tools
+
+        def _planner_ok(name: str | None) -> bool:
+            # Identical predicate to the closure in tools_for_step()'s PLANNING
+            # branch — keep them in lockstep.
+            if name is None:
+                return False
+            if readonly is not None and name not in readonly:
+                return False  # capability backstop — never a mutating tool
+            if allow:
+                return name in allow  # allowlist restricts further
+            return True
+
+        names: set[str] = set()
+        for t in self._loop.executor.available_tools():
+            name = getattr(t, "name", None)
+            if isinstance(name, str) and _planner_ok(name):
+                names.add(name)
+        names.add(self._loop._plan_tool)  # submit_plan — always intercepted
+        names.update({"ask_user", "clarify"})  # virtual escape hatches
+        return frozenset(names)
+
     def tools_for_step(self, *, suppress_meta_tools: bool = False) -> list:
         """Mode-scoped tool visibility. With no planning_tools configured this is a
         pass-through (Research / default). While PLANNING the agent sees ONLY the

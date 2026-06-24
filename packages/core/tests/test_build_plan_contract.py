@@ -52,13 +52,6 @@ async def test_first_turn_planning_exposes_think():
     assert "think" in set(agent.seen_tools[0])
 
 
-@pytest.mark.xfail(
-    reason="BUG WRITE_TOOL_ALLOWED_IN_PLANNING: _gate_planning_mode (engine.py:841) "
-    "only intercepts submit_plan + a no-tool prose turn; any OTHER tool call FALLS "
-    "THROUGH and EXECUTES, so a scripted file_write in PLANNING writes instead of "
-    "being rejected (§11.1/§20.1) — repair-loop target",
-    strict=True,
-)
 async def test_write_tool_in_planning_produces_recoverable_rejection():
     """A write tool called during PLANNING must produce a recoverable rejection
     (an AgentErrorEvent or a failed observation), NOT a successful write."""

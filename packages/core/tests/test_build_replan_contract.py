@@ -7,7 +7,6 @@ with the surfaced bug code; see docs/build-soak-surfaced-bugs.md.
 
 from __future__ import annotations
 
-import pytest
 from _buildsoak_fakes import BuildExecutor, build_plan_loop
 from disco.core import (
     ActionEvent,
@@ -88,13 +87,6 @@ async def test_revision_plan_event_has_incremented_revision():
     assert [p.revision for p in plans] == [1, 2]
 
 
-@pytest.mark.xfail(
-    reason="BUG WRITE_BEFORE_REVISION_APPROVAL: after a revision re-enters PLANNING, "
-    "_gate_planning_mode (engine.py:841) still lets a non-plan tool call FALL THROUGH "
-    "and EXECUTE, so the agent can write before the revised plan is approved "
-    "(§11.4/§20.2) — repair-loop target",
-    strict=True,
-)
 async def test_agent_cannot_write_before_revised_plan_approval():
     """During a revision (back in PLANNING), a write must not execute before the
     revised plan is approved."""
