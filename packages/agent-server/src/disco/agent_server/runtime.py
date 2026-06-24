@@ -1696,6 +1696,12 @@ class ConversationRuntime:
                     detail="loop ended without reaching a terminal state",
                 ),
             )
+            # STUCK is terminal → release the kernel pin so the NEXT run re-resolves
+            # the current selection (finding #3). Unlike the healthy-return branch
+            # above (which unpins via `_KERNEL_UNPIN_STATUSES`), this path appends a
+            # FRESH terminal status and must clear the pin itself, else a wedged run
+            # would leak its pin forever and later gate/config flips stay ineffective.
+            self._clear_pinned_kernel(conversation_id)
             await self._emit_persistence_reminder(
                 conversation_id,
                 "The run ended without completing or stopping cleanly (the model turn "
@@ -2460,8 +2466,21 @@ class ConversationRuntime:
     def start(self, conversation_id: str) -> None:
         """Start/continue the conversation's run THROUGH the pinned kernel (codex
         finding #1, point a). For the default `disco` kernel this is a behaviour-
-        identical pass-through to `kick`."""
-        self._ensure_kernel_pinned(conversation_id).start(conversation_id)
+        identical pass-through to `kick`.
+
+        If the kernel's `start` RAISES (e.g. a `PiKernel.start` failure) and we just
+        created the pin in this call, roll it back (finding #2): the pin is committed
+        only once the kernel call succeeds, so a failed start leaves NO pin and the
+        next attempt re-resolves the current selection. A pre-existing pin (a steer /
+        resume of a live run) is NOT rolled back — that run stays on its kernel."""
+        newly_pinned = conversation_id not in self._pinned_kernels
+        kernel = self._ensure_kernel_pinned(conversation_id)
+        try:
+            kernel.start(conversation_id)
+        except BaseException:
+            if newly_pinned:
+                self._clear_pinned_kernel(conversation_id)
+            raise
 
     async def send_user_turn(
         self,
@@ -2475,10 +2494,23 @@ class ConversationRuntime:
         start/continue the run — routed THROUGH the pinned kernel (codex finding
         #1, point a). For the default `disco` kernel this is byte-identical to the
         store-append + `kick` the routes performed inline before the seam. Returns
-        the stored USER message so the REST routes can report its id/seq."""
-        return await self._ensure_kernel_pinned(conversation_id).send_user_turn(
-            conversation_id, text, context=context, steer=steer
-        )
+        the stored USER message so the REST routes can report its id/seq.
+
+        If the kernel's `send_user_turn` RAISES (e.g. a `PiKernel.send_user_turn`
+        failure, before any task is spawned) and we just created the pin in this call,
+        roll it back (finding #2): the pin commits only once the kernel call succeeds,
+        so a failed send leaves NO pin and the next attempt re-resolves. A pre-existing
+        pin (a steer of a live run) is NOT rolled back — that run stays on its kernel."""
+        newly_pinned = conversation_id not in self._pinned_kernels
+        kernel = self._ensure_kernel_pinned(conversation_id)
+        try:
+            return await kernel.send_user_turn(
+                conversation_id, text, context=context, steer=steer
+            )
+        except BaseException:
+            if newly_pinned:
+                self._clear_pinned_kernel(conversation_id)
+            raise
 
     async def confirm(self, conversation_id: str) -> None:
         return await self._kernel_for(conversation_id).confirm(conversation_id)

@@ -438,6 +438,11 @@ class LifecycleManager:
                             detail="reaped: abandoned at gate past TTL",
                         ),
                     )
+                    # A gate-parked run stays PINNED (its resume must keep the same
+                    # kernel); reaping it to terminal STUCK must therefore release the
+                    # pin too (finding #3, same class), else an abandoned gated run
+                    # leaks its kernel pin forever.
+                    self._rt._clear_pinned_kernel(cid)
                     _LOG.info("reaped abandoned gate conversation %s", cid)
                     reaped += 1
             if len(ids) < page:

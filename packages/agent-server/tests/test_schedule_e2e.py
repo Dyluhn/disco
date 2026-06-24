@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from disco.agent_server.schedule import ScheduleManager
@@ -38,11 +38,28 @@ def _store() -> SqliteEventStore:
     return SqliteEventStore(":memory:")
 
 
-def _runtime() -> MagicMock:
+def _runtime(store: SqliteEventStore) -> MagicMock:
+    """A fake runtime whose `send_user_turn` faithfully emulates the SHIPPED path
+    (runtime.send_user_turn → pinned DiscoKernel): append the USER message + kick.
+
+    A scheduled rerun routes through `send_user_turn` (the pinned start/send path) —
+    NOT a raw append+kick — so the fake must do the append+kick the real method does,
+    else the engine work-gate never opens. `kick` is still observable for the
+    once-per-fire assertions."""
     rt = MagicMock()
     rt.kick = MagicMock()
     rt.set_model_override = MagicMock()
     rt.set_depth = MagicMock()
+
+    async def _send(cid, text, *, context=None, steer=False):
+        stored = await store.append(
+            cid,
+            MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content=text)),
+        )
+        rt.kick(cid)
+        return stored
+
+    rt.send_user_turn = _send
     return rt
 
 
@@ -66,7 +83,7 @@ def _manager(
     rt: MagicMock | None = None,
 ) -> tuple[ScheduleManager, MagicMock]:
     if rt is None:
-        rt = _runtime()
+        rt = _runtime(store)
     mgr = ScheduleManager(
         store,
         rt,
@@ -402,3 +419,46 @@ async def test_fire_now_runs_schedule_immediately_and_returns_true():
 
     # unknown schedule id -> False (the route turns this into a 404)
     assert await mgr.fire_now("does-not-exist", owner_id="local") is False
+
+
+# ---- finding #1: a scheduled rerun MUST route through the pinned send path ----
+
+
+@pytest.mark.asyncio
+async def test_scheduled_rerun_routes_through_pinned_send_path():
+    """Finding #1: a scheduled fire must trigger the rerun via runtime.send_user_turn —
+    the SAME pinned kernel start/send path conversations.py/ws.py use — so the run is
+    PINNED before the first append/kick. A raw store-append + runtime.kick would create
+    an UNPINNED run whose later control op could re-resolve to a different kernel. Here
+    send_user_turn is a pure spy: it must be awaited with the original query, and the
+    schedule must NOT bypass it with a direct kick."""
+    store = _store()
+    clock: list[datetime] = [datetime(2024, 6, 1, 10, 0, tzinfo=UTC)]
+    cid = f"conv_{uuid.uuid4().hex}"
+    store.create_conversation(cid, owner_id="local")
+    await _seed_query(store, cid, text="What's new in AI?")
+
+    rt = MagicMock()
+    rt.kick = MagicMock()
+    rt.set_model_override = MagicMock()
+    rt.set_depth = MagicMock()
+    rt.send_user_turn = AsyncMock()  # pure spy — does NOT append/kick
+    mgr, _ = _manager(store, clock, rt=rt)
+
+    sched = mgr.create_schedule(
+        conversation_id=cid,
+        owner_id="local",
+        rrule="*/2 * * * *",
+        description="rerun routing test",
+    )
+
+    clock[0] = clock[0] + timedelta(minutes=2, seconds=30)
+    await mgr._tick()
+
+    # The rerun trigger went through the pinned send path with the original query.
+    rt.send_user_turn.assert_awaited_once_with(cid, "What's new in AI?")
+    # And NOT via a raw kick that would bypass _ensure_kernel_pinned.
+    rt.kick.assert_not_called()
+    # The audit marker + row are still emitted exactly once.
+    assert len(await _run_events(store, cid)) == 1
+    assert len(store.list_schedule_runs(sched.schedule_id)) == 1

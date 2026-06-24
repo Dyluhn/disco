@@ -292,6 +292,30 @@ def test_stale_persisted_pi_normalizes_to_disco_on_load_when_gate_off(tmp_path):
     assert _kernel_store(tmp_path, gate=True).load().build_kernel == "pi_experimental"
 
 
+def test_full_config_save_normalizes_pi_to_disco_when_gate_off(tmp_path):
+    """Finding #4: the PUBLIC full-config `save()` must also gate-normalize — a config
+    carrying an active `pi_experimental` saved verbatim while the gate is OFF would
+    bypass `save_build_kernel`/`load` normalization and persist a value the executor
+    could later honor if the gate flips. Both the on-disk write AND the returned config
+    are normalized to `disco`."""
+    store = _kernel_store(tmp_path, gate=False)
+    cfg = default_config().model_copy(update={"build_kernel": "pi_experimental"})
+    returned = store.save(cfg)
+    assert returned.build_kernel == "disco"
+    written = json.loads((tmp_path / "cfg.json").read_text())
+    assert written["build_kernel"] == "disco"
+    assert store.load().build_kernel == "disco"
+
+
+def test_full_config_save_keeps_pi_when_gate_on(tmp_path):
+    """The gate-ON counterpart: a deliberate full-config save of `pi_experimental`
+    is honored when the experimental gate is open."""
+    store = _kernel_store(tmp_path, gate=True)
+    cfg = default_config().model_copy(update={"build_kernel": "pi_experimental"})
+    assert store.save(cfg).build_kernel == "pi_experimental"
+    assert store.load().build_kernel == "pi_experimental"
+
+
 def test_experimental_kernels_enabled_reads_injected_authority(tmp_path):
     assert _kernel_store(tmp_path, gate=True).experimental_kernels_enabled() is True
     assert _kernel_store(tmp_path, gate=False).experimental_kernels_enabled() is False

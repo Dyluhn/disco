@@ -115,18 +115,37 @@ class ConfigStore:
         store rather than the ambient env directly, so there is one reader."""
         return self._experimental_enabled()
 
+    def _normalize_build_kernel(self, build_kernel: str) -> str:
+        """The SINGLE gate-normalization rule (finding #2/#4): a `pi_experimental`
+        selection collapses to `disco` unless the experimental gate is open. Used by
+        every persistence boundary — `load` (`_gate_build_kernel`), the full-config
+        `save`, and `save_build_kernel` — so no path can persist or load a gated-off
+        `pi_experimental` as active. No-op for any other value."""
+        if build_kernel == "pi_experimental" and not self._experimental_enabled():
+            return "disco"
+        return build_kernel
+
     def _gate_build_kernel(self, cfg: RouterConfig) -> RouterConfig:
         """Normalize a persisted `pi_experimental` selection to `disco` unless the
         experimental gate is open (finding #2), so a stale/dormant value can never
         LOAD as active — and therefore can't silently activate the stub if the gate
         later flips on in a different process than the one that persisted it. No-op
         for any other value."""
-        if cfg.build_kernel == "pi_experimental" and not self._experimental_enabled():
-            return cfg.model_copy(update={"build_kernel": "disco"})
+        normalized = self._normalize_build_kernel(cfg.build_kernel)
+        if normalized != cfg.build_kernel:
+            return cfg.model_copy(update={"build_kernel": normalized})
         return cfg
 
     def save(self, config: RouterConfig) -> RouterConfig:
-        """Persist the full config (atomically) and return it."""
+        """Persist the full config (atomically) and return it.
+
+        Gate-normalizes `build_kernel` first (finding #4): the public full-config save
+        must NOT persist `pi_experimental` as active while the experimental gate is off —
+        otherwise a stale value could load as active if the gate later flips, bypassing
+        the `save_build_kernel`/`load` normalization. No-op for the `disco` default."""
+        normalized = self._normalize_build_kernel(config.build_kernel)
+        if normalized != config.build_kernel:
+            config = config.model_copy(update={"build_kernel": normalized})
         self._write(config.model_dump(mode="json"))
         return config
 
@@ -197,8 +216,7 @@ class ConfigStore:
         Gate authority (finding #2): never PERSIST `pi_experimental` as active while
         the experimental gate is off — normalize to `disco` first, so a later gate
         flip (possibly in another process) can't silently activate a stale value."""
-        if build_kernel == "pi_experimental" and not self._experimental_enabled():
-            build_kernel = "disco"
+        build_kernel = self._normalize_build_kernel(build_kernel)
         return self.save(self.load().model_copy(update={"build_kernel": build_kernel}))
 
     # -- Build-project persistence --------------------------------------------
