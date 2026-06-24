@@ -327,3 +327,104 @@ pause that the user would clear is not mis-failed, while a build that just keeps
 `BUILD_DID_NOT_FINISH`. Pinned: `test_classifier.test_paused_incomplete_required_output_is_build_did_not_finish`,
 `test_output_truth_oracle.test_not_finished_with_required_output_fails_closed`,
 `test_api_runner.test_paused_{then_finished_resumes_to_terminal,forever_is_bounded_then_build_did_not_finish}`.
+
+### Bug 9 — runner workspace-collection returned an EMPTY manifest for a SUCCEEDED build (HARNESS) — FIXED
+
+NOT a product bug — a RUNNER collection defect surfaced by the first live soak smoke. A build
+that genuinely SUCCEEDED (`file_write index.html` → served → `DELIVERABLE index.html` "Build Smoke
+OK" → `FINISHED`) produced an empty `workspace-manifest.json` (`{}`), so `OutputTruthOracle`
+false-FAILed it with **`FALSE_FINISH_NO_OUTPUT`**. A runner that false-fails every successful run
+is useless.
+
+**Root cause.** `collect_workspace` fetched each declared path via the single-origin preview proxy
+(`GET /conversations/{cid}/preview-app/<path>`), which proxies the agent's ephemeral DEV SERVER.
+Post-FINISH that route 404s (the served preview isn't up/registered for that exact path), so the
+manifest came back empty even though `index.html` was really written. Live-verified that **no** HTTP
+route serves arbitrary workspace source for a finished static build: `…/preview-app/index.html`
+(proxy down), `…/workspace/index.html` (image-only allowlist `.pmx/screenshots|plots`), and
+`…/artifacts/index.html` (declared-`files` only — an app deliverable is `artifact_kind="app"`) ALL
+404.
+
+**Fix (this commit, `fix-soak-workspace-collect`, HARNESS-only `adapters/disco_api.py`).**
+`collect_workspace` now reads the AUTHORITATIVE host ProjectStore SNAPSHOT directly
+(`<projects_root>/<cid>/workspace/…` — the SAME durable source the product's own
+preview-edit/artifact-download routes fall back to once a run is terminal), independent of
+dev-server state. It walks the snapshot (symlink-jailed: `resolve()` + `is_relative_to`) into a
+manifest `{path: {present, size, sha256, content}}` reflecting the WHOLE workspace, keying each
+declared path by its exact scenario string so the unchanged oracle's `path in files` check matches.
+A genuinely-missing declared file is OMITTED (never a `present:false` key — that would mask
+`FALSE_FINISH_NO_OUTPUT` into `ARTIFACT_TRUTH_MISMATCH`), so a real missing deliverable still FAILs.
+A bounded re-read (`--snapshot-wait`, default 15s) absorbs the snapshot-vs-`FINISHED` flush race
+(the build appends `FINISHED` inside `loop.run()`, then `_maybe_snapshot` writes the workspace).
+**Snapshot is AUTHORITATIVE — no proxy mask (anti-false-PASS hardening).** The preview-proxy
+fallback fires ONLY when there is NO snapshot at all (no `projects_root`, or the conversation's
+snapshot workspace dir never materialized within `--snapshot-wait`). When the snapshot workspace dir
+exists, the proxy is NEVER consulted: a declared file absent from the snapshot is genuinely missing
+and is OMITTED — the proxy can't substitute a served/stale copy to mask a missing required deliverable
+(`FALSE_FINISH_NO_OUTPUT` preserved). **LIVE-PROVEN:** re-running `static_html_minimal` populates the
+manifest from the snapshot (`index.html` present, content "Build Smoke OK", real sha256/size,
+`source≠preview_proxy`) → workspace truth checks PASS. Pinned:
+`test_api_runner.test_collect_workspace_{reads_snapshot_when_preview_proxy_404s,
+genuinely_missing_file_is_omitted,falls_back_to_proxy_without_projects_root}`,
+`test_snapshot_authoritative_does_not_proxy_mask_missing_required_file`.
+
+### Bug 10 — runner PREVIEW-collection has the SAME ephemeral-proxy fragility (HARNESS) — FIXED
+
+Surfaced by the Bug 9 live re-run: with the workspace manifest now correct, the SAME
+`static_html_minimal` smoke fails one step later with **`FALSE_FINISH_PREVIEW_BROKEN`**
+(`preview_health_status: 404`). `collect_preview` read the preview via the same fragile
+`GET …/preview-app/` proxy, which 404s post-FINISH because the model's served preview
+(`python3 -m http.server 8080 -d /workspace`, a backgrounded shell process) is torn down when the
+run ends. This is NOT a bad build and NOT Bug 9: the event log PROVES the preview served correctly
+DURING the run (`verify_web_app` on :8080 → passed; `shell curl …8080 | grep 'Build Smoke OK'` →
+exit 0); `…/preview-edit/index.html` (snapshot-backed) returns 200, so the deliverable is durable.
+
+**Fix (HARNESS-only `adapters/disco_api.py` `collect_preview`).** When the LIVE proxy serves
+(status < 400 AND non-empty), that IS the truth and is used unchanged. When it is down, the runner
+produces a preview health/content ONLY from GENUINE POSITIVE EVIDENCE — never a forged 200:
+
+- **Serve + probe (Option A — positive evidence, the residual-gap fix).** When a STATIC served-root
+  (`index.html`, root-preferred then shallowest) is durable in the snapshot — `_snapshot_served_index`,
+  which MIRRORS the product's `lifecycle._find_snapshot_index` skip set (`.pmx` / `.disco` /
+  `node_modules`) so an internal tool `index.html` is never the served root (hole #3) — the runner
+  SERVES that snapshot dir itself on an OS-assigned FREE loopback port (port 0 → ephemeral high port;
+  NEVER a reserved control port 8000/8800/5173; always torn down in `finally`) and HTTP-PROBES `GET /`.
+  The REAL probe (status + served body) is the evidence — INDEPENDENT of whether the agent ran an
+  in-run verify, which closes the residual hole: a build that NEVER verified no longer gets a 200 from
+  mere absence-of-failure; it gets a 200 only if the deliverable ACTUALLY serves the required content.
+  A non-serving / unreadable / wrong-content snapshot → the probe genuinely fails / the body lacks the
+  needle → preview FAILs (never masked; the body is the REAL served bytes, so a wrong-content snapshot
+  can't forge the needle).
+- **Verifier-failure veto (hole #2).** If the build's own LAST in-run `verify_web_app` FAILED —
+  `_in_run_verify_failed`, where FAILURE = `structured.passed is False`, the verifier FAILED TO EXECUTE
+  (`tool_result.success is False`, no verdict), or a verdict/error signalling failure — the runner
+  believes that broken-verdict and does NOT claim OK even if the static shell would serve.
+- **No static served-root** (dynamic-only app, or no deliverable) → honest 404 →
+  `FALSE_FINISH_PREVIEW_BROKEN`. Live dynamic-app preview verification is the documented follow-up —
+  never a forged pass.
+
+**INVARIANT:** the runner NEVER reports preview-health-200 without genuine positive evidence the
+deliverable serves the required content. **LIVE-PROVEN PASS** (`static_html_minimal`, `conv_75881694…`
+→ `conv_e29cc4a2…` → `conv_c33248cc…`): proxy down post-FINISH, the runner served+probed the snapshot
+(health 200, `served.html` = the real probed body), OutputTruthOracle PASS, overall **PASS**.
+Anti-false-PASS pins: `test_api_runner.test_collect_preview_{no_verify_serves_and_probes_for_genuine_evidence,
+no_verify_probe_carries_real_wrong_body,does_not_substitute_on_verifier_execution_failure}`,
+`test_snapshot_served_root_skips_internal_dirs`, `test_durable_preview_does_not_mask_wrong_content`.
+Pinned: `test_api_runner.test_collect_preview_{uses_durable_snapshot_when_proxy_404s,
+does_not_mask_failing_in_run_verify,no_durable_deliverable_stays_broken,live_proxy_wins_over_snapshot}`,
+`test_static_build_classifies_pass_with_dead_proxy_via_durable_sources`,
+`test_durable_preview_does_not_mask_wrong_content`.
+
+### Bug 11 — runner crashes the whole drive on a normal PAUSE→resume (HARNESS) — FIXED
+
+Surfaced live during the Bug 10 re-run: a build that PAUSED (the cooperative valve), then was resumed
+by the runner (acting as the user, ≤3×, the Bug 8 design), crashed the entire drive with
+`ValueError: invalid literal for int() with base 10: 'RUNNING'` → the run degraded to `INVALID_RUN`.
+Root cause: `DiscoApiClient.resume` returned `{"status": <http_int>, **body}`, but the resume body is
+`{"ok": true, "status": "RUNNING"}` — the body's STATE STRING clobbered the HTTP int under the shared
+`status` key, so the caller's `int(resp["status"])` blew up the moment any build paused. The
+deterministic tests missed it because the fake transport returned no `status` in the resume body.
+**Fix (this commit):** `resume` returns the HTTP code under the non-colliding `http_status` key (body
+fields, including the state `status`, preserved); the caller reads `http_status`. The fake transport
+now returns the REALISTIC resume body (`{"ok": true, "status": "RUNNING"}`) so the existing
+`test_paused_*` resume tests are a permanent regression guard.

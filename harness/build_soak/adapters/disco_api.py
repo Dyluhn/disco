@@ -14,7 +14,9 @@ routes/conversations.py; the plan gate + steer are WS-ONLY, verified in routes/w
   poll_until_terminal        GET /conversations/{cid}/state           conversations.py:195
   collect_events             read disco.db DIRECTLY, post-terminal (race-free; trace pattern)
   collect_state              GET /conversations/{cid}/state
-  collect_workspace          GET /conversations/{cid}/preview-app/<path>   preview.py (snapshot)
+  collect_workspace          read the host ProjectStore SNAPSHOT directly (authoritative;
+                             Bug 9 fix — NOT the dev-server preview proxy, which 404s when
+                             the served app isn't up). Falls back to the preview proxy.
   collect_preview            GET /conversations/{cid}/preview + preview-app root
 
 approve_plan / request_plan are WS-ONLY (there is no REST approval route — verified
@@ -36,10 +38,13 @@ websockets) behind the opt-in `@pytest.mark.live` marker.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import os
 import sqlite3
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Protocol
 
 import httpx  # the adapter MAY import an http client (oracle path stays disco/http-free)
@@ -76,6 +81,20 @@ GATE_STATES = frozenset(
     }
 )
 AWAITING_PLAN_APPROVAL = "AWAITING_PLAN_APPROVAL"
+
+# Workspace-snapshot manifest bounds (Bug 9 fix): cap per-file captured content and the
+# number of files walked so a pathological workspace can't blow up the dossier.
+_WS_MANIFEST_MAX_BYTES = 5 * 1024 * 1024  # capture content for files up to 5 MiB
+_WS_MANIFEST_MAX_FILES = 2000
+_SNAPSHOT_POLL_S = 0.5  # re-read cadence while a just-finished build's snapshot flushes
+# Internal dirs the served-root index detection must skip — mirrors the product's
+# lifecycle._find_snapshot_index / SandboxSession._detect_serve_dir skip set exactly, so a
+# .pmx/.disco/node_modules index.html is NEVER mistaken for the build's served root.
+_SERVE_SKIP_DIRS = frozenset({".pmx", ".disco", "node_modules"})
+# Reserved control ports the durable serve+probe must NEVER bind (defense in depth — the
+# probe binds port 0 so the OS assigns a free EPHEMERAL high port, never these): the
+# agent-server (8000), the app-server (8800), and the conventional vite dev port (5173).
+_RESERVED_CONTROL_PORTS = frozenset({8000, 8800, 5173})
 
 # Tools that DON'T count as a "file write" for the mid-run steer trigger (the
 # planning-safe read/ask set; mirrors ToolScopeOracle.PLANNING_SAFE_TOOLS).
@@ -138,10 +157,24 @@ class DiscoApiClient:
         *,
         db_path: str,
         poll_interval_s: float = 1.0,
+        projects_root: str | None = None,
+        snapshot_wait_s: float = 0.0,
     ) -> None:
         self._t = transport
         self._db_path = db_path
         self._poll = poll_interval_s
+        # ProjectStore root for the authoritative workspace SNAPSHOT read (Bug 9 fix).
+        # None ⇒ snapshot read DISABLED (deterministic fake-transport tests keep the
+        # pure preview-proxy path, byte-identical to before). The live CLI passes ""
+        # so it mirrors the agent-server's OWN default root resolution (same env), and
+        # the snapshot unit test injects a tmp root.
+        self._projects_root = projects_root
+        # How long to wait for the snapshot to flush after the run reaches a terminal
+        # state — the build appends FINISHED INSIDE loop.run(), then `_maybe_snapshot`
+        # writes the workspace to the ProjectStore; a fast collect can read between the
+        # two. Re-read the snapshot until every declared file is present (or this budget
+        # elapses) so a genuinely-present file is never reported missing.
+        self._snapshot_wait_s = snapshot_wait_s
 
     # -- pre-create infra probe (§9; the ONLY infra source) -------------------
 
@@ -208,11 +241,17 @@ class DiscoApiClient:
         """Resume a PAUSED (cooperative / actionless) run — the runner ACTS AS THE
         USER who hits Resume. POST /conversations/{cid}/resume (conversations.py:284,
         the same mode-agnostic path the WS `resume` frame uses). A 409 (not resumable)
-        is returned as-is so the caller can stop retrying."""
+        is returned as-is so the caller can stop retrying.
+
+        The HTTP code is returned under `http_status` (NOT `status`): the resume body
+        itself carries a ``status`` field (e.g. ``{"ok": true, "status": "RUNNING"}``), so
+        merging it under the same key would clobber the HTTP int with the body's STATE
+        STRING — the caller's ``int(resp["status"])`` then crashed the whole drive with
+        ``ValueError: invalid literal for int() ... 'RUNNING'`` the moment a build paused."""
         status, data = await self._t.post_json(
             f"/conversations/{conversation_id}/resume", {}
         )
-        return {"status": status, **(data if isinstance(data, dict) else {})}
+        return {"http_status": status, **(data if isinstance(data, dict) else {})}
 
     async def send_followup(
         self, conversation_id: str, text: str, *, kind: str = "message"
@@ -349,37 +388,323 @@ class DiscoApiClient:
     async def collect_workspace(
         self, conversation_id: str, file_paths: list[str]
     ) -> dict[str, Any]:
-        """Fetch each scenario-declared workspace file via the single-origin preview
-        proxy (serves the live dev server OR the on-host snapshot). Returns
-        {path: content} for the OutputTruthOracle. A file that cannot be served at all
-        (4xx/5xx — not on the live server and not in the host snapshot) is OMITTED, so
-        the oracle distinguishes a genuinely-absent deliverable (FALSE_FINISH_NO_OUTPUT)
-        from a served-but-wrong one (ARTIFACT_TRUTH_MISMATCH)."""
-        out: dict[str, Any] = {}
-        for path in file_paths:
+        """Collect the conversation's workspace files AUTHORITATIVELY (Bug 9 fix).
+
+        ROOT CAUSE this replaces: the old path fetched each declared file via the
+        single-origin preview proxy (``GET …/preview-app/<path>``). That proxies the
+        agent's DEV SERVER, so it returns the file ONLY when the served preview is up,
+        registered, and serving that exact route — fragile. A build that genuinely
+        SUCCEEDED (index.html written, served, FINISHED) produced an EMPTY manifest
+        because the proxy 404'd → the OutputTruthOracle false-FAILed it
+        (FALSE_FINISH_NO_OUTPUT). Verified live: ``…/preview-app/index.html``,
+        ``…/workspace/index.html`` (image-only allowlist), and ``…/artifacts/index.html``
+        (declared-"files" only; an app deliverable is artifact_kind="app") ALL 404 for a
+        finished static build — there is no HTTP route that serves arbitrary workspace
+        source. The durable, dev-server-independent truth is the host ProjectStore
+        SNAPSHOT (``<projects_root>/<cid>/workspace/…``), the SAME source the product's
+        own preview-edit / artifact-download routes fall back to once a run is terminal.
+
+        Returns a manifest keyed by workspace-relative path:
+            {path: {"present": True, "size": int, "sha256": hex, "content": str}}
+        for EVERY file in the snapshot (a faithful workspace reflection, not just the
+        declared paths), plus each declared path under its EXACT scenario-declared key
+        so the OutputTruthOracle's ``path in files`` presence check matches. A declared
+        file that is genuinely absent is OMITTED (never a present:false key — that would
+        mask FALSE_FINISH_NO_OUTPUT into ARTIFACT_TRUTH_MISMATCH), so a real
+        missing-deliverable build STILL FAILs correctly. ``content`` is the decoded UTF-8
+        text (so must_contain substring checks run on the real file); a binary / oversized
+        file keeps present+size+sha256 with empty content.
+
+        Fallback: ONLY when there is NO snapshot at all (no projects_root configured, or
+        the conversation's snapshot workspace dir never materialized), each declared path
+        is fetched via the preview proxy — so a no-storage deployment is never WORSE than
+        before. When the snapshot IS authoritative (its workspace dir exists), the proxy
+        is NEVER consulted: a declared file absent from the snapshot is genuinely missing
+        and is OMITTED, so the proxy can't mask a missing required deliverable with a
+        served/stale copy (anti-false-PASS hole #1).
+        """
+        declared = list(file_paths)
+        manifest: dict[str, Any] = {}
+        snapshot_dir: Path | None = None
+
+        if self._projects_root is not None:
+            deadline = time.monotonic() + self._snapshot_wait_s
+            while True:
+                snapshot_dir = self._snapshot_workspace_dir(conversation_id)
+                manifest = (
+                    self._read_snapshot_manifest(conversation_id, declared, snapshot_dir)
+                    if snapshot_dir is not None
+                    else {}
+                )
+                missing = [p for p in declared if p not in manifest]
+                # Stop when the snapshot exists AND is complete, or the wait budget elapsed.
+                # The wait also covers the snapshot DIR not yet existing (snapshot is written
+                # after FINISHED is appended inside loop.run()), so a not-yet-flushed run is
+                # not mistaken for "no snapshot" → proxy mask.
+                if (snapshot_dir is not None and not missing) or time.monotonic() >= deadline:
+                    break
+                await asyncio.sleep(_SNAPSHOT_POLL_S)
+
+        # The snapshot is AUTHORITATIVE: return it as-is. A declared file absent from the
+        # snapshot stays OMITTED — never proxy-substituted (hole #1).
+        if snapshot_dir is not None:
+            return manifest
+
+        # No snapshot at all → legacy preview-proxy fallback (no-storage deployments only).
+        for path in declared:
+            if path in manifest:
+                continue
             rel = path.lstrip("/")
             status, text, _hdrs = await self._t.get_text(
                 f"/conversations/{conversation_id}/preview-app/{rel}"
             )
             if status < 400:
-                out[path] = text
-        return out
+                entry = _file_entry(text.encode("utf-8"))
+                entry["source"] = "preview_proxy"
+                manifest[path] = entry
+        return manifest
+
+    def _read_snapshot_manifest(
+        self, conversation_id: str, declared: list[str], ws: Path | None = None
+    ) -> dict[str, Any]:
+        """Walk the host ProjectStore snapshot workspace for `conversation_id` and
+        build the per-file manifest. Symlink-jailed (resolve + is_relative_to) so a
+        planted ``leak.html -> /etc/passwd`` can never escape the workspace. Empty dict
+        when no snapshot exists yet (caller retries / falls back to the preview proxy)."""
+        if ws is None:
+            ws = self._snapshot_workspace_dir(conversation_id)
+        if ws is None:
+            return {}
+        manifest: dict[str, Any] = {}
+        count = 0
+        for root, _dirs, names in os.walk(ws):  # followlinks=False → no dir-symlink escape
+            for name in sorted(names):
+                fp = Path(root) / name
+                try:
+                    resolved = fp.resolve()
+                    if not resolved.is_relative_to(ws) or not resolved.is_file():
+                        continue
+                    rel = resolved.relative_to(ws).as_posix()
+                    data = resolved.read_bytes()
+                except OSError:
+                    continue
+                manifest[rel] = _file_entry(data)
+                count += 1
+                if count >= _WS_MANIFEST_MAX_FILES:
+                    break
+            if count >= _WS_MANIFEST_MAX_FILES:
+                break
+        # Guarantee each DECLARED path is keyed by its EXACT scenario string (the oracle
+        # checks `spec["path"] in files`); the walk keys by the leading-slash-free relpath.
+        for path in declared:
+            rel = path.lstrip("/")
+            if path not in manifest and rel in manifest:
+                manifest[path] = manifest[rel]
+        return manifest
+
+    def _snapshot_workspace_dir(self, conversation_id: str) -> Path | None:
+        """The host ProjectStore ``workspace/`` directory for this conversation, or None
+        when no projects_root is configured/valid or the snapshot isn't on disk yet.
+        Uses the product's OWN ProjectStore so the runner resolves the SAME root the
+        agent-server does (DISCO_DATA_DIR / XDG_DATA_HOME / ~/.local/share/disco/projects)."""
+        if self._projects_root is None:
+            return None
+        try:
+            from disco.tools.projects.store import ProjectStore, StorageStatus
+
+            store = ProjectStore(self._projects_root)
+            if store.status() != StorageStatus.OK:
+                return None
+            ws = store.path_for(conversation_id).resolve()
+        except Exception:  # noqa: BLE001 — any resolution failure ⇒ no snapshot available
+            return None
+        return ws if ws.is_dir() else None
 
     async def collect_preview(self, conversation_id: str) -> dict[str, Any]:
         """Capture preview truth: availability + the served ROOT html + its HTTP
         health status. Shape consumed by OutputTruthOracle:
-        {"health": {"status": <code>}, "content": <html>, "available": <bool>}."""
+        {"health": {"status": <code>}, "content": <html>, "available": <bool>}.
+
+        Bug 10 (same ephemeral-proxy fragility as Bug 9): post-FINISH the live preview
+        proxy 404s because the model's served preview (a backgrounded ``python -m
+        http.server``) is torn down when the run ends — false `FALSE_FINISH_PREVIEW_BROKEN`.
+
+        TRUTH HIERARCHY (no forged 200 — every preview-OK carries GENUINE POSITIVE evidence
+        the deliverable actually serves the required content):
+          1. The LIVE proxy serves (status < 400 AND non-empty) → that IS the truth, used as-is.
+          2. Proxy down + a STATIC served-root (``index.html``) is durable in the snapshot →
+             the runner SERVES that snapshot dir itself on an OS-assigned FREE high port (never
+             a reserved control port) and HTTP-PROBES it, then tears the server down. The REAL
+             probe (status + body) is the evidence — independent of whether the agent ran an
+             in-run verify. A non-serving / unreadable / wrong-content snapshot → the probe
+             genuinely fails / lacks the needle → the preview FAILs (NOT masked). Absence of an
+             in-run verify is NOT treated as a pass; the serve+probe supplies the positive proof.
+          3. The build's OWN in-run web-app verification ENDED in failure (`_in_run_verify_failed`)
+             → believe the agent's broken-verdict; do NOT claim OK even if the static shell serves.
+          4. No static served-root (dynamic-only app, or no deliverable) → honest 404
+             (FALSE_FINISH_PREVIEW_BROKEN). Live dynamic-app preview verification is the
+             documented follow-up — never a forged pass.
+        """
         avail_status, avail = await self._t.get_json(
             f"/conversations/{conversation_id}/preview"
         )
         status, text, _hdrs = await self._t.get_text(
             f"/conversations/{conversation_id}/preview-app/"
         )
-        return {
+        live = {
             "health": {"status": status},
             "content": text,
             "available": bool(avail.get("available")) if avail_status < 400 else False,
         }
+        # (1) The live preview proxy actually served → that IS the truth.
+        if status < 400 and text:
+            return live
+        # (3) The agent's own in-run verify ended in failure → believe it; no durable claim.
+        if self._projects_root is None or self._in_run_verify_failed(conversation_id):
+            return live
+        # (4) No static served-root → honest 404 (dynamic-only / no deliverable).
+        served_index = self._snapshot_served_index(conversation_id)
+        if served_index is None:
+            return live
+        # (2) Serve the snapshot static content ourselves + PROBE it for GENUINE evidence.
+        probe = await asyncio.to_thread(self._serve_probe_snapshot, served_index.parent)
+        if probe is None:
+            return live  # couldn't serve/probe → no positive evidence → honest 404
+        probe_status, probe_body = probe
+        return {
+            "health": {"status": probe_status},
+            "content": probe_body,
+            "available": probe_status < 400,
+            "source": "snapshot_serve_probe",
+        }
+
+    def _serve_probe_snapshot(self, served_dir: Path) -> tuple[int, str] | None:
+        """Serve `served_dir` on an OS-assigned FREE loopback port (NEVER a reserved control
+        port — port 0 lets the OS pick an ephemeral high port, guarded defensively) and
+        HTTP-probe ``GET /`` for GENUINE evidence the static deliverable serves + with what
+        content. Returns (status, body) or None if it could not be served/probed. The server
+        is ALWAYS torn down (finally). Loopback-only bind (127.0.0.1)."""
+        import functools
+        import http.server
+        import threading
+        import urllib.error
+        import urllib.request
+
+        class _QuietHandler(http.server.SimpleHTTPRequestHandler):
+            # silence per-request stderr noise; signature matches BaseHTTPRequestHandler
+            def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+                return
+
+        handler = functools.partial(_QuietHandler, directory=str(served_dir))
+        try:
+            httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        except OSError:
+            return None
+        # From here `httpd` owns a bound socket — it must be closed on EVERY path, including
+        # a failure to create/start the serving thread (else the socket/server leaks).
+        thread: threading.Thread | None = None
+        try:
+            port = httpd.server_address[1]
+            if port in _RESERVED_CONTROL_PORTS:  # defensive — port 0 won't pick these
+                return None
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as resp:
+                    body = resp.read().decode("utf-8", "replace")
+                    return int(resp.status), body
+            except urllib.error.HTTPError as exc:  # a real HTTP error status IS evidence
+                try:
+                    body = exc.read().decode("utf-8", "replace")
+                except Exception:  # noqa: BLE001
+                    body = ""
+                return int(exc.code), body
+            except (urllib.error.URLError, OSError, ValueError):
+                return None
+        finally:
+            # shutdown() only makes sense once serve_forever is actually running; server_close()
+            # is ALWAYS safe and is what frees the socket if the thread never started.
+            if thread is not None and thread.is_alive():
+                httpd.shutdown()
+            httpd.server_close()
+            if thread is not None:
+                thread.join(timeout=2)
+
+    def _snapshot_served_index(self, conversation_id: str) -> Path | None:
+        """The durable served-root ``index.html`` Path for a STATIC build: at the snapshot
+        workspace root (preferred), else the shallowest ``index.html`` in the tree —
+        MIRRORING the product's ``lifecycle._find_snapshot_index`` skip set
+        (``.pmx`` / ``.disco`` / ``node_modules``) so an internal ``index.html`` is never
+        picked as the served root. Symlink-jailed (resolved path must stay inside the
+        workspace). None ⇒ no static served-root (so the caller does NOT claim a preview)."""
+        ws = self._snapshot_workspace_dir(conversation_id)
+        if ws is None:
+            return None
+        candidates: list[Path] = []
+        root_index = ws / "index.html"
+        if root_index.is_file():
+            candidates = [root_index]
+        else:
+            try:
+                candidates = sorted(
+                    (
+                        p
+                        for p in ws.rglob("index.html")
+                        if p.is_file() and not (_SERVE_SKIP_DIRS & set(p.relative_to(ws).parts))
+                    ),
+                    key=lambda p: (len(p.relative_to(ws).parts), str(p)),
+                )
+            except OSError:
+                return None
+        for cand in candidates:
+            try:
+                resolved = cand.resolve()
+                if resolved.is_relative_to(ws) and resolved.is_file():
+                    return resolved
+            except OSError:
+                continue
+        return None
+
+    def _snapshot_served_root(self, conversation_id: str) -> str | None:
+        """The served-root ``index.html`` CONTENT (decoded) — thin wrapper over
+        :meth:`_snapshot_served_index` (which handles root-preference, the
+        ``.pmx``/``.disco``/``node_modules`` skip set, and the symlink jail). None ⇒ no
+        static served-root."""
+        p = self._snapshot_served_index(conversation_id)
+        if p is None:
+            return None
+        try:
+            return p.read_bytes().decode("utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+
+    def _in_run_verify_failed(self, conversation_id: str) -> bool:
+        """True iff the build's LAST in-run ``verify_web_app`` FAILED — where FAILED means
+        ANY of: ``structured.passed`` is False; the tool FAILED TO EXECUTE
+        (``tool_result.success`` is False, which produces NO verdict — hole #2); or it ran
+        but the verdict/error signals failure. Only a verify that genuinely PASSED (ran
+        successfully AND ``passed`` truthy) leaves this False, so the durable-preview
+        substitution never fires off a verify that errored or failed. No verify at all ⇒
+        False (a static deliverable that finished with no serve-check is not a PROVEN
+        failure; the served-root presence + content truth still gate the substitution)."""
+        last: dict[str, Any] | None = None
+        for e in self._read_events(conversation_id):
+            if e.get("kind") != "observation":
+                continue
+            tr = _payload(e).get("tool_result") or {}
+            if tr.get("tool_name") == "verify_web_app":
+                last = tr
+        if last is None:
+            return False
+        if not last.get("success", True):
+            return True  # verifier EXECUTION failure — no verdict produced (hole #2)
+        raw_structured = last.get("structured")
+        structured: dict[str, Any] = raw_structured if isinstance(raw_structured, dict) else {}
+        if structured.get("passed") is False:
+            return True
+        if str(structured.get("verdict", "")).lower() in {"fail", "failed", "error", "broken"}:
+            return True
+        return bool(structured.get("error"))
 
     # -- internal: race-free DB read ------------------------------------------
 
@@ -409,6 +734,28 @@ class DiscoApiClient:
 
 
 # ---- helpers ----------------------------------------------------------------
+
+
+def _file_entry(data: bytes) -> dict[str, Any]:
+    """A single workspace-manifest entry: existence + identity (size, sha256) plus the
+    decoded text content. The OutputTruthOracle reads ``content`` for must_contain
+    substring checks; a binary / oversized file keeps present+size+sha256 with empty
+    content (binary deliverables carry no text assertions)."""
+    entry: dict[str, Any] = {
+        "present": True,
+        "size": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+    if len(data) <= _WS_MANIFEST_MAX_BYTES:
+        try:
+            entry["content"] = data.decode("utf-8")
+        except UnicodeDecodeError:
+            entry["content"] = ""
+            entry["binary"] = True
+    else:
+        entry["content"] = ""
+        entry["truncated"] = True
+    return entry
 
 
 def _payload(row: dict[str, Any]) -> dict[str, Any]:
