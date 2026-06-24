@@ -22,10 +22,19 @@ vi.mock("@/api/agent", () => ({
   getDeckRenderHtml: vi.fn().mockResolvedValue(""),
 }));
 
-import { getDeckForEditor, patchDeck } from "@/api/agent";
+// BW-14: a second template so the lifted Theme picker can switch.
+vi.mock("@/hooks/useTemplates", () => ({
+  useTemplates: () => [
+    { id: "disco-light", name: "disco", mode: "light", label: "Disco", description: "Default", accent: "#4077a3", bg: "#fcfcfa", default: true },
+    { id: "midnight-dark", name: "midnight", mode: "dark", label: "Midnight", description: "Dark", accent: "#d9a441", bg: "#0d1017", default: false },
+  ],
+}));
+
+import { getDeckForEditor, getDeckRenderHtml, patchDeck } from "@/api/agent";
 
 const getMock = getDeckForEditor as ReturnType<typeof vi.fn>;
 const putMock = patchDeck as ReturnType<typeof vi.fn>;
+const renderMock = getDeckRenderHtml as ReturnType<typeof vi.fn>;
 
 function makeDeck(title: string): LoweredDeck {
   return {
@@ -181,5 +190,25 @@ describe("DeckEditorPane", () => {
     getMock.mockRejectedValue(new ApiError("not found", 404));
     render(<DeckEditorPane cid="conv_1" base="deck" />);
     expect(await screen.findByText(/not found/i)).toBeInTheDocument();
+  });
+
+  it("BW-14: switching the export Theme re-renders the LIVE preview (re-fetches with the new template)", async () => {
+    getMock.mockResolvedValue(makeDeck("Original Title"));
+    render(<DeckEditorPane cid="conv_1" base="deck" />);
+    await screen.findAllByText("Original Title");
+
+    // The initial preview render used the default template…
+    await waitFor(() =>
+      expect(renderMock).toHaveBeenCalledWith("conv_1", "deck", "disco-light"),
+    );
+
+    // …and changing the lifted Theme re-fetches the render with the new template,
+    // so the slides (not just the export hrefs) visibly re-render.
+    const select = screen.getByLabelText(/Theme/i) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "midnight-dark" } });
+
+    await waitFor(() =>
+      expect(renderMock).toHaveBeenCalledWith("conv_1", "deck", "midnight-dark"),
+    );
   });
 });
