@@ -24,6 +24,12 @@ from .files import (
 )
 from .image_gen import ImageGenTool, select_image_backend
 from .plan import PlanStepTool, SubmitPlanTool, UpdatePlanProgressTool
+from .preview import (
+    PreviewLogsTool,
+    PreviewStartTool,
+    PreviewStatusTool,
+    PreviewStopTool,
+)
 from .retrieval import ExtractTool, SearchTool
 from .server import ServerStatusTool
 from .sheets import SheetsTool
@@ -57,6 +63,10 @@ __all__ = [
     "ImageGenTool",
     "select_image_backend",
     "PlanStepTool",
+    "PreviewStartTool",
+    "PreviewStatusTool",
+    "PreviewLogsTool",
+    "PreviewStopTool",
     "SearchTool",
     "ServerStatusTool",
     "SheetsTool",
@@ -99,6 +109,11 @@ def build_default_registry() -> ToolRegistry:
         BrowserTool(),
         VerifyWebAppTool(),  # W-45: structured web-app self-test → clean finish-gate verdict
         ServerStatusTool(),
+        # EPIC F: platform-owned preview — the model declares intent, never a port.
+        PreviewStartTool(),
+        PreviewStatusTool(),
+        PreviewLogsTool(),
+        PreviewStopTool(),
         SubmitPlanTool(),  # plan-mode: proposed plan (intercepted by the loop)
         PlanStepTool(),  # plan-mode: capstone progress reports (legacy incremental)
         UpdatePlanProgressTool(),  # runthru-v2 #3: declarative full-state progress (capable)

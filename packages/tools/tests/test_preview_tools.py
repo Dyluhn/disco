@@ -1,0 +1,176 @@
+"""EPIC F — preview_* tools: the model-facing surface proves there is NO port arg, and
+the tools return the platform-assigned URL via the PreviewManager bound to the sandbox.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+
+import pytest
+from disco.agent_server.preview_manager import PreviewManager
+from disco.tools.anatomy import ToolContext
+from disco.tools.builtin.preview import (
+    PreviewLogsTool,
+    PreviewStartArgs,
+    PreviewStartTool,
+    PreviewStatusTool,
+    PreviewStopTool,
+)
+
+_PORT_RE = re.compile(r"(?:http\.server\s+|--port[= ]|-p[= ]|PORT=)(\d+)")
+
+
+@dataclass
+class _View:
+    running: bool
+    output: str
+
+
+class _FakeSessions:
+    def __init__(self, serving: set[int]) -> None:
+        self.namespace = ""
+        self._serving = serving
+        self._running: dict[str, bool] = {}
+        self._name_port: dict[str, int] = {}
+        self._logs: dict[str, str] = {}
+
+    async def exec(self, name: str, command: str, exec_dir: str | None) -> None:
+        m = _PORT_RE.search(command)
+        if m:
+            port = int(m.group(1))
+            self._name_port[name] = port
+            self._serving.add(port)
+        self._running[name] = True
+        self._logs[name] = f"serving {command}\n"
+
+    async def view(self, name: str, tail_chars: int = 2000) -> _View:
+        return _View(self._running.get(name, False), self._logs.get(name, ""))
+
+    async def kill_foreground(self, name: str) -> str:
+        self._running[name] = False
+        port = self._name_port.get(name)
+        if port is not None:
+            self._serving.discard(port)
+        return "killed"
+
+
+class _FakeSandbox:
+    def __init__(self) -> None:
+        self.backend_name = "gvisor"
+        self.workspace_path = "/workspace"
+        self._serving: set[int] = set()
+        self.sessions = _FakeSessions(self._serving)
+
+    def expose_port(self, port: int) -> str | None:
+        return f"http://preview.test/{port}/"
+
+    async def fetch_inside(self, port: int, path: str, *, timeout_s: int = 5):
+        return (200, b"", "text/html") if port in self._serving else None
+
+
+def _ctx(sandbox: _FakeSandbox) -> ToolContext:
+    return ToolContext(
+        sandbox=sandbox,
+        workspace_path="/workspace",
+        timeout_s=30,
+        capabilities=None,
+        owner_id="local",
+        conversation_id="conv_test",
+    )
+
+
+def _attach_manager(sandbox: _FakeSandbox) -> None:
+    sandbox._preview_manager = PreviewManager(
+        sandbox, port_pool=[3000, 5173], health_attempts=1, health_interval_s=0.0
+    )
+
+
+# --------------------------------------------------------------------------- no port arg
+
+
+def test_preview_start_args_have_no_port_field() -> None:
+    """The defining property of EPIC F: the model literally cannot supply a port."""
+    fields = set(PreviewStartArgs.model_fields)
+    assert "port" not in fields
+    assert {"serve_dir", "command", "framework"} <= fields
+
+
+def test_preview_start_spec_schema_has_no_port() -> None:
+    schema = PreviewStartTool.definition.to_spec().parameters_schema
+    assert "port" not in schema.get("properties", {})
+
+
+# --------------------------------------------------------------------------- behavior
+
+
+@pytest.mark.asyncio
+async def test_preview_start_returns_platform_url() -> None:
+    sandbox = _FakeSandbox()
+    _attach_manager(sandbox)
+    out = await PreviewStartTool().run(
+        PreviewStartArgs(serve_dir="dist", name="app"), _ctx(sandbox)
+    )
+    assert out.success
+    assert out.structured is not None
+    assert out.structured["port"] == 3000  # platform-assigned
+    assert out.structured["url"] == "http://preview.test/3000/"
+    assert "http://preview.test/3000/" in out.content
+
+
+@pytest.mark.asyncio
+async def test_preview_start_requires_intent() -> None:
+    sandbox = _FakeSandbox()
+    _attach_manager(sandbox)
+    out = await PreviewStartTool().run(PreviewStartArgs(), _ctx(sandbox))
+    assert not out.success
+    assert out.error == "no_intent"
+
+
+@pytest.mark.asyncio
+async def test_status_logs_stop_tools() -> None:
+    sandbox = _FakeSandbox()
+    _attach_manager(sandbox)
+    ctx = _ctx(sandbox)
+    await PreviewStartTool().run(PreviewStartArgs(serve_dir="dist", name="app"), ctx)
+
+    status = await PreviewStatusTool().run(_status_args(), ctx)
+    assert status.success and "running" in status.content
+
+    logs = await PreviewLogsTool().run(_logs_args(), ctx)
+    assert logs.success and "app" in logs.content
+
+    stop = await PreviewStopTool().run(_stop_args(), ctx)
+    assert stop.success and "app" in stop.content
+
+
+@pytest.mark.asyncio
+async def test_tool_lazily_constructs_manager_when_absent() -> None:
+    """No runtime pre-attached a manager → the tool builds one (and caches it),
+    proving the production path works without explicit wiring in this test."""
+    sandbox = _FakeSandbox()
+    assert getattr(sandbox, "_preview_manager", None) is None
+    out = await PreviewStartTool().run(
+        PreviewStartArgs(framework="static", serve_dir="dist", name="app"), _ctx(sandbox)
+    )
+    assert out.success
+    assert getattr(sandbox, "_preview_manager", None) is not None
+
+
+# small arg-model constructors (the status/logs/stop arg models)
+def _status_args():
+    from disco.tools.builtin.preview import PreviewStatusArgs
+
+    return PreviewStatusArgs()
+
+
+def _logs_args():
+    from disco.tools.builtin.preview import PreviewLogsArgs
+
+    return PreviewLogsArgs()
+
+
+def _stop_args():
+    from disco.tools.builtin.preview import PreviewStopArgs
+
+    return PreviewStopArgs()
