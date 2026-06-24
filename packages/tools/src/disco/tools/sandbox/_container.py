@@ -366,8 +366,9 @@ class ContainerInstance:
         """Resolve `path` to its REAL location inside the guest (`realpath -m`, which
         follows symlink components but does NOT require the final path to exist, so a
         not-yet-written file resolves too). Returns None if realpath is unavailable or
-        errors — the caller then falls back to the lexical jail (availability over a hard
-        fail; the live integration test proves real enforcement)."""
+        errors — the caller then fails CLOSED (refuses the op): a path whose real
+        location can't be verified is treated as outside the workspace, never trusted to
+        the lexical jail (which is blind to guest symlinks)."""
         try:
             rc, out = self._guest_run(["realpath", "-m", "--", path])
         except Exception:  # noqa: BLE001 — resolution is best-effort hardening
@@ -396,7 +397,12 @@ class ContainerInstance:
         real = self._guest_realpath(target)
         ws_real = self._guest_ws_real()
         if real is None or ws_real is None:
-            return target  # realpath unavailable → the lexical jail stands
+            # FAIL CLOSED: the real location couldn't be verified (realpath missing/broken,
+            # or the guest exec failed). The lexical path is BLIND to guest symlinks, so
+            # trusting it here would reopen the symlink escape. Refuse instead.
+            raise SandboxPermissionError(
+                f"cannot verify real path stays in workspace (realpath unavailable): {path!r}"
+            )
         ws_prefix = ws_real.rstrip("/") + "/"
         if real != ws_real and not real.startswith(ws_prefix):
             raise SandboxPermissionError(f"path escapes workspace via symlink: {path!r}")

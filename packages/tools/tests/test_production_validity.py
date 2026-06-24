@@ -134,6 +134,24 @@ def test_host_signal_refusal_is_documented_best_effort_not_containment():
     assert "bypassable" in doc  # explicitly acknowledges it's trivially evadable
 
 
+def test_signal_refusal_call_site_does_not_overclaim_containment():
+    # [P2] The ENFORCEMENT call site (ProcessSandboxInstance.exec_shell) must describe the
+    # host-signal refusal as best-effort dev-only, NOT as "additional containment" — the
+    # real containment is the P0 production-validity gate refusing the process backend.
+    import inspect
+
+    from disco.tools.sandbox.process import ProcessSandboxInstance
+
+    src = inspect.getsource(ProcessSandboxInstance.exec_shell)
+    # isolate the Bug-19 call-site comment block (up to the actual refusal call)
+    head, _sep, _rest = src.partition("signal_why = process_backend_signal_command_violation")
+    _b19, _s, block = head.partition("# Bug 19")
+    block = block.lower()
+    assert "additional containment" not in block  # the round-1 over-claim is gone
+    assert "best-effort" in block
+    assert "dev-only" in block
+
+
 def test_production_path_never_relies_on_the_signal_refusal():
     # The REAL containment: production-validity refuses the process backend, so a
     # prod/soak build is never on the shared-host box that the refusal would "protect".

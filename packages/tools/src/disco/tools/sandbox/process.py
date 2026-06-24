@@ -209,10 +209,14 @@ class ProcessSandboxInstance:
         why = reserved_port_command_violation(cmd, reserved_control_ports())
         if why is not None:
             return ExecResult(exit_code=126, stdout="", stderr=why)
-        # Bug 19 (P0) — ADDITIONAL containment: blanket-refuse host-process-SIGNAL
-        # commands (`kill <pid>`/`pkill`/`killall`/`fuser -k`/`… | xargs kill`) on the
-        # shared-host process backend, so a build can't take down the agent-server (or any
-        # host process) via a raw `kill <pid>` of a PID it discovered. Runs AFTER the
+        # Bug 19 — BEST-EFFORT, DEV-ONLY refusal (NOT containment): blanket-reject host-
+        # process-SIGNAL commands (`kill <pid>`/`pkill`/`killall`/`fuser -k`/`… | xargs
+        # kill`) on the shared-host process backend, so a local-dev build gets an
+        # actionable nudge instead of silently taking down the agent-server (or any host
+        # process) via a raw `kill <pid>` of a PID it discovered. This is a string scan
+        # and is trivially bypassable (renamed binary, `os.kill` in `python -c`); the REAL
+        # containment is the production-validity gate refusing the process backend outright
+        # (see process_backend_signal_command_violation's docstring). Runs AFTER the
         # reserved-port check so a reserved-port `fuser -k 8000` keeps its port-specific
         # message. Process backend ONLY — the container/isolated backend has its own PID
         # namespace and is not routed here. Returns BEFORE the subprocess launcher.

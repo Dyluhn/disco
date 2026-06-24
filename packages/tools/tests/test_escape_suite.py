@@ -254,6 +254,59 @@ async def test_container_file_api_allows_in_workspace_symlink():
     assert await inst.read_file("keep.txt") == b""
 
 
+class _RealpathFailContainer:
+    """A fake guest where the workspace root resolves fine but `realpath` of a TARGET
+    is UNAVAILABLE (non-zero rc) — exercising the `real is None` fail-closed branch of
+    `_resolve_guest_path` while `_guest_ws_real` is valid. A path marked `fail` cannot
+    have its real location verified; any other in-workspace path resolves normally."""
+
+    def __init__(self) -> None:
+        self.attrs: dict[str, Any] = {}
+
+    def reload(self) -> None: ...
+
+    def exec_run(self, cmd: Any, demux: bool = False, workdir: Any = None) -> Any:
+        if isinstance(cmd, list) and cmd[:1] == ["realpath"]:
+            path = cmd[-1]
+            if "fail" in path:  # realpath can't verify this target → unavailable (rc 1)
+                return (1, (b"", b"realpath: cannot resolve\n")) if demux else (1, b"")
+            real = path  # workspace root + any other path resolve to themselves (in bounds)
+            return (0, (real.encode() + b"\n", b"")) if demux else (0, real.encode() + b"\n")
+        return (0, (b"", b"")) if demux else (0, b"")
+
+
+def _realpath_fail_instance() -> GvisorSandboxInstance:
+    return GvisorSandboxInstance(
+        id="sbx_rpfail",
+        owner_id="o",
+        conversation_id="c",
+        spec=SandboxSpec(),
+        container=_RealpathFailContainer(),
+        container_workspace="/workspace",
+        stop_timeout_s=1,
+    )
+
+
+async def test_container_file_api_fails_closed_when_realpath_unavailable():
+    # [P2] When the guest real path of a target CANNOT be resolved (realpath missing/
+    # broken, or the guest exec failed), the op must be REFUSED — never fall back to the
+    # lexical path (which is blind to guest symlinks and would reopen the escape).
+    inst = _realpath_fail_instance()
+    with pytest.raises(SandboxError):
+        await inst.read_file("fail.txt")
+    with pytest.raises(SandboxError):
+        await inst.write_file("fail.txt", b"x")
+    with pytest.raises(SandboxError):
+        await inst.list_dir("faildir")
+
+
+async def test_container_file_api_allows_in_workspace_when_realpath_resolves():
+    # The same backend still serves a normal in-workspace path whose real location IS
+    # verifiable (proves the fail-closed guard didn't break the happy path).
+    inst = _realpath_fail_instance()
+    assert await inst.read_file("ok.txt") == b""
+
+
 async def test_process_jail_confines_writes_to_workspace(tmp_path):
     # A write that resolves INSIDE the workspace lands there; an escaping one is rejected
     # before any host file is touched (no /etc/passwd write, no parent-dir traversal).
