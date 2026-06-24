@@ -10,13 +10,24 @@
  * manager's parser never trips. EOF on stdin and SIGINT/SIGTERM both trigger a
  * clean shutdown.
  *
- * Hardening (codex review): the stdio layer is built to survive a hostile or
- * slow peer without crashing or growing memory without bound —
+ * Hardening (codex review, rounds 1 & 2): the stdio layer is built to survive a
+ * hostile or slow peer without crashing, deadlocking, or growing memory without
+ * bound —
  *  - inbound lines are byte-capped (over-cap frames are rejected, not parsed);
- *  - command dispatch is serialized so each command fully resolves before the
- *    next begins (init really completes before a back-to-back prompt runs);
- *  - outbound writes respect backpressure (await `drain`) and coalesce
- *    heartbeats under pressure, but NEVER drop `agent_event` frames.
+ *  - command dispatch runs on TWO planes (round-2 P1 #1):
+ *      • DATA plane  — init/prompt/followup/approve/reject are serialized so each
+ *        fully resolves before the next begins (init really completes before a
+ *        back-to-back prompt runs);
+ *      • CONTROL plane — cancel / stdin-EOF / SIGINT / SIGTERM PREEMPT the data
+ *        plane: they abort in-flight work immediately, bypassing the serial
+ *        queue, so a hung `prompt()` can never wedge teardown. Signals also arm
+ *        a hard force-exit deadline so a stuck teardown still terminates.
+ *  - outbound writes respect backpressure (await `drain`), coalesce heartbeats
+ *    under pressure, and are BOUNDED (round-2 P1 #2): when the queue reaches its
+ *    cap the producer is told to back off (the inbound source is paused) instead
+ *    of growing memory — but `agent_event` / `ready` are never dropped, and
+ *    `error` / `exit` always flush (a reserved, cap-exempt path) so teardown can
+ *    drain.
  *
  * The transport pieces below are exported so they can be unit-tested against
  * fake streams; `main()` only auto-runs when this module is the process entry.
@@ -27,7 +38,12 @@ import { fileURLToPath } from "node:url";
 import type { Writable } from "node:stream";
 
 import { PiKernelRunner } from "./runner.ts";
-import { encodeOutbound, parseCommand, type KernelOutbound } from "./protocol.ts";
+import {
+  encodeOutbound,
+  parseCommand,
+  type KernelCommand,
+  type KernelOutbound,
+} from "./protocol.ts";
 
 /**
  * Maximum bytes for a single inbound JSON line. A peer cannot drive unbounded
@@ -124,31 +140,92 @@ export function createLineReader(
 // Outbound: backpressure-aware writer
 // ---------------------------------------------------------------------------
 
+/**
+ * Default cap on the number of frames buffered for outbound delivery before the
+ * producer is asked to back off. A stalled reader can park at most this many
+ * data frames in memory; beyond it we apply UPSTREAM backpressure (pause the
+ * inbound source) rather than growing the queue without bound. `error` / `exit`
+ * frames are exempt (reserved flush path) so teardown always drains.
+ */
+export const DEFAULT_MAX_OUTBOUND_QUEUE = 1024;
+
 export interface OutboundWriter {
-  /** Enqueue a frame for ordered, backpressure-respecting delivery. */
-  write: (frame: KernelOutbound) => void;
+  /**
+   * Enqueue a frame for ordered, backpressure-respecting delivery. Returns
+   * `false` once the bounded queue is at/over its cap — a cooperating producer
+   * MUST then pause and await {@link OutboundWriter.whenWritable} before writing
+   * more data frames. `error` / `exit` frames are always accepted (cap-exempt).
+   */
+  write: (frame: KernelOutbound) => boolean;
+  /** Resolves when the queue has drained back below the cap (capacity is free). */
+  whenWritable: () => Promise<void>;
   /** Resolves once every queued frame has been flushed to the stream. */
   flushed: () => Promise<void>;
 }
 
+export interface OutboundWriterOptions {
+  /** Max buffered data frames before upstream backpressure engages. */
+  maxQueue?: number;
+  /**
+   * Called when the bounded queue crosses into (`true`) / out of (`false`) the
+   * over-cap state. Wire this to pause/resume the upstream source (stdin) so no
+   * fresh work is pulled while the consumer is stalled.
+   */
+  onBackpressure?: (active: boolean) => void;
+}
+
 /**
  * Wrap a writable stream so protocol frames are delivered with backpressure
- * respected: when `stream.write()` returns false we await `'drain'` before the
- * next write, so a slow reader can never let the writable buffer grow without
- * bound. Under pressure, queued `heartbeat` frames coalesce (only the freshest
- * liveness ping is kept) — but `agent_event` / `ready` / `error` / `exit` frames
- * are ALWAYS preserved, in order.
+ * respected AND the in-memory buffer is bounded:
+ *  - when `stream.write()` returns false we await `'drain'` before the next
+ *    write, so the OS-level writable buffer can never grow without bound;
+ *  - the in-process queue is capped at `maxQueue` frames. When it fills, `write`
+ *    returns `false` and `onBackpressure(true)` fires so the producer (and the
+ *    inbound source) stops — memory stays bounded instead of accumulating
+ *    `agent_event` frames behind a stalled reader. No `agent_event` / `ready`
+ *    is ever DROPPED; the producer is BLOCKED instead;
+ *  - `heartbeat` frames coalesce under pressure (only the freshest is kept);
+ *  - `error` / `exit` are cap-EXEMPT (a reserved flush path) so a final
+ *    diagnostic / the terminal `exit` can always be enqueued and drained on
+ *    teardown even while the data queue is saturated.
  */
-export function createOutboundWriter(stream: Writable): OutboundWriter {
+export function createOutboundWriter(
+  stream: Writable,
+  options: OutboundWriterOptions = {},
+): OutboundWriter {
+  const maxQueue = Math.max(1, Math.floor(options.maxQueue ?? DEFAULT_MAX_OUTBOUND_QUEUE));
+  const onBackpressure = options.onBackpressure;
   const queue: KernelOutbound[] = [];
   let pumping = false;
+  let backpressured = false;
   let idleResolvers: Array<() => void> = [];
+  let writableResolvers: Array<() => void> = [];
+
+  // `error` / `exit` must always flush so teardown can drain — they bypass the
+  // cap and never engage producer backpressure.
+  function isReservedFrame(frame: KernelOutbound): boolean {
+    return frame.type === "error" || frame.type === "exit";
+  }
 
   function notifyIdle(): void {
     if (idleResolvers.length === 0) return;
     const resolvers = idleResolvers;
     idleResolvers = [];
     for (const resolveIdle of resolvers) resolveIdle();
+  }
+
+  function notifyWritable(): void {
+    if (writableResolvers.length === 0) return;
+    const resolvers = writableResolvers;
+    writableResolvers = [];
+    for (const resolveWritable of resolvers) resolveWritable();
+  }
+
+  function setBackpressure(active: boolean): void {
+    if (active === backpressured) return;
+    backpressured = active;
+    onBackpressure?.(active);
+    if (!active) notifyWritable();
   }
 
   async function pump(): Promise<void> {
@@ -158,6 +235,8 @@ export function createOutboundWriter(stream: Writable): OutboundWriter {
       while (queue.length > 0) {
         const frame = queue.shift()!;
         const ok = stream.write(encodeOutbound(frame));
+        // Draining below the cap relieves upstream backpressure.
+        if (queue.length < maxQueue) setBackpressure(false);
         if (!ok) {
           // Slow reader: wait for the OS buffer to drain before writing more.
           await once(stream, "drain");
@@ -166,7 +245,10 @@ export function createOutboundWriter(stream: Writable): OutboundWriter {
     } finally {
       pumping = false;
     }
-    if (queue.length === 0) notifyIdle();
+    if (queue.length === 0) {
+      setBackpressure(false);
+      notifyIdle();
+    }
   }
 
   return {
@@ -174,16 +256,27 @@ export function createOutboundWriter(stream: Writable): OutboundWriter {
       if (frame.type === "heartbeat") {
         // Coalesce: replace an already-queued (stale) heartbeat in place rather
         // than letting liveness pings pile up behind a slow reader. Position is
-        // preserved, so no agent_event is reordered or dropped.
+        // preserved, so no agent_event is reordered or dropped, and the queue
+        // does not grow.
         const pending = queue.findIndex((f) => f.type === "heartbeat");
         if (pending >= 0) {
           queue[pending] = frame;
           void pump();
-          return;
+          return !backpressured;
         }
       }
       queue.push(frame);
       void pump();
+      // Engage producer backpressure once the (cap-eligible) queue is full.
+      // Reserved frames never trip the cap, so a final error/exit always lands.
+      if (!isReservedFrame(frame) && queue.length >= maxQueue) {
+        setBackpressure(true);
+      }
+      return !backpressured;
+    },
+    whenWritable() {
+      if (!backpressured) return Promise.resolve();
+      return new Promise<void>((resolveWritable) => writableResolvers.push(resolveWritable));
     },
     flushed() {
       if (queue.length === 0 && !pumping) return Promise.resolve();
@@ -202,10 +295,12 @@ export interface SerialQueue {
 }
 
 /**
- * A single-lane async queue. Each task starts only after the previous one fully
- * settles (resolve OR reject), so command handling is strictly sequential and in
- * arrival order — `init` completes before a back-to-back `prompt` begins, and
- * `cancel` / EOF teardown is ordered with respect to in-flight work.
+ * A single-lane async queue for the DATA plane. Each task starts only after the
+ * previous one fully settles (resolve OR reject), so command handling is strictly
+ * sequential and in arrival order — `init` completes before a back-to-back
+ * `prompt` begins. NOTE: teardown/`cancel` deliberately do NOT ride this queue
+ * (see {@link createControlPlane}); they must preempt a possibly-hung in-flight
+ * data task rather than serialize behind it.
  */
 export function createSerialQueue(): SerialQueue {
   let tail: Promise<void> = Promise.resolve();
@@ -223,12 +318,132 @@ export function createSerialQueue(): SerialQueue {
 }
 
 // ---------------------------------------------------------------------------
+// Control plane: preemptive cancel / teardown (round-2 P1 #1)
+// ---------------------------------------------------------------------------
+
+/** Default grace before a stuck teardown is forced to exit (ms). */
+export const DEFAULT_FORCE_EXIT_MS = 3000;
+
+/** The runner surface the control plane drives. */
+export interface ControlTarget {
+  /** DATA-plane command handling (init/prompt/followup/approve/reject). */
+  handleCommand: (command: KernelCommand) => Promise<void>;
+  /** CONTROL-plane preempt: abort in-flight work WITHOUT tearing the process down. */
+  cancel: () => Promise<void>;
+  /** CONTROL-plane teardown: abort + dispose + emit the terminal `exit`. */
+  shutdown: (code: number) => Promise<void>;
+}
+
+export interface ControlPlane {
+  /** Route one inbound command onto the data plane, or preempt for `cancel`. */
+  dispatch: (command: KernelCommand) => void;
+  /** stdin EOF → preemptive graceful teardown. */
+  eof: () => void;
+  /** SIGINT / SIGTERM → preemptive teardown with a hard force-exit deadline. */
+  signal: () => void;
+}
+
+export interface ControlPlaneOptions {
+  /** The data-plane serial queue (ordering is preserved on this lane only). */
+  queue: SerialQueue;
+  target: ControlTarget;
+  /** Surface a non-fatal control-plane failure (e.g. cancel threw). */
+  onError: (message: string) => void;
+  /** Grace before a stuck teardown is forced to exit. */
+  forceExitMs?: number;
+  /** Hard process-exit seam (injected in tests). Defaults to `process.exit`. */
+  forceExit?: (code: number) => void;
+}
+
+/**
+ * Split command handling into two planes so a hung in-flight `prompt()` can never
+ * wedge cancellation or shutdown:
+ *
+ *  - DATA plane: `init` / `prompt` / `followup` / `approve` / `reject` run on the
+ *    serial queue, preserving arrival order (init still completes before a
+ *    back-to-back prompt).
+ *  - CONTROL plane: `cancel`, stdin EOF and SIGINT/SIGTERM PREEMPT — they invoke
+ *    `target.cancel()` / `target.shutdown()` DIRECTLY, bypassing the serial
+ *    queue, even while a data task is in flight. Because `cancel`/`shutdown`
+ *    abort the session, they are exactly what unblocks a stuck prompt. Signals
+ *    additionally arm a hard {@link ControlPlaneOptions.forceExitMs} deadline: if
+ *    graceful teardown (or the final flush) stalls, the process is force-exited.
+ */
+export function createControlPlane(options: ControlPlaneOptions): ControlPlane {
+  const { queue, target, onError } = options;
+  const forceExitMs = options.forceExitMs ?? DEFAULT_FORCE_EXIT_MS;
+  const forceExit = options.forceExit ?? ((code: number) => process.exit(code));
+  let tearingDown = false;
+
+  function describe(err: unknown): string {
+    return err instanceof Error ? err.message : String(err);
+  }
+
+  function teardown(code: number): void {
+    if (tearingDown) return;
+    tearingDown = true;
+    // Hard deadline covering the WHOLE teardown (abort + dispose + final flush):
+    // if any of it stalls — a hung abort, or a permanently stalled stdout reader
+    // that blocks the `exit` flush — force the process to exit anyway. Unref'd so
+    // it never by itself keeps the loop alive.
+    const deadline = setTimeout(() => forceExit(code), Math.max(0, forceExitMs));
+    deadline.unref?.();
+    // Preempt: tear down DIRECTLY, never behind the serial queue, so a hung
+    // in-flight prompt cannot block shutdown. The graceful path exits the process
+    // via the runner's onExit (flush → process.exit); the deadline is the
+    // backstop if that path stalls.
+    void Promise.resolve()
+      .then(() => target.shutdown(code))
+      .catch((err) => {
+        onError(`shutdown failed: ${describe(err)}`);
+        forceExit(code);
+      });
+  }
+
+  return {
+    dispatch(command) {
+      if (tearingDown) return;
+      if (command.type === "cancel") {
+        // CONTROL plane: abort in-flight work immediately, bypassing the data
+        // queue, so a hung prompt is unblocked without waiting for it to settle.
+        void Promise.resolve()
+          .then(() => target.cancel())
+          .catch((err) => onError(`cancel failed: ${describe(err)}`));
+        return;
+      }
+      // DATA plane: ordered + serialized.
+      void queue.run(async () => {
+        try {
+          await target.handleCommand(command);
+        } catch (err) {
+          onError(`internal error: ${describe(err)}`);
+        }
+      });
+    },
+    eof() {
+      teardown(0);
+    },
+    signal() {
+      teardown(0);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Wiring
 // ---------------------------------------------------------------------------
 
 export async function main(): Promise<void> {
   let exited = false;
-  const writer = createOutboundWriter(process.stdout);
+  const writer = createOutboundWriter(process.stdout, {
+    // Upstream backpressure: when the outbound queue saturates behind a stalled
+    // reader, pause the inbound source so no fresh command (and therefore no
+    // fresh agent turn) is pulled; resume once the queue drains below the cap.
+    onBackpressure: (active) => {
+      if (active) process.stdin.pause();
+      else process.stdin.resume();
+    },
+  });
   const queue = createSerialQueue();
 
   const runner = new PiKernelRunner({
@@ -242,7 +457,19 @@ export async function main(): Promise<void> {
     },
   });
 
-  async function processLine(line: string): Promise<void> {
+  const control = createControlPlane({
+    queue,
+    target: {
+      handleCommand: (command) => runner.handleCommand(command),
+      // Preemptive cancel: abort the in-flight turn but keep the sidecar alive.
+      cancel: () => runner.cancel(),
+      // Idempotent w.r.t. an already-completed exit.
+      shutdown: (code) => (exited ? Promise.resolve() : runner.shutdown(code)),
+    },
+    onError: (message) => writer.write({ type: "error", message }),
+  });
+
+  function onLine(line: string): void {
     const trimmed = line.trim();
     if (trimmed === "") return;
     let parsed: unknown;
@@ -257,21 +484,13 @@ export async function main(): Promise<void> {
       writer.write({ type: "error", message: "unrecognized command" });
       return;
     }
-    try {
-      await runner.handleCommand(command);
-    } catch (err: unknown) {
-      writer.write({
-        type: "error",
-        message: `internal error: ${err instanceof Error ? err.message : String(err)}`,
-      });
-    }
+    // Route onto the data plane, or preempt for `cancel` — see createControlPlane.
+    control.dispatch(command);
   }
 
   const feed = createLineReader(
     {
-      // Each line is serialized through the queue so dispatch is sequential and
-      // ordered even under burst input.
-      onLine: (line) => void queue.run(() => processLine(line)),
+      onLine,
       onOverflow: (byteLength) =>
         writer.write({
           type: "error",
@@ -284,15 +503,13 @@ export async function main(): Promise<void> {
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (chunk: string) => feed(chunk));
 
-  // EOF on stdin → graceful shutdown, ordered AFTER any in-flight commands.
-  process.stdin.on("end", () => {
-    void queue.run(() => (exited ? Promise.resolve() : runner.shutdown(0)));
-  });
+  // EOF on stdin → preemptive graceful teardown (bypasses the data queue).
+  process.stdin.on("end", () => control.eof());
 
+  // SIGINT/SIGTERM → preemptive teardown with a hard force-exit deadline, so a
+  // stuck prompt/teardown can never make the signal ineffective.
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.on(signal, () => {
-      void queue.run(() => (exited ? Promise.resolve() : runner.shutdown(0)));
-    });
+    process.on(signal, () => control.signal());
   }
 }
 

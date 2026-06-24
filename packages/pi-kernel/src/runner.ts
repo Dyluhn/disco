@@ -220,8 +220,13 @@ export class PiKernelRunner {
    * resume. Termination is a separate concern (stdin EOF / SIGTERM → shutdown);
    * `cancel` MUST NOT tear the process down (campaign BuildKernel protocol:
    * cancel and resume are distinct from teardown).
+   *
+   * PUBLIC because the stdio transport routes `cancel` on a separate CONTROL
+   * plane that PREEMPTS the data-plane serial queue: a hung `prompt()` must be
+   * abortable without first waiting for that prompt to settle. `session.abort()`
+   * is exactly what unblocks an in-flight turn, so it must run immediately.
    */
-  private async cancel(): Promise<void> {
+  async cancel(): Promise<void> {
     if (!this.session) {
       this.error("received 'cancel' before 'init'");
       return;

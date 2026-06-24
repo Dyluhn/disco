@@ -145,6 +145,95 @@ describe("createOutboundWriter (P1: stdout backpressure)", () => {
   });
 });
 
+describe("createOutboundWriter (P1 #2: BOUNDED outbound queue)", () => {
+  it("bounds the queue under a stalled reader: producer is backpressured, nothing dropped", async () => {
+    const stream = new BlockingStream();
+    const cap = 8;
+    let backpressure: boolean | undefined;
+    const writer = createOutboundWriter(stream as unknown as Writable, {
+      maxQueue: cap,
+      onBackpressure: (active) => {
+        backpressure = active;
+      },
+    });
+
+    stream.block();
+
+    // A cooperating producer writes until told to back off.
+    const produced: string[] = [];
+    let backedOff = false;
+    for (let i = 0; i < 1000; i++) {
+      const frame: KernelOutbound = { type: "agent_event", event: { kind: `k${i}` } };
+      produced.push(`k${i}`);
+      const ok = writer.write(frame);
+      if (!ok) {
+        backedOff = true;
+        break; // respect backpressure rather than growing memory
+      }
+    }
+
+    // The producer was stopped FAR short of 1000; the buffer stayed bounded.
+    expect(backedOff).toBe(true);
+    expect(backpressure).toBe(true);
+    // At most cap frames are buffered + the one in-flight frame parked on drain.
+    expect(produced.length).toBeLessThanOrEqual(cap + 1);
+
+    // Reader catches up — everything accepted is delivered, in order, none dropped.
+    stream.release();
+    await writer.flushed();
+    const kinds = stream.chunks.map(
+      (c) => (JSON.parse(c) as { event: { kind: string } }).event.kind,
+    );
+    expect(kinds).toEqual(produced);
+    expect(backpressure).toBe(false); // relieved once drained
+  });
+
+  it("whenWritable resolves once the queue drains below the cap", async () => {
+    const stream = new BlockingStream();
+    const writer = createOutboundWriter(stream as unknown as Writable, { maxQueue: 4 });
+    stream.block();
+
+    let ok = true;
+    while (ok) ok = writer.write({ type: "agent_event", event: { kind: "x" } });
+
+    let writableResolved = false;
+    void writer.whenWritable().then(() => {
+      writableResolved = true;
+    });
+    // Still congested: the producer stays parked.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(writableResolved).toBe(false);
+
+    stream.release();
+    await writer.flushed();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(writableResolved).toBe(true);
+  });
+
+  it("error/exit bypass the cap and still flush on teardown", async () => {
+    const stream = new BlockingStream();
+    const writer = createOutboundWriter(stream as unknown as Writable, { maxQueue: 4 });
+    stream.block();
+
+    // Saturate the cap with data frames (a misbehaving producer ignoring backpressure).
+    for (let i = 0; i < 20; i++) {
+      writer.write({ type: "agent_event", event: { kind: `k${i}` } });
+    }
+    // A terminal error + exit must still be accepted (reserved, cap-exempt path).
+    writer.write({ type: "error", message: "boom", fatal: true });
+    writer.write({ type: "exit", code: 0 });
+
+    stream.release();
+    await writer.flushed();
+
+    const frames = stream.chunks.map((c) => JSON.parse(c) as KernelOutbound);
+    expect(frames.some((f) => f.type === "error")).toBe(true);
+    expect(frames.some((f) => f.type === "exit")).toBe(true);
+    // exit is the last frame written.
+    expect(frames[frames.length - 1]).toMatchObject({ type: "exit", code: 0 });
+  });
+});
+
 describe("createSerialQueue (P1: sequential dispatch)", () => {
   it("runs tasks strictly in order, each settling before the next starts", async () => {
     const queue = createSerialQueue();

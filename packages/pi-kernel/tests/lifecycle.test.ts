@@ -297,6 +297,22 @@ describe("pi-kernel sidecar lifecycle", () => {
     expect(await sidecar.exitCode()).toBe(0);
   });
 
+  it("SIGTERM preempts and tears down cleanly (control plane wired end-to-end)", async () => {
+    sidecar = startSidecar();
+    sidecar.send({ type: "init", config: { heartbeatMs: 50 } });
+    await sidecar.waitFor((f) => f.type === "ready");
+
+    // SIGTERM is handled on the CONTROL plane (not the data queue): it preempts
+    // and exits. Default Node termination is suppressed, so a clean exit(0) here
+    // proves our handler ran rather than the process being signal-killed.
+    sidecar.child.kill("SIGTERM");
+
+    const exit = await sidecar.waitFor((f) => f.type === "exit", 5_000);
+    expect(exit.type).toBe("exit");
+    const code = await sidecar.exitCode();
+    expect(code).toBe(0);
+  });
+
   it("shuts down cleanly on stdin EOF", async () => {
     sidecar = startSidecar();
     sidecar.send({ type: "init", config: { heartbeatMs: 50 } });
