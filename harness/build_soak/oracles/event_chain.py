@@ -25,6 +25,7 @@ from .. import failure_codes as fc
 from ..events import (
     KIND_ACTION,
     KIND_OBSERVATION,
+    KIND_PLAN,
     has_action,
     has_observation_for_action,
     has_plan,
@@ -83,15 +84,34 @@ class EventChainOracle:
             ]
 
         # 3/4. plan event -> approval status -> execution action.
-        # Only adjudicated once a plan was actually approved (a run legitimately
-        # ending at AWAITING_PLAN_APPROVAL is incomplete, not a chain break — the
-        # output-truth oracle judges finish expectations separately).
+        #
+        # FAIL-CLOSED: the chain is NOT gated on `plan_approved` already existing
+        # (that is circular — a plan that finished WITHOUT ever being approved would
+        # slip past). The rule keys on the durable facts: a PlanEvent exists and the
+        # run reached a FINISHED terminal. A finished plan-gated build MUST show the
+        # full approval+execution chain.
         approvals = plan_approved_seqs(events)
-        if approvals:
+        has_plan_event = any(kind_of(e) == KIND_PLAN for e in events)
+        term = terminal_status(events)
+        # A run still parked at AWAITING_PLAN_APPROVAL (or otherwise non-terminal) is
+        # legitimately incomplete, not a chain break — only judge a FINISHED run.
+        if has_plan_event and term == "FINISHED":
+            if not approvals:
+                # The plan reached FINISHED with NO plan_approved status ever —
+                # a false finish: the plan was never approved/executed.
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.PLAN_APPROVED_STATUS_MISSING,
+                        first_broken_link="plan_event -> approval_status",
+                        facts={
+                            "plan_approved_present": False,
+                            "terminal_status": term,
+                        },
+                    )
+                ]
             last_approval = approvals[-1]
-            action_after_approval = has_action(events, after_seq=last_approval)
-            term = terminal_status(events)
-            if not action_after_approval and term == "FINISHED":
+            if not has_action(events, after_seq=last_approval):
                 # The plan was approved and the run FINISHED, yet not a single
                 # execution action appeared — a false finish of the approval gate.
                 return [

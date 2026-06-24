@@ -19,6 +19,7 @@ adjudicator is reproducible over frozen evidence.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable
 from typing import Any
 
@@ -61,49 +62,69 @@ class NormalizationError(ValueError):
     """A raw event could not be coerced into the canonical full-event shape."""
 
 
+# The DB row columns SqliteEventStore writes alongside the JSON `payload` (the
+# full event). These are duplicated INSIDE the payload too, so on a row the
+# payload is authoritative for content; the columns only fill a gap.
+_ROW_COLUMNS = ("seq", "kind", "source", "id", "created_at")
+
+
 def normalize_event(raw: Any) -> dict[str, Any]:
     """Coerce one raw event into the canonical FULL-event dict.
 
-    Accepts:
-      * the full persisted event dict (has a top-level "kind") — returned as-is
-        (a shallow copy), with `seq`/`source` left untouched;
-      * a row-shaped dict `{seq, kind, source, payload}` where `payload` is itself
-        the full event dict (or a JSON string of one) — flattened so the
-        canonical fields win, while the row's `seq`/`kind`/`source` fill any gap.
+    Two input shapes, ONE canonical output (same fields regardless of input):
 
-    Raises NormalizationError on anything else (a non-dict, or a dict missing a
-    discernible kind) so a corrupt log surfaces as INVALID_RUN, never a silent
-    mis-parse.
+      * the full persisted event dict — `event.model_dump(mode="json")`: a flat
+        dict with `kind` and ALL content fields (`tool_call`, `tool_result`,
+        `detail`, `revision`, ...) inlined, and NO `payload` member. Returned as a
+        shallow copy.
+
+      * a real SQLite row `{seq, kind, source, [id, created_at,] payload}` where
+        `payload` is the FULL event — either an already-decoded dict OR (the real
+        on-disk shape) a JSON STRING of one. The canonical event is the PARSED
+        PAYLOAD (it carries every content field); the top-level row columns only
+        FILL a field the payload happens to lack (older dumps). This is the fix
+        for the P0 false-negative where a row with top-level `kind` had its payload
+        dropped, hiding `detail`/`tool_call`/`revision` from every predicate.
+
+    Raises NormalizationError on anything else (a non-dict, a payload that won't
+    parse, or a dict with no discernible kind) so a corrupt log surfaces as
+    INVALID_RUN, never a silent mis-parse.
     """
     if not isinstance(raw, dict):
         raise NormalizationError(f"event is not a dict: {type(raw).__name__}")
 
-    # Row-shape: a `payload` member that is (or decodes to) a dict with a kind.
-    payload = raw.get("payload")
-    if payload is not None and "kind" not in {k for k in raw if k != "payload"}:
-        # Heuristic: a row carries (seq, kind, source, payload). The payload IS the
-        # full event. Only treat as a row when payload looks like an event dict/str.
+    # Decode a `payload` member (string -> JSON, or an already-decoded dict).
+    parsed_payload: Any = None
+    if "payload" in raw:
+        payload = raw["payload"]
         if isinstance(payload, str):
-            import json
-
             try:
-                payload = json.loads(payload)
-            except (ValueError, TypeError) as exc:  # pragma: no cover - defensive
+                parsed_payload = json.loads(payload)
+            except (ValueError, TypeError) as exc:
                 raise NormalizationError(f"row payload is not JSON: {exc}") from exc
-        if isinstance(payload, dict) and "kind" in payload:
-            event = dict(payload)
-            # The row's columns are authoritative for seq/kind/source if the
-            # payload somehow lacks them (older dumps).
-            event.setdefault("kind", raw.get("kind"))
-            event.setdefault("source", raw.get("source"))
-            if event.get("seq") is None and raw.get("seq") is not None:
-                event["seq"] = raw.get("seq")
-            return event
+        elif isinstance(payload, dict):
+            parsed_payload = payload
+        else:
+            raise NormalizationError(
+                f"row payload is neither a JSON string nor a dict: {type(payload).__name__}"
+            )
 
-    if "kind" in raw:
+    # Row shape: the payload IS the full event. MERGE — payload content wins, the
+    # row's columns only fill a missing field.
+    if isinstance(parsed_payload, dict) and "kind" in parsed_payload:
+        event = dict(parsed_payload)
+        for col in _ROW_COLUMNS:
+            if event.get(col) is None and raw.get(col) is not None:
+                event[col] = raw[col]
+        return event
+
+    # Full event dict (no payload member, kind inlined).
+    if "kind" in raw and "payload" not in raw:
         return dict(raw)
 
-    raise NormalizationError(f"event has no discernible kind: keys={sorted(raw)}")
+    raise NormalizationError(
+        f"event has no discernible kind (and no usable payload): keys={sorted(raw)}"
+    )
 
 
 def normalize_events(raw_events: Iterable[Any]) -> list[dict[str, Any]]:

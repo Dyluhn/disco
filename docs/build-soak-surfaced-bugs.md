@@ -11,6 +11,35 @@ These were surfaced by the FOUNDATION slice (deterministic harness + contract te
 product fixes happen in a SEPARATE later repair step — engine.py / messages.py / recitation.py
 were NOT touched here.
 
+> **Harness fail-closed fixes (NOT product bugs).** A codex review of the foundation found
+> THREE P0 **false-negatives in the adjudicator itself** — cases where it would classify a
+> REAL failure as PASS. A false-green oracle is the worst outcome for this campaign, so they
+> were fixed inside the harness (no product change) and pinned by
+> `harness/build_soak/tests/test_fail_closed.py`:
+> 1. **DB-row payload drop** (`events.py` normalize_event): a real SQLite row
+>    `{seq,kind,source,payload(JSON)}` had its `payload` dropped, hiding
+>    `detail`/`tool_call`/`revision` from every predicate →
+>    `WRITE_TOOL_ATTEMPTED_IN_PLANNING` / `APPROVE_PLAN_NO_EXECUTION` /
+>    `NO_REPLAN_AFTER_REVISION` all read PASS in row shape. Fixed by MERGING the parsed
+>    payload with the row columns; the canonical event is identical for both shapes.
+> 2. **Missing-approval false finish** (`oracles/event_chain.py`): the approval→execution
+>    chain was only checked when `plan_approved` already existed (circular), so a
+>    `PlanEvent → FINISHED` with no approval PASSED. Now: a PlanEvent that reaches FINISHED
+>    MUST show the approval chain — no approval → `PLAN_APPROVED_STATUS_MISSING`; approval but
+>    no execution action → `APPROVE_PLAN_NO_EXECUTION`.
+> 3. **Required-evidence skipped into PASS** (`oracles/contract.py`): a scenario asserting
+>    `tool_scope` with no captured tool-scope evidence used to SKIP into PASS; now it
+>    FAIL-CLOSES to INVALID_RUN (insufficient evidence, §8) — the event-only
+>    `WRITE_TOOL_ATTEMPTED_IN_PLANNING` check is unchanged.
+>
+> General principle now enforced: missing/ambiguous evidence → INVALID_RUN (never PASS); a
+> required invariant whose evidence is present but violated → FAIL; only a genuinely-complete,
+> genuinely-conforming run → PASS. The other oracles (revision, output_truth, harness_validity)
+> were audited for the same "checks only if precondition already true → silent pass" pattern
+> and the same row-vs-dict blindness; their remaining SKIPs are genuine not-applicable cases
+> (no approval/follow-up to judge; a non-finished terminal that already surfaced its own
+> error/cancel), and all read content through the normalizer so they inherit fix #1.
+
 | # | Failure code | Severity | Test (xfail, strict) | Site | Spec |
 |---|---|---|---|---|---|
 | 1 | `WRITE_TOOL_ALLOWED_IN_PLANNING` | P0 | `test_build_plan_contract.py::test_write_tool_in_planning_produces_recoverable_rejection` | `engine.py:841` `_gate_planning_mode` | §11.1, §11.7, §20.1 |

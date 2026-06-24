@@ -4,7 +4,26 @@ each fixture event log is explicit and readable."""
 
 from __future__ import annotations
 
+import json
 from typing import Any
+
+
+def to_db_rows(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Render full-event dicts into the REAL SQLite row shape SqliteEventStore
+    persists: top-level seq/kind/source/id columns + a JSON-STRING `payload`
+    holding the whole event. Used to prove the normalizer/classifier behave
+    identically on both shapes."""
+    return [
+        {
+            "seq": e.get("seq"),
+            "kind": e.get("kind"),
+            "source": e.get("source"),
+            "id": e.get("id"),
+            "created_at": e.get("timestamp", ""),
+            "payload": json.dumps(e),
+        }
+        for e in events
+    ]
 
 
 def msg(seq: int, source: str, content: str, *, role: str | None = None) -> dict[str, Any]:

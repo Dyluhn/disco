@@ -55,6 +55,17 @@ class ContractOracle:
         if preview.get("required") and "preview" not in present:
             missing.append("preview_evidence (scenario asserts preview.required)")
 
+        # tool-scope truth (§11.7 WRITE_TOOL_ALLOWED_IN_PLANNING — a disallowed tool
+        # must not be CALLABLE, not merely un-advertised) needs the runner-captured
+        # per-turn tool scope. A scenario that asserts tool_scope therefore REQUIRES
+        # that evidence; if it is missing the run cannot be adjudicated against the
+        # contract and must FAIL-CLOSED to INVALID_RUN — never silently PASS via a
+        # SKIP. (The event-only WRITE_TOOL_ATTEMPTED_IN_PLANNING check is separate
+        # and still runs.)
+        tool_scope_assert = assertions.get("tool_scope") or {}
+        if tool_scope_assert and "tool_scope" not in present:
+            missing.append("tool_scope_capture (scenario asserts assertions.tool_scope)")
+
         if missing:
             return [
                 failing(
