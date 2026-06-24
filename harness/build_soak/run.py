@@ -33,9 +33,11 @@ import yaml
 from . import failure_codes as fc
 from .adapters.disco_api import (
     AWAITING_PLAN_APPROVAL,
+    AWAITING_USER_QUESTION,
     PAUSED_STATE,
     PROGRESSING_TIMEOUT,
     TERMINAL_STATES,
+    WAITING_FOR_CONFIRMATION,
     CollectedRun,
     DiscoApiClient,
     InconclusiveRunError,
@@ -50,6 +52,19 @@ _DEFAULT_OUT = "test-record/build-soak"
 _SCENARIOS = Path(__file__).resolve().parent / "scenarios.yaml"
 _MAX_GATES = 8  # bound the approve loop so a gate flap can't spin forever
 _MAX_RESUMES = 3  # bound PAUSED-resume so an actionless-paused build can't spin forever
+_MAX_CLARIFY = 3  # bound clarify/confirm answers so an endlessly-asking model is let go (Bug 17)
+
+# The runner ACTS AS THE USER (§14 runner directive): when a build asks a clarifying
+# question mid-build, the runner answers it so the build proceeds — exactly what a real
+# user does. The generic answer MUST instruct "do not ask further questions" so a model
+# can't trap the build in a question-loop; a scenario MAY override it with its own
+# `clarification_answer`. This does NOT weaken the oracle: the resulting build is still
+# adjudicated (plan→approve→execute→deliver) — a build that STILL fails after a
+# reasonable clarification is a genuine finding (Bug 17, §17).
+_GENERIC_CLARIFY_ANSWER = (
+    "Use your best judgment and proceed with sensible, conventional defaults. "
+    "Do not ask further clarifying questions; build the most reasonable version."
+)
 
 # Progress-aware terminal-wait knobs (Bug 15). The terminal wait is NOT a blind
 # wall-clock: `inactivity_s` is the NO-PROGRESS window (a build that keeps emitting
@@ -110,9 +125,11 @@ async def _drive_to_terminal(
     timeline: list[str],
     inactivity_s: float,
     hard_cap_s: float,
+    clarification_answer: str | None = None,
 ) -> str:
-    """Drive the run to a terminal state, approving each plan gate (interactive) and
-    injecting any mid-run steer follow-up concurrently. Returns the terminal status.
+    """Drive the run to a terminal state, approving each plan gate (interactive),
+    answering any mid-build clarify/confirm gate (Bug 17), and injecting any mid-run
+    steer follow-up concurrently. Returns the terminal status.
 
     The wait is PROGRESS-AWARE (Bug 15): a still-actively-progressing build is never cut
     off by a wall-clock — only a genuine terminal, genuine inactivity (INACTIVE_TIMEOUT →
@@ -126,6 +143,7 @@ async def _drive_to_terminal(
         )
     gates = 0
     resumes = 0
+    clarifies = 0
     try:
         while True:
             if autonomous:
@@ -157,6 +175,38 @@ async def _drive_to_terminal(
                 # re-read as the same gate and double-approved (wastes the gate budget).
                 await client.wait_until_status_leaves(
                     cid, AWAITING_PLAN_APPROVAL, timeout_s=min(inactivity_s, 60.0)
+                )
+                continue
+            if (
+                status in (AWAITING_USER_QUESTION, WAITING_FOR_CONFIRMATION)
+                and clarifies < _MAX_CLARIFY
+            ):
+                # The runner ACTS AS THE USER: a build that asks a clarifying question (or
+                # pauses for a go-ahead) mid-build is ANSWERED so it proceeds, instead of
+                # false-stalling into NO_PLAN (Bug 17). Each gate is answered via its REAL
+                # mechanism — a clarifying QUESTION over the send_message path a real user
+                # follow-up uses; a CONFIRMATION via the dedicated `confirm` control frame
+                # (the confirm analogue of approve_plan — a plain message does NOT clear it).
+                # BOUNDED (≤ _MAX_CLARIFY): a model that keeps asking past the cap is let go
+                # to a real terminal/inactivity and classified HONESTLY — never an infinite
+                # answer-loop, never a masked failure.
+                clarifies += 1
+                if status == WAITING_FOR_CONFIRMATION:
+                    await client.confirm(cid)
+                    timeline.append(
+                        f"confirmed pending action (clarify {clarifies}/{_MAX_CLARIFY})"
+                    )
+                else:
+                    answer = clarification_answer or _GENERIC_CLARIFY_ANSWER
+                    await client.send_followup(cid, answer, kind="message")
+                    timeline.append(
+                        "answered clarifying question "
+                        f"(clarify {clarifies}/{_MAX_CLARIFY}): {answer!r}"
+                    )
+                # Wait for the gate to clear so the same unprocessed gate isn't re-read +
+                # re-answered (wastes the clarify budget), mirroring the approval gate.
+                await client.wait_until_status_leaves(
+                    cid, status, timeout_s=min(inactivity_s, 60.0)
                 )
                 continue
             if status == PAUSED_STATE and resumes < _MAX_RESUMES:
@@ -206,6 +256,12 @@ async def drive_scenario(
     timeline.append(f"created build conversation {cid} (autonomous={autonomous})")
     state_initial = await client.get_state(cid)
 
+    # Optional scenario-provided answer to a mid-build clarifying question (Bug 17). When
+    # absent, the runner sends a generic safe default that instructs the model not to ask
+    # further questions. Either way the build proceeds + is adjudicated on its real outcome.
+    clarification_answer = scenario.get("clarification_answer")
+    clarification_answer = str(clarification_answer) if clarification_answer is not None else None
+
     followups = scenario.get("followups") or []
     mid_run = [f for f in followups if f.get("trigger") == "after_first_file_write"]
     after_terminal = [f for f in followups if f.get("trigger") != "after_first_file_write"]
@@ -219,6 +275,7 @@ async def drive_scenario(
         timeline=timeline,
         inactivity_s=timeout_s,
         hard_cap_s=hard_cap_s,
+        clarification_answer=clarification_answer,
     )
 
     # Phase 2: after-terminal follow-ups — each is its own re-plan→approve→terminal
@@ -234,6 +291,7 @@ async def drive_scenario(
             timeline=timeline,
             inactivity_s=timeout_s,
             hard_cap_s=hard_cap_s,
+            clarification_answer=clarification_answer,
         )
 
     # Collect (post-terminal, race-free DB read for events).

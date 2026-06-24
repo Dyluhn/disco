@@ -756,6 +756,55 @@ against the shared :8000 now WAITS for the real terminal and classifies on it.
 
 ---
 
+### Bug 17 — the runner did NOT answer a mid-build clarifying question → an interactive build that asks one false-stalled into `NO_PLAN` (HARNESS) — FIXED
+
+Another §17 **no-fluke intermittency source**, on the SAME `must_plan_before_tool` scenario: the 27B
+sometimes asked a clarifying question BEFORE planning, intermittently driving the conversation to
+`AWAITING_USER_QUESTION`. The runner left it unanswered → the build sat idle until the inactivity window
+and was classified `NO_PLAN_AFTER_USER_TURN` — a **false stall**, not a product failure.
+
+**Root cause** (`harness/build_soak/run.py` `_drive_to_terminal`): the drive loop acted ONLY on
+`AWAITING_PLAN_APPROVAL`. `AWAITING_USER_QUESTION` and `WAITING_FOR_CONFIRMATION` are in the adapter's
+`GATE_STATES` (`adapters/disco_api.py`) so the progress-aware poll RETURNS on them — but the loop had **no
+branch to ACT on them**, so the build waited for an answer that never came. The runner is supposed to ACT
+AS THE USER (§14 runner directive); it approved plans but never answered a clarifying question.
+
+**Fix** (`fix-bug17-runner-clarify`, **harness only** — no product/engine/messages/recitation touched).
+`_drive_to_terminal` now answers the two non-approval gates, keeping the runner "acting as the user":
+- `AWAITING_USER_QUESTION` → SEND a clarification answer over the SAME `send_message` WS path a real user
+  follow-up uses (appends the user turn + kicks the loop). The answer is the scenario-provided
+  `clarification_answer` (a new OPTIONAL scenario field, default `None`) if set, ELSE a generic safe
+  default that **instructs the model not to ask further questions** (`_GENERIC_CLARIFY_ANSWER`) so a model
+  can't trap the build in a question-loop.
+- `WAITING_FOR_CONFIRMATION` → confirm the pending risky action via the product's **REAL confirmation
+  mechanism** — a new `DiscoApiClient.confirm(cid)` that sends the dedicated `{"type":"confirm"}` WS control
+  frame (`routes/ws.py:89` → `runtime.confirm` → `control_ops.py:89` `ControlOps.confirm` →
+  `loop.confirm()` + kick), the exact analogue of `approve_plan`. **A plain user `send_message` does NOT
+  clear this gate** (codex follow-up caught the first cut answering it with a free-text "Yes, proceed"
+  message, which the product ignores → the gate would never clear and the build would stall); only the
+  `confirm` frame executes the pending action and resumes past the gate.
+- **Bounded** by `_MAX_CLARIFY = 3` (mirrors `_MAX_GATES` / `_MAX_RESUMES`): a model that keeps asking past
+  the cap is **let go** to a real terminal/inactivity and classified HONESTLY — never an infinite
+  answer-loop, never a masked failure.
+
+This does **not** weaken the oracle: answering a clarifying question is what a real user does; the resulting
+build is still adjudicated end-to-end (plan→approve→execute→deliver). A build that STILL fails after a
+reasonable clarification is a genuine finding — the fix only stops a clarify-question from being a **false**
+stall. The existing approval-gate handling, the Bug-15 progress-aware wait, and the runner-hygiene teardown
+are all intact.
+
+**Proof** (`tests/test_api_runner.py`, fake transport): (a) a build that hits `AWAITING_USER_QUESTION` →
+the runner sends the generic answer and proceeds to a clean terminal (PASS); (b) a scenario with a
+`clarification_answer` → that EXACT answer is sent; (c) `WAITING_FOR_CONFIRMATION` → the runner clears it
+with the REAL `{"type":"confirm"}` control frame (asserted — NOT a no-op message) and proceeds; (d) a model
+that asks endlessly → answered up to `_MAX_CLARIFY` (=3) then let go → the
+non-finished run classifies `BUILD_DID_NOT_FINISH` (NOT an infinite loop, NOT a silent pass). The prior
+fail-closed test now pins an UNHANDLED gate (`AWAITING_USER_DECISION`). Ruff + basedpyright clean,
+import-linter KEPT, full build-soak suite green. **Live note:** the local 27B was busy with a running soak,
+so the unit tests (fake transport) are the proof for this fix.
+
+---
+
 ## Runner hygiene — kill abandoned conversations (harness only)
 
 **Symptom.** The runner left a build conversation **RUNNING** whenever it stopped watching —
