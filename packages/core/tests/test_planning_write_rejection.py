@@ -168,6 +168,35 @@ async def test_allowlist_read_tools_still_execute_in_planning():
     assert (await loop.get_state()).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
 
 
+async def test_think_allowed_in_planning_executes_then_plans():
+    """`think` is an allowlisted, read-only NO-OP scratchpad — it must NOT be rejected
+    by the planning phase gate: it EXECUTES (a harmless no-op), the loop continues, and
+    the model can then submit_plan (FIXED THINK_NOT_EXPOSED). It is also a 'free' step —
+    it does not count as an exploration read (the explore-read cap is untouched)."""
+    agent = ScriptedAgent(
+        [
+            action_step("think", {"thought": "weighing the approach before I plan"}),
+            _submit_plan_step("plan after thinking"),
+        ]
+    )
+    executor = BuildExecutor()
+    loop, store = build_plan_loop(agent, conversation_id="pw-think", executor=executor)
+    await loop.send_message("create a page")
+    await loop.run()
+
+    events = await store.get_events("pw-think")
+
+    # think was NOT rejected ...
+    assert not any(isinstance(e, AgentErrorEvent) for e in events), "think was wrongly rejected"
+    # ... it actually reached the executor (executed as a no-op) ...
+    assert any(c.tool_name == "think" for c in executor.calls), "think did not execute"
+    # ... it did NOT count as an explore read (no plan was forced; the cap is untouched) ...
+    assert loop._plan_explore_reads == 0, "think must not count toward the explore-read cap"
+    # ... and the model got another turn and submitted its plan, halting for approval.
+    assert len([e for e in events if isinstance(e, PlanEvent)]) == 1
+    assert (await loop.get_state()).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+
+
 async def test_ask_user_allowed_in_planning_halts_for_input():
     """ask_user is an allowlisted virtual escape hatch — it must NOT be rejected; it
     halts at AWAITING_USER_QUESTION via its existing handler."""

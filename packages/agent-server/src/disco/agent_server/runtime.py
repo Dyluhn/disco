@@ -1464,7 +1464,13 @@ class ConversationRuntime:
             # per-action gate above still governs the build that follows.
             mode=OperatingMode.PLANNING,
             planning_tools=frozenset(
-                {"submit_plan", "file_list", "file_read", "search", "extract"}
+                # read/explore + plan + `think`. `think` is a pure NO-OP reasoning
+                # scratchpad (read_only=True, no side effect), so it belongs among
+                # the allowed PLANNING first moves (§11.1/§15.2/§20.1: submit_plan /
+                # ask / clarify / think / safe read). It passes the just-merged phase
+                # gate because it is BOTH in this allowlist AND in the read-only
+                # capability set (ToolDef.read_only) the gate intersects against.
+                {"submit_plan", "file_list", "file_read", "search", "extract", "think"}
             ),
             # Same gated source of truth as the router prefix and the UI badge —
             # _compose_build_loop only runs for build-like surfaces today, but reading

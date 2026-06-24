@@ -87,7 +87,7 @@ were NOT touched here.
 | 2 | `WRITE_TOOL_ALLOWED_IN_PLANNING` | P0 | **FIXED** (fix-planning-gate) | `test_tool_rejection_recovery.py::test_disallowed_tool_call_visible_as_rejection` (now passing) | `engine.py:841` `_gate_planning_mode` | §11.3, §20.3 |
 | 3 | `WRITE_BEFORE_REVISION_APPROVAL` | P1 | **FIXED** (fix-planning-gate) | `test_build_replan_contract.py::test_agent_cannot_write_before_revised_plan_approval` (now passing) | `engine.py:841` `_gate_planning_mode` (revision re-entry) | §11.4, §20.2 |
 | 4 | `APPROVE_PLAN_NO_EXECUTION` | P0 | open (xfail, strict) | `test_plan_approval_execution.py::test_kick_after_approval_produces_action_or_terminal_failure` | `finish.py` `gate_execution_nudge` (~L1008, `_EXECUTION_NUDGE_CAP` release) | §11.2, §20.4 |
-| 5 | `THINK_NOT_EXPOSED_IN_PLANNING` | P2 (gap) | open (xfail, strict) | `test_build_plan_contract.py::test_first_turn_planning_exposes_think` | `runtime.py:1467` planning allowlist | §11.1, §15.2, §20.1 |
+| 5 | `THINK_NOT_EXPOSED_IN_PLANNING` | P2 (gap) | **FIXED** (fix-think-planning) | `test_build_plan_contract.py::test_first_turn_planning_exposes_think` (xfail removed, now passing) + `test_planning_write_rejection.py::test_think_allowed_in_planning_executes_then_plans` | `runtime.py:1466` planning allowlist + `engine.py` `_gate_planning_mode` | §11.1, §15.2, §20.1 |
 
 > **Bugs 1–3 FIXED** on branch `fix-planning-gate` (two commits): the PLANNING phase gate
 > (`_gate_planning_mode`, engine.py) rejects any tool call that is not in the planning allowlist
@@ -113,7 +113,20 @@ were NOT touched here.
 > The three strict-xfail markers were removed (now normal passing tests) and a dedicated
 > real-loop regression suite (`test_planning_write_rejection.py`) covers every non-allowlist tool
 > family (file_write/finish/serve/remember/notify_user/shell) plus the positive paths (read tools
-> still execute, ask_user still halts). Bugs 4 + 5 are separate fixes and remain strict-xfail.
+> still execute, ask_user still halts). Bug 4 is a separate fix and remains strict-xfail.
+>
+> **Bug 5 FIXED** on branch `fix-think-planning` (Build Soak repair #3). `think` — a pure NO-OP,
+> read-only reasoning scratchpad (`tools/builtin/think.py`, `read_only=True`) — was omitted from
+> the Build planning allowlist (`runtime.py:1466`), so the just-merged planning gate (which
+> intersects the allowlist with the read-only capability set) rejected it. Fix: (a) add `think`
+> to the `planning_tools` frozenset (it was already `read_only=True`, so the capability backstop
+> already kept it — both halves of `planning_allowed_tool_names()` now include it); (b) in
+> `_gate_planning_mode`, treat `think` as a 'free' planning step (`planning_noncounting`) so it
+> EXECUTES (harmless no-op) but is NOT tallied toward the explore-read cap — thinking is reasoning,
+> not context-gathering, so it must not force a premature plan. The `_buildsoak_fakes` planning
+> allowlist + advertised toolset mirror production. The strict-xfail was removed (now passing) and
+> a real-loop test (`test_think_allowed_in_planning_executes_then_plans`) proves think is not
+> rejected, executes, leaves the explore-read cap at 0, and the model then submits its plan.
 
 ## Root causes
 

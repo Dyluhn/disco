@@ -8,7 +8,6 @@ See docs/build-soak-surfaced-bugs.md for the repair backlog.
 
 from __future__ import annotations
 
-import pytest
 from _buildsoak_fakes import BuildExecutor, build_plan_loop
 from disco.core import ActionEvent, AgentErrorEvent, ObservationEvent, PlanEvent
 from disco.core.events import ConversationStatus, EventKind
@@ -36,15 +35,9 @@ async def test_first_turn_planning_only_exposes_safe_tools():
     assert not leaked, f"PLANNING offered mutating tools: {leaked}"
 
 
-@pytest.mark.xfail(
-    reason="BUG THINK_NOT_EXPOSED_IN_PLANNING: production planning allowlist "
-    "(runtime.py:1467) omits `think`, though §20.1/§15.2 list it as an allowed "
-    "first move — repair-loop target",
-    strict=True,
-)
 async def test_first_turn_planning_exposes_think():
     """§20.1 lists `think` among the allowed first moves in PLANNING; the product
-    does not offer it."""
+    now offers it (FIXED THINK_NOT_EXPOSED — planning allowlist + read-only cap)."""
     agent = ScriptedAgent([_submit_plan_step()])
     loop, _store = build_plan_loop(agent, conversation_id="plan-think")
     await loop.send_message("create a landing page")
