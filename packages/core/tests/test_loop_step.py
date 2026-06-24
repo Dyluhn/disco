@@ -359,6 +359,79 @@ async def test_pick_alternative_runs_the_selected_option():
     assert len(obs) == 1
 
 
+async def test_pick_label_only_alternative_replies_with_the_label_no_tool() -> None:
+    """BW-03 end-to-end: an option with NO tool_name is the user's ANSWER, not a
+    runnable action. Picking it injects the option's label as a USER reply and
+    resumes the conversation — it must NOT synthesize an empty-tool ActionEvent
+    (which would error / do nothing) and must NOT raise."""
+    from disco.core import (
+        ActionEvent,
+        AgentErrorEvent,
+        AlternativesEvent,
+        ConversationStatus,
+        MessageEvent,
+    )
+
+    alt_call = action_step(
+        tool="ask_user",
+        args={
+            "summary": "which direction?",
+            "options": [
+                # LABEL-ONLY: a plain-language path with no tool_name.
+                {"id": "a", "title": "Use approach A", "description": "the simpler path"},
+                {"id": "b", "title": "Use approach B", "description": "the thorough path"},
+            ],
+        },
+    )
+    # Real work first (fresh-session backstop), then the ask_user gate, then the
+    # model's next step after the pick cleanly finishes the run.
+    agent = ScriptedAgent([action_step("shell", {}), alt_call, finish_step()])
+    loop, store = build_loop(agent)
+    await loop.send_message("decide the approach")
+    await loop.run()
+    assert (
+        await store.get_state(CID)
+    ).execution_status == ConversationStatus.AWAITING_USER_DECISION
+    # The gate kept the label-only options (no tool_name) — the BW-03 plans.py fix.
+    events = await store.get_events(CID)
+    alts = [e for e in events if isinstance(e, AlternativesEvent)]
+    assert alts and alts[-1].options[0].tool_name == ""
+
+    n_actions_before = len([e for e in events if isinstance(e, ActionEvent)])
+
+    await loop.pick_alternative("a")
+
+    events = await store.get_events(CID)
+    # The pick became a USER reply carrying the option's label (the answer),
+    # NOT a tool execution.
+    user_replies = [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.message is not None
+        and "Use approach A" in e.message.content
+    ]
+    assert len(user_replies) == 1
+    # NO empty-tool ActionEvent was ever synthesized for the label-only pick.
+    empty_tool_actions = [
+        e
+        for e in events
+        if isinstance(e, ActionEvent)
+        and e.tool_call is not None
+        and not (e.tool_call.tool_name or "").strip()
+    ]
+    assert empty_tool_actions == []
+    # No error surfaced from the pick.
+    assert [e for e in events if isinstance(e, AgentErrorEvent)] == []
+    # The conversation CONTINUED with that answer (the scripted finish step ran).
+    assert (await store.get_state(CID)).execution_status == ConversationStatus.FINISHED
+    # The only new ActionEvents after the pick are the agent's own next steps —
+    # none synthesized from the label-only option.
+    n_actions_after = len([e for e in events if isinstance(e, ActionEvent)])
+    # finish_step may or may not emit an action; the invariant is no EMPTY-tool one.
+    assert n_actions_after >= n_actions_before
+
+
 async def test_pick_alternative_with_unknown_id_does_not_resume():
     """Defensive: a bad pick (stale id, wrong user) doesn't crash — it leaves
     the gate intact + emits a reminder so the user can try again."""
