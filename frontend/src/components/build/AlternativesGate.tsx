@@ -55,39 +55,53 @@ export function AlternativesGate({
           recommendations.length >= 3 ? "lg:grid-cols-3" : "lg:grid-cols-2",
         )}
       >
-        {recommendations.map((opt, i) => (
-          <li key={opt.id}>
-            <button
-              type="button"
-              onClick={() => onPick(opt.id)}
-              data-disco-control={`alternative.${opt.id}`}
-              className="group flex h-full w-full flex-col gap-hair rounded-control border border-hairline bg-surface-1 p-inline text-left transition-colors hover:border-accent hover:bg-surface-2"
-            >
-              <span className="flex items-baseline gap-hair">
-                <span className="font-mono text-[0.7rem] text-text-faint">
-                  {i + 1}
-                </span>
-                <span className="font-display text-[0.98rem] font-medium text-text">
-                  {opt.title}
-                </span>
-              </span>
-              <span className="font-ui text-[0.8rem] text-text-muted">
-                {opt.description}
-              </span>
-              <span
-                title={`Will call: ${opt.tool_name}`}
-                className="mt-auto flex items-center gap-hair pt-hair font-mono text-[0.72rem] text-text-faint"
+        {recommendations.map((opt, i) => {
+          // BW-03 — a card must NEVER be label-less: fall back title →
+          // description → tool_name so an option carrying only a description (or
+          // only a tool) still reads as a real choice. The "Will call" row is
+          // shown ONLY when a tool_name is actually present (a label-only choice
+          // is not runnable — promising a tool call would be a false affordance).
+          const label = opt.title.trim() || opt.description.trim() || opt.tool_name.trim();
+          const showDescription =
+            opt.description.trim().length > 0 && opt.description.trim() !== label;
+          return (
+            <li key={opt.id}>
+              <button
+                type="button"
+                onClick={() => onPick(opt.id)}
+                data-disco-control={`alternative.${opt.id}`}
+                className="group flex h-full w-full flex-col gap-hair rounded-control border border-hairline bg-surface-1 p-inline text-left transition-colors hover:border-accent hover:bg-surface-2"
               >
-                <Terminal className="size-3" aria-hidden />
-                {opt.tool_name}
-              </span>
-              <span className="mt-hair flex items-center gap-hair font-ui text-[0.76rem] text-accent opacity-0 transition-opacity group-hover:opacity-100">
-                Run this path
-                <ArrowRight className="size-3" aria-hidden />
-              </span>
-            </button>
-          </li>
-        ))}
+                <span className="flex items-baseline gap-hair">
+                  <span className="font-mono text-[0.7rem] text-text-faint">
+                    {i + 1}
+                  </span>
+                  <span className="font-display text-[0.98rem] font-medium text-text">
+                    {label}
+                  </span>
+                </span>
+                {showDescription && (
+                  <span className="font-ui text-[0.8rem] text-text-muted">
+                    {opt.description}
+                  </span>
+                )}
+                {opt.tool_name.trim() && (
+                  <span
+                    title={`Will call: ${opt.tool_name}`}
+                    className="mt-auto flex items-center gap-hair pt-hair font-mono text-[0.72rem] text-text-faint"
+                  >
+                    <Terminal className="size-3" aria-hidden />
+                    {opt.tool_name}
+                  </span>
+                )}
+                <span className="mt-hair flex items-center gap-hair font-ui text-[0.76rem] text-accent opacity-0 transition-opacity group-hover:opacity-100">
+                  {opt.tool_name.trim() ? "Run this path" : "Choose this"}
+                  <ArrowRight className="size-3" aria-hidden />
+                </span>
+              </button>
+            </li>
+          );
+        })}
       </ul>
 
       <div className="mt-hair flex flex-wrap items-center justify-between gap-inline border-t border-hairline pt-inline">
