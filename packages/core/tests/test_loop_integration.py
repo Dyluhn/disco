@@ -128,6 +128,66 @@ async def test_truncated_prose_does_not_end_run_and_injects_continue_reminder():
     ), "a 'continue where you left off' reminder must be injected after truncation"
 
 
+async def test_unclosed_think_wedge_injects_continue_reminder_and_continues():
+    """fix-slides-wedge end-to-end — reproduces Dylan's wedged agent slides build.
+
+    A reasoning model (MiniMax) inlined its whole chain-of-thought as a literal
+    `<think>` block in `content`, exhausted the output cap mid-thought — drafting
+    an entire deck inside the unclosed block — and returned WITHOUT
+    finish_reason=="length". Before the fix that never-finished, tool-less turn
+    was mis-read as a clean no-op: the loop silently re-stepped another 2-minute
+    reasoning dump that never reached a tool call, so the build looked WEDGED (the
+    user had to kill it). WITH the fix the unclosed `<think>` is detected as a
+    structural truncation: the loop records the partial, injects the 'cut off —
+    take the action now with a tool call' reminder, and re-steps to real work —
+    never a silent spin."""
+    provider = SequenceProvider(
+        [
+            # turn 1: the wedge — an unclosed `<think>` dump, finish_reason "stop".
+            {
+                "text": "<think>\nLet me design the deck. Slide 1 title, slide 2 the",
+                "finish_reason": "stop",
+            },
+            # turn 2: steered back to a real action (proves the run stepped past it).
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "ls -la"})]},
+            # turn 3: affirmative finish (work happened → gates pass).
+            {
+                "text": "all done",
+                "tool_calls": [
+                    ProposedToolCall(tool_name="finish", arguments={"summary": "built the deck"})
+                ],
+            },
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = RouterAgent(router, conversation_id=CID)  # prose_finishes=True — the hard case
+    executor = FakeExecutor()
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("make slides for the report")
+    state = await loop.run()
+
+    # The run did NOT wedge/end on the unclosed-think fragment — it continued.
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert any(c.tool_name == "shell" for c in executor.calls)
+
+    events = await store.get_events(CID)
+    # The partial reasoning was recorded, not dropped.
+    assert any(
+        isinstance(e, MessageEvent)
+        and e.source == EventSource.AGENT
+        and "Let me design the deck" in (e.message.content or "")
+        for e in events
+    ), "the unclosed-think fragment must be persisted as the assistant's partial turn"
+    # The W-31 continue/take-action reminder was injected (NOT a silent no-op).
+    assert any(
+        isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and "cut off mid-sentence" in (e.message.content or "")
+        for e in events
+    ), "an unclosed `<think>` must trigger the 'cut off — take the action now' reminder"
+
+
 async def test_provider_error_reaches_the_user_with_real_content():
     """Reactive error surfacing acceptance gate: when the driver model's provider
     rejects the call, the loop does NOT crash or flatten it — it emits a terminal

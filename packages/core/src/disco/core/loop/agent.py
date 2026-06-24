@@ -49,6 +49,26 @@ from ..view import View
 from .boundaries import AgentStep, StreamHook
 
 
+def _has_unclosed_think(text: str) -> bool:
+    """A tool-less turn whose visible content opens a ``<think>`` block but never
+    closes it was CUT OFF mid-reasoning — the model ran out of output budget
+    before it finished thinking (and therefore before it could emit a tool call).
+
+    This is the MiniMax wedge (fix-slides-wedge): a reasoning model that inlines
+    its chain-of-thought as literal ``<think>`` tags in ``content`` (rather than a
+    separate ``reasoning_content`` field) can exhaust the provider's output cap
+    deep inside the block, yet NOT report ``finish_reason=="length"`` — so the
+    plain length check below misses it and the turn is mis-read as a clean,
+    completed no-op. An unclosed ``<think>`` is an unambiguous, model-agnostic
+    "the turn never finished" signal: openai_provider already documents the same
+    invariant for its F5 think-budget pass. Models that stream reasoning out of
+    band (no ``<think>`` in ``content``) never match, so this is naturally scoped
+    to the inline-think providers that actually hit the wedge."""
+    if "<think>" not in text:
+        return False
+    return text.lower().count("<think>") > text.lower().count("</think>")
+
+
 class RouterAgent:
     """[CONTRACT] An `Agent` that wraps the LLM router."""
 
@@ -211,7 +231,21 @@ class RouterAgent:
         # finished (Research) — or as a clean no-op (Build) — is the bug. Flag it
         # and force `finished=False` so the loop injects a "continue where you
         # left off" reminder and re-steps instead of ending on a fragment.
-        truncated = resp.finish_reason == "length"
+        #
+        # fix-slides-wedge — STRUCTURAL truncation backstop. Some reasoning
+        # providers (MiniMax inlines its chain-of-thought as `<think>` tags in
+        # `content`) exhaust the output cap mid-reasoning WITHOUT reporting
+        # `finish_reason=="length"`, so the check above misses it and the
+        # never-finished, tool-less turn is mis-classified as a clean no-op. The
+        # loop then silently re-steps a 2-minute reasoning dump that never reaches
+        # a tool call — a wedge to the user (the agent slides build that drafted a
+        # whole deck inside one unclosed `<think>` and produced nothing). An
+        # unclosed `<think>` is an unambiguous "cut off mid-thought" signal:
+        # treat it as truncated too, so the W-31 handler fires its "you were cut
+        # off — be concise and take the action now with a tool call" steer
+        # immediately (turn 1, not after 3 silent no-ops) and the no-op valve
+        # still bounds a truncation storm into a VISIBLE PAUSED halt.
+        truncated = resp.finish_reason == "length" or _has_unclosed_think(resp.text)
         return AgentStep(
             thought=resp.text,
             tool_call=None,
