@@ -288,6 +288,42 @@ async def test_restart_budget_decrements_only_on_genuine_process_exit() -> None:
     await mgr.aclose()
 
 
+@pytest.mark.asyncio
+async def test_start_refresh_does_not_restart_crashed_but_live_session() -> None:
+    """P1 #2 (codex repro): the restart budget must not burn OUTSIDE the supervisor.
+
+    `start()`'s idempotent-refresh path re-probes an existing session and, if it reads
+    CRASHED, funnels into `_restart()`. But a process that is still ALIVE (just not
+    answering health) is NOT a crash — re-execing it burns a restart for nothing. The
+    centralized liveness guard inside `_restart()` must spare it here exactly as it does
+    on the supervisor path: no re-exec, no `restart_count` bump.
+
+    Reproduces codex's exact scenario: status=CRASHED, restart_count=1, _session_alive
+    True → after start(), exec_calls unchanged and restart_count unchanged.
+    """
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000])
+    session = await mgr.start(serve_dir="dist", name="app", supervise=False)
+    assert session.status is PreviewStatus.RUNNING
+
+    # Drive into codex's exact state: process ALIVE, not answering health, mislabeled
+    # CRASHED with a restart already on the clock.
+    sandbox._serving.discard(session.port)  # stops answering health
+    assert sandbox.sessions._running["app"] is True  # but the PROCESS is alive
+    assert await mgr._probe_health(session.port) is False
+    session.status = PreviewStatus.CRASHED
+    session.restart_count = 1
+    exec_before = len(sandbox.sessions.exec_calls)
+
+    # Re-calling start() refreshes the live session → must NOT re-exec or burn budget.
+    again = await mgr.start(serve_dir="dist", name="app", supervise=False)
+
+    assert again is session
+    assert len(sandbox.sessions.exec_calls) == exec_before  # exec_calls == 0 new re-execs
+    assert session.restart_count == 1  # budget unchanged
+    assert session.status is not PreviewStatus.CRASHED  # no longer falsely terminal
+
+
 # --------------------------------------------------------------------------- degrade / limits
 
 

@@ -387,6 +387,19 @@ class PreviewManager:
                 await self._restart(session)
 
     async def _restart(self, session: PreviewSession) -> None:
+        # Liveness guard — the SINGLE chokepoint every restart path funnels through
+        # (the supervisor AND start()'s CRASHED-refresh path). NEVER re-exec a preview
+        # whose PROCESS is still alive: re-issuing into a busy shell raises
+        # (ShellSessionManager busy), is then misread as a crash by `_launch`, and burns
+        # a restart from the budget for a process that never exited. A live-but-unhealthy
+        # preview is slow/booting/unroutable, not crashed, so leave `restart_count`
+        # untouched and report it as STARTING. The budget decrements ONLY on a genuine
+        # process exit. Centralizing the check here (not at each call site) means every
+        # current and future caller of the re-exec point is covered.
+        if await self._session_alive(session.name):
+            session.status = PreviewStatus.STARTING
+            session.detail = "process running; not yet answering health checks"
+            return
         if session.restart_count >= self.MAX_RESTARTS:
             session.status = PreviewStatus.CRASHED
             session.detail = f"crashed; restart budget ({self.MAX_RESTARTS}) exhausted"
