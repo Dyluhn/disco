@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import math
 import posixpath
 import tarfile
 import threading
@@ -54,6 +55,23 @@ def _bounded(name: str, value: float, maximum: float) -> float:
     sentinel → the configured default/maximum. A negative value is REJECTED (invalid —
     a model must not be able to smuggle a negative through to the runtime). Anything
     ABOVE the maximum is clamped DOWN to it (a spec tightens, never loosens)."""
+    # EPIC H (P1 hardening): the configured MAXIMUM must itself be finite and positive.
+    # SandboxConfig's validators reject a bad max at construction, but resolve_bounds is
+    # the last gate before the runtime, so it refuses defense-in-depth too: a non-finite
+    # (NaN/inf) or <=0 maximum would make the clamp below a no-op and a 0 reach Docker as
+    # "unlimited" — a silently-disabled host-protection cap. Reject it loudly instead.
+    if not math.isfinite(maximum) or maximum <= 0:
+        raise SandboxError(
+            f"sandbox config maximum for {name}={maximum!r} is invalid "
+            "(must be a finite positive number); a non-finite or <=0 maximum would "
+            "disable the host-protection cap"
+        )
+    # A non-finite spec value (NaN/inf) can never be a valid request — reject before clamp
+    # (min(NaN, max) is order-dependent and could smuggle NaN through to the runtime).
+    if not math.isfinite(value):
+        raise SandboxError(
+            f"sandbox spec {name}={value!r} is invalid (must be a finite number)"
+        )
     if value < 0:
         raise SandboxError(
             f"sandbox spec {name}={value!r} is invalid (must be >= 0); "

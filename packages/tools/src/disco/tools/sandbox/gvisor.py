@@ -290,53 +290,74 @@ class GvisorSandboxService:
            IP."""
         net_name = f"{EGR_NET_PREFIX}{instance_id}"
         labels = {LABEL_CONV: conversation_id} if conversation_id else {}
-        # The network carries the same label as the containers so the orphan
-        # sweep can find it — its NAME is instance-keyed, not conversation-keyed.
-        network = client.networks.create(net_name, driver="bridge", internal=True, labels=labels)
-        # (1) create on bridge → connect internal → start, so runsc sees BOTH NICs.
-        # [FIX6] PUBLISH the preview ports on the SIDECAR (it's on bridge → it CAN
-        # publish; the sandbox is internal-only and can't). The sidecar's inbound
-        # forwarder (launched after the sandbox starts) bridges each published
-        # host port to the sandbox's internal IP — host reaches the preview, the
-        # sandbox keeps zero direct egress. Ports must be declared at create()
-        # (docker can't add mappings to a running container).
-        sidecar = client.containers.create(
-            image=self._cfg.image,
-            command=["sh", "-c", "exec sleep infinity"],
-            runtime=self._cfg.runtime,
-            network="bridge",  # the route to the internet (the proxy's upstream)
-            ports={f"{p}/tcp": None for p in sorted(PUBLISHED_PORTS)},  # FIX6: preview publish
-            # EPIC H (P1): bound the sidecar on CPU + PIDs too, not just memory — a wedged
-            # or compromised proxy must not be able to burn host CPU or fork-bomb host PIDs.
-            mem_limit=f"{self._cfg.sidecar_memory_mb}m",
-            nano_cpus=int(self._cfg.sidecar_cpu * 1_000_000_000),
-            pids_limit=self._cfg.sidecar_pids_limit,
-            detach=True,
-            name=net_name,
-            labels=labels,
-        )
-        network.connect(sidecar)  # the internal net the sandbox shares with it
-        sidecar.start()
-        # (2) replace the dead embedded resolver with public DNS over the (working) route.
-        sidecar.exec_run(
-            ["sh", "-c", 'printf "nameserver 1.1.1.1\\nnameserver 8.8.8.8\\n" > /etc/resolv.conf']
-        )
-        # Inject the proxy script + launch it in the background on the sidecar.
-        script = pathlib.Path(_egress_proxy_mod.__file__).read_bytes()
-        _put_file(sidecar, "/", "egress_proxy.py", script)
-        allow = format_allow(spec.egress_allow)
-        argv = proxy_run_argv(allow, EGRESS_PROXY_PORT)
-        sidecar.exec_run(["sh", "-c", f"{' '.join(argv)} >/var/log/egress.log 2>&1 &"], detach=True)
-        # (3) read the sidecar's IP on the internal net; the sandbox proxies by IP.
-        sidecar.reload()
-        proxy_ip = (
-            sidecar.attrs.get("NetworkSettings", {})
-            .get("Networks", {})
-            .get(net_name, {})
-            .get("IPAddress", "")
-        ) or net_name  # fall back to the name (harmless for the fake/test path)
-        env = proxy_env(proxy_ip, EGRESS_PROXY_PORT)
-        return network, sidecar, env, net_name
+        # [P1 leak-guard] Setup runs BEFORE the guarded sandbox create in `_start_container`,
+        # so if it creates the network/sidecar then fails partway (connect/start/proxy
+        # inject), nothing downstream tears them down. Own the cleanup HERE: any exception
+        # after either resource exists removes whatever was created before re-raising, so a
+        # failed filtered-egress setup never strands an internal network or proxy sidecar.
+        network: Any = None
+        sidecar: Any = None
+        try:
+            # The network carries the same label as the containers so the orphan
+            # sweep can find it — its NAME is instance-keyed, not conversation-keyed.
+            network = client.networks.create(
+                net_name, driver="bridge", internal=True, labels=labels
+            )
+            # (1) create on bridge → connect internal → start, so runsc sees BOTH NICs.
+            # [FIX6] PUBLISH the preview ports on the SIDECAR (it's on bridge → it CAN
+            # publish; the sandbox is internal-only and can't). The sidecar's inbound
+            # forwarder (launched after the sandbox starts) bridges each published
+            # host port to the sandbox's internal IP — host reaches the preview, the
+            # sandbox keeps zero direct egress. Ports must be declared at create()
+            # (docker can't add mappings to a running container).
+            sidecar = client.containers.create(
+                image=self._cfg.image,
+                command=["sh", "-c", "exec sleep infinity"],
+                runtime=self._cfg.runtime,
+                network="bridge",  # the route to the internet (the proxy's upstream)
+                ports={f"{p}/tcp": None for p in sorted(PUBLISHED_PORTS)},  # FIX6: preview publish
+                # EPIC H (P1): bound the sidecar on CPU + PIDs too, not just memory — a wedged
+                # or compromised proxy must not be able to burn host CPU or fork-bomb host PIDs.
+                mem_limit=f"{self._cfg.sidecar_memory_mb}m",
+                nano_cpus=int(self._cfg.sidecar_cpu * 1_000_000_000),
+                pids_limit=self._cfg.sidecar_pids_limit,
+                detach=True,
+                name=net_name,
+                labels=labels,
+            )
+            network.connect(sidecar)  # the internal net the sandbox shares with it
+            sidecar.start()
+            # (2) replace the dead embedded resolver with public DNS over the (working) route.
+            sidecar.exec_run(
+                [
+                    "sh",
+                    "-c",
+                    'printf "nameserver 1.1.1.1\\nnameserver 8.8.8.8\\n" > /etc/resolv.conf',
+                ]
+            )
+            # Inject the proxy script + launch it in the background on the sidecar.
+            script = pathlib.Path(_egress_proxy_mod.__file__).read_bytes()
+            _put_file(sidecar, "/", "egress_proxy.py", script)
+            allow = format_allow(spec.egress_allow)
+            argv = proxy_run_argv(allow, EGRESS_PROXY_PORT)
+            sidecar.exec_run(
+                ["sh", "-c", f"{' '.join(argv)} >/var/log/egress.log 2>&1 &"], detach=True
+            )
+            # (3) read the sidecar's IP on the internal net; the sandbox proxies by IP.
+            sidecar.reload()
+            proxy_ip = (
+                sidecar.attrs.get("NetworkSettings", {})
+                .get("Networks", {})
+                .get(net_name, {})
+                .get("IPAddress", "")
+            ) or net_name  # fall back to the name (harmless for the fake/test path)
+            env = proxy_env(proxy_ip, EGRESS_PROXY_PORT)
+            return network, sidecar, env, net_name
+        except Exception:
+            # Partial setup must not leak: tear down whatever already exists, then re-raise
+            # so the caller surfaces the original failure.
+            self._best_effort_cleanup(network, sidecar)
+            raise
 
     def _launch_inbound_forwarder(self, sidecar: Any, container: Any, net_name: str) -> None:
         """[FIX6 — live-proven on real gVisor/runsc] Make a FILTERED box's preview
