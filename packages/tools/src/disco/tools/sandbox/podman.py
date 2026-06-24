@@ -241,6 +241,9 @@ class PodmanSandboxService:
     """[CONTRACT boundary] Creates Podman-backed instances over the native remote."""
 
     name = "podman"
+    # EPIC H (§1.4/§9.3): a container backend with its own PID + network namespace —
+    # production / Build-Soak valid (only the `process` dev backend is False).
+    is_production_valid = True
 
     def __init__(
         self,
@@ -469,6 +472,9 @@ class PodmanSandboxService:
 
         mem_mb = spec.memory_mb or self._cfg.default_memory_mb
         cpu = spec.cpu or self._cfg.default_cpu
+        # EPIC H host-protection: cap container pids (cgroup pids.max) — fork-bomb guard.
+        # Enforced by the user@ systemd manager via the socket (same path as mem/cpu).
+        pids = spec.pids or self._cfg.default_pids_limit
         vol_name = f"{self._cfg.workspace_volume_prefix}-{instance_id}"
         name = f"{SBX_NAME_PREFIX}{instance_id}"
 
@@ -508,6 +514,7 @@ class PodmanSandboxService:
                 mem_limit=f"{mem_mb}m",
                 cpu_quota=int(cpu * _CPU_PERIOD),
                 cpu_period=_CPU_PERIOD,
+                pids_limit=pids,  # EPIC H: cgroup pids.max — fork-bomb / host-PID guard
                 **net_kwargs,
                 volumes={vol_name: {"bind": self._cfg.container_workspace, "mode": "rw"}},
                 # NO host env leaks in. For a filtered box the proxy routing vars

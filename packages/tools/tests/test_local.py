@@ -211,6 +211,9 @@ async def test_limits_and_no_env_leak_in_create(monkeypatch):
     kw = client.last.run_kwargs
     assert kw["mem_limit"] == "512m"  # the limit goes through the local socket/daemon
     assert kw["nano_cpus"] == 2_000_000_000
+    # EPIC H host-protection: pids cap (cgroup pids.max) carried on the create call.
+    assert kw["pids_limit"] == 512  # spec unset → config default
+    assert kw.get("pid_mode") != "host"  # own PID namespace, never the host's
     assert kw["environment"] == {}  # no host env into the box
 
 

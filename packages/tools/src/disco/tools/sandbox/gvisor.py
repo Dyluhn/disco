@@ -171,6 +171,11 @@ class GvisorSandboxService:
     in its socket/runtime config and a named-volume workspace."""
 
     name = "gvisor"
+    # EPIC H (§1.4/§9.3): a container backend with its OWN PID + network namespace —
+    # production / Build-Soak valid. LocalSandboxService (runc, shared host KERNEL but
+    # still a private PID + net namespace) and PodmanSandboxService inherit/set the
+    # same. Only the `process` dev backend is False.
+    is_production_valid = True
     _instance_cls: type[ContainerInstance] = GvisorSandboxInstance
 
     def __init__(self, config: SandboxConfig | None = None, *, client: Any | None = None) -> None:
@@ -403,6 +408,10 @@ class GvisorSandboxService:
         # would (wrongly) create it on whatever host runs the backend.
         mem_mb = spec.memory_mb or self._cfg.default_memory_mb
         cpu = spec.cpu or self._cfg.default_cpu
+        # EPIC H host-protection: cap the container's pids (cgroup pids.max) so a
+        # runaway build can't exhaust host PIDs and freeze the box. Spec overrides;
+        # default from config (512).
+        pids = spec.pids or self._cfg.default_pids_limit
         mode = egress_mode(spec)
         # Publish the curated port set (Docker can't add mappings to a running
         # container, so the set is declared here), and only when network is
@@ -439,6 +448,7 @@ class GvisorSandboxService:
                 ports=ports,  # preview exposure (dev-server port only)
                 mem_limit=f"{mem_mb}m",
                 nano_cpus=int(cpu * 1_000_000_000),
+                pids_limit=pids,  # EPIC H: cgroup pids.max — fork-bomb / host-PID guard
                 volumes={host_workspace: {"bind": self._cfg.container_workspace, "mode": "rw"}},
                 # NO host env beyond capability-granted values. For a filtered box that's
                 # the proxy routing vars (defense in depth atop the no-route network).

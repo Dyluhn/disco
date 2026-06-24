@@ -328,6 +328,12 @@ class ProcessSandboxService:
     """[CONTRACT boundary] Creates process-backed instances (dev)."""
 
     name = "process"
+    # EPIC H (§1.4/§9.3): NOT production-valid. This backend runs builds as bare host
+    # subprocesses in the SHARED host PID + network namespace — it is the source of the
+    # isolation incidents (a build `kill <pid>` took down the agent-server). The
+    # production / Build-Soak path refuses it (`require_production_valid_backend`); it
+    # remains the convenient default for local dev only.
+    is_production_valid = False
 
     def __init__(self, root: str | None = None) -> None:
         self._root = Path(root or tempfile.mkdtemp(prefix="disco-sbx-")).resolve()

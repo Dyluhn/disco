@@ -33,6 +33,28 @@ def test_build_sandbox_service_maps_each_backend():
     assert svc._cfg.image == "custom:tag"
 
 
+def test_production_gate_refuses_process_backend_when_required(monkeypatch):
+    # EPIC H (§1.4/§9.3): on a production / Build-Soak host the process (dev) backend is
+    # refused up front — it shares the host PID + net namespace (the `kill <pid>` source).
+    from disco.tools.sandbox import ProductionValidityError
+
+    monkeypatch.setenv("DISCO_REQUIRE_PRODUCTION_SANDBOX", "1")
+    with pytest.raises(ProductionValidityError, match="dev-only"):
+        build_sandbox_service(SandboxSettings(backend="process"))
+    # a container backend passes the gate on the same production host
+    assert isinstance(
+        build_sandbox_service(SandboxSettings(backend="gvisor")), GvisorSandboxService
+    )
+
+
+def test_production_gate_off_by_default_allows_process_backend(monkeypatch):
+    # Default-off: local dev keeps the convenient process backend (no env set).
+    monkeypatch.delenv("DISCO_REQUIRE_PRODUCTION_SANDBOX", raising=False)
+    assert isinstance(
+        build_sandbox_service(SandboxSettings(backend="process")), ProcessSandboxService
+    )
+
+
 def test_runtime_reads_backend_from_the_shared_store(tmp_path):
     # the app-server writes the selection; the agent-server reads the SAME store.
     store = ConfigStore(tmp_path / "config.json")

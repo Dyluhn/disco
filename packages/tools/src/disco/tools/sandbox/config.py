@@ -59,6 +59,11 @@ class SandboxConfig(BaseModel):
     # default resource bounds applied on create (a SandboxSpec may tighten them).
     default_cpu: float = 1.0
     default_memory_mb: int = 2048
+    # EPIC H host-protection: default cgroup pids.max for a created sandbox container,
+    # so a runaway build (fork bomb, parallel-install storm) can't exhaust host PIDs and
+    # freeze the box. Used when a SandboxSpec leaves `pids` unset (0). Overridable per
+    # deployment via the Settings layer (same hot-apply path as the other bounds).
+    default_pids_limit: int = 512
 
     # how long to wait for the container to stop on close, before force-remove.
     stop_timeout_s: int = 5

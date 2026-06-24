@@ -72,6 +72,8 @@ class LocalSandboxService(GvisorSandboxService):
         vol_name = f"{self._cfg.workspace_volume_prefix}-{instance_id}"
         mem_mb = spec.memory_mb or self._cfg.default_memory_mb
         cpu = spec.cpu or self._cfg.default_cpu
+        # EPIC H host-protection: cap container pids (cgroup pids.max) — fork-bomb guard.
+        pids = spec.pids or self._cfg.default_pids_limit
         labels = {LABEL_CONV: conversation_id} if conversation_id else {}
         mode = egress_mode(spec)
         # Per-mode network config (the three-way egress posture; egress_mode docstring).
@@ -110,6 +112,7 @@ class LocalSandboxService(GvisorSandboxService):
                 # The limit goes through the LOCAL socket/daemon → it actually bites.
                 mem_limit=f"{mem_mb}m",
                 nano_cpus=int(cpu * 1_000_000_000),
+                pids_limit=pids,  # EPIC H: cgroup pids.max — fork-bomb / host-PID guard
                 volumes={vol_name: {"bind": self._cfg.container_workspace, "mode": "rw"}},
                 # NO host env beyond capability-granted values. For a filtered box
                 # that's the proxy routing vars (defense in depth atop the no-route
