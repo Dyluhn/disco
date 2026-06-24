@@ -201,6 +201,99 @@ def test_podman_filtered_egress_setup_failure_leaves_no_leak() -> None:
 
 
 # ---------------------------------------------------------------------------
+# P1 (sidecar runtime gate) — the sidecar resource caps go through a runtime LAST GATE
+# right before the create, so a POST-construction mutation of a hot-mutable SandboxConfig
+# (`cfg.sidecar_cpu = 0`) cannot smuggle an UNLIMITED sidecar cap to Docker/Podman. The
+# construction @field_validator does NOT cover this (ConfigDict has no assignment
+# validation, on purpose, for Settings hot-apply). We mutate AFTER construction and assert
+# the sidecar create path REFUSES (raises SandboxError) before any network/sidecar exists,
+# on gVisor/local AND podman; a valid cap still gets past the gate.
+# ---------------------------------------------------------------------------
+
+_SIDECAR_CAP_FIELDS = ["sidecar_cpu", "sidecar_memory_mb", "sidecar_pids_limit"]
+# 0 + negative read as UNLIMITED at the runtime; NaN/inf are non-finite. setattr on the
+# hot-mutable config bypasses pydantic (no assignment validation) so each lands verbatim.
+_BAD_SIDECAR_VALUES = [0, -1, -2.5, float("nan"), float("inf"), float("-inf")]
+
+
+def _mutated_cfg(make_cfg: Any, field: str, bad: Any) -> SandboxConfig:
+    """Build a VALID config, then hot-mutate one sidecar cap AFTER construction — exactly
+    the path the construction @field_validator cannot guard (ConfigDict, no assign-validate)."""
+    cfg = make_cfg()
+    setattr(cfg, field, bad)  # bypasses validation by design (hot-apply); reaches the runtime
+    assert getattr(cfg, field) is bad or getattr(cfg, field) == bad  # the mutation stuck
+    return cfg
+
+
+@pytest.mark.parametrize("field", _SIDECAR_CAP_FIELDS)
+@pytest.mark.parametrize("bad", _BAD_SIDECAR_VALUES)
+def test_gvisor_sidecar_cap_mutation_refused_at_runtime(field: str, bad: Any) -> None:
+    cfg = _mutated_cfg(SandboxConfig, field, bad)
+    svc = GvisorSandboxService(SandboxConfig(), client=_LeakClient())
+    client = _LeakClient()
+    svc._cfg = cfg  # the mutated config is what the create path reads
+    spec = SandboxSpec(egress_allow=frozenset({"api.example.com"}))
+    with pytest.raises(SandboxError, match="sidecar cap"):
+        svc._setup_filtered_egress(client, spec, "sbx_test", "conv1")
+    # The gate fires BEFORE any network/sidecar is created — nothing stranded.
+    assert client.networks.created == [], "gate must refuse before creating the egress network"
+    assert client.created == [], "gate must refuse before creating the sidecar"
+
+
+@pytest.mark.parametrize("field", _SIDECAR_CAP_FIELDS)
+@pytest.mark.parametrize("bad", _BAD_SIDECAR_VALUES)
+def test_local_sidecar_cap_mutation_refused_at_runtime(field: str, bad: Any) -> None:
+    # Local tier reuses the gVisor `_setup_filtered_egress` unchanged — the runtime gate
+    # must hold here too (same method, different service class / config).
+    cfg = _mutated_cfg(default_local_config, field, bad)
+    svc = LocalSandboxService(default_local_config(), client=_LeakClient())
+    client = _LeakClient()
+    svc._cfg = cfg
+    spec = SandboxSpec(egress_allow=frozenset({"api.example.com"}))
+    with pytest.raises(SandboxError, match="sidecar cap"):
+        svc._setup_filtered_egress(client, spec, "sbx_test", "conv1")
+    assert client.networks.created == [] and client.created == []
+
+
+@pytest.mark.parametrize("field", _SIDECAR_CAP_FIELDS)
+@pytest.mark.parametrize("bad", _BAD_SIDECAR_VALUES)
+def test_podman_sidecar_cap_mutation_refused_at_runtime(field: str, bad: Any) -> None:
+    cfg = _mutated_cfg(default_podman_config, field, bad)
+    svc = PodmanSandboxService(
+        default_podman_config(), client=_LeakClient(), cli_runner=lambda argv, t: (0, b"", b"")
+    )
+    client = _LeakClient()
+    svc._cfg = cfg
+    spec = SandboxSpec(egress_allow=frozenset({"api.example.com"}))
+    with pytest.raises(SandboxError, match="sidecar cap"):
+        svc._setup_filtered_egress(client, spec, "sbx_test", "conv1")
+    assert client.networks.created == [] and client.created == []
+
+
+def test_gvisor_valid_sidecar_caps_pass_the_runtime_gate() -> None:
+    """A legitimate (default) sidecar cap is NOT a false reject: the gate lets it through to
+    the create, proven by reaching the injected `start()` failure (RuntimeError, not the
+    gate's SandboxError)."""
+    svc = GvisorSandboxService(SandboxConfig(), client=_LeakClient())
+    client = _LeakClient()
+    spec = SandboxSpec(egress_allow=frozenset({"api.example.com"}))
+    with pytest.raises(RuntimeError, match="simulated sidecar start failure"):
+        svc._setup_filtered_egress(client, spec, "sbx_test", "conv1")
+    assert len(client.created) == 1, "a valid sidecar cap must get past the gate to create"
+
+
+def test_podman_valid_sidecar_caps_pass_the_runtime_gate() -> None:
+    svc = PodmanSandboxService(
+        default_podman_config(), client=_LeakClient(), cli_runner=lambda argv, t: (0, b"", b"")
+    )
+    client = _LeakClient()
+    spec = SandboxSpec(egress_allow=frozenset({"api.example.com"}))
+    with pytest.raises(RuntimeError, match="simulated sidecar start failure"):
+        svc._setup_filtered_egress(client, spec, "sbx_test", "conv1")
+    assert len(client.created) == 1, "a valid sidecar cap must get past the gate to create"
+
+
+# ---------------------------------------------------------------------------
 # P2 #3 — podman destroy_by_conversation removes labeled egress networks too.
 # ---------------------------------------------------------------------------
 

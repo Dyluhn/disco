@@ -95,6 +95,28 @@ def resolve_bounds(spec: SandboxSpec, cfg: SandboxConfig) -> tuple[float, int, i
     pids = int(_bounded("pids", spec.pids, cfg.default_pids_limit))
     return cpu, mem, pids
 
+
+def bounded_sidecar_cap(name: str, value: float) -> float:
+    """Runtime LAST GATE for a filtered-egress PROXY SIDECAR resource cap (cpu / memory_mb
+    / pids), the sidecar analogue of `_bounded`/`resolve_bounds` for the main sandbox.
+
+    Unlike the main-sandbox path there is no model-shaped spec — the deployment config value
+    IS the cap (the max). But `SandboxConfig` is intentionally hot-mutable (ConfigDict with
+    no assignment validation, for Settings hot-apply), so the construction-time
+    `@field_validator` does NOT protect against a POST-construction mutation
+    (`cfg.sidecar_cpu = 0`). This is the last gate before the value is handed to
+    Docker/Podman at create, where a 0 / negative / non-finite cap reads as UNLIMITED
+    (`mem_limit` / `nano_cpus` / `cpu_quota` / `pids_limit` of 0 = no cap) — a silently
+    DISABLED host-protection bound on the egress proxy. Refuse it loudly instead of passing
+    an unbounded sidecar through."""
+    if not math.isfinite(value) or value <= 0:
+        raise SandboxError(
+            f"sandbox sidecar cap {name}={value!r} is invalid (must be a finite positive "
+            "number); a 0/negative/non-finite sidecar cap would disable the host-protection "
+            "limit (unlimited CPU/memory/PIDs on the egress proxy)"
+        )
+    return value
+
 # Exit codes the `timeout` coreutil reports when it fires (SIGTERM / then SIGKILL).
 TIMEOUT_EXIT_CODES = frozenset({124, 137})
 

@@ -27,6 +27,7 @@ from ._container import (
     EGRESS_PROXY_PORT,
     PUBLISHED_PORTS,
     ContainerInstance,
+    bounded_sidecar_cap,
     egress_mode,
     format_allow,
     proxy_env,
@@ -290,6 +291,13 @@ class GvisorSandboxService:
            IP."""
         net_name = f"{EGR_NET_PREFIX}{instance_id}"
         labels = {LABEL_CONV: conversation_id} if conversation_id else {}
+        # EPIC H (P1) — runtime LAST GATE on the sidecar caps. SandboxConfig is hot-mutable, so
+        # a post-construction `cfg.sidecar_cpu = 0` (etc.) bypasses the @field_validator and
+        # would otherwise reach Docker as UNLIMITED. Gate BEFORE creating any network/sidecar
+        # so a mutated cap is refused with nothing stranded.
+        sidecar_cpu = bounded_sidecar_cap("cpu", self._cfg.sidecar_cpu)
+        sidecar_memory_mb = int(bounded_sidecar_cap("memory_mb", self._cfg.sidecar_memory_mb))
+        sidecar_pids_limit = int(bounded_sidecar_cap("pids", self._cfg.sidecar_pids_limit))
         # [P1 leak-guard] Setup runs BEFORE the guarded sandbox create in `_start_container`,
         # so if it creates the network/sidecar then fails partway (connect/start/proxy
         # inject), nothing downstream tears them down. Own the cleanup HERE: any exception
@@ -318,9 +326,9 @@ class GvisorSandboxService:
                 ports={f"{p}/tcp": None for p in sorted(PUBLISHED_PORTS)},  # FIX6: preview publish
                 # EPIC H (P1): bound the sidecar on CPU + PIDs too, not just memory — a wedged
                 # or compromised proxy must not be able to burn host CPU or fork-bomb host PIDs.
-                mem_limit=f"{self._cfg.sidecar_memory_mb}m",
-                nano_cpus=int(self._cfg.sidecar_cpu * 1_000_000_000),
-                pids_limit=self._cfg.sidecar_pids_limit,
+                mem_limit=f"{sidecar_memory_mb}m",
+                nano_cpus=int(sidecar_cpu * 1_000_000_000),
+                pids_limit=sidecar_pids_limit,
                 detach=True,
                 name=net_name,
                 labels=labels,

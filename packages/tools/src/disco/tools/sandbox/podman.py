@@ -49,6 +49,7 @@ from ._container import (
     PUBLISHED_PORTS,
     TIMEOUT_EXIT_CODES,
     ContainerInstance,
+    bounded_sidecar_cap,
     egress_mode,
     format_allow,
     proxy_env,
@@ -349,6 +350,13 @@ class PodmanSandboxService:
            the fake/test path."""
         net_name = f"{EGR_NET_PREFIX}{instance_id}"
         labels = {LABEL_CONV: conversation_id} if conversation_id else {}
+        # EPIC H (P1) — runtime LAST GATE on the sidecar caps. SandboxConfig is hot-mutable, so
+        # a post-construction `cfg.sidecar_cpu = 0` (etc.) bypasses the @field_validator and
+        # would otherwise reach podman as UNLIMITED. Gate BEFORE creating any network/sidecar
+        # so a mutated cap is refused with nothing stranded.
+        sidecar_cpu = bounded_sidecar_cap("cpu", self._cfg.sidecar_cpu)
+        sidecar_memory_mb = int(bounded_sidecar_cap("memory_mb", self._cfg.sidecar_memory_mb))
+        sidecar_pids_limit = int(bounded_sidecar_cap("pids", self._cfg.sidecar_pids_limit))
         # [P1 leak-guard] Setup runs BEFORE the guarded sandbox create in `_start_container`,
         # so a partial failure here (connect/start/proxy inject) would otherwise strand the
         # internal network + proxy sidecar. Own the cleanup: any exception after either
@@ -388,10 +396,10 @@ class PodmanSandboxService:
                 # EPIC H (P1): bound the sidecar on CPU + PIDs too, not just memory — a wedged
                 # or compromised proxy must not be able to burn host CPU or fork-bomb host PIDs.
                 # podman caps cpu via quota/period (mirrors the sandbox create path).
-                mem_limit=f"{self._cfg.sidecar_memory_mb}m",
-                cpu_quota=int(self._cfg.sidecar_cpu * _CPU_PERIOD),
+                mem_limit=f"{sidecar_memory_mb}m",
+                cpu_quota=int(sidecar_cpu * _CPU_PERIOD),
                 cpu_period=_CPU_PERIOD,
-                pids_limit=self._cfg.sidecar_pids_limit,
+                pids_limit=sidecar_pids_limit,
                 detach=True,
                 name=net_name,
                 labels=labels,
