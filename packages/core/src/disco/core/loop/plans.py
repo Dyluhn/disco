@@ -159,6 +159,28 @@ class Planner:
         raw_options = arguments.get("options") or arguments.get("alternatives") or []
         options: list[AlternativeOption] = []
         for i, opt in enumerate(raw_options):
+            # BW-03 — DECOUPLE "labeled choice" from "runnable recovery pick".
+            # An option does NOT need a tool_name to be a valid choice: the model
+            # often enumerates plain-language paths ("Use approach A") with no
+            # tool call. Those still become clickable cards — the pick is recorded
+            # as a user message that steers the agent — so we must NOT drop them.
+            # A `tool_name`, when present, additionally makes the pick directly
+            # runnable; its absence just means "label-only".
+            if isinstance(opt, str):
+                # A bare string IS the choice label (no tool, no description).
+                label = opt.strip()
+                if not label:
+                    continue
+                options.append(
+                    AlternativeOption(
+                        id=f"opt_{i + 1}",
+                        title=label,
+                        description="",
+                        tool_name="",
+                        arguments={},
+                    )
+                )
+                continue
             if not isinstance(opt, dict):
                 continue
             tool_name = str(
@@ -167,17 +189,30 @@ class Planner:
                 or (opt.get("tool_call") or {}).get("tool_name")
                 or ""
             ).strip()
-            if not tool_name:
-                continue
             args = (
                 opt.get("arguments")
                 or (opt.get("tool_call") or {}).get("arguments")
                 or {}
             )
             if not isinstance(args, dict):
-                continue
-            title = str(opt.get("title") or opt.get("label") or f"Option {i + 1}").strip()
+                # Malformed args shouldn't sink the whole option — drop the args,
+                # keep the labeled choice. (The executor revalidates args anyway.)
+                args = {}
             description = str(opt.get("description") or opt.get("why") or "").strip()
+            # Broaden label extraction and NEVER fall back to a content-free
+            # "Option N": derive a real label from any human-readable field, and
+            # only as a last resort name the tool the pick will run. If none of
+            # those exist the option carries no information to show — skip it
+            # rather than render a meaningless button.
+            title = str(
+                opt.get("title")
+                or opt.get("label")
+                or opt.get("name")
+                or description
+                or tool_name
+            ).strip()
+            if not title:
+                continue
             option_id = str(opt.get("id") or f"opt_{i + 1}")
             options.append(
                 AlternativeOption(

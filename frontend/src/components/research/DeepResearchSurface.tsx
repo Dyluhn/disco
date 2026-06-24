@@ -163,8 +163,11 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId,
               onLeaderChange={r.setLeaderId}
               scope={"deep_research" as ScopeId}
               onScopeChange={onScopeChange ?? (() => {})}
-              think={false}
-              onThinkChange={() => {}}
+              // BW-04: Deep Research does not honor a per-run reasoning-effort
+              // flag (its create frame carries depth/recency/iterative, not
+              // `think`), so the Think toggle is OMITTED rather than rendered
+              // inert (always-off, no-op) — no false affordance. Omitting
+              // onThinkChange drops only the toggle; model/scope still render.
               extraControls={
                 // R10: Depth/Recency/Iterative now sit INLINE in the same pill row
                 // as the model/scope cluster (via QueryInput's `extraControls`),

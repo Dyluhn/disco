@@ -138,17 +138,20 @@ function SectionSkeleton({ title, state }: { title: string; state: "pending" | "
  *  (container framing, an eyebrow label, prose emphasis). The body itself still
  *  renders through the same <Markdown>/<CitedText> pipeline, so citations and
  *  grounding are byte-for-byte unchanged; this is layout, not content. */
-type SectionShape = "lead" | "figure" | "list" | "standard";
+type SectionShape = "lead" | "figure" | "table" | "list" | "standard";
 
 /** A GFM table needs a pipe row AND a dash-separator row; a chart is the
- *  fenced ```chart block the synthesis layer emits. Either makes the section a
- *  "figure" worth surfacing more prominently. */
+ *  fenced ```chart block the synthesis layer emits. BW-06: these are NOT the
+ *  same — only a real chart earns the "Figure" eyebrow (a graph promise), while
+ *  a table-only section is labeled "Table". Stamping "Figure" on a table was a
+ *  false affordance (the reader expects a rendered graph that isn't there). */
 function classifySection(markdown: string, index: number): SectionShape {
   // The opening section is the report's lead — give it a standfirst treatment.
   if (index === 0) return "lead";
   const hasChart = markdown.includes("```chart");
   const hasTable = /\n *\|.*\|/.test(markdown) && /\n *\|? *:?-{3,}/.test(markdown);
-  if (hasChart || hasTable) return "figure";
+  if (hasChart) return "figure";
+  if (hasTable) return "table";
   const lines = markdown
     .split("\n")
     .map((l) => l.trim())
@@ -175,6 +178,12 @@ const SHAPE_CHROME: Record<
   figure: {
     section: "rounded-card border border-hairline bg-surface-1/40 px-body py-section",
     eyebrow: "Figure",
+  },
+  table: {
+    // Same card framing as a figure (it's still a data block worth surfacing),
+    // but an honest "Table" label — no implied graph.
+    section: "rounded-card border border-hairline bg-surface-1/40 px-body py-section",
+    eyebrow: "Table",
   },
   list: {
     body: "[&_ul]:marker:text-accent [&_ol]:marker:text-accent",

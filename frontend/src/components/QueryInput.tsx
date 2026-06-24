@@ -101,7 +101,12 @@ export function QueryInput({
     }
   };
 
-  const controls = showControls && onLeaderChange && onScopeChange && onThinkChange;
+  // The model + scope cluster renders whenever the surface wires those two
+  // handlers. The Think toggle is INDEPENDENT: it only appears when the surface
+  // actually honors a reasoning-effort flag (passes onThinkChange). Surfaces
+  // that can't honor it (e.g. Deep Research) simply omit onThinkChange and the
+  // toggle is gone — no inert, always-off affordance (BW-04).
+  const controls = showControls && onLeaderChange && onScopeChange;
 
   return (
     <form
@@ -131,7 +136,7 @@ export function QueryInput({
             <>
               <ModelLeaderPill value={leaderId} onChange={onLeaderChange} />
               <ScopeControl value={scope} onChange={onScopeChange} />
-              <ThinkToggle value={think} onChange={onThinkChange} />
+              {onThinkChange && <ThinkToggle value={think} onChange={onThinkChange} />}
             </>
           )}
           {extraControls}

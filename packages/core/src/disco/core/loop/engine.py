@@ -1518,38 +1518,74 @@ class AgentLoop:
                     )
                 )
                 return await self.get_state()
-            # Record the human's pick as a user message — keeps the log honest
-            # (the audit trail shows "user chose X") AND lands in the LLM View
-            # so a follow-up turn has the context.
-            await self._emit(
-                MessageEvent(
-                    source=EventSource.USER,
-                    message=LLMMessage(
-                        role="user",
-                        content=(
-                            f"Try the alternative approach: “{option.title}”. "
-                            f"{option.description}"
+            # BW-03 — a LABEL-ONLY pick is the user's ANSWER, not a tool to run.
+            # An option with no tool_name carries no executable action (the model
+            # enumerated a plain-language path like "Use approach A"). Picking it
+            # must be treated as the user's reply to the agent's ask_user
+            # question: inject the option's label as the user's text so the model
+            # continues WITH that answer. Synthesizing an ActionEvent here would
+            # dispatch a tool call with an empty tool_name, which errors / does
+            # nothing — so this no-tool case resumes via the user-reply path
+            # (mirroring the _CONTINUE_OPTION_ID resume above) instead.
+            emitted: Event | None = None
+            if not option.tool_name.strip():
+                reply = option.title.strip()
+                if option.description.strip():
+                    reply = (
+                        f"{reply}. {option.description.strip()}"
+                        if reply
+                        else option.description.strip()
+                    )
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.USER,
+                        message=LLMMessage(role="user", content=reply),
+                    )
+                )
+                await self._emit(
+                    StatusEvent(
+                        status=ConversationStatus.RUNNING,
+                        detail=f"alternative_picked:{option.id}",
+                    )
+                )
+            else:
+                # Record the human's pick as a user message — keeps the log honest
+                # (the audit trail shows "user chose X") AND lands in the LLM View
+                # so a follow-up turn has the context.
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.USER,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                f"Try the alternative approach: “{option.title}”. "
+                                f"{option.description}"
+                            ),
                         ),
+                    )
+                )
+                # Synthesize the ActionEvent. The thought records WHY we're
+                # running it (the option's description) so the trace stays
+                # self-explanatory.
+                action = ActionEvent(
+                    source=EventSource.AGENT,
+                    thought=f"User picked alternative: {option.title}. {option.description}",
+                    tool_call=ToolCall(
+                        tool_name=option.tool_name,
+                        arguments=option.arguments,
                     ),
                 )
-            )
-            # Synthesize the ActionEvent. The thought records WHY we're running
-            # it (the option's description) so the trace stays self-explanatory.
-            action = ActionEvent(
-                source=EventSource.AGENT,
-                thought=f"User picked alternative: {option.title}. {option.description}",
-                tool_call=ToolCall(
-                    tool_name=option.tool_name,
-                    arguments=option.arguments,
-                ),
-            )
-            emitted = await self._emit(action)
-            await self._emit(
-                StatusEvent(
-                    status=ConversationStatus.RUNNING,
-                    detail=f"alternative_picked:{option.id}",
+                emitted = await self._emit(action)
+                await self._emit(
+                    StatusEvent(
+                        status=ConversationStatus.RUNNING,
+                        detail=f"alternative_picked:{option.id}",
+                    )
                 )
-            )
+        # Label-only pick: no tool to run — the injected user reply already
+        # resumed RUNNING, so just continue the loop with that answer in view.
+        if emitted is None:
+            return await self.run()
         # Execute the synthesized action directly so the option actually runs
         # before returning to the main loop (analogous to confirm()'s
         # post-gate execute). The loop's next call to run() then proceeds
