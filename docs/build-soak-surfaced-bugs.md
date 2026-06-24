@@ -776,7 +776,13 @@ AS THE USER (§14 runner directive); it approved plans but never answered a clar
   `clarification_answer` (a new OPTIONAL scenario field, default `None`) if set, ELSE a generic safe
   default that **instructs the model not to ask further questions** (`_GENERIC_CLARIFY_ANSWER`) so a model
   can't trap the build in a question-loop.
-- `WAITING_FOR_CONFIRMATION` → send a "yes, proceed" confirmation (`_CONFIRM_ANSWER`) and continue.
+- `WAITING_FOR_CONFIRMATION` → confirm the pending risky action via the product's **REAL confirmation
+  mechanism** — a new `DiscoApiClient.confirm(cid)` that sends the dedicated `{"type":"confirm"}` WS control
+  frame (`routes/ws.py:89` → `runtime.confirm` → `control_ops.py:89` `ControlOps.confirm` →
+  `loop.confirm()` + kick), the exact analogue of `approve_plan`. **A plain user `send_message` does NOT
+  clear this gate** (codex follow-up caught the first cut answering it with a free-text "Yes, proceed"
+  message, which the product ignores → the gate would never clear and the build would stall); only the
+  `confirm` frame executes the pending action and resumes past the gate.
 - **Bounded** by `_MAX_CLARIFY = 3` (mirrors `_MAX_GATES` / `_MAX_RESUMES`): a model that keeps asking past
   the cap is **let go** to a real terminal/inactivity and classified HONESTLY — never an infinite
   answer-loop, never a masked failure.
@@ -789,8 +795,9 @@ are all intact.
 
 **Proof** (`tests/test_api_runner.py`, fake transport): (a) a build that hits `AWAITING_USER_QUESTION` →
 the runner sends the generic answer and proceeds to a clean terminal (PASS); (b) a scenario with a
-`clarification_answer` → that EXACT answer is sent; (c) `WAITING_FOR_CONFIRMATION` → the runner confirms +
-proceeds; (d) a model that asks endlessly → answered up to `_MAX_CLARIFY` (=3) then let go → the
+`clarification_answer` → that EXACT answer is sent; (c) `WAITING_FOR_CONFIRMATION` → the runner clears it
+with the REAL `{"type":"confirm"}` control frame (asserted — NOT a no-op message) and proceeds; (d) a model
+that asks endlessly → answered up to `_MAX_CLARIFY` (=3) then let go → the
 non-finished run classifies `BUILD_DID_NOT_FINISH` (NOT an infinite loop, NOT a silent pass). The prior
 fail-closed test now pins an UNHANDLED gate (`AWAITING_USER_DECISION`). Ruff + basedpyright clean,
 import-linter KEPT, full build-soak suite green. **Live note:** the local 27B was busy with a running soak,

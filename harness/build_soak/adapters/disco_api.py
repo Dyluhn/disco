@@ -8,6 +8,9 @@ routes/conversations.py; the plan gate + steer are WS-ONLY, verified in routes/w
                              + POST /conversations/{cid}/messages      conversations.py:149
                                (appends the user message AND kicks the loop)
   approve_plan               WS {"type":"approve_plan"}    ws.py:95 -> runtime.approve_plan
+  confirm                    WS {"type":"confirm"}         ws.py:89 -> runtime.confirm (clears
+                             WAITING_FOR_CONFIRMATION — the confirm analogue of approve_plan;
+                             a plain message does NOT clear this gate)
   send_followup (message)    WS {"type":"send_message"}    ws.py:48 -> store.append + kick
   send_followup (steer)      WS {"type":"steer",...}       ws.py:58 -> store.append(steer)+kick
   send_followup (request_plan) WS {"type":"request_plan"}  ws.py:98 -> runtime.request_plan
@@ -281,6 +284,14 @@ class DiscoApiClient:
     async def approve_plan(self, conversation_id: str) -> None:
         """Approve the pending plan via the REAL WS plan gate (routes/ws.py:95)."""
         await self._t.ws_control(conversation_id, {"type": "approve_plan"})
+
+    async def confirm(self, conversation_id: str) -> None:
+        """Confirm a pending RISKY ACTION via the REAL WS confirmation gate
+        (routes/ws.py:89 -> runtime.confirm -> ControlOps.confirm -> loop.confirm() + kick).
+        This is the confirmation ANALOGUE of approve_plan, NOT a free-text message: a plain
+        user `send_message` does NOT clear a WAITING_FOR_CONFIRMATION gate — only the dedicated
+        `confirm` control frame executes the pending action and resumes the loop past the gate."""
+        await self._t.ws_control(conversation_id, {"type": "confirm"})
 
     async def resume(self, conversation_id: str) -> dict[str, Any]:
         """Resume a PAUSED (cooperative / actionless) run — the runner ACTS AS THE

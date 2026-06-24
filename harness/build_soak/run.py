@@ -65,10 +65,6 @@ _GENERIC_CLARIFY_ANSWER = (
     "Use your best judgment and proceed with sensible, conventional defaults. "
     "Do not ask further clarifying questions; build the most reasonable version."
 )
-_CONFIRM_ANSWER = (
-    "Yes, proceed. Use sensible, conventional defaults and continue to completion. "
-    "Do not ask further clarifying questions."
-)
 
 # Progress-aware terminal-wait knobs (Bug 15). The terminal wait is NOT a blind
 # wall-clock: `inactivity_s` is the NO-PROGRESS window (a build that keeps emitting
@@ -185,24 +181,28 @@ async def _drive_to_terminal(
                 status in (AWAITING_USER_QUESTION, WAITING_FOR_CONFIRMATION)
                 and clarifies < _MAX_CLARIFY
             ):
-                # The runner ACTS AS THE USER: a build that asks a clarifying question
-                # (or pauses for a go-ahead) mid-build is ANSWERED so it proceeds, instead
-                # of false-stalling into NO_PLAN (Bug 17). Sent over the SAME send_message
-                # path a real user follow-up uses (appends the user turn + kicks the loop).
+                # The runner ACTS AS THE USER: a build that asks a clarifying question (or
+                # pauses for a go-ahead) mid-build is ANSWERED so it proceeds, instead of
+                # false-stalling into NO_PLAN (Bug 17). Each gate is answered via its REAL
+                # mechanism — a clarifying QUESTION over the send_message path a real user
+                # follow-up uses; a CONFIRMATION via the dedicated `confirm` control frame
+                # (the confirm analogue of approve_plan — a plain message does NOT clear it).
                 # BOUNDED (≤ _MAX_CLARIFY): a model that keeps asking past the cap is let go
                 # to a real terminal/inactivity and classified HONESTLY — never an infinite
                 # answer-loop, never a masked failure.
                 clarifies += 1
                 if status == WAITING_FOR_CONFIRMATION:
-                    answer = _CONFIRM_ANSWER
-                    label = "confirmed"
+                    await client.confirm(cid)
+                    timeline.append(
+                        f"confirmed pending action (clarify {clarifies}/{_MAX_CLARIFY})"
+                    )
                 else:
                     answer = clarification_answer or _GENERIC_CLARIFY_ANSWER
-                    label = "answered clarifying question"
-                await client.send_followup(cid, answer, kind="message")
-                timeline.append(
-                    f"{label} (clarify {clarifies}/{_MAX_CLARIFY}, status {status}): {answer!r}"
-                )
+                    await client.send_followup(cid, answer, kind="message")
+                    timeline.append(
+                        "answered clarifying question "
+                        f"(clarify {clarifies}/{_MAX_CLARIFY}): {answer!r}"
+                    )
                 # Wait for the gate to clear so the same unprocessed gate isn't re-read +
                 # re-answered (wastes the clarify budget), mirroring the approval gate.
                 await client.wait_until_status_leaves(

@@ -943,8 +943,9 @@ async def test_clarify_uses_scenario_provided_answer(tmp_path):
 
 @pytest.mark.asyncio
 async def test_confirmation_gate_confirmed_then_build_proceeds(tmp_path):
-    # A WAITING_FOR_CONFIRMATION gate → the runner sends a "yes, proceed" confirmation and
-    # the build continues to a terminal.
+    # A WAITING_FOR_CONFIRMATION gate → the runner clears it via the REAL `confirm` control
+    # frame (the confirm analogue of approve_plan), NOT a no-op free-text message, and the
+    # build continues to a terminal.
     db = tmp_path / "disco.db"
     _seed_db(db, _CID, clean_smoke_log())
     transport = FakeTransport(
@@ -956,11 +957,9 @@ async def test_confirmation_gate_confirmed_then_build_proceeds(tmp_path):
     client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
     scenario = _smoke_scenario()
     run = await drive_scenario(client, scenario, model="m", autonomous=False, timeout_s=2)
-    answers = [
-        f["content"] for f in transport.ws_frames if f.get("type") == "send_message"
-    ]
-    assert len(answers) == 1
-    assert "proceed" in answers[0].lower()
+    # the runner cleared the gate with the REAL confirm frame — NOT a no-op send_message
+    assert {"type": "confirm"} in transport.ws_frames
+    assert not any(f.get("type") == "send_message" for f in transport.ws_frames)
     base = assemble_dossier(
         tmp_path / "out", "run_confirm_001", scenario, run, model="m", autonomous=False
     )
