@@ -56,14 +56,30 @@ class SandboxConfig(BaseModel):
     # persists across the container). This prefix names it.
     workspace_volume_prefix: str = "disco-ws"
 
-    # default resource bounds applied on create (a SandboxSpec may tighten them).
+    # default resource bounds applied on create. EPIC H (P1): these are the deployment
+    # MAXIMUM, not a mere fallback. A SandboxSpec may TIGHTEN a bound (request LESS), but a
+    # model-influenced spec can NEVER loosen one above the configured max nor disable a
+    # limit — `resolve_bounds` (in _container.py) clamps above-max values down and rejects
+    # negatives, while the per-field 0 "unset" sentinel resolves to the default below.
     default_cpu: float = 1.0
     default_memory_mb: int = 2048
     # EPIC H host-protection: default cgroup pids.max for a created sandbox container,
     # so a runaway build (fork bomb, parallel-install storm) can't exhaust host PIDs and
-    # freeze the box. Used when a SandboxSpec leaves `pids` unset (0). Overridable per
-    # deployment via the Settings layer (same hot-apply path as the other bounds).
+    # freeze the box. Used when a SandboxSpec leaves `pids` unset (0); also the hard
+    # MAXIMUM a spec can request (above-max is clamped). Overridable per deployment via
+    # the Settings layer (same hot-apply path as the other bounds).
     default_pids_limit: int = 512
+
+    # EPIC H (P1) — resource caps for the filtered-egress PROXY SIDECAR. A "filtered" box
+    # stands up a SECOND container (the allowlisting proxy). Before this it was capped on
+    # MEMORY only (256m) and left UNBOUNDED on CPU + PIDs — so a wedged/compromised proxy
+    # could burn host CPU or fork-bomb host PIDs with no ceiling. These apply the same
+    # host-protection bounds to the sidecar; smaller than the sandbox's because the proxy
+    # is a thin stdlib server, not a build. NOT spec-influenced (the model never shapes the
+    # sidecar), so they are plain config maxima with no resolve_bounds clamp needed.
+    sidecar_cpu: float = 1.0
+    sidecar_memory_mb: int = 256
+    sidecar_pids_limit: int = 128
 
     # how long to wait for the container to stop on close, before force-remove.
     stop_timeout_s: int = 5

@@ -40,6 +40,29 @@ def service_from_config(cfg: SandboxConfig) -> SandboxService:
     return ProcessSandboxService()
 
 
+# EPIC H (P0) — the dev-only opt-out that re-permits the unisolated `process` backend on
+# a Build/soak path. FAIL-CLOSED is the default (Build/soak refuses `process`); a developer
+# running plain local dev sets DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV=1 to opt back in. This
+# REPLACES the old fail-OPEN DISCO_REQUIRE_PRODUCTION_SANDBOX opt-in, which left soak/Build
+# silently running on `process` unless an operator REMEMBERED to set the protection var.
+PROCESS_SANDBOX_DEV_OPT_OUT_ENV = "ALLOW_PROCESS_SANDBOX_FOR_DEV"  # disco_env prefixes DISCO_
+
+
+def process_sandbox_dev_opt_out_enabled() -> bool:
+    """True iff the dev-only opt-out env explicitly permits the unisolated `process`
+    backend on a Build/soak path. Fail-closed: ONLY an explicit truthy value
+    (DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV=1|true|yes|on) enables it; unset/anything else
+    means NO. Read live (no caching) so a test/monkeypatch toggle is honored."""
+    from disco.core.env import disco_env
+
+    return disco_env(PROCESS_SANDBOX_DEV_OPT_OUT_ENV, "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def require_production_valid_backend(service: SandboxService) -> SandboxService:
     """EPIC H (§1.4/§9.3) production-validity GATE. Returns the service unchanged when
     its backend is production-valid (a container backend with its own PID + network
@@ -48,17 +71,40 @@ def require_production_valid_backend(service: SandboxService) -> SandboxService:
     PID + net namespace and is the source of the isolation incidents — a build
     `kill <pid>` took down the agent-server).
 
-    The Build-Soak / production build path calls this BEFORE any build runs so a
-    misconfigured deployment fails loud at selection time rather than letting an
-    unisolated build loose on the host."""
+    UNCONDITIONAL: this is the low-level gate that always refuses a non-valid backend.
+    The Build/soak entrypoint goes through :func:`preflight_build_sandbox_backend`, which
+    layers the dev-only opt-out on top. NOTE: the process backend's host-signal
+    kill-refusal (`process_backend_signal_command_violation`) is a BEST-EFFORT dev-only
+    nicety, NOT containment — this gate refusing the backend outright is the real
+    containment, so the production path never relies on that refusal."""
     if not getattr(service, "is_production_valid", False):
         raise ProductionValidityError(
             f"the {service.name!r} backend is dev-only and is NOT valid for a production "
-            "or Build-Soak build — it shares the host PID + network namespace, so a build "
+            "or Build/soak build — it shares the host PID + network namespace, so a build "
             "can take down the platform (e.g. `kill <pid>`). Select a container backend: "
-            "Local, Podman, or gVisor."
+            "Local, Podman, or gVisor. (For LOCAL DEV ONLY, set "
+            "DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV=1 to re-permit the process backend.)"
         )
     return service
+
+
+def preflight_build_sandbox_backend(
+    service: SandboxService, *, allow_process_dev: bool | None = None
+) -> SandboxService:
+    """EPIC H (P0) FAIL-CLOSED Build/soak preflight — the entrypoint the live Build
+    builder + the soak harness call BEFORE any build runs.
+
+    Inverts the old fail-open posture: the `process` backend is refused BY DEFAULT for
+    Build/soak (it shares the host PID + net namespace — the `kill <pid>` takedown
+    source), and is re-permitted ONLY by the explicit dev-only opt-out
+    DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV=1 (so plain local dev still works). A container
+    backend (gvisor/local/podman) always passes. `allow_process_dev` defaults to the env
+    read; pass it explicitly in tests."""
+    if allow_process_dev is None:
+        allow_process_dev = process_sandbox_dev_opt_out_enabled()
+    if allow_process_dev and not getattr(service, "is_production_valid", False):
+        return service  # explicit dev opt-out: the unisolated process backend is permitted
+    return require_production_valid_backend(service)  # else fail-closed
 
 
 __all__ = [
@@ -85,6 +131,8 @@ __all__ = [
     "default_podman_config",
     "default_sandbox_config",
     "isolation_for",
+    "preflight_build_sandbox_backend",
+    "process_sandbox_dev_opt_out_enabled",
     "require_production_valid_backend",
     "service_from_config",
 ]

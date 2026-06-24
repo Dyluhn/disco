@@ -206,7 +206,11 @@ async def test_sealed_default_open_when_granted():
 async def test_limits_and_no_env_leak_in_create(monkeypatch):
     monkeypatch.setenv("PMX_FAKE_SECRET", "sk-do-not-leak")
     client = FakeLocalClient()
-    svc = _svc(client)
+    # EPIC H (P1): config is the MAXIMUM. cpu=2.0 is within this deployment's ceiling
+    # (default_cpu=4.0) so it flows through; above-max clamping is its own regression test.
+    cfg = default_local_config()
+    cfg.default_cpu = 4.0
+    svc = LocalSandboxService(cfg, client=client)
     await svc.create(SandboxSpec(cpu=2.0, memory_mb=512), owner_id="o", conversation_id="c")
     kw = client.last.run_kwargs
     assert kw["mem_limit"] == "512m"  # the limit goes through the local socket/daemon

@@ -53,6 +53,7 @@ from ._container import (
     format_allow,
     proxy_env,
     proxy_run_argv,
+    resolve_bounds,
 )
 from .base import (
     ExecResult,
@@ -153,6 +154,14 @@ class PodmanSandboxInstance(ContainerInstance):
     def _exec(self, argv: list[str], timeout: float) -> tuple[int, bytes, bytes]:
         return self._runner(["podman", "--url", self._cli_url, "exec", self._name, *argv], timeout)
 
+    def _guest_run(self, argv: list[str]) -> tuple[int, bytes]:
+        """[P2] Guest exec for the symlink-resolution jail, via the CLI native remote —
+        podman-py's `exec_run` is unusable over the remote API (see the module docstring),
+        so the shared `_resolve_guest_path` (ContainerInstance) drives the guest through
+        this override, exactly as read/list/exec do."""
+        rc, out, _err = self._exec(argv, 30)
+        return rc, out
+
     def _raise_if_dead(self, rc: int, err: bytes) -> None:
         """`podman exec` against a gone/exited container fails at the container level
         (rc 125 + a 'no such container'/'not running' marker), distinct from the inner
@@ -182,7 +191,7 @@ class PodmanSandboxInstance(ContainerInstance):
 
     async def read_file(self, path: str) -> bytes:
         self._alive()
-        target = self._container_path(path)
+        target = await asyncio.to_thread(self._resolve_guest_path, path)  # lexical+symlink (P2)
         rc, out, err = await asyncio.to_thread(self._exec, ["cat", "--", target], 60)
         if rc != 0:
             self._raise_if_dead(rc, err)
@@ -196,7 +205,7 @@ class PodmanSandboxInstance(ContainerInstance):
         container is surfaced as a typed SandboxUnavailableError (→ recreate)."""
         self._alive()
         try:
-            target = self._container_path(path)
+            target = await asyncio.to_thread(self._resolve_guest_path, path)  # symlink jail (P2)
         except SandboxError:
             return False
         rc, _out, err = await asyncio.to_thread(self._exec, ["test", "-f", target], 30)
@@ -206,7 +215,7 @@ class PodmanSandboxInstance(ContainerInstance):
 
     async def list_dir(self, path: str) -> list[str]:
         self._alive()
-        target = self._container_path(path)
+        target = await asyncio.to_thread(self._resolve_guest_path, path)  # symlink jail (P2)
         rc, out, err = await asyncio.to_thread(self._exec, ["ls", "-1A", "--", target], 30)
         if rc != 0:
             self._raise_if_dead(rc, err)
@@ -217,7 +226,7 @@ class PodmanSandboxInstance(ContainerInstance):
         """Write via podman-py `put_archive` (binary-safe + works over remote); the
         parent dir is created via the CLI first."""
         self._alive()
-        target = self._container_path(path)
+        target = await asyncio.to_thread(self._resolve_guest_path, path)  # symlink jail (P2)
         parent = posixpath.dirname(target) or self._ws
         name = posixpath.basename(target)
 
@@ -353,7 +362,13 @@ class PodmanSandboxService:
             # create defaults to pasta, which an internal net cannot attach to).
             network_mode="bridge",
             ports={f"{p}/tcp": None for p in sorted(PUBLISHED_PORTS)},  # FIX6: preview publish
-            mem_limit="256m",
+            # EPIC H (P1): bound the sidecar on CPU + PIDs too, not just memory — a wedged
+            # or compromised proxy must not be able to burn host CPU or fork-bomb host PIDs.
+            # podman caps cpu via quota/period (mirrors the sandbox create path).
+            mem_limit=f"{self._cfg.sidecar_memory_mb}m",
+            cpu_quota=int(self._cfg.sidecar_cpu * _CPU_PERIOD),
+            cpu_period=_CPU_PERIOD,
+            pids_limit=self._cfg.sidecar_pids_limit,
             detach=True,
             name=net_name,
             labels=labels,
@@ -470,11 +485,11 @@ class PodmanSandboxService:
                 "`podman load`; this backend never pulls from a registry)"
             )
 
-        mem_mb = spec.memory_mb or self._cfg.default_memory_mb
-        cpu = spec.cpu or self._cfg.default_cpu
-        # EPIC H host-protection: cap container pids (cgroup pids.max) — fork-bomb guard.
-        # Enforced by the user@ systemd manager via the socket (same path as mem/cpu).
-        pids = spec.pids or self._cfg.default_pids_limit
+        # EPIC H (P1): config is the MAXIMUM, not a fallback. A model spec may tighten
+        # cpu/mem/pids but never loosen them above the configured max nor disable the pids
+        # cap (pids=0 → default, never "unlimited"). Enforced by the user@ systemd manager
+        # via the socket (same path as mem/cpu). See resolve_bounds.
+        cpu, mem_mb, pids = resolve_bounds(spec, self._cfg)
         vol_name = f"{self._cfg.workspace_volume_prefix}-{instance_id}"
         name = f"{SBX_NAME_PREFIX}{instance_id}"
 

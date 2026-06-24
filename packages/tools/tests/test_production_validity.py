@@ -22,6 +22,8 @@ from disco.tools.sandbox import (
     SandboxConfig,
     default_local_config,
     default_podman_config,
+    preflight_build_sandbox_backend,
+    process_sandbox_dev_opt_out_enabled,
     require_production_valid_backend,
     service_from_config,
 )
@@ -72,3 +74,69 @@ def test_gate_consumes_the_factory_selection():
     # …and a container backend from the SAME factory passes.
     gvisor_svc = service_from_config(SandboxConfig(backend="gvisor"))
     assert require_production_valid_backend(gvisor_svc) is gvisor_svc
+
+
+# ---------------------------------------------------------------------------
+# P0 — the FAIL-CLOSED Build/soak preflight (the inversion of the old fail-open opt-in)
+# ---------------------------------------------------------------------------
+def test_preflight_refuses_process_backend_by_default():
+    # Fail-closed: with NO dev opt-out, the Build/soak preflight refuses the process
+    # backend (the inversion — protection is the default, not an opt-in the operator
+    # might forget). `allow_process_dev=False` makes the default explicit + hermetic.
+    with pytest.raises(ProductionValidityError, match="dev-only"):
+        preflight_build_sandbox_backend(ProcessSandboxService(), allow_process_dev=False)
+
+
+def test_preflight_dev_opt_out_re_enables_process_backend():
+    # The explicit dev opt-out re-permits the unisolated process backend (plain local dev).
+    svc = ProcessSandboxService()
+    assert preflight_build_sandbox_backend(svc, allow_process_dev=True) is svc
+
+
+def test_preflight_container_backends_always_pass():
+    # A container backend passes regardless of the opt-out flag (it IS production-valid).
+    for opt in (True, False):
+        for svc in (
+            GvisorSandboxService(SandboxConfig()),
+            LocalSandboxService(default_local_config()),
+            PodmanSandboxService(default_podman_config()),
+        ):
+            assert preflight_build_sandbox_backend(svc, allow_process_dev=opt) is svc
+
+
+def test_dev_opt_out_env_is_fail_closed(monkeypatch):
+    # The opt-out reads ONLY an explicit truthy value; unset / anything else = NO.
+    monkeypatch.delenv("DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV", raising=False)
+    assert process_sandbox_dev_opt_out_enabled() is False
+    monkeypatch.setenv("DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV", "0")
+    assert process_sandbox_dev_opt_out_enabled() is False
+    monkeypatch.setenv("DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV", "nope")
+    assert process_sandbox_dev_opt_out_enabled() is False
+    for truthy in ("1", "true", "YES", "on"):
+        monkeypatch.setenv("DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV", truthy)
+        assert process_sandbox_dev_opt_out_enabled() is True
+    # default-resolution path (no explicit arg) honors the env, fail-closed
+    monkeypatch.delenv("DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV", raising=False)
+    with pytest.raises(ProductionValidityError):
+        preflight_build_sandbox_backend(ProcessSandboxService())
+
+
+# ---------------------------------------------------------------------------
+# P1 #4 — the process host-signal refusal is BEST-EFFORT dev-only, NOT containment.
+# The production path never relies on it (it refuses the backend outright).
+# ---------------------------------------------------------------------------
+def test_host_signal_refusal_is_documented_best_effort_not_containment():
+    from disco.tools.sandbox.process import process_backend_signal_command_violation
+
+    doc = (process_backend_signal_command_violation.__doc__ or "").lower()
+    assert "best-effort" in doc
+    assert "not containment" in doc
+    assert "bypassable" in doc  # explicitly acknowledges it's trivially evadable
+
+
+def test_production_path_never_relies_on_the_signal_refusal():
+    # The REAL containment: production-validity refuses the process backend, so a
+    # prod/soak build is never on the shared-host box that the refusal would "protect".
+    assert ProcessSandboxService().is_production_valid is False
+    with pytest.raises(ProductionValidityError):
+        preflight_build_sandbox_backend(ProcessSandboxService(), allow_process_dev=False)

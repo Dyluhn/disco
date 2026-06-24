@@ -31,6 +31,7 @@ from ._container import (
     format_allow,
     proxy_env,
     proxy_run_argv,
+    resolve_bounds,
     sealed,
 )
 from .base import SandboxInstance, SandboxSpec, SandboxUnavailableError
@@ -305,7 +306,11 @@ class GvisorSandboxService:
             runtime=self._cfg.runtime,
             network="bridge",  # the route to the internet (the proxy's upstream)
             ports={f"{p}/tcp": None for p in sorted(PUBLISHED_PORTS)},  # FIX6: preview publish
-            mem_limit="256m",
+            # EPIC H (P1): bound the sidecar on CPU + PIDs too, not just memory — a wedged
+            # or compromised proxy must not be able to burn host CPU or fork-bomb host PIDs.
+            mem_limit=f"{self._cfg.sidecar_memory_mb}m",
+            nano_cpus=int(self._cfg.sidecar_cpu * 1_000_000_000),
+            pids_limit=self._cfg.sidecar_pids_limit,
             detach=True,
             name=net_name,
             labels=labels,
@@ -406,12 +411,11 @@ class GvisorSandboxService:
         # NOTE: do NOT mkdir the workspace locally — the bind-mount source is a path
         # on the Docker DAEMON host, which Docker creates on demand. Making it here
         # would (wrongly) create it on whatever host runs the backend.
-        mem_mb = spec.memory_mb or self._cfg.default_memory_mb
-        cpu = spec.cpu or self._cfg.default_cpu
-        # EPIC H host-protection: cap the container's pids (cgroup pids.max) so a
-        # runaway build can't exhaust host PIDs and freeze the box. Spec overrides;
-        # default from config (512).
-        pids = spec.pids or self._cfg.default_pids_limit
+        # EPIC H (P1): the deployment config is the MAXIMUM, not a fallback. A
+        # model-influenced spec may TIGHTEN cpu/mem/pids but can never loosen them above
+        # the configured max nor disable the pids cap (pids=0 → default, never Docker's
+        # "unlimited"); above-max is clamped down, negatives rejected. See resolve_bounds.
+        cpu, mem_mb, pids = resolve_bounds(spec, self._cfg)
         mode = egress_mode(spec)
         # Publish the curated port set (Docker can't add mappings to a running
         # container, so the set is declared here), and only when network is

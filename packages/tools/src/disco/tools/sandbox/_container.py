@@ -16,7 +16,7 @@ import posixpath
 import tarfile
 import threading
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..anatomy import Capability
 from .base import (
@@ -28,6 +28,54 @@ from .base import (
     raise_read_error,
     strip_redundant_workspace_prefix,
 )
+
+if TYPE_CHECKING:
+    from .config import SandboxConfig
+
+
+# EPIC H (P1) — the deployment config is the MAXIMUM, not a fallback ---------------
+#
+# A SandboxSpec carries model-influenced resource fields (cpu / memory_mb / pids). The
+# old `spec.X or cfg.default_X` resolution treated the config as a mere FALLBACK, so a
+# spec could set ANY value — including `pids=0` (which `or` then read as "unset" and a
+# raw value of 0 to Docker means UNLIMITED pids: the model could DISABLE the fork-bomb
+# cap) or `cpu=64` (above the deployment's intent). These helpers make the config the
+# hard ceiling: a spec may TIGHTEN a bound (request less) but can never loosen one above
+# the configured maximum, and can never disable a limit.
+
+# The internal "unset" sentinel for a spec resource field: SandboxSpec defaults pids to
+# 0, and a 0 cpu/memory likewise means "the spec didn't choose" — resolved to the
+# configured default (which equals the max).
+_UNSET = 0
+
+
+def _bounded(name: str, value: float, maximum: float) -> float:
+    """Clamp a spec-supplied resource `value` to `[>0 .. maximum]`. 0 is the unset
+    sentinel → the configured default/maximum. A negative value is REJECTED (invalid —
+    a model must not be able to smuggle a negative through to the runtime). Anything
+    ABOVE the maximum is clamped DOWN to it (a spec tightens, never loosens)."""
+    if value < 0:
+        raise SandboxError(
+            f"sandbox spec {name}={value!r} is invalid (must be >= 0); "
+            "resource bounds may only tighten the deployment maximum, never go negative"
+        )
+    if value == _UNSET:
+        return maximum  # unset → the deployment default (== the configured max)
+    return min(value, maximum)  # clamp above-max DOWN; a spec can only tighten
+
+
+def resolve_bounds(spec: SandboxSpec, cfg: SandboxConfig) -> tuple[float, int, int]:
+    """Resolve the effective `(cpu, memory_mb, pids)` for a container create from the
+    SPEC and the deployment CONFIG, treating the config as the hard MAXIMUM (EPIC H P1).
+
+    Closes the spec-overridable-limits hole: `pids=0` resolves to the configured default
+    (never Docker's "unlimited"); `pids`/`cpu`/`memory_mb` ABOVE the configured max are
+    clamped down to it; a NEGATIVE value is rejected. A model-shaped spec therefore can
+    never loosen `default_cpu` / `default_memory_mb` / `default_pids_limit`."""
+    cpu = _bounded("cpu", spec.cpu, cfg.default_cpu)
+    mem = int(_bounded("memory_mb", spec.memory_mb, cfg.default_memory_mb))
+    pids = int(_bounded("pids", spec.pids, cfg.default_pids_limit))
+    return cpu, mem, pids
 
 # Exit codes the `timeout` coreutil reports when it fires (SIGTERM / then SIGKILL).
 TIMEOUT_EXIT_CODES = frozenset({124, 137})
@@ -178,6 +226,9 @@ class ContainerInstance:
         # this from `SandboxConfig.reload_timeout_s` at create time (hot-apply).
         self._reload_timeout_s = reload_timeout_s
         self._destroyed = False
+        # [P2 symlink-jail] cached guest-resolved workspace root (the mount itself is
+        # never a symlink, so this is stable for the box's life). None until first probe.
+        self._ws_real: str | None = None
 
     def _alive(self) -> None:
         if self._destroyed:
@@ -291,13 +342,64 @@ class ContainerInstance:
 
     def _container_path(self, path: str) -> str:
         """Resolve `path` to an absolute path INSIDE the workspace, rejecting escapes
-        (../, absolute). File ops go through the container, so this is the only jail."""
+        (../, absolute). LEXICAL only — see `_resolve_guest_path` for the symlink jail
+        the file ops actually use; this is the first (cheap, no-exec) gate."""
         path = strip_redundant_workspace_prefix(path)  # ROOT-2: workspace/foo → foo
         target = posixpath.normpath(posixpath.join(self._ws, path))
         if target != self._ws and not target.startswith(self._ws + "/"):
             # W1/codex round-6: a path escaping the jail is an ACCESS denial → typed so the
             # loop's bookkeeping handlers (except PermissionError/OSError) catch it.
             raise SandboxPermissionError(f"path escapes workspace: {path!r}")
+        return target
+
+    def _guest_run(self, argv: list[str]) -> tuple[int, bytes]:
+        """Run a short argv IN the guest, returning (exit_code, stdout). Backend-specific
+        transport — docker-py `exec_run` here; the Podman subclass overrides it to use the
+        CLI native remote (podman-py exec is unusable over the remote API). Used only by
+        the symlink-resolution guard, which MUST run inside the guest namespace."""
+        res = self._container.exec_run(argv, demux=True)
+        out = (res[1][0] if res[1] else b"") or b""
+        rc = res[0] if res[0] is not None else -1
+        return rc, out
+
+    def _guest_realpath(self, path: str) -> str | None:
+        """Resolve `path` to its REAL location inside the guest (`realpath -m`, which
+        follows symlink components but does NOT require the final path to exist, so a
+        not-yet-written file resolves too). Returns None if realpath is unavailable or
+        errors — the caller then falls back to the lexical jail (availability over a hard
+        fail; the live integration test proves real enforcement)."""
+        try:
+            rc, out = self._guest_run(["realpath", "-m", "--", path])
+        except Exception:  # noqa: BLE001 — resolution is best-effort hardening
+            return None
+        if rc != 0:
+            return None
+        line = out.decode("utf-8", "replace").strip()
+        return line or None
+
+    def _guest_ws_real(self) -> str | None:
+        """The guest-resolved workspace root, cached (the mount is never a symlink)."""
+        if self._ws_real is None:
+            self._ws_real = self._guest_realpath(self._ws)
+        return self._ws_real
+
+    def _resolve_guest_path(self, path: str) -> str:
+        """[P2] The REAL workspace jail the file ops use. `_container_path` is lexical —
+        `posixpath.normpath` keeps `/workspace/../x` in bounds but is BLIND to guest
+        symlinks, so a sandbox could `ln -s /etc /workspace/out` and then read
+        `out/passwd` (lexically `/workspace/out/passwd`, really `/etc/passwd`). Here we
+        additionally resolve the target IN THE GUEST (`realpath -m`) and require the
+        resolved real path to stay under the resolved workspace, else fail closed
+        (SandboxPermissionError). Returns the lexical container path to use for the op
+        (the guest follows the now-verified-safe symlink itself)."""
+        target = self._container_path(path)  # lexical gate first (rejects ../, absolute)
+        real = self._guest_realpath(target)
+        ws_real = self._guest_ws_real()
+        if real is None or ws_real is None:
+            return target  # realpath unavailable → the lexical jail stands
+        ws_prefix = ws_real.rstrip("/") + "/"
+        if real != ws_real and not real.startswith(ws_prefix):
+            raise SandboxPermissionError(f"path escapes workspace via symlink: {path!r}")
         return target
 
     async def exec_shell(self, cmd: str, *, timeout_s: int) -> ExecResult:
@@ -335,9 +437,9 @@ class ContainerInstance:
     async def read_file(self, path: str) -> bytes:
         """Read a workspace file via `exec cat` — binary-safe, transport-agnostic."""
         self._alive()
-        target = self._container_path(path)
 
         def _read() -> bytes:
+            target = self._resolve_guest_path(path)  # lexical + symlink jail (P2)
             res = self._container.exec_run(["cat", "--", target], demux=True)
             if res[0] != 0:
                 err = (res[1][1] if res[1] else b"") or b""
@@ -354,12 +456,12 @@ class ContainerInstance:
         workspace jail is False. A genuinely dead box still surfaces through
         `_guarded` as a typed SandboxError, which C18 treats as unverifiable."""
         self._alive()
-        try:
-            target = self._container_path(path)
-        except SandboxError:
-            return False
 
         def _test() -> bool:
+            try:
+                target = self._resolve_guest_path(path)  # lexical + symlink jail (P2)
+            except SandboxError:
+                return False
             res = self._container.exec_run(["test", "-f", target])
             return res[0] == 0
 
@@ -368,11 +470,11 @@ class ContainerInstance:
     async def write_file(self, path: str, data: bytes) -> None:
         """Write a workspace file via `cp` (put_archive) — binary-safe."""
         self._alive()
-        target = self._container_path(path)
-        parent = posixpath.dirname(target) or self._ws
-        name = posixpath.basename(target)
 
         def _write() -> None:
+            target = self._resolve_guest_path(path)  # lexical + symlink jail (P2)
+            parent = posixpath.dirname(target) or self._ws
+            name = posixpath.basename(target)
             self._container.exec_run(["mkdir", "-p", "--", parent])
             buf = io.BytesIO()
             with tarfile.open(fileobj=buf, mode="w") as tar:
@@ -395,9 +497,9 @@ class ContainerInstance:
     async def list_dir(self, path: str) -> list[str]:
         """List a workspace dir via `exec ls`."""
         self._alive()
-        target = self._container_path(path)
 
         def _list() -> list[str]:
+            target = self._resolve_guest_path(path)  # lexical + symlink jail (P2)
             res = self._container.exec_run(["ls", "-1A", "--", target], demux=True)
             if res[0] != 0:
                 err = (res[1][1] if res[1] else b"") or b""

@@ -49,7 +49,9 @@ _WORKSPACE_TOKEN_RE = re.compile(
     r"(?<![\w/.])/workspace(?=/|$|[\s'\";|&<>()`])(?:/[^\s'\";|&<>()`]*)?"
 )
 
-# Bug 19 (P0): host-process-SIGNAL containment for the PROCESS backend ONLY.
+# Bug 19 (P0): BEST-EFFORT, DEV-ONLY host-process-SIGNAL refusal for the PROCESS backend
+# ONLY — NOT containment (the real containment is the fail-closed production-validity gate
+# refusing this backend for prod/soak; see __init__.preflight_build_sandbox_backend).
 # This backend shares the host PID namespace (no isolation — §5.1 dev-only), so a
 # `kill <pid>` the build issues against a PID it discovered (`ss -lntp`/`pgrep`) can
 # take down the AGENT-SERVER itself (observed LIVE: MiniMax-M3 ran `kill 931479` —
@@ -94,7 +96,15 @@ def process_backend_signal_command_violation(command: str) -> str | None:
     process on the process (dev) backend, else None. BLANKET refusal of host-signal
     shapes (`kill`/`pkill`/`killall`/`fuser -k`/`… | xargs kill`); scoped to the
     process backend only (the container/isolated backend has its own PID namespace —
-    a kill there only hits sandbox processes — and is NOT routed through this check)."""
+    a kill there only hits sandbox processes — and is NOT routed through this check).
+
+    NOT CONTAINMENT (P1) — this is a BEST-EFFORT, DEV-ONLY string scan and is trivially
+    bypassable (a renamed binary, a raw `os.kill` in `python -c`, env indirection). It
+    must never be presented as real isolation. The REAL containment for prod/soak is the
+    fail-closed production-validity gate (`preflight_build_sandbox_backend`) REFUSING the
+    process backend outright, so a production/soak build is never on a shared-host box in
+    the first place and never relies on this refusal. It survives only to give a local-dev
+    build an actionable nudge instead of a silent stack takedown."""
     for pat in _HOST_SIGNAL_PATTERNS:
         if pat.search(command):
             return _HOST_SIGNAL_REFUSAL

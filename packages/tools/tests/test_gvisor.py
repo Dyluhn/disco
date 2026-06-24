@@ -258,7 +258,12 @@ async def test_filtered_egress_stands_up_and_tears_down_proxy_sidecar(tmp_path):
 
 async def test_resource_limits_and_workspace_mount_applied(tmp_path):
     client = FakeDockerClient()
-    svc = _svc(tmp_path, client)
+    # EPIC H (P1): the deployment config is the MAXIMUM. cpu=2.0 / memory_mb=512 are WITHIN
+    # this deployment's ceiling (default_cpu=4.0, default_memory_mb=2048), so they flow
+    # through unchanged — proving the limits reach the create call. (Above-max clamping is
+    # the separate test_spec_cannot_loosen_bounds_above_config_max regression.)
+    cfg = SandboxConfig(workspace_root=str(tmp_path), default_cpu=4.0)
+    svc = GvisorSandboxService(cfg, client=client)
     await svc.create(SandboxSpec(cpu=2.0, memory_mb=512), owner_id="o", conversation_id="c")
     kw = client.last.run_kwargs
     assert kw["mem_limit"] == "512m"

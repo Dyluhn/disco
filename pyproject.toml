@@ -61,8 +61,17 @@ markers = [
     # Build Soak (S3): the opt-in LIVE-API path that hits a running agent-server on
     # :8000 with a real model. Skipped by default (env-guarded); never runs in CI.
     "live",
+    # EPIC H (P2): the LIVE sandbox-isolation escape suite — drives ONE bounded real
+    # container and inspects ACTUAL isolation (HostConfig.PidMode, namespace inodes vs
+    # host, host-loopback reachability, host-PID signal bypass forms). Skipped unless
+    # explicitly selected (`-m sandbox_integration`); never in the default suite / CI
+    # (jail safety + it needs a container runtime + the sandbox image).
+    "sandbox_integration",
 ]
-addopts = "-q"
+# EPIC H (P2): DESELECT the live sandbox-isolation escape suite by default (jail safety —
+# it spins real containers). A CLI `-m sandbox_integration` overrides this ini expression
+# (the last -m wins), so the suite is reachable only when explicitly selected.
+addopts = "-q -m 'not sandbox_integration'"
 
 [tool.ruff]
 line-length = 100

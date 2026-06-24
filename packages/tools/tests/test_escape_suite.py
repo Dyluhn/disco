@@ -189,6 +189,71 @@ async def test_process_jail_rejects_path_escape(tmp_path, path: str):
         await inst.write_file(path, b"x")
 
 
+# ---------------------------------------------------------------------------
+# (c-symlink) P2 #6 — container workspace confinement resists GUEST symlink escape.
+# Lexical normalization keeps `/workspace/out/passwd` "in bounds", but if `out` is a
+# guest symlink to /etc the real target escapes. The file API resolves IN the guest
+# (`realpath -m`) and refuses a target whose real path leaves the workspace.
+# ---------------------------------------------------------------------------
+class _SymlinkFakeContainer:
+    """A fake guest where `/workspace/out` is a symlink to `/etc`, so `realpath -m`
+    of anything under it resolves OUTSIDE the workspace. Drives the real
+    `_resolve_guest_path` symlink check without a live container."""
+
+    def __init__(self) -> None:
+        self.attrs: dict[str, Any] = {}
+
+    def reload(self) -> None: ...
+
+    def exec_run(self, cmd: Any, demux: bool = False, workdir: Any = None) -> Any:
+        # Only the realpath probe matters here; everything else returns benign success.
+        if isinstance(cmd, list) and cmd[:1] == ["realpath"]:
+            path = cmd[-1]
+            if path == "/workspace":
+                real = "/workspace"
+            elif path.startswith("/workspace/out"):
+                real = "/etc" + path[len("/workspace/out"):]  # the symlink target escapes
+            else:
+                real = path
+            return (0, (real.encode() + b"\n", b"")) if demux else (0, real.encode() + b"\n")
+        return (0, (b"", b"")) if demux else (0, b"")
+
+
+def _symlink_instance() -> GvisorSandboxInstance:
+    return GvisorSandboxInstance(
+        id="sbx_symlink",
+        owner_id="o",
+        conversation_id="c",
+        spec=SandboxSpec(),
+        container=_SymlinkFakeContainer(),
+        container_workspace="/workspace",
+        stop_timeout_s=1,
+    )
+
+
+async def test_container_file_api_refuses_guest_symlink_escape():
+    inst = _symlink_instance()
+    # `out/passwd` is lexically /workspace/out/passwd (in bounds) but `out` -> /etc, so
+    # the real target /etc/passwd escapes. Every file op must refuse it (fail closed).
+    with pytest.raises(SandboxError):
+        await inst.read_file("out/passwd")
+    with pytest.raises(SandboxError):
+        await inst.write_file("out/passwd", b"x")
+    with pytest.raises(SandboxError):
+        await inst.list_dir("out")
+    # file_exists never raises — a symlink-escaping path is simply False (out of scope).
+    assert await inst.file_exists("out/passwd") is False
+
+
+async def test_container_file_api_allows_in_workspace_symlink():
+    # A path that resolves to a REAL location still inside the workspace is allowed —
+    # the guard only refuses targets that leave the jail, not all symlinks.
+    inst = _symlink_instance()
+    # `/workspace/keep.txt` realpath → itself (in bounds) → read proceeds (the fake's
+    # non-realpath exec returns empty success, so the read returns b"").
+    assert await inst.read_file("keep.txt") == b""
+
+
 async def test_process_jail_confines_writes_to_workspace(tmp_path):
     # A write that resolves INSIDE the workspace lands there; an escaping one is rejected
     # before any host file is touched (no /etc/passwd write, no parent-dir traversal).

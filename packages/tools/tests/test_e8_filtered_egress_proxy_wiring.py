@@ -279,3 +279,64 @@ async def test_sealed_and_open_local_paths_unchanged_no_regression():
         conversation_id="c",
     )
     assert client.last.run_kwargs["network_mode"] == "bridge"
+
+
+# ---------------------------------------------------------------------------
+# P1 #3 — the egress proxy SIDECAR is CPU + PID + MEM bounded on EVERY backend.
+# Before this it was capped on memory only; an unbounded sidecar could burn host
+# CPU or fork-bomb host PIDs. The sidecar create must carry the config's sidecar caps.
+# ---------------------------------------------------------------------------
+async def test_filtered_gvisor_sidecar_is_cpu_pid_mem_bounded(tmp_path):
+    cfg = SandboxConfig(
+        workspace_root=str(tmp_path),
+        sidecar_cpu=0.5,
+        sidecar_memory_mb=200,
+        sidecar_pids_limit=64,
+    )
+    client = FakeDockerClient(has_image=True)
+    svc = GvisorSandboxService(cfg, client=client)
+    await svc.create(
+        SandboxSpec(egress_allow=frozenset({"api.example.com"})), owner_id="o", conversation_id="c"
+    )
+    sidecar_kw = client.runs[0].run_kwargs  # the sidecar is created first (then the sandbox)
+    assert sidecar_kw["mem_limit"] == "200m"
+    assert sidecar_kw["nano_cpus"] == 500_000_000  # 0.5 cpu
+    assert sidecar_kw["pids_limit"] == 64
+
+
+async def test_filtered_local_sidecar_is_cpu_pid_mem_bounded():
+    cfg = default_local_config()
+    cfg.sidecar_cpu = 0.5
+    cfg.sidecar_memory_mb = 200
+    cfg.sidecar_pids_limit = 64
+    client = FakeLocalClient()
+    svc = LocalSandboxService(cfg, client=client)
+    await svc.create(
+        SandboxSpec(egress_allow=frozenset({"api.example.com"})), owner_id="o", conversation_id="c"
+    )
+    sidecar_kw = client.runs[0].run_kwargs  # sidecar created first
+    assert sidecar_kw["mem_limit"] == "200m"
+    assert sidecar_kw["nano_cpus"] == 500_000_000
+    assert sidecar_kw["pids_limit"] == 64
+
+
+async def test_filtered_podman_sidecar_is_cpu_pid_mem_bounded():
+    fs: dict[str, bytes] = {}
+    client = FakePodmanClient(has_image=True, fs=fs)
+    cli = FakeCli(fs)
+    cfg = SandboxConfig(
+        backend="podman",
+        runtime="crun",
+        sidecar_cpu=0.5,
+        sidecar_memory_mb=200,
+        sidecar_pids_limit=64,
+    )
+    svc = PodmanSandboxService(cfg, client=client, cli_runner=cli)
+    await svc.create(
+        SandboxSpec(egress_allow=frozenset({"api.example.com"})), owner_id="o", conversation_id="c"
+    )
+    sidecar_kw = client.created[0].create_kwargs  # sidecar created first
+    assert sidecar_kw["mem_limit"] == "200m"
+    # podman caps cpu via quota/period (100ms period): 0.5 cpu → quota 50_000
+    assert sidecar_kw["cpu_quota"] == 50_000 and sidecar_kw["cpu_period"] == 100_000
+    assert sidecar_kw["pids_limit"] == 64
