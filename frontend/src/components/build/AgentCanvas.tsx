@@ -644,6 +644,20 @@ export function AgentCanvas({
   // A2: the Edit/Export Slides tab appears ONLY when a deck with an editable AuthoredDeck
   // sidecar exists AND there's a conversation to edit against (no false affordance).
   const editableDeckBase = useMemo(() => latestEditableDeckBase(events), [events]);
+
+  // BW-15: when a fresh slides_generate just completed, auto-foreground the
+  // Edit/Export Slides tab (mirrors the hasScreenshots→Browser auto-switch). Fire
+  // ONLY on the absent→present transition of editableDeckBase — a ref-remembered
+  // prev base keeps it from re-firing on every re-render (so it doesn't fight a
+  // later manual tab click). Declared AFTER the hasScreenshots effect so, in a
+  // commit where both transition, the deck switch wins for a slides build.
+  const prevDeckBaseRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = prevDeckBaseRef.current;
+    prevDeckBaseRef.current = editableDeckBase;
+    if (!prev && editableDeckBase && cid) setTab("deck");
+  }, [editableDeckBase, cid]);
+
   const tabs = useMemo(
     () =>
       editableDeckBase && cid
