@@ -100,10 +100,71 @@ _PDF_CAPABLE_BACKENDS: frozenset[str] = frozenset({"gvisor", "local", "podman"})
 
 
 def _deck_pdf_capable(runtime: ConversationRuntime) -> bool:
-    """True iff the active sandbox backend is a container with LibreOffice. Mirrors the
-    frontend's `deckPdfCapableBackend` gate so the 409 and the hidden button agree."""
+    """True iff the active sandbox backend is a container that COULD ship LibreOffice.
+
+    This is the cheap BACKEND-TYPE pre-gate only — it does NOT prove LibreOffice is
+    actually installed in the deployed image (a stale image predating the
+    libreoffice-impress layer passes this but cannot convert). The real availability
+    check is `_deck_pdf_available`, which probes ``command -v soffice`` in the box."""
     name = runtime.sandbox_backend_name()
     return name in _PDF_CAPABLE_BACKENDS
+
+
+class _SofficeUnavailable(RuntimeError):
+    """Raised when the sandbox image has no ``soffice`` (LibreOffice) on PATH.
+
+    BW-10: a container backend whose deployed image predates the libreoffice-impress
+    layer passes the backend-type gate but cannot actually convert. We surface this as
+    an HONEST, specific message ("PDF unavailable in this sandbox image") instead of a
+    generic render failure — and the OPS fix is to rebuild/redeploy the image."""
+
+
+async def _probe_soffice_in_sandbox(
+    runtime: ConversationRuntime, *, owner_id: str
+) -> bool:
+    """Spin a THROWAWAY sandbox and probe ``command -v soffice`` — the HONEST capability
+    check for deck→PDF export (BW-10). Returns True iff LibreOffice is on PATH in the
+    deployed image. Any spin/probe error → False (treated as unavailable, never a false
+    affordance). Mirrors the probe pattern in _pptx_render.convert_to_pdf."""
+    import uuid as _uuid
+
+    try:
+        svc = runtime._sandbox_service_now()
+    except Exception:  # noqa: BLE001 — no sandbox service → not available
+        return False
+    cid = f"probe-soffice-{_uuid.uuid4().hex[:12]}"
+    try:
+        instance = await svc.create(
+            runtime._sandbox_spec, owner_id=owner_id, conversation_id=cid
+        )
+    except Exception:  # noqa: BLE001 — cannot spin a box → not available
+        return False
+    try:
+        probe = await instance.exec_shell("command -v soffice", timeout_s=10)
+        return getattr(probe, "exit_code", 1) == 0
+    except Exception:  # noqa: BLE001 — probe error → not available
+        return False
+    finally:
+        try:
+            await instance.destroy()
+        except Exception:  # noqa: BLE001 — teardown best-effort
+            pass
+
+
+async def _deck_pdf_available(
+    runtime: ConversationRuntime, *, owner_id: str
+) -> tuple[bool, str | None]:
+    """Honest deck→PDF capability: backend-type gate AND a real ``soffice`` probe.
+
+    Returns ``(available, reason)`` where ``reason`` is a stable machine code
+    (``"no_container_backend"`` | ``"soffice_missing"``) when unavailable, else None.
+    Used by the FE capabilities endpoint so the PDF button is hidden when the image
+    truly cannot convert — not merely when the backend type is wrong (BW-10)."""
+    if not _deck_pdf_capable(runtime):
+        return False, "no_container_backend"
+    if not await _probe_soffice_in_sandbox(runtime, owner_id=owner_id):
+        return False, "soffice_missing"
+    return True, None
 
 
 async def _render_deck_pdf_in_sandbox(
@@ -123,6 +184,15 @@ async def _render_deck_pdf_in_sandbox(
     cid = f"export-deck-pdf-{_uuid.uuid4().hex[:12]}"
     instance = await svc.create(runtime._sandbox_spec, owner_id=owner_id, conversation_id=cid)
     try:
+        # BW-10: probe FIRST so a stale image (no LibreOffice) yields an HONEST,
+        # specific failure instead of a generic soffice-not-found render error.
+        probe = await instance.exec_shell("command -v soffice", timeout_s=10)
+        if getattr(probe, "exit_code", 1) != 0:
+            raise _SofficeUnavailable(
+                "PDF unavailable in this sandbox image — LibreOffice (soffice) is not "
+                "installed. Rebuild/redeploy the sandbox image (deploy/sandbox/Dockerfile "
+                "ships libreoffice-impress) to enable deck PDF export."
+            )
         await instance.write_file("_deck.pptx", pptx_bytes)
         # soffice --convert-to pdf writes "<stem>.pdf" into --outdir; "." = the jailed
         # workspace root where we wrote the input.
@@ -331,6 +401,13 @@ def make_deck_editor_router(
                 ext = "pptx"
         except HTTPException:
             raise
+        except _SofficeUnavailable as exc:
+            # BW-10: stale image has no LibreOffice — honest, specific 409 (not a
+            # generic 422 render failure). The UI surfaces this in-app (BW-11).
+            raise HTTPException(
+                status_code=409,
+                detail={"reason": "pdf_unavailable", "message": str(exc)},
+            ) from exc
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
                 status_code=422, detail={"reason": "render_failed", "message": str(exc)}
@@ -341,6 +418,20 @@ def make_deck_editor_router(
             media_type=media,
             headers={"Content-Disposition": f'attachment; filename="{base}.{ext}"'},
         )
+
+    @router.get("/conversations/{conversation_id}/deck/export/capabilities")
+    async def deck_export_capabilities(conversation_id: str) -> dict[str, Any]:
+        """Report which export formats this conversation's sandbox can ACTUALLY produce.
+
+        BW-10: deck→PDF needs LibreOffice. Rather than the FE guessing from the backend
+        TYPE alone (a stale image passes that but cannot convert), this probes
+        ``command -v soffice`` in a throwaway box so the PDF button is hidden HONESTLY
+        when the deployed image lacks it. ``pptx``/``html`` render in-process → always
+        available."""
+        if runtime is None:
+            return {"pptx": True, "html": True, "pdf": False, "pdf_reason": "no_runtime"}
+        available, reason = await _deck_pdf_available(runtime, owner_id=DEFAULT_OWNER_ID)
+        return {"pptx": True, "html": True, "pdf": available, "pdf_reason": reason}
 
     @router.put("/conversations/{conversation_id}/deck/editor")
     async def patch_deck(
