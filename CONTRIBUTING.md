@@ -21,6 +21,16 @@ push.
   for running the Build/Agent surface for real. The fully hermetic `make test` path
   does not need one (it uses the `process` backend on the host); the integration tests
   and live runs do.
+- **LibreOffice (`soffice`)** for deck→PDF export on the **`process` (host) backend** —
+  the default the dev server runs. PPTX + HTML deck export need nothing extra, but
+  converting a deck to PDF shells out to headless LibreOffice. Install the minimal
+  Impress-only package on your host (the container/sandbox image already ships it):
+  - Debian/Ubuntu: `sudo apt-get install -y libreoffice-impress`
+  - Fedora: `sudo dnf install -y libreoffice-impress`
+  - macOS: `brew install --cask libreoffice`
+
+  Without it, deck→PDF fails soft with an honest message naming the missing binary; the
+  rest of the app is unaffected.
 
 First run also fetches a few one-time artifacts that the dev deps drive: Playwright's
 Chromium (`playwright install chromium`) for the browser-daemon integration test, and

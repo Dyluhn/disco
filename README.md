@@ -139,6 +139,14 @@ first use. Bring-your-own / self-host / paid TTS tiers stay opt-in.
 Other optional extras live on the member packages (not the workspace root), so install
 them with `--package` (e.g. the tools `browser` extra for Playwright).
 
+Deck→PDF export shells out to headless **LibreOffice** (`soffice`). On the `process`
+(host) backend the dev server runs by default, install the Impress-only package on
+your host so it works out of the box — the container/sandbox image already ships it:
+`sudo apt-get install -y libreoffice-impress` (Debian/Ubuntu), `sudo dnf install -y
+libreoffice-impress` (Fedora), or `brew install --cask libreoffice` (macOS). PPTX +
+HTML deck export need nothing extra; only PDF conversion needs it, and it fails soft
+with an honest message when absent.
+
 ## License
 
 disco is licensed under the **Apache License 2.0** — see [`LICENSE`](./LICENSE).
