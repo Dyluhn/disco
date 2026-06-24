@@ -16,6 +16,7 @@ from .files import make_files_router
 from .health import make_health_router
 from .mcp import make_mcp_router
 from .models import make_models_router
+from .pi_inference import make_pi_inference_router
 from .preview import make_preview_router
 from .preview_edit import make_preview_edit_router
 from .probes import make_probes_router
@@ -37,6 +38,7 @@ __all__ = [
     "make_health_router",
     "make_mcp_router",
     "make_models_router",
+    "make_pi_inference_router",
     "make_preview_router",
     "make_preview_edit_router",
     "make_probes_router",

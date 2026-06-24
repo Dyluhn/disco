@@ -22,6 +22,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .host_proxy import HostPreviewProxyMiddleware, make_preview_session_resolver
+from .pi_inference import PiInferenceTokenStore
 from .routes import (
     make_activity_router,
     make_conversations_router,
@@ -32,6 +33,7 @@ from .routes import (
     make_health_router,
     make_mcp_router,
     make_models_router,
+    make_pi_inference_router,
     make_preview_edit_router,
     make_preview_router,
     make_probes_router,
@@ -134,5 +136,14 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     app.include_router(make_share_router(store, runtime))
     app.include_router(make_debug_router(store, runtime))
     app.include_router(make_probes_router())
+    # EPIC C — the DiscoInferenceGateway: a loopback, run-scoped, OpenAI-compatible
+    # endpoint that lets the Pi sidecar drive the UI-selected model WITHOUT ever
+    # seeing a provider key. The ephemeral token store is held on app.state so the
+    # kernel-spawn path can issue tokens and the lifecycle (cancel/finish/error) can
+    # revoke them; the router resolves the bound model + decrypts the key per request
+    # via the shared ConfigStore/SecretStore.
+    pi_token_store = PiInferenceTokenStore()
+    app.state.pi_token_store = pi_token_store
+    app.include_router(make_pi_inference_router(pi_token_store))
 
     return app
