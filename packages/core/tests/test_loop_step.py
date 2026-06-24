@@ -1200,12 +1200,14 @@ async def test_execution_nudge_without_action_lands_instead_of_livelocking():
     model that keeps declaring `finish` must NOT spin forever on the execution
     gate. The plan-completeness auto-continue ladder is inert here (nothing is
     missing). W5 added an explicit cap (_EXECUTION_NUDGE_CAP = 3): after 3 nudges
-    the gate emits FINISHED:execution_nudge_cap directly and halts.
+    the gate terminalizes STUCK:approve_plan_no_execution directly and halts —
+    a plan approved but never executed is a terminal FAILURE per §11.2, NOT a
+    false FINISHED.
 
     Inverse proof: the script caps at an `LLMError` sentinel after 20 finish
     attempts, so a REVERTED backstop (bare `continue`) terminates into a
-    model_error ERROR state — and never lands FINISHED. The FIXED path lands
-    in ~4 turns (3 nudges + 1 cap release), well before the sentinel cap."""
+    model_error ERROR state. The FIXED path lands STUCK in ~4 turns (3 nudges +
+    1 cap terminal), well before the sentinel cap."""
     from disco.core import ActionEvent as AE
     from disco.core import (
         ConversationStatus,
@@ -1257,15 +1259,16 @@ async def test_execution_nudge_without_action_lands_instead_of_livelocking():
     state = await store.get_state(CID)
     events = await store.get_events(CID)
     # Landed cleanly via the W5 execution-nudge cap — NOT spun to the LLMError cap.
-    # W5 changed the exit mechanism: the cap emits FINISHED:execution_nudge_cap
-    # directly (bypassing the noop valve) so the run lands in bounded turns.
-    assert state.execution_status == ConversationStatus.FINISHED
+    # The cap terminalizes STUCK:approve_plan_no_execution directly (bypassing the
+    # noop valve) so the run lands in bounded turns — a false FINISHED here would
+    # be the APPROVE_PLAN_NO_EXECUTION bug.
+    assert state.execution_status == ConversationStatus.STUCK
     terminal = next(
         e
         for e in reversed(events)
-        if isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED
+        if isinstance(e, StatusEvent) and e.status == ConversationStatus.STUCK
     )
-    assert terminal.detail == "execution_nudge_cap"
+    assert terminal.detail == "approve_plan_no_execution"
     # The execution gate actually fired (the path under test ran)...
     assert loop._execution_nudges >= _EXECUTION_NUDGE_CAP
     # ...and it terminated promptly — well short of the 20-finish LLMError cap.

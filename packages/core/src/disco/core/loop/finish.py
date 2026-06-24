@@ -1000,15 +1000,18 @@ class FinishGate:
             and not signals.productive_action_since_approval(events)
         ):
             # W5 cap: after _EXECUTION_NUDGE_CAP nudges without productive
-            # action, RELEASE by landing the run FINISHED with a loud warning.
-            # Emitting FINISHED here (rather than FALLTHROUGH) bypasses the
-            # finalize_finish auto-continue ladder, which would loop forever
-            # when plan steps remain incomplete: the cap is the terminal exit
-            # for this path, not a gate permitting further continuation.
+            # action, TERMINALIZE the run as a FAILURE — NOT a false FINISHED.
+            # Spec §11.2: after approval, execution must produce ≥1 action OR
+            # a terminal explicit failure. A plan that is approved but never
+            # executed is the latter, so land STUCK (bounded no-progress /
+            # model-stall — same family as the other no-progress terminals;
+            # ERROR is reserved for thrown exceptions). The cap is the
+            # terminal exit for this path: HALT so the engine exits the loop
+            # and `get_state()` surfaces STUCK/approve_plan_no_execution.
             if self._loop._execution_nudges >= _EXECUTION_NUDGE_CAP:
                 _LOG.warning(
-                    "execution-nudge cap (%d) reached for %s — releasing finish gate; "
-                    "the plan was approved but never executed.",
+                    "execution-nudge cap (%d) reached for %s — plan approved but "
+                    "never executed; terminalizing STUCK (approve_plan_no_execution).",
                     _EXECUTION_NUDGE_CAP,
                     self._loop.conversation_id,
                 )
@@ -1019,22 +1022,18 @@ class FinishGate:
                             role="user",
                             content=(
                                 "<system-reminder>\n"
-                                f"⚠ The execution gate fired {self._loop._execution_nudges}× "
-                                "without the agent taking action since plan approval. "
-                                "Releasing the finish gate — the plan may be unexecuted; "
-                                "note this clearly in your summary.\n"
+                                "Plan approved but no execution action was taken after "
+                                f"{self._loop._execution_nudges} execution reminders. "
+                                "The plan was not executed.\n"
                                 "</system-reminder>"
                             ),
                         ),
                     )
                 )
-                # Land the run FINISHED so the caller sees a clean
-                # terminal status. Return HALT — the engine exits the
-                # loop and `get_state()` surfaces the FINISHED status.
                 await self._loop._emit(
                     StatusEvent(
-                        status=ConversationStatus.FINISHED,
-                        detail="execution_nudge_cap",
+                        status=ConversationStatus.STUCK,
+                        detail="approve_plan_no_execution",
                     )
                 )
                 return Disp.HALT

@@ -173,6 +173,9 @@ async def test_c18_satisfied_predicate_emits_met_note(tmp_path):
                     ],
                 },
             ),
+            # A real productive action so the run executes the plan (else the
+            # approve→no-execution gate terminalizes STUCK before finish).
+            action_step("shell", {"command": "echo done"}),
             # plan_step(1, 'done') — the C18 hook evaluates the predicate
             action_step("plan_step", {"index": 1, "state": "done"}),
             finish_step(),
@@ -240,6 +243,7 @@ async def test_c18_unsatisfied_predicate_emits_not_met_note(tmp_path):
                     ],
                 },
             ),
+            action_step("shell", {"command": "echo done"}),
             action_step("plan_step", {"index": 1, "state": "done"}),
             finish_step(),
         ]
@@ -301,6 +305,7 @@ async def test_c18_no_predicate_emits_no_note(tmp_path):
                     ],
                 },
             ),
+            action_step("shell", {"command": "echo done"}),
             action_step("plan_step", {"index": 1, "state": "done"}),
             finish_step(),
         ]
