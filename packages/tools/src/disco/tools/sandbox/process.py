@@ -49,6 +49,57 @@ _WORKSPACE_TOKEN_RE = re.compile(
     r"(?<![\w/.])/workspace(?=/|$|[\s'\";|&<>()`])(?:/[^\s'\";|&<>()`]*)?"
 )
 
+# Bug 19 (P0): host-process-SIGNAL containment for the PROCESS backend ONLY.
+# This backend shares the host PID namespace (no isolation — §5.1 dev-only), so a
+# `kill <pid>` the build issues against a PID it discovered (`ss -lntp`/`pgrep`) can
+# take down the AGENT-SERVER itself (observed LIVE: MiniMax-M3 ran `kill 931479` —
+# the agent-server's uvicorn pid — and the whole dev stack went down). The Bug-7/16
+# reserved-PORT containment blocks reserved-port BIND/KILL shapes by port number, but
+# NOT a raw `kill <pid>` of a discovered PID. A build has NO legitimate need to signal
+# host processes — its OWN foreground server is managed via the named preview/dev
+# session (`shell_kill_process` → ShellSessionManager.kill_foreground) — so we
+# BLANKET-refuse process-signal command shapes here. BEST-EFFORT command-pattern
+# matching (like the reserved-port scan): trivially bypassable (renamed binary, raw
+# os.kill in a python -c, env-indirection) — the robust long-term answer is a
+# PID-namespaced/isolated backend (gVisor/container), which already has its OWN PID
+# namespace so a kill there only hits sandbox processes (the container path is left
+# UNCHANGED). This net stops the trivial stack-takedown. Each pattern fires only when
+# the signalling verb is a COMMAND head — string start, or after a shell separator
+# (`;`/`&`/`|`/`(`/backtick/`&&`/`||`) — so `kill`/`pkill`/`killall` buried inside an
+# `echo`/quoted argument is not falsely refused, and `pytest -k kill_switch` (no word
+# boundary; `-k` is a flag) never matches.
+_CMD_HEAD = r"(?:^|[;&|`(\n]|\|\||&&)\s*"
+_HOST_SIGNAL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(_CMD_HEAD + r"kill\b"),           # kill <pid> / kill -9 / kill -TERM / kill -s TERM
+    re.compile(_CMD_HEAD + r"pkill\b"),          # pkill / pkill -f uvicorn
+    re.compile(_CMD_HEAD + r"killall\b"),        # killall python
+    re.compile(r"\bfuser\b[^\n]*\s-k\b"),        # fuser -k 8000/tcp (free a port by killing owner)
+    re.compile(r"\bxargs\b[^\n|]*\bkill\b"),     # lsof -ti:PORT | xargs kill / xargs -r kill
+)
+
+# Actionable refusal — MUST start with "refused:" so system.py (_exec_outcome, Bug 16)
+# promotes it to the ToolOutcome.error text the model actually sees (the loop drops tool
+# `content`), instead of a bare "exited 126" the model can't recover from.
+_HOST_SIGNAL_REFUSAL = (
+    "refused: killing host processes is not permitted on this (process) backend — it "
+    "shares the host, so a `kill <pid>` can take down the platform. Ports 8000/8800 are "
+    "platform-owned; serve your preview on a non-reserved port such as 8080 (it runs in "
+    "your named preview/dev session). To restart your OWN server, stop/start that session "
+    "(shell_kill_process), never `kill`/`pkill`/`killall`/`fuser -k` a host PID or free a port."
+)
+
+
+def process_backend_signal_command_violation(command: str) -> str | None:
+    """Bug 19 — return an actionable refusal string if `command` would SIGNAL a host
+    process on the process (dev) backend, else None. BLANKET refusal of host-signal
+    shapes (`kill`/`pkill`/`killall`/`fuser -k`/`… | xargs kill`); scoped to the
+    process backend only (the container/isolated backend has its own PID namespace —
+    a kill there only hits sandbox processes — and is NOT routed through this check)."""
+    for pat in _HOST_SIGNAL_PATTERNS:
+        if pat.search(command):
+            return _HOST_SIGNAL_REFUSAL
+    return None
+
 
 class ProcessSandboxInstance:
     """[CONTRACT boundary] An in-subprocess instance with a jailed workspace."""
@@ -148,6 +199,16 @@ class ProcessSandboxInstance:
         why = reserved_port_command_violation(cmd, reserved_control_ports())
         if why is not None:
             return ExecResult(exit_code=126, stdout="", stderr=why)
+        # Bug 19 (P0) — ADDITIONAL containment: blanket-refuse host-process-SIGNAL
+        # commands (`kill <pid>`/`pkill`/`killall`/`fuser -k`/`… | xargs kill`) on the
+        # shared-host process backend, so a build can't take down the agent-server (or any
+        # host process) via a raw `kill <pid>` of a PID it discovered. Runs AFTER the
+        # reserved-port check so a reserved-port `fuser -k 8000` keeps its port-specific
+        # message. Process backend ONLY — the container/isolated backend has its own PID
+        # namespace and is not routed here. Returns BEFORE the subprocess launcher.
+        signal_why = process_backend_signal_command_violation(cmd)
+        if signal_why is not None:
+            return ExecResult(exit_code=126, stdout="", stderr=signal_why)
         cmd = self._rewrite_workspace_paths(cmd)
         proc = await asyncio.create_subprocess_shell(
             cmd,
