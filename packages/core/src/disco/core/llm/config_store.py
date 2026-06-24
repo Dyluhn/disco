@@ -159,6 +159,11 @@ class ConfigStore:
         """Persist the live-browser enable toggle. The agent-server reloads per-request."""
         return self.save(self.load().model_copy(update={"live_browser": live_browser}))
 
+    def save_build_kernel(self, build_kernel: str) -> RouterConfig:
+        """Persist the Build kernel selector (Disco Pi campaign A2). The agent-server
+        reloads per-request, so a change drives the NEXT control op / run."""
+        return self.save(self.load().model_copy(update={"build_kernel": build_kernel}))
+
     # -- Build-project persistence --------------------------------------------
 
     def save_projects(self, projects: ProjectStorageSettings) -> RouterConfig:

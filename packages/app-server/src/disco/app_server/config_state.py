@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 from .config.dtos import (
     AssignmentsDTO,
     AssignmentsPatch,
+    BuildKernelConfigDTO,
     DataSourcesConfigDTO,
     EncodersConfigDTO,
     ImageGenConfigDTO,
@@ -49,6 +50,7 @@ from .config.dtos import (
 )
 from .config.mappers import (
     _assignments_from,
+    _build_kernel_from,
     _data_sources_from,
     _encoders_from,
     _entry_from,
@@ -629,6 +631,39 @@ class ConfigState:
 
         self._store.save_live_browser(LiveBrowserSettings(enabled=dto.enabled))
         return _live_browser_from(self._store.load())
+
+    # Build kernel selector (persisted; agent-server reads it per request) --------
+
+    def build_kernel_config(self) -> BuildKernelConfigDTO:
+        """The Build kernel selector + whether the experimental gate is open (so the
+        Settings UI can show/hide the `pi_experimental` option) — Disco Pi campaign A2."""
+        from disco.core.llm.config import build_kernel_experimental_enabled
+
+        return _build_kernel_from(
+            self._store.load(),
+            experimental_enabled=build_kernel_experimental_enabled(),
+        )
+
+    def update_build_kernel_config(self, dto: BuildKernelConfigDTO) -> BuildKernelConfigDTO:
+        """Persist the Build kernel selector (A2). The agent-server reads it per control
+        op / run, so a change takes effect on the next step without a restart.
+
+        REJECT selecting `pi_experimental` while the experimental gate is OFF — no false
+        affordance, and a direct API call can't persist a setting that would only ever
+        resolve back to `disco` at runtime. Selecting `disco` is always allowed."""
+        from disco.core.llm.config import build_kernel_experimental_enabled
+
+        if dto.kind == "pi_experimental" and not build_kernel_experimental_enabled():
+            raise ConfigValidationError(
+                "experimental_disabled",
+                detail=(
+                    "The experimental Pi build kernel is off. Set the "
+                    "PI_KERNEL_EXPERIMENTAL flag on the agent-server to enable it; "
+                    "until then only the 'disco' kernel can be selected."
+                ),
+            )
+        self._store.save_build_kernel(dto.kind)
+        return self.build_kernel_config()
 
     # Build-project storage path (persisted; agent-server reads it per request) ---
 

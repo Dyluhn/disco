@@ -351,6 +351,17 @@ class McpConnectionDTO(BaseModel):
     enabled: bool | None = None
 
 
+class BuildKernelConfigDTO(BaseModel):
+    """Build kernel selector — the wire mirror of core's RouterConfig.build_kernel
+    (Disco Pi Build Kernel Campaign A2). `kind` is the persisted choice; the
+    read-only `experimental_enabled` reports whether the agent-server's experimental
+    flag is on, so the Settings UI can offer/hide the `pi_experimental` option and
+    not present a false affordance. PUT sends `kind` only."""
+
+    kind: Literal["disco", "pi_experimental"] = "disco"
+    experimental_enabled: bool = False
+
+
 class LiveBrowserConfigDTO(BaseModel):
     """Live browser (noVNC) toggle — the wire mirror of core's LiveBrowserSettings.
     Off by default; enabling shows a 'Live' toggle on the Agent canvas browser pane.

@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from ..config.dtos import (
+    BuildKernelConfigDTO,
     DataSourcesConfigDTO,
     EncodersConfigDTO,
     ImageGenConfigDTO,
@@ -127,6 +128,24 @@ def make_config_router(state: ConfigState) -> APIRouter:
         flags it instead of silently persisting a setting that only ever fails at runtime."""
         try:
             return state.update_live_browser_config(dto)
+        except ConfigValidationError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"reason": exc.reason, "message": exc.detail or exc.reason},
+            ) from exc
+
+    @router.get("/api/build-kernel/config")
+    async def get_build_kernel_config() -> BuildKernelConfigDTO:
+        return state.build_kernel_config()
+
+    @router.put("/api/build-kernel/config")
+    async def put_build_kernel_config(dto: BuildKernelConfigDTO) -> BuildKernelConfigDTO:
+        """Persist the Build kernel selector (Disco Pi campaign A2). Selecting the
+        experimental Pi kernel while the experimental flag is off is rejected with a
+        400 + typed reason so the UI flags it instead of persisting a setting that
+        only ever resolves back to 'disco'."""
+        try:
+            return state.update_build_kernel_config(dto)
         except ConfigValidationError as exc:
             raise HTTPException(
                 status_code=400,

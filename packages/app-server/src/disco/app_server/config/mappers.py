@@ -17,6 +17,7 @@ from disco.core.llm.types import Requirement
 
 from .dtos import (
     AssignmentsDTO,
+    BuildKernelConfigDTO,
     DataSourcesConfigDTO,
     EncodersConfigDTO,
     ImageGenConfigDTO,
@@ -313,6 +314,17 @@ def _live_browser_from(config: RouterConfig) -> LiveBrowserConfigDTO:
     """Wire DTO for the live-browser toggle. Mirrors LiveBrowserSettings."""
     lb = config.live_browser
     return LiveBrowserConfigDTO(enabled=lb.enabled)
+
+
+def _build_kernel_from(
+    config: RouterConfig, *, experimental_enabled: bool
+) -> BuildKernelConfigDTO:
+    """Wire DTO for the Build kernel selector (A2). Mirrors RouterConfig.build_kernel;
+    `experimental_enabled` is supplied by the caller (an env-gate read kept out of this
+    pure mapper)."""
+    return BuildKernelConfigDTO(
+        kind=config.build_kernel, experimental_enabled=experimental_enabled
+    )
 
 
 def _mcp_live_status(approval: dict | None) -> str:

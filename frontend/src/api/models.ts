@@ -2,6 +2,7 @@ import { DEFAULT_ASSIGNMENTS, MODEL_CATALOGUE } from "@/fixtures/models";
 import { ApiError } from "./client";
 import type {
   AssignmentsPatch,
+  BuildKernelConfig,
   DataSourcesConfig,
   EncodersConfig,
   ImageGenConfig,
@@ -367,4 +368,23 @@ export async function updateLiveBrowserConfig(cfg: LiveBrowserConfig): Promise<L
   await fixtureDelay();
   fixtureLiveBrowser = { ...cfg };
   return { ...fixtureLiveBrowser };
+}
+
+// ---- build kernel selector (Disco Pi campaign A2) --------------------------
+
+let fixtureBuildKernel: BuildKernelConfig = { kind: "disco", experimental_enabled: false };
+
+export async function getBuildKernelConfig(): Promise<BuildKernelConfig> {
+  if (isLive()) return apiGet<BuildKernelConfig>("/api/build-kernel/config");
+  await fixtureDelay();
+  return { ...fixtureBuildKernel };
+}
+
+export async function updateBuildKernelConfig(
+  cfg: Pick<BuildKernelConfig, "kind">,
+): Promise<BuildKernelConfig> {
+  if (isLive()) return apiSend<BuildKernelConfig>("PUT", "/api/build-kernel/config", cfg);
+  await fixtureDelay();
+  fixtureBuildKernel = { ...fixtureBuildKernel, kind: cfg.kind };
+  return { ...fixtureBuildKernel };
 }

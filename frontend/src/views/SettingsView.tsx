@@ -1,4 +1,5 @@
 import { AudioSection } from "@/components/settings/AudioSection";
+import { BuildKernelSection } from "@/components/settings/BuildKernelSection";
 import { ChatVerbositySection } from "@/components/settings/ChatVerbositySection";
 import { DataSourcesSection } from "@/components/settings/DataSourcesSection";
 import { EncoderSection } from "@/components/settings/EncoderSection";
@@ -35,6 +36,7 @@ export function SettingsView() {
         <ImageGenSection />
         <DataSourcesSection />
         <SandboxSection />
+        <BuildKernelSection />
         <LiveBrowserSection />
         <ProjectStorageSection />
         <SkillsSection />

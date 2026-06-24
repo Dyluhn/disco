@@ -111,6 +111,7 @@ from disco.tools.sandbox import (
 from disco.tools.sandbox._container import PREVIEW_PORT
 from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
 
+from .build_kernel import BuildKernel, DiscoKernel, PiKernel, select_kernel  # noqa: E402
 from .control_ops import ControlOps
 from .deep_research_service import DeepResearchService
 from .lifecycle import _GATE_STATES, LifecycleManager
@@ -724,6 +725,14 @@ class ConversationRuntime:
         # reaches _loops / _tasks / _executors / _pending_sessions / _cancel_flags /
         # _store + _loop_for / kick via a back-ref. See control_ops.py.
         self._control = ControlOps(self)
+        # Build kernel seam (Disco Pi campaign A1/A2). The current loop runs through
+        # `DiscoKernel` (a thin pass-through to _control / kick / _store, ZERO behavior
+        # change); the public plan/action-gate methods route through `_kernel_for`, so a
+        # future PiKernel can be selected in Settings without the routes caring which
+        # inner agent ran. Both kernels hold only a back-ref (like _control). See
+        # build_kernel/.
+        self._disco_kernel = DiscoKernel(self)
+        self._pi_kernel = PiKernel(self)
 
     # The generative (text-producing) roles a model PICK drives. NLI_VERIFIER is a
     # cross-encoder (entailment scorer), NOT a chat model — pointing it at a picked
@@ -2373,17 +2382,31 @@ class ConversationRuntime:
 
     # ---- control ops: the confirmation gate + kill switch (BoD §13.4/§13.6) -----
 
+    def _kernel_for(self, conversation_id: str) -> BuildKernel:
+        """The active Build kernel for this conversation (Disco Pi campaign A1/A2).
+
+        Reads the persisted `build_kernel` setting and resolves it against the
+        experimental gate: `disco` (default) → `DiscoKernel`; `pi_experimental`
+        → `PiKernel` ONLY when the experimental flag is on, else `DiscoKernel`.
+        Both kernels are constructed once (back-ref only); this just selects. The
+        config is reloaded per call, mirroring `_router_now`, so a Settings change
+        takes effect on the next control op without a restart."""
+        selected = self._config_store.load().build_kernel
+        return select_kernel(
+            self, disco=self._disco_kernel, pi=self._pi_kernel, selected=selected
+        )
+
     async def confirm(self, conversation_id: str) -> None:
-        return await self._control.confirm(conversation_id)
+        return await self._kernel_for(conversation_id).confirm(conversation_id)
 
     async def reject(self, conversation_id: str, reason: str = "rejected by user") -> None:
-        return await self._control.reject(conversation_id, reason)
+        return await self._kernel_for(conversation_id).reject(conversation_id, reason)
 
     async def approve_plan(self, conversation_id: str) -> None:
-        return await self._control.approve_plan(conversation_id)
+        return await self._kernel_for(conversation_id).approve_plan(conversation_id)
 
     async def request_plan(self, conversation_id: str, text: str = "") -> None:
-        return await self._control.request_plan(conversation_id, text)
+        return await self._kernel_for(conversation_id).request_plan(conversation_id, text)
 
     async def pick_alternative(self, conversation_id: str, option_id: str) -> None:
         """Resume from AWAITING_USER_DECISION by selecting the agent's proposed
