@@ -178,6 +178,42 @@ class Valve:
         # automatically once the revised plan is approved (then plan_approved.seq >
         # planning.seq → this is False again and finish is allowed).
         pending_revision = signals.in_planning_for_revision(events)
+        # BW-01 follow-up 2 — bounded halt for a pending re-plan that spins in
+        # PLANNING on tool-less turns. The ceiling branch below keys off the noop
+        # counter, but a BLANK tool-less planning turn moves NEITHER
+        # consecutive_noops NOR _invisible_steps (the planning-mode gate emits only
+        # the ENVIRONMENT plan-nudge and never bumps the invisible-step counter),
+        # so a model emitting prose/blank/nothing in planning racks up turns while
+        # `noops` stays 0 → the run hangs (codex P1). This stateless, noop-
+        # INDEPENDENT bound counts the planning turns since the latest `planning`
+        # marker (no later PlanEvent/plan_approved) and HALTS at the same ceiling
+        # the noop ladder uses — a NON-FINISH PAUSED(actionless), never a stale-plan
+        # FINISH. It is gated on `pending_revision` so a normal first build is
+        # untouched, and releases automatically once a revised plan is submitted/
+        # approved (then planning_turns_since_replan == 0 again).
+        if (
+            pending_revision
+            and signals.planning_turns_since_replan(events)
+            >= self._loop._max_consecutive_noops
+        ):
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "The agent stayed in planning for several turns without"
+                            " submitting a revised plan while a re-plan is pending —"
+                            " pausing instead of burning tokens. Resume to continue,"
+                            " or send a new instruction."
+                        ),
+                    ),
+                )
+            )
+            await self._loop._emit(
+                StatusEvent(status=ConversationStatus.PAUSED, detail="actionless")
+            )
+            return True
         if noops >= self._loop._ACTIONLESS_BREAK_CAP:
             # B5 — completion BEFORE pause. A model that signals "done" via
             # notify_user (×N) instead of finish() trips the actionless valve.

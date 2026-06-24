@@ -21,7 +21,7 @@ from disco.core import (
     StatusEvent,
 )
 from disco.core.llm import OperatingMode
-from disco.core.loop import signals
+from disco.core.loop import AgentStep, signals
 from loop_fakes import (
     ScriptedAgent,
     action_step,
@@ -234,6 +234,76 @@ async def test_pending_first_plan_never_submitting_halts_at_ceiling():
     assert not any(
         isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED
         for e in after
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 2d. RESIDUAL HANG (codex P1) — a pending re-plan that spins in PLANNING on    #
+#     BLANK tool-less turns. consecutive_noops sees no AGENT message and the    #
+#     planning gate never bumps _invisible_steps, so the noop counters stay 0   #
+#     forever and the noop CEILING can NEVER trip. The stateless turns-since-    #
+#     replan bound HALTS it anyway — PAUSED(actionless), no hang, no FINISH.     #
+# --------------------------------------------------------------------------- #
+
+
+def _planning_seq(events):
+    seq = None
+    for e in events:
+        if isinstance(e, StatusEvent) and e.detail == "planning":
+            seq = e.seq or 0
+    return seq
+
+
+async def test_pending_revision_blank_planning_turns_halt_at_bound():
+    blank = AgentStep(thought="", tool_call=None, finished=False)
+    agent = ScriptedAgent([
+        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+        action_step("shell", {"command": "echo build the site"}),  # productive work
+        action_step("plan_step", {"index": 1, "state": "done"}),  # rev-1 complete
+        finish_step(),
+        blank,  # ScriptedAgent repeats the last step → the planning spin
+    ])
+    loop, store = build_loop(agent)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    await loop.send_message("go")
+    await loop.run()  # submit_plan → AWAITING_PLAN_APPROVAL
+    await loop.approve_plan()
+    await loop.run()  # shell, plan_step done, finish → FINISHED
+    await loop.enter_planning("please add a dark-mode toggle")  # planning (pending)
+
+    pre = await store.get_events(CID)
+    assert signals.in_planning_for_revision(pre) is True
+    # No tool-less planning turn has happened yet → the bound is still 0.
+    assert signals.planning_turns_since_replan(pre) == 0
+
+    # The spin: BLANK tool-less planning turns. Without the bound this run never
+    # returns (the noop ceiling can't trip on flat counters) — so reaching this
+    # line at all is the no-hang proof.
+    state = await loop.run()
+    events = await store.get_events(CID)
+
+    # Halted via PAUSED(actionless), NOT a FINISH off the stale rev-1 plan.
+    assert state.execution_status == ConversationStatus.PAUSED
+    assert _last_status_detail(events) == "actionless"
+
+    # PROOF the BOUND (not the noop ladder) did it: the noop counter reads 0 at
+    # the halt (the trailing PAUSED is a resume boundary) — the ceiling never
+    # could have fired — while the turns-since-replan bound reached the ceiling.
+    assert signals.consecutive_noops(events) == 0
+    assert (
+        signals.planning_turns_since_replan(events) >= loop._max_consecutive_noops
+    )
+
+    # No NEW terminal FINISH was emitted after the re-plan re-entered planning
+    # (the rev-1 FINISHED in the log is the prior, legitimately-completed build).
+    pseq = _planning_seq(events)
+    assert pseq is not None
+    assert not any(
+        isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.FINISHED
+        and (e.seq or 0) > pseq
+        for e in events
     )
 
 

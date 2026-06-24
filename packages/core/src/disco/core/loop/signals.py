@@ -323,6 +323,57 @@ def in_planning_for_revision(events: list[Event]) -> bool:
     return approved_seq is None or planning_seq > approved_seq
 
 
+def planning_turns_since_replan(events: list[Event]) -> int:
+    """BW-01 follow-up 2 — count tool-less PLANNING turns spent since the build
+    most recently (re-)entered planning (StatusEvent detail=="planning"), as long
+    as NO plan has since been submitted (PlanEvent) or (re-)approved
+    (plan_approved). This is the stateless, noop-INDEPENDENT bound the actionless
+    valve halts a pending re-plan on.
+
+    Why a separate count (codex P1 — the residual hang): each tool-less planning
+    turn appends exactly one ENVIRONMENT plan-nudge message (engine `_PLAN_NUDGE`,
+    emitted ONLY by the planning-mode gate). A model spinning in planning racks
+    these up even when the noop counters DON'T move — a BLANK tool-less planning
+    turn emits neither an AGENT message (so `consecutive_noops` ignores it) nor an
+    invisible-step bump (the planning gate, unlike `handle_noop_step`, never
+    touches `_invisible_steps`), so the noop ladder reads 0 forever and the
+    `in_planning_for_revision` ceiling never trips → the run hangs. Counting the
+    nudges instead is independent of that classification: prose, blank, or nothing,
+    every tool-less planning turn is one nudge.
+
+    Returns 0 when NOT spinning in planning: no `planning` marker at all, or a
+    later PlanEvent / plan_approved (the model DID submit/land a plan since
+    re-entry — the auto-release case).
+    """
+    from .engine import _PLAN_NUDGE
+
+    planning_seq: int | None = None
+    for e in reversed(events):
+        if isinstance(e, StatusEvent) and e.detail == "planning":
+            planning_seq = e.seq or 0
+            break
+    if planning_seq is None:
+        return 0
+    count = 0
+    for e in events:
+        if (e.seq or 0) <= planning_seq:
+            continue
+        # A plan was submitted or (re-)approved after re-entry → no longer a
+        # planning spin; release the bound (the model moved forward).
+        if isinstance(e, PlanEvent):
+            return 0
+        if isinstance(e, StatusEvent) and e.detail == "plan_approved":
+            return 0
+        if (
+            isinstance(e, MessageEvent)
+            and e.source == EventSource.ENVIRONMENT
+            and e.message is not None
+            and e.message.content == _PLAN_NUDGE
+        ):
+            count += 1
+    return count
+
+
 def actions_since_last_resume(events: list[Event]) -> int:
     """Count ActionEvents (excluding meta/bookkeeping tools and the
     verify-on-finish probe) since the last
