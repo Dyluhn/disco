@@ -5,6 +5,7 @@ from __future__ import annotations
 from _eventlog import (
     action,
     agent_error,
+    awaiting,
     clean_smoke_log,
     msg,
     observation,
@@ -47,15 +48,16 @@ def test_action_without_observation_fails():
     events = [
         msg(1, "user", "build"),
         plan(2),
-        status(3, "RUNNING", "plan_approved"),
-        action(4, "shell", action_id="act4"),
-        # no observation for act4
-        status(5, "FINISHED"),
+        awaiting(3, 2),
+        status(4, "RUNNING", "plan_approved"),
+        action(5, "shell", action_id="act5"),
+        # no observation for act5
+        status(6, "FINISHED"),
     ]
     results = _run(events, _SCN_PLAN)
     fail = next(r for r in results if r.failed)
     assert fail.code == "ACTION_NO_OBSERVATION"
-    assert fail.facts["action_id"] == "act4"
+    assert fail.facts["action_id"] == "act5"
 
 
 def test_agent_error_counts_as_valid_pairing():
@@ -64,12 +66,13 @@ def test_agent_error_counts_as_valid_pairing():
     events = [
         msg(1, "user", "build"),
         plan(2),
-        status(3, "RUNNING", "plan_approved"),
-        action(4, "shell", action_id="act4"),
-        agent_error(5, "act4", error="rejected by policy"),
-        action(6, "shell", action_id="act6"),
-        observation(7, "act6"),
-        status(8, "FINISHED"),
+        awaiting(3, 2),
+        status(4, "RUNNING", "plan_approved"),
+        action(5, "shell", action_id="act5"),
+        agent_error(6, "act5", error="rejected by policy"),
+        action(7, "shell", action_id="act7"),
+        observation(8, "act7"),
+        status(9, "FINISHED"),
     ]
     results = _run(events, _SCN_PLAN)
     assert all(r.passed for r in results), [r.to_dict() for r in results]
@@ -81,11 +84,12 @@ def test_observation_without_action_fails():
     events = [
         msg(1, "user", "build"),
         plan(2),
-        status(3, "RUNNING", "plan_approved"),
-        action(4, "shell", action_id="act4"),
-        observation(5, "act4"),
-        observation(6, "ghost-action"),
-        status(7, "FINISHED"),
+        awaiting(3, 2),
+        status(4, "RUNNING", "plan_approved"),
+        action(5, "shell", action_id="act5"),
+        observation(6, "act5"),
+        observation(7, "ghost-action"),
+        status(8, "FINISHED"),
     ]
     results = _run(events, _SCN_PLAN)
     fail = next(r for r in results if r.failed)
@@ -96,10 +100,60 @@ def test_approved_plan_finished_with_no_action_fails():
     events = [
         msg(1, "user", "build"),
         plan(2),
-        status(3, "RUNNING", "plan_approved"),
-        status(4, "FINISHED"),
+        awaiting(3, 2),
+        status(4, "RUNNING", "plan_approved"),
+        status(5, "FINISHED"),
     ]
     results = _run(events, _SCN_PLAN)
     fail = next(r for r in results if r.failed)
     assert fail.code == "APPROVE_PLAN_NO_EXECUTION"
     assert fail.first_broken_link == "approval_status -> execution_action"
+
+
+def test_plan_approved_without_preceding_awaiting_fails():
+    # A forged/skipped human gate: RUNNING/plan_approved with NO preceding
+    # AWAITING_PLAN_APPROVAL in an interactive run.
+    events = [
+        msg(1, "user", "build"),
+        plan(2),
+        status(3, "RUNNING", "plan_approved"),  # no awaiting before it
+        action(4, "shell", action_id="act4"),
+        observation(5, "act4"),
+        status(6, "FINISHED"),
+    ]
+    results = _run(events, _SCN_PLAN)
+    fail = next(r for r in results if r.failed)
+    assert fail.code == "PLAN_APPROVED_STATUS_MISSING"
+    assert fail.first_broken_link == "plan_event -> awaiting_plan_approval"
+
+
+def test_autonomous_inline_approval_without_awaiting_passes():
+    # An autonomous build auto-approves inline (no AWAITING) — a LEGITIMATE chain.
+    events = [
+        msg(1, "user", "build"),
+        plan(2),
+        status(3, "RUNNING", "plan_approved"),  # autonomous inline approve
+        action(4, "shell", action_id="act4"),
+        observation(5, "act4"),
+        status(6, "FINISHED"),
+    ]
+    scenario = {**_SCN_PLAN, "autonomous": True}
+    results = _run(events, scenario)
+    assert all(r.passed for r in results), [r.to_dict() for r in results]
+
+
+def test_observation_before_its_action_fails():
+    # An observation that PRECEDES the action it references is an invalid pairing.
+    events = [
+        msg(1, "user", "build"),
+        plan(2),
+        awaiting(3, 2),
+        status(4, "RUNNING", "plan_approved"),
+        observation(5, "act6"),  # observation BEFORE its action
+        action(6, "shell", action_id="act6"),
+        status(7, "FINISHED"),
+    ]
+    results = _run(events, _SCN_PLAN)
+    fail = next(r for r in results if r.failed)
+    # act6 has no LATER response -> ACTION_NO_OBSERVATION (the earlier obs doesn't pair)
+    assert fail.code in {"ACTION_NO_OBSERVATION", "OBSERVATION_WITHOUT_ACTION"}

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 
-from _eventlog import action, agent_error, clean_smoke_log, msg, observation, plan, status
+from _eventlog import action, agent_error, awaiting, clean_smoke_log, msg, observation, plan, status
 
 from harness.build_soak.classify import classify, classify_run_folder
 from harness.build_soak.evidence import (
@@ -38,14 +38,15 @@ def test_no_replan_classifies_p0_with_broken_link():
     events = [
         msg(1, "user", "build"),
         plan(2, revision=1),
-        status(3, "RUNNING", "plan_approved"),
-        action(4, "shell", action_id="a4"),
-        observation(5, "a4"),
-        status(6, "FINISHED"),
-        msg(7, "user", "also add a contact page"),
-        action(8, "file_write", args={"path": "c.html", "content": "x"}, action_id="a8"),
-        observation(9, "a8"),
-        status(10, "FINISHED"),
+        awaiting(3, 2),
+        status(4, "RUNNING", "plan_approved"),
+        action(5, "shell", action_id="a5"),
+        observation(6, "a5"),
+        status(7, "FINISHED"),
+        msg(8, "user", "also add a contact page"),
+        action(9, "file_write", args={"path": "c.html", "content": "x"}, action_id="a9"),
+        observation(10, "a9"),
+        status(11, "FINISHED"),
     ]
     c = classify(events)
     assert c["status"] == "FAIL"
@@ -75,14 +76,15 @@ def test_action_no_observation_from_fixture():
     events = [
         msg(1, "user", "build"),
         plan(2),
-        status(3, "RUNNING", "plan_approved"),
-        action(4, "shell", action_id="a4"),
-        status(5, "FINISHED"),
+        awaiting(3, 2),
+        status(4, "RUNNING", "plan_approved"),
+        action(5, "shell", action_id="a5"),
+        status(6, "FINISHED"),
     ]
     scenario = {"id": "s", "assertions": {"event_chain": {"require_plan_before_execution": True}}}
     c = classify(events, scenario=scenario)
     assert c["code"] == "ACTION_NO_OBSERVATION"
-    assert c["facts"]["action_id"] == "a4"
+    assert c["facts"]["action_id"] == "a5"
 
 
 def test_first_broken_link_wins_event_chain_before_output_truth():
@@ -91,9 +93,10 @@ def test_first_broken_link_wins_event_chain_before_output_truth():
     events = [
         msg(1, "user", "build"),
         plan(2),
-        status(3, "RUNNING", "plan_approved"),
-        action(4, "shell", action_id="a4"),  # no observation
-        status(5, "FINISHED"),
+        awaiting(3, 2),
+        status(4, "RUNNING", "plan_approved"),
+        action(5, "shell", action_id="a5"),  # no observation
+        status(6, "FINISHED"),
     ]
     c = classify(events, scenario=_SCN, workspace_manifest={"nope.html": "x"})
     assert c["code"] == "ACTION_NO_OBSERVATION"  # not FALSE_FINISH_NO_OUTPUT
@@ -129,12 +132,13 @@ def test_agent_error_pairing_does_not_break_chain():
     events = [
         msg(1, "user", "build"),
         plan(2),
-        status(3, "RUNNING", "plan_approved"),
-        action(4, "shell", args={"cmd": "boom"}, action_id="a4"),
-        agent_error(5, "a4"),
-        action(6, "shell", action_id="a6"),
-        observation(7, "a6"),
-        status(8, "FINISHED"),
+        awaiting(3, 2),
+        status(4, "RUNNING", "plan_approved"),
+        action(5, "shell", args={"cmd": "boom"}, action_id="a5"),
+        agent_error(6, "a5"),
+        action(7, "shell", action_id="a7"),
+        observation(8, "a7"),
+        status(9, "FINISHED"),
     ]
     scenario = {"id": "s", "assertions": {"event_chain": {"require_plan_before_execution": True}}}
     c = classify(events, scenario=scenario)

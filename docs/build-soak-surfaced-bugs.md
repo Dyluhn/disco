@@ -11,10 +11,10 @@ These were surfaced by the FOUNDATION slice (deterministic harness + contract te
 product fixes happen in a SEPARATE later repair step — engine.py / messages.py / recitation.py
 were NOT touched here.
 
-> **Harness fail-closed fixes (NOT product bugs).** A codex review of the foundation found
-> THREE P0 **false-negatives in the adjudicator itself** — cases where it would classify a
-> REAL failure as PASS. A false-green oracle is the worst outcome for this campaign, so they
-> were fixed inside the harness (no product change) and pinned by
+> **Harness fail-closed fixes (NOT product bugs).** Two codex reviews of the foundation found
+> P0 **false-negatives in the adjudicator itself** — cases where it would classify a REAL
+> failure as PASS. A false-green oracle is the worst outcome for this campaign, so they were
+> fixed inside the harness (no product change) and pinned by
 > `harness/build_soak/tests/test_fail_closed.py`:
 > 1. **DB-row payload drop** (`events.py` normalize_event): a real SQLite row
 >    `{seq,kind,source,payload(JSON)}` had its `payload` dropped, hiding
@@ -22,11 +22,21 @@ were NOT touched here.
 >    `WRITE_TOOL_ATTEMPTED_IN_PLANNING` / `APPROVE_PLAN_NO_EXECUTION` /
 >    `NO_REPLAN_AFTER_REVISION` all read PASS in row shape. Fixed by MERGING the parsed
 >    payload with the row columns; the canonical event is identical for both shapes.
-> 2. **Missing-approval false finish** (`oracles/event_chain.py`): the approval→execution
->    chain was only checked when `plan_approved` already existed (circular), so a
->    `PlanEvent → FINISHED` with no approval PASSED. Now: a PlanEvent that reaches FINISHED
->    MUST show the approval chain — no approval → `PLAN_APPROVED_STATUS_MISSING`; approval but
->    no execution action → `APPROVE_PLAN_NO_EXECUTION`.
+> 2. **Missing-approval false finish + forged approval gate** (`oracles/event_chain.py`): the
+>    approval→execution chain was only checked when `plan_approved` already existed (circular),
+>    so a `PlanEvent → FINISHED` with no approval PASSED. A follow-up review found a second
+>    hole — an approval with NO preceding `AWAITING_PLAN_APPROVAL` (a skipped/forged human
+>    gate) also PASSED. Now the oracle enforces the FULL ordered chain for a plan-gated FINISHED
+>    run: `PlanEvent (A) < AWAITING_PLAN_APPROVAL (B) < RUNNING/plan_approved (C) < execution
+>    action (D)`, first-broken-link wins — B missing/out-of-order →
+>    `PLAN_APPROVED_STATUS_MISSING (plan_event -> awaiting_plan_approval)`; C missing →
+>    `PLAN_APPROVED_STATUS_MISSING`; D missing → `APPROVE_PLAN_NO_EXECUTION`. An AUTONOMOUS run
+>    (scenario/manifest `autonomous: true`) legitimately auto-approves inline with no awaiting
+>    gate (engine.py ~L855), so the B link is required for interactive runs only — this avoids
+>    a NEW false-positive. Re-audit also tightened action↔observation pairing to be
+>    ORDER-AWARE: a response (Observation/AgentError) must appear AFTER the action it answers,
+>    and an Observation must reference an action that PRECEDES it (an out-of-order pairing is no
+>    longer accepted).
 > 3. **Required-evidence skipped into PASS** (`oracles/contract.py`): a scenario asserting
 >    `tool_scope` with no captured tool-scope evidence used to SKIP into PASS; now it
 >    FAIL-CLOSES to INVALID_RUN (insufficient evidence, §8) — the event-only

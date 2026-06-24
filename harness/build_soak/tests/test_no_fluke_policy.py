@@ -4,7 +4,7 @@ replay is FAIL/INTERMITTENT_<code>, never PASS; "fluke" never yields a pass."""
 from __future__ import annotations
 
 import pytest
-from _eventlog import action, msg, observation, plan, status
+from _eventlog import action, awaiting, msg, observation, plan, status
 
 from harness.build_soak.classify import classify, intermittent_classification
 
@@ -13,14 +13,15 @@ def _no_replan_failure():
     events = [
         msg(1, "user", "build"),
         plan(2, revision=1),
-        status(3, "RUNNING", "plan_approved"),
-        action(4, "shell", action_id="a4"),
-        observation(5, "a4"),
-        status(6, "FINISHED"),
-        msg(7, "user", "also add a page"),
-        action(8, "file_write", args={"path": "c.html", "content": "x"}, action_id="a8"),
-        observation(9, "a8"),
-        status(10, "FINISHED"),
+        awaiting(3, 2),
+        status(4, "RUNNING", "plan_approved"),
+        action(5, "shell", action_id="a5"),
+        observation(6, "a5"),
+        status(7, "FINISHED"),
+        msg(8, "user", "also add a page"),
+        action(9, "file_write", args={"path": "c.html", "content": "x"}, action_id="a9"),
+        observation(10, "a9"),
+        status(11, "FINISHED"),
     ]
     c = classify(events, run_id="orig")
     assert c["status"] == "FAIL"

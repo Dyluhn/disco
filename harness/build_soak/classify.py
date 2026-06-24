@@ -76,9 +76,19 @@ def classify(
     workspace_manifest: dict[str, Any] | None = None,
     preview: dict[str, Any] | None = None,
     tool_scope: list[dict[str, Any]] | None = None,
+    autonomous: bool | None = None,
 ) -> dict[str, Any]:
     """Classify one run from its raw event log (full-event dicts OR DB rows) plus
-    optional captured evidence. Returns the §13 classification dict."""
+    optional captured evidence. Returns the §13 classification dict.
+
+    `autonomous`, when given (e.g. from the run manifest), overrides the scenario's
+    autonomy: an autonomous build legitimately skips the AWAITING_PLAN_APPROVAL gate
+    (it auto-approves inline), so the event-chain approval-ordering check relaxes the
+    awaiting link for it."""
+    # An explicit autonomous flag (manifest) overrides the scenario declaration.
+    if autonomous is not None:
+        scenario = {**(scenario or {}), "autonomous": autonomous}
+
     # Normalize the event log; a parse failure is a harness-validity defect.
     parse_ok = True
     try:
@@ -206,6 +216,7 @@ def classify_run_folder(
         commit=manifest.repo_commit if manifest else "",
         seed=manifest.seed if manifest else None,
         evidence_intact=evidence_intact,
+        autonomous=manifest.autonomous if manifest else None,
     )
     (base / CLASSIFICATION_NAME).write_text(
         json.dumps(classification, indent=2, sort_keys=True), encoding="utf-8"

@@ -24,10 +24,11 @@ from typing import Any
 from .. import failure_codes as fc
 from ..events import (
     KIND_ACTION,
+    KIND_AGENT_ERROR,
     KIND_OBSERVATION,
     KIND_PLAN,
+    awaiting_approval_seqs,
     has_action,
-    has_observation_for_action,
     has_plan,
     has_user_message,
     kind_of,
@@ -57,6 +58,16 @@ def _wants_observation_pairs(scenario: dict[str, Any] | None) -> bool:
     return ec.get("require_action_observation_pairs", True) is not False
 
 
+def _is_autonomous(scenario: dict[str, Any] | None) -> bool:
+    """An autonomous build auto-approves its plan inline (no human AWAITING gate),
+    so the awaiting link is not required. Declared by the scenario (mirrors the §6
+    manifest `autonomous` flag); defaults to False (interactive Build — the §15
+    bare-Build scenarios are all `mode: api`, human-approved)."""
+    if not scenario:
+        return False
+    return bool(scenario.get("autonomous", False))
+
+
 class EventChainOracle:
     def check(
         self, events: list[dict[str, Any]], *, scenario: dict[str, Any] | None = None
@@ -83,37 +94,80 @@ class EventChainOracle:
                 )
             ]
 
-        # 3/4. plan event -> approval status -> execution action.
+        # 3/4. The FULL ordered approval chain (§16). For a plan-gated run that
+        # reached a FINISHED terminal the durable facts must show, IN SEQ ORDER:
         #
-        # FAIL-CLOSED: the chain is NOT gated on `plan_approved` already existing
-        # (that is circular — a plan that finished WITHOUT ever being approved would
-        # slip past). The rule keys on the durable facts: a PlanEvent exists and the
-        # run reached a FINISHED terminal. A finished plan-gated build MUST show the
-        # full approval+execution chain.
+        #   PlanEvent (A) < AWAITING_PLAN_APPROVAL (B) < RUNNING/plan_approved (C)
+        #                 < execution action (D)
+        #
+        # FAIL-CLOSED + non-circular: the chain is NOT gated on `plan_approved`
+        # already existing (a plan that finished WITHOUT approval would slip past),
+        # and the human-approval gate (B) must PRECEDE the approval (C) — a
+        # `plan_approved` with no preceding AWAITING is a forged/skipped gate.
+        #
+        # AUTONOMOUS EXCEPTION: an autonomous build auto-approves INLINE (engine.py
+        # ~L855) emitting RUNNING/plan_approved with NO awaiting status — that is a
+        # LEGITIMATE chain, so the B link is required only for interactive runs.
         approvals = plan_approved_seqs(events)
-        has_plan_event = any(kind_of(e) == KIND_PLAN for e in events)
+        awaiting = awaiting_approval_seqs(events)
+        plan_seqs = [seq_of(e) for e in events if kind_of(e) == KIND_PLAN]
         term = terminal_status(events)
+        autonomous = _is_autonomous(scenario)
         # A run still parked at AWAITING_PLAN_APPROVAL (or otherwise non-terminal) is
         # legitimately incomplete, not a chain break — only judge a FINISHED run.
-        if has_plan_event and term == "FINISHED":
-            if not approvals:
-                # The plan reached FINISHED with NO plan_approved status ever —
-                # a false finish: the plan was never approved/executed.
+        if plan_seqs and term == "FINISHED":
+            first_plan = min(plan_seqs)
+
+            # Link A->B: PlanEvent -> AWAITING_PLAN_APPROVAL (interactive only).
+            if not autonomous and not any(s > first_plan for s in awaiting):
                 return [
                     failing(
                         _ORACLE,
                         fc.PLAN_APPROVED_STATUS_MISSING,
-                        first_broken_link="plan_event -> approval_status",
+                        first_broken_link="plan_event -> awaiting_plan_approval",
+                        facts={
+                            "first_plan_seq": first_plan,
+                            "awaiting_plan_approval_present": False,
+                            "terminal_status": term,
+                        },
+                    )
+                ]
+
+            # Link B->C: AWAITING -> RUNNING/plan_approved.
+            if not approvals:
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.PLAN_APPROVED_STATUS_MISSING,
+                        first_broken_link="awaiting_plan_approval -> plan_approved",
                         facts={
                             "plan_approved_present": False,
                             "terminal_status": term,
                         },
                     )
                 ]
+            first_approval = approvals[0]
+
+            # Ordering A < B < C: the awaiting gate must fall BETWEEN the plan and
+            # its approval (interactive only). Catches an out-of-order forged chain.
+            if not autonomous and not any(first_plan < s < first_approval for s in awaiting):
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.PLAN_APPROVED_STATUS_MISSING,
+                        first_broken_link="plan_event -> awaiting_plan_approval",
+                        facts={
+                            "first_plan_seq": first_plan,
+                            "awaiting_seqs": awaiting,
+                            "first_plan_approved_seq": first_approval,
+                            "reason": "no AWAITING_PLAN_APPROVAL between the plan and its approval",
+                        },
+                    )
+                ]
+
+            # Link C->D: RUNNING/plan_approved -> execution action.
             last_approval = approvals[-1]
             if not has_action(events, after_seq=last_approval):
-                # The plan was approved and the run FINISHED, yet not a single
-                # execution action appeared — a false finish of the approval gate.
                 return [
                     failing(
                         _ORACLE,
@@ -144,35 +198,64 @@ class EventChainOracle:
         ]
 
     def _check_pairing(self, events: list[dict[str, Any]]) -> OracleResult | None:
-        # Every ActionEvent must be answered by an Observation OR an AgentError.
-        action_ids: set[str] = set()
+        # ORDER-AWARE pairing: a response must come AFTER the action it answers.
+        # action_id -> the action's seq.
+        action_seqs: dict[str, int] = {}
+        for e in events:
+            if kind_of(e) == KIND_ACTION:
+                action_seqs[str(e.get("id"))] = seq_of(e)
+
+        # Every ActionEvent must be answered by an Observation OR an AgentError that
+        # appears LATER in the log (a response at/ before the action is not a valid
+        # pairing — it is forged/out-of-order).
         for e in events:
             if kind_of(e) != KIND_ACTION:
                 continue
             action_id = str(e.get("id"))
-            action_ids.add(action_id)
-            if not has_observation_for_action(events, action_id):
+            aseq = seq_of(e)
+            if not self._has_later_response(events, action_id, aseq):
                 return failing(
                     _ORACLE,
                     fc.ACTION_NO_OBSERVATION,
                     first_broken_link="execution_action -> observation",
                     facts={
                         "action_id": action_id,
-                        "action_seq": seq_of(e),
+                        "action_seq": aseq,
                         "tool_name": tool_name_of(e),
                     },
                 )
 
-        # Every Observation must reference an existing Action (no dangling obs).
+        # Every Observation must reference an Action that EXISTS and PRECEDES it.
         for e in events:
             if kind_of(e) != KIND_OBSERVATION:
                 continue
             ref = str(e.get("action_id"))
-            if ref not in action_ids:
+            origin = action_seqs.get(ref)
+            if origin is None or origin >= seq_of(e):
                 return failing(
                     _ORACLE,
                     fc.OBSERVATION_WITHOUT_ACTION,
                     first_broken_link="observation -> originating_action",
-                    facts={"observation_seq": seq_of(e), "dangling_action_id": ref},
+                    facts={
+                        "observation_seq": seq_of(e),
+                        "dangling_action_id": ref,
+                        "originating_action_seq": origin,
+                    },
                 )
         return None
+
+    @staticmethod
+    def _has_later_response(events: list[dict[str, Any]], action_id: str, action_seq: int) -> bool:
+        """True iff an ObservationEvent OR AgentErrorEvent references `action_id`
+        with seq > `action_seq` (a rejection/error IS a valid pairing, codex #5)."""
+        for e in events:
+            k = kind_of(e)
+            if seq_of(e) <= action_seq:
+                continue
+            if k == KIND_OBSERVATION and str(e.get("action_id")) == action_id:
+                return True
+            if k == KIND_AGENT_ERROR and e.get("action_id") is not None and (
+                str(e.get("action_id")) == action_id
+            ):
+                return True
+        return False

@@ -47,6 +47,19 @@ def status(seq: int, status_value: str, detail: str | None = None) -> dict[str, 
     }
 
 
+def awaiting(seq: int, plan_seq: int | None = None) -> dict[str, Any]:
+    """An AWAITING_PLAN_APPROVAL status (the human-approval gate). `detail` carries
+    the proposed plan's event id, mirroring the real loop."""
+    return {
+        "id": f"evt_{seq}",
+        "seq": seq,
+        "kind": "status",
+        "source": "system",
+        "status": "AWAITING_PLAN_APPROVAL",
+        "detail": f"evt_{plan_seq}" if plan_seq is not None else None,
+    }
+
+
 def plan(seq: int, *, revision: int = 1, steps: int = 1) -> dict[str, Any]:
     return {
         "id": f"evt_{seq}",

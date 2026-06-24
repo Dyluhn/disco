@@ -8,14 +8,17 @@ as PASS. Each is pinned here so it can never silently regress:
           so WRITE_TOOL_ATTEMPTED_IN_PLANNING / APPROVE_PLAN_NO_EXECUTION /
           NO_REPLAN_AFTER_REVISION all classified PASS in row shape.
   P0 #2 — a plan that reached FINISHED with NO plan_approved status PASSED (the
-          approval chain was only checked when an approval already existed).
+          approval chain was only checked when an approval already existed). A
+          follow-up re-review tightened this to the FULL ordered chain:
+          PlanEvent < AWAITING_PLAN_APPROVAL < RUNNING/plan_approved < action — an
+          approval with no preceding AWAITING gate (interactive) is a forged chain.
   P0 #3 — a scenario REQUIRING tool-scope evidence with that evidence missing was
           SKIPped into PASS instead of INVALID_RUN.
 """
 
 from __future__ import annotations
 
-from _eventlog import action, msg, observation, plan, status, to_db_rows
+from _eventlog import action, awaiting, msg, observation, plan, status, to_db_rows
 
 from harness.build_soak.classify import classify
 
@@ -48,8 +51,9 @@ def _approve_no_execution_log():
     return [
         msg(1, "user", "build"),
         plan(2, revision=1),
-        status(3, "RUNNING", "plan_approved"),
-        status(4, "FINISHED"),
+        awaiting(3, 2),
+        status(4, "RUNNING", "plan_approved"),
+        status(5, "FINISHED"),
     ]
 
 
@@ -57,14 +61,15 @@ def _no_replan_log():
     return [
         msg(1, "user", "build"),
         plan(2, revision=1),
-        status(3, "RUNNING", "plan_approved"),
-        action(4, "shell", action_id="a4"),
-        observation(5, "a4"),
-        status(6, "FINISHED"),
-        msg(7, "user", "also add a contact page"),
-        action(8, "file_write", args={"path": "c.html", "content": "x"}, action_id="a8"),
-        observation(9, "a8", tool="file_write"),
-        status(10, "FINISHED"),
+        awaiting(3, 2),
+        status(4, "RUNNING", "plan_approved"),
+        action(5, "shell", action_id="a5"),
+        observation(6, "a5"),
+        status(7, "FINISHED"),
+        msg(8, "user", "also add a contact page"),
+        action(9, "file_write", args={"path": "c.html", "content": "x"}, action_id="a9"),
+        observation(10, "a9", tool="file_write"),
+        status(11, "FINISHED"),
     ]
 
 
@@ -124,7 +129,8 @@ def test_plan_finished_without_approval_fails():
     c = classify(events, scenario=_PLAN_SCN)
     assert c["status"] == "FAIL"
     assert c["code"] == "PLAN_APPROVED_STATUS_MISSING"
-    assert c["first_broken_link"] == "plan_event -> approval_status"
+    # the FIRST missing link in the ordered chain is the human-approval gate
+    assert c["first_broken_link"] == "plan_event -> awaiting_plan_approval"
 
 
 def test_plan_awaiting_approval_is_not_a_false_finish():
@@ -137,6 +143,59 @@ def test_plan_awaiting_approval_is_not_a_false_finish():
         status(4, "AWAITING_PLAN_APPROVAL", "evt_3"),
     ]
     c = classify(events, scenario=_PLAN_SCN)
+    assert c["status"] == "PASS"
+
+
+# ---- P0 #2b — approval WITHOUT a preceding AWAITING_PLAN_APPROVAL (forged gate) ----
+
+
+def _approval_without_awaiting_log():
+    return [
+        msg(1, "user", "build"),
+        plan(2, revision=1),
+        status(3, "RUNNING", "plan_approved"),  # NO awaiting gate before it
+        action(4, "shell", action_id="a4"),
+        observation(5, "a4"),
+        status(6, "FINISHED"),
+    ]
+
+
+def test_approval_without_preceding_awaiting_fails_both_shapes():
+    full = classify(_approval_without_awaiting_log(), scenario=_PLAN_SCN)
+    row = classify(to_db_rows(_approval_without_awaiting_log()), scenario=_PLAN_SCN)
+    assert full["status"] == "FAIL"
+    assert full["code"] == "PLAN_APPROVED_STATUS_MISSING"
+    assert full["first_broken_link"] == "plan_event -> awaiting_plan_approval"
+    assert row["code"] == "PLAN_APPROVED_STATUS_MISSING"  # NOT PASS in row shape
+
+
+def test_legit_full_chain_still_passes():
+    # user -> Plan -> AWAITING -> RUNNING/plan_approved -> action -> obs -> FINISHED
+    events = [
+        msg(1, "user", "build"),
+        plan(2, revision=1),
+        awaiting(3, 2),
+        status(4, "RUNNING", "plan_approved"),
+        action(5, "shell", action_id="a5"),
+        observation(6, "a5"),
+        status(7, "FINISHED"),
+    ]
+    c = classify(events, scenario=_PLAN_SCN)
+    assert c["status"] == "PASS"
+
+
+def test_autonomous_inline_approval_without_awaiting_passes():
+    # Autonomous build: plan_approved emitted inline with NO awaiting -> legitimate.
+    c = classify(
+        _approval_without_awaiting_log(),
+        scenario={**_PLAN_SCN, "autonomous": True},
+    )
+    assert c["status"] == "PASS"
+
+
+def test_autonomous_override_via_manifest_flag():
+    # The classify-level autonomous override (manifest flag) relaxes the awaiting link.
+    c = classify(_approval_without_awaiting_log(), scenario=_PLAN_SCN, autonomous=True)
     assert c["status"] == "PASS"
 
 

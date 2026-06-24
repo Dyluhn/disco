@@ -48,6 +48,11 @@ SRC_SYSTEM = "system"
 # disco.core ConversationStatus values that are terminal-ish for adjudication.
 TERMINAL_STATUSES = frozenset({"FINISHED", "ERROR", "IDLE"})
 
+# The status the loop stamps while a proposed plan is halted for the human to
+# approve (engine.py _gate_planning_mode, non-autonomous path). It MUST precede a
+# RUNNING/plan_approved in an interactive run; autonomous runs skip it (the loop
+# auto-approves inline with no human gate).
+AWAITING_PLAN_APPROVAL_STATUS = "AWAITING_PLAN_APPROVAL"
 # The status detail the loop stamps when a plan is approved (engine.approve_plan /
 # the autonomous inline approve). The presence of this detail is the durable
 # "approval happened" signal.
@@ -324,4 +329,15 @@ def plan_approved_seqs(events: list[dict[str, Any]]) -> list[int]:
         seq_of(e)
         for e in events
         if kind_of(e) == KIND_STATUS and (e.get("detail") or None) == PLAN_APPROVED_DETAIL
+    ]
+
+
+def awaiting_approval_seqs(events: list[dict[str, Any]]) -> list[int]:
+    """Seqs of every AWAITING_PLAN_APPROVAL status, in order (the human-approval
+    gate that must precede a RUNNING/plan_approved in an interactive run)."""
+    return [
+        seq_of(e)
+        for e in events
+        if kind_of(e) == KIND_STATUS
+        and str(e.get("status")) == AWAITING_PLAN_APPROVAL_STATUS
     ]
