@@ -29,6 +29,7 @@ from disco.tools.builtin._deck_schema import (
     _infer_layout,
     _parse_theme,
     lower_deck,
+    lower_deck_for_editor,
 )
 
 # ---------------------------------------------------------------------------
@@ -232,6 +233,69 @@ def test_continuation_slide_has_cont_type():
     deck = lower_deck(authored)
     cont_slides = [s for s in deck.slides if "_cont" in s.type]
     assert len(cont_slides) >= 1, "No continuation slide found after overflow"
+
+
+# ---------------------------------------------------------------------------
+# BW-12 / BW-13 — editor and export agree; no duplicate title pages
+# ---------------------------------------------------------------------------
+
+
+def _title_overflow_deck() -> AuthoredDeck:
+    """A title slide carrying MORE than one body line — the BW-12 duplicate trap.
+
+    The old lowerer spilled body[1:] into a ``title_cont`` that re-inferred back
+    to the ``title`` layout → a SECOND identical title page.
+    """
+    return AuthoredDeck(
+        title="Dup Test",
+        theme="disco-light",
+        slides=[
+            AuthoredSlide(
+                type="title",
+                title="Welcome",
+                body=["Subtitle line", "Spilled line A", "Spilled line B"],
+            ),
+        ],
+    )
+
+
+def test_continuation_never_renders_a_second_title_layout():
+    """BW-12: a title slide that overflows must NOT produce two 'title' slides."""
+    deck = lower_deck(_title_overflow_deck())
+    title_layouts = [s for s in deck.slides if s.layout == "title"]
+    assert len(title_layouts) == 1, (
+        f"Expected exactly one title-layout slide, got {len(title_layouts)} "
+        f"(layouts={[s.layout for s in deck.slides]})"
+    )
+    # The overflow continuation is a bullets slide relabelled '(cont.)'
+    conts = [s for s in deck.slides if "_cont" in s.type]
+    assert conts and all(s.layout == "bullets" for s in conts)
+    assert all(s.title.endswith("(cont.)") for s in conts)
+
+
+def test_editor_count_matches_export_count():
+    """BW-13: lower_deck_for_editor must produce the SAME slide count as lower_deck."""
+    for authored in (_overflow_authored_deck(), _title_overflow_deck(), _sample_authored_deck()):
+        exported = lower_deck(authored)
+        editor = lower_deck_for_editor(authored)
+        assert len(editor.slides) == len(exported.slides), (
+            f"editor={len(editor.slides)} vs export={len(exported.slides)} "
+            f"for deck {authored.title!r}"
+        )
+
+
+def test_editor_continuation_bullets_point_at_original_body():
+    """BW-13: spilled bullets in the editor map back to real /slides/i/body/j pointers."""
+    editor = lower_deck_for_editor(_overflow_authored_deck())
+    # Gather every authored body index referenced across all (split) editor slides
+    referenced: set[str] = set()
+    for s in editor.slides:
+        for el in s.elements:
+            if el.kind in ("bullet", "subtitle"):
+                referenced.add(el.json_pointer)
+    # The dense slide is authored index 1 with 30 body lines — all must be addressable
+    for j in range(30):
+        assert f"/slides/1/body/{j}" in referenced, f"body/{j} not addressable in editor"
 
 
 # ---------------------------------------------------------------------------

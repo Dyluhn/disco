@@ -403,11 +403,18 @@ def _infer_layout(slide: AuthoredSlide, image_alt: list[int] | None = None) -> L
         "table": "table",
         "closing": "closing",
     }
-    typ = slide.type.lower().removesuffix("_cont")  # "bullets_cont" → "bullets"
+    # Continuation fragments (BW-12) must NEVER re-infer back to
+    # title/section_header/closing — that rendered a DUPLICATE title page with
+    # the same heading.  A "_cont" slide only ever carries spilled body text, so
+    # it is always bullets, regardless of the base type.
+    if slide.type.lower().endswith("_cont"):
+        return "bullets"
+
+    typ = slide.type.lower()
     if typ in _TYPE_MAP:
         return _TYPE_MAP[typ]
 
-    # Default — covers "bullets", custom types, "_cont" continuations
+    # Default — covers "bullets", custom types
     return "bullets"
 
 
@@ -927,6 +934,71 @@ _LAYOUT_FNS: dict[str, object] = {
 _MAX_CONT_DEPTH = 3  # maximum continuation-slide nesting
 
 
+@dataclass
+class _EffSlide:
+    """One *effective* slide after overflow expansion.
+
+    The render path (``lower_deck``) and the editor path
+    (``lower_deck_for_editor``) BOTH iterate this same expansion so their slide
+    counts are guaranteed identical (BW-13).  Each continuation fragment carries
+    ``render_body`` (exactly the body lines that belong on THIS slide) and
+    ``body_offset`` (where those lines start in the ORIGINAL slide's body) so the
+    editor can map every spilled bullet back to its real
+    ``/slides/{orig_index}/body/{j}`` JSON pointer.
+    """
+
+    aslide: AuthoredSlide   # original slide OR a synthesized "_cont" fragment
+    layout: LayoutHint      # resolved ONCE here (image-side alternation included)
+    render_body: list[str]  # body lines this fragment actually shows (fitted slice)
+    orig_index: int         # index into authored.slides (image bytes + pointer base)
+    body_offset: int        # offset into the ORIGINAL body this fragment starts at
+    is_cont: bool
+
+
+def _expand_slides(
+    slides: list[AuthoredSlide], theme: Theme, image_alt: list[int]
+) -> list[_EffSlide]:
+    """Deterministically expand authored slides into the effective rendered set.
+
+    Runs the SAME font-fit / overflow logic as lowering: a slide whose body
+    overflows at the font floor spills its tail into a ``bullets`` continuation
+    fragment (NOT a re-inferred title/section/closing — that produced BW-12's
+    duplicate title pages).  ``image_alt`` is advanced HERE only; callers must
+    consume ``_EffSlide.layout`` rather than re-inferring (which would
+    double-advance the image-side alternation counter).
+    """
+    eff: list[_EffSlide] = []
+
+    def _walk(aslide: AuthoredSlide, depth: int, orig_index: int, body_offset: int) -> None:
+        if depth > _MAX_CONT_DEPTH:
+            return  # guard: discard overflow beyond depth cap
+        layout = _infer_layout(aslide, image_alt)
+        layout_fn = _LAYOUT_FNS.get(layout, _layout_bullets)
+        _elements, overflow = layout_fn(aslide, theme)  # type: ignore[operator]
+        consumed = len(aslide.body) - len(overflow)
+        eff.append(_EffSlide(
+            aslide=aslide,
+            layout=layout,
+            render_body=aslide.body[:consumed],
+            orig_index=orig_index,
+            body_offset=body_offset,
+            is_cont=depth > 0,
+        ))
+        if overflow:
+            cont = AuthoredSlide(
+                type=f"{aslide.type}_cont",
+                title=f"{aslide.title} (cont.)",
+                body=overflow,
+                layout_hint="bullets",   # FORCE bullets — never map back to title/section/closing
+                notes=None,              # notes stay on the original slide
+            )
+            _walk(cont, depth + 1, orig_index, body_offset + consumed)
+
+    for i, aslide in enumerate(slides):
+        _walk(aslide, depth=0, orig_index=i, body_offset=0)
+    return eff
+
+
 def lower_deck(
     authored: AuthoredDeck,
     *,
@@ -961,27 +1033,28 @@ def lower_deck(
     theme_name, theme_mode = _parse_theme(theme_override or authored.theme)
     theme = resolve_theme(theme_name, theme_mode)
 
-    deck_slides: list[Slide] = []
+    # Shared overflow expansion — identical to the editor's, so counts match (BW-13).
     image_alt: list[int] = [0]  # alternating image side counter
+    eff_slides = _expand_slides(authored.slides, theme, image_alt)
 
-    def _lower_slide(aslide: AuthoredSlide, depth: int, orig_index: int | None = None) -> None:
-        if depth > _MAX_CONT_DEPTH:
-            return  # guard: discard overflow beyond depth cap
-
-        layout = _infer_layout(aslide, image_alt)
-
+    deck_slides: list[Slide] = []
+    for eff in eff_slides:
+        aslide = eff.aslide
+        layout = eff.layout
         layout_fn = _LAYOUT_FNS.get(layout, _layout_bullets)
-        elements, overflow_body = layout_fn(aslide, theme)  # type: ignore[operator]
+        # The layout fn drops this fragment's own overflow internally; the
+        # expansion already created the matching continuation _EffSlide for it.
+        elements, _overflow = layout_fn(aslide, theme)  # type: ignore[operator]
 
         # C7 wire: attach generated image bytes to this slide's image element(s).
-        # Only the ORIGINAL slide (depth==0) carries an image_prompt; continuations
-        # are text-only, so orig_index is None for them and nothing is attached.
-        if image_assets and orig_index is not None and orig_index in image_assets:
+        # Only ORIGINAL (non-cont) slides carry an image_prompt; continuations are
+        # text-only, so nothing is attached for them.
+        if image_assets and not eff.is_cont and eff.orig_index in image_assets:
             for el in elements:
                 if el.kind == "image":
-                    el.image_bytes = image_assets[orig_index]
+                    el.image_bytes = image_assets[eff.orig_index]
 
-        slide = Slide(
+        deck_slides.append(Slide(
             id=_uid(),
             type=aslide.type,
             title=aslide.title,
@@ -990,21 +1063,7 @@ def lower_deck(
             notes=aslide.notes,
             chart=aslide.chart,
             table=aslide.table,
-        )
-        deck_slides.append(slide)
-
-        if overflow_body:
-            cont = AuthoredSlide(
-                type=f"{aslide.type}_cont",
-                title=aslide.title,
-                body=overflow_body,
-                layout_hint=None,   # re-infer as bullets
-                notes=None,         # notes stay on the original slide
-            )
-            _lower_slide(cont, depth + 1)
-
-    for orig_index, aslide in enumerate(authored.slides):
-        _lower_slide(aslide, depth=0, orig_index=orig_index)
+        ))
 
     return Deck(
         id=_uid(),
@@ -1098,11 +1157,20 @@ def lower_deck_for_editor(authored: AuthoredDeck) -> LoweredDeck:
     theme_name, theme_mode = _parse_theme(authored.theme)
     theme = resolve_theme(theme_name, theme_mode)
 
-    lslides: list[LoweredSlide] = []
+    # SAME overflow expansion as lower_deck, so the editor shows exactly the
+    # slides the export produces (BW-13).  ``orig``/``boff`` map this fragment's
+    # fields back to their real JSON pointers in the authored deck.
     image_alt: list[int] = [0]
+    eff_slides = _expand_slides(authored.slides, theme, image_alt)
 
-    for si, aslide in enumerate(authored.slides):
-        layout = _infer_layout(aslide, image_alt)
+    lslides: list[LoweredSlide] = []
+
+    for si, eff in enumerate(eff_slides):
+        aslide = eff.aslide
+        layout = eff.layout
+        orig = eff.orig_index
+        boff = eff.body_offset
+        render_body = eff.render_body
         slide_id = f"slide-{si}"
         bg_color = theme.surface_1 if layout == "section_header" else theme.bg
         elements: list[LoweredElement] = []
@@ -1126,51 +1194,54 @@ def lower_deck_for_editor(authored: AuthoredDeck) -> LoweredDeck:
                 json_pointer=jptr,
             ))
 
-        # Title element (always present)
+        # Title element (always present).  Continuation fragments point back at
+        # the ORIGINAL slide's title (their "(cont.)" suffix is display-only).
         _add(
             kind="title", content=aslide.title,
             x=_E_TITLE_LEFT, y=_E_TITLE_TOP, w=_E_TITLE_W, h=_E_TITLE_H,
             fsz=2.5, fw="bold", fi="normal",
-            jptr=f"/slides/{si}/title",
+            jptr=f"/slides/{orig}/title",
         )
         elements[-1].element_id = f"{slide_id}:title"
 
-        # Subtitle (first body line on title/section/closing slides)
-        if layout in ("title", "section_header", "closing") and aslide.body:
+        # Subtitle (first body line on title/section/closing slides).  ``boff``
+        # is the original-body index of this fragment's first line.
+        if layout in ("title", "section_header", "closing") and render_body:
             sub_top = _E_TITLE_TOP + _E_TITLE_H + 2.0
             _add(
-                kind="subtitle", content=aslide.body[0],
+                kind="subtitle", content=render_body[0],
                 x=_E_TITLE_LEFT, y=sub_top, w=_E_TITLE_W, h=_E_BULLET_H,
                 fsz=1.8, fw="normal", fi="italic",
-                jptr=f"/slides/{si}/body/0",
+                jptr=f"/slides/{orig}/body/{boff}",
             )
             elements[-1].element_id = f"{slide_id}:subtitle"
             body_start = 1
         else:
             body_start = 0
 
-        # Bullet body lines
+        # Bullet body lines — only the lines that belong to THIS fragment.
         body_y = _E_BODY_TOP
-        for bj, line in enumerate(aslide.body[body_start:], start=body_start):
+        for local_j, line in enumerate(render_body[body_start:], start=body_start):
+            orig_bj = boff + local_j
             content_stripped = line.lstrip("• ")
             _add(
-                kind=f"body:{bj}", content=content_stripped,
+                kind=f"body:{orig_bj}", content=content_stripped,
                 x=_E_BODY_LEFT, y=body_y, w=_E_BODY_W, h=_E_BULLET_H,
                 fsz=1.6, fw="normal", fi="normal",
-                jptr=f"/slides/{si}/body/{bj}",
+                jptr=f"/slides/{orig}/body/{orig_bj}",
             )
-            elements[-1].element_id = f"{slide_id}:body:{bj}"
+            elements[-1].element_id = f"{slide_id}:body:{orig_bj}"
             elements[-1].kind = "bullet"
             body_y = min(body_y + _E_BULLET_H + 1.0, 90.0)
 
-        # Chart placeholder element
+        # Chart placeholder element (originals only — continuations are text-only)
         if aslide.chart is not None:
             chart_desc = f"[{aslide.chart.kind} chart] {aslide.chart.title}"
             _add(
                 kind="chart", content=chart_desc,
                 x=_E_TITLE_LEFT, y=_E_BODY_TOP, w=_E_TITLE_W, h=55.0,
                 fsz=1.4, fw="normal", fi="normal",
-                jptr=f"/slides/{si}/chart",
+                jptr=f"/slides/{orig}/chart",
             )
             elements[-1].element_id = f"{slide_id}:chart"
 
@@ -1181,7 +1252,7 @@ def lower_deck_for_editor(authored: AuthoredDeck) -> LoweredDeck:
                 kind="table", content=table_desc,
                 x=_E_TITLE_LEFT, y=_E_BODY_TOP, w=_E_TITLE_W, h=55.0,
                 fsz=1.4, fw="normal", fi="normal",
-                jptr=f"/slides/{si}/table",
+                jptr=f"/slides/{orig}/table",
             )
             elements[-1].element_id = f"{slide_id}:table"
 
@@ -1191,7 +1262,7 @@ def lower_deck_for_editor(authored: AuthoredDeck) -> LoweredDeck:
                 kind="image_prompt", content=aslide.image_prompt,
                 x=_E_TITLE_LEFT, y=_E_BODY_TOP, w=_E_TITLE_W, h=55.0,
                 fsz=1.4, fw="normal", fi="normal",
-                jptr=f"/slides/{si}/image_prompt",
+                jptr=f"/slides/{orig}/image_prompt",
             )
             elements[-1].element_id = f"{slide_id}:image_prompt"
 
