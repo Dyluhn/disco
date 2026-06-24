@@ -34,8 +34,10 @@ from . import failure_codes as fc
 from .adapters.disco_api import (
     AWAITING_PLAN_APPROVAL,
     PAUSED_STATE,
+    PROGRESSING_TIMEOUT,
     CollectedRun,
     DiscoApiClient,
+    InconclusiveRunError,
     InfraProbeError,
     Transport,
 )
@@ -47,6 +49,15 @@ _DEFAULT_OUT = "test-record/build-soak"
 _SCENARIOS = Path(__file__).resolve().parent / "scenarios.yaml"
 _MAX_GATES = 8  # bound the approve loop so a gate flap can't spin forever
 _MAX_RESUMES = 3  # bound PAUSED-resume so an actionless-paused build can't spin forever
+
+# Progress-aware terminal-wait knobs (Bug 15). The terminal wait is NOT a blind
+# wall-clock: `inactivity_s` is the NO-PROGRESS window (a build that keeps emitting
+# events is never cut off — only genuine silence for this long ends the wait), and
+# `hard_cap_s` is the generous safety ceiling that bounds a truly-hung run, set well
+# above a normal build (~5min) so a slow-but-progressing build finishes on its real
+# terminal rather than being frozen mid-flight + mislabeled BUILD_DID_NOT_FINISH.
+_DEFAULT_INACTIVITY_S = 180.0
+_DEFAULT_HARD_CAP_S = 1200.0
 
 
 # ---- scenario loading -------------------------------------------------------
@@ -96,23 +107,47 @@ async def _drive_to_terminal(
     autonomous: bool,
     mid_run: list[dict[str, Any]],
     timeline: list[str],
-    timeout_s: float,
+    inactivity_s: float,
+    hard_cap_s: float,
 ) -> str:
     """Drive the run to a terminal state, approving each plan gate (interactive) and
-    injecting any mid-run steer follow-up concurrently. Returns the terminal status."""
+    injecting any mid-run steer follow-up concurrently. Returns the terminal status.
+
+    The wait is PROGRESS-AWARE (Bug 15): a still-actively-progressing build is never cut
+    off by a wall-clock — only a genuine terminal, genuine inactivity (INACTIVE_TIMEOUT →
+    fall through to normal classification of the wedged run), or the hard cap ends it. A
+    hard-cap cutoff WHILE STILL PROGRESSING (PROGRESSING_TIMEOUT) is INCONCLUSIVE, not a
+    product failure → raise InconclusiveRunError so the run records INVALID_RUN (§17)."""
     injector: asyncio.Task[None] | None = None
     if mid_run:
         injector = asyncio.create_task(
-            _inject_when_writing(client, cid, mid_run, timeline, timeout_s)
+            _inject_when_writing(client, cid, mid_run, timeline, hard_cap_s)
         )
     gates = 0
     resumes = 0
     try:
         while True:
             if autonomous:
-                status = await client.poll_until_terminal(cid, timeout_s=timeout_s)
+                status = await client.poll_until_terminal(
+                    cid, inactivity_s=inactivity_s, hard_cap_s=hard_cap_s
+                )
             else:
-                status = await client.poll_until_terminal_or_gate(cid, timeout_s=timeout_s)
+                status = await client.poll_until_terminal_or_gate(
+                    cid, inactivity_s=inactivity_s, hard_cap_s=hard_cap_s
+                )
+            if status == PROGRESSING_TIMEOUT:
+                # The hard cap hit while the build was STILL emitting events — the runner
+                # could not obtain a terminal verdict. This is a harness/model-speed limit,
+                # NOT a product BUILD_DID_NOT_FINISH: surface it as INVALID_RUN so §17 re-runs.
+                timeline.append(
+                    "hard-cap reached while build was STILL PROGRESSING — "
+                    "inconclusive (INVALID_RUN, not a product failure)"
+                )
+                raise InconclusiveRunError(
+                    "terminal status not reached before the hard cap while the build "
+                    "was still actively progressing",
+                    {"stage": "terminal_wait", "hard_cap_s": hard_cap_s},
+                )
             if status == AWAITING_PLAN_APPROVAL and gates < _MAX_GATES:
                 gates += 1
                 await client.approve_plan(cid)
@@ -120,7 +155,7 @@ async def _drive_to_terminal(
                 # Wait for the gate to clear so a not-yet-processed approval isn't
                 # re-read as the same gate and double-approved (wastes the gate budget).
                 await client.wait_until_status_leaves(
-                    cid, AWAITING_PLAN_APPROVAL, timeout_s=min(timeout_s, 60.0)
+                    cid, AWAITING_PLAN_APPROVAL, timeout_s=min(inactivity_s, 60.0)
                 )
                 continue
             if status == PAUSED_STATE and resumes < _MAX_RESUMES:
@@ -138,7 +173,7 @@ async def _drive_to_terminal(
                     timeline.append("resume rejected (not resumable) — stopping")
                     return status
                 await client.wait_until_status_leaves(
-                    cid, PAUSED_STATE, timeout_s=min(timeout_s, 60.0)
+                    cid, PAUSED_STATE, timeout_s=min(inactivity_s, 60.0)
                 )
                 continue
             timeline.append(f"reached terminal/stop status: {status}")
@@ -156,10 +191,14 @@ async def drive_scenario(
     *,
     model: str | None,
     autonomous: bool,
-    timeout_s: float = 600.0,
+    timeout_s: float = _DEFAULT_INACTIVITY_S,
+    hard_cap_s: float = _DEFAULT_HARD_CAP_S,
 ) -> CollectedRun:
     """Create + drive one scenario end-to-end, then COLLECT all evidence
-    (events from the DB race-free, state, workspace, preview)."""
+    (events from the DB race-free, state, workspace, preview).
+
+    `timeout_s` is the PROGRESS-AWARE INACTIVITY window (no-new-events budget), NOT a
+    blind wall-clock; `hard_cap_s` is the generous safety ceiling (Bug 15)."""
     timeline: list[str] = []
     prompt = str(scenario["prompt"])
     cid = await client.create_build_conversation(prompt, model=model, autonomous=autonomous)
@@ -172,7 +211,13 @@ async def drive_scenario(
 
     # Phase 1: the initial build (+ any mid-run steer) to terminal.
     await _drive_to_terminal(
-        client, cid, autonomous=autonomous, mid_run=mid_run, timeline=timeline, timeout_s=timeout_s
+        client,
+        cid,
+        autonomous=autonomous,
+        mid_run=mid_run,
+        timeline=timeline,
+        inactivity_s=timeout_s,
+        hard_cap_s=hard_cap_s,
     )
 
     # Phase 2: after-terminal follow-ups — each is its own re-plan→approve→terminal
@@ -181,7 +226,13 @@ async def drive_scenario(
         await client.send_followup(cid, str(f["text"]), kind="message")
         timeline.append(f"sent after-terminal follow-up: {f['text']!r}")
         await _drive_to_terminal(
-            client, cid, autonomous=autonomous, mid_run=[], timeline=timeline, timeout_s=timeout_s
+            client,
+            cid,
+            autonomous=autonomous,
+            mid_run=[],
+            timeline=timeline,
+            inactivity_s=timeout_s,
+            hard_cap_s=hard_cap_s,
         )
 
     # Collect (post-terminal, race-free DB read for events).
@@ -373,24 +424,33 @@ def _infra_failure_record(
 
 
 def _invalid_run_record(
-    out_root: str | Path, run_id: str, scenario: dict[str, Any], reason: str
+    out_root: str | Path,
+    run_id: str,
+    scenario: dict[str, Any],
+    reason: str,
+    *,
+    code: str = "RUN_INTERRUPTED",
+    first_broken_link: str = "drive -> evidence_collection",
+    facts: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write an INVALID_RUN record (§8) when the harness could not collect complete
-    evidence to adjudicate — e.g. the agent-server became UNREACHABLE mid-run (a raw
-    transport error AFTER conversation creation). This is NOT a product FAIL (we can't
-    prove a product outcome) and NOT INFRA_FAILURE (that is pre-create only, §9); it
-    blocks promotion until the environment is reliable enough to prove anything."""
+    evidence / obtain a verdict to adjudicate — e.g. the agent-server became UNREACHABLE
+    mid-run (RUN_INTERRUPTED), or the terminal wait was cut off by the hard cap while the
+    build was STILL PROGRESSING (RUN_TIMEOUT_WHILE_PROGRESSING, Bug 15). This is NOT a
+    product FAIL (we can't prove a product outcome) and NOT INFRA_FAILURE (pre-create only,
+    §9); it blocks promotion AND signals §17 to re-run rather than recording a false fail."""
     base = Path(out_root) / run_id
     base.mkdir(parents=True, exist_ok=True)
+    record_facts: dict[str, Any] = {"reason": reason, **(facts or {})}
     record = {
         "status": fc.INVALID_RUN,
         "severity": fc.NONE,
-        "code": "RUN_INTERRUPTED",
-        "first_broken_link": "drive -> evidence_collection",
+        "code": code,
+        "first_broken_link": first_broken_link,
         "scenario_id": scenario.get("id"),
         "run_id": run_id,
         "conversation_id": None,
-        "facts": {"reason": reason},
+        "facts": record_facts,
         "required_evidence_present": False,
         "accepted_by": "oracle",
         "agent_comments_ignored_for_adjudication": True,
@@ -399,7 +459,7 @@ def _invalid_run_record(
         json.dumps(record, indent=2, sort_keys=True), encoding="utf-8"
     )
     (base / "timeline.md").write_text(
-        f"# INVALID_RUN (mid-run interruption)\n\nreason: {reason}\n", encoding="utf-8"
+        f"# INVALID_RUN ({code})\n\nreason: {reason}\n", encoding="utf-8"
     )
     return record
 
@@ -417,6 +477,7 @@ async def run_once(
     autonomous: bool,
     commit: str,
     timeout_s: float,
+    hard_cap_s: float = _DEFAULT_HARD_CAP_S,
 ) -> dict[str, Any]:
     # §9 pre-create infra gate (the ONLY infra source).
     try:
@@ -429,7 +490,24 @@ async def run_once(
     # so a batch keeps going and the outcome is recorded honestly.
     try:
         run = await drive_scenario(
-            client, scenario, model=model, autonomous=autonomous, timeout_s=timeout_s
+            client,
+            scenario,
+            model=model,
+            autonomous=autonomous,
+            timeout_s=timeout_s,
+            hard_cap_s=hard_cap_s,
+        )
+    except InconclusiveRunError as exc:
+        # Bug 15: the build was STILL PROGRESSING when the hard cap hit — the runner could
+        # not obtain a terminal verdict. INVALID_RUN (inconclusive), NEVER a product fail.
+        return _invalid_run_record(
+            out_root,
+            run_id,
+            scenario,
+            exc.reason,
+            code=fc.RUN_TIMEOUT_WHILE_PROGRESSING,
+            first_broken_link="terminal_wait -> no_terminal_before_hard_cap",
+            facts=exc.facts,
         )
     except Exception as exc:  # noqa: BLE001 — surface the real reason as INVALID_RUN
         return _invalid_run_record(
@@ -502,6 +580,7 @@ async def _amain(args: argparse.Namespace) -> int:
             autonomous=autonomous,
             commit=commit,
             timeout_s=args.timeout,
+            hard_cap_s=args.hard_cap,
         )
         status = str(classification.get("status"))
         code = classification.get("code")
@@ -537,7 +616,22 @@ def main(argv: list[str] | None = None) -> int:
         default=15.0,
         help="seconds to wait for a just-finished build's workspace snapshot to flush",
     )
-    p.add_argument("--timeout", type=float, default=600.0, help="per-phase poll timeout (s)")
+    p.add_argument(
+        "--timeout",
+        type=float,
+        default=_DEFAULT_INACTIVITY_S,
+        help="PROGRESS-AWARE inactivity window (s): the terminal wait keeps waiting while "
+        "the build emits NEW events; it stops only after THIS much no-progress silence "
+        "(a genuine wedge) — NOT a blind wall-clock. A still-progressing build is never cut off.",
+    )
+    p.add_argument(
+        "--hard-cap",
+        type=float,
+        default=_DEFAULT_HARD_CAP_S,
+        help="generous safety ceiling (s) bounding a truly-hung run, set well above a normal "
+        "build; a cutoff here WHILE STILL PROGRESSING is recorded INVALID_RUN (inconclusive), "
+        "not a product BUILD_DID_NOT_FINISH (Bug 15).",
+    )
     p.add_argument("--scenarios", default=str(_SCENARIOS))
     args = p.parse_args(argv)
     return asyncio.run(_amain(args))
