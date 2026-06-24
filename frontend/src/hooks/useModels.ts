@@ -11,6 +11,7 @@ import {
   getTtsConfig,
   getOpenRouterKeyStatus,
   getSandboxConfig,
+  getSandboxHealth,
   listModels,
   listOpenRouterModels,
   setOpenRouterKey,
@@ -37,7 +38,7 @@ import type {
   OpenRouterKeyStatus,
   OpenRouterModel,
 } from "@/types/models";
-import type { SandboxConfig } from "@/types/sandbox";
+import type { SandboxConfig, SandboxHealth } from "@/types/sandbox";
 
 /**
  * Query/mutation hooks for the model catalogue + assignments. Components consume
@@ -88,6 +89,21 @@ export function useUpdateSandboxConfig() {
 export function useTestSandbox() {
   return useMutation({
     mutationFn: (cfg: SandboxConfig) => testSandbox(cfg),
+  });
+}
+
+const SANDBOX_HEALTH_KEY = ["sandbox-health"] as const;
+
+/** Reachability of the ACTIVE sandbox backend — polled by the app shell to surface an
+ * unreachable sandbox BEFORE a doomed run. Refetches periodically + on window focus so a
+ * host coming back (or going down) clears/raises the banner without a reload. */
+export function useSandboxHealth() {
+  return useQuery<SandboxHealth>({
+    queryKey: SANDBOX_HEALTH_KEY,
+    queryFn: getSandboxHealth,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+    staleTime: 10_000,
   });
 }
 

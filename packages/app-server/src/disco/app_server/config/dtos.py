@@ -146,10 +146,27 @@ class AssignmentsPatch(BaseModel):
     roles: dict[str, str] | None = None
 
 
+class SandboxConnectionDTO(BaseModel):
+    """One backend's saved connection block — the wire mirror of core's
+    SandboxConnection. Carried in :class:`SandboxConfigDTO.connections` so the UI can
+    RESTORE a backend's last-known setup on switch instead of blanking it."""
+
+    docker_socket: str = ""
+    podman_url: str = ""
+    runtime: str = ""
+    image: str = ""
+    workspace_root: str = ""
+
+
 class SandboxConfigDTO(BaseModel):
     """The active sandbox backend + its (non-secret) connection — the wire mirror of
     core's SandboxSettings. Persisted in the shared ConfigStore; the agent-server maps
-    it to the live backend. No secrets (remote connections are keyless Tailscale SSH)."""
+    it to the live backend. No secrets (remote connections are keyless Tailscale SSH).
+
+    ``connections`` exposes EVERY backend's last-saved block (keyed by backend id) so the
+    Settings UI restores a backend's own connection when you flip to it — the persistence
+    fix for the switch-blanks-the-other-backend outage. It's read-only context for the
+    client; the server is authoritative and merges it on save."""
 
     backend: str  # "process" | "gvisor" | "local" | "podman"
     docker_socket: str
@@ -157,6 +174,19 @@ class SandboxConfigDTO(BaseModel):
     runtime: str
     image: str
     workspace_root: str
+    connections: dict[str, SandboxConnectionDTO] = {}
+
+
+class SandboxHealthDTO(BaseModel):
+    """Reachability of the ACTIVE (persisted) sandbox backend — the cheap, side-effect-
+    free health signal the app shell surfaces as a banner BEFORE a run is started. Uses
+    the SAME probe (`healthcheck()`) the run path hits, so the banner and the real run
+    agree. ``reachable`` False carries the typed, host-naming ``detail`` (e.g. "gvisor
+    sandbox host ssh://sandbox@ unreachable: …")."""
+
+    reachable: bool
+    backend: str
+    detail: str = ""
 
 
 class EncodersConfigDTO(BaseModel):

@@ -88,6 +88,83 @@ class RoleRouting(BaseModel):
     overflow_ladder: list[str] = Field(default_factory=list)  # stronger models (§5.3)
 
 
+class SandboxConnection(BaseModel):
+    """[settings] ONE backend's saved connection block. Stored per-backend in
+    ``SandboxSettings.connections`` so flipping the active ``backend`` NEVER clears
+    another backend's setup.
+
+    The outage this prevents (2026-06-23): toggling gVisor→local→gVisor blanked the
+    gVisor ``docker_socket`` to a host-less ``ssh://sandbox@`` (the flat fields were
+    SHARED across backends), and every build/agent run then died with
+    "gvisor sandbox host ssh://sandbox@ unreachable: ssh: Could not resolve hostname :".
+    Each backend now keeps its own block; the ACTIVE block is mirrored to the flat
+    ``SandboxSettings`` fields the live backend builder reads."""
+
+    docker_socket: str = "unix:///var/run/docker.sock"
+    podman_url: str = "http+ssh://sandbox@100.73.110.47/run/user/1000/podman/podman.sock"
+    runtime: str = "runc"
+    image: str = "disco-sandbox:base"
+    workspace_root: str = "/opt/sandbox/workspaces"
+
+
+def _ssh_endpoint_hostless(endpoint: str) -> bool:
+    """True when an ``ssh://``/``http+ssh://`` endpoint has NO host — e.g.
+    ``ssh://sandbox@``, ``ssh://sandbox@:22``, ``http+ssh://sandbox@:22/path`` or
+    ``ssh://sandbox@/path`` (all of which produced "ssh: Could not resolve hostname"
+    in the outage). The HOST is the authority between ``@`` and the next ``:`` (port)
+    or ``/`` (path); if it's empty the endpoint is host-less, EVEN with a port. A local
+    ``unix://`` / ``tcp://`` socket is never host-less by this rule (no ``user@host``)."""
+    scheme, sep, rest = endpoint.partition("://")
+    if not sep or scheme not in ("ssh", "http+ssh"):
+        return False
+    authority = rest.split("/", 1)[0]  # user@host[:port]
+    hostport = authority.rsplit("@", 1)[-1].strip()
+    if hostport.startswith("["):  # IPv6 literal (e.g. [::1]:22) — bracketed = has a host
+        return hostport[1:].split("]", 1)[0].strip() == ""
+    host = hostport.split(":", 1)[0]  # drop any :port so ":22" alone reads as host-less
+    return host.strip() == ""
+
+
+def sandbox_connection_error(backend: str, conn: SandboxConnection) -> str | None:
+    """Validate that ``backend``'s connection is structurally RUNNABLE; return a
+    human reason if not, else None. This is the guard against persisting the
+    unrunnable state that caused the outage (a ``gvisor`` backend saved with an
+    empty / host-less ``docker_socket``). ``process`` needs nothing local-only."""
+    if backend in ("gvisor", "local"):
+        sock = conn.docker_socket.strip()
+        if not sock:
+            return "the Docker endpoint (docker_socket) is empty"
+        if _ssh_endpoint_hostless(sock):
+            return (
+                f"the Docker endpoint '{conn.docker_socket}' has no host "
+                "(expected e.g. ssh://sandbox@<tailscale-ip-or-host>)"
+            )
+    elif backend == "podman":
+        url = conn.podman_url.strip()
+        if not url:
+            return "the Podman URL (podman_url) is empty"
+        if _ssh_endpoint_hostless(url):
+            return f"the Podman URL '{conn.podman_url}' has no host"
+    return None
+
+
+def default_connection_for(backend: str) -> SandboxConnection:
+    """A CLEAN, backend-APPROPRIATE connection block for a backend with no saved setup.
+
+    The persistence fix needs this so switching TO a backend restores a sensible default
+    for THAT backend, never the previous backend's socket (the P1 bleed: an old flat
+    config's bad gvisor ``ssh://sandbox@`` must not carry into Local). gVisor seeds the
+    host-less ``ssh://sandbox@`` prefill (the user fills the Tailscale host — flagged
+    invalid on save until then, but gvisor-SHAPED, not an inherited local socket); local
+    seeds the LOCAL docker socket; podman seeds the rootless remote (crun)."""
+    if backend == "gvisor":
+        return SandboxConnection(docker_socket="ssh://sandbox@", runtime="runsc")
+    if backend == "podman":
+        return SandboxConnection(runtime="crun")  # keeps the default rootless podman_url
+    # local / process: the local Docker socket + runc (process ignores it at runtime).
+    return SandboxConnection(docker_socket="unix:///var/run/docker.sock", runtime="runc")
+
+
 class SandboxSettings(BaseModel):
     """[settings] The active sandbox backend + its (non-secret) connection details.
 
@@ -95,6 +172,11 @@ class SandboxSettings(BaseModel):
     model catalogue — no parallel config path); the agent-server maps it to the concrete
     `SandboxBackend`. Remote connections are KEYLESS over Tailscale SSH — there are no
     secrets here, only host/socket/runtime detail.
+
+    Per-backend persistence: the flat fields below are the ACTIVE backend's live
+    connection (what the backend builder reads). ``connections`` additionally retains
+    EACH backend's last-saved block so switching the active backend restores its own
+    setup instead of inheriting/blanking another's — see :meth:`with_preserved_connections`.
     """
 
     # seconds a non-RUNNING sandbox may sit idle before suspend
@@ -111,6 +193,34 @@ class SandboxSettings(BaseModel):
     image: str = "disco-sandbox:base"
     # host dir bind-mounted to the container workspace (gVisor); local uses a named volume.
     workspace_root: str = "/opt/sandbox/workspaces"
+    # per-backend SAVED connection blocks (backend id → its connection). Retained across
+    # switches so a flip of `backend` restores that backend's last-known setup. Empty on a
+    # fresh/legacy config; seeded from the active flat fields on the first save/merge.
+    connections: dict[str, SandboxConnection] = Field(default_factory=dict)
+
+    def active_connection(self) -> SandboxConnection:
+        """The flat fields as a connection block (the live/active backend's setup)."""
+        return SandboxConnection(
+            docker_socket=self.docker_socket,
+            podman_url=self.podman_url,
+            runtime=self.runtime,
+            image=self.image,
+            workspace_root=self.workspace_root,
+        )
+
+    def with_preserved_connections(self, previous: SandboxSettings) -> SandboxSettings:
+        """Return a copy whose per-backend ``connections`` map RETAINS every backend's
+        last-saved block. The active backend's block is taken from THIS settings' flat
+        fields; all OTHER backends' blocks are carried over verbatim from ``previous``
+        (and from any blocks this payload already provided). This is the persistence
+        fix: switching the active backend never drops the inactive backends' setup."""
+        merged: dict[str, SandboxConnection] = {}
+        merged.update(previous.connections)  # history across past switches
+        # seed the previous ACTIVE block in case the old config predates the map
+        merged.setdefault(previous.backend, previous.active_connection())
+        merged.update(self.connections)  # idempotent round-trips carry their own map
+        merged[self.backend] = self.active_connection()  # authoritative from THIS save
+        return self.model_copy(update={"connections": merged})
 
 
 class ProjectStorageSettings(BaseModel):

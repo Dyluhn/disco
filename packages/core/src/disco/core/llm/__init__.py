@@ -23,10 +23,13 @@ from .config import (
     ProjectStorageSettings,
     RoleRouting,
     RouterConfig,
+    SandboxConnection,
     SandboxSettings,
     SearchSettings,
     TtsSettings,
     default_config,
+    default_connection_for,
+    sandbox_connection_error,
 )
 from .config_store import ConfigStore
 from .errors import (
@@ -117,6 +120,9 @@ __all__ = [
     "RouterConfig",
     "ProjectStorageSettings",
     "SandboxSettings",
+    "SandboxConnection",
+    "sandbox_connection_error",
+    "default_connection_for",
     "EncodersSettings",
     "TtsSettings",
     "ExtractionSettings",

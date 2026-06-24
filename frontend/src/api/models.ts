@@ -13,7 +13,7 @@ import type {
   OpenRouterModel,
   TtsConfig,
 } from "@/types/models";
-import type { SandboxConfig } from "@/types/sandbox";
+import type { SandboxConfig, SandboxHealth } from "@/types/sandbox";
 import type { ProbeResult } from "@/types/probe";
 import { agentSend, apiGet, apiSend, fixtureDelay, isLive } from "./client";
 
@@ -165,6 +165,15 @@ export async function testSandbox(cfg: SandboxConfig): Promise<ProbeResult> {
   if (isLive()) return apiSend<ProbeResult>("POST", "/api/sandbox/test", cfg);
   await fixtureDelay();
   return { ok: true, status: "ok", detail: `${cfg.backend} sandbox is reachable.` };
+}
+
+/** Reachability of the ACTIVE (persisted) sandbox backend — the cheap signal the app
+ * shell polls to surface an unreachable sandbox BEFORE a doomed run. Same probe the run
+ * path hits. The fixture path returns a synthetic "reachable" (dev = process backend). */
+export async function getSandboxHealth(): Promise<SandboxHealth> {
+  if (isLive()) return apiGet<SandboxHealth>("/api/sandbox/health");
+  await fixtureDelay();
+  return { reachable: true, backend: fixtureSandbox.backend, detail: "" };
 }
 
 // ---- encoders (bundled-local vs remote) ------------------------------------

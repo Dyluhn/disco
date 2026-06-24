@@ -124,18 +124,37 @@ export function SandboxSection() {
 
   const selectBackend = (id: string) => {
     const m = backendMeta(id);
+    // Persistence fix (2026-06-23 outage + P1 bleed): RESTORE this backend's OWN saved
+    // connection block — and NOTHING from the previous backend's active socket. The
+    // original bug was a SHARED docker_socket that blanked gVisor's `ssh://sandbox@<host>`
+    // to a host-less `ssh://sandbox@`; the P1 follow-up was that an old flat config's bad
+    // gvisor socket bled into Local on switch. We pull ONLY connections[id] (the server
+    // guarantees a clean backend-appropriate block for every backend) so each backend gets
+    // its own slate. We deliberately do NOT spread `draft` here — that's what leaked the
+    // old socket across backends.
+    const saved =
+      data?.connections?.[id] ??
+      // Defensive fallback if the server didn't send a block: a clean per-backend default,
+      // never the previous backend's socket. gVisor gets the prefill below; others stay local.
+      (id === "gvisor"
+        ? { docker_socket: "", podman_url: draft.podman_url, runtime: "runsc", image: draft.image, workspace_root: draft.workspace_root }
+        : id === "podman"
+          ? { docker_socket: "", podman_url: draft.podman_url, runtime: "crun", image: draft.image, workspace_root: draft.workspace_root }
+          : { docker_socket: "unix:///var/run/docker.sock", podman_url: draft.podman_url, runtime: m?.defaultRuntime ?? "runc", image: draft.image, workspace_root: draft.workspace_root });
     const next: SandboxConfig = {
-      ...draft,
       backend: id,
-      runtime: m?.defaultRuntime ?? draft.runtime,
+      docker_socket: saved.docker_socket,
+      podman_url: saved.podman_url,
+      runtime: saved.runtime || m?.defaultRuntime || draft.runtime,
+      image: saved.image,
+      workspace_root: saved.workspace_root,
+      connections: draft.connections,
     };
-    // W-48(b): seed the ONE varying connection field with the backend's template when
-    // it's empty or still a WRONG-TIER default — e.g. the LOCAL docker socket left on
-    // the REMOTE gVisor tier, which would point docker-py at a local socket with no
-    // runsc. After this the user only edits the host part of `ssh://sandbox@<host>`.
-    if (m?.primaryField && m.primaryPrefill) {
-      const cur = next[m.primaryField];
-      if (!cur || !cur.startsWith(m.primaryPrefill)) next[m.primaryField] = m.primaryPrefill;
+    // W-48(b): seed the gVisor host template ONLY when its restored socket is EMPTY
+    // (a first-time/unconfigured gvisor) — never overwrite a restored real host (any
+    // user@host). After this the user only edits the host part of `ssh://sandbox@<host>`.
+    if (m?.primaryField && m.primaryPrefill && !next[m.primaryField]) {
+      next[m.primaryField] = m.primaryPrefill;
     }
     setProbe(null);
     setDraft(next);
