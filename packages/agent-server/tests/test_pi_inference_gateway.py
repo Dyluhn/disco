@@ -19,7 +19,9 @@ an ``httpx.MockTransport`` and the endpoint is driven over ``ASGITransport``.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import urllib.parse
 from types import SimpleNamespace
 
 import httpx
@@ -33,6 +35,10 @@ from disco.agent_server.pi_inference import (
 )
 from disco.agent_server.routes.pi_inference import (
     _client_is_local,
+    _estimate_prompt_tokens,
+    _key_byte_needles,
+    _redact_bytes,
+    _redact_stream,
     make_pi_inference_router,
     resolve_upstream,
 )
@@ -652,13 +658,16 @@ async def test_oversized_request_clamped_to_remaining_budget(tmp_path) -> None:
 
 async def test_concurrent_calls_cannot_both_pass_cap(tmp_path) -> None:
     store = PiInferenceTokenStore()
+    body = {"messages": [{"role": "user", "content": "hi"}]}
+    # Budget sized so exactly ONE prompt estimate fits with a little headroom but two
+    # do not (the stricter ``used + estimate > budget`` gate rejects the second).
+    est = _estimate_prompt_tokens(body)
     token = store.issue(
         kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
-        budget_tokens=1,  # only one reservation can fit
+        budget_tokens=est + 5,  # one reservation fits (with room to generate), two don't
     )
     captured: list[httpx.Request] = []
     app = _make_app(store, tmp_path, handler=_capturing_handler(captured))
-    body = {"messages": [{"role": "user", "content": "hi"}]}
     r1, r2 = await asyncio.gather(
         _post(app, token, body), _post(app, token, body)
     )
@@ -756,3 +765,206 @@ async def test_stream_upstream_error_is_generic_and_redacted(tmp_path) -> None:
     )
     assert _SECRET_VALUE not in resp.text
     assert "upstream request failed" in resp.text  # generic stream error
+
+
+# ===========================================================================
+# Codex round-2 BLOCK fixes — regression coverage.
+# ===========================================================================
+
+# -- P0: key redaction across SSE chunk boundaries + encoded forms ----------
+
+
+async def test_redact_stream_catches_key_split_across_chunks() -> None:
+    """A key split between two SSE chunks (``sk-ab`` | ``cdef``) reassembles intact
+    under per-chunk redaction; the cross-boundary carry-over catches it."""
+    key = _SECRET_VALUE
+    mid = len(key) // 2
+
+    async def chunks():
+        # The key straddles the boundary between chunk 1 and chunk 2.
+        yield b'data: {"choices":[{"delta":{"content":"leak=' + key[:mid].encode("utf-8")
+        yield key[mid:].encode("utf-8") + b'"}}]}\n\n'
+        yield b"data: [DONE]\n\n"
+
+    out = b""
+    async for piece in _redact_stream(chunks(), key):
+        out += piece
+    assert key.encode("utf-8") not in out  # the split key is fully redacted
+    assert b"[REDACTED]" in out
+    assert b"data: [DONE]" in out  # ordinary streaming content untouched
+    assert b'"content":"leak=[REDACTED]"' in out
+
+
+async def test_redact_stream_passthrough_without_key() -> None:
+    """With no provider key the stream is byte-for-byte transparent."""
+    payload = b'data: {"choices":[{"delta":{"content":"hello world"}}]}\n\n'
+
+    async def chunks():
+        yield payload[:20]
+        yield payload[20:]
+
+    out = b""
+    async for piece in _redact_stream(chunks(), None):
+        out += piece
+    assert out == payload
+
+
+def test_redact_bytes_handles_encoded_key_forms() -> None:
+    """A provider may echo request data URL- or base64-encoded; those forms are
+    redacted too (a key with special chars makes the encodings differ from the raw)."""
+    key = "sk-a/b+c d=secret"  # / + space = → percent/base64 forms differ from raw
+    pct = urllib.parse.quote(key, safe="").encode("utf-8")
+    b64 = base64.b64encode(key.encode("utf-8"))
+    assert pct != key.encode("utf-8")  # the encoded form really is different
+    needles = _key_byte_needles(key)
+    assert pct in needles
+    assert b64 in needles
+    red_pct = _redact_bytes(b"prefix " + pct + b" suffix", key)
+    assert pct not in red_pct
+    assert b"[REDACTED]" in red_pct
+    red_b64 = _redact_bytes(b"prefix " + b64 + b" suffix", key)
+    assert b64 not in red_b64
+    assert b"[REDACTED]" in red_b64
+
+
+async def test_key_redacted_across_stream_chunks_end_to_end(tmp_path) -> None:
+    """End-to-end: an upstream that delivers the key split across two streamed chunks
+    is redacted before Pi sees the reassembled stream."""
+    key = _SECRET_VALUE
+    mid = len(key) // 2
+
+    async def upstream_body():
+        yield b'data: {"choices":[{"delta":{"content":"k=' + key[:mid].encode("utf-8")
+        yield key[mid:].encode("utf-8") + b'"}}]}\n\n'
+        yield b'data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}\n\n'
+        yield b"data: [DONE]\n\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=upstream_body(), headers={"content-type": "text/event-stream"}
+        )
+
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
+    )
+    app = _make_app(store, tmp_path, handler=handler)
+    resp = await _post(
+        app, token, {"messages": [{"role": "user", "content": "hi"}], "stream": True}
+    )
+    assert resp.status_code == 200
+    assert _SECRET_VALUE not in resp.text  # split key never reassembles on Pi's side
+    assert "[REDACTED]" in resp.text
+
+
+# -- P1: budget pre-check rejects an oversized request before the provider ---
+
+
+async def test_oversized_first_request_rejected_pre_call(tmp_path) -> None:
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=3,  # smaller than any real prompt estimate
+    )
+    body = {"messages": [{"role": "user", "content": "hi"}]}
+    assert _estimate_prompt_tokens(body) > 3  # the estimate already exceeds the budget
+    captured: list[httpx.Request] = []
+    app = _make_app(store, tmp_path, handler=_capturing_handler(captured))
+    resp = await _post(app, token, body)
+    assert resp.status_code == 429
+    assert captured == []  # rejected before the provider was ever called
+    assert store.validate(token).used_tokens == 0  # nothing reserved
+
+
+async def test_zero_remaining_rejected_not_one_token_allowed(tmp_path) -> None:
+    store = PiInferenceTokenStore()
+    body = {"messages": [{"role": "user", "content": "hi"}]}
+    est = _estimate_prompt_tokens(body)
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=est,  # exactly enough for the prompt, no room to generate
+    )
+    captured: list[httpx.Request] = []
+    app = _make_app(store, tmp_path, handler=_capturing_handler(captured))
+    resp = await _post(app, token, body)
+    assert resp.status_code == 429  # remaining==0 → rejected, not a 1-token call
+    assert captured == []
+
+
+async def test_max_completion_tokens_clamped_to_remaining_budget(tmp_path) -> None:
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=500,
+    )
+    captured: list[httpx.Request] = []
+    app = _make_app(store, tmp_path, handler=_capturing_handler(captured))
+    resp = await _post(
+        app,
+        token,
+        {
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_completion_tokens": 1_000_000,
+        },
+    )
+    assert resp.status_code == 200
+    sent = json.loads(captured[0].content)
+    # max_completion_tokens is whitelisted → it must be clamped too, not bypass the cap.
+    assert 0 < sent["max_completion_tokens"] <= 500
+    assert sent["max_completion_tokens"] < 1_000_000
+
+
+# -- P1: upstream error BODIES (4xx/5xx) are not relayed to Pi ---------------
+
+
+async def test_upstream_error_body_not_relayed_non_stream(tmp_path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        # A provider error body that echoes request data + the injected key.
+        return httpx.Response(
+            500,
+            content=json.dumps(
+                {
+                    "error": "bad things",
+                    "echoed_auth": request.headers.get("authorization"),
+                    "leaked": _SECRET_VALUE,
+                }
+            ).encode("utf-8"),
+            headers={"content-type": "application/json"},
+        )
+
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
+    )
+    app = _make_app(store, tmp_path, handler=handler)
+    resp = await _post(app, token, {"messages": [{"role": "user", "content": "hi"}]})
+    assert resp.status_code == 500  # status code passes through
+    assert _SECRET_VALUE not in resp.text  # but the body does NOT
+    assert "bad things" not in resp.text  # the provider body is replaced wholesale
+    assert resp.json()["error"]["message"] == "upstream request failed"  # generic
+
+
+async def test_upstream_error_body_not_relayed_stream(tmp_path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            502,
+            content=json.dumps(
+                {"error": "upstream boom", "leaked": _SECRET_VALUE}
+            ).encode("utf-8"),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
+    )
+    app = _make_app(store, tmp_path, handler=handler)
+    resp = await _post(
+        app, token, {"messages": [{"role": "user", "content": "hi"}], "stream": True}
+    )
+    assert _SECRET_VALUE not in resp.text  # error body never relayed
+    assert "upstream boom" not in resp.text
+    assert "upstream request failed" in resp.text  # generic message instead

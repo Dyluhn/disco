@@ -225,21 +225,25 @@ class PiInferenceTokenStore:
 
     def reserve(self, token: str, amount: int) -> bool:
         """Atomically reserve ``amount`` ESTIMATED tokens against the budget BEFORE
-        the upstream call, returning False (reserving nothing) when the cap is
-        already reached or the token is unknown.
+        the upstream call, returning False (reserving nothing) when the token is
+        unknown or the reservation would push usage PAST the cap
+        (``used + amount > budget``) — so an oversized FIRST request whose estimate
+        already exceeds the remaining budget is rejected here, before the provider is
+        ever called, instead of being let through to push usage over the cap.
 
         This is the real budget gate (the old pre-call ``is_over_budget`` peek let an
         oversized or concurrent request slip past). Under single-threaded asyncio the
         read-check-write here runs with NO ``await`` in the middle, so two concurrent
         gateway calls cannot both pass a near-full cap — whichever reserves first
-        moves ``used_tokens`` and the other then sees the cap reached. Reconcile the
-        estimate to the provider's actual usage afterward via ``settle_usage``."""
+        moves ``used_tokens`` and the other then sees no room. Reconcile the estimate
+        to the provider's actual usage afterward via ``settle_usage``."""
         rec = self._tokens.get(token)
         if rec is None:
             return False
-        if rec.budget_tokens > 0 and rec.used_tokens >= rec.budget_tokens:
+        amt = max(0, int(amount))
+        if rec.budget_tokens > 0 and rec.used_tokens + amt > rec.budget_tokens:
             return False
-        rec.used_tokens += max(0, int(amount))
+        rec.used_tokens += amt
         return True
 
     def settle_usage(

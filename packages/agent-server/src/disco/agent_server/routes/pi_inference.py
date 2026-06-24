@@ -32,10 +32,12 @@ raw Pi pass-through must not do.
 
 from __future__ import annotations
 
+import base64
 import ipaddress
 import json
 import logging
 import os
+import urllib.parse
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
@@ -193,12 +195,37 @@ def _outbound_headers(target: _UpstreamTarget) -> dict[str, str]:
 
 
 def _key_needles(api_key: str | None) -> list[str]:
-    """Every literal form of the provider key that could leak back to Pi — the bare
-    key and its ``Bearer <key>`` header form. Bearer-form first so the longer match
-    is replaced before the bare key."""
+    """Every literal STRING form of the provider key that could leak back to Pi — the
+    bare key and its ``Bearer <key>`` header form. Bearer-form first so the longer
+    match is replaced before the bare key."""
     if not api_key:
         return []
     return [f"Bearer {api_key}", api_key]
+
+
+def _key_byte_needles(api_key: str | None) -> list[bytes]:
+    """Every literal BYTE form of the provider key a hostile/buggy upstream could echo
+    back to Pi: the bare key + its ``Bearer <key>`` header form, PLUS the common
+    ENCODED transforms a provider might apply when reflecting request data — URL
+    percent-encoding, JSON-string escaping, and base64 (standard + url-safe, padded
+    and unpadded). Deliberately bounded to these specific, realistic forms (not a
+    regex-of-everything). Sorted LONGEST-first so an overlapping/containing form is
+    replaced before a shorter one nested inside it (``Bearer <key>`` before ``<key>``;
+    a padded base64 before its unpadded prefix)."""
+    if not api_key:
+        return []
+    forms: set[str] = {api_key, f"Bearer {api_key}"}
+    # URL percent-encoding (safe="" → the whole key is encoded).
+    forms.add(urllib.parse.quote(api_key, safe=""))
+    # JSON-string escaping (drop the quotes json.dumps wraps it in).
+    forms.add(json.dumps(api_key)[1:-1])
+    raw = api_key.encode("utf-8")
+    for enc in (base64.b64encode(raw), base64.urlsafe_b64encode(raw)):
+        s = enc.decode("ascii")
+        forms.add(s)
+        forms.add(s.rstrip("="))  # unpadded variant
+    needles = [f.encode("utf-8") for f in forms if f]
+    return sorted(needles, key=len, reverse=True)
 
 
 def _redact_text(text: str, api_key: str | None) -> str:
@@ -210,13 +237,45 @@ def _redact_text(text: str, api_key: str | None) -> str:
 
 
 def _redact_bytes(data: bytes, api_key: str | None) -> bytes:
-    """Strip every form of the provider key from Pi-facing BYTES (a relayed body or
-    SSE chunk). Best-effort per buffer: a hostile/buggy upstream that echoes the
-    request ``Authorization`` header (or embeds the key in a body / error / SSE
-    chunk) must never hand it back to Pi."""
-    for needle in _key_needles(api_key):
-        data = data.replace(needle.encode("utf-8"), _REDACTED.encode("ascii"))
+    """Strip every (literal + encoded) form of the provider key from Pi-facing BYTES (a
+    relayed body or SSE chunk). Best-effort per buffer: a hostile/buggy upstream that
+    echoes the request ``Authorization`` header (or embeds the key in a body / error /
+    SSE chunk, possibly URL- or base64-encoded) must never hand it back to Pi."""
+    for needle in _key_byte_needles(api_key):
+        data = data.replace(needle, _REDACTED.encode("ascii"))
     return data
+
+
+async def _redact_stream(
+    chunks: AsyncIterator[bytes], api_key: str | None
+) -> AsyncIterator[bytes]:
+    """Redact the provider key from a stream of bytes ACROSS chunk boundaries.
+
+    Per-chunk redaction alone leaks a key split between two SSE chunks
+    (``sk-ab`` | ``cdef`` reassembles intact on Pi's side). This keeps a carry-over
+    buffer of the longest needle minus one byte between chunks, so a key straddling a
+    boundary is reconstructed and caught before it reaches Pi; only bytes that cannot
+    possibly start a still-unfinished match are emitted, and the tail is flushed
+    (redacted) at stream end. With no key configured it is a transparent pass-through."""
+    needles = _key_byte_needles(api_key)
+    if not needles:
+        async for chunk in chunks:
+            if chunk:
+                yield chunk
+        return
+    keep = max(len(n) for n in needles) - 1  # retain enough to complete a split match
+    carry = b""
+    async for chunk in chunks:
+        if not chunk:
+            continue
+        buf = _redact_bytes(carry + chunk, api_key)
+        if len(buf) > keep:
+            yield buf[:-keep]
+            carry = buf[-keep:]
+        else:
+            carry = buf
+    if carry:
+        yield _redact_bytes(carry, api_key)
 
 
 def _sanitize_body(body: dict, *, model_id: str) -> tuple[dict, list[str]]:
@@ -382,10 +441,32 @@ def make_pi_inference_router(
             )
         remaining = rec.budget_remaining()
         if remaining is not None:
-            cap = max(1, remaining)
+            if remaining <= 0:
+                # The reservation consumed the last of the budget — there is no room
+                # to generate. Reject rather than force a min-1 cap (which would let a
+                # request through at an exhausted budget).
+                _LOG.info(
+                    "pi-gateway no budget remaining after reserve token=%s used=%d budget=%d",
+                    rec.fingerprint, rec.used_tokens, rec.budget_tokens,
+                )
+                return JSONResponse(
+                    {"error": {"message": "token budget exhausted", "type": "budget_exceeded"}},
+                    status_code=429,
+                )
+            cap = remaining
+            # Clamp max_tokens (injecting it when absent so generation is always
+            # capped to what the budget allows).
             requested = clean.get("max_tokens")
             if not isinstance(requested, int) or requested > cap:
-                clean["max_tokens"] = cap  # clamp generation to what budget allows
+                clean["max_tokens"] = cap
+            # Clamp any OTHER whitelisted generation-limit field Pi may have set, so it
+            # cannot bypass the cap on a provider that honors it (e.g. OpenAI's
+            # ``max_completion_tokens``). Only clamp DOWN — never inject a field Pi did
+            # not send.
+            for gen_field in ("max_completion_tokens",):
+                val = clean.get(gen_field)
+                if isinstance(val, int) and val > cap:
+                    clean[gen_field] = cap
         if stream:
             opts = clean.get("stream_options")
             opts = dict(opts) if isinstance(opts, dict) else {}
@@ -423,6 +504,24 @@ def make_pi_inference_router(
                 )
             data = resp.content
             status = resp.status_code
+            if status >= 400:
+                # An upstream error BODY can echo request data/headers (and thus the
+                # injected key). Never relay it: replace with the generic message (the
+                # status code may pass through, the body must not). Log the real,
+                # redacted body server-side only.
+                await client.aclose()
+                token_store.settle_usage(
+                    token, reserved=estimate, input_tokens=None, output_tokens=None
+                )
+                _LOG.warning(
+                    "pi-gateway upstream error status=%d token=%s body=%s",
+                    status, rec.fingerprint,
+                    _redact_text(data.decode("utf-8", "replace"), target.api_key),
+                )
+                return JSONResponse(
+                    {"error": {"message": _GENERIC_UPSTREAM_ERROR, "type": "upstream"}},
+                    status_code=status,
+                )
             media = _redact_text(
                 resp.headers.get("content-type", "application/json"), target.api_key
             )
@@ -455,19 +554,36 @@ def make_pi_inference_router(
         # observing the trailing usage for accounting without altering the stream.
         async def _proxy_stream() -> AsyncIterator[bytes]:
             tail = b""
+
+            async def _raw() -> AsyncIterator[bytes]:
+                # Observe the ORIGINAL bytes for usage accounting; the redaction layer
+                # below relays the (cross-chunk-redacted) bytes to Pi.
+                nonlocal tail
+                async for chunk in resp.aiter_bytes():
+                    if chunk:
+                        tail = (tail + chunk)[-_USAGE_TAIL_BYTES:]
+                        yield chunk
+
             try:
                 async with client.stream(
                     "POST", url, content=payload, headers=headers
                 ) as resp:
                     if resp.status_code >= 400:
-                        # Redact any echoed key from an error body before relaying.
-                        yield _redact_bytes(await resp.aread(), target.api_key)
+                        # An upstream error BODY can echo request data/headers (and the
+                        # injected key). Never relay it — emit the generic message and
+                        # log the real, redacted body server-side only.
+                        body = await resp.aread()
+                        _LOG.warning(
+                            "pi-gateway upstream stream error status=%d token=%s body=%s",
+                            resp.status_code, rec.fingerprint,
+                            _redact_text(body.decode("utf-8", "replace"), target.api_key),
+                        )
+                        yield b'data: {"error": {"message": "upstream request failed"}}\n\n'
                         return
-                    async for chunk in resp.aiter_bytes():
-                        if chunk:
-                            # Observe the ORIGINAL bytes for usage; relay REDACTED.
-                            tail = (tail + chunk)[-_USAGE_TAIL_BYTES:]
-                            yield _redact_bytes(chunk, target.api_key)
+                    # Redact the provider key ACROSS chunk boundaries before it reaches
+                    # Pi (a key split between two SSE chunks would otherwise reassemble).
+                    async for out in _redact_stream(_raw(), target.api_key):
+                        yield out
             except httpx.HTTPError as exc:
                 # Generic Pi-facing error; real (redacted) detail logged server-side.
                 _LOG.warning(
