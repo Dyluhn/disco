@@ -35,6 +35,7 @@ from .adapters.disco_api import (
     AWAITING_PLAN_APPROVAL,
     PAUSED_STATE,
     PROGRESSING_TIMEOUT,
+    TERMINAL_STATES,
     CollectedRun,
     DiscoApiClient,
     InconclusiveRunError,
@@ -464,6 +465,41 @@ def _invalid_run_record(
     return record
 
 
+# ---- runner hygiene: kill an abandoned conversation -------------------------
+
+
+async def _release_conversation(
+    client: DiscoApiClient, cid: str | None, timeline: list[str] | None = None
+) -> None:
+    """Tear down the conversation the runner is DONE with so it doesn't leak as a RUNNING
+    build on the shared server. Called from run_once's `finally` AFTER evidence has been
+    collected + frozen (the §6 read of the terminal events already happened in
+    drive_scenario), so the kill never races the dossier.
+
+    Kills ONLY a STILL-NON-TERMINAL conversation (RUNNING / PAUSED / AWAITING_*): one that
+    already reached a genuine terminal (FINISHED / ERROR / STUCK / IDLE) needs no kill. The
+    kill is BEST-EFFORT + IDEMPOTENT — any error (server gone, already terminal) is swallowed
+    so teardown never turns a real verdict into a crash, and an already-terminal conv is
+    never double-killed (we don't kill it at all)."""
+    if not cid:
+        return
+    status = ""
+    with contextlib.suppress(Exception):
+        status = DiscoApiClient._status_of(await client.get_state(cid))
+    if status in TERMINAL_STATES:
+        if timeline is not None:
+            timeline.append(f"released conversation {cid}: already terminal ({status}); no kill")
+        return
+    # Non-terminal (or undeterminable) → the runner is abandoning a live build: kill it.
+    with contextlib.suppress(Exception):
+        resp = await client.kill(cid)
+        if timeline is not None:
+            timeline.append(
+                f"killed abandoned conversation {cid} "
+                f"(was {status or 'unknown'}, http {resp.get('http_status')})"
+            )
+
+
 # ---- one full run -----------------------------------------------------------
 
 
@@ -479,45 +515,59 @@ async def run_once(
     timeout_s: float,
     hard_cap_s: float = _DEFAULT_HARD_CAP_S,
 ) -> dict[str, Any]:
-    # §9 pre-create infra gate (the ONLY infra source).
+    # §9 pre-create infra gate (the ONLY infra source). No conversation exists yet, so a
+    # failure here needs no teardown (returns before the try/finally below).
     try:
         await client.pre_create_probe(model)
     except InfraProbeError as exc:
         return _infra_failure_record(out_root, run_id, scenario, exc)
 
-    # A mid-run transport loss (the shared server crashed / network dropped AFTER
-    # create) is not adjudicable — degrade to INVALID_RUN instead of a raw traceback,
-    # so a batch keeps going and the outcome is recorded honestly.
+    # This run has not created a conversation yet — reset the tracked cid so the finally
+    # only ever kills the conversation THIS run created (the client is reused across a
+    # batch of iterations).
+    client.last_conversation_id = None
     try:
-        run = await drive_scenario(
-            client,
-            scenario,
-            model=model,
-            autonomous=autonomous,
-            timeout_s=timeout_s,
-            hard_cap_s=hard_cap_s,
-        )
-    except InconclusiveRunError as exc:
-        # Bug 15: the build was STILL PROGRESSING when the hard cap hit — the runner could
-        # not obtain a terminal verdict. INVALID_RUN (inconclusive), NEVER a product fail.
-        return _invalid_run_record(
-            out_root,
-            run_id,
-            scenario,
-            exc.reason,
-            code=fc.RUN_TIMEOUT_WHILE_PROGRESSING,
-            first_broken_link="terminal_wait -> no_terminal_before_hard_cap",
-            facts=exc.facts,
-        )
-    except Exception as exc:  # noqa: BLE001 — surface the real reason as INVALID_RUN
-        return _invalid_run_record(
-            out_root, run_id, scenario, f"{type(exc).__name__}: {exc}"
-        )
+        # A mid-run transport loss (the shared server crashed / network dropped AFTER
+        # create) is not adjudicable — degrade to INVALID_RUN instead of a raw traceback,
+        # so a batch keeps going and the outcome is recorded honestly.
+        try:
+            run = await drive_scenario(
+                client,
+                scenario,
+                model=model,
+                autonomous=autonomous,
+                timeout_s=timeout_s,
+                hard_cap_s=hard_cap_s,
+            )
+        except InconclusiveRunError as exc:
+            # Bug 15: the build was STILL PROGRESSING when the hard cap hit — the runner could
+            # not obtain a terminal verdict. INVALID_RUN (inconclusive), NEVER a product fail.
+            return _invalid_run_record(
+                out_root,
+                run_id,
+                scenario,
+                exc.reason,
+                code=fc.RUN_TIMEOUT_WHILE_PROGRESSING,
+                first_broken_link="terminal_wait -> no_terminal_before_hard_cap",
+                facts=exc.facts,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface the real reason as INVALID_RUN
+            return _invalid_run_record(
+                out_root, run_id, scenario, f"{type(exc).__name__}: {exc}"
+            )
 
-    base = assemble_dossier(
-        out_root, run_id, scenario, run, model=model, autonomous=autonomous, commit=commit
-    )
-    return classify_dossier(base, scenario, run, autonomous=autonomous, commit=commit)
+        base = assemble_dossier(
+            out_root, run_id, scenario, run, model=model, autonomous=autonomous, commit=commit
+        )
+        return classify_dossier(base, scenario, run, autonomous=autonomous, commit=commit)
+    finally:
+        # RUNNER HYGIENE: kill the conversation this run created if it's still non-terminal,
+        # so an abandoned RUNNING / PAUSED / AWAITING build (inconclusive cutoff, error path,
+        # or simply released after evidence collection) doesn't leak and load the shared
+        # server. AFTER assemble_dossier on the happy path → the §6 evidence is already frozen
+        # (the terminal events were read in drive_scenario); a kill of the remote conversation
+        # never touches the local frozen dossier. Best-effort + idempotent.
+        await _release_conversation(client, client.last_conversation_id)
 
 
 # ---- CLI --------------------------------------------------------------------

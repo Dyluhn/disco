@@ -1082,3 +1082,200 @@ async def test_dossier_evidence_lock_detects_tamper(tmp_path):
     # mutate a frozen evidence file
     (base / "conversations" / _CID / "events.jsonl").write_text("{}\n", encoding="utf-8")
     assert not verify_evidence_unchanged(base, manifest).intact
+
+
+# ---- runner hygiene: kill an abandoned conversation -------------------------
+
+
+@pytest.mark.asyncio
+async def test_abandoned_run_kills_its_conversation(tmp_path):
+    # RUNNER HYGIENE: an inconclusive run the runner stops watching while it is STILL
+    # non-terminal (RUNNING) must KILL the conversation it created — a leaked RUNNING conv
+    # loads the shared server. Here the build never terminates (progressing cutoff →
+    # INVALID_RUN); the finally must POST /conversations/{cid}/kill.
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log()[:-1])  # no FINISHED — never terminal
+    transport = _ProgressTransport(db, finish_after=None)  # always RUNNING + progressing
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    record = await run_once(
+        client,
+        _smoke_scenario(),
+        run_id="run_kill_001",
+        out_root=tmp_path / "out",
+        model="m",
+        autonomous=False,
+        commit="abc",
+        timeout_s=10.0,  # generous inactivity — never trips while events advance
+        hard_cap_s=0.2,  # tiny ceiling — bounds the never-terminating run
+    )
+    assert record["status"] == "INVALID_RUN"  # progressing cutoff, not a product fail
+    # it KILLED the conversation it created (still non-terminal when released)
+    kills = [p for p in transport.posts if p[0] == f"/conversations/{_CID}/kill"]
+    assert len(kills) == 1, transport.posts
+
+
+@pytest.mark.asyncio
+async def test_cleanly_terminal_run_is_not_killed(tmp_path):
+    # The flip side: a run that reached a genuine terminal (FINISHED) needs NO kill — the
+    # runner must NOT kill an already-terminal conversation (no wasted teardown, no
+    # double-kill). A clean smoke PASS must issue zero /kill posts.
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())
+    transport = FakeTransport(
+        db,
+        states=["AWAITING_PLAN_APPROVAL", "FINISHED", "FINISHED", "FINISHED", "FINISHED"],
+        workspace={"index.html": "<h1>Build Smoke OK</h1>"},
+        preview_html="<html><h1>Build Smoke OK</h1></html>",
+    )
+    client = _client(transport, tmp_path)
+    record = await run_once(
+        client,
+        _smoke_scenario(),
+        run_id="run_nokill_001",
+        out_root=tmp_path / "out",
+        model="m",
+        autonomous=False,
+        commit="abc",
+        timeout_s=5,
+    )
+    assert record["status"] == "PASS", record
+    assert not any(p[0].endswith("/kill") for p in transport.posts)  # already terminal → no kill
+
+
+@pytest.mark.asyncio
+async def test_kill_is_idempotent_on_already_terminal_conv(tmp_path):
+    # The kill adapter method is harmless/idempotent on an already-terminal conversation
+    # (the route is always-available); _release_conversation skips it, but a direct kill
+    # must still succeed cleanly so a belt-and-suspenders call never crashes teardown.
+    db = tmp_path / "disco.db"
+    transport = FakeTransport(db, states=["FINISHED"])
+    client = _client(transport, tmp_path)
+    resp = await client.kill(_CID)
+    assert resp["http_status"] == 200
+    assert any(p[0] == f"/conversations/{_CID}/kill" for p in transport.posts)
+
+
+@pytest.mark.asyncio
+async def test_release_conversation_swallows_unreachable_server(tmp_path):
+    # Teardown is BEST-EFFORT: if the server is gone when the runner releases the conv,
+    # _release_conversation must not raise (it would otherwise turn a recorded verdict into
+    # a crash). get_state raises → status undeterminable → it attempts a kill, which also
+    # raises → swallowed. No exception escapes.
+    from harness.build_soak.run import _release_conversation
+
+    class _DeadTransport(FakeTransport):
+        async def get_json(self, path):
+            raise ConnectionError("server gone")
+
+        async def post_json(self, path, body):
+            raise ConnectionError("server gone")
+
+    transport = _DeadTransport(tmp_path / "disco.db", states=["RUNNING"])
+    client = _client(transport, tmp_path)
+    await _release_conversation(client, _CID)  # must not raise
+    await _release_conversation(client, None)  # no cid → no-op, must not raise
+
+
+# ---- scenario schema / loader validation ------------------------------------
+
+_TERMINAL_VOCAB = {"FINISHED", "VERIFIED", "STUCK", "ERROR", "IDLE"}
+_EVENT_CHAIN_KEYS = {
+    "require_user_event",
+    "require_plan_before_execution",
+    "require_action_observation_pairs",
+}
+_ASSERTION_KEYS = {
+    "event_chain",
+    "planning",
+    "revisions",
+    "workspace",
+    "preview",
+    "terminal_status_in",
+}
+_FOLLOWUP_TRIGGERS = {"after_terminal", "after_first_file_write"}
+
+
+def test_every_scenario_loads_with_a_valid_schema():
+    # Every scenario in scenarios.yaml must load AND be well-formed against the shape the
+    # oracles consume — so a typo'd key / missing terminal vocab / unsatisfiable contract
+    # can't slip in. Mirrors the ContractOracle / OutputTruthOracle / RevisionOracle fields.
+    scen = load_scenarios()
+    assert scen, "no scenarios loaded"
+    # all four originals + the three new ones are present
+    expected = {
+        "static_html_minimal",
+        "must_plan_before_tool",
+        "revise_after_finish",
+        "steer_while_running_requires_plan_update_or_clear_execution_note",
+        "multifile_static_site",
+        "revise_twice_complex",
+        "verify_catches_broken_then_fixed",
+    }
+    assert expected <= set(scen), sorted(set(scen) ^ expected)
+
+    for sid, s in scen.items():
+        assert s.get("id") == sid
+        assert isinstance(s.get("prompt"), str) and s["prompt"].strip(), sid
+        assert s.get("mode") == "api", sid
+        a = s.get("assertions") or {}
+        assert isinstance(a, dict) and a, f"{sid}: assertions missing"
+        assert set(a) <= _ASSERTION_KEYS, f"{sid}: unknown keys {set(a) - _ASSERTION_KEYS}"
+
+        # NO scenario asserts tool_scope (no per-turn tool-scope evidence yet — file header).
+        assert "tool_scope" not in a, f"{sid}: must not assert tool_scope (no evidence yet)"
+
+        ec = a.get("event_chain") or {}
+        assert set(ec) <= _EVENT_CHAIN_KEYS, f"{sid}: bad event_chain keys"
+
+        term = a.get("terminal_status_in")
+        assert isinstance(term, list) and term, f"{sid}: terminal_status_in required"
+        assert set(term) <= _TERMINAL_VOCAB, f"{sid}: bad terminal {set(term) - _TERMINAL_VOCAB}"
+
+        # workspace.files: every file has a path + (optional) list-of-str must_contain.
+        for spec in (a.get("workspace") or {}).get("files") or []:
+            assert isinstance(spec.get("path"), str) and spec["path"], f"{sid}: file needs a path"
+            mc = spec.get("must_contain") or []
+            assert isinstance(mc, list) and all(isinstance(x, str) for x in mc), sid
+
+        # preview: required is bool; must_contain (if any) is a list of str.
+        prev = a.get("preview") or {}
+        if prev:
+            assert isinstance(prev.get("required"), bool), f"{sid}: preview.required must be bool"
+            assert all(isinstance(x, str) for x in (prev.get("must_contain") or [])), sid
+
+        # followups: each has a text + a known trigger; if ANY requires a plan revision the
+        # ContractOracle requires assertions.revisions.expected_final_plan_revision.
+        followups = s.get("followups") or []
+        for f in followups:
+            assert isinstance(f.get("text"), str) and f["text"], f"{sid}: followup needs text"
+            assert f.get("trigger") in _FOLLOWUP_TRIGGERS, f"{sid}: bad trigger {f.get('trigger')}"
+        if any(f.get("requires_plan_revision") for f in followups):
+            assert "expected_final_plan_revision" in (a.get("revisions") or {}), (
+                f"{sid}: revision followups need revisions.expected_final_plan_revision"
+            )
+
+
+def test_new_scenarios_assert_deterministic_oracle_checkable_output():
+    # The three new scenarios must each carry a deterministically-checkable output oracle
+    # expectation (specific files with must_contain markers and/or a required preview) — no
+    # vague asserts that the OutputTruthOracle could not verify.
+    scen = load_scenarios()
+    new_ids = ("multifile_static_site", "revise_twice_complex", "verify_catches_broken_then_fixed")
+    for sid in new_ids:
+        a = scen[sid]["assertions"]
+        files = (a.get("workspace") or {}).get("files") or []
+        # at least one declared file with concrete must_contain markers
+        assert files, f"{sid}: must declare workspace files"
+        assert any(spec.get("must_contain") for spec in files), f"{sid}: needs must_contain markers"
+        assert a.get("terminal_status_in"), sid
+
+    # multifile: three distinct files, each with markers; preview required.
+    ms = scen["multifile_static_site"]["assertions"]
+    paths = {spec["path"] for spec in ms["workspace"]["files"]}
+    assert {"index.html", "about.html", "style.css"} <= paths
+    assert ms["preview"]["required"] is True
+
+    # revise_twice: two revision-requiring followups → expected_final_plan_revision == 3.
+    rt = scen["revise_twice_complex"]
+    assert sum(bool(f.get("requires_plan_revision")) for f in rt["followups"]) == 2
+    assert rt["assertions"]["revisions"]["expected_final_plan_revision"] == 3
