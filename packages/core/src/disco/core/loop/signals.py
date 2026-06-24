@@ -308,6 +308,37 @@ def actions_since_last_resume(events: list[Event]) -> int:
     return count
 
 
+def consecutive_actionless_pauses(events: list[Event]) -> int:
+    """BW-02 escalation signal — the trailing run of
+    `StatusEvent(PAUSED, detail="actionless")` landings, counting back from the
+    end of `events`, separated only by resume markers and noop steps.
+
+    A real (non-bookkeeping, non-verify-probe) ActionEvent — a file_read, search,
+    browser, edit, anything the model actually DID — breaks the run, as does any
+    OTHER landing (FINISHED/STUCK/a different PAUSE reason). RUNNING resume markers
+    are transparent. So the count is the number of consecutive zero-ACTION
+    actionless pauses already in the log: an actionless PAUSE only lands when the
+    segment leading to it produced no real action (a real action resets the noop
+    streak before the cap), so a trailing run of them with no action in between is
+    a degenerate "keeps pausing" loop the plain pause never breaks. The actionless
+    valve consults this so the SECOND such pause escalates to STUCK instead of
+    re-pausing forever; the FIRST (count 0 here) stays the useful stop."""
+    count = 0
+    for e in reversed(events):
+        if isinstance(e, ActionEvent) and e.tool_call is not None:
+            if e.tool_call.tool_name in _BOOKKEEPING_TOOLS or e.meta.get("verify_probe"):
+                continue  # bookkeeping / the finish probe is not the model acting
+            break  # a real action breaks the degenerate streak
+        if isinstance(e, StatusEvent):
+            if e.status == ConversationStatus.PAUSED and e.detail == "actionless":
+                count += 1
+                continue
+            if e.status == ConversationStatus.RUNNING:
+                continue  # a resume marker between pauses — transparent
+            break  # a different PAUSE reason, or FINISHED/STUCK — streak ends
+    return count
+
+
 def productive_actions_since_approval(events: list[Event]) -> int:
     """Count PRODUCTIVE (state-changing) actions since the latest plan approval — i.e.
     actions NOT in `_NON_PRODUCTIVE_TOOLS` (excludes reads, browser, and the

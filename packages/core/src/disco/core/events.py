@@ -320,6 +320,26 @@ _ELISION_MARKER_RE = re.compile(r"<\s*\d[\d,]*\s*chars\b[^>]*?\b(?:elided|full c
 # pass can re-render it (pinned vs non-pinned) without re-deriving the original length.
 _ELISION_COUNT_RE = re.compile(r"<\s*(\d[\d,]*)\s*chars\b")
 
+# BW-02 (trace conv_20fa8482) — a model can PARAPHRASE the neutral marker, dropping the
+# leading "<N chars …>" anchor while copying the marker's stable TAIL prose verbatim into
+# a real tool argument (observed: "<content elided — re-issue the call or file_read the
+# path for the full content; do not copy this placeholder into a tool argument>"). With
+# no digit anchor, `_ELISION_MARKER_RE` misses it, so K1 passed it and a 132-byte
+# placeholder overwrote a real file (DATA LOSS → build corruption → degenerate tool-less
+# resumes). This SECOND detector is for the REJECTION path ONLY: it matches a bounded
+# angle-bracket placeholder `<…>` (no greedy cross-`>`) that carries BOTH the marker's
+# signature TAIL phrase AND an elision keyword — requiring BOTH so it does NOT
+# false-positive on ordinary file content that merely says "elided" in prose. It is NOT
+# used by the RETARGET pass (which still needs the char count from `_ELISION_COUNT_RE` to
+# reconstruct the neutral marker, and a paraphrase carries no count to reconstruct).
+_ELISION_PARAPHRASE_RE = re.compile(
+    r"<"
+    r"(?=[^>]*\b(?:elided|full content|placeholder)\b)"
+    r"[^>]*"
+    r"(?:re-issue the call or file_read the path|do not copy this placeholder)"
+    r"[^>]*>"
+)
+
 
 # CW P1-c — the DEFAULT / assist-ON elided-arg marker: the pre-CW-3 directional bytes.
 # For assist-ON the CURRENT WORKSPACE block stays in the TAIL (after the history), so
@@ -421,11 +441,19 @@ def retarget_elided_arg_markers(messages: list[LLMMessage]) -> list[LLMMessage]:
 def find_elided_arg_markers(arguments: dict[str, object]) -> list[str]:
     """K1 execution guard: return the argument keys whose string value carries an
     elision placeholder (the `_snip_args` marker copied back by a weak model).
-    Empty list ⇒ the arguments are clean and safe to execute. Pure + deterministic."""
+    Empty list ⇒ the arguments are clean and safe to execute. Pure + deterministic.
+
+    Matches BOTH the structural `<N chars … {elided|full content} …>` marker AND a
+    model-PARAPHRASED placeholder that dropped the count anchor but kept the marker's
+    signature tail prose (BW-02). Rejection-only — the retarget pass is unaffected."""
     return [
         k
         for k, v in arguments.items()
-        if isinstance(v, str) and _ELISION_MARKER_RE.search(v) is not None
+        if isinstance(v, str)
+        and (
+            _ELISION_MARKER_RE.search(v) is not None
+            or _ELISION_PARAPHRASE_RE.search(v) is not None
+        )
     ]
 
 

@@ -196,6 +196,44 @@ class Valve:
                     return True
                 return False
             if incomplete:
+                # BW-02 — SECONDARY escalation. The first actionless pause is a
+                # useful stop (it waits for a human steer). But if the run is
+                # RESUMED and the very next segment again does ZERO tool actions
+                # (no tool call AT ALL since the resume — a file_read/search/
+                # browser would count as acting and reset this), the model is in a
+                # degenerate "keeps pausing" loop the plain pause never breaks.
+                # Halt VISIBLY (STUCK) on the 2nd consecutive zero-action pause
+                # instead of re-pausing forever. (consecutive_actionless_pauses
+                # counts the pauses ALREADY in the log; >= 1 prior + this one == 2.)
+                if (
+                    signals.actions_since_last_resume(events) == 0
+                    and signals.consecutive_actionless_pauses(events) >= 1
+                ):
+                    await self._loop._emit(
+                        MessageEvent(
+                            source=EventSource.ENVIRONMENT,
+                            message=LLMMessage(
+                                role="user",
+                                content=(
+                                    "<system-reminder>\nThe agent was resumed but"
+                                    " again produced no action — two consecutive run"
+                                    " segments did zero real work while plan steps"
+                                    " remain undone. This is a degenerate loop;"
+                                    " halting (STUCK) instead of pausing again."
+                                    " A human steer with concrete next steps, or a"
+                                    " corrected workspace, is needed to proceed.\n"
+                                    "</system-reminder>"
+                                ),
+                            ),
+                        )
+                    )
+                    await self._loop._emit(
+                        StatusEvent(
+                            status=ConversationStatus.STUCK,
+                            detail="actionless_loop",
+                        )
+                    )
+                    return True
                 await self._loop._emit(
                     MessageEvent(
                         source=EventSource.ENVIRONMENT,
