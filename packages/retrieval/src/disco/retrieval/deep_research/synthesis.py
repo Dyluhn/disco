@@ -560,16 +560,29 @@ async def synthesize_section(
             extra = resp.text
             if not extra.strip():
                 break
+            stripped_extra = extra.lstrip()
             if markdown[-1:].isspace():
                 # Cut fell on a line/word boundary — start the continuation on a
                 # fresh line so a new table row or paragraph never merges into the
                 # last one (the half-table case BW-07 exists to fix).
-                markdown = markdown.rstrip() + "\n" + extra.lstrip()
+                markdown = markdown.rstrip() + "\n" + stripped_extra
+            elif markdown[-1:] == "|" and stripped_extra[:1] == "|":
+                # Cut landed AFTER a complete table row but BEFORE its trailing
+                # newline: the previous chunk ends on a row-closing pipe and the
+                # continuation opens a NEW row with a leading pipe. A direct glue
+                # would fuse the two rows on one line ("| Alpha | 90 |" +
+                # "| Beta | 85 |" -> "| Alpha | 90 || Beta | 85 |"); the adjacent
+                # `||` across the boundary is the tell of a wrongly merged row.
+                # Join on a fresh line so each row stays a distinct row. (A cut
+                # mid-cell ends on a value, not a pipe — "| Alpha | 9" — and its
+                # continuation opens on the value too — "0 |" — so it never trips
+                # this branch and still glues directly below.)
+                markdown = markdown + "\n" + stripped_extra
             else:
-                # Cut landed mid-token/mid-row — glue the fragments with no
+                # Cut landed mid-token/mid-cell — glue the fragments with no
                 # separator so the partial token/cell completes ("| a | 10" +
                 # "0 |" -> "| a | 100 |"), never inserting a spurious space.
-                markdown = markdown + extra.lstrip()
+                markdown = markdown + stripped_extra
         markdown = markdown.strip()
 
         # CHART VALIDATION & RETRY

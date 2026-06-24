@@ -226,6 +226,35 @@ async def test_truncation_at_row_boundary_starts_a_fresh_line() -> None:
     assert md.count("Beta") == 1
 
 
+async def test_truncation_after_complete_row_without_newline_joins_fresh_line() -> None:
+    """The residual BW-07 case: the cut lands AFTER a complete table row but
+    BEFORE its trailing newline — the prev chunk ends on a row-closing pipe
+    (``…| Alpha | 90 |``, no ``\\n``) and the continuation opens a new row with a
+    leading pipe (``| Beta | 85 |``). A direct glue would fuse them into one row
+    (``| Alpha | 90 || Beta | 85 |``); the adjacent ``||`` is the tell. The join
+    must insert a newline so each row stays distinct."""
+    router = _ScriptedRouter([
+        (
+            "Intro [[p1]].\n\n"
+            "| Model | Score |\n| --- | --- |\n| Alpha | 90 |",  # NO trailing \n
+            "length",
+        ),
+        ("| Beta | 85 |", "stop"),
+    ])
+    md = await _run_synth(router)
+
+    assert router.calls == 2
+    assert "| Alpha | 90 |" in md
+    assert "| Beta | 85 |" in md
+    # the row-boundary bug: two complete rows fused into one via "||"
+    assert "||" not in md
+    assert "| Alpha | 90 || Beta" not in md
+    # the two rows were joined on a fresh line, in order, with no loss
+    assert "90 |\n| Beta | 85 |" in md
+    assert md.count("Beta") == 1
+    assert md.count("Alpha") == 1
+
+
 async def test_no_continuation_when_first_response_completes() -> None:
     """A normal (`finish_reason=="stop"`) section makes exactly one call — the
     truncation guard never fires."""
