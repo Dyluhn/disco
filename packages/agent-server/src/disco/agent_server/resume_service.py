@@ -290,16 +290,25 @@ class ResumeService:
         return result
 
     async def resume_conversation(self, conversation_id: str) -> dict:
-        """Mode-agnostic, event-log-driven resume. Legal from PAUSED and IDLE-with-
-        unfinished-plan (an approved PlanEvent exists but FINISHED was never reached).
+        """Mode-agnostic, event-log-driven resume. Legal from PAUSED, a terminal
+        ERROR or STUCK (the recovery path), and IDLE-with-unfinished-plan (an approved
+        PlanEvent exists but FINISHED was never reached).
 
         Returns {"ok": True, "status": "RUNNING"} on success or {"ok": False, "reason": …}
         for illegal transitions — the HTTP route converts non-ok to 409.
 
+        ERROR / STUCK are RECOVERABLE (the "Try again" button): a build/agent run that
+        crashed or wedged keeps its full persisted history + workspace snapshot. Resuming
+        flips it back to RUNNING and re-kicks the loop, which rehydrates the workspace and
+        continues from the last event — progress is NEVER discarded. If the underlying
+        cause persists (e.g. a still-dead driver/sandbox), the loop's own pre-flight
+        re-terminalizes honestly, but the history is intact and the user can retry again.
+
         Deep Research conversations dispatch to the EXISTING DR resume behavior unchanged
-        (mode check). Build/Research: flip PAUSED/IDLE → RUNNING in the event log so
-        loop.run() doesn't early-return on PAUSED, then kick via the standard task-spawn
-        path (same as send-message). kick() is idempotent — no second loop if one is live.
+        (mode check). Build/Research: flip PAUSED/ERROR/STUCK/IDLE → RUNNING in the event
+        log so loop.run() doesn't early-return on a parked/terminal status, then kick via
+        the standard task-spawn path (same as send-message). kick() is idempotent — no
+        second loop if one is live (a genuinely RUNNING run is rejected up front).
         """
         # The unfinished-plan predicate stays a module-level helper in runtime.py;
         # reach it late-bound to avoid a module-load circular import.
@@ -308,12 +317,13 @@ class ResumeService:
         state = await self._rt._store.get_state(conversation_id)
         status = state.execution_status
 
+        # A genuinely in-flight run must not be double-kicked; a finished one has
+        # nothing to resume. Everything else (PAUSED, ERROR, STUCK, IDLE) is a
+        # candidate — the legality check below decides IDLE on the plan predicate.
         if status == ConversationStatus.RUNNING:
             return {"ok": False, "reason": "already_running"}
         if status == ConversationStatus.FINISHED:
             return {"ok": False, "reason": "conversation_finished"}
-        if status == ConversationStatus.ERROR:
-            return {"ok": False, "reason": "conversation_error"}
 
         events = await self._rt._store.get_events(conversation_id)
 
@@ -323,7 +333,20 @@ class ResumeService:
             await self._rt._store.append(conversation_id, tombstone)
             events = await self._rt._store.get_events(conversation_id)
 
+        # ERROR / STUCK are terminal-but-recoverable: re-kick from history (no lost
+        # progress). PAUSED is the cooperative-stop resume. IDLE only when an approved
+        # plan was never finished (an interrupted run, not a fresh idle conversation).
+        #
+        # ERROR/STUCK recovery is scoped to the BUILD/RESEARCH loop surfaces: the
+        # else-branch below flips them back to RUNNING and re-kicks loop.run() from
+        # history. Deep Research has no such re-entry from a terminal error — its
+        # driver (`_maybe_run_deep_research`) only re-runs from a PAUSED checkpoint —
+        # so a DR error is NOT resumable here (the DR surface retries via a fresh run);
+        # allowing it would falsely report RUNNING while the driver no-ops.
+        surface = self._rt._surface_of(conversation_id)
         legal = status == ConversationStatus.PAUSED
+        if not legal and status in (ConversationStatus.ERROR, ConversationStatus.STUCK):
+            legal = surface != "deep_research"
         if not legal and status == ConversationStatus.IDLE:
             legal = _has_unfinished_plan(events)
 
@@ -353,7 +376,6 @@ class ResumeService:
         if _loop is not None and hasattr(_loop, "_pause_requested"):
             _loop._pause_requested.clear()
 
-        surface = self._rt._surface_of(conversation_id)
         if surface == "deep_research":
             # DR: _maybe_run_deep_research detects PAUSED and re-runs from the partial
             # ReportEvent checkpoint — dispatch unchanged, do not touch DR internals.

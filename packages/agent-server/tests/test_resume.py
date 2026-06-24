@@ -188,29 +188,103 @@ async def test_resume_from_finished_is_409():
     assert result["reason"] == "conversation_finished"
 
 
-async def test_resume_from_error_is_409():
-    """ERROR → resume_conversation → conversation_error."""
+async def test_resume_from_error_is_legal_and_preserves_history():
+    """RECOVERY: ERROR → resume_conversation → ok=True/RUNNING, with the FULL
+    persisted history intact (no events wiped — the 'Try again' button must not lose
+    progress). A RUNNING StatusEvent is appended; every original event id survives."""
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
     rt.set_surface(CID, "build")
     await store.append(CID, _user("build it"))
+    await store.append(CID, _plan_event())
     await store.append(CID, StatusEvent(status=ConversationStatus.ERROR))
 
+    ids_before = {e.id for e in await store.get_events(CID)}
+
     result = await rt.resume_conversation(CID)
+    await _cancel_task(rt)
 
-    assert result["ok"] is False
-    assert result["reason"] == "conversation_error"
+    assert result["ok"] is True
+    assert result["status"] == "RUNNING"
+
+    events_after = await store.get_events(CID)
+    # No progress lost: every pre-resume event still present.
+    assert ids_before <= {e.id for e in events_after}
+    # The loop was actually re-kicked (kick() composes + caches a loop for CID).
+    assert CID in rt._loops
+    # The conversation is back in RUNNING (a RUNNING StatusEvent was appended).
+    assert any(
+        isinstance(e, StatusEvent) and e.status == ConversationStatus.RUNNING
+        for e in events_after
+    )
 
 
-async def test_resume_from_stuck_is_illegal():
-    """STUCK → resume_conversation → illegal_state (send_message is the path forward)."""
+async def test_resume_from_stuck_is_legal_and_preserves_history():
+    """RECOVERY: STUCK → resume_conversation → ok=True/RUNNING, history preserved."""
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
     rt.set_surface(CID, "build")
     await store.append(CID, _user("build it"))
+    await store.append(CID, _plan_event())
     await store.append(CID, StatusEvent(status=ConversationStatus.STUCK))
+
+    ids_before = {e.id for e in await store.get_events(CID)}
+
+    result = await rt.resume_conversation(CID)
+    await _cancel_task(rt)
+
+    assert result["ok"] is True
+    assert result["status"] == "RUNNING"
+    assert ids_before <= {e.id for e in await store.get_events(CID)}
+
+
+async def test_resume_from_error_rehydrates_build_workspace(monkeypatch):
+    """The resumed Build kick must rehydrate the persisted workspace so the files
+    come back — the rehydrate-on-kick path fires for an ERROR resume just as for a
+    PAUSED one (surface-gated, not status-gated)."""
+    store = SqliteEventStore(":memory:")
+    store.create_conversation(CID, owner_id="local")
+    # A plan-then-park script so the loop reaches the rehydrate hook then parks
+    # cleanly at AWAITING_PLAN_APPROVAL (no live sandbox work needed).
+    rt = _runtime(store, steps=[("plan", [_plan(["do it"])])])
+    rt.set_surface(CID, "build")
+    await store.append(CID, _user("build it"))
+    await store.append(CID, _plan_event())
+    await store.append(CID, StatusEvent(status=ConversationStatus.ERROR))
+
+    calls: list[str] = []
+    orig = rt._maybe_rehydrate
+
+    async def _spy(cid: str) -> None:
+        calls.append(cid)
+        return await orig(cid)
+
+    monkeypatch.setattr(rt, "_maybe_rehydrate", _spy)
+
+    result = await rt.resume_conversation(CID)
+    assert result["ok"] is True
+
+    task = rt._tasks.get(CID)
+    if task is not None:
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+    await _cancel_task(rt)
+
+    assert calls == [CID]  # workspace rehydrate fired on the resumed build kick
+
+
+async def test_resume_from_error_is_illegal_for_deep_research():
+    """A Deep Research conversation in ERROR is NOT resumable via this path — its
+    driver only re-runs from a PAUSED checkpoint, so resume must report illegal
+    rather than falsely flip to RUNNING and no-op (the DR surface retries fresh)."""
+    store = SqliteEventStore(":memory:")
+    store.create_conversation(CID, owner_id="local")
+    rt = _runtime(store)
+    rt.set_surface(CID, "deep_research")
+    await store.append(CID, _user("research it"))
+    await store.append(CID, StatusEvent(status=ConversationStatus.ERROR))
 
     result = await rt.resume_conversation(CID)
 

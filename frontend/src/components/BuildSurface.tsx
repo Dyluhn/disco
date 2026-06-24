@@ -94,11 +94,19 @@ export function BuildSurface({
   // useBuildStream doesn't expose sandbox_backend yet, so we read it once via HTTP
   // when the conversation id is known. The backend name is stable for a run's lifetime.
   const [sandboxBackend, setSandboxBackend] = useState<string | null>(null);
+  // The stored (auto-titled) clean conversation title, fetched alongside the
+  // sandbox backend. On RESUME the H1 prefers this over the raw first prompt
+  // (which is the giant wall of text the user originally typed). null until the
+  // async auto-titler lands → the H1 falls back to a TRUNCATED first task.
+  const [storedTitle, setStoredTitle] = useState<string | null>(null);
   useEffect(() => {
     if (!b.cid || !agentLive()) return;
     void fetch(`${agentHttpBase()}/conversations/${b.cid}/state`)
       .then((r) => r.json())
-      .then((s: { sandbox_backend?: string }) => setSandboxBackend(s.sandbox_backend ?? null))
+      .then((s: { sandbox_backend?: string; title?: string | null }) => {
+        setSandboxBackend(s.sandbox_backend ?? null);
+        setStoredTitle(s.title ?? null);
+      })
       .catch(() => {});
   }, [b.cid]);
   const download = useDownloadProject();
@@ -121,14 +129,26 @@ export function BuildSurface({
   const finalMessage = useMemo(() => latestAgentMessage(visibleEvents), [visibleEvents]);
   const deliverable = useMemo(() => deriveDeliverable(visibleEvents), [visibleEvents]);
   // W-01: on resume, useBuild seeds the task with the internal "(resumed)"
-  // sentinel; recover the REAL task from the first user message so the H1 reads
-  // the project instead of literally "(resumed)". Sentinel stays internal.
+  // sentinel. The H1 must read the PROJECT, never the literal sentinel — and
+  // never the giant raw first prompt (firstUserTask returns the whole first user
+  // message, which on a resumed deck build is a wall of text). Precedence on
+  // resume: stored clean auto-title → a TRUNCATED first task (so even the fallback
+  // is never the wall) → "Resumed project". A fresh run keeps its real task as-is.
   const recoveredTask = useMemo(() => firstUserTask(b.events), [b.events]);
-  const taskLabel = b.task === "(resumed)" ? (recoveredTask ?? "Resumed project") : b.task;
+  const taskLabel = useMemo(() => {
+    if (b.task !== "(resumed)") return b.task; // fresh run — unchanged
+    if (storedTitle && storedTitle.trim()) return storedTitle.trim();
+    if (recoveredTask) {
+      const trimmed = recoveredTask.trim();
+      return trimmed.length > 80 ? `${trimmed.slice(0, 80).trimEnd()}…` : trimmed;
+    }
+    return "Resumed project";
+  }, [b.task, storedTitle, recoveredTask]);
 
   // Attention when tabbed away: badge the title + (best-effort) OS-notify when the
-  // run finishes or needs the user while the tab is hidden.
-  useBuildNotifications(b.status, b.task);
+  // run finishes or needs the user while the tab is hidden. Use the clean taskLabel
+  // (stored title on resume) so the tab badge isn't the "(resumed)" sentinel.
+  useBuildNotifications(b.status, taskLabel);
 
   // Gap #4: publish this surface's live run status to the W6 E2E bridge so the
   // harness can await RUNNING / AWAITING_* / FINISHED. (AgentSurface delegates to
@@ -400,7 +420,12 @@ export function BuildSurface({
             className="mt-inline min-h-0 flex-1 overflow-y-auto pb-inline lg:pr-hair"
           >
             {b.status === "ERROR" ? (
-              <ErrorState message={b.error ?? "The agent run failed."} onRetry={b.reset} />
+              // Recovery: "Try again" RESUMES the errored conversation — it re-kicks
+              // the loop from the full persisted history (events + workspace snapshot
+              // survive), it does NOT reset/discard progress. The backend flips
+              // ERROR → RUNNING and continues; the existing WS subscription streams the
+              // new events in over the preserved view.
+              <ErrorState message={b.error ?? "The agent run failed."} onRetry={b.resume} />
             ) : b.awaitingPlan && b.plan ? (
               // Plan gate is the hero: review + Approve/Revise before any work runs.
               <div className="flex flex-col gap-section">
