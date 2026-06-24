@@ -121,12 +121,15 @@ class ProcessSandboxInstance:
 
     async def exec_shell(self, cmd: str, *, timeout_s: int) -> ExecResult:
         self._alive()
-        # Process-backend control-port containment (Bug 7): there is NO network
-        # namespace here, so the sandbox shares the host's loopback with the
-        # agent-server. A build command that binds/kills a reserved control port
-        # (8000 = agent-server, 8800 = app-server) collides with + crashes the
-        # agent-server — refuse it BEFORE running. Scoped to this backend only; an
-        # isolated container's 8000 is its own and is untouched.
+        # Process-backend control-port containment (Bug 7) — BEST-EFFORT defense-in-
+        # depth, NOT a guarantee. There is NO network namespace here, so the sandbox
+        # shares the host's loopback with the agent-server; a command that binds/kills
+        # a reserved control port (8000 agent-server / 8800 app-server / 5173 UI)
+        # collides with + crashes it. This shell-string scan refuses the COMMON shapes
+        # before running, but is trivially bypassable (raw socket.bind, renamed binary)
+        # — the load-bearing Bug-7 fix is that verify no longer targets these ports
+        # (see preview_target.resolve_preview_port); a netns is the robust follow-up.
+        # Scoped to this backend only; an isolated container's 8000 is its own.
         from disco.core.loop.preview_target import (
             reserved_control_ports,
             reserved_port_command_violation,

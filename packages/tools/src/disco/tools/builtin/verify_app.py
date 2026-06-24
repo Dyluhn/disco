@@ -390,18 +390,16 @@ class VerifyWebAppTool:
         uses (`preview_target.resolve_preview_port`).
 
         On a SHARED-host backend (process/local — `sandbox.workspace_path` is set)
-        the agent-server's `:8000` is NOT the build's app (Bug 7): the resolver never
-        returns a reserved control port — it prefers the CONVERSATION-OWNED served
-        port, else any non-reserved owned port; if none, a process-safe default
-        preview port (8080, never 8000) so the HTTP probe reports it unreachable
-        rather than hitting the agent-server. On an ISOLATED backend (gVisor/Podman)
-        `:8000` IS the app, so the legacy "first owned, else 8000" behavior holds."""
+        the agent-server's `:8000`, the app-server's `:8800`, and the UI's Vite
+        `:5173` are NOT the build's app (Bug 7): the resolver returns ONLY a
+        CONVERSATION-OWNED non-reserved port, else None. Here None ⇒ UNDETECTABLE — we
+        return "" and do NOT blind-guess a port: probing an arbitrary port (5173 = the
+        Vite UI, or a sibling conversation's server) would be a FALSE PASS against the
+        wrong app. An empty url makes `_probe_http` report "not serving", which routes
+        the gate to the honest-unverifiable path. On an ISOLATED backend (gVisor/
+        Podman) `:8000` IS the app, so the legacy "first owned, else 8000" holds."""
         assert ctx.sandbox is not None
-        from disco.core.loop.preview_target import (
-            PortOwnership,
-            process_safe_preview_port,
-            resolve_preview_port,
-        )
+        from disco.core.loop.preview_target import PortOwnership, resolve_preview_port
 
         from ..sandbox.port_owner import port_owners
 
@@ -423,10 +421,10 @@ class VerifyWebAppTool:
             preview_ports=_PREVIEW_PORTS,
         )
         if chosen is None:
-            # Shared-host backend with no conversation-owned preview: target a
-            # process-safe default (never the control port) — the probe will report
-            # it unreachable rather than fabricate a pass against the agent-server.
-            chosen = process_safe_preview_port(_PREVIEW_PORTS)
+            # Shared-host backend with no conversation-owned preview → UNDETECTABLE.
+            # Return "" rather than guess a port: a guess could verify the UI / a
+            # sibling app (false pass). "" → probe reports not-serving → honest path.
+            return ""
         return f"http://127.0.0.1:{chosen}/"
 
     async def _probe_http(self, ctx: ToolContext, url: str) -> tuple[bool, int]:

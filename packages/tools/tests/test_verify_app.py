@@ -348,31 +348,35 @@ async def test_process_autodetect_targets_conversation_port_not_8000(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_process_autodetect_only_8000_owned_uses_safe_default(monkeypatch):
-    """When the ONLY listener is the agent-server on 8000, auto-detect targets a
-    process-safe default (the first non-control preview port, 5173), never 8000."""
+async def test_process_autodetect_no_conversation_port_is_undetectable(monkeypatch):
+    """P1 #1: when NO port is conversation-owned (only the agent-server on 8000 and
+    the Vite UI on 5173 are reachable — both FOREIGN), auto-detect is UNDETECTABLE:
+    it probes "" (never guesses 5173 or 8000), so the tool reports not-serving
+    instead of a FALSE PASS against the UI / agent-server."""
 
-    class _OnlyAgentServer(_ProcessLikeSandbox):
+    class _OnlyForeignServers(_ProcessLikeSandbox):
         async def exec_shell(self, cmd, *, timeout_s=10):
             return _ShellRes(
                 '[{"port": 8000, "pid": 7, "session": "disco-other777-preview"},'
+                ' {"port": 5173, "pid": 8, "session": "disco-other777-ui"},'
                 ' {"port": 8080, "pid": null, "session": null},'
-                ' {"port": 5173, "pid": null, "session": null},'
                 ' {"port": 3000, "pid": null, "session": null},'
                 ' {"port": 5000, "pid": null, "session": null},'
                 ' {"port": 4321, "pid": null, "session": null}]'
             )
 
-    sbx = _OnlyAgentServer()
+    sbx = _OnlyForeignServers()
 
     async def fake_probe(self, ctx, url):
         sbx.probed_url = url
         return (False, 0)
 
     monkeypatch.setattr(VerifyWebAppTool, "_probe_http", fake_probe)
-    await VerifyWebAppTool().run(VerifyWebAppArgs(url=""), _ctx(sbx))
-    assert sbx.probed_url == "http://127.0.0.1:5173/", sbx.probed_url
+    out = await VerifyWebAppTool().run(VerifyWebAppArgs(url=""), _ctx(sbx))
+    assert sbx.probed_url == "", sbx.probed_url  # undetectable — no blind guess
+    assert "5173" not in (sbx.probed_url or "")
     assert "8000" not in (sbx.probed_url or "")
+    assert out.structured["passed"] is False  # not-serving, never a false pass
 
 
 def test_tool_definition_registered_low_risk():

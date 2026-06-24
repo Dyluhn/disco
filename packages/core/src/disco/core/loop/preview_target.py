@@ -39,14 +39,26 @@ def _int_env(suffix: str, default: int) -> int:
         return default
 
 
+# The Vite dev server port. On a SHARED-host dev box this is Disco's OWN frontend
+# (the UI's `vite`), NOT a build's app — so on the process/local backend it is a
+# reserved control/infra port like 8000/8800: a build's verify must never be pointed
+# at it (that would verify the UI / an unrelated app — a FALSE PASS) and the build
+# should not squat it.
+_FRONTEND_DEV_PORT = 5173
+
+
 def reserved_control_ports() -> frozenset[int]:
-    """The host control ports a SHARED-host (process/local) build must NEVER target
-    or bind: the agent-server port (``DISCO_AGENT_PORT``/``PMX_AGENT_PORT``, default
-    8000) and the app-server port (``DISCO_APP_PORT``/``PMX_APP_PORT``, default
-    8800). Sourced from the SAME env the servers read so a non-default deployment
-    stays consistent. (Inside an isolated container these ports are the box's own
-    loopback and are not reserved — see `host_shared` below.)"""
-    return frozenset({_int_env("AGENT_PORT", 8000), _int_env("APP_PORT", 8800)})
+    """The host control/infra ports a SHARED-host (process/local) build must NEVER be
+    verified against or bind: the agent-server port (``DISCO_AGENT_PORT``/
+    ``PMX_AGENT_PORT``, default 8000), the app-server port (``DISCO_APP_PORT``/
+    ``PMX_APP_PORT``, default 8800), and the frontend Vite dev port (5173 — Disco's
+    own UI on a dev host, or some other app). Server ports come from the SAME env the
+    servers read so a non-default deployment stays consistent. (Inside an isolated
+    container these are the box's own loopback and are NOT reserved — see
+    `host_shared`.)"""
+    return frozenset(
+        {_int_env("AGENT_PORT", 8000), _int_env("APP_PORT", 8800), _FRONTEND_DEV_PORT}
+    )
 
 
 @dataclass(frozen=True)
@@ -79,14 +91,15 @@ def resolve_preview_port(
     finish gate and `verify_web_app`.
 
     ``host_shared=True`` (process/local — the sandbox shares the host network with
-    the agent-server): NEVER pick a reserved control port (8000), even if it is
-    reachable/owned (that is the agent-server, not the build). Prefer a
-    CONVERSATION-OWNED served port (its tmux session matches this conversation's
-    namespace), then any non-reserved owned port; if none is found → ``None``
-    (undetectable — the caller uses a process-safe default or declines to bind a
-    stale verdict). ``host_shared=False`` (gVisor/Podman — isolated namespace): 8000
-    inside the box IS the app, so keep the legacy "first owned port, else the
-    canonical port" behavior."""
+    the agent-server): return ONLY a CONVERSATION-OWNED served port (its tmux session
+    matches this conversation's namespace) that is NOT a reserved control/infra port.
+    If no such port exists → ``None`` (UNDETECTABLE). It deliberately does NOT fall
+    back to "the first reachable / any owned port": on a shared host that could be the
+    agent-server (8000), the Disco UI (5173), or ANOTHER conversation's server —
+    verifying it would be a FALSE PASS against the wrong app. ``None`` routes the
+    caller to the honest-unverifiable path, never a guessed target. ``host_shared=
+    False`` (gVisor/Podman — isolated namespace): 8000 inside the box IS the app, so
+    keep the legacy "first owned port, else the canonical port" behavior."""
     reserved = reserved_control_ports() if reserved is None else reserved
 
     def _owned(p: int) -> bool:
@@ -105,16 +118,12 @@ def resolve_preview_port(
         sess = o.session or ""
         return any(sess.startswith(pre) for pre in prefixes)
 
-    # 1) a port THIS conversation serves on, never a reserved control port.
+    # ONLY a port THIS conversation serves on, never a reserved control/infra port.
+    # No port the build cannot be tied to → UNDETECTABLE (never a blind guess that
+    # could verify the agent-server, the UI, or a sibling conversation's app).
     for p in preview_ports:
         if p not in reserved and _conv_owned(p):
             return p
-    # 2) any non-reserved owned preview port (a server we can't tie to a session,
-    #    but it is NOT the control port).
-    for p in preview_ports:
-        if p not in reserved and _owned(p):
-            return p
-    # 3) nothing the build owns → undetectable (do NOT fall back to 8000).
     return None
 
 
@@ -122,8 +131,11 @@ def process_safe_preview_port(
     preview_ports: tuple[int, ...] = PREVIEW_PORTS,
     reserved: frozenset[int] | None = None,
 ) -> int:
-    """The first preview port that is NOT a reserved control port — the default the
-    process/local backend serves its static preview on instead of 8000."""
+    """The first preview port that is NOT a reserved control/infra port — the port
+    the process/local backend serves its OWN static preview on instead of 8000 (that
+    preview is conversation-owned, so the resolver then finds it). This is NOT a
+    verify-target guess: the resolver returns None rather than guess a port to verify
+    (see `resolve_preview_port`)."""
     reserved = reserved_control_ports() if reserved is None else reserved
     for p in preview_ports:
         if p not in reserved:
@@ -268,17 +280,24 @@ def parse_port_ownership(stdout: str) -> dict[int, PortOwnership]:
 def reserved_port_command_violation(
     command: str, reserved: frozenset[int] | None = None
 ) -> str | None:
-    """Process-backend containment: a reason string if `command` would BIND or KILL
-    a reserved control port (the agent-server / app-server), else None.
+    """Process-backend containment, BEST-EFFORT / DEFENSE-IN-DEPTH (NOT a guarantee):
+    a reason string if `command` would BIND or KILL a reserved control port (the
+    agent-server / app-server), else None.
 
-    On the process backend there is no network namespace, so an agent that binds
-    8000 collides with + crashes the agent-server (observed in the live soak). This
-    is the pragmatic command-level denial the RCA calls for (a network namespace is
-    the robust containment — tracked as a follow-up). It runs ONLY on the process
-    backend (`ProcessSandboxInstance.exec_shell`), where the agent has no business
-    touching a control port, so it fails CLOSED on the clear server-bind / port-kill
-    shapes. URL fetches (`http://127.0.0.1:8000/...`) are intentionally NOT matched
-    — reading is not the crash vector and the gate's own probes never bind."""
+    On the process backend there is no network namespace, so an agent that binds 8000
+    collides with + crashes the agent-server (observed in the live soak). This shell-
+    string scan catches the COMMON shapes (`python3 -m http.server 8000`, `--port
+    8000`, `fuser -k 8000`) but is TRIVIALLY BYPASSABLE — an agent can bind a reserved
+    port via a method the scan doesn't match (a raw Python `socket.bind`, a renamed
+    binary, an env-indirected port). Per the RCA, shell scanning CANNOT guarantee
+    "never bind/collide"; the robust containment is a network namespace (or simply not
+    using the process backend for hosted/multi-tenant soak) — tracked as a follow-up.
+    The PRIMARY Bug-7 protection is elsewhere and stands on its own: verify no longer
+    TARGETS or suggests 8000, and `ensure_preview` remaps it. This scan + `expose_port`
+    refusal are an additional layer, not the load-bearing fix. Runs ONLY on the process
+    backend, fails CLOSED on the clear server-bind / port-kill shapes; URL fetches
+    (`http://127.0.0.1:8000/...`) are intentionally NOT matched (reading is not the
+    crash vector and the gate's own probes never bind)."""
     reserved = reserved_control_ports() if reserved is None else reserved
     low = command.lower()
     for p in sorted(reserved):

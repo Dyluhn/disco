@@ -273,24 +273,32 @@ SKIP→PASS). So the concrete product hook is `verify_web_app`'s default preview
 the agent-server port; on an isolated sandbox the two 8000s don't collide, but the default still
 points the verifier at a port the build cannot own on the shared-net `process` backend.
 
-> **Bug 7 FIXED** on branch `fix-verify-backend` (Build Soak repair #4). Three coordinated fixes,
-> all keyed off one new shared resolver `disco.core.loop.preview_target` (single source of truth,
-> consumed by BOTH the finish gate in core AND `verify_web_app` in tools):
-> 1. **Backend-aware verify target** — `resolve_preview_port(host_shared, owned, conversation_id)`.
->    On a shared-host backend (`process`/`local` — `sandbox.workspace_path` is set) it NEVER returns
->    a reserved control port (8000), even if reachable/owned: it prefers a CONVERSATION-OWNED served
->    port (tmux session `disco-{cid8}-…`), then any non-reserved owned port, else None →
->    process-safe default (5173, never 8000). Both `FinishGate._detect_preview_url` and
->    `VerifyWebAppTool._detect_preview_url` use it; the gate now passes `{"url": target}` to a driven
->    `verify_web_app` instead of `{}`. Isolated (gVisor/Podman) backends keep 8000 (the box's app).
-> 2. **Process-backend control-port containment** — `ProcessSandboxInstance.exec_shell` refuses a
->    command that binds/kills a reserved control port (8000/8800) via `reserved_port_command_violation`;
->    `expose_port` refuses to advertise them; `SandboxSession.ensure_preview` remaps the 8000 default
->    to a process-safe port on `process`/`local`. (Pragmatic denial now; a network namespace is the
->    robust follow-up.)
+> **Bug 7 FIXED** on branch `fix-verify-backend` (Build Soak repair #4). Three fixes keyed off one
+> new shared resolver `disco.core.loop.preview_target` (single source of truth, consumed by BOTH the
+> finish gate in core AND `verify_web_app` in tools). **The PRIMARY, load-bearing fix is #1
+> (verify-retargeting); #2 is best-effort defense-in-depth, NOT a containment guarantee.**
+> 1. **Backend-aware verify target (PRIMARY)** — `resolve_preview_port(host_shared, owned,
+>    conversation_id)`. On a shared-host backend (`process`/`local` — `sandbox.workspace_path` is set)
+>    it returns ONLY a CONVERSATION-OWNED non-reserved port (its tmux session matches `disco-{cid8}-…`),
+>    else **None = UNDETECTABLE**. It does NOT blind-guess a port (P1, codex): a guess could verify the
+>    agent-server (8000), Disco's own Vite UI (**5173** — now reserved alongside 8000/8800), or a
+>    SIBLING conversation's server → a FALSE PASS against the wrong app. None routes to the honest-
+>    unverifiable path (no false verify). The driven `verify_web_app` is passed `{"url": target}` (or
+>    `{}`→tool auto-detect→same resolver→`""`/not-serving when undetectable). Isolated (gVisor/Podman)
+>    backends keep 8000 (the box's app).
+> 2. **Process control-port containment (BEST-EFFORT / defense-in-depth — NOT a guarantee)** —
+>    `ProcessSandboxInstance.exec_shell` refuses commands that bind/kill a reserved port via
+>    `reserved_port_command_violation`; `expose_port` refuses to advertise them; `ensure_preview` remaps
+>    the 8000 default to a process-safe port. This is a SHELL-STRING scan: it catches the common
+>    `python -m http.server 8000` shape but is **trivially bypassable** (a raw Python `socket.bind`, a
+>    renamed binary). Per the RCA, shell scanning cannot guarantee "never bind/collide" — the robust
+>    containment is a **network namespace** (or not using the `process` backend for hosted/multi-tenant
+>    soak), **tracked as a follow-up**. Containment is not the load-bearing fix; #1 is.
 > 3. **Honest unverifiable-finish** — see Bug 6 above (shared root). Regression:
->    `test_preview_target.py` (resolver + containment units), `test_verify_app.py::test_process_autodetect_*`
->    (tool targets 8080/5173 not 8000), `test_verify_web_app_gate.py::test_process_gate_drives_verify_against_conversation_port_not_8000`.
+>    `test_preview_target.py` (resolver returns None on no-conversation-owned port + reserves 5173 +
+>    containment units), `test_verify_app.py::test_process_autodetect_*` (undetectable "", never 5173/
+>    8000), `test_verify_web_app_gate.py::test_process_gate_drives_verify_against_conversation_port_not_8000`
+>    + the Bug-6 honest-finish loop test.
 
 ### Bug 8 — adjudicator GAP: a PAUSED-incomplete run classified PASS (HARNESS) — FIXED
 

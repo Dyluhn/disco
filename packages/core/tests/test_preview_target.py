@@ -43,18 +43,53 @@ def test_process_prefers_conversation_owned_over_foreign():
     )
 
 
-def test_process_falls_back_to_any_nonreserved_owned():
-    # No session attribution, but a non-reserved port IS listening → use it (it is
-    # NOT the control port).
-    owned = {5173: PortOwnership(pid=99, session=None)}
+def test_process_unattributed_owned_port_is_undetectable_not_guessed():
+    # A non-reserved port IS listening but we CANNOT tie it to this conversation
+    # (no session, or a foreign session) → UNDETECTABLE (None). Never guess: it
+    # could be a sibling conversation's app or an unrelated server (false PASS).
     assert (
-        resolve_preview_port(host_shared=True, owned=owned, conversation_id=CID) == 5173
+        resolve_preview_port(
+            host_shared=True,
+            owned={5000: PortOwnership(pid=99, session=None)},
+            conversation_id=CID,
+        )
+        is None
+    )
+    assert (
+        resolve_preview_port(
+            host_shared=True,
+            owned={3000: PortOwnership(pid=99, session="disco-sibling1-dev")},
+            conversation_id=CID,
+        )
+        is None
     )
 
 
 def test_process_only_8000_owned_returns_none_not_8000():
     # The ONLY listener is the agent-server on 8000 → undetectable, NEVER 8000.
     owned = {8000: PortOwnership(pid=111, session="disco-other-preview")}
+    assert (
+        resolve_preview_port(host_shared=True, owned=owned, conversation_id=CID) is None
+    )
+
+
+def test_process_frontend_5173_and_agent_8000_reachable_but_foreign_returns_none():
+    # P1 #1: 5173 (the Vite UI) and 8000 (agent-server) are reachable but NEITHER is
+    # conversation-owned → resolver returns None (NOT 5173, NOT 8000). A static build
+    # then finishes honestly-unverifiable instead of a FALSE PASS against the UI.
+    owned = {
+        8000: PortOwnership(pid=111, session="disco-other-preview"),
+        5173: PortOwnership(pid=222, session=None),
+    }
+    assert (
+        resolve_preview_port(host_shared=True, owned=owned, conversation_id=CID) is None
+    )
+
+
+def test_process_conversation_owned_5173_is_reserved_not_targeted():
+    # Even if THIS conversation somehow owns 5173, it is a reserved infra port (the
+    # UI's Vite) → not a verify target. Undetectable rather than verify the UI port.
+    owned = {5173: PortOwnership(pid=9, session="disco-conv_abc-preview")}
     assert (
         resolve_preview_port(host_shared=True, owned=owned, conversation_id=CID) is None
     )
@@ -94,11 +129,11 @@ def test_process_safe_preview_port_is_never_a_control_port():
     safe = process_safe_preview_port()
     assert safe not in reserved_control_ports()
     assert safe in PREVIEW_PORTS
-    assert safe != 8000
+    assert safe not in (8000, 8800, 5173)
 
 
-def test_reserved_control_ports_default_8000_and_8800():
-    assert reserved_control_ports() == frozenset({8000, 8800})
+def test_reserved_control_ports_default_8000_8800_and_frontend_5173():
+    assert reserved_control_ports() == frozenset({8000, 8800, 5173})
 
 
 # ---- ownership probe parsing ------------------------------------------------
@@ -129,6 +164,7 @@ def test_reserved_port_command_violation_blocks_binds():
         "vite -p 8000",
         "serve -l 0.0.0.0:8000",
         "python -m http.server 8800",
+        "vite --port 5173",  # the frontend/UI port is reserved too
     ):
         assert reserved_port_command_violation(cmd, r) is not None, cmd
 
@@ -143,7 +179,7 @@ def test_reserved_port_command_violation_allows_safe_commands():
     r = reserved_control_ports()
     for cmd in (
         "python3 -m http.server 8080",          # non-reserved preview port
-        "vite --port 5173",
+        "vite --port 5174",                     # non-reserved (5173 IS reserved)
         "head -c 8000 file.bin",                # 8000 as a byte count, not a port
         "echo serving 8000 items",
         "python3 -c 'print(8000)'",
