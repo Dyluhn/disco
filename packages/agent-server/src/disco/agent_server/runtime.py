@@ -587,13 +587,16 @@ class ConversationRuntime:
         # healthy driver is re-probed at most once per _DRIVER_PREFLIGHT_TTL_S, so
         # back-to-back kicks don't each pay a live round-trip.
         self._driver_preflight_ok: dict[str, float] = {}
-        # W-35 (resilience): conversation ids whose driver has ALREADY answered a
-        # pre-flight (or run) successfully in THIS process. An established run that
-        # has proven the driver reachable must NOT be hard-failed by a single
-        # transient pre-flight timeout (a remote reasoning model — e.g. minimax —
-        # is intermittently slow under load): for these we soft-degrade a transient
-        # probe failure to a warning and let the REAL call surface a genuine error.
-        self._driver_proven: set[str] = set()
+        # W-35 (resilience): (conversation_id, role, resolved_model_key) tuples whose
+        # driver has ALREADY answered a pre-flight successfully in THIS process. An
+        # established run that has proven THAT SPECIFIC driver reachable must NOT be
+        # hard-failed by a single transient pre-flight timeout (a remote reasoning
+        # model — e.g. minimax — is intermittently slow under load): for these we
+        # soft-degrade a transient probe failure to a warning and let the REAL call
+        # surface a genuine error. Keying on (role, model) — not the conversation
+        # alone — means a build's proven AGENT_DRIVER can NOT mask a genuinely-dead
+        # DR RAG_ANSWERER (or a switched model) in the same conversation.
+        self._driver_proven: set[tuple[str, ModelRole, str]] = set()
         if config_store is not None:
             self._config_store = config_store
         elif config is not None:
@@ -1761,9 +1764,13 @@ class ConversationRuntime:
                 key = cfg.model_for(role)
             except Exception:  # noqa: BLE001 — resolution failure ⇒ generic label
                 key = "?"
+        # Proven-state is keyed by the SPECIFIC driver being probed — (conversation,
+        # role, resolved model) — so a soft-degrade only ever applies to the same
+        # driver that previously succeeded HERE, never a different role/model.
+        proven_key = (cid, role, key)
         cached = self._driver_preflight_ok.get(key)
         if cached is not None and time.monotonic() - cached < self._DRIVER_PREFLIGHT_TTL_S:
-            self._driver_proven.add(cid)
+            self._driver_proven.add(proven_key)
             return None
         router = self._router_now(pick=override, conversation_id=cid)
         req = CompletionRequest(
@@ -1816,25 +1823,28 @@ class ConversationRuntime:
                 await asyncio.sleep(self._DRIVER_PREFLIGHT_BACKOFF_S * (attempt + 1))
 
         if transient_reason is not None:
-            # Every probe failed with a TRANSIENT verdict. If this driver has
-            # ALREADY proven itself in THIS conversation (e.g. a build that ran for
-            # many turns), a momentary slow remote model must NOT terminate the run:
-            # soft-degrade to a warning and PROCEED — the real generation will
-            # surface a genuine error if the driver is actually down. A driver that
-            # has NEVER answered in this conversation is more legitimately terminal,
-            # so for a first-ever call we keep the named terminal reason.
-            if cid in self._driver_proven:
+            # Every probe failed with a TRANSIENT verdict. If THIS SAME driver
+            # (conversation + role + model) has ALREADY proven itself (e.g. a build
+            # that ran for many turns), a momentary slow remote model must NOT
+            # terminate the run: soft-degrade to a warning and PROCEED — the real
+            # generation will surface a genuine error if the driver is actually down.
+            # A driver that has NEVER answered for this (conversation, role, model) is
+            # more legitimately terminal, so we keep the named terminal reason —
+            # crucially, a DIFFERENT proven driver in the same conversation (e.g. a
+            # build AGENT_DRIVER) does NOT mask a genuinely-dead DR RAG_ANSWERER.
+            if proven_key in self._driver_proven:
                 logger.warning(
-                    "driver pre-flight for %r failed transiently (%s) but the driver "
+                    "driver pre-flight for %r (role=%s) failed transiently (%s) but it "
                     "already succeeded in conversation %s — proceeding (soft-degrade)",
                     key,
+                    role,
                     transient_reason,
                     cid or "<none>",
                 )
                 return None
             return transient_reason
         self._driver_preflight_ok[key] = time.monotonic()
-        self._driver_proven.add(cid)
+        self._driver_proven.add(proven_key)
         return None
 
     # W-48: HARD wall-clock bound on a SINGLE sandbox connectivity pre-flight. Like

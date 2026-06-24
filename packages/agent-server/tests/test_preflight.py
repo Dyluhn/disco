@@ -206,9 +206,11 @@ async def test_preflight_driver_soft_degrades_for_already_working_conversation()
     router = _SwitchRouter()
     rt._router_now = lambda **kw: router
 
-    # First kick: the driver is healthy → the conversation is marked "proven".
+    # First kick: the driver is healthy → THIS (conversation, role, model) is proven.
     assert await rt._preflight_driver("c1") is None
-    assert "c1" in rt._driver_proven
+    assert any(
+        k[0] == "c1" and k[1] == ModelRole.AGENT_DRIVER for k in rt._driver_proven
+    )
 
     # Simulate a later kick after the success cache's TTL has lapsed (30 turns in):
     rt._driver_preflight_ok.clear()  # force a real re-probe
@@ -241,7 +243,64 @@ async def test_preflight_driver_still_terminal_when_genuinely_unreachable():
     assert reason is not None
     assert "timed out" in reason and "unreachable" in reason
     assert dead.calls == rt._DRIVER_PREFLIGHT_ATTEMPTS  # retried, still bounded
-    assert "c2" not in rt._driver_proven
+    assert not any(k[0] == "c2" for k in rt._driver_proven)
+
+
+async def test_preflight_soft_degrade_is_per_driver_not_per_conversation():
+    """codex regression guard: proven-state is keyed by (conversation, role, model),
+    NOT by conversation alone. A conversation that proved driver A (build's
+    AGENT_DRIVER) must NOT soft-degrade a DIFFERENT, genuinely-unreachable driver B
+    (a DR RAG_ANSWERER on another model) used in the SAME conversation — that call
+    still terminates with the named 'unreachable' reason."""
+
+    class _RoleCfg:
+        # Distinct model keys per role so the model-keyed success cache (which IS
+        # legitimately shared across roles on the same endpoint) does not apply.
+        models = {"model-a": object(), "model-b": object()}
+
+        def model_for(self, role, *, override=None):
+            if override is not None:
+                return override
+            return {
+                ModelRole.AGENT_DRIVER: "model-a",
+                ModelRole.RAG_ANSWERER: "model-b",
+            }.get(role, "model-a")
+
+    class _RoleStore:
+        def load(self):
+            return _RoleCfg()
+
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)
+    rt._DRIVER_PREFLIGHT_BACKOFF_S = 0.0
+    rt._config_store = _RoleStore()  # type: ignore[assignment]
+
+    # Driver A (AGENT_DRIVER / model-a) is healthy → proves THAT driver only.
+    class _OkRouter:
+        async def complete(self, req, *, context=None):
+            return
+
+    rt._router_now = lambda **kw: _OkRouter()
+    assert await rt._preflight_driver("c1", role=ModelRole.AGENT_DRIVER) is None
+    assert ("c1", ModelRole.AGENT_DRIVER, "model-a") in rt._driver_proven
+
+    # Driver B (RAG_ANSWERER / model-b) is genuinely unreachable in the SAME
+    # conversation. The conversation is "proven" — but for a DIFFERENT driver — so
+    # this STILL terminates (no soft-degrade masking a dead DR driver).
+    class _DeadRouter:
+        def __init__(self):
+            self.calls = 0
+
+        async def complete(self, req, *, context=None):
+            self.calls += 1
+            raise TimeoutError
+
+    dead = _DeadRouter()
+    rt._router_now = lambda **kw: dead
+    reason = await rt._preflight_driver("c1", role=ModelRole.RAG_ANSWERER)
+    assert reason is not None and "timed out" in reason and "unreachable" in reason
+    assert dead.calls == rt._DRIVER_PREFLIGHT_ATTEMPTS  # actually probed, not masked
+    assert ("c1", ModelRole.RAG_ANSWERER, "model-b") not in rt._driver_proven
 
 
 async def test_deep_research_kick_blocks_on_dead_driver():
