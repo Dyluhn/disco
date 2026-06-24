@@ -1,0 +1,97 @@
+"""ContractOracle (guidelines §10 / §16 — the scenario-contract layer).
+
+Runs after harness validity. It validates that the scenario's DECLARED
+requirements are well-formed and that the evidence needed to adjudicate them is
+present — i.e. that the run can be judged against the contract the scenario
+states. It does NOT yet judge whether the product satisfied the contract (that is
+the event-chain / revision / output-truth oracles); it guards against silently
+"passing" a run whose contract we could never actually check.
+
+Examples of an unsatisfiable contract → INVALID_RUN (SCENARIO_CONTRACT_UNSATISFIABLE):
+  * the scenario asserts workspace file truth but no workspace manifest was captured;
+  * the scenario asserts preview truth but no preview health/screenshot was captured;
+  * the scenario declares followups requiring plan revision but no expected final
+    revision (the revision oracle would have nothing to compare against).
+
+The scenario is a plain machine-readable dict (guidelines §14) — never interpreted
+by an LLM.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from .. import failure_codes as fc
+from .schema import OracleResult, failing, passing, skipping
+
+_ORACLE = "ContractOracle"
+
+
+class ContractOracle:
+    def check(
+        self,
+        scenario: dict[str, Any] | None,
+        *,
+        available_evidence: set[str] | None = None,
+    ) -> list[OracleResult]:
+        """`available_evidence` names the evidence categories the run actually
+        captured (e.g. {"events", "workspace", "preview", "tool_scope"}). When
+        None, only "events" is assumed present (the deterministic, no-live-spend
+        slice always has the event log)."""
+        if not scenario:
+            return [skipping(_ORACLE, reason="no scenario contract supplied")]
+        present = available_evidence if available_evidence is not None else {"events"}
+        assertions = scenario.get("assertions") or {}
+
+        missing: list[str] = []
+
+        # workspace truth requires a workspace manifest.
+        workspace = assertions.get("workspace") or {}
+        if workspace.get("files") and "workspace" not in present:
+            missing.append("workspace_manifest (scenario asserts workspace.files)")
+
+        # preview truth requires preview health/screenshot evidence.
+        preview = assertions.get("preview") or {}
+        if preview.get("required") and "preview" not in present:
+            missing.append("preview_evidence (scenario asserts preview.required)")
+
+        if missing:
+            return [
+                failing(
+                    _ORACLE,
+                    fc.SCENARIO_CONTRACT_UNSATISFIABLE,
+                    first_broken_link="scenario_contract -> required_evidence",
+                    facts={"missing_evidence": missing},
+                )
+            ]
+
+        # Revision contract well-formedness: followups requiring a revision need an
+        # expected final revision to compare against.
+        followups = scenario.get("followups") or []
+        revisions = assertions.get("revisions") or {}
+        requires_rev = any(f.get("requires_plan_revision") for f in followups)
+        if requires_rev and "expected_final_plan_revision" not in revisions:
+            return [
+                failing(
+                    _ORACLE,
+                    fc.SCENARIO_CONTRACT_UNSATISFIABLE,
+                    first_broken_link="scenario_contract -> revisions.expected_final_plan_revision",
+                    facts={
+                        "reason": (
+                            "followups require_plan_revision but no "
+                            "assertions.revisions.expected_final_plan_revision declared"
+                        )
+                    },
+                )
+            ]
+
+        return [
+            passing(
+                _ORACLE,
+                facts={
+                    "scenario_id": scenario.get("id"),
+                    "followup_count": len(followups),
+                    "evidence_present": sorted(present),
+                },
+            )
+        ]
