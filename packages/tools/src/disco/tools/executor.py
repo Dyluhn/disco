@@ -11,7 +11,9 @@ turns malformed tool calls into the auto-repair loop (§3).
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+import json
+import types
+from typing import Any, Literal, Union, get_args, get_origin
 from uuid import uuid4
 
 from disco.core import ToolCall, ToolResult
@@ -77,6 +79,97 @@ def _arg_surface(args_model: type[BaseModel]) -> str:
     return ", ".join(parts) if parts else "(takes no arguments)"
 
 
+def _unwrap_optional(annotation: Any) -> Any:
+    """`X | None` / `Optional[X]` -> `X` (the single non-None member). Leaves any
+    other annotation untouched. Lets the nested-shape hint see through an optional
+    nested-model field."""
+    origin = get_origin(annotation)
+    if origin is Union or origin is types.UnionType:
+        non_none = [a for a in get_args(annotation) if a is not type(None)]
+        if len(non_none) == 1:
+            return non_none[0]
+    return annotation
+
+
+def _base_type(annotation: Any) -> type | None:
+    """The plain python type behind a (possibly Optional) annotation, or None when
+    it is not a bare type (a Literal, a generic, a model, ...)."""
+    ann = _unwrap_optional(annotation)
+    return ann if isinstance(ann, type) else None
+
+
+def _nested_model(annotation: Any) -> tuple[type[BaseModel], bool] | None:
+    """If `annotation` is a pydantic model — or a list/tuple/set of one — return
+    `(model, is_list)`; otherwise None. This is what lets the validation error show
+    the EXPECTED nested shape (e.g. `steps: list[PlanProgressItem]`) for ANY tool,
+    not just update_plan_progress."""
+    ann = _unwrap_optional(annotation)
+    if isinstance(ann, type) and issubclass(ann, BaseModel):
+        return ann, False
+    if get_origin(ann) in (list, tuple, set, frozenset):
+        for arg in get_args(ann):
+            inner = _unwrap_optional(arg)
+            if isinstance(inner, type) and issubclass(inner, BaseModel):
+                return inner, True
+    return None
+
+
+def _model_shape(model: type[BaseModel]) -> str:
+    """A concise one-line shape for a nested model: each field as `"name": <type>`,
+    with a Literal field spelled out as its allowed values (`"state":
+    "pending"|"active"|"done"`). Deterministic (model_fields order is stable)."""
+    parts: list[str] = []
+    for fname, finfo in model.model_fields.items():
+        ann = finfo.annotation
+        if get_origin(ann) is Literal:
+            allowed = "|".join(json.dumps(v) for v in get_args(ann))
+            parts.append(f'"{fname}": {allowed}')
+        else:
+            parts.append(f'"{fname}": <{_field_type_name(ann)}>')
+    return "{" + ", ".join(parts) + "}"
+
+
+def _model_example_item(model: type[BaseModel], i: int) -> dict[str, Any]:
+    """One concrete, schema-VALID example object for `model`. `i` varies values
+    across items so a list example reads as a list of distinct objects: int fields
+    count 1,2,…; a Literal cycles through its allowed values."""
+    obj: dict[str, Any] = {}
+    for fname, finfo in model.model_fields.items():
+        ann = finfo.annotation
+        if get_origin(ann) is Literal:
+            allowed = list(get_args(ann))
+            obj[fname] = allowed[i % len(allowed)]
+        else:
+            base = _base_type(ann)
+            if base is bool:
+                obj[fname] = True
+            elif base is int:
+                obj[fname] = i + 1
+            elif base is float:
+                obj[fname] = 0.0
+            else:
+                obj[fname] = "..."
+    return obj
+
+
+def _nested_shape_hint(field_name: str, model: type[BaseModel], is_list: bool) -> str:
+    """A concise, copyable hint: the expected nested shape + ONE concrete example —
+    so a model that mis-formats an array-of-objects (e.g. `steps: ["", "", ""]`)
+    can see exactly what to send instead. Never the full JSON schema (kept small)."""
+    shape = _model_shape(model)
+    if is_list:
+        example = json.dumps([_model_example_item(model, 0), _model_example_item(model, 1)])
+        return (
+            f"The {field_name!r} argument must be a list of objects, each shaped "
+            f"{shape}. Example: {field_name}={example}."
+        )
+    example = json.dumps(_model_example_item(model, 0))
+    return (
+        f"The {field_name!r} argument must be an object shaped {shape}. "
+        f"Example: {field_name}={example}."
+    )
+
+
 def describe_validation_failure(
     tool_name: str,
     args_model: type[BaseModel],
@@ -131,6 +224,34 @@ def describe_validation_failure(
                 f" Re-call {tool_name!r} using the correct key(s) "
                 f"{required_names} instead of {unknown}."
             )
+    # Nested-shape hints (GENERIC, all tools): when an error points at a field
+    # whose value is a model — or a list of models — but the model sent the wrong
+    # shape (e.g. `steps: ["", "", ""]` where each item must be an object), append
+    # the EXPECTED nested shape + one concrete example so the call is recoverable.
+    # Skip "missing"/unknown-key errors (already explained above) and dedupe by
+    # field so three bad list items don't repeat the same hint thrice. Deterministic.
+    seen_fields: set[str] = set()
+    for err in errors:
+        loc = err.get("loc", ())
+        if not loc:
+            continue
+        top = loc[0]
+        etype = err.get("type", "")
+        if (
+            not isinstance(top, str)
+            or top in seen_fields
+            or etype in {"missing", "extra_forbidden", "unexpected_keyword_argument"}
+        ):
+            continue
+        finfo = args_model.model_fields.get(top)
+        if finfo is None:
+            continue
+        nested = _nested_model(finfo.annotation)
+        if nested is None:
+            continue
+        seen_fields.add(top)
+        model, is_list = nested
+        msg += " " + _nested_shape_hint(top, model, is_list)
     if arguments:
         msg += f" You provided: {sorted(arguments)}."
     return msg

@@ -861,6 +861,50 @@ currently holds port 3000 — not a regression of this change.)
 
 ---
 
+### Bug 18 — a malformed tool-arg call STUCKs the build because the schema-validation error is not ACTIONABLE — PRODUCT — FIXED
+
+Live **MiniMax-M3** finding on a `revise_after_finish` soak. The model called
+`update_plan_progress({"steps": ["", "", ""]})` — empty strings where each `steps` item must be an OBJECT —
+and kept resending the identical malformed call until the stuck breaker fired (`actionless_loop` → STUCK). The
+validation error it saw, `argument 'steps.0': Input should be a valid dictionary or instance of
+PlanProgressItem` (×3), was technically correct but **not actionable**: it never showed the EXPECTED nested
+shape, the `state` enum, or a concrete example, so a model that mis-formats an array-of-objects could not
+self-correct. The build failed not because the task was impossible but because a recoverable FORMATTING error
+was never made recoverable.
+
+**Fix** (`fix-bug18-actionable-validation`, in the single generic validation-error formatter). The tool
+executor already routes every arg-schema failure through `describe_validation_failure`
+(`packages/tools/src/disco/tools/executor.py`) — the one place whose string is the ONLY thing the model sees
+(the structured `expected_schema` is not rendered into the next turn). It now appends, for ANY tool whose
+failing arg is a pydantic model (or a list of models), a concise **nested-shape hint**: the expected shape
+with the enum spelled out + ONE concrete example, e.g. for `update_plan_progress`:
+
+> The 'steps' argument must be a list of objects, each shaped `{"index": <integer>, "state":
+> "pending"|"active"|"done"}`. Example: `steps=[{"index": 1, "state": "pending"}, {"index": 2, "state":
+> "active"}]`.
+
+Generic by construction (derived from the model's fields/annotations), so a future nested-arg tool benefits
+with no extra code; concise by design (the bad arg path + expected nested shape + enum + one example, NOT the
+full JSON schema, so context isn't bloated).
+
+**Must-not-regress (verified):** the schema is UNCHANGED — `["", "", ""]` is still REJECTED
+(`invalid_arguments`), never coerced/normalized into objects (the tool body never runs on bad input); the
+message is DETERMINISTIC for identical bad calls, so the loop's stuck detector still trips byte-for-byte; the
+stuck breaker is untouched — if the model ignores the now-actionable error and keeps looping, it still attempts
+the escape once then halts STUCK (no infinite loop).
+
+**Proof — LIVE stack in use, so per policy the UNIT + loop-fake tests are the required proof** (no live soak):
+`test_validation_executor.py` (the malformed `steps` call yields `invalid_arguments` whose model-visible
+message contains `steps.0`, "list of objects", `index`/`state`, the `pending`/`active`/`done` enum, and a
+concrete example; the corrected `[{"index": 1, "state": "done"}]` call SUCCEEDS; a generic non-`update_plan_progress`
+tool with a malformed nested arg gets the same treatment — proving genericity; the rich message is
+deterministic), and `test_bug18_actionable_validation.py` (loop-level via the REAL executor: the first
+`AgentErrorEvent.to_llm_message()` the model receives carries the shape + example, the corrected call produces
+a success `ObservationEvent`, and the SAME malformed call repeated past the stuck threshold still drops a
+`stuck_escape` marker then halts terminal STUCK). Ruff + basedpyright clean, import-linter KEPT.
+
+---
+
 ## Runner hygiene — kill abandoned conversations (harness only)
 
 **Symptom.** The runner left a build conversation **RUNNING** whenever it stopped watching —

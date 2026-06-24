@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Literal
 
 from disco.core.llm import ModelExecutionPolicy
 from disco.tools import (
@@ -106,6 +107,110 @@ async def test_missing_required_message_names_field():
     res = await ex.execute(call("file_read"))  # missing required `path`
     seen = res.error or ""
     assert "path" in seen and "missing required argument" in seen
+
+
+# ---- Bug 18 — nested array-of-objects arg validation is ACTIONABLE -----------
+#
+# Live MiniMax-M3 finding (build_soak revise_after_finish): the model called
+# `update_plan_progress({"steps": ["", "", ""]})` repeatedly. The bare pydantic
+# message ("Input should be a valid dictionary or instance of PlanProgressItem")
+# never showed the EXPECTED nested shape/example, so the model looped to STUCK.
+# The fix enriches the validation error with the nested shape + enum + one concrete
+# example — WITHOUT weakening the schema (`["", "", ""]` is still REJECTED).
+
+
+async def test_update_plan_progress_malformed_steps_message_is_actionable():
+    """`update_plan_progress({"steps": ["", "", ""]})` → invalid_arguments whose
+    model-visible message shows the bad arg path, that steps is a LIST OF OBJECTS,
+    the `index`/`state` fields, the `state` enum (pending/active/done), AND a
+    concrete example — so a model can copy the shape instead of looping."""
+    ex = _executor()
+    res = await ex.execute(call("update_plan_progress", steps=["", "", ""]))
+    assert res.success is False
+    assert res.structured["kind"] == "invalid_arguments"
+    seen = res.error or ""
+    assert res.content == seen  # the model sees exactly this string
+    # bad arg path (the failing list index) is named
+    assert "steps.0" in seen
+    # the expected container: a list of objects
+    assert "list of objects" in seen
+    # the nested fields + the full state enum
+    assert "index" in seen and "state" in seen
+    assert "pending" in seen and "active" in seen and "done" in seen
+    # a concrete, copyable example of a correct call
+    assert '{"index": 1, "state": "pending"}' in seen
+    assert "Example: steps=[" in seen
+
+
+async def test_update_plan_progress_well_formed_steps_succeeds():
+    """The corrected shape the actionable error points at actually validates +
+    runs — proving the hint enables real recovery (not just a nicer rejection)."""
+    ex = _executor()
+    res = await ex.execute(
+        call("update_plan_progress", steps=[{"index": 1, "state": "done"}])
+    )
+    assert res.success is True
+    assert "1/1 done" in res.content
+
+
+async def test_malformed_nested_arg_is_rejected_never_coerced():
+    """MUST-NOT-REGRESS: a malformed nested arg is REJECTED (invalid_arguments) and
+    the tool NEVER runs — the empty strings are not normalized into objects. Only
+    the error message got richer; the schema still rejects."""
+    ex = _executor()
+    res = await ex.execute(call("update_plan_progress", steps=["", "", ""]))
+    assert res.success is False
+    assert res.structured["kind"] == "invalid_arguments"
+    # the raw structured pydantic errors are preserved (no coercion happened) and
+    # the tool's own success output ("plan progress: x/y done") is absent — the
+    # tool body never ran on the bad input (the empty strings were not normalized).
+    assert res.structured["validation_errors"]
+    assert "plan progress:" not in (res.content or "")
+
+
+async def test_nested_shape_hint_is_generic_across_tools():
+    """The actionable nested-shape hint is GENERIC — any tool with a nested model
+    (or list-of-model) arg benefits, not just update_plan_progress. A fresh tool
+    with a `list[_Item]` arg, called with a malformed item, gets the same shape +
+    example treatment."""
+
+    class _Item(BaseModel):
+        name: str
+        kind: Literal["alpha", "beta"]
+
+    class _NestedArgs(BaseModel):
+        items: list[_Item]
+
+    class _NestedTool:
+        definition = ToolDef(
+            name="nested_tool", description="takes nested items", args_model=_NestedArgs
+        )
+
+        async def run(self, args, ctx):
+            return ToolOutcome(success=True, content="ran")
+
+    reg = ToolRegistry()
+    reg.register(_NestedTool())
+    ex = DefaultToolExecutor(reg, ToolScope(allowed_tools=frozenset({"nested_tool"})))
+    res = await ex.execute(call("nested_tool", items=["nope"]))
+    assert res.success is False
+    assert res.structured["kind"] == "invalid_arguments"
+    seen = res.error or ""
+    assert "items.0" in seen
+    assert "list of objects" in seen
+    # the nested model's fields + enum + a concrete example, all generically derived
+    assert '"name": <string>' in seen
+    assert '"kind": "alpha"|"beta"' in seen
+    assert "Example: items=[" in seen
+
+
+async def test_actionable_nested_message_is_deterministic():
+    """Identical malformed nested calls produce byte-identical messages, so the
+    loop's stuck detector still trips after the fix (Bug 18 must not break stuck)."""
+    ex = _executor()
+    a = await ex.execute(call("update_plan_progress", steps=["", "", ""]))
+    b = await ex.execute(call("update_plan_progress", steps=["", "", ""]))
+    assert a.content == b.content
 
 
 # ---- §11.2 executor ↔ loop boundary -----------------------------------------
