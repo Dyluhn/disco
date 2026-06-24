@@ -31,6 +31,8 @@ from .. import failure_codes as fc
 from ..events import (
     KIND_ACTION,
     KIND_PLAN,
+    action_executed,
+    action_id_of,
     kind_of,
     plan_approved_seqs,
     seq_of,
@@ -93,6 +95,15 @@ class ToolScopeOracle:
                     continue
                 name = tool_name_of(e)
                 if name is not None and name not in PLANNING_SAFE_TOOLS:
+                    # A write the gate REJECTED in planning (an agent_error pairing /
+                    # failed result) did NOT mutate state — that is the §11.3
+                    # tool-rejection-recovery contract WORKING, the gate visibly
+                    # refusing the call, NOT a §11.7 violation. Only a write that
+                    # ACTUALLY EXECUTED (success observation) — the product letting a
+                    # write fall through and mutate in PLANNING — is the violation.
+                    aid = action_id_of(e)
+                    if aid is not None and not action_executed(events, aid):
+                        continue
                     results.append(
                         failing(
                             _ORACLE,

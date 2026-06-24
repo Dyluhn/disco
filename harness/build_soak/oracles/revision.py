@@ -34,6 +34,8 @@ from ..events import (
     KIND_PLAN,
     PLANNING_DETAIL,
     SRC_USER,
+    action_executed,
+    action_id_of,
     awaiting_approval_seqs,
     has_action,
     has_status,
@@ -62,11 +64,25 @@ def _followup_user_seqs(events: list[dict[str, Any]], boundary: int) -> list[int
 
 
 def _first_mutating_action_after(events: list[dict[str, Any]], after_seq: int) -> int | None:
+    """Seq of the first mutating action after `after_seq` that ACTUALLY EXECUTED.
+
+    A mutating action is paired with its result by `action_id`; it counts ONLY when
+    it executed and mutated — i.e. it has a SUCCESS observation. A mutating action the
+    gate REJECTED (an agent_error pairing) or that failed without mutating (success is
+    False) did NOT write the workspace — that is the §11.3 tool-rejection-recovery
+    contract WORKING, not a §11.4 write-before-revised-approval violation. Counting a
+    rejected pre-approval write ATTEMPT as a write was the Bug-13 false-FAIL. The
+    anti-false-PASS half is preserved: an EXECUTED write (success observation) still
+    counts → still drives WRITE_BEFORE_REVISION_APPROVAL.
+    """
     for e in events:
         if kind_of(e) != KIND_ACTION or seq_of(e) <= after_seq:
             continue
         name = tool_name_of(e)
-        if name is not None and name not in PLANNING_SAFE_TOOLS:
+        if name is None or name in PLANNING_SAFE_TOOLS:
+            continue
+        aid = action_id_of(e)
+        if aid is not None and action_executed(events, aid):
             return seq_of(e)
     return None
 

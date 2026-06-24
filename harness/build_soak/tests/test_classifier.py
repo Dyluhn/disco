@@ -72,6 +72,30 @@ def test_write_in_planning_attempted_classifies():
     assert c["severity"] == "P0"
 
 
+def test_rejected_write_in_planning_is_not_a_violation():
+    # Bug 13 (tool_scope mirror): a mutating action ATTEMPTED in planning that the
+    # gate REJECTS (agent_error) did NOT mutate state — the §11.3 tool-rejection
+    # contract working. It must NOT raise WRITE_TOOL_ATTEMPTED_IN_PLANNING. The
+    # recovery (file_read) + a real plan follow, so the run is clean.
+    events = [
+        msg(1, "user", "build"),
+        action(2, "file_write", args={"path": "index.html", "content": "bad"}, action_id="a2"),
+        agent_error(3, "a2", error="REFUSED: write before plan approval"),
+        action(4, "file_read", args={"path": "index.html"}, action_id="a4"),
+        observation(5, "a4", tool="file_read"),
+        plan(6, revision=1),
+        awaiting(7, 6),
+        status(8, "RUNNING", "plan_approved"),
+        action(9, "file_write", args={"path": "index.html", "content": "ok"}, action_id="a9"),
+        observation(10, "a9", tool="file_write"),
+        status(11, "FINISHED"),
+    ]
+    scenario = {"id": "s", "assertions": {"event_chain": {"require_plan_before_execution": True}}}
+    c = classify(events, scenario=scenario)
+    assert c["code"] != "WRITE_TOOL_ATTEMPTED_IN_PLANNING", c
+    assert c["status"] == "PASS", c
+
+
 def test_action_no_observation_from_fixture():
     events = [
         msg(1, "user", "build"),

@@ -561,3 +561,57 @@ and the model's next write is rejected on the old plan (proven: with the read-re
 test fails — the write slips through); (4) negative — a pure Q&A follow-up is answered without a forced
 re-plan (no dead-end). The §20 contract suite + the planning-gate regression suite + the full core suite
 stay green.
+
+### Bug 13 — revision oracle FALSE-FAILs a REJECTED pre-approval write (HARNESS) — FIXED
+
+Surfaced re-classifying the `revise_after_finish` live run (`build_soak_revise_after_finish_20260624_155854_000`,
+conv `23f99798`) against the merged Bug-12 product fix. The run was adjudicated
+`WRITE_BEFORE_REVISION_APPROVAL` (P0) — but that was a HARNESS false-FAIL, masking proof that Bug 12
+works. After the follow-up (seq 56) the model ATTEMPTED `file_replace_lines` at seq 59 — which the
+planning gate correctly REJECTED (seq 60 = `agent_error`, the file was NOT mutated; the model recovered
+via `file_read` at seq 61, re-planned to rev 3, got approval at seq 65, then the post-approval write
+executed). A REJECTED write attempt is the §11.3 tool-rejection-recovery contract WORKING — exactly the
+Bug-12 gate firing — NOT a §11.4 write-before-revised-approval violation.
+
+**Root cause:** `oracles/revision.py` `_first_mutating_action_after` returned the seq of a mutating
+ACTION regardless of whether it actually EXECUTED. It counted the rejected seq-59 attempt as
+`mutated_seq` → `write_before_revised_plan_approval=true`. The §11.4 contract is "no write EXECUTES /
+mutates before revised approval", not "no write is ATTEMPTED". `oracles/tool_scope.py`'s
+`WRITE_TOOL_ATTEMPTED_IN_PLANNING` had the same latent flaw (it flags the product letting a write FALL
+THROUGH and EXECUTE in planning — a rejected attempt is the gate working, the §11.3 PASS, not the
+violation).
+
+**Fix** (`fix-bug13-revision-oracle`, harness only — `events.py` + `oracles/revision.py` +
+`oracles/tool_scope.py`; no product/engine/messages/recitation/uv.lock): a mutating action is correlated
+with its result by `action_id` (the ActionEvent's `id` ↔ the Observation/AgentError `action_id`; verified
+on frozen evidence) and counts ONLY when it ACTUALLY EXECUTED — i.e. it has a SUCCESS observation. A
+shared `events.action_executed(events, action_id)` returns True only for a paired ObservationEvent whose
+`tool_result.success` is not False; an AgentError pairing (gate rejection) or a `success=False`
+observation (failed, no mutation) does NOT count. `_first_mutating_action_after` and the tool_scope
+`WRITE_TOOL_ATTEMPTED_IN_PLANNING` loop both apply it. **Anti-false-PASS preserved:** an EXECUTED write
+before revised approval (success observation, file mutated) STILL counts → STILL FAILs
+`WRITE_BEFORE_REVISION_APPROVAL` / `WRITE_TOOL_ATTEMPTED_IN_PLANNING`. The ONLY change is excluding
+rejected/failed attempts. (An action with no observation at all is separately caught as
+`ACTION_NO_OBSERVATION` by the EventChainOracle, so requiring a success observation cannot hide a
+genuinely-executed pre-approval write.)
+
+Proof: new harness unit tests — `tests/test_revision_oracle.py::test_rejected_preapproval_write_then_clean_replan_passes`
+(rejected attempt → no `WRITE_BEFORE_REVISION_APPROVAL`, revised chain holds → PASS) and
+`::test_executed_preapproval_write_still_fails` (a SUCCESS-observed pre-approval write → STILL
+`WRITE_BEFORE_REVISION_APPROVAL`); `tests/test_classifier.py::test_rejected_write_in_planning_is_not_a_violation`
+(rejected planning write → no `WRITE_TOOL_ATTEMPTED_IN_PLANNING`). All existing oracle/classifier tests
+(the legitimate-violation cases, which all use SUCCESS-observed writes) stay green; full harness suite green.
+
+**Confirms Bug 12 works live.** Re-classifying the frozen `revise_after_finish` run (read-only, into a
+copy — the original frozen evidence is untouched) now shows **RevisionOracle PASS** and **ToolScopeOracle
+PASS** — the seq-59 pre-approval write WAS rejected by the gate and the re-plan (rev 3) went through, so
+the harness no longer false-FAILs the Bug-12 behaviour.
+
+**NOTE — not a false-PASS:** the run as a whole still does NOT classify PASS, and that is CORRECT. With
+the Bug-13 false-FAIL removed, adjudication proceeds to `OutputTruthOracle`, which honestly reports
+`BUILD_DID_NOT_FINISH`: the run genuinely ended `STUCK` (`repeated_action_error`, seq 84) on the SECOND
+follow-up — it never reached `FINISHED`/`VERIFIED`. (The `index.html` deliverable does contain both
+required substrings, but a build that does not complete is a failure regardless — the same fail-closed
+policy as Bug 8.) That STUCK outcome is a separate, genuine run result, NOT a harness artifact; forcing
+the run to PASS would be a false-PASS. Bug 13 is strictly the WRITE_BEFORE_REVISION_APPROVAL false-FAIL,
+and it is fixed.

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from _eventlog import action, awaiting, msg, observation, plan, status
+from _eventlog import action, agent_error, awaiting, msg, observation, plan, status
 
 from harness.build_soak.events import normalize_events
 from harness.build_soak.oracles.revision import RevisionOracle
@@ -149,6 +149,53 @@ def test_write_before_revision_approval_fails():
         status(15, "FINISHED"),
     ]
     results = _run(events)
+    fail = next(r for r in results if r.failed)
+    assert fail.code == "WRITE_BEFORE_REVISION_APPROVAL"
+    assert fail.facts["first_write_tool_after_followup_seq"] == 10
+
+
+def test_rejected_preapproval_write_then_clean_replan_passes():
+    # Bug 13: after the follow-up the model ATTEMPTS a write that the planning gate
+    # REJECTS (agent_error) — the §11.3 tool-rejection-recovery contract working. It
+    # then recovers (file_read), re-plans (rev2), gets approval, and the POST-approval
+    # write EXECUTES. The rejected attempt must NOT count as a write-before-approval,
+    # so the whole revised chain holds → PASS (no WRITE_BEFORE_REVISION_APPROVAL).
+    events = _initial_build() + [
+        msg(8, "user", "revise the hero and add pricing"),
+        status(9, "RUNNING", "planning"),
+        action(10, "file_replace_lines", args={"path": "index.html"}, action_id="act10"),
+        agent_error(11, "act10", error="REFUSED: planning gate rejected the write"),
+        action(12, "file_read", args={"path": "index.html"}, action_id="act12"),
+        observation(13, "act12", tool="file_read"),
+        plan(14, revision=2),
+        awaiting(15, 14),
+        status(16, "RUNNING", "plan_approved"),
+        action(17, "file_write", args={"path": "index.html", "content": "x"}, action_id="act17"),
+        observation(18, "act17", tool="file_write"),
+        status(19, "FINISHED"),
+    ]
+    scenario = {"id": "s", "followups": [{"requires_plan_revision": True}]}
+    results = _run(events, scenario)
+    assert all(r.passed or r.skipped for r in results), [r.to_dict() for r in results]
+
+
+def test_executed_preapproval_write_still_fails():
+    # Anti-false-PASS guard: the SAME shape, but the pre-approval write EXECUTES
+    # (success observation, file actually mutated) before the revised plan is
+    # approved → STILL WRITE_BEFORE_REVISION_APPROVAL. Only REJECTED attempts are
+    # excluded; an executed mutation before approval is always the violation.
+    events = _initial_build() + [
+        msg(8, "user", "revise the hero and add pricing"),
+        status(9, "RUNNING", "planning"),
+        action(10, "file_replace_lines", args={"path": "index.html"}, action_id="act10"),
+        observation(11, "act10", tool="file_replace_lines"),  # EXECUTED (success)
+        plan(12, revision=2),
+        awaiting(13, 12),
+        status(14, "RUNNING", "plan_approved"),
+        status(15, "FINISHED"),
+    ]
+    scenario = {"id": "s", "followups": [{"requires_plan_revision": True}]}
+    results = _run(events, scenario)
     fail = next(r for r in results if r.failed)
     assert fail.code == "WRITE_BEFORE_REVISION_APPROVAL"
     assert fail.facts["first_write_tool_after_followup_seq"] == 10
