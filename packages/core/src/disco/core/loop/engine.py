@@ -1822,34 +1822,48 @@ class AgentLoop:
         missed by it, and the in-flight step may be a WRITE against the OLD plan.
 
         This apply-time gate runs AFTER `drive_step()` returns, just before the
-        ActionEvent is built/executed. For a MUTATING tool (anything the planning
-        gate would reject — reads/think/explore pass) it RE-POLLS the log for a
-        fresh unprocessed CHANGE follow-up since the last approval; if one is
-        pending it RE-ENTERS PLANNING and REJECTS this call recoverably (the same
-        shape as `_gate_planning_mode`: record the ActionEvent so the assistant
-        tool_call stays PAIRED with a tool-role result, then a paired
-        AgentErrorEvent the View keeps). So no write lands on the stale plan — the
-        model must submit a revised plan first. A pure Q&A follow-up is exempt
-        (`signals.is_revision_intent`); a read/think mid-step is never deferred.
+        ActionEvent is built/executed. It RE-POLLS the log for a fresh unprocessed
+        CHANGE follow-up since the last approval — for ANY tool, read/think/explore
+        INCLUDED. The re-poll-on-reads matters: if it only fired for mutating
+        tools, a READ in flight when the steer lands would proceed and emit its
+        ActionEvent AFTER the steer, burying the steer's unprocessed marker — so
+        neither the next top-of-loop check NOR a later apply-gate would see it, and
+        a subsequent write would slip through on the stale plan (codex-found
+        residual window).
 
-        Lock-free (caller holds `self._lock`). Returns CONTINUE when it deferred
-        the call, else FALLTHROUGH (the common, no-steer case — zero behavior
-        change for a normal execution turn)."""
+        On detecting a pending change steer it RE-ENTERS PLANNING immediately
+        (sets `mode=PLANNING` + the `planning` marker + replan framing) regardless
+        of the current tool. THEN, for the CURRENT tool:
+          * MUTATING (anything the planning gate would reject) → REJECT it
+            recoverably (record the ActionEvent so the assistant tool_call stays
+            PAIRED with a tool-role result, then a paired AgentErrorEvent the View
+            keeps) — no write lands on the stale plan.
+          * an ALLOWED read/think/explore tool → let it PROCEED (harmless); the
+            invariant is preserved because PLANNING is now set, so EVERY subsequent
+            tool this run — including the model's next write — is rejected by
+            `_gate_planning_mode` until a revised plan is approved.
+
+        A pure Q&A follow-up is exempt (`signals.is_revision_intent`). Lock-free
+        (caller holds `self._lock`). Returns CONTINUE when it deferred a mutating
+        call, else FALLTHROUGH (a harmless read OR the common no-steer case — zero
+        behavior change for a normal execution turn)."""
         if self.mode == OperatingMode.PLANNING:
             return Disp.FALLTHROUGH  # the planning gate already governs writes
         tc = step.tool_call
         if tc is None:
             return Disp.FALLTHROUGH
-        # MUTATING = anything the planning gate would reject. Reusing the SAME set
-        # as `_gate_planning_mode` (read-only-capability ∩ allowlist, + submit_plan
-        # + ask/clarify) means a read/think/explore tool falls through and only a
-        # real workspace mutation / execution is gated — no drift, no read dead-end.
-        if tc.tool_name in self._driver.planning_allowed_tool_names():
-            return Disp.FALLTHROUGH
-        # Re-poll: a steer may have landed DURING the just-finished drive_step.
+        # Re-poll for a steer that may have landed DURING the just-finished
+        # drive_step — for ANY tool, so a read-in-flight re-enters planning BEFORE
+        # its ActionEvent buries the steer marker (no read-then-write window).
         fresh = await self._events()
         if not await self._maybe_reenter_planning_for_followup(fresh):
             return Disp.FALLTHROUGH  # no pending change follow-up (or Q&A) — proceed
+        # PLANNING is now re-entered. A read/think/explore tool (anything the
+        # planning gate allows) may proceed harmlessly — _gate_planning_mode now
+        # governs every subsequent tool. A MUTATING tool is deferred here so it
+        # never lands on the stale plan; the model must submit a revised plan.
+        if tc.tool_name in self._driver.planning_allowed_tool_names():
+            return Disp.FALLTHROUGH
         action = ActionEvent(
             thought=step.thought,
             tool_call=tc,

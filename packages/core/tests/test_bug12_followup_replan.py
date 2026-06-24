@@ -36,6 +36,10 @@ def _write_step(content: str, path: str = "index.html") -> AgentStep:
     return action_step("file_write", {"path": path, "content": content})
 
 
+def _read_step(path: str = "index.html") -> AgentStep:
+    return action_step("file_read", {"path": path})
+
+
 def _silent_noop() -> AgentStep:
     """A tool-less step with EMPTY thought — handle_noop_step persists NOTHING
     (turn_control.py:1182), so it does not advance 'progress' past a follow-up the
@@ -306,6 +310,66 @@ async def test_change_followup_between_steps_reenters_planning():
     assert (
         await loop.get_state()
     ).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+
+
+# --------------------------------------------------------------------------- #
+# Test 3c — the READ-then-WRITE in-flight window (codex residual): the steer    #
+# lands while the in-flight tool is an ALLOWED READ. The read may proceed, BUT  #
+# planning must be re-entered ON DETECTION so the model's NEXT write is rejected #
+# on the old plan — otherwise the read's ActionEvent buries the steer marker and #
+# the write slips through. Only an approved rev 2 lets the write land.          #
+# --------------------------------------------------------------------------- #
+async def test_change_followup_during_in_flight_read_still_gates_next_write():
+    cid = "bug12-steer-read"
+    agent = ScriptedAgent([_submit_plan_step("first")])
+    loop, store = build_plan_loop(agent, conversation_id=cid)
+    await loop.send_message("Create a two-page static site with Home and About.")
+    await loop.run()
+    await loop.approve_plan()
+    executor: BuildExecutor = loop.executor  # type: ignore[assignment]
+
+    # before[0] fires at the START of the in-flight READ step (the steer lands
+    # while the read is in flight). step1 is the WRITE the model then attempts.
+    loop.agent = ScriptedAgent(
+        [_read_step("index.html"),
+         _write_step("<h1>Contact</h1>", path="contact.html"),
+         _submit_plan_step("second")],
+        before={0: _steer_injector(store, cid)},
+    )
+    await loop.run()  # -> AWAITING_PLAN_APPROVAL (rev 2); the next write rejected
+
+    events = await store.get_events(cid)
+    followup_seq = _seq_of_user(events, "Contact page")
+
+    # planning re-entered ON DETECTION even though the in-flight tool was a READ.
+    assert any(
+        isinstance(e, StatusEvent)
+        and e.detail == "planning"
+        and (e.seq or 0) > followup_seq
+        for e in events
+    ), "in-flight read did not re-enter PLANNING on steer detection"
+    # the read MAY have proceeded (harmless) — but the WRITE did NOT land.
+    assert "contact.html" not in executor.world
+    assert not any(
+        isinstance(e, ObservationEvent)
+        and e.tool_result.tool_name == "file_write"
+        and e.tool_result.success
+        and (e.seq or 0) > followup_seq
+        for e in events
+    ), "a write slipped through after a read-in-flight steer (read-then-write window)"
+    plans = [e for e in events if isinstance(e, PlanEvent)]
+    assert [p.revision for p in plans] == [1, 2]
+    assert (
+        await loop.get_state()
+    ).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+
+    # Only an APPROVED revised plan lets the write through.
+    await loop.approve_plan()
+    loop.agent = ScriptedAgent(
+        [_write_step("<h1>Contact</h1>", path="contact.html"), finish_step()]
+    )
+    await loop.run()
+    assert "contact.html" in executor.world
 
 
 # --------------------------------------------------------------------------- #

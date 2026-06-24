@@ -88,7 +88,7 @@ were NOT touched here.
 | 3 | `WRITE_BEFORE_REVISION_APPROVAL` | P1 | **FIXED** (fix-planning-gate) | `test_build_replan_contract.py::test_agent_cannot_write_before_revised_plan_approval` (now passing) | `engine.py:841` `_gate_planning_mode` (revision re-entry) | §11.4, §20.2 |
 | 4 | `APPROVE_PLAN_NO_EXECUTION` | P0 | **FIXED** (fix-approve-noexec) | `test_plan_approval_execution.py::test_kick_after_approval_produces_action_or_terminal_failure` (xfail removed, now passing) | `finish.py` `gate_execution_nudge` (`_EXECUTION_NUDGE_CAP` → STUCK terminal) | §11.2, §20.4 |
 | 5 | `THINK_NOT_EXPOSED_IN_PLANNING` | P2 (gap) | **FIXED** (fix-think-planning) | `test_build_plan_contract.py::test_first_turn_planning_exposes_think` (xfail removed, now passing) + `test_planning_write_rejection.py::test_think_allowed_in_planning_executes_then_plans` | `runtime.py:1466` planning allowlist + `engine.py` `_gate_planning_mode` | §11.1, §15.2, §20.1 |
-| 12 | `NO_REPLAN_AFTER_REVISION` | P0 | **FIXED** (fix-bug12-replan-followup) | `test_bug12_followup_replan.py` (5 real-loop tests: finished→followup, ordered chain, in-flight steer race, between-steps steer, Q&A negative) | `engine.py` `_maybe_reenter_planning_for_followup` (run() intake + `_run_drive`) + `_gate_midstep_steer_replan` (apply-time, in-flight race) + `signals.is_revision_intent` | §11.4 |
+| 12 | `NO_REPLAN_AFTER_REVISION` | P0 | **FIXED** (fix-bug12-replan-followup) | `test_bug12_followup_replan.py` (6 real-loop tests: finished→followup, ordered chain, in-flight write race, between-steps steer, read-then-write window, Q&A negative) | `engine.py` `_maybe_reenter_planning_for_followup` (run() intake + `_run_drive`) + `_gate_midstep_steer_replan` (apply-time, in-flight race; re-enters on ANY tool) + `signals.is_revision_intent` | §11.4 |
 
 > **Bugs 1–3 FIXED** on branch `fix-planning-gate` (two commits): the PLANNING phase gate
 > (`_gate_planning_mode`, engine.py) rejects any tool call that is not in the planning allowlist
@@ -461,23 +461,36 @@ below — `_gate_midstep_steer_replan` at the tool-apply boundary. A re-entered 
 revision oracle's exact chain: `followup < revised PlanEvent(rev=prev+1) < AWAITING_PLAN_APPROVAL <
 RUNNING/plan_approved < write`. Q&A is exempt (answered in execution mode, no forced re-plan).
 
-**In-flight steer race (codex-found follow-up, same branch):** the top-of-loop `_run_drive` re-plan
+**In-flight steer race (codex-found follow-ups, same branch):** the top-of-loop `_run_drive` re-plan
 check runs BEFORE `drive_step()`, so a change steer that lands WHILE the model is mid-turn is missed —
 the in-flight step can be a WRITE that lands once on the OLD plan before the next iteration re-enters
 planning (exactly what the revision oracle flags). Closed by a second, apply-time gate
-`AgentLoop._gate_midstep_steer_replan` (called just before the ActionEvent is built): for a MUTATING
-tool only (anything `Driver.planning_allowed_tool_names()` would reject — reads/think/explore pass, no
-drift) it RE-POLLS the log for a fresh pending change follow-up; if one is present it re-enters PLANNING
-and REJECTS the write recoverably (record the ActionEvent paired with an `AgentErrorEvent`, same shape
-as `_gate_planning_mode`). So even a steer that arrives during an in-flight write never gets one write
-through on the stale plan; the model must submit a revised plan first. Q&A still exempt.
+`AgentLoop._gate_midstep_steer_replan` (called just before the ActionEvent is built): it RE-POLLS the
+log for a fresh pending change follow-up and, on detection, RE-ENTERS PLANNING immediately (sets
+`mode=PLANNING` + the `planning` marker + replan framing), then REJECTS the current call recoverably IF
+it is mutating (record the ActionEvent paired with an `AgentErrorEvent`, same shape as
+`_gate_planning_mode`).
 
-Proof: `packages/core/tests/test_bug12_followup_replan.py` — 5 real-loop (`loop_fakes`) tests
+Crucially the re-poll fires for ANY in-flight tool, **read/think/explore included** (a second
+codex-found residual): if it had only fired for mutating tools, a READ in flight when the steer lands
+would proceed and emit its ActionEvent AFTER the steer, BURYING the steer's unprocessed marker — so
+neither the next top-of-loop check nor a later apply-gate would see it, and the model's subsequent write
+would slip through on the stale plan. So on a read-in-flight steer the read may proceed harmlessly but
+PLANNING is already set, and `_gate_planning_mode` then rejects EVERY subsequent tool (a single
+`drive_step` emits one tool call, so the next write is a fresh iteration the per-iteration planning gate
+catches). The invariant: the moment a change steer is detected at apply-time, the conversation is in
+PLANNING and no mutating write can land until a revised plan is approved — regardless of the in-flight
+tool type. Q&A still exempt (`signals.is_revision_intent`).
+
+Proof: `packages/core/tests/test_bug12_followup_replan.py` — 6 real-loop (`loop_fakes`) tests
 reproducing the exact revise + steer conditions via the PLAIN product follow-up path (not
 `request_plan`): (1) finished→followup re-enters PLANNING + defers the stale-plan write + submits
 rev 2; (2) approving rev 2 then writes, asserting the full ordered chain; (3) the IN-FLIGHT steer race
-— the steer lands DURING the write step, the apply-time gate defers it, and only an approved revised
-plan lets the write land (proven: with the apply-gate disabled this test fails — the write goes through
-on the old plan); (3b) a between-steps steer re-enters PLANNING via the top-of-loop check; (4) negative
-— a pure Q&A follow-up is answered without a forced re-plan (no dead-end). The §20 contract suite + the
-planning-gate regression suite + the full core suite stay green.
+— the steer lands DURING the write step, the apply-time gate defers it, only an approved revised plan
+lets the write land (proven: with the apply-gate disabled this test fails — the write goes through);
+(3b) a between-steps steer re-enters PLANNING via the top-of-loop check; (3c) the READ-then-WRITE window
+— the steer lands during an in-flight READ; the read may proceed but PLANNING is re-entered on detection
+and the model's next write is rejected on the old plan (proven: with the read-re-entry reverted this
+test fails — the write slips through); (4) negative — a pure Q&A follow-up is answered without a forced
+re-plan (no dead-end). The §20 contract suite + the planning-gate regression suite + the full core suite
+stay green.
