@@ -13,6 +13,8 @@ from disco.app_server.config_state import ConfigState
 from disco.core import (
     ConversationStatus,
     EventSource,
+    LLMMessage,
+    MessageEvent,
     SkillStore,
     SqliteEventStore,
     StatusEvent,
@@ -496,9 +498,16 @@ def test_mcp_approval_persists_via_production_default_wiring(store, tmp_path, mo
 # ---- library: owner-scoped conversation list + delete -----------------------
 
 
-def test_conversations_are_owner_scoped(client, store):
+async def test_conversations_are_owner_scoped(client, store):
     store.create_conversation("c1", owner_id="me", title="My RRF question")
     store.create_conversation("c2", owner_id="someone-else", title="Not mine")
+    # BW-08: the History listing hides 0-event ghosts, so give each a real event.
+    await store.append(
+        "c1", MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="q"))
+    )
+    await store.append(
+        "c2", MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="q"))
+    )
 
     mine = client.get("/api/conversations", params={"owner_id": "me"}).json()
     assert [c["id"] for c in mine] == ["c1"]
@@ -523,6 +532,11 @@ def test_delete_is_owner_scoped(client, store):
 async def test_conversations_include_status(client, store):
     cid = "c1"
     store.create_conversation(cid, owner_id="me", title="Status Test")
+    # BW-08: a real (non-status) event so the row isn't filtered as a 0-event
+    # ghost — status stays IDLE since no StatusEvent has landed yet.
+    await store.append(
+        cid, MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="q"))
+    )
 
     # Initially status is IDLE (backfilled by read-repair from empty state)
     mine = client.get("/api/conversations", params={"owner_id": "me"}).json()

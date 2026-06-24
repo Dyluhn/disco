@@ -578,16 +578,35 @@ class SqliteEventStore:
         return [r["conversation_id"] for r in rows]
 
     async def list_conversation_summaries(
-        self, *, owner_id: str, limit: int = 50, cursor: str | None = None
+        self,
+        *,
+        owner_id: str,
+        limit: int = 50,
+        cursor: str | None = None,
+        nonempty_only: bool = False,
     ) -> list[ConversationSummary]:
         """Owner-scoped library rows (id/title/created_at), newest first — what the
         History surface lists (§6.1). Same ownership filter as `list_conversations`;
-        no cross-owner data, ever."""
+        no cross-owner data, ever.
+
+        BW-08: ``nonempty_only`` hides 0-event "ghost" conversations — rows that
+        were pre-created but never actually used (no first user message, no title,
+        nothing to show). The user-facing History/Projects listings pass it True
+        (belt-and-suspenders to the lazy client pre-create); the activity feed and
+        other internal readers leave it False so a freshly-kicked, mid-first-append
+        running task is never dropped."""
         offset = int(cursor) if cursor else 0
+        nonempty_clause = (
+            "AND EXISTS (SELECT 1 FROM events e WHERE e.conversation_id = c.conversation_id) "
+            if nonempty_only
+            else ""
+        )
         rows = self._conn.execute(
             "SELECT conversation_id, owner_id, title, created_at, status, surface, origin "
-            "FROM conversations "
-            "WHERE owner_id = ? ORDER BY created_at DESC, conversation_id DESC LIMIT ? OFFSET ?",
+            "FROM conversations c "
+            "WHERE owner_id = ? "
+            f"{nonempty_clause}"
+            "ORDER BY created_at DESC, conversation_id DESC LIMIT ? OFFSET ?",
             (owner_id, limit, offset),
         ).fetchall()
         summaries: list[ConversationSummary] = []
