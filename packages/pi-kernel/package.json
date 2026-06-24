@@ -12,6 +12,8 @@
   },
   "main": "./dist/index.js",
   "scripts": {
+    "preinstall": "node -e \"if(process.env.npm_config_ignore_scripts!=='true'){console.error('@disco/pi-kernel: install MUST run with --ignore-scripts (campaign \\u00a71.2 — never run dependency lifecycle scripts). Use: npm run setup, or npm install --ignore-scripts');process.exit(1)}\"",
+    "setup": "npm install --ignore-scripts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.test.json --noEmit",
     "start": "node ./dist/index.js",

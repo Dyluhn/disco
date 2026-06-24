@@ -29,9 +29,10 @@ interface Sidecar {
   exitCode: () => Promise<number | null>;
 }
 
-function startSidecar(): Sidecar {
+function startSidecar(env?: NodeJS.ProcessEnv): Sidecar {
   const child = spawn(process.execPath, [ENTRY], {
     stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, ...env },
   }) as ChildProcessWithoutNullStreams;
 
   const frames: KernelOutbound[] = [];
@@ -231,6 +232,62 @@ describe("pi-kernel sidecar lifecycle", () => {
     sidecar.sendRaw("");
 
     // The sidecar is unharmed: it keeps heartbeating and accepts a real command.
+    await sidecar.waitFor((f) => f.type === "heartbeat", 5_000);
+    sidecar.send({ type: "followup", text: "still working" });
+    await sidecar.waitFor((f) => f.type === "agent_event");
+    expect(sidecar.child.exitCode).toBeNull();
+
+    sidecar.child.stdin.end();
+    expect(await sidecar.exitCode()).toBe(0);
+  });
+
+  it("serializes dispatch: back-to-back init+prompt sees init COMPLETE (no false pre-init error)", async () => {
+    sidecar = startSidecar();
+
+    // Both commands arrive in a SINGLE write, back-to-back, before init's async
+    // SDK setup can resolve. With sequential dispatch, `prompt` must wait for
+    // `init` to fully complete — so it fails with "prompt failed" (no model
+    // wired), never the false "received 'prompt' before 'init'".
+    sidecar.child.stdin.write(
+      JSON.stringify({ type: "init", config: { heartbeatMs: 50 } }) +
+        "\n" +
+        JSON.stringify({ type: "prompt", text: "build me an app" }) +
+        "\n",
+    );
+
+    const ready = await sidecar.waitFor((f) => f.type === "ready");
+    const error = await sidecar.waitFor((f) => f.type === "error");
+    expect(error.type).toBe("error");
+    if (error.type === "error") {
+      expect(error.message).toContain("prompt failed");
+      expect(error.message).not.toContain("before 'init'");
+    }
+    // Ordering preserved: ready (from init) was emitted before the prompt error.
+    const readyIdx = sidecar.frames.indexOf(ready);
+    const errIdx = sidecar.frames.indexOf(error);
+    expect(readyIdx).toBeGreaterThanOrEqual(0);
+    expect(errIdx).toBeGreaterThan(readyIdx);
+
+    sidecar.child.stdin.end();
+    expect(await sidecar.exitCode()).toBe(0);
+  });
+
+  it("rejects an over-cap inbound line with an error frame and stays alive", async () => {
+    // Shrink the inbound byte cap so the test stays small.
+    sidecar = startSidecar({ DISCO_PI_KERNEL_MAX_LINE_BYTES: "256" });
+    sidecar.send({ type: "init", config: { heartbeatMs: 50 } });
+    await sidecar.waitFor((f) => f.type === "ready");
+
+    // A single frame far larger than the cap (no chance to parse it).
+    sidecar.sendRaw('{"type":"prompt","text":"' + "Z".repeat(4096) + '"}');
+
+    const overflow = await sidecar.waitFor(
+      (f) => f.type === "error" && f.message.includes("byte cap"),
+    );
+    expect(overflow.type).toBe("error");
+
+    // The process did NOT crash: it keeps heartbeating and still handles valid
+    // frames after the oversized one was discarded + resynced.
     await sidecar.waitFor((f) => f.type === "heartbeat", 5_000);
     sidecar.send({ type: "followup", text: "still working" });
     await sidecar.waitFor((f) => f.type === "agent_event");
