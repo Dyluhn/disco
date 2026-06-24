@@ -260,3 +260,129 @@ def test_reconstruct_clarify_then_ask_does_not_shadow():
         "stale clarify id leaked into a later ask_user gate — the snapshot path "
         "would render the wrong (clarify) panel on reconnect"
     )
+
+
+# ── Malformed `clarify` options normalization (fix-clarify-cards) ─────────────
+# Live build (conv "Make a simple macosx clone", 2026-06-24) produced two distinct
+# rendered failures, BOTH from the model emitting `choice` options in shapes that
+# are NOT the flat `list[str]` the schema asks for, which the old
+# `[str(o) for o in options]` mangled:
+#   * BUG 1 (first-run, malformed): options as {id,question} dicts or nested
+#     lists → str(...) put a Python-repr blob in each radio label.
+#   * BUG 2 (later-turn, EMPTY cards): options as ["","",""] → blank radios with
+#     no pickable text (the "empty bubble cards" Dylan reported).
+async def _run_clarify(arguments: dict) -> ClarifyEvent:
+    agent = ScriptedAgent(
+        [
+            AgentStep(
+                thought="clarifying",
+                tool_call=ToolCall(tool_name="clarify", arguments=arguments),
+                finished=False,
+            ),
+        ]
+    )
+    loop, store = build_loop(
+        agent, mode=OperatingMode.PLANNING, planning_tools={"file_read", "file_list"},
+        conversation_id=CID,
+    )
+    await loop.send_message("build it")
+    await loop.run()
+    events = await store.get_events(CID)
+    clarify = [e for e in events if isinstance(e, ClarifyEvent)]
+    assert len(clarify) == 1
+    return clarify[0]
+
+
+async def test_clarify_options_as_dicts_are_flattened_to_labels():
+    """BUG 1 — the model emits choice options as {id, question} objects (seq 11
+    of the live repro). They must become clean string labels, not str(dict) blobs."""
+    ce = await _run_clarify(
+        {
+            "question": "How deep should the clone go?",
+            "questions": [
+                {
+                    "id": "depth",
+                    "question": "How deep?",
+                    "type": "choice",
+                    "options": [
+                        {"id": "depth_static", "question": "Static screenshot-style desktop."},
+                        {"id": "depth_light", "question": "Lightly interactive."},
+                        {"id": "depth_full", "question": "Full single-page desktop."},
+                    ],
+                },
+            ],
+        }
+    )
+    item = ce.items[0]
+    assert item.type == "choice"
+    assert item.options == [
+        "Static screenshot-style desktop.",
+        "Lightly interactive.",
+        "Full single-page desktop.",
+    ]
+    for opt in item.options:
+        assert "{" not in opt and "'id'" not in opt  # no python-repr leaked
+
+
+async def test_clarify_options_nested_lists_are_flattened():
+    """BUG 1 — the model nests options as a list-of-lists (seq 5 of the live
+    repro). They must flatten to individual string labels."""
+    ce = await _run_clarify(
+        {
+            "question": "Which look?",
+            "questions": [
+                {
+                    "id": "style",
+                    "question": "Which macOS look?",
+                    "type": "choice",
+                    "options": [["Modern", ["Classic", ["Your call"]]]],
+                },
+            ],
+        }
+    )
+    item = ce.items[0]
+    assert item.type == "choice"
+    assert item.options == ["Modern", "Classic", "Your call"]
+
+
+async def test_clarify_empty_options_downgrade_to_text_no_blank_radios():
+    """BUG 2 — the model emits empty option placeholders ["","",""] (seq 73/82 of
+    the live repro). With <2 real options the question must downgrade to free text
+    so the card never renders blank, un-pickable radio buttons."""
+    ce = await _run_clarify(
+        {
+            "question": "A few choices.",
+            "questions": [
+                {
+                    "id": "scope",
+                    "question": "How ambitious?",
+                    "type": "choice",
+                    "options": ["", "", ""],
+                },
+                {"id": "view", "question": "Which camera?", "type": "choice", "options": ["", ""]},
+            ],
+        }
+    )
+    for item in ce.items:
+        assert item.type == "short_text", f"{item.id} stayed a choice with no real options"
+        assert item.options == []
+
+
+async def test_clarify_good_string_options_pass_through_unchanged():
+    """Well-formed flat-string options (the schema's intended shape) are preserved."""
+    ce = await _run_clarify(
+        {
+            "question": "Pick a stack.",
+            "questions": [
+                {
+                    "id": "stack",
+                    "question": "React or Vue?",
+                    "type": "choice",
+                    "options": ["React", "Vue"],
+                },
+            ],
+        }
+    )
+    item = ce.items[0]
+    assert item.type == "choice"
+    assert item.options == ["React", "Vue"]

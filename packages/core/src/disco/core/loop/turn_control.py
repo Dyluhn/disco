@@ -75,6 +75,67 @@ _PROPOSE_PLAN_UPDATE_REPEAT_CAP = 3
 # pick_alternative special-cases it (reset streak + resume) rather than running a tool.
 _CONTINUE_OPTION_ID = "__continue__"
 
+
+def _coerce_choice_label(opt: object, _depth: int = 0) -> list[str]:
+    """Normalize ONE raw `clarify` choice-option into zero or more clean label
+    strings. Defensive against the model's shape drift — exactly the discipline
+    `plans.py:alternatives_from_args` applies to `ask_user` options, which the
+    clarify handler historically lacked.
+
+    Observed live malformations (build `clarify`, real models) that the naive
+    `str(o)` mangled into garbage or empties:
+      * a `{"id": "...", "question"/"label": "..."}` object  → `str(dict)`
+        rendered the whole Python-repr as one radio label.
+      * a NESTED list `["A", ["B", "C"]]`                    → `str(list)`
+        rendered the whole repr as one radio label.
+      * empty placeholders `["", "", ""]`                     → blank radios
+        ("empty bubble cards" with nothing to pick).
+
+    This returns FLAT, human-readable, non-empty labels; dicts contribute their
+    best text field; nested lists are flattened; empties are dropped."""
+    if _depth > 4:
+        return []
+    if isinstance(opt, str):
+        s = opt.strip()
+        return [s] if s else []
+    if isinstance(opt, bool):
+        return [str(opt)]
+    if isinstance(opt, (int, float)):
+        return [str(opt)]
+    if isinstance(opt, dict):
+        # Prefer a human-readable field; the model reuses the multi-question
+        # item shape ({id, question}) and the ask_user option shape
+        # ({title, description}) interchangeably inside `options`.
+        for key in ("label", "title", "text", "value", "name", "question", "option"):
+            v = opt.get(key)
+            if isinstance(v, str) and v.strip():
+                return [v.strip()]
+        # No known text key — fall back to the single string value if unambiguous.
+        str_vals = [v.strip() for v in opt.values() if isinstance(v, str) and v.strip()]
+        return [str_vals[0]] if len(str_vals) == 1 else []
+    if isinstance(opt, (list, tuple)):
+        out: list[str] = []
+        for sub in opt:
+            out.extend(_coerce_choice_label(sub, _depth + 1))
+        return out
+    return []
+
+
+def _normalize_clarify_options(raw: object) -> list[str]:
+    """Flatten a raw `options` value into clean, de-duplicated label strings.
+    Empty / unrecoverable options are dropped — a `choice` left with too few
+    real options is downgraded to free text by the caller (no blank radios)."""
+    if not isinstance(raw, (list, tuple)):
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for opt in raw:
+        for label in _coerce_choice_label(opt):
+            if label not in seen:
+                seen.add(label)
+                out.append(label)
+    return out
+
 # WALK-19 — the corrective reminder injected when the no-progress breaker first
 # trips. Failure-independent: the model's edits are "succeeding" but the app is
 # unchanged, so the message reframes toward a hypothesis + a DIFFERENT outcome.
@@ -1341,10 +1402,16 @@ class MetaToolHandlers:
             qtype = str(it.get("type") or "short_text").strip()
             if qtype not in ("short_text", "long_text", "choice"):
                 qtype = "short_text"
-            qopts = it.get("options") or []
-            if isinstance(qopts, list):
-                qopts = [str(o) for o in qopts]
-            else:
+            # Normalize options robustly — the model emits choice options as
+            # nested lists / {id,question} dicts / empty placeholders, NOT the
+            # flat strings the schema asks for. `str(o)` rendered those as
+            # garbage radio labels (malformed) or blank radios (empty cards).
+            qopts = _normalize_clarify_options(it.get("options"))
+            # A `choice` with fewer than two real options can't be a meaningful
+            # pick — render a free-text box instead of one/zero blank radios so
+            # the user always has something usable to answer with.
+            if qtype == "choice" and len(qopts) < 2:
+                qtype = "short_text"
                 qopts = []
             items.append(
                 ClarifyQuestionItem(
