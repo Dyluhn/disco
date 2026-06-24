@@ -145,6 +145,30 @@ def test_agent_error_pairing_does_not_break_chain():
     assert c["status"] == "PASS"
 
 
+def test_stuck_approve_no_execution_classifies_as_terminal_fail():
+    # codex #1: the loop's approve-but-never-execute exit terminalizes the run as
+    # StatusEvent(STUCK, detail=approve_plan_no_execution) (finish.py execution-nudge
+    # cap). STUCK is a TERMINAL state — the run gave up, no further work without a
+    # fresh user turn. The dossier (plan approved, NO action after approval) must
+    # classify as the FAIL it is: APPROVE_PLAN_NO_EXECUTION / P0 — NOT INVALID_RUN and
+    # NOT a false PASS (which is what happened while STUCK read as non-terminal).
+    events = [
+        msg(1, "user", "build a page"),
+        status(2, "RUNNING"),
+        plan(3, revision=1),
+        awaiting(4, 3),
+        status(5, "RUNNING", "plan_approved"),
+        # no execution action ever appears
+        status(6, "STUCK", "approve_plan_no_execution"),
+    ]
+    scenario = {"id": "s", "assertions": {"event_chain": {"require_plan_before_execution": True}}}
+    c = classify(events, scenario=scenario)
+    assert c["status"] == "FAIL"
+    assert c["code"] == "APPROVE_PLAN_NO_EXECUTION"
+    assert c["severity"] == "P0"
+    assert c["first_broken_link"] == "approval_status -> execution_action"
+
+
 def test_classify_run_folder_writes_classification(tmp_path):
     conv = tmp_path / "conversations" / "conv_x"
     conv.mkdir(parents=True)

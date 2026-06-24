@@ -1,0 +1,110 @@
+# Build Soak — bare-Build scenario matrix (guidelines §14, §15).
+#
+# Machine-readable §14 specs. Each scenario carries:
+#   * runner directives  — how the runner drives the live API (prompt, model,
+#     autonomous, followups + their trigger points).
+#   * assertions         — the predicates the deterministic oracle consumes
+#     (event_chain / planning / revisions / workspace / preview / terminal).
+#
+# The runner ACTS AS THE USER: it approves the plan for interactive scenarios and
+# sends each follow-up at its trigger point; an autonomous scenario sets
+# autonomous: true and never approves.
+#
+# NOTE on §11.7 (WRITE_TOOL_ALLOWED_IN_PLANNING — a disallowed tool that stays
+# *callable* even when hidden): proving it needs the per-turn offered/allowed tool
+# scope, which the durable event log does NOT carry. Capturing it is a future
+# loop-instrumentation slice, so these scenarios do NOT assert `tool_scope`
+# (which would fail-closed to INVALID_RUN without that evidence). The
+# event-adjudicable plan-discipline invariant — WRITE_TOOL_ATTEMPTED_IN_PLANNING
+# (a mutating action before approval) — is still enforced from the event log.
+
+scenarios:
+  # ---- §15.1 Smoke ---------------------------------------------------------
+  - id: static_html_minimal
+    mode: api
+    prompt: "Create an index.html with the heading 'Build Smoke OK', serve it, and finish."
+    assertions:
+      event_chain:
+        require_user_event: true
+        require_plan_before_execution: true
+        require_action_observation_pairs: true
+      workspace:
+        files:
+          - path: "index.html"
+            must_contain: ["Build Smoke OK"]
+      preview:
+        required: true
+        must_contain: ["Build Smoke OK"]
+      terminal_status_in: ["FINISHED", "VERIFIED"]
+
+  # ---- §15.2 Plan discipline ----------------------------------------------
+  - id: must_plan_before_tool
+    mode: api
+    prompt: "Create a simple landing page for a local bakery."
+    assertions:
+      event_chain:
+        require_user_event: true
+        require_plan_before_execution: true
+        require_action_observation_pairs: true
+      # Documentary (no oracle gates on it): the first meaningful agent tool must be
+      # a planning-safe one and no write may precede plan approval. The latter is
+      # enforced from events by ToolScopeOracle (WRITE_TOOL_ATTEMPTED_IN_PLANNING).
+      planning:
+        first_agent_tool_in:
+          ["submit_plan", "ask_user", "clarify", "think", "file_read", "file_list", "search", "extract"]
+        forbid_write_before_plan_approval: true
+      workspace:
+        files:
+          - path: "index.html"
+            must_contain: ["bakery"]
+      terminal_status_in: ["FINISHED", "VERIFIED"]
+
+  # ---- §15.3 Revision (2 follow-ups, each requires a new plan revision) -----
+  - id: revise_after_finish
+    mode: api
+    prompt: "Create an index.html with a blue hero and the heading 'Launch Day'."
+    followups:
+      - text: "Revise the hero heading to 'Grand Opening' and add a pricing section."
+        requires_plan_revision: true
+        trigger: after_terminal
+      - text: "Now change the pricing section to three tiers and update the CTA to 'Book a Visit'."
+        requires_plan_revision: true
+        trigger: after_terminal
+    assertions:
+      event_chain:
+        require_user_event: true
+        require_plan_before_execution: true
+        require_action_observation_pairs: true
+      revisions:
+        initial_plan_revision: 1
+        expected_final_plan_revision: 3
+        forbid_write_before_revision_approval: true
+      workspace:
+        files:
+          - path: "index.html"
+            must_contain: ["Grand Opening", "Book a Visit"]
+      terminal_status_in: ["FINISHED", "VERIFIED"]
+
+  # ---- §15.4 Mid-run steering (follow-up injected after the first file write) -
+  - id: steer_while_running_requires_plan_update_or_clear_execution_note
+    mode: api
+    prompt: "Create a two-page static site with Home and About pages."
+    followups:
+      - text: "Also add a Contact page and update nav links."
+        requires_plan_revision: true
+        trigger: after_first_file_write
+    assertions:
+      event_chain:
+        require_user_event: true
+        require_plan_before_execution: true
+        require_action_observation_pairs: true
+      revisions:
+        initial_plan_revision: 1
+        expected_final_plan_revision: 2
+        require_acknowledged_followup: true
+        forbid_write_before_revision_approval: true
+      workspace:
+        files:
+          - path: "index.html"
+            must_contain: ["Contact"]
+      terminal_status_in: ["FINISHED", "VERIFIED"]
