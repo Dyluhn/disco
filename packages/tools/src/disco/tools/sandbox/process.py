@@ -130,31 +130,22 @@ class ProcessSandboxInstance:
         # — the load-bearing Bug-7 fix is that verify no longer targets these ports
         # (see preview_target.resolve_preview_port); a netns is the robust follow-up.
         # Scoped to this backend only; an isolated container's 8000 is its own.
+        #
+        # NOTE (Bug 16) — the RECOVERY for a reserved-port preview SERVE does NOT live
+        # here. This method receives an ALREADY-WRAPPED / arbitrary shell string (e.g.
+        # `tmux send-keys -t … -l '…'`), which cannot be parsed quote/heredoc-safely; a
+        # regex rewrite here would corrupt serve-shaped TEXT inside quotes. The remap is
+        # therefore done upstream on the model's CLEAN `shell_exec` command, before it is
+        # wrapped (see `ShellSessionManager.exec` + `remap_reserved_preview_serve`). What
+        # stays here is the BEST-EFFORT containment REFUSAL — which only ever REJECTS
+        # (never rewrites), so a false-refuse of an echo is harmless + recoverable, and it
+        # is the actionable refuse-and-guide net for any reserved bind that reaches us.
         from disco.core.loop.preview_target import (
-            remap_reserved_preview_serve,
             reserved_control_ports,
             reserved_port_command_violation,
         )
 
-        reserved = reserved_control_ports()
-        # Bug 16 (§17 no-fluke) — a reserved-port PREVIEW SERVE (`python -m http.server
-        # 8000`, including the form the agent's `shell_exec("preview", ...)` reaches us
-        # as: `tmux send-keys -t disco-{cid8}-preview -l '...http.server 8000...'`) is
-        # transparently REMAPPED to a process-safe port instead of refused. Without this,
-        # a model that serves its deliverable on 8000/5173 is refused, establishes NO
-        # preview, and the build STUCKs (`verify_no_progress`). The remapped server binds
-        # a SAFE port (never 8000/8800/5173 — the Bug-7 crash vector stays CLOSED) inside
-        # the conversation's preview session, so it is conversation-owned and the verify
-        # resolver (`resolve_preview_port(host_shared=True)`) targets it → the build can
-        # finish. Only the unambiguous http.server serve shape is remapped.
-        remapped = remap_reserved_preview_serve(cmd, reserved)
-        if remapped is not None:
-            cmd = remapped
-        # Containment (Bug 7) STILL refuses any reserved-port command that REMAINS after
-        # the remap — a kill (`fuser`/`lsof`) or an arbitrary reserved bind is NEVER
-        # remapped, only the serve above, so the refusal (exit 126, before the subprocess
-        # launcher) holds for them. Best-effort defense-in-depth (see preview_target).
-        why = reserved_port_command_violation(cmd, reserved)
+        why = reserved_port_command_violation(cmd, reserved_control_ports())
         if why is not None:
             return ExecResult(exit_code=126, stdout="", stderr=why)
         cmd = self._rewrite_workspace_paths(cmd)

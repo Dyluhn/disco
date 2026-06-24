@@ -272,17 +272,20 @@ def test_remap_reserved_http_server_serve_to_safe_port():
     )
 
 
-def test_remap_covers_tmux_send_keys_wrapped_serve():
-    # The shape `shell_exec("preview", ...)` actually reaches the backend as.
+def test_remap_operates_on_clean_command_not_the_tmux_wrapper():
+    # Bug-16 review #2: the remap operates on the model's CLEAN shell_exec command
+    # (BEFORE Disco wraps it into `tmux send-keys -l '...'`), so the function deliberately
+    # does NOT match an ALREADY-WRAPPED string — that arbitrary/quoted form is exactly
+    # what a regex cannot parse safely. The wrapper is handled upstream by remapping the
+    # clean inner command, so here the wrapped string comes back None (left as-is).
     r = reserved_control_ports()
-    safe = process_safe_preview_port(reserved=r)
     cmd = "tmux send-keys -t disco-conv_abc-preview -l 'python3 -m http.server 8000 -d .'"
-    out = remap_reserved_preview_serve(cmd, r)
-    assert out == (
-        f"tmux send-keys -t disco-conv_abc-preview -l 'python3 -m http.server {safe} -d .'"
+    assert remap_reserved_preview_serve(cmd, r) is None
+    # the CLEAN inner command (what ShellSessionManager.exec actually remaps) DOES match
+    safe = process_safe_preview_port(reserved=r)
+    assert remap_reserved_preview_serve("python3 -m http.server 8000 -d .", r) == (
+        f"python3 -m http.server {safe} -d ."
     )
-    # and the remapped string no longer trips the containment refusal
-    assert reserved_port_command_violation(out, r) is None
 
 
 def test_remap_leaves_non_reserved_and_non_serve_commands_untouched():
@@ -297,43 +300,47 @@ def test_remap_leaves_non_reserved_and_non_serve_commands_untouched():
     assert remap_reserved_preview_serve("serve -l 0.0.0.0:8000", r) is None
 
 
-def test_remap_never_touches_serve_shaped_text_in_echo_print_or_quotes():
-    # Bug-16 REVIEW: the rewrite must touch ONLY a genuine `python -m http.server`
-    # invocation at a command position — NEVER serve-shaped TEXT the model meant to
-    # run verbatim. Each of these must come back None (unchanged), so the model's
-    # intended output / string literal is never silently corrupted + executed.
+def test_remap_never_touches_serve_shaped_text_in_quotes_heredocs_echo_print():
+    # Bug-16 review #2 (the unwinnable-by-regex bypasses): because the matcher anchors at
+    # the START of the CLEAN command, serve-shaped TEXT that does not BEGIN with
+    # `python -m http.server` is NEVER rewritten — no quote/heredoc parsing needed. Each
+    # must come back None so the model's intended output / string literal is never
+    # silently corrupted + executed. (These are the exact codex-#2 bypasses.)
     r = reserved_control_ports()
     for cmd in (
+        # a separator INSIDE quotes must not be treated as a command boundary
+        "echo '; python3 -m http.server 8000'",
+        'printf "%s" "; python3 -m http.server 8000"',
+        "python3 -c \"print('; python3 -m http.server 8000')\"",
         # serve form as the ARGUMENT of echo (not a command) — must run verbatim
         "echo python3 -m http.server 8000",
         "echo 'python3 -m http.server 8000'",
-        'printf "%s" "python3 -m http.server 8000"',
-        # serve-shaped substring inside a python -c string literal (no `-m http.server`)
+        # serve-shaped substring with no `-m http.server` invocation
         "python3 -c \"print('http.server 8000')\"",
-        # a bare quoted serve-shaped string (no -m http.server invocation)
         "echo 'http.server 8000'",
-        # a shell comment that mentions the serve form
+        # a shell comment / a serve AFTER a separator (non-leading) — refuse-and-guide path
         "# run python3 -m http.server 8000 to preview",
         "ls  # python3 -m http.server 8000",
-        # cat of a literal mentioning the serve form
+        "cd build && python3 -m http.server 8000",
+        "true; python3 -m http.server 8000",
+        # a heredoc body line that happens to be a serve command
         "cat <<'EOF'\npython3 -m http.server 8000\nEOF",
+        "cat <<'EOF'\n; python3 -m http.server 8000\nEOF",
     ):
         assert remap_reserved_preview_serve(cmd, r) is None, cmd
 
 
-def test_remap_matches_real_serve_at_command_positions():
-    # The genuine serve invocation IS remapped at each real command position:
-    # at the start, after a shell separator, and via the tmux `-l` preview literal.
+def test_remap_matches_a_real_leading_serve_invocation():
+    # A genuine serve at the START of the clean command IS remapped — incl. an absolute
+    # python path and leading whitespace. (Non-leading positions are refuse-and-guide.)
     r = reserved_control_ports()
     safe = process_safe_preview_port(reserved=r)
     assert remap_reserved_preview_serve("python3 -m http.server 8000", r) == (
         f"python3 -m http.server {safe}"
     )
-    # after `&&` — only the serve's port is rewritten, the `cd` prefix is preserved
-    assert remap_reserved_preview_serve("cd build && python3 -m http.server 8000", r) == (
-        f"cd build && python3 -m http.server {safe}"
+    assert remap_reserved_preview_serve("  python -m http.server 8000  ", r) == (
+        f"  python -m http.server {safe}  "
     )
-    # an absolute python path still counts as a real invocation
     assert remap_reserved_preview_serve("/usr/bin/python3 -m http.server 5173", r) == (
         f"/usr/bin/python3 -m http.server {safe}"
     )

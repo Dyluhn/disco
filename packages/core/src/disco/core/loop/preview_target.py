@@ -383,25 +383,20 @@ def reserved_port_command_violation(
     return None
 
 
-# A GENUINE `python -m http.server <port>` SERVE invocation — the real preview-serve
-# command (and its tmux `send-keys` preview-wrapper), NOT serve-shaped TEXT inside
-# echo/print/cat/comments/quotes (which must run verbatim). Two requirements, both
-# needed: (1) the actual `python[3] -m http.server <port>` shape (so `print('http.server
-# 8000')`, `echo 'http.server 8000'` — no `-m http.server` — never match); and (2) the
-# `python` sits at a COMMAND position — the start of the command, after an EXPLICIT shell
-# separator (`;` `&` `|`, which also covers `&&`/`||`), or right after the tmux `send-keys
-# -l '`/`"` literal (the preview wrapper). A serve form that is an ARGUMENT
-# (`echo python3 -m http.server 8000`) or inside a non-tmux quoted string is NOT matched.
-# A bare NEWLINE is deliberately NOT a separator here: it cannot be told apart from a
-# heredoc/multi-line literal body (`cat <<'EOF'\npython3 -m http.server 8000\nEOF`), so —
-# per "when in doubt, do not remap" — a newline-continued serve falls through to the
-# refuse-with-guidance path instead of risking a rewrite of literal text. (`\s*` after an
-# EXPLICIT `;&|` still spans a newline, so a genuine `foo;\npython3 …` sequence remaps.)
-# `pre`/`cmd` are captured and re-emitted verbatim — only the reserved `port` is rewritten.
+# A GENUINE `python -m http.server <port>` SERVE invocation, matched ONLY at the START of
+# a CLEAN command string — the model's raw `shell_exec` command, BEFORE Disco wraps it into
+# `tmux send-keys -l '<command>'`. Anchoring at the start is what makes this SAFE without a
+# shell parser: the leading `python` cannot be inside a quote / heredoc body / `echo`
+# argument (nothing precedes it), so — unlike a scan over an already-wrapped or arbitrary
+# shell string — it can NEVER rewrite serve-shaped TEXT the model meant to run verbatim
+# (`echo '; python3 -m http.server 8000'`, `python3 -c "print('http.server 8000')"`, a
+# heredoc line, …). We also require the real `python[3] -m http.server <port>` shape (so a
+# bare `http.server 8000` substring with no `-m http.server` never matches). A serve buried
+# after a separator (`cd x && python -m http.server 8000`) or any quoting is deliberately
+# NOT matched — it falls through to the actionable refuse-and-guide path. `cmd` is re-emitted
+# verbatim — only the reserved `port` is rewritten.
 _HTTP_SERVER_SERVE_RE = re.compile(
-    r"(?P<pre>^\s*|[;&|]\s*|-l\s+['\"])"
-    r"(?P<cmd>(?:[\w./-]*/)?python[\d.]*\s+-m\s+http\.server\s+)"
-    r"(?P<port>\d+)"
+    r"^(?P<cmd>\s*(?:[\w./-]*/)?python[\d.]*\s+-m\s+http\.server\s+)(?P<port>\d+)"
 )
 
 
@@ -412,9 +407,10 @@ def remap_reserved_preview_serve(
 ) -> str | None:
     """Bug 16 — the RECOVERABLE counterpart to `reserved_port_command_violation`.
 
-    If `command` is (or wraps, via `tmux send-keys ... -l '...'`) a GENUINE
-    `python -m http.server <port>` STATIC PREVIEW SERVE invocation whose port is a
-    RESERVED control/UI port, return the command with that port rewritten to a
+    `command` MUST be the model's CLEAN, single `shell_exec` command (the preview-serve
+    handling point — `ShellSessionManager.exec`, BEFORE it is wrapped into `tmux
+    send-keys -l '<command>'`). If it BEGINS with a genuine `python -m http.server
+    <port>` SERVE on a RESERVED control/UI port, return it with that port rewritten to a
     process-safe preview port; otherwise return None (nothing to remap).
 
     On the process/local shared host a model that serves its deliverable on 8000/5173
@@ -422,18 +418,16 @@ def remap_reserved_preview_serve(
     build STUCKs (`verify_no_progress`, the §17 no-fluke intermittency). Transparently
     remapping the SERVE to a safe port keeps the Bug-7 crash vector CLOSED (we never bind
     a reserved control port) while letting the build finish: the remapped server runs in
-    the conversation's `disco-{cid8}-preview` tmux session, so it is conversation-owned
+    the conversation's `disco-{cid8}-<session>` tmux session, so it is conversation-owned
     and `resolve_preview_port(host_shared=True)` targets it.
 
-    Scope (Bug-16 review): the rewrite touches ONLY a real `python -m http.server`
-    invocation at a command position — NEVER serve-shaped TEXT the model meant to run
-    verbatim (the argument of `echo`/`printf`/`cat`, a `#` comment, a `python -c` string
-    literal, or any non-tmux quoted string). Kill commands (`fuser`/`lsof`) and other
-    reserved binds (`--port`, `:8000`, `listen`) are likewise NOT a `http.server` serve
-    and are left for `reserved_port_command_violation` to refuse with the actionable
-    message above. When in doubt we do NOT remap — a reserved bind that slips through is
-    still refused-with-guidance, which is safer than silently rewriting an unrelated
-    command."""
+    Scope (Bug-16 review #2): the rewrite is ANCHORED at the start of the clean command,
+    so it is SAFE without a shell parser — it can NEVER touch serve-shaped TEXT inside
+    quotes / a heredoc / an `echo`/`printf`/`python -c` argument (those don't BEGIN with
+    `python -m http.server`). A serve after a `&&`/`;`/`|` separator, or any non-leading
+    position, is intentionally left for `reserved_port_command_violation` to
+    refuse-with-guidance — safer than risking a rewrite of quoted text. Kills + other
+    reserved binds are likewise not a leading `http.server` serve and are refused."""
     reserved = reserved_control_ports() if reserved is None else reserved
     safe_port = (
         process_safe_preview_port(reserved=reserved) if safe_port is None else safe_port
@@ -442,7 +436,7 @@ def remap_reserved_preview_serve(
     def _sub(m: re.Match[str]) -> str:
         port = int(m.group("port"))
         new_port = safe_port if port in reserved else port
-        return f"{m.group('pre')}{m.group('cmd')}{new_port}"
+        return f"{m.group('cmd')}{new_port}"
 
     new = _HTTP_SERVER_SERVE_RE.sub(_sub, command)
     return new if new != command else None

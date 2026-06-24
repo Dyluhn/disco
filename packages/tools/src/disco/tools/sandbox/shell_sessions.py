@@ -210,7 +210,35 @@ class ShellSessionManager:
             return "\n".join(lines), exit_code
         return "\n".join(lines), None
 
+    async def _remap_reserved_preview_serve(self, command: str) -> str:
+        """Bug 16 — the CLEAN-command home for the reserved-port preview-serve remap.
+
+        `command` here is the model's RAW `shell_exec` command, BEFORE it is wrapped into
+        `tmux send-keys -l '<command>'` below — so a genuine leading `python -m
+        http.server <reserved>` serve can be remapped to a process-safe port precisely
+        and unambiguously (no scan over arbitrary/wrapped shell text; see
+        `remap_reserved_preview_serve`). Gated to SHARED-host backends via the SAME signal
+        the verify resolver uses (`workspace_path is not None` ⇒ process/local, where 8000
+        is the agent-server's own control port); an ISOLATED container keeps 8000 as its
+        canonical app port and is never remapped. Best-effort: any probe failure leaves
+        the command unchanged (the containment refusal is still the safety net)."""
+        try:
+            inst = await self._get_instance()
+        except Exception:  # noqa: BLE001 — instance unavailable; leave command unchanged
+            return command
+        if getattr(inst, "workspace_path", None) is None:
+            return command  # isolated backend — 8000 is the box's own app, keep it
+        from disco.core.loop.preview_target import remap_reserved_preview_serve
+
+        remapped = remap_reserved_preview_serve(command)
+        return remapped if remapped is not None else command
+
     async def exec(self, name: str, command: str, exec_dir: str | None) -> ExecOutcome:
+        # Bug 16: remap a reserved-port preview SERVE on the CLEAN command, before the
+        # tmux-wrap below — so a model serving on 8000/5173 lands on a safe, conversation-
+        # owned port the verify resolver can target (instead of STUCK verify_no_progress),
+        # while the Bug-7 crash vector stays closed (we never wrap/run a reserved bind).
+        command = await self._remap_reserved_preview_serve(command)
         try:
             await self.ensure(name, exec_dir)
         except Exception as e:

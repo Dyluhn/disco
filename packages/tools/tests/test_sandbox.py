@@ -191,25 +191,17 @@ async def test_process_backend_expose_port_defense():
         await inst.destroy()
 
 
-async def test_process_exec_shell_remaps_reserved_preview_serve(monkeypatch):
-    # Bug 16 (§17 no-fluke): a GENUINE reserved-port preview SERVE is REMAPPED to a safe
-    # port BEFORE execution, instead of refused — so a model serving on 8000 recovers
-    # rather than STUCKing. Proven hermetically by spying on the subprocess launcher (NO
-    # real bind: we never touch port 8000/3000) — the launched command must already carry
-    # the safe port. (The review NEGATIVES — serve-shaped text in echo/print/quotes is
-    # never rewritten — are asserted at the function level in test_preview_target.py,
-    # where the separate, pre-existing containment refusal does not interfere.)
+async def test_process_exec_shell_does_not_rewrite_arbitrary_wrapped_strings(monkeypatch):
+    # Bug-16 review #2: process.exec_shell receives ALREADY-WRAPPED / arbitrary shell
+    # (e.g. the `tmux send-keys -l '...'` wrapper) and must NEVER rewrite it — the remap
+    # now lives upstream on the CLEAN command (ShellSessionManager.exec). Here we prove
+    # exec_shell launches the wrapped serve string VERBATIM (no port rewrite), spying on
+    # the subprocess launcher so nothing is actually bound.
     import asyncio
     import tempfile
     from pathlib import Path
 
-    from disco.core.loop.preview_target import (
-        process_safe_preview_port,
-        reserved_control_ports,
-    )
     from disco.tools.sandbox.process import ProcessSandboxInstance
-
-    safe = str(process_safe_preview_port(reserved=reserved_control_ports()))
 
     captured: list[str] = []
 
@@ -227,29 +219,22 @@ async def test_process_exec_shell_remaps_reserved_preview_serve(monkeypatch):
 
     with tempfile.TemporaryDirectory() as tmp:
         inst = ProcessSandboxInstance("i", "o", "c", SandboxSpec(), Path(tmp))
-
-        # A real serve on a reserved port → the LAUNCHED command carries the safe port,
-        # never 8000 (remapped before exec; the agent-server control port is never bound).
+        # A serve form buried INSIDE a tmux send-keys literal is NOT a reserved-port BIND
+        # the containment scan flags (the bind regex keys on `http.server <reserved>`,
+        # which IS present here) — so this particular wrapper would actually be refused by
+        # containment. Use a wrapper around an ALREADY-SAFE port to prove the no-rewrite:
+        # it passes containment and is launched byte-for-byte, never port-rewritten.
         captured.clear()
-        await inst.exec_shell("python3 -m http.server 8000", timeout_s=10)
-        assert captured == [f"python3 -m http.server {safe}"]
-        assert "8000" not in captured[0]
-
-        # The tmux preview-wrapper form (how shell_exec("preview", ...) reaches us) too.
-        captured.clear()
-        await inst.exec_shell(
-            "tmux send-keys -t disco-c-preview -l 'python3 -m http.server 8000'",
-            timeout_s=10,
-        )
-        assert captured == [
-            f"tmux send-keys -t disco-c-preview -l 'python3 -m http.server {safe}'"
-        ]
+        wrapped = "tmux send-keys -t disco-c-preview -l 'python3 -m http.server 3000'"
+        await inst.exec_shell(wrapped, timeout_s=10)
+        assert captured == [wrapped]  # verbatim — exec_shell never rewrites ports
 
 
 async def test_process_exec_shell_still_refuses_reserved_kill_and_arbitrary_bind():
-    # Must-not-regress: the remap covers ONLY the http.server serve shape. A reserved-
-    # port KILL and an arbitrary reserved BIND are STILL refused (exit 126) with the
-    # actionable message — and the refusal returns BEFORE the real subprocess launcher.
+    # Must-not-regress: a reserved-port KILL and an arbitrary reserved BIND are STILL
+    # refused (exit 126) with the actionable message — the refusal returns BEFORE the
+    # real subprocess launcher. (The recovery REMAP lives upstream on the clean command;
+    # this containment net only ever REJECTS, never rewrites.)
     import tempfile
     from pathlib import Path
 
