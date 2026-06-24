@@ -56,7 +56,10 @@ _CLARIFY_DESCRIPTION = (
     "stable identifier like 'color' or 'stack'), the `question` text, a "
     "`type` field ('short_text' for a one-word answer, 'long_text' for a "
     "sentence, 'choice' for a pick from `options`), and optional `options` "
-    "array for choice-type questions. Prefer 2-5 questions — enough to "
+    "array for choice-type questions. For a 'choice' question, `options` MUST "
+    "be a FLAT array of plain strings (the exact labels the user picks, e.g. "
+    "[\"Modern\", \"Classic\", \"Your call\"]) — never objects, never nested "
+    "arrays. Prefer 2-5 questions — enough to "
     "disambiguate, not an interrogation. Call this BEFORE submit_plan when "
     "the unknowns are genuine blockers to a good plan."
 )
@@ -92,7 +95,11 @@ _CLARIFY_PARAMETERS_SCHEMA = {
                     "options": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Allowed choices (required when type=choice).",
+                        "description": (
+                            "Allowed choices for type=choice — a FLAT array of "
+                            "plain strings (the labels the user picks), e.g. "
+                            '["Modern", "Classic"]. Never objects or nested arrays.'
+                        ),
                     },
                 },
                 "required": ["id", "question"],

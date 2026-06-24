@@ -67,7 +67,15 @@ export function ClarifyPanel({
         <Markdown>{question}</Markdown>
       </div>
       <div className="flex flex-col gap-inline">
-        {items.map((it) => (
+        {items.map((it) => {
+          // Defense in depth (mirrors handle_clarify): drop empty / blank
+          // option labels and treat a choice with <2 real options as free
+          // text, so a malformed/old event never renders blank radio buttons.
+          const cleanOptions = (it.options ?? [])
+            .map((o) => o.trim())
+            .filter((o) => o.length > 0);
+          const isChoice = it.type === "choice" && cleanOptions.length >= 2;
+          return (
           <div key={it.id} className="flex flex-col gap-hair">
             <label
               htmlFor={`clarify-${it.id}`}
@@ -75,9 +83,9 @@ export function ClarifyPanel({
             >
               {it.question}
             </label>
-            {it.type === "choice" && it.options && it.options.length > 0 ? (
+            {isChoice ? (
               <div className="flex flex-wrap gap-inline">
-                {it.options.map((opt) => (
+                {cleanOptions.map((opt) => (
                   <label
                     key={opt}
                     className={cn(
@@ -131,7 +139,8 @@ export function ClarifyPanel({
               />
             )}
           </div>
-        ))}
+          );
+        })}
       </div>
       <div className="flex justify-end">
         <button
