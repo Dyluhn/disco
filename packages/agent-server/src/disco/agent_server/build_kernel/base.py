@@ -30,7 +30,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import ClassVar, Literal, Protocol, runtime_checkable
 
-from disco.core import ConversationState, Event
+from disco.core import ConversationState, Event, MessageEvent
 
 # The experimental gate lives in the shared core layer (one source of truth for
 # both sibling server packages) and is re-exported here so the build_kernel API
@@ -127,9 +127,10 @@ class BuildKernel(Protocol):
         *,
         context: str | None = None,
         steer: bool = False,
-    ) -> None:
+    ) -> MessageEvent:
         """Append a user turn (optionally a context block, optionally a mid-run
-        steer) and start/continue the run."""
+        steer) and start/continue the run. Returns the stored USER message so a
+        caller can report its id/seq (the REST send/followup routes do)."""
         ...
 
     # -- plan gate ------------------------------------------------------------

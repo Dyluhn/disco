@@ -636,12 +636,14 @@ class ConfigState:
 
     def build_kernel_config(self) -> BuildKernelConfigDTO:
         """The Build kernel selector + whether the experimental gate is open (so the
-        Settings UI can show/hide the `pi_experimental` option) — Disco Pi campaign A2."""
-        from disco.core.llm.config import build_kernel_experimental_enabled
+        Settings UI can show/hide the `pi_experimental` option) — Disco Pi campaign A2.
 
+        The gate is read THROUGH the store (finding #2): the store is the single gate
+        authority, so a stale persisted `pi_experimental` already normalizes to `disco`
+        on load when the gate is off — no second ambient-env read here."""
         return _build_kernel_from(
             self._store.load(),
-            experimental_enabled=build_kernel_experimental_enabled(),
+            experimental_enabled=self._store.experimental_kernels_enabled(),
         )
 
     def update_build_kernel_config(self, dto: BuildKernelConfigDTO) -> BuildKernelConfigDTO:
@@ -650,10 +652,11 @@ class ConfigState:
 
         REJECT selecting `pi_experimental` while the experimental gate is OFF — no false
         affordance, and a direct API call can't persist a setting that would only ever
-        resolve back to `disco` at runtime. Selecting `disco` is always allowed."""
-        from disco.core.llm.config import build_kernel_experimental_enabled
+        resolve back to `disco` at runtime. Selecting `disco` is always allowed.
 
-        if dto.kind == "pi_experimental" and not build_kernel_experimental_enabled():
+        The gate is read THROUGH the store (finding #2) — the single authority that also
+        normalizes the value on save, so this rejection and the persisted state agree."""
+        if dto.kind == "pi_experimental" and not self._store.experimental_kernels_enabled():
             raise ConfigValidationError(
                 "experimental_disabled",
                 detail=(

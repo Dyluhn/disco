@@ -33,6 +33,7 @@ from .config import (
     SearchSettings,
     TtsSettings,
     apply_runtime_capabilities,
+    build_kernel_experimental_enabled,
     default_config,
 )
 from .types import ModelRole
@@ -49,9 +50,22 @@ class ConfigStore:
         path: str | os.PathLike[str] | None = None,
         *,
         base_factory: Callable[[], RouterConfig] = default_config,
+        experimental_enabled: Callable[[], bool] | None = None,
     ) -> None:
         self._path = Path(path or disco_env("CONFIG", _DEFAULT_PATH))
         self._base_factory = base_factory
+        # The SINGLE authority deciding whether a persisted `pi_experimental` build
+        # kernel may load/save as ACTIVE (codex finding #2). Gate authority used to
+        # be split — the app-server validated persistence against its OWN env while
+        # the agent-server decided activation against its own — so a stale value
+        # could load as active in the wrong process. Now the store normalizes at
+        # BOTH load and save against one injected predicate; it defaults to the
+        # shared core env gate (`PI_KERNEL_EXPERIMENTAL`), so there is ONE ambient-env
+        # reader, and the build executor (agent-server) is the authority by
+        # constructing its store in its own process.
+        self._experimental_enabled: Callable[[], bool] = (
+            experimental_enabled or build_kernel_experimental_enabled
+        )
         # V2/V4 (§2): process-lifetime overlay of the async vision-probe results
         # (model catalogue key → True/False/None), produced ONCE at server startup
         # by wiring.probe_all_vision and installed via `apply_vision_probe`. None
@@ -92,7 +106,24 @@ class ConfigStore:
                 cfg = base
         else:
             cfg = self._apply_overlay(base, data)  # legacy {default_model, assignments}
-        return apply_runtime_capabilities(cfg, probe_results=self._vision_probe)
+        cfg = apply_runtime_capabilities(cfg, probe_results=self._vision_probe)
+        return self._gate_build_kernel(cfg)
+
+    def experimental_kernels_enabled(self) -> bool:
+        """Whether the experimental Pi build kernel may be selected/activated — the
+        store's single gate authority (finding #2). Other layers read it THROUGH the
+        store rather than the ambient env directly, so there is one reader."""
+        return self._experimental_enabled()
+
+    def _gate_build_kernel(self, cfg: RouterConfig) -> RouterConfig:
+        """Normalize a persisted `pi_experimental` selection to `disco` unless the
+        experimental gate is open (finding #2), so a stale/dormant value can never
+        LOAD as active — and therefore can't silently activate the stub if the gate
+        later flips on in a different process than the one that persisted it. No-op
+        for any other value."""
+        if cfg.build_kernel == "pi_experimental" and not self._experimental_enabled():
+            return cfg.model_copy(update={"build_kernel": "disco"})
+        return cfg
 
     def save(self, config: RouterConfig) -> RouterConfig:
         """Persist the full config (atomically) and return it."""
@@ -161,7 +192,13 @@ class ConfigStore:
 
     def save_build_kernel(self, build_kernel: str) -> RouterConfig:
         """Persist the Build kernel selector (Disco Pi campaign A2). The agent-server
-        reloads per-request, so a change drives the NEXT control op / run."""
+        reloads per-request, so a change drives the NEXT control op / run.
+
+        Gate authority (finding #2): never PERSIST `pi_experimental` as active while
+        the experimental gate is off — normalize to `disco` first, so a later gate
+        flip (possibly in another process) can't silently activate a stale value."""
+        if build_kernel == "pi_experimental" and not self._experimental_enabled():
+            build_kernel = "disco"
         return self.save(self.load().model_copy(update={"build_kernel": build_kernel}))
 
     # -- Build-project persistence --------------------------------------------

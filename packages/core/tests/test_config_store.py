@@ -243,3 +243,67 @@ def test_apply_vision_probe_none_leaves_table_caps(tmp_path, monkeypatch):
     store = ConfigStore(tmp_path / "cfg.json")
     store.apply_vision_probe({"driver-local": None})
     assert Requirement.VISION not in store.load().models["driver-local"].capabilities
+
+
+# ---- build-kernel gate authority (Disco Pi campaign, codex finding #2) -------
+#
+# The store is the SINGLE authority deciding whether a persisted `pi_experimental`
+# build kernel may load/save as ACTIVE. Gate authority used to be split — the
+# app-server validated persistence against ITS env while the agent-server decided
+# activation against its own — so a stale value could load as active in the wrong
+# process. `experimental_enabled` is injected so a test pins the gate explicitly.
+
+
+def _kernel_store(tmp_path, *, gate: bool) -> ConfigStore:
+    return ConfigStore(tmp_path / "cfg.json", experimental_enabled=lambda: gate)
+
+
+def test_build_kernel_default_is_disco(tmp_path):
+    assert _kernel_store(tmp_path, gate=False).load().build_kernel == "disco"
+
+
+def test_save_build_kernel_normalizes_pi_to_disco_when_gate_off(tmp_path):
+    """A direct save of `pi_experimental` with the gate OFF must persist `disco` —
+    never write an active experimental value the executor would later honor."""
+    store = _kernel_store(tmp_path, gate=False)
+    store.save_build_kernel("pi_experimental")
+    # Persisted-on-disk value is normalized, not just the in-memory load.
+    written = json.loads((tmp_path / "cfg.json").read_text())
+    assert written["build_kernel"] == "disco"
+    assert store.load().build_kernel == "disco"
+
+
+def test_save_build_kernel_keeps_pi_when_gate_on(tmp_path):
+    store = _kernel_store(tmp_path, gate=True)
+    store.save_build_kernel("pi_experimental")
+    assert store.load().build_kernel == "pi_experimental"
+
+
+def test_stale_persisted_pi_normalizes_to_disco_on_load_when_gate_off(tmp_path):
+    """The core finding-#2 case: a file persisted with `pi_experimental` (e.g. by an
+    app-server whose env had the gate ON) must LOAD as `disco` in a process whose
+    gate is OFF — a dormant value can never load as active in the wrong process."""
+    # Write a raw config carrying an active pi_experimental, bypassing the save gate.
+    raw = default_config().model_copy(update={"build_kernel": "pi_experimental"})
+    (tmp_path / "cfg.json").write_text(json.dumps(raw.model_dump(mode="json")))
+
+    assert _kernel_store(tmp_path, gate=False).load().build_kernel == "disco"
+    # Same file, gate ON → the executor honors it.
+    assert _kernel_store(tmp_path, gate=True).load().build_kernel == "pi_experimental"
+
+
+def test_experimental_kernels_enabled_reads_injected_authority(tmp_path):
+    assert _kernel_store(tmp_path, gate=True).experimental_kernels_enabled() is True
+    assert _kernel_store(tmp_path, gate=False).experimental_kernels_enabled() is False
+
+
+def test_default_gate_reads_env(tmp_path, monkeypatch):
+    """With no injected predicate the store falls back to the shared core env gate —
+    one ambient-env reader, default OFF."""
+    # disco_env prepends the DISCO_ prefix to the bare PI_KERNEL_EXPERIMENTAL suffix.
+    monkeypatch.delenv("DISCO_PI_KERNEL_EXPERIMENTAL", raising=False)
+    monkeypatch.delenv("PMX_PI_KERNEL_EXPERIMENTAL", raising=False)
+    store = ConfigStore(tmp_path / "cfg.json")  # no experimental_enabled injected
+    assert store.experimental_kernels_enabled() is False
+    monkeypatch.setenv("DISCO_PI_KERNEL_EXPERIMENTAL", "1")
+    assert store.experimental_kernels_enabled() is True

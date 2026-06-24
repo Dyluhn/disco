@@ -24,11 +24,11 @@ THROUGH the active kernel (the A1 seam), so calling them here would loop.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
-from disco.core import ConversationState
+from disco.core import ConversationState, MessageEvent
 
-from ..routes._common import _context_message, _user_message
+from ..build_messages import _context_message, _user_message
 from .base import KernelEvent
 
 if TYPE_CHECKING:
@@ -55,15 +55,19 @@ class DiscoKernel:
         *,
         context: str | None = None,
         steer: bool = False,
-    ) -> None:
+    ) -> MessageEvent:
         """Append the (optional hidden context +) user message, then kick — the
-        same store appends + `kick` the WS/REST send_message path performs."""
+        same store appends + `kick` the WS/REST send_message path performs.
+
+        Returns the stored USER message (the REST send/followup routes report its
+        id/seq) — byte-identical to the append the routes did inline before the seam."""
         if context:
             await self._rt._store.append(conversation_id, _context_message(context))
-        await self._rt._store.append(
+        stored = await self._rt._store.append(
             conversation_id, _user_message(text, steer=steer)
         )
         self._rt.kick(conversation_id)
+        return cast("MessageEvent", stored)
 
     # -- plan gate ------------------------------------------------------------
     async def approve_plan(self, conversation_id: str) -> None:

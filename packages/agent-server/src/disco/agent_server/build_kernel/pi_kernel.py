@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from disco.core import ConversationState
+from disco.core import ConversationState, MessageEvent
 
 from .base import KernelEvent
 
@@ -45,7 +45,7 @@ class PiKernel:
         *,
         context: str | None = None,
         steer: bool = False,
-    ) -> None:
+    ) -> MessageEvent:
         raise NotImplementedError(_MSG)
 
     async def approve_plan(self, conversation_id: str) -> None:

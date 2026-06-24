@@ -733,6 +733,14 @@ class ConversationRuntime:
         # build_kernel/.
         self._disco_kernel = DiscoKernel(self)
         self._pi_kernel = PiKernel(self)
+        # The kernel PINNED to each conversation's in-flight run (codex finding #1).
+        # A run resolves its kernel ONCE, at the turn that starts it (via
+        # `_ensure_kernel_pinned`), and every later op (gate resume, steer, control
+        # op) reuses the pinned instance — so a mid-run Settings/flag change can
+        # never split a run across kernels (half-disco/half-pi). Cleared when the
+        # run reaches a terminal status (FINISHED/ERROR/STUCK) or is killed, so the
+        # NEXT turn re-resolves the current selection. A pause/gate-park keeps it.
+        self._pinned_kernels: dict[str, BuildKernel] = {}
 
     # The generative (text-producing) roles a model PICK drives. NLI_VERIFIER is a
     # cross-encoder (entailment scorer), NOT a chat model — pointing it at a picked
@@ -1590,6 +1598,19 @@ class ConversationRuntime:
     )
     _MAX_NONTERMINAL_REKICKS = 1
 
+    # Statuses at which a run is BETWEEN turns (terminal or idle) — the kernel pin
+    # is released so the next run re-resolves the current selection (finding #1).
+    # NB: PAUSED and the AWAITING_*/WAITING_* gate-parks are deliberately EXCLUDED
+    # — their resume/approve must continue under the SAME pinned kernel.
+    _KERNEL_UNPIN_STATUSES = frozenset(
+        {
+            ConversationStatus.FINISHED,
+            ConversationStatus.ERROR,
+            ConversationStatus.STUCK,
+            ConversationStatus.IDLE,
+        }
+    )
+
     def _on_run_task_done(self, conversation_id: str, task: asyncio.Task[Any]) -> None:
         """W2 supervision callback. Deregister the task; on an UNHANDLED exception (NOT
         cancellation), schedule terminalization to ERROR so the conversation can never sit
@@ -1637,6 +1658,12 @@ class ConversationRuntime:
         if status in self._CONCLUDED_STATUSES or status in self._RUN_PARKED_STATUSES:
             # Healthy ending → reset the per-cid re-kick budget for the next segment.
             self._nonterminal_rekicks.pop(conversation_id, None)
+            # A run that ended between turns (done/errored/stuck/idle) releases the
+            # kernel pin so the NEXT run re-resolves the current selection. A
+            # gate-park (AWAITING_*) or PAUSED stays pinned — its resume/approve
+            # must continue under the SAME kernel the run started on (finding #1).
+            if status in self._KERNEL_UNPIN_STATUSES:
+                self._clear_pinned_kernel(conversation_id)
             return
         # Still RUNNING (the loop emits RUNNING at entry and only leaves it by emitting
         # a different status): the turn ended without concluding.
@@ -1723,6 +1750,8 @@ class ConversationRuntime:
                 conversation_id,
                 StatusEvent(status=ConversationStatus.ERROR, detail=detail),
             )
+            # Terminal ending → release the kernel pin (next run re-resolves). #1.
+            self._clear_pinned_kernel(conversation_id)
             await self._emit_persistence_reminder(
                 conversation_id,
                 f"The run stopped on an unexpected internal error ({type(exc).__name__}). "
@@ -2385,15 +2414,70 @@ class ConversationRuntime:
     def _kernel_for(self, conversation_id: str) -> BuildKernel:
         """The active Build kernel for this conversation (Disco Pi campaign A1/A2).
 
-        Reads the persisted `build_kernel` setting and resolves it against the
-        experimental gate: `disco` (default) → `DiscoKernel`; `pi_experimental`
-        → `PiKernel` ONLY when the experimental flag is on, else `DiscoKernel`.
-        Both kernels are constructed once (back-ref only); this just selects. The
-        config is reloaded per call, mirroring `_router_now`, so a Settings change
-        takes effect on the next control op without a restart."""
+        If a kernel is PINNED to this conversation's in-flight run, return it —
+        a run must not re-resolve mid-flight (codex finding #1), so every control
+        op on a live run lands on the SAME kernel the run started under, even if
+        Settings (or the experimental flag) changed since.
+
+        Otherwise resolve fresh: read the persisted `build_kernel` setting and
+        resolve it against the experimental gate — `disco` (default) →
+        `DiscoKernel`; `pi_experimental` → `PiKernel` ONLY when the experimental
+        flag is on, else `DiscoKernel`. Both kernels are constructed once (back-ref
+        only); this just selects. The config is reloaded per call, mirroring
+        `_router_now`, so a Settings change takes effect on the next NEW run
+        without a restart."""
+        pinned = getattr(self, "_pinned_kernels", None)
+        if pinned is not None:
+            existing = pinned.get(conversation_id)
+            if existing is not None:
+                return existing
         selected = self._config_store.load().build_kernel
         return select_kernel(
             self, disco=self._disco_kernel, pi=self._pi_kernel, selected=selected
+        )
+
+    def _ensure_kernel_pinned(self, conversation_id: str) -> BuildKernel:
+        """Resolve + PIN the kernel for a (continuing) run, if not already pinned
+        (codex finding #1, point b). Called at the start/send/steer entry points
+        BEFORE the first append/kick: the first turn of a run resolves the current
+        selection and stores it; a steer / gate-resume reuses the existing pin so a
+        run can never be split across kernels. The pin is cleared on terminalization
+        (`_clear_pinned_kernel`), so the next run re-resolves the selection."""
+        existing = self._pinned_kernels.get(conversation_id)
+        if existing is not None:
+            return existing
+        # No pin yet → `_kernel_for` resolves fresh (the pin read above is empty).
+        kernel = self._kernel_for(conversation_id)
+        self._pinned_kernels[conversation_id] = kernel
+        return kernel
+
+    def _clear_pinned_kernel(self, conversation_id: str) -> None:
+        """Drop the run's kernel pin so the next run re-resolves the current
+        selection. Called only on a TERMINAL ending (FINISHED/ERROR/STUCK) or kill
+        — NOT on a pause / gate-park, which stay pinned for resume."""
+        self._pinned_kernels.pop(conversation_id, None)
+
+    def start(self, conversation_id: str) -> None:
+        """Start/continue the conversation's run THROUGH the pinned kernel (codex
+        finding #1, point a). For the default `disco` kernel this is a behaviour-
+        identical pass-through to `kick`."""
+        self._ensure_kernel_pinned(conversation_id).start(conversation_id)
+
+    async def send_user_turn(
+        self,
+        conversation_id: str,
+        text: str,
+        *,
+        context: str | None = None,
+        steer: bool = False,
+    ) -> MessageEvent:
+        """Append a user turn (optional hidden context, optional steer) and
+        start/continue the run — routed THROUGH the pinned kernel (codex finding
+        #1, point a). For the default `disco` kernel this is byte-identical to the
+        store-append + `kick` the routes performed inline before the seam. Returns
+        the stored USER message so the REST routes can report its id/seq."""
+        return await self._ensure_kernel_pinned(conversation_id).send_user_turn(
+            conversation_id, text, context=context, steer=steer
         )
 
     async def confirm(self, conversation_id: str) -> None:
@@ -2456,6 +2540,8 @@ class ConversationRuntime:
         return await self._resume.resume_conversation(conversation_id)
 
     async def kill(self, conversation_id: str) -> None:
+        # Hard kill = terminal → release the kernel pin (next run re-resolves). #1.
+        self._clear_pinned_kernel(conversation_id)
         return await self._control.kill(conversation_id)
 
     async def aclose(self) -> None:
