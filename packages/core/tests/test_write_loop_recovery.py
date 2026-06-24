@@ -19,7 +19,6 @@ direct-drive pattern) with a spy executor that records grounding + execute calls
 
 from __future__ import annotations
 
-import pytest
 from disco.core import (
     ActionEvent,
     AgentErrorEvent,
@@ -35,13 +34,16 @@ from disco.core.events import (
     find_elided_arg_markers,
 )
 from disco.core.llm import ModelExecutionPolicy, OperatingMode
+from disco.core.loop.dedup import _canonical_path, _f9_dedupable_read, _f9_path_was_mutated_after
 from disco.core.loop.engine import AgentLoop
 from disco.core.loop.view_render import ViewBuilder
 from disco.core.view import NoOpCondenser
 
 CID = "conv"
 
-pytestmark = pytest.mark.asyncio
+# asyncio_mode = "auto" (pyproject) auto-collects the `async def` tests; the sync
+# P1 helper tests run as plain tests. No module-level asyncio mark (it would wrongly
+# mark the sync tests).
 
 
 # ---------------------------------------------------------------------------
@@ -277,29 +279,28 @@ def _marker_for(content: str) -> str:
     return _arg_snip_marker_neutral(len(content))
 
 
-async def test_k1_recovery_reexpands_elided_file_write():
-    """The model copies the elision placeholder back as `content`. The real content
-    is recovered from the prior successful file_write in the event log, the call is
-    re-expanded + grounded, and it EXECUTES — no rejection, no loop."""
+async def test_k1_recovery_reexpands_accepted_prior_write():
+    """The legit path: the prior file_write was ACCEPTED (executed → successful
+    ObservationEvent). When the model copies the placeholder back, the real content
+    is recovered from that accepted write, re-expanded + grounded, and EXECUTES —
+    no rejection, no loop."""
     ex = _SpyExecutor()
     loop = _make_loop(ex, model_policy=ModelExecutionPolicy.standard())  # assist OFF
     real_content = "A" * 23_462  # the original large body
     marker = _marker_for(real_content)
     assert marker != real_content and find_elided_arg_markers({"content": marker})
-    # History: a prior REAL file_write of app.js (full content in the event log).
-    await loop.store.append(CID, _write("w_orig", real_content, path="app.js"))
+    # A prior ACCEPTED file_write of app.js: drive it so it gets a SUCCESS
+    # observation (confirmed) — the only kind of write K1 may recover from.
+    await _drive(loop, _write("w_orig", real_content, path="app.js"))
     # Now the copy-back: content is PURELY the placeholder.
     events = await _drive(loop, _write("w_copy", marker, path="app.js"))
     # No K1 rejection was emitted for the copy-back action.
-    errs = [
-        e for e in events
-        if isinstance(e, AgentErrorEvent) and e.tool_call_id == "w_copy"
-    ]
+    errs = [e for e in events if isinstance(e, AgentErrorEvent) and e.tool_call_id == "w_copy"]
     assert errs == [], f"K1 should have RECOVERED, not rejected: {errs}"
-    # The executor ran the write with the RE-EXPANDED real content.
-    write_calls = [c for c in ex.calls if c.tool_name == "file_write"]
-    assert len(write_calls) == 1
-    assert write_calls[0].arguments["content"] == real_content
+    # The executor ran the copy-back write with the RE-EXPANDED real content.
+    copy_call = next(c for c in ex.calls if c.call_id == "w_copy")
+    assert copy_call.tool_name == "file_write"
+    assert copy_call.arguments["content"] == real_content
     # And the path was grounded so the gate would allow it.
     assert "app.js" in ex.grounded
     # A success observation exists for the recovered write.
@@ -308,6 +309,42 @@ async def test_k1_recovery_reexpands_elided_file_write():
         if isinstance(e, ObservationEvent) and e.tool_result.call_id == "w_copy"
     ]
     assert obs and obs[0].tool_result.success is True
+
+
+async def test_k1_recovery_refuses_to_resurrect_a_rejected_blind_write():
+    """P0 (security, codex): a BLIND file_write the read-before-write gate REJECTED
+    still sits in the log with its full `content`. A later pure-marker copy-back must
+    NOT recover that never-read body — doing so would re-expand + ground + EXECUTE a
+    blind clobber of unread content, defeating the gate. Recovery fails closed: the
+    rejection stands and no write executes (the model must do a real file_read)."""
+    ex = _SpyExecutor()
+    loop = _make_loop(ex, model_policy=ModelExecutionPolicy.standard())
+    blind_body = "EVIL BLIND OVERWRITE\n" + "Z" * 9_000
+    marker = _marker_for(blind_body)
+    # Simulate the rejected blind write: its ActionEvent is in the log (full body),
+    # followed by an AgentErrorEvent (read_before_write) — NO success observation.
+    blind = _write("w_blind", blind_body, path="secret.js")
+    await loop.store.append(CID, blind)
+    await loop.store.append(
+        CID,
+        AgentErrorEvent(
+            error="file_write refused: secret.js ... not been read since the last write",
+            action_id=blind.id,
+            tool_call_id="w_blind",
+        ),
+    )
+    # Now the copy-back of the SAME path's marker.
+    events = await _drive(loop, _write("w_copy", marker, path="secret.js"))
+    # The blind body must NEVER have been executed.
+    assert all(c.arguments.get("content") != blind_body for c in ex.calls), (
+        "BLIND-CLOBBER BYPASS: a rejected write's content was re-expanded and executed"
+    )
+    assert ex.calls == [], "no write may execute — recovery must fail closed"
+    assert "secret.js" not in ex.grounded, "a rejected write must not ground the gate"
+    # The K1 rejection stands (recoverable only via a real file_read).
+    errs = [e for e in events if isinstance(e, AgentErrorEvent) and e.tool_call_id == "w_copy"]
+    assert len(errs) == 1
+    assert "elision" in errs[0].error
 
 
 async def test_k1_rejects_when_no_original_to_recover():
@@ -355,3 +392,57 @@ async def test_k1_recovery_ignores_marker_in_non_file_write():
     errs = [e for e in events if isinstance(e, AgentErrorEvent) and e.tool_call_id == "sh1"]
     assert len(errs) == 1
     assert ex.calls == []
+
+
+# ===========================================================================
+# (4) P1 — F9 invalidation/grounding uses the CANONICAL path (no stale grounding)
+# ===========================================================================
+
+
+def _seq(event: ActionEvent, n: int) -> ActionEvent:
+    return event.model_copy(update={"seq": n})
+
+
+def test_canonical_path_matches_the_gate_canonicalizer():
+    """The core F9 canonicalizer must agree with the tools-layer gate
+    canonicalizer (files._canonical) — they key the SAME file the same way."""
+    from disco.tools.builtin.files import _canonical as _gate_canonical
+
+    for spelling in ("x.py", "./x.py", "workspace/x.py", "/workspace/x.py", "a//b/../x.py"):
+        assert _canonical_path(spelling) == _gate_canonical(spelling), spelling
+
+
+def test_f9_invalidation_canonicalizes_path_spelling():
+    """P1: a mutation recorded under a DIFFERENT spelling of the same file
+    (canonically equal) MUST invalidate a read tracked under the canonical form —
+    otherwise F9 would dedup a STALE read and ground a write against changed
+    content."""
+    read_path = "x.py"
+    for mutated_spelling in ("./x.py", "workspace/x.py", "/workspace/x.py"):
+        mut = _seq(_write("m", "new bytes", path=mutated_spelling), 2)
+        assert _f9_path_was_mutated_after([mut], read_path, after_seq=1) is True, (
+            f"mutation under {mutated_spelling!r} must invalidate a read of {read_path!r}"
+        )
+    # Control: an unrelated path does NOT invalidate.
+    other = _seq(_write("m2", "z", path="y.py"), 2)
+    assert _f9_path_was_mutated_after([other], read_path, after_seq=1) is False
+
+
+def test_f9_dedup_suppressed_when_canonically_same_path_mutated():
+    """End-to-end pure-helper proof: read 'x.py' → write './x.py' (same file) → read
+    'x.py' again is NOT dedupable → it re-executes (a real read), so F9 never grounds
+    a stale write. Raw '==' would have wrongly deduped + grounded."""
+    first_read = _read("c1", path="x.py")
+    write_diff_spelling = _write("c2", "changed", path="./x.py")
+    second_read = _read("c3", path="x.py")  # the current action (last in the list)
+    events = [
+        _seq(first_read, 1),
+        _read_obs(first_read).model_copy(update={"seq": 2}),
+        _seq(write_diff_spelling, 3),
+        second_read.model_copy(update={"seq": 4}),
+    ]
+    deduped, prior_id, pointer = _f9_dedupable_read(
+        "file_read", {"path": "x.py"}, events, readonly_names=frozenset({"file_read"})
+    )
+    assert deduped is False, "a write under a canonically-same path must block the dedup"
+    assert prior_id == "" and pointer == ""

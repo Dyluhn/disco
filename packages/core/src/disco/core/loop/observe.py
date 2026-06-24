@@ -29,7 +29,11 @@ from ..events import (
 )
 from ..llm import LLMContextWindowExceeded
 from ..view import View
-from .dedup import _f9_dedupable_read, _w39_shell_verify_reminder
+from .dedup import (
+    _f8_confirmed_file_writes,
+    _f9_dedupable_read,
+    _w39_shell_verify_reminder,
+)
 from .messages import _workspace_paths_from_events
 
 if TYPE_CHECKING:
@@ -69,11 +73,23 @@ def _recover_elided_file_write_content(
     KB from memory (which it can't do reliably, and which re-collides with
     elision). `before_id` excludes the current action (and anything at/after it).
 
+    SECURITY (fail closed): the prior write MUST have been ACCEPTED/EXECUTED — its
+    ActionEvent must be followed by a SUCCESSFUL ObservationEvent and carry no
+    AgentErrorEvent (the `_f8_confirmed_file_writes` contract). A BLIND write the
+    read-before-write gate REJECTED still sits in the log with its full `content`;
+    recovering THAT would re-expand + ground + execute a never-read body — the
+    exact blind clobber the gate exists to prevent. So only legitimately-written
+    content is ever a recovery source; an unread/rejected body fails closed and the
+    rejection stands (the model must do a real file_read to ground its write).
+
     Path matching is RAW-string equality — consistent with the rest of the loop's
-    path bookkeeping (e.g. `_f9_path_was_mutated_after`); the copy-back case reuses
-    the prior call's exact spelling. Pure + deterministic."""
+    path bookkeeping; the copy-back case reuses the prior call's exact spelling.
+    Pure + deterministic."""
     if not path:
         return None
+    # Confirmed = ActionEvent + a SUCCESSFUL ObservationEvent + no AgentErrorEvent
+    # for the same call_id (single source of truth for "this write was accepted").
+    confirmed = _f8_confirmed_file_writes(events)
     seen_current = before_id is None
     for e in reversed(events):
         if not isinstance(e, ActionEvent) or e.tool_call is None:
@@ -86,6 +102,8 @@ def _recover_elided_file_write_content(
             continue
         if e.tool_call.arguments.get("path") != path:
             continue
+        if e.tool_call.call_id not in confirmed:
+            continue  # SECURITY: not an accepted write (rejected/blind) — never a source
         content = e.tool_call.arguments.get("content")
         if not isinstance(content, str) or not content:
             continue
