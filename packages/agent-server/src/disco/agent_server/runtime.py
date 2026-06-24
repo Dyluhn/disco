@@ -1929,6 +1929,34 @@ class ConversationRuntime:
 
             clear_conversation_read_state(conversation_id)
 
+    def _evict_loop_for_model_change(self, conversation_id: str) -> None:
+        """A deliberate model/assist change on a TERMINAL conversation (ERROR / STUCK /
+        FINISHED / PAUSED / IDLE-with-unfinished-plan): drop the cached loop + executor
+        that were composed against the OLD model so the NEXT kick (resume / replan)
+        re-composes the driver, summarizer, ModelExecutionPolicy, capability scope, and
+        driver-LLM endpoint with the NEW model — the model-pill-silently-ignored fix (#24).
+
+        The live sandbox SESSION is preserved: it is re-parked as the pending session so
+        `_compose_build_loop` adopts the SAME workspace (object identity — no destroy, no
+        leak, no rehydrate round-trip). A later backend change is still caught at the next
+        kick by `_evict_stale_backend`, which reconciles a mismatched pending session.
+
+        No-op when a run is in flight (the settings gate already rejected that) — never
+        evict a live loop. Called under the per-cid settings lock from
+        `RuntimeSettings.apply_settings_change` AFTER the override is persisted."""
+        task = self._tasks.get(conversation_id)
+        if task is not None and not task.done():
+            return  # defensive: never evict under a live run (the gate already blocks it)
+        self._loops.pop(conversation_id, None)
+        executor = self._executors.pop(conversation_id, None)
+        # Preserve the live sandbox so the rebuilt loop adopts the SAME box (workspace +
+        # shell sessions intact). Don't clobber an existing pending session (a pre-kick
+        # upload session) if one is already parked.
+        if conversation_id not in self._pending_sessions:
+            sess = getattr(executor, "_sandbox", None) if executor is not None else None
+            if sess is not None:
+                self._pending_sessions[conversation_id] = sess
+
     def _evict_stale_backend(self, conversation_id: str) -> None:
         """[W-48(c)] On a persisted sandbox-backend change, reconcile THIS conversation:
         if its cached session runs a DIFFERENT backend than the now-configured one (the

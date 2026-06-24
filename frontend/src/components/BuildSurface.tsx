@@ -424,8 +424,18 @@ export function BuildSurface({
               // the loop from the full persisted history (events + workspace snapshot
               // survive), it does NOT reset/discard progress. The backend flips
               // ERROR → RUNNING and continues; the existing WS subscription streams the
-              // new events in over the preserved view.
-              <ErrorState message={b.error ?? "The agent run failed."} onRetry={b.resume} />
+              // new events in over the preserved view. The model picker lets the user
+              // switch to a DIFFERENT model before retrying (the failed model may BE the
+              // cause); b.resume patches the pick first so the retry runs on the new one.
+              <div className="flex flex-col gap-section">
+                <ErrorState message={b.error ?? "The agent run failed."} onRetry={b.resume} />
+                <div className="flex flex-col items-start gap-hair rounded-control border border-hairline bg-surface-1 p-body">
+                  <p className="font-ui text-[0.78rem] text-text-muted">
+                    Try a different model before retrying:
+                  </p>
+                  <BuildModelPicker value={b.modelId} onChange={b.setModelId} />
+                </div>
+              </div>
             ) : b.awaitingPlan && b.plan ? (
               // Plan gate is the hero: review + Approve/Revise before any work runs.
               <div className="flex flex-col gap-section">

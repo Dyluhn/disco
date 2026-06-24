@@ -148,6 +148,25 @@ describe("RECOVERY: errored build — 'Try again' resumes (never resets)", () =>
     expect(resume).toHaveBeenCalledTimes(1);
     expect(reset).not.toHaveBeenCalled();
   });
+
+  it("exposes the model picker in the ERROR state so the user can switch before retrying", () => {
+    const setModelId = vi.fn();
+    buildState = baseBuild({
+      status: "ERROR",
+      error: "the driver kept dropping the tool call",
+      events: [userMessage("u1", "build a landing page")],
+      modelId: null,
+      setModelId,
+    });
+    renderSurface(<BuildSurface resumeCid="cid-1" />);
+
+    // The errored UI now offers a model swap next to "Try again" — without this the
+    // user could only retry on the SAME (failed) model.
+    expect(
+      screen.getByLabelText(/choose the model that runs the agent/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
+  });
 });
 
 describe("CLEAN TITLE ON RESUME: the H1 is never the giant raw prompt", () => {
