@@ -30,6 +30,7 @@ signal (BoD §17.2).
 
 from __future__ import annotations
 
+import re
 import uuid
 
 from ..env import disco_env
@@ -47,6 +48,32 @@ from ..llm import (
 from ..obs import log_span
 from ..view import View
 from .boundaries import AgentStep, StreamHook
+
+# The View feeds the model's own prior thoughts back into context with a rotating
+# surface-form prefix ("Reasoning: …" / "Thought: …" — a deterministic-by-seq
+# anti-overfit decoration, see view.py B3). A model (observed: MiniMax) then ECHOES
+# that decoration into the NEXT thought it emits, and since each turn re-decorates,
+# the prefix STACKS — the stored/displayed thought becomes
+# "Reasoning: Reasoning: Reasoning: …". We strip the leaked leading decorator(s) off
+# the model's response text BEFORE it is stored as the ActionEvent thought, which
+# both cleans the stored event AND breaks the feedback loop (the clean thought goes
+# back into context, gets exactly one fresh decoration, never compounds).
+#
+# Scoped to ONLY the surface forms the View applies to AGENT thoughts (Reasoning /
+# Thought) — the "Observation:" / "Output:" forms decorate tool-result messages, not
+# thoughts, so a thought never legitimately starts with one and we don't strip them.
+_THOUGHT_DECOR_RE = re.compile(
+    r"^(?:\s*(?:Reasoning|Thought)\s*:\s*)+",
+    re.IGNORECASE,
+)
+
+
+def _clean_thought(text: str) -> str:
+    """Strip leaked, stacked surface-form prefixes the View added and the model
+    echoed back ("Reasoning: Reasoning: …"). Only LEADING repeated decorators are
+    removed — a thought that legitimately says "Reasoning: foo" mid-sentence is
+    untouched. Idempotent; a clean thought is returned unchanged."""
+    return _THOUGHT_DECOR_RE.sub("", text)
 
 
 def _has_unclosed_think(text: str) -> bool:
@@ -210,7 +237,7 @@ class RouterAgent:
                 resp.tool_calls[0],
             )
             return AgentStep(
-                thought=resp.text,
+                thought=_clean_thought(resp.text),
                 tool_call=ToolCall(tool_name=pc.tool_name, arguments=pc.arguments),
                 finished=False,
                 llm_response_id=resp.request_id,
@@ -247,7 +274,7 @@ class RouterAgent:
         # still bounds a truncation storm into a VISIBLE PAUSED halt.
         truncated = resp.finish_reason == "length" or _has_unclosed_think(resp.text)
         return AgentStep(
-            thought=resp.text,
+            thought=_clean_thought(resp.text),
             tool_call=None,
             finished=self._prose_finishes and not truncated,
             truncated=truncated,

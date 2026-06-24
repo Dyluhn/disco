@@ -12,6 +12,7 @@ import {
   deriveBuildProgress,
   deriveDeliverable,
   deriveFiles,
+  derivePlan,
   firstUserTask,
 } from "@/lib/buildTrace";
 import type { AgentEvent } from "@/types/agent";
@@ -47,6 +48,46 @@ function actionEvent(
     meta,
   } as AgentEvent;
 }
+
+function planCardEvent(
+  id: string,
+  summary: string,
+  steps: Array<{ title: string; detail?: string | null }>,
+  revision = 1,
+): AgentEvent {
+  return { kind: "plan", id, source: "agent", summary, steps, revision, context: "" } as AgentEvent;
+}
+
+describe("derivePlan — legacy no-steps placeholder is dropped", () => {
+  it("filters the '(the planner returned no concrete steps)' sentinel so the card renders summary-only", () => {
+    const plan = derivePlan([
+      planCardEvent("p1", "Move the spawn off the intersection.", [
+        { title: "(the planner returned no concrete steps)", detail: null },
+      ]),
+    ]);
+    expect(plan).not.toBeNull();
+    expect(plan!.steps).toEqual([]); // no broken numbered "1." step
+    expect(plan!.summary).toBe("Move the spawn off the intersection.");
+  });
+
+  it("keeps real steps intact", () => {
+    const plan = derivePlan([
+      planCardEvent("p1", "Build it", [
+        { title: "Scaffold", detail: "make files" },
+        { title: "Wire it up" },
+      ]),
+    ]);
+    expect(plan!.steps.map((s) => s.title)).toEqual(["Scaffold", "Wire it up"]);
+  });
+
+  it("highest revision wins", () => {
+    const plan = derivePlan([
+      planCardEvent("p1", "v1", [{ title: "old" }], 1),
+      planCardEvent("p2", "v2", [{ title: "new" }], 2),
+    ]);
+    expect(plan!.summary).toBe("v2");
+  });
+});
 
 describe("deriveActivity — autoApproved derivation (DC-03)", () => {
   it("sets autoApproved=true when meta.auto_approved === 'sandboxed'", () => {

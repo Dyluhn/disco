@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { splitThink } from "@/lib/think";
+import { splitThink, stripReasoningPrefixes } from "@/lib/think";
 
 describe("splitThink", () => {
   it("splits a single closed block into reasoning + answer", () => {
@@ -43,5 +43,40 @@ describe("splitThink", () => {
     expect(splitThink("")).toEqual({ reasoning: "", answer: "" });
     expect(splitThink(null)).toEqual({ reasoning: "", answer: "" });
     expect(splitThink(undefined)).toEqual({ reasoning: "", answer: "" });
+  });
+
+  it("strips leaked stacked 'Reasoning:' decoration before splitting (MiniMax)", () => {
+    // The live defect: MiniMax echoed the View's surface-form prefix, stacking it.
+    const { reasoning, answer } = splitThink(
+      "Reasoning: Reasoning: Reasoning: The planner returned an empty plan.",
+    );
+    expect(answer).toBe("The planner returned an empty plan.");
+    expect(reasoning).toBe("");
+  });
+});
+
+describe("stripReasoningPrefixes — leaked surface-form decoration", () => {
+  it("collapses a stack of 'Reasoning:' prefixes", () => {
+    expect(stripReasoningPrefixes("Reasoning: Reasoning: Reasoning: done")).toBe("done");
+  });
+
+  it("strips a mixed 'Thought:' + 'Reasoning:' stack", () => {
+    expect(stripReasoningPrefixes("Thought: Reasoning: Reasoning: go")).toBe("go");
+  });
+
+  it("leaves a clean thought untouched", () => {
+    expect(stripReasoningPrefixes("Build verified — HTTP 200.")).toBe("Build verified — HTTP 200.");
+  });
+
+  it("only strips leading decorators, not mid-sentence ones", () => {
+    expect(stripReasoningPrefixes("Stale tracker. Reasoning: it missed a delta.")).toBe(
+      "Stale tracker. Reasoning: it missed a delta.",
+    );
+  });
+
+  it("is idempotent and null-safe", () => {
+    expect(stripReasoningPrefixes(stripReasoningPrefixes("Reasoning: x"))).toBe("x");
+    expect(stripReasoningPrefixes(null)).toBe("");
+    expect(stripReasoningPrefixes(undefined)).toBe("");
   });
 });
