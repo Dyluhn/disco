@@ -282,11 +282,13 @@ class Observer:
                 await self._loop._emit(
                     AgentErrorEvent(
                         error=(
-                            f"Argument(s) {_k1_bad} contain an internal placeholder of "
-                            'the form "<N chars … full content …>", not real content. '
-                            "That marker is a context-saving stand-in for content you "
-                            "ALREADY wrote — it is NOT the content itself, and it was "
-                            "NOT executed. Do not copy it into a tool call. Read the "
+                            f"Argument(s) {_k1_bad} contain an internal elision "
+                            "placeholder (e.g. text inside angle brackets saying the "
+                            "content was elided / to re-issue the call or file_read the "
+                            "path for the full content), not real content. That marker "
+                            "is a context-saving stand-in for content you ALREADY wrote "
+                            "— it is NOT the content itself, and it was NOT executed. Do "
+                            "not copy the placeholder into a tool call. Read the "
                             + _k1_recover
                         ),
                         action_id=action.id,

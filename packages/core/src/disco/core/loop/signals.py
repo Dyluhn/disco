@@ -376,14 +376,31 @@ def planning_turns_since_replan(events: list[Event]) -> int:
 
 def actions_since_last_resume(events: list[Event]) -> int:
     """Count ActionEvents (excluding meta/bookkeeping tools and the
-    verify-on-finish probe) since the last
-    StatusEvent(RUNNING, detail="resumed") or since start."""
+    verify-on-finish probe) since the last resume boundary, or since start.
+
+    The resume boundary is the REAL one, keyed producer-agnostically exactly
+    like `consecutive_noops` (fb60fc8):
+      * a `StatusEvent(PAUSED)` — everything after the most recent pause is the
+        post-resume segment, so the PAUSED is the boundary. This covers BOTH
+        resume producers: resume_service appends a RUNNING flip after the
+        PAUSED, AND `AgentLoop.resume()` emits a *bare* `StatusEvent(RUNNING)`
+        with no detail. A PAUSED only lands when the loop actually paused and
+        returned, so any later events are post-resume; a normal run's bare
+        RUNNING (no preceding PAUSED) is neutral and never resets mid-run.
+      * `StatusEvent(RUNNING, detail="resumed")` — the resume_service flip,
+        kept so an IDLE-with-unfinished-plan resume (legal, NO preceding PAUSED
+        in the log) still resets.
+
+    Keying ONLY on detail=="resumed" (the original) NEVER matched the
+    bare-RUNNING resume that `AgentLoop.resume()` emits, so after a resume that
+    FOLLOWED prior work this returned the STALE pre-pause count — and the BW-02
+    STUCK escalation's `== 0` gate never fired, re-pausing forever (codex P1,
+    the twin of the fb60fc8 consecutive_noops bare-RUNNING blind spot)."""
     count = 0
     for e in reversed(events):
-        if (
-            isinstance(e, StatusEvent)
-            and e.status == ConversationStatus.RUNNING
-            and e.detail == "resumed"
+        if isinstance(e, StatusEvent) and (
+            e.status == ConversationStatus.PAUSED
+            or (e.status == ConversationStatus.RUNNING and e.detail == "resumed")
         ):
             break
         if isinstance(e, ActionEvent) and e.tool_call is not None:
@@ -393,6 +410,37 @@ def actions_since_last_resume(events: list[Event]) -> int:
                 continue
             if e.tool_call.tool_name not in _BOOKKEEPING_TOOLS:
                 count += 1
+    return count
+
+
+def consecutive_actionless_pauses(events: list[Event]) -> int:
+    """BW-02 escalation signal — the trailing run of
+    `StatusEvent(PAUSED, detail="actionless")` landings, counting back from the
+    end of `events`, separated only by resume markers and noop steps.
+
+    A real (non-bookkeeping, non-verify-probe) ActionEvent — a file_read, search,
+    browser, edit, anything the model actually DID — breaks the run, as does any
+    OTHER landing (FINISHED/STUCK/a different PAUSE reason). RUNNING resume markers
+    are transparent. So the count is the number of consecutive zero-ACTION
+    actionless pauses already in the log: an actionless PAUSE only lands when the
+    segment leading to it produced no real action (a real action resets the noop
+    streak before the cap), so a trailing run of them with no action in between is
+    a degenerate "keeps pausing" loop the plain pause never breaks. The actionless
+    valve consults this so the SECOND such pause escalates to STUCK instead of
+    re-pausing forever; the FIRST (count 0 here) stays the useful stop."""
+    count = 0
+    for e in reversed(events):
+        if isinstance(e, ActionEvent) and e.tool_call is not None:
+            if e.tool_call.tool_name in _BOOKKEEPING_TOOLS or e.meta.get("verify_probe"):
+                continue  # bookkeeping / the finish probe is not the model acting
+            break  # a real action breaks the degenerate streak
+        if isinstance(e, StatusEvent):
+            if e.status == ConversationStatus.PAUSED and e.detail == "actionless":
+                count += 1
+                continue
+            if e.status == ConversationStatus.RUNNING:
+                continue  # a resume marker between pauses — transparent
+            break  # a different PAUSE reason, or FINISHED/STUCK — streak ends
     return count
 
 

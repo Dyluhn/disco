@@ -68,6 +68,15 @@ CID = "conv"
 # trace can still emit it; the structural detector must catch it.
 _LEGACY_MARKER = "<4,441 chars elided — already applied; use file_read for the content>"
 
+# BW-02 (trace conv_20fa8482) — the model PARAPHRASED the neutral marker, dropping the
+# leading "<N chars …>" count anchor while copying its stable tail prose verbatim. With
+# no digit anchor the structural detector missed it; a 132-byte placeholder overwrote a
+# real file. The separate paraphrase detector must catch this REJECTION-path case.
+_PARAPHRASE_MARKER = (
+    "<content elided — re-issue the call or file_read the path for the full "
+    "content; do not copy this placeholder into a tool argument>"
+)
+
 
 class _NoOpCondenser:
     def should_condense(self, view, *, token_count):
@@ -203,6 +212,33 @@ async def test_legacy_marker_wording_is_also_rejected():
 
 
 # ---------------------------------------------------------------------------
+# (2b) BW-02 — a MODEL-PARAPHRASED placeholder (no count anchor) → also rejected
+# ---------------------------------------------------------------------------
+
+
+async def test_paraphrased_marker_without_count_is_rejected_and_not_executed():
+    # The exact placeholder the model copied into js/shell.js in conv_20fa8482:
+    # the count anchor was dropped ("<content elided …>"), so the structural
+    # _ELISION_MARKER_RE (which requires "N chars") missed it. The separate
+    # paraphrase detector catches it on the rejection path.
+    loop = _make_loop()
+    action = _write_action("call_para", path="js/shell.js", content=_PARAPHRASE_MARKER)
+    events = await _drive_execute(loop, action)
+    assert len(loop.executor.calls) == 0, (
+        "K1 must reject the model-paraphrased placeholder BEFORE execution — this "
+        "is the BW-02 data-loss path (132 bytes overwrote a real file)"
+    )
+    errs = [e for e in events if isinstance(e, AgentErrorEvent)]
+    assert len(errs) == 1
+    assert errs[0].action_id == action.id
+    # The reject copy is accurate for the paraphrased form too (no false "<N chars>").
+    msg = errs[0].error
+    assert "content" in msg  # names the offending key
+    assert "<N chars" not in msg  # the old copy claimed this form — wrong for a paraphrase
+    assert "placeholder" in msg
+
+
+# ---------------------------------------------------------------------------
 # (3) a clean argument executes normally (the guard is invisible)
 # ---------------------------------------------------------------------------
 
@@ -240,6 +276,30 @@ async def test_benign_anglebracket_string_is_not_rejected():
 
 
 # ---------------------------------------------------------------------------
+# (4b) BW-02 — a real file whose CONTENT merely says "elided" in prose → no false reject
+# ---------------------------------------------------------------------------
+
+
+async def test_prose_mentioning_elided_is_not_false_rejected():
+    # The paraphrase detector requires BOTH the marker's signature tail phrase AND an
+    # elision keyword inside one bounded <...> — so ordinary documentation that merely
+    # uses the word "elided" (even inside angle brackets) executes normally.
+    loop = _make_loop()
+    body = (
+        "# Notes\n"
+        "The middle of the file was <elided> for brevity in the original PDF.\n"
+        "See <appendix> for the full content of the report.\n"
+    )
+    action = _write_action("call_prose", path="docs/notes.md", content=body)
+    events = await _drive_execute(loop, action)
+    assert len(loop.executor.calls) == 1, (
+        "a real file whose prose merely mentions 'elided'/'full content' must NOT be "
+        "false-rejected — the paraphrase detector also requires the marker's tail phrase"
+    )
+    assert not [e for e in events if isinstance(e, AgentErrorEvent)]
+
+
+# ---------------------------------------------------------------------------
 # (5) pure-function contracts
 # ---------------------------------------------------------------------------
 
@@ -257,6 +317,52 @@ def test_find_elided_arg_markers_reports_offending_keys():
     # Multiple offenders → all reported, in arg order.
     multi = {"a": marker, "b": "ok", "c": _LEGACY_MARKER}
     assert find_elided_arg_markers(multi) == ["a", "c"]
+
+
+def test_find_elided_arg_markers_catches_paraphrase_but_not_prose():
+    # BW-02 — the paraphrased placeholder (count anchor dropped) IS detected on the
+    # rejection path...
+    assert find_elided_arg_markers({"content": _PARAPHRASE_MARKER}) == ["content"]
+    # ...while ordinary prose that merely contains "elided"/"full content" (even in
+    # angle brackets) without the marker's signature tail phrase is NOT a false reject.
+    assert find_elided_arg_markers({"c": "the section was <elided> for space"}) == []
+    assert find_elided_arg_markers({"c": "<div>full content here</div>"}) == []
+    assert find_elided_arg_markers({"c": "rows elided; see full content in appendix"}) == []
+
+
+def test_retarget_preserved_for_count_markers_paraphrase_untouched():
+    # The RETARGET path is unchanged by BW-02: it still reconstructs the neutral
+    # marker from the char count (_ELISION_COUNT_RE) for a real count-bearing marker...
+    from disco.core.events import (
+        LLMMessage,
+        _arg_snip_marker_below,
+        retarget_elided_arg_markers,
+    )
+
+    below = _arg_snip_marker_below(4441)  # the directional/assist-ON marker (has count)
+    msg = LLMMessage(
+        role="assistant",
+        content="",
+        tool_calls=[{"tool_name": "file_write", "call_id": "x", "arguments": {"content": below}}],
+    )
+    out = retarget_elided_arg_markers([msg])
+    rewritten = out[0].tool_calls[0]["arguments"]["content"]
+    assert "4,441 chars elided" in rewritten  # count preserved → neutral marker rebuilt
+    # ...and a PARAPHRASE (no count to reconstruct) is left untouched by retarget — the
+    # new broad detector is for REJECTION only, NOT retargeting.
+    msgp = LLMMessage(
+        role="assistant",
+        content="",
+        tool_calls=[
+            {
+                "tool_name": "file_write",
+                "call_id": "y",
+                "arguments": {"content": _PARAPHRASE_MARKER},
+            }
+        ],
+    )
+    outp = retarget_elided_arg_markers([msgp])
+    assert outp[0].tool_calls[0]["arguments"]["content"] == _PARAPHRASE_MARKER
 
 
 def test_snip_args_rewords_to_snapshot_pointer_and_round_trips():
