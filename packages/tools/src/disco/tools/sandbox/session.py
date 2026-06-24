@@ -552,7 +552,20 @@ class SandboxSession:
         ask "what's exposed on this conversation right now?" (see
         `tracked_services`). For multi-service builds use `ensure_service`
         directly (BP-G9 acceptance: API on 3000 + frontend on 5173)."""
+        from disco.core.loop.preview_target import (
+            process_safe_preview_port,
+            reserved_control_ports,
+        )
+
         from .port_owner import port_owner
+
+        # Process-backend containment (Bug 7): on a SHARED-host backend (process/
+        # local) the default preview port (8000) is the agent-server's own control
+        # port — serving the static preview there collides with + crashes the
+        # agent-server. Remap a reserved control port to a process-safe preview port
+        # (8080, never 8000). Isolated container backends keep 8000 (it's the box's).
+        if self._service.name in ("process", "local") and port in reserved_control_ports():
+            port = process_safe_preview_port()
 
         inst = await self._ensure()
         owner = await port_owner(inst, port)

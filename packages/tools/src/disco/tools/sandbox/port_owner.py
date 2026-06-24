@@ -2,6 +2,8 @@ import json
 import shlex
 from dataclasses import dataclass
 
+from disco.core.loop.preview_target import PORT_OWNER_PROBE_SRC
+
 from .base import SandboxInstance
 
 
@@ -13,111 +15,11 @@ class PortOwner:
     session: str | None = None
 
 
-_PROBE_SRC = """\
-import json
-import os
-import subprocess
-import sys
-
-def get_tmux_panes():
-    try:
-        out = subprocess.check_output(
-            ['tmux', 'list-panes', '-a', '-F', '#{pane_pid} #{session_name}']
-        ).decode('utf-8')
-        res = {}
-        for line in out.splitlines():
-            parts = line.strip().split()
-            if len(parts) >= 2:
-                res[int(parts[0])] = parts[1]
-        return res
-    except Exception:
-        return {}
-
-def read_tcp_listen(port_hex):
-    inodes = set()
-    for net_file in ['/proc/net/tcp', '/proc/net/tcp6']:
-        try:
-            with open(net_file) as f:
-                for line in f.readlines()[1:]:
-                    parts = line.strip().split()
-                    if len(parts) >= 10:
-                        local_addr = parts[1]
-                        state = parts[3]
-                        inode = parts[9]
-                        if state == '0A' and local_addr.endswith(':' + port_hex):
-                            inodes.add(inode)
-        except Exception:
-            pass
-    return inodes
-
-def main():
-    ports = [int(a) for a in sys.argv[1:]]
-    inode_to_port = {}
-    for target_port in ports:
-        for ino in read_tcp_listen(f"{target_port:04X}"):
-            inode_to_port.setdefault(ino, target_port)
-
-    port_to_pid = {}
-    if inode_to_port:
-        for pid_str in os.listdir('/proc'):
-            if not pid_str.isdigit():
-                continue
-            fd_dir = f'/proc/{pid_str}/fd'
-            if not os.path.isdir(fd_dir):
-                continue
-            try:
-                for fd in os.listdir(fd_dir):
-                    try:
-                        link = os.readlink(f'{fd_dir}/{fd}')
-                        if link.startswith('socket:['):
-                            ino = link[8:-1]
-                            if ino in inode_to_port:
-                                port_to_pid.setdefault(inode_to_port[ino], int(pid_str))
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-    panes = get_tmux_panes()
-    results = []
-    for target_port in ports:
-        found_pid = port_to_pid.get(target_port)
-        if not found_pid:
-            results.append({"port": target_port, "pid": None})
-            continue
-
-        cmdline = ""
-        try:
-            with open(f'/proc/{found_pid}/cmdline', 'rb') as f:
-                cmdline = f.read().replace(b'\\x00', b' ').decode('utf-8').strip()
-        except Exception:
-            pass
-
-        current_pid = found_pid
-        session = None
-        for _ in range(6):
-            if current_pid in panes:
-                session = panes[current_pid]
-                break
-            try:
-                with open(f'/proc/{current_pid}/stat') as f:
-                    stat_data = f.read().split()
-                    if len(stat_data) >= 4:
-                        current_pid = int(stat_data[3])
-                    else:
-                        break
-            except Exception:
-                break
-
-        results.append(
-            {"port": target_port, "pid": found_pid, "cmdline": cmdline, "session": session}
-        )
-
-    print(json.dumps(results))
-
-if __name__ == "__main__":
-    main()
-"""
+# SINGLE source of truth for the /proc + tmux ownership walk lives in core
+# (`disco.core.loop.preview_target`) so the finish gate and this tool can never
+# disagree about who owns a port. `PortOwner` here just adds `cmdline` to the
+# gate's pid+session view.
+_PROBE_SRC = PORT_OWNER_PROBE_SRC
 
 
 async def port_owners(

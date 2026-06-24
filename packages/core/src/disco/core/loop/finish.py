@@ -34,6 +34,12 @@ from ..state import ConversationState
 from . import signals
 from .boundaries import AgentStep
 from .control import Disp
+from .preview_target import (
+    PREVIEW_PORTS,
+    parse_port_ownership,
+    port_ownership_probe_command,
+    resolve_preview_port,
+)
 from .signals import _NON_PRODUCTIVE_TOOLS
 
 if TYPE_CHECKING:
@@ -342,11 +348,13 @@ def _latest_browser_error(events: list[Event]) -> str | None:
 _VERIFY_MARKER_PREFIX = "verify_no_progress:"
 
 # Preview ports the user-visible deliverable may serve on (ordered by preference;
-# 8000 is Disco's canonical user-visible port). SINGLE SOURCE OF TRUTH for the
-# preview-port set: the `verify_web_app` tool (tools/builtin/verify_app.py)
-# imports THIS tuple so the finish gate's preview detection and the tool's
-# auto-detect stay byte-identical (the prompt's "same _PREVIEW_PORTS detection").
-_PREVIEW_PORTS: tuple[int, ...] = (8000, 5173, 3000, 8080, 5000, 4321)
+# 8000 is Disco's canonical user-visible port INSIDE an isolated sandbox). SINGLE
+# SOURCE OF TRUTH now lives in `preview_target.PREVIEW_PORTS` alongside the
+# backend-aware resolver; re-exported here under the historical name so the
+# `verify_web_app` tool's existing `from ...finish import _PREVIEW_PORTS` keeps
+# working (the gate's preview detection and the tool's auto-detect share BOTH the
+# port set AND the resolver).
+_PREVIEW_PORTS: tuple[int, ...] = PREVIEW_PORTS
 
 
 def _preview_key(url: str) -> tuple[str, int] | None:
@@ -623,21 +631,46 @@ class FinishGate:
         return "verify_web_app" in tool_names
 
     async def _detect_preview_url(self) -> str | None:
-        """P1-1 — detect the URL the live deliverable currently serves on, using
-        the SAME `_PREVIEW_PORTS` preference order the `verify_web_app` tool
-        auto-detects with. Duck-typed over the executor's sandbox (`exec_shell`):
-        core never imports `tools`, so rather than call tools' `port_owners` the
-        liveness probe is inlined here (a single in-sandbox exec that connects to
-        each preview port in order and prints the first that accepts).
+        """P1-1 — detect the URL the live deliverable currently serves on, using the
+        SAME backend-aware resolver the `verify_web_app` tool uses
+        (`preview_target.resolve_preview_port`). Duck-typed over the executor's
+        sandbox (`exec_shell`): core never imports `tools`, so the gate runs the
+        shared in-sandbox ownership probe and feeds the result to the shared
+        resolver.
 
-        Returns `http://127.0.0.1:<port>/` for the first reachable preview port,
-        or None when there is no sandbox / the sandbox lacks `exec_shell` / the
-        probe fails — in which case binding is NOT enforced (see
-        `_verdict_targets_preview`) and the gate falls back to the (since_seq) key
-        alone. Never raises (a detection failure must not wedge the finish gate)."""
+        On a SHARED-host backend (process/local — `sandbox.workspace_path` is set)
+        the resolver NEVER returns a reserved control port (8000 = the agent-server):
+        it prefers a CONVERSATION-OWNED served port, else any non-reserved owned
+        port, else None — so a stale verdict about `:8000` (the agent-server, Bug 7)
+        can never bind the finish gate. On an ISOLATED backend (gVisor/Podman —
+        `workspace_path` is None) `:8000` IS the app, so the legacy first-reachable
+        socket probe is kept.
+
+        Returns `http://127.0.0.1:<port>/` or None (no sandbox / no exec_shell /
+        nothing detected), in which case binding is NOT enforced (see
+        `_verdict_targets_preview`) and the gate drives a fresh verify against the
+        real preview. Never raises (a detection failure must not wedge the gate)."""
         sbx = getattr(self._loop.executor, "sandbox", None)
         if sbx is None or not hasattr(sbx, "exec_shell"):
             return None
+        host_shared = getattr(sbx, "workspace_path", None) is not None
+        if host_shared:
+            # Process/local: ownership-aware — never bind the agent-server's 8000.
+            try:
+                res = await sbx.exec_shell(
+                    port_ownership_probe_command(_PREVIEW_PORTS), timeout_s=10
+                )
+            except Exception:  # noqa: BLE001 — detection failure → no binding (degrade safe)
+                return None
+            owned = parse_port_ownership(str(getattr(res, "stdout", "") or ""))
+            port = resolve_preview_port(
+                host_shared=True,
+                owned=owned,
+                conversation_id=str(getattr(sbx, "conversation_id", "") or ""),
+            )
+            return f"http://127.0.0.1:{port}/" if port is not None else None
+
+        # Isolated backend: 8000 is the app inside the box — first reachable wins.
         import shlex
 
         ports = list(_PREVIEW_PORTS)
@@ -667,12 +700,21 @@ class FinishGate:
                 return f"http://127.0.0.1:{int(line)}/"
         return None
 
-    async def _drive_verify_web_app(self) -> bool:
+    async def _drive_verify_web_app(self, target_url: str | None = None) -> bool:
         """W-45 ACTIVE verify: DRIVE one `verify_web_app` call when the agent
         declares done without a fresh verdict. Mirrors `_drive_finish_browser_probe`
         — the probe ActionEvent is tagged `verify_probe` so it never counts as
-        agent work. Returns True iff the call produced a usable observation."""
-        call = ToolCall(tool_name="verify_web_app", arguments={})
+        agent work. Returns True iff the call produced a usable observation.
+
+        When the gate has already resolved the real preview target (`target_url`,
+        backend-aware — never the agent-server's 8000 on the process backend), it is
+        passed EXPLICITLY so the tool verifies the build's actual served port instead
+        of repeating its own auto-detect (Bug 7). None ⇒ `{}` ⇒ the tool auto-detects
+        (which itself uses the same backend-aware resolver)."""
+        call = ToolCall(
+            tool_name="verify_web_app",
+            arguments={"url": target_url} if target_url else {},
+        )
         action = ActionEvent(
             thought="Verifying the app: running verify_web_app on the running preview.",
             tool_call=call,
@@ -1101,8 +1143,10 @@ class FinishGate:
         verdict = _latest_verify_verdict(events, since_seq, target_url)
         if verdict is None:
             # No fresh verdict bound to the current preview — the agent may have
-            # overclaimed, or only a stale/foreign-url verdict exists. Drive ONE.
-            if await self._drive_verify_web_app():
+            # overclaimed, or only a stale/foreign-url verdict exists. Drive ONE
+            # against the resolved real preview (target_url is backend-aware — never
+            # the agent-server's 8000 on the process backend, Bug 7).
+            if await self._drive_verify_web_app(target_url):
                 events = await self._loop._events()
                 # The freshly driven verify auto-detected + tested the CURRENT
                 # preview, so its verdict IS bound by construction — read it
@@ -1130,6 +1174,21 @@ class FinishGate:
                         )
                     )
             return Disp.FALLTHROUGH
+
+        # Bug 6 — HONEST unverifiable finish for a delivered-but-unverifiable static
+        # build. If the ONLY failure is "not serving" (server unreachable; the
+        # browser never even ran ⇒ no console/network errors and no blank-render
+        # judgement) AND this backend cannot run a headless browser AND the static
+        # deliverable file exists on disk, then the build is UNVERIFIABLE (infra),
+        # not BROKEN — finish honestly with an explicit marker instead of refusing →
+        # STUCK. A REAL fail (console errors, network failures, blank render, or a
+        # MISSING deliverable) never reaches here, so W-45 is not weakened. This runs
+        # only after `gate_execution_nudge` (so an approved-but-unexecuted plan still
+        # STUCKs there) and requires index.html on disk (so a zero-action run cannot
+        # finish).
+        honest = await self._maybe_honest_unverifiable_static_finish(verdict)
+        if honest is not None:
+            return honest
 
         # FAIL / DEGRADED. Build the concrete next-step payload from the verdict.
         fp = str(verdict.get("failure_fingerprint") or "")
@@ -1220,6 +1279,77 @@ class FinishGate:
             MessageEvent(
                 source=EventSource.ENVIRONMENT,
                 message=LLMMessage(role="user", content=warn),
+            )
+        )
+        self._loop._browser_verify_refusals = 0
+        return Disp.FALLTHROUGH
+
+    def _browser_verification_unavailable(self) -> bool:
+        """True when this backend cannot run browser-based verification (the process
+        backend ships no `browser` tool). Mirrors `_drive_finish_browser_probe`'s
+        availability check — the precise "the render/console check cannot run here"
+        signal that distinguishes an UNVERIFIABLE delivery from a BROKEN app."""
+        try:
+            tool_names = {
+                getattr(t, "name", None) for t in self._loop.executor.available_tools()
+            }
+        except Exception:  # noqa: BLE001 — introspection failure → assume available (cautious)
+            return False
+        return "browser" not in tool_names
+
+    async def _static_deliverable_present(self) -> bool:
+        """True when the static web deliverable (index.html) exists on disk in the
+        sandbox workspace — the file-truth half of the honest unverifiable finish (a
+        zero-action run wrote nothing, so this is False and it cannot finish)."""
+        sbx = getattr(self._loop.executor, "sandbox", None)
+        if sbx is None or not hasattr(sbx, "file_exists"):
+            return False
+        try:
+            return bool(await sbx.file_exists("index.html"))
+        except Exception:  # noqa: BLE001 — existence probe failure → cannot confirm
+            return False
+
+    async def _maybe_honest_unverifiable_static_finish(self, verdict: dict) -> Disp | None:
+        """Bug 6 — when a web build's verify FAILS ONLY because nothing is serving
+        (no console/network errors, no blank-render judgement: the browser never ran)
+        AND this backend cannot run a headless browser AND index.html exists on disk,
+        return FALLTHROUGH with an explicit honest-unverifiable marker so a delivered
+        static build FINISHES instead of pausing/STUCKing. Returns None (let the
+        normal refuse/loop-break path run) for every other case — a real fail
+        (console/network/blank) or a missing deliverable is NEVER converted to a
+        success (W-45 preserved)."""
+        http_ok = 200 <= int(verdict.get("http_status") or 0) < 400
+        not_serving = (
+            str(verdict.get("verdict")) == "fail"
+            and not (verdict.get("console_errors") or [])
+            and not (verdict.get("network_failures") or [])
+            and not http_ok
+        )
+        if not not_serving:
+            return None
+        if not self._browser_verification_unavailable():
+            return None
+        if not await self._static_deliverable_present():
+            return None
+        await self._loop._emit(
+            StatusEvent(
+                status=ConversationStatus.RUNNING,
+                detail="unverifiable_static_finish",
+            )
+        )
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(
+                    role="user",
+                    content=(
+                        "⚠ Finished WITHOUT a live browser verification — the static "
+                        "deliverable (index.html) exists but no preview server is "
+                        "reachable and this backend cannot run a headless browser, so "
+                        "the render could not be checked here. The files are delivered; "
+                        "note clearly in your summary that the build is UNVERIFIED."
+                    ),
+                ),
             )
         )
         self._loop._browser_verify_refusals = 0
