@@ -383,9 +383,26 @@ def reserved_port_command_violation(
     return None
 
 
-# The static-preview SERVE shape: `python -m http.server <port>` — the ONE reserved-port
-# command we REMAP (vs refuse) so a build can recover. See remap_reserved_preview_serve.
-_HTTP_SERVER_SERVE_RE = re.compile(r"(http\.server\s+)(\d+)")
+# A GENUINE `python -m http.server <port>` SERVE invocation — the real preview-serve
+# command (and its tmux `send-keys` preview-wrapper), NOT serve-shaped TEXT inside
+# echo/print/cat/comments/quotes (which must run verbatim). Two requirements, both
+# needed: (1) the actual `python[3] -m http.server <port>` shape (so `print('http.server
+# 8000')`, `echo 'http.server 8000'` — no `-m http.server` — never match); and (2) the
+# `python` sits at a COMMAND position — the start of the command, after an EXPLICIT shell
+# separator (`;` `&` `|`, which also covers `&&`/`||`), or right after the tmux `send-keys
+# -l '`/`"` literal (the preview wrapper). A serve form that is an ARGUMENT
+# (`echo python3 -m http.server 8000`) or inside a non-tmux quoted string is NOT matched.
+# A bare NEWLINE is deliberately NOT a separator here: it cannot be told apart from a
+# heredoc/multi-line literal body (`cat <<'EOF'\npython3 -m http.server 8000\nEOF`), so —
+# per "when in doubt, do not remap" — a newline-continued serve falls through to the
+# refuse-with-guidance path instead of risking a rewrite of literal text. (`\s*` after an
+# EXPLICIT `;&|` still spans a newline, so a genuine `foo;\npython3 …` sequence remaps.)
+# `pre`/`cmd` are captured and re-emitted verbatim — only the reserved `port` is rewritten.
+_HTTP_SERVER_SERVE_RE = re.compile(
+    r"(?P<pre>^\s*|[;&|]\s*|-l\s+['\"])"
+    r"(?P<cmd>(?:[\w./-]*/)?python[\d.]*\s+-m\s+http\.server\s+)"
+    r"(?P<port>\d+)"
+)
 
 
 def remap_reserved_preview_serve(
@@ -395,10 +412,10 @@ def remap_reserved_preview_serve(
 ) -> str | None:
     """Bug 16 — the RECOVERABLE counterpart to `reserved_port_command_violation`.
 
-    If `command` is (or wraps, via `tmux send-keys ... -l '...'`) a
-    `python -m http.server <port>` STATIC PREVIEW SERVE whose port is a RESERVED
-    control/UI port, return the command with that port rewritten to a process-safe
-    preview port; otherwise return None (nothing to remap).
+    If `command` is (or wraps, via `tmux send-keys ... -l '...'`) a GENUINE
+    `python -m http.server <port>` STATIC PREVIEW SERVE invocation whose port is a
+    RESERVED control/UI port, return the command with that port rewritten to a
+    process-safe preview port; otherwise return None (nothing to remap).
 
     On the process/local shared host a model that serves its deliverable on 8000/5173
     would be refused by the containment scan — and, with no preview established, the
@@ -406,19 +423,26 @@ def remap_reserved_preview_serve(
     remapping the SERVE to a safe port keeps the Bug-7 crash vector CLOSED (we never bind
     a reserved control port) while letting the build finish: the remapped server runs in
     the conversation's `disco-{cid8}-preview` tmux session, so it is conversation-owned
-    and `resolve_preview_port(host_shared=True)` targets it. ONLY the unambiguous
-    `http.server <reserved>` serve shape is remapped — kill commands (`fuser`/`lsof`) and
-    other reserved binds (`--port`, `:8000`, `listen`) are NOT remapped and are left for
-    `reserved_port_command_violation` to refuse with the actionable message above."""
+    and `resolve_preview_port(host_shared=True)` targets it.
+
+    Scope (Bug-16 review): the rewrite touches ONLY a real `python -m http.server`
+    invocation at a command position — NEVER serve-shaped TEXT the model meant to run
+    verbatim (the argument of `echo`/`printf`/`cat`, a `#` comment, a `python -c` string
+    literal, or any non-tmux quoted string). Kill commands (`fuser`/`lsof`) and other
+    reserved binds (`--port`, `:8000`, `listen`) are likewise NOT a `http.server` serve
+    and are left for `reserved_port_command_violation` to refuse with the actionable
+    message above. When in doubt we do NOT remap — a reserved bind that slips through is
+    still refused-with-guidance, which is safer than silently rewriting an unrelated
+    command."""
     reserved = reserved_control_ports() if reserved is None else reserved
     safe_port = (
         process_safe_preview_port(reserved=reserved) if safe_port is None else safe_port
     )
 
     def _sub(m: re.Match[str]) -> str:
-        if int(m.group(2)) in reserved:
-            return f"{m.group(1)}{safe_port}"
-        return m.group(0)
+        port = int(m.group("port"))
+        new_port = safe_port if port in reserved else port
+        return f"{m.group('pre')}{m.group('cmd')}{new_port}"
 
     new = _HTTP_SERVER_SERVE_RE.sub(_sub, command)
     return new if new != command else None

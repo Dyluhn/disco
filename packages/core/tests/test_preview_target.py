@@ -297,6 +297,48 @@ def test_remap_leaves_non_reserved_and_non_serve_commands_untouched():
     assert remap_reserved_preview_serve("serve -l 0.0.0.0:8000", r) is None
 
 
+def test_remap_never_touches_serve_shaped_text_in_echo_print_or_quotes():
+    # Bug-16 REVIEW: the rewrite must touch ONLY a genuine `python -m http.server`
+    # invocation at a command position — NEVER serve-shaped TEXT the model meant to
+    # run verbatim. Each of these must come back None (unchanged), so the model's
+    # intended output / string literal is never silently corrupted + executed.
+    r = reserved_control_ports()
+    for cmd in (
+        # serve form as the ARGUMENT of echo (not a command) — must run verbatim
+        "echo python3 -m http.server 8000",
+        "echo 'python3 -m http.server 8000'",
+        'printf "%s" "python3 -m http.server 8000"',
+        # serve-shaped substring inside a python -c string literal (no `-m http.server`)
+        "python3 -c \"print('http.server 8000')\"",
+        # a bare quoted serve-shaped string (no -m http.server invocation)
+        "echo 'http.server 8000'",
+        # a shell comment that mentions the serve form
+        "# run python3 -m http.server 8000 to preview",
+        "ls  # python3 -m http.server 8000",
+        # cat of a literal mentioning the serve form
+        "cat <<'EOF'\npython3 -m http.server 8000\nEOF",
+    ):
+        assert remap_reserved_preview_serve(cmd, r) is None, cmd
+
+
+def test_remap_matches_real_serve_at_command_positions():
+    # The genuine serve invocation IS remapped at each real command position:
+    # at the start, after a shell separator, and via the tmux `-l` preview literal.
+    r = reserved_control_ports()
+    safe = process_safe_preview_port(reserved=r)
+    assert remap_reserved_preview_serve("python3 -m http.server 8000", r) == (
+        f"python3 -m http.server {safe}"
+    )
+    # after `&&` — only the serve's port is rewritten, the `cd` prefix is preserved
+    assert remap_reserved_preview_serve("cd build && python3 -m http.server 8000", r) == (
+        f"cd build && python3 -m http.server {safe}"
+    )
+    # an absolute python path still counts as a real invocation
+    assert remap_reserved_preview_serve("/usr/bin/python3 -m http.server 5173", r) == (
+        f"/usr/bin/python3 -m http.server {safe}"
+    )
+
+
 def test_remap_then_resolver_targets_the_conversation_owned_safe_port():
     # The full Bug-16 chain: remap → the safe port is served in disco-{cid8}-preview →
     # conversation-owned → resolve_preview_port(host_shared=True) targets it (never 8000).

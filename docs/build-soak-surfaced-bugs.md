@@ -778,6 +778,14 @@ default auto-serve, NOT a raw model-launched `http.server <reserved>` via shell/
   targets it → the build can FINISH. The containment refusal STILL runs on the (possibly remapped) command,
   so a reserved-port KILL (`fuser`/`lsof`) and any arbitrary reserved bind (`--port`, `:8000`, `listen`) are
   NOT remapped and still exit 126 before the subprocess launcher.
+  - **Remap scope (Bug-16 review hardening):** the rewrite is anchored to a GENUINE `python -m http.server
+    <port>` invocation at a COMMAND position (start of command, after an explicit `;`/`&`/`|` separator, or
+    after the tmux `send-keys -l '`/`"` preview literal) — it does **NOT** touch serve-shaped TEXT the model
+    meant to run verbatim (the argument of `echo`/`printf`/`cat`, a `#` comment, a `python -c` string
+    literal, a heredoc body, or any non-tmux quoted string). A bare newline is deliberately NOT treated as a
+    separator (indistinguishable from a heredoc line break). When the shape is ambiguous it is left
+    unchanged: a real reserved bind that slips through is still refused-with-guidance, which is safer than
+    silently rewriting + executing an unrelated command.
 - **3a actionable refusal** — `reserved_port_command_violation`'s message now names the rejected port, the
   whole reserved set, AND a concrete safe replacement ("serve … on a non-reserved port such as 3000
   instead"). And `_exec_outcome` (`system.py`) promotes an `ExecResult(126, stderr="refused: …")` to the
@@ -790,12 +798,15 @@ still rejected; isolated containers keep 8000 canonical; W-45 broken-app still f
 
 **Proof — LIVE soak was running (local 27B busy), so per policy the UNIT tests are the required proof** (no
 live soak run, port 8000 never bound by this work): `test_preview_target.py` (actionable message; remap of
-bare + tmux-wrapped serve; remap leaves non-reserved/kills/arbitrary-binds untouched; remap→conversation-
-owned→resolver-targets-safe-port composition), `test_sandbox.py` (process `exec_shell` remaps a reserved
-serve before exec via an `echo` proxy — no real bind; kills + arbitrary binds still refused 126 with the
-actionable message), `test_shell_spill.py` (a `refused:` 126 surfaces as the `error` text; ordinary nonzero
-exits keep the concise summary). Ruff + basedpyright clean, import-linter KEPT, preview/verify/finish/shell
-suite green. (One pre-existing, untouched env-dependent assertion in
+bare + tmux-wrapped serve; remap matches a real serve at each command position incl. after `&&` and an
+absolute python path; remap leaves non-reserved/kills/arbitrary-binds untouched; **review negatives — a
+serve-shaped string inside echo/printf/`python -c`/quotes/comment/heredoc is NEVER rewritten**;
+remap→conversation-owned→resolver-targets-safe-port composition), `test_sandbox.py` (process `exec_shell`
+remaps a reserved serve before exec — proven by spying on the subprocess launcher so NO real bind happens,
+the LAUNCHED command already carries the safe port for both the bare + tmux-wrapper forms; kills + arbitrary
+binds still refused 126 with the actionable message), `test_shell_spill.py` (a `refused:` 126 surfaces as the
+`error` text; ordinary nonzero exits keep the concise summary). Ruff + basedpyright clean, import-linter
+KEPT, preview/verify/finish/shell suite green. (One pre-existing, untouched env-dependent assertion in
 `test_process_backend_expose_port_defense` fails only because the LIVE soak currently holds port 3000 — not
 a regression of this change.)
 

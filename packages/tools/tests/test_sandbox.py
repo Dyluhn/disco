@@ -191,12 +191,15 @@ async def test_process_backend_expose_port_defense():
         await inst.destroy()
 
 
-async def test_process_exec_shell_remaps_reserved_preview_serve():
-    # Bug 16 (§17 no-fluke): a reserved-port preview SERVE is REMAPPED to a safe port
-    # BEFORE execution, instead of refused — so a model serving on 8000 recovers rather
-    # than STUCKing. Proven hermetically via an `echo` proxy (NO real bind: we never
-    # touch port 8000/3000) that the reserved port has already been rewritten by the
-    # time the command runs.
+async def test_process_exec_shell_remaps_reserved_preview_serve(monkeypatch):
+    # Bug 16 (§17 no-fluke): a GENUINE reserved-port preview SERVE is REMAPPED to a safe
+    # port BEFORE execution, instead of refused — so a model serving on 8000 recovers
+    # rather than STUCKing. Proven hermetically by spying on the subprocess launcher (NO
+    # real bind: we never touch port 8000/3000) — the launched command must already carry
+    # the safe port. (The review NEGATIVES — serve-shaped text in echo/print/quotes is
+    # never rewritten — are asserted at the function level in test_preview_target.py,
+    # where the separate, pre-existing containment refusal does not interfere.)
+    import asyncio
     import tempfile
     from pathlib import Path
 
@@ -207,15 +210,40 @@ async def test_process_exec_shell_remaps_reserved_preview_serve():
     from disco.tools.sandbox.process import ProcessSandboxInstance
 
     safe = str(process_safe_preview_port(reserved=reserved_control_ports()))
+
+    captured: list[str] = []
+
+    class _FakeProc:
+        returncode = 0
+
+        async def communicate(self):
+            return (b"", b"")
+
+    async def _fake_create(cmd, **kwargs):
+        captured.append(cmd)
+        return _FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_create)
+
     with tempfile.TemporaryDirectory() as tmp:
         inst = ProcessSandboxInstance("i", "o", "c", SandboxSpec(), Path(tmp))
-        # `echo ... http.server 8000` would normally trip the containment refusal; the
-        # remap rewrites the reserved port first, so the command runs and echoes `safe`.
-        res = await inst.exec_shell("echo python3 -m http.server 8000", timeout_s=10)
-        assert res.exit_code == 0, res.stderr
-        assert safe in res.stdout
-        assert "8000" not in res.stdout  # the reserved port was rewritten before exec
-        await inst.destroy()
+
+        # A real serve on a reserved port → the LAUNCHED command carries the safe port,
+        # never 8000 (remapped before exec; the agent-server control port is never bound).
+        captured.clear()
+        await inst.exec_shell("python3 -m http.server 8000", timeout_s=10)
+        assert captured == [f"python3 -m http.server {safe}"]
+        assert "8000" not in captured[0]
+
+        # The tmux preview-wrapper form (how shell_exec("preview", ...) reaches us) too.
+        captured.clear()
+        await inst.exec_shell(
+            "tmux send-keys -t disco-c-preview -l 'python3 -m http.server 8000'",
+            timeout_s=10,
+        )
+        assert captured == [
+            f"tmux send-keys -t disco-c-preview -l 'python3 -m http.server {safe}'"
+        ]
 
 
 async def test_process_exec_shell_still_refuses_reserved_kill_and_arbitrary_bind():
