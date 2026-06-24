@@ -288,14 +288,31 @@ def plan_steps_complete(events: list[Event]) -> bool:
 
 def actions_since_last_resume(events: list[Event]) -> int:
     """Count ActionEvents (excluding meta/bookkeeping tools and the
-    verify-on-finish probe) since the last
-    StatusEvent(RUNNING, detail="resumed") or since start."""
+    verify-on-finish probe) since the last resume boundary, or since start.
+
+    The resume boundary is the REAL one, keyed producer-agnostically exactly
+    like `consecutive_noops` (fb60fc8):
+      * a `StatusEvent(PAUSED)` — everything after the most recent pause is the
+        post-resume segment, so the PAUSED is the boundary. This covers BOTH
+        resume producers: resume_service appends a RUNNING flip after the
+        PAUSED, AND `AgentLoop.resume()` emits a *bare* `StatusEvent(RUNNING)`
+        with no detail. A PAUSED only lands when the loop actually paused and
+        returned, so any later events are post-resume; a normal run's bare
+        RUNNING (no preceding PAUSED) is neutral and never resets mid-run.
+      * `StatusEvent(RUNNING, detail="resumed")` — the resume_service flip,
+        kept so an IDLE-with-unfinished-plan resume (legal, NO preceding PAUSED
+        in the log) still resets.
+
+    Keying ONLY on detail=="resumed" (the original) NEVER matched the
+    bare-RUNNING resume that `AgentLoop.resume()` emits, so after a resume that
+    FOLLOWED prior work this returned the STALE pre-pause count — and the BW-02
+    STUCK escalation's `== 0` gate never fired, re-pausing forever (codex P1,
+    the twin of the fb60fc8 consecutive_noops bare-RUNNING blind spot)."""
     count = 0
     for e in reversed(events):
-        if (
-            isinstance(e, StatusEvent)
-            and e.status == ConversationStatus.RUNNING
-            and e.detail == "resumed"
+        if isinstance(e, StatusEvent) and (
+            e.status == ConversationStatus.PAUSED
+            or (e.status == ConversationStatus.RUNNING and e.detail == "resumed")
         ):
             break
         if isinstance(e, ActionEvent) and e.tool_call is not None:

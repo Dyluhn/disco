@@ -534,6 +534,21 @@ def test_actions_since_last_resume_resets_at_marker():
     assert signals.actions_since_last_resume([resumed, probe]) == 0
     assert signals.actions_since_last_resume([resumed, probe, shell]) == 1
 
+    # codex P1 / fb60fc8 twin: AgentLoop.resume() emits a BARE RUNNING (no
+    # detail), AND a PAUSED is itself a resume boundary. Pre-pause work must NOT
+    # leak past it — otherwise the BW-02 STUCK escalation's `== 0` gate stays
+    # False forever after a resume that followed real work.
+    paused = StatusEvent(status=ConversationStatus.PAUSED, detail="actionless")
+    bare_running = StatusEvent(status=ConversationStatus.RUNNING)
+    # prior file_read, then PAUSED, then a bare-RUNNING resume, then nothing:
+    # zero actions since the real resume boundary (NOT 1 counting the pre-pause shell).
+    assert signals.actions_since_last_resume([shell, paused, bare_running]) == 0
+    assert signals.actions_since_last_resume([shell, paused]) == 0
+    # a real action AFTER the bare-RUNNING resume DOES count.
+    assert signals.actions_since_last_resume([shell, paused, bare_running, shell]) == 1
+    # a normal-run bare RUNNING with NO preceding PAUSED is neutral (does not reset).
+    assert signals.actions_since_last_resume([shell, bare_running, shell]) == 2
+
 
 # ---- meta-tool suppression until first real action (Phase-B re-run #4) ----------
 #

@@ -342,3 +342,59 @@ async def test_action_between_pauses_does_not_escalate():
     assert statuses[-1].status == ConversationStatus.PAUSED
     assert statuses[-1].detail == "actionless"
     assert not any(s.status == ConversationStatus.STUCK for s in statuses)
+
+
+async def test_bare_running_resume_after_prior_work_still_escalates_to_stuck():
+    """codex P1 — the bare-RUNNING resume blind spot. A run that DID real work
+    (a file_read) BEFORE the first actionless pause, then is resumed by the live
+    `AgentLoop.resume()` BARE StatusEvent(RUNNING) (NO detail="resumed"), then
+    again does zero actions, MUST still escalate to STUCK. The old
+    `actions_since_last_resume` keyed only on detail=="resumed", so it counted
+    the pre-pause file_read (>0) and the `== 0` escalation gate never fired —
+    the build re-paused forever. Resetting at the real resume boundary (the
+    PAUSED / bare RUNNING) closes it."""
+    loop, store = build_loop(ScriptedAgent([]))
+    paused = StatusEvent(status=ConversationStatus.PAUSED, detail="actionless")
+    bare_resume = StatusEvent(status=ConversationStatus.RUNNING)  # the LIVE resume marker
+    events = [
+        _undone_plan(),
+        _file_read_action(),  # REAL work happened before the first pause
+        paused,  # the FIRST (useful) actionless pause
+        bare_resume,  # AgentLoop.resume(): bare RUNNING, no detail
+        _agent_msg("still thinking..."),  # zero-action segment
+        _agent_msg("almost there..."),
+        _agent_msg("ok..."),
+    ]
+    landed = await loop._valve.actionless_valve(events, loop._ACTIONLESS_BREAK_CAP)
+    assert landed is True
+    statuses = [e for e in await store.get_events(CID) if isinstance(e, StatusEvent)]
+    assert statuses, "the valve must land a terminal"
+    assert statuses[-1].status == ConversationStatus.STUCK
+    assert statuses[-1].detail == "actionless_loop"
+    assert not any(
+        s.status == ConversationStatus.PAUSED and s.detail == "actionless" for s in statuses
+    )
+
+
+async def test_real_action_after_bare_running_resume_does_not_escalate():
+    """The mirror guard: a run resumed by a BARE RUNNING that THEN does real
+    work (a file_read after the resume) is NOT a degenerate loop — it must pause
+    normally, never STUCK. Resetting the counter at the bare-RUNNING boundary
+    must not over-fire on a genuinely-productive resumed segment."""
+    loop, store = build_loop(ScriptedAgent([]))
+    paused = StatusEvent(status=ConversationStatus.PAUSED, detail="actionless")
+    bare_resume = StatusEvent(status=ConversationStatus.RUNNING)
+    events = [
+        _undone_plan(),
+        _file_read_action(),  # pre-pause work
+        paused,
+        bare_resume,  # bare RUNNING resume
+        _file_read_action(),  # the model ACTED this segment → not degenerate
+        _agent_msg("read another file, now thinking..."),
+    ]
+    landed = await loop._valve.actionless_valve(events, loop._ACTIONLESS_BREAK_CAP)
+    assert landed is True
+    statuses = [e for e in await store.get_events(CID) if isinstance(e, StatusEvent)]
+    assert statuses[-1].status == ConversationStatus.PAUSED
+    assert statuses[-1].detail == "actionless"
+    assert not any(s.status == ConversationStatus.STUCK for s in statuses)
