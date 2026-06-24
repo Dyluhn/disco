@@ -165,6 +165,55 @@ class Valve:
         serve spams and ~20 prose messages sailed past every DC-05a cap until
         the stuck detector fired ~95 events later."""
         incomplete, _ = signals.plan_is_incomplete(events)
+        # BW-01 — while a plan REVISION is pending (the build re-entered PLANNING
+        # via request_plan and has NOT been re-approved), every terminal decision
+        # below would key off the STALE prior-revision plan (still marked complete)
+        # and force-FINISH a build the user is actively re-planning. Suppress the
+        # stale-plan FINISH decisions for this turn — both the completed_via_notify
+        # done-build finish (3 no-ops) AND the generic noop_limit→FINISHED (6) — so
+        # a pending re-plan can never read as a COMPLETED build. At the 3-no-op cap
+        # the run falls through to the plan-nudge; at the 6-no-op CEILING it does
+        # NOT fall through to an infinite nudge (which would HANG) — it emits a
+        # NON-FINISH PAUSED(actionless) halt instead (see below). Releases
+        # automatically once the revised plan is approved (then plan_approved.seq >
+        # planning.seq → this is False again and finish is allowed).
+        pending_revision = signals.in_planning_for_revision(events)
+        # BW-01 follow-up 2 — bounded halt for a pending re-plan that spins in
+        # PLANNING on tool-less turns. The ceiling branch below keys off the noop
+        # counter, but a BLANK tool-less planning turn moves NEITHER
+        # consecutive_noops NOR _invisible_steps (the planning-mode gate emits only
+        # the ENVIRONMENT plan-nudge and never bumps the invisible-step counter),
+        # so a model emitting prose/blank/nothing in planning racks up turns while
+        # `noops` stays 0 → the run hangs (codex P1). This stateless, noop-
+        # INDEPENDENT bound counts the planning turns since the latest `planning`
+        # marker (no later PlanEvent/plan_approved) and HALTS at the same ceiling
+        # the noop ladder uses — a NON-FINISH PAUSED(actionless), never a stale-plan
+        # FINISH. It is gated on `pending_revision` so a normal first build is
+        # untouched, and releases automatically once a revised plan is submitted/
+        # approved (then planning_turns_since_replan == 0 again).
+        if (
+            pending_revision
+            and signals.planning_turns_since_replan(events)
+            >= self._loop._max_consecutive_noops
+        ):
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "The agent stayed in planning for several turns without"
+                            " submitting a revised plan while a re-plan is pending —"
+                            " pausing instead of burning tokens. Resume to continue,"
+                            " or send a new instruction."
+                        ),
+                    ),
+                )
+            )
+            await self._loop._emit(
+                StatusEvent(status=ConversationStatus.PAUSED, detail="actionless")
+            )
+            return True
         if noops >= self._loop._ACTIONLESS_BREAK_CAP:
             # B5 — completion BEFORE pause. A model that signals "done" via
             # notify_user (×N) instead of finish() trips the actionless valve.
@@ -179,7 +228,8 @@ class Valve:
             # FINISH an empty workspace; a "done" plan with zero state-changing
             # actions is a hallucinated completion, not a build.
             if (
-                signals.plan_steps_complete(events)
+                not pending_revision
+                and signals.plan_steps_complete(events)
                 and signals.productive_actions_since_approval(events) > 0
             ):
                 # W-32 — DO NOT force-finish directly. The old code emitted
@@ -216,6 +266,35 @@ class Valve:
                 return True
 
         if noops >= self._loop._max_consecutive_noops:
+            if pending_revision:
+                # BW-01 follow-up — the original fix suppressed the stale-plan
+                # FINISH here, but `in_planning_for_revision` is True for ANY
+                # pending plan (a re-plan, the first plan, or a no-PlanEvent run)
+                # where the model never submits — so simply skipping this terminal
+                # let the build HANG on an infinite nudge (no FINISH, no halt).
+                # Refinement: still never FINISH off a stale plan, but emit a
+                # NON-FINISH HALT at the ceiling so the run can't spin forever —
+                # PAUSED(actionless), matching the 3-no-op actionless pause, so the
+                # user can resume/redirect. Releases automatically once the revised
+                # plan is approved (then this is False again and finish is allowed).
+                await self._loop._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                "The agent produced repeated responses without"
+                                " submitting a revised plan while a re-plan is"
+                                " pending — pausing instead of burning tokens."
+                                " Resume to continue, or send a new instruction."
+                            ),
+                        ),
+                    )
+                )
+                await self._loop._emit(
+                    StatusEvent(status=ConversationStatus.PAUSED, detail="actionless")
+                )
+                return True
             # The model is spinning without acting and won't stop — end
             # cleanly rather than burn. (A real run resumes on a user steer;
             # the prompt steers toward finish/act.)
