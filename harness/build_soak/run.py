@@ -33,6 +33,7 @@ import yaml
 from . import failure_codes as fc
 from .adapters.disco_api import (
     AWAITING_PLAN_APPROVAL,
+    PAUSED_STATE,
     CollectedRun,
     DiscoApiClient,
     InfraProbeError,
@@ -45,6 +46,7 @@ _DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 _DEFAULT_OUT = "test-record/build-soak"
 _SCENARIOS = Path(__file__).resolve().parent / "scenarios.yaml"
 _MAX_GATES = 8  # bound the approve loop so a gate flap can't spin forever
+_MAX_RESUMES = 3  # bound PAUSED-resume so an actionless-paused build can't spin forever
 
 
 # ---- scenario loading -------------------------------------------------------
@@ -104,6 +106,7 @@ async def _drive_to_terminal(
             _inject_when_writing(client, cid, mid_run, timeline, timeout_s)
         )
     gates = 0
+    resumes = 0
     try:
         while True:
             if autonomous:
@@ -118,6 +121,23 @@ async def _drive_to_terminal(
                 # re-read as the same gate and double-approved (wastes the gate budget).
                 await client.wait_until_status_leaves(
                     cid, AWAITING_PLAN_APPROVAL, timeout_s=min(timeout_s, 60.0)
+                )
+                continue
+            if status == PAUSED_STATE and resumes < _MAX_RESUMES:
+                # A cooperative / actionless PAUSE is RESUMABLE — the runner acts as the
+                # user who hits Resume. BOUNDED (≤ _MAX_RESUMES) so a build that just keeps
+                # actionless-pausing can't spin forever; after the budget it falls through
+                # to the terminal/stop return and the oracle classifies the non-finished
+                # run (BUILD_DID_NOT_FINISH), never a silent pass.
+                resumes += 1
+                resp = await client.resume(cid)
+                timeline.append(f"resumed PAUSED run (resume {resumes}, http {resp.get('status')})")
+                if int(resp.get("status", 0)) >= 400:
+                    # not resumable (409) — stop retrying; let the oracle judge.
+                    timeline.append("resume rejected (not resumable) — stopping")
+                    return status
+                await client.wait_until_status_leaves(
+                    cid, PAUSED_STATE, timeout_s=min(timeout_s, 60.0)
                 )
                 continue
             timeline.append(f"reached terminal/stop status: {status}")
@@ -265,6 +285,12 @@ def assemble_dossier(
         "state.final.json": f"{conv_rel}/state.final.json",
         "workspace-manifest.json": f"{conv_rel}/workspace-manifest.json",
     }
+    # P1 (codex): the PREVIEW dossier is preview TRUTH the oracle adjudicates on — it
+    # MUST be under the hash lock too, else a preview-health/served-html tamper would
+    # not trip the §6 INVALID_RUN. Hash both preview files when a preview was captured.
+    if run.preview is not None:
+        evidence_files["preview/health.json"] = f"{conv_rel}/preview/health.json"
+        evidence_files["preview/served.html"] = f"{conv_rel}/preview/served.html"
     manifest = EvidenceManifest(
         run_id=run_id,
         scenario_id=str(scenario.get("id")),

@@ -8,10 +8,12 @@ from __future__ import annotations
 import json
 import sqlite3
 
+import httpx
 import pytest
 from _eventlog import clean_smoke_log
 
 from harness.build_soak.adapters.disco_api import DiscoApiClient
+from harness.build_soak.evidence import load_manifest, verify_evidence_unchanged
 from harness.build_soak.run import (
     assemble_dossier,
     classify_dossier,
@@ -365,7 +367,187 @@ async def test_mid_run_transport_loss_is_invalid_run(tmp_path):
     assert transport.posts and transport.posts[0][0] == "/conversations"
 
 
+# ---- P1#2: pre-create infra gate catches the httpx hierarchy ----------------
+
+
+@pytest.mark.asyncio
+async def test_infra_gate_catches_httpx_connect_error(tmp_path):
+    # codex P1#2: HttpTransport.health() raises httpx.ConnectError (NOT an OSError
+    # subclass) for a dead server. The pre-create probe must catch the httpx hierarchy
+    # -> INFRA_FAILURE, never a raw crash / PASS / FAIL.
+    class _HttpxDownTransport(FakeTransport):
+        async def health(self):
+            raise httpx.ConnectError("All connection attempts failed")
+
+    transport = _HttpxDownTransport(tmp_path / "disco.db", states=["FINISHED"])
+    client = _client(transport, tmp_path)
+    record = await run_once(
+        client,
+        _smoke_scenario(),
+        run_id="run_httpx_001",
+        out_root=tmp_path / "out",
+        model="m",
+        autonomous=False,
+        commit="abc",
+        timeout_s=5,
+    )
+    assert record["status"] == "INFRA_FAILURE"
+    assert record["code"] == "agent_server_unreachable_before_conversation"
+    assert transport.posts == []  # never created a conversation
+
+
+# ---- PAUSED-resume runner behavior ------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_paused_then_finished_resumes_to_terminal(tmp_path):
+    # The runner ACTS AS THE USER: a PAUSED (actionless) run is RESUMABLE, so the drive
+    # resumes it and proceeds to the real terminal.
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())
+    transport = FakeTransport(
+        db,
+        states=["RUNNING", "PAUSED", "RUNNING", "FINISHED", "FINISHED"],
+        workspace={"index.html": "<h1>Build Smoke OK</h1>"},
+        preview_html="<h1>Build Smoke OK</h1>",
+    )
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    scenario = _smoke_scenario()
+    run = await drive_scenario(client, scenario, model="m", autonomous=False, timeout_s=2)
+    # it issued a resume (POST /resume)
+    assert any(p[0].endswith("/resume") for p in transport.posts)
+    base = assemble_dossier(
+        tmp_path / "out", "run_resume_001", scenario, run, model="m", autonomous=False
+    )
+    classification = classify_dossier(base, scenario, run, autonomous=False)
+    assert classification["status"] == "PASS", classification
+
+
+@pytest.mark.asyncio
+async def test_paused_forever_is_bounded_then_build_did_not_finish(tmp_path):
+    # A build that just keeps actionless-pausing is resumed a BOUNDED number of times,
+    # then the non-finished run classifies BUILD_DID_NOT_FINISH — never a silent pass,
+    # never an infinite resume spin.
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log()[:-1])  # no FINISHED status
+    transport = FakeTransport(
+        db,
+        states=["RUNNING"] + ["PAUSED"] * 12,
+        workspace={"index.html": "<h1>Build Smoke OK</h1>"},
+        preview_html="<h1>Build Smoke OK</h1>",
+    )
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    scenario = _smoke_scenario()
+    record = await run_once(
+        client,
+        scenario,
+        run_id="run_paused_001",
+        out_root=tmp_path / "out",
+        model="m",
+        autonomous=False,
+        commit="abc",
+        timeout_s=0.3,
+    )
+    resumes = sum(1 for p in transport.posts if p[0].endswith("/resume"))
+    assert resumes == 3  # _MAX_RESUMES — bounded
+    assert record["status"] == "FAIL"
+    assert record["code"] == "BUILD_DID_NOT_FINISH"
+
+
+# ---- TIMEOUT + unhandled-gate fail-closed (no silent pass / no hang) ---------
+
+
+@pytest.mark.asyncio
+async def test_poll_timeout_is_not_a_silent_pass(tmp_path):
+    # The run never reaches a terminal/gate within the deadline -> poll TIMEOUT -> the
+    # collected non-finished run classifies BUILD_DID_NOT_FINISH (not PASS).
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log()[:-1])  # no FINISHED
+    transport = FakeTransport(
+        db,
+        states=["RUNNING"] * 6,  # never terminal
+        workspace={"index.html": "<h1>Build Smoke OK</h1>"},
+        preview_html="<h1>Build Smoke OK</h1>",
+    )
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    record = await run_once(
+        client,
+        _smoke_scenario(),
+        run_id="run_timeout_001",
+        out_root=tmp_path / "out",
+        model="m",
+        autonomous=False,
+        commit="abc",
+        timeout_s=0.2,
+    )
+    assert record["status"] == "FAIL"
+    assert record["code"] == "BUILD_DID_NOT_FINISH"
+
+
+@pytest.mark.asyncio
+async def test_unhandled_gate_does_not_hang_and_fails_closed(tmp_path):
+    # A gate the runner does not act on (e.g. AWAITING_USER_QUESTION on a bare-Build
+    # scenario) must NOT hang — the drive returns it, and the non-finished run is judged
+    # (not a pass).
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log()[:-1])
+    transport = FakeTransport(
+        db,
+        states=["RUNNING", "AWAITING_USER_QUESTION", "AWAITING_USER_QUESTION"],
+        workspace={"index.html": "<h1>Build Smoke OK</h1>"},
+        preview_html="<h1>Build Smoke OK</h1>",
+    )
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    record = await run_once(
+        client,
+        _smoke_scenario(),
+        run_id="run_gate_001",
+        out_root=tmp_path / "out",
+        model="m",
+        autonomous=False,
+        commit="abc",
+        timeout_s=2,
+    )
+    assert record["status"] != "PASS"
+    assert record["code"] == "BUILD_DID_NOT_FINISH"
+
+
 # ---- evidence lock freezes the dossier --------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_preview_dossier_is_evidence_locked(tmp_path):
+    # codex P1#1: the PREVIEW dossier is adjudicated truth — it MUST be under the §6
+    # hash lock, so a tampered served.html / health.json trips INVALID_RUN.
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())
+    transport = FakeTransport(
+        db,
+        states=["AWAITING_PLAN_APPROVAL", "FINISHED", "FINISHED"],
+        workspace={"index.html": "<h1>Build Smoke OK</h1>"},
+        preview_html="<h1>Build Smoke OK</h1>",
+    )
+    client = _client(transport, tmp_path)
+    scenario = _smoke_scenario()
+    run = await drive_scenario(client, scenario, model="m", autonomous=False, timeout_s=5)
+    base = assemble_dossier(
+        tmp_path / "out", "run_pvlock_001", scenario, run, model="m", autonomous=False
+    )
+    manifest = load_manifest(base)
+    # the preview files ARE in the locked set
+    assert "preview/served.html" in manifest.evidence_hashes
+    assert "preview/health.json" in manifest.evidence_hashes
+    assert verify_evidence_unchanged(base, manifest).intact
+    # tamper the served preview -> lock trips
+    (base / "conversations" / _CID / "preview" / "served.html").write_text(
+        "<h1>TAMPERED</h1>", encoding="utf-8"
+    )
+    integrity = verify_evidence_unchanged(base, manifest)
+    assert not integrity.intact
+    assert "preview/served.html" in integrity.mismatches
+
+
+# ---- evidence lock (events) --------------------------------------------------
 
 
 @pytest.mark.asyncio

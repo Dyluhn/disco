@@ -42,9 +42,27 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+import httpx  # the adapter MAY import an http client (oracle path stays disco/http-free)
+
+# Pre-create infra error hierarchy (codex P1#2): the runner-side health probe fails
+# with built-in OSError/ConnectionError/TimeoutError (fake transport, raw sockets) OR,
+# via HttpTransport, with the httpx hierarchy — httpx.ConnectError / ConnectTimeout /
+# TimeoutException / TransportError all subclass httpx.HTTPError, which does NOT
+# subclass OSError. Catch BOTH so a DEAD server pre-create yields INFRA_FAILURE (§9),
+# never a raw crash.
+_PRECREATE_INFRA_ERRORS: tuple[type[Exception], ...] = (
+    TimeoutError,
+    ConnectionError,
+    OSError,
+    httpx.HTTPError,
+)
+
 # ---- status vocabulary (mirrors disco.core.ConversationStatus as plain strings) --
 
 TERMINAL_STATES = frozenset({"FINISHED", "ERROR", "STUCK", "IDLE"})
+# A cooperative / no-progress PAUSE (the actionless valve). NOT terminal — it is
+# RESUMABLE, so the runner (acting as the user) resumes it a bounded number of times.
+PAUSED_STATE = "PAUSED"
 # The terminals that mean WORK ENDED (vs IDLE, which is ALSO the pre-kick resting
 # state). The drive stops on these unconditionally; IDLE only after the run started.
 _WORK_TERMINALS = frozenset({"FINISHED", "ERROR", "STUCK"})
@@ -138,7 +156,7 @@ class DiscoApiClient:
         """
         try:
             status, _body = await self._t.health()
-        except (TimeoutError, ConnectionError, OSError) as exc:
+        except _PRECREATE_INFRA_ERRORS as exc:
             raise InfraProbeError(
                 "agent_server_unreachable_before_conversation",
                 {
@@ -185,6 +203,16 @@ class DiscoApiClient:
     async def approve_plan(self, conversation_id: str) -> None:
         """Approve the pending plan via the REAL WS plan gate (routes/ws.py:95)."""
         await self._t.ws_control(conversation_id, {"type": "approve_plan"})
+
+    async def resume(self, conversation_id: str) -> dict[str, Any]:
+        """Resume a PAUSED (cooperative / actionless) run — the runner ACTS AS THE
+        USER who hits Resume. POST /conversations/{cid}/resume (conversations.py:284,
+        the same mode-agnostic path the WS `resume` frame uses). A 409 (not resumable)
+        is returned as-is so the caller can stop retrying."""
+        status, data = await self._t.post_json(
+            f"/conversations/{conversation_id}/resume", {}
+        )
+        return {"status": status, **(data if isinstance(data, dict) else {})}
 
     async def send_followup(
         self, conversation_id: str, text: str, *, kind: str = "message"
@@ -237,6 +265,9 @@ class DiscoApiClient:
                 return last
             if last in _WORK_TERMINALS:
                 return last
+            if last == PAUSED_STATE:
+                # a cooperative / actionless PAUSE — the driver decides (resume or stop).
+                return last
             if last == "IDLE":
                 if seen_active:
                     return last
@@ -256,6 +287,8 @@ class DiscoApiClient:
             last = self._status_of(await self.get_state(conversation_id))
             if last in _WORK_TERMINALS:
                 return last
+            if last == PAUSED_STATE:
+                return last  # let the driver decide (bounded resume) — never silently spin
             if last == "IDLE":
                 if seen_active:
                     return last

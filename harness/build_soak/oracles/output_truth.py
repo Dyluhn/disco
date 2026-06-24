@@ -68,12 +68,25 @@ class OutputTruthOracle:
             bool(terminal_expected) and term in set(terminal_expected)
         )
         if not finished:
-            # The run did not claim to finish, so there is no false-finish to judge.
+            # FAIL-CLOSED (migration 2026_06_24_paused_incomplete_not_pass): we only reach
+            # here when the scenario REQUIRES output (wants_output) and/or a finished
+            # terminal, but the run never reached one — e.g. the no-progress / actionless
+            # valve PAUSED it, it timed out, or it ended at an unhandled gate. This is NOT a
+            # "false finish" (nothing claimed finished) and it is NOT a PASS: a build that
+            # does not complete is a failure even if some files happen to exist on disk.
+            # Previously this SKIPPED, which let a paused-incomplete run score PASS — the
+            # live-surfaced adjudicator gap (surfaced-bugs Bug 8 / conv_c0ff8684...).
             return [
-                skipping(
+                failing(
                     _ORACLE,
-                    reason=f"run not in a finished terminal state (terminal={term})",
-                    facts={"terminal_status": term},
+                    fc.BUILD_DID_NOT_FINISH,
+                    first_broken_link="required_finish -> terminal_status",
+                    facts={
+                        "terminal_status": term,
+                        "terminal_status_in": terminal_expected,
+                        "reason": "run required to finish + deliver output but never reached "
+                        "a finished/required terminal",
+                    },
                 )
             ]
 

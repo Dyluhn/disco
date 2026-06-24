@@ -72,8 +72,20 @@ def test_preview_content_mismatch():
     assert results[0].code == "PREVIEW_TRUTH_MISMATCH"
 
 
-def test_not_finished_skips_output_truth():
-    # An unfinished run can't be a "false finish".
+def test_not_finished_with_required_output_fails_closed():
+    # migration 2026_06_24_paused_incomplete_not_pass: a run that REQUIRES output but
+    # never reached a finished terminal is NOT a "skip into PASS" — it is
+    # BUILD_DID_NOT_FINISH (the build did not complete). (Previously this SKIPPED, which
+    # let a paused-incomplete run score PASS — surfaced-bugs Bug 8.)
     unfinished = clean_smoke_log()[:-1]  # drop the FINISHED status
     results = _run(workspace={"other.html": "x"}, events=unfinished)
+    assert results[0].code == "BUILD_DID_NOT_FINISH"
+    assert results[0].facts["terminal_status"] is None
+
+
+def test_not_finished_without_output_assertion_still_skips():
+    # The gate only fires where a finish was actually REQUIRED. A scenario asserting no
+    # output truth still SKIPs on a non-finished run (unchanged).
+    unfinished = clean_smoke_log()[:-1]
+    results = _run(scenario={"id": "x", "assertions": {}}, events=unfinished)
     assert results[0].skipped

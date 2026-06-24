@@ -169,6 +169,27 @@ def test_stuck_approve_no_execution_classifies_as_terminal_fail():
     assert c["first_broken_link"] == "approval_status -> execution_action"
 
 
+def test_paused_incomplete_required_output_is_build_did_not_finish():
+    # LIVE-SURFACED adjudicator gap (surfaced-bugs Bug 8): a bare-Build run that wrote
+    # work but PAUSED "actionless" (no-progress valve) instead of FINISHING used to
+    # classify PASS — the required output was never verified because OutputTruth skipped
+    # any non-finished terminal. It must FAIL-CLOSED: BUILD_DID_NOT_FINISH / P1.
+    events = [
+        msg(1, "user", "build a bakery page"),
+        status(2, "RUNNING"),
+        plan(3, revision=1),
+        awaiting(4, 3),
+        status(5, "RUNNING", "plan_approved"),
+        action(6, "file_write", args={"path": "index.html", "content": "x"}, action_id="a6"),
+        observation(7, "a6", tool="file_write"),
+        status(8, "PAUSED", "actionless"),  # the no-progress valve — NOT finished
+    ]
+    c = classify(events, scenario=_SCN, workspace_manifest={"index.html": "Build Smoke OK"})
+    assert c["status"] == "FAIL"
+    assert c["code"] == "BUILD_DID_NOT_FINISH"
+    assert c["severity"] == "P1"
+
+
 def test_classify_run_folder_writes_classification(tmp_path):
     conv = tmp_path / "conversations" / "conv_x"
     conv.mkdir(parents=True)

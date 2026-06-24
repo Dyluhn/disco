@@ -63,6 +63,13 @@ ARTIFACT_TRUTH_MISMATCH = "ARTIFACT_TRUTH_MISMATCH"
 NO_CLEAR_FAILURE_TO_USER = "NO_CLEAR_FAILURE_TO_USER"
 OBSERVATION_WITHOUT_ACTION = "OBSERVATION_WITHOUT_ACTION"
 WRITE_BEFORE_REVISION_APPROVAL = "WRITE_BEFORE_REVISION_APPROVAL"
+# The run was required to FINISH and deliver output (scenario asserts
+# workspace/preview output and/or terminal_status_in) but ended at a non-finished,
+# non-required terminal — e.g. a no-progress / actionless PAUSE, or never reached a
+# terminal at all. NOT a "false finish" (nothing claimed finished); a "never
+# finished". Fail-closed: a build that does not complete is not a PASS even if some
+# files happen to exist (migration 2026_06_24_paused_incomplete_not_pass).
+BUILD_DID_NOT_FINISH = "BUILD_DID_NOT_FINISH"
 
 # ---- P2 — quality bugs (§12) ------------------------------------------------
 
@@ -128,6 +135,7 @@ SEVERITY_BY_CODE: dict[str, str] = {
     NO_CLEAR_FAILURE_TO_USER: P1,
     OBSERVATION_WITHOUT_ACTION: P1,
     WRITE_BEFORE_REVISION_APPROVAL: P1,
+    BUILD_DID_NOT_FINISH: P1,
     # P2
     SLOW_FIRST_PLAN: P2,
     EXCESSIVE_READS_BEFORE_PLAN: P2,
