@@ -10,6 +10,7 @@ to `self._loop.`.
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING
 
 from ..dod import predicate_from_obj
@@ -36,6 +37,38 @@ if TYPE_CHECKING:
     from .engine import AgentLoop
 
 _LOG = logging.getLogger("disco.loop")
+
+# Plan-field wrapper tags the model sometimes ECHOES into the value it submits.
+# `submit_plan` takes plain JSON args, but a model (observed: MiniMax) may leak a
+# stray `<summary>` / `</summary>` (or a sibling plan-field tag) into the summary /
+# step text — e.g. a summary stored verbatim as "...road plane.</summary>". We strip
+# ONLY this closed vocabulary of plan-template tag names (open / close / self-close,
+# case-insensitive) so the stored event is clean, while never touching legitimate
+# markup the plan itself is about (a plan that mentions `<div>` or `<style>` is safe).
+_PLAN_WRAPPER_TAGS = (
+    "summary",
+    "steps",
+    "step",
+    "context",
+    "rationale",
+    "plan",
+    "title",
+    "detail",
+    "description",
+)
+_PLAN_TAG_RE = re.compile(
+    r"</?\s*(?:" + "|".join(_PLAN_WRAPPER_TAGS) + r")\s*/?>",
+    re.IGNORECASE,
+)
+
+
+def _strip_plan_tags(text: str | None) -> str:
+    """Defensively remove leaked plan-template wrapper tags from a submitted plan
+    field (summary / step title / detail / context). Idempotent: a clean field is
+    returned unchanged (modulo surrounding whitespace)."""
+    if not text:
+        return ""
+    return _PLAN_TAG_RE.sub("", text).strip()
 
 
 class Planner:
@@ -109,16 +142,23 @@ class Planner:
         revision = 1 + sum(1 for e in events if isinstance(e, PlanEvent))
         for s in arguments.get("steps") or []:
             if isinstance(s, dict):
-                title = str(s.get("title") or s.get("step") or s.get("name") or "").strip()
-                detail = s.get("detail") or s.get("description")
+                title = _strip_plan_tags(s.get("title") or s.get("step") or s.get("name"))
+                detail = _strip_plan_tags(s.get("detail") or s.get("description")) or None
                 if title:
-                    steps.append(PlanStep(title=title, detail=str(detail) if detail else None))
-            elif isinstance(s, str) and s.strip():
-                steps.append(PlanStep(title=s.strip()))
-        if not steps:
-            steps = [PlanStep(title="(the planner returned no concrete steps)")]
-        summary = str(arguments.get("summary") or "").strip() or "Proposed plan"
-        context = str(arguments.get("context") or arguments.get("rationale") or "").strip()
+                    steps.append(PlanStep(title=title, detail=detail))
+            elif isinstance(s, str):
+                title = _strip_plan_tags(s)
+                if title:
+                    steps.append(PlanStep(title=title))
+        # When the model submits a summary but NO real steps, keep `steps` EMPTY
+        # rather than inserting a fake "(the planner returned no concrete steps)"
+        # placeholder — that rendered as a broken numbered "1." step in the UI.
+        # Every plan consumer already guards `not plan.steps` (the honest no-steps
+        # state), so the UI shows a clean summary-only plan card instead.
+        summary = _strip_plan_tags(arguments.get("summary")) or "Proposed plan"
+        context = _strip_plan_tags(
+            arguments.get("context") or arguments.get("rationale")
+        )
         # C18 — harvest the predicates (revision-scoped). We walk the raw
         # args (not the rebuilt `steps`) so we can preserve the 1-based
         # step index even when the title/format was leniently coerced.

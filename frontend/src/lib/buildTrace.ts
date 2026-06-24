@@ -610,6 +610,13 @@ export interface PlanView {
   context: string;
 }
 
+// The legacy backend inserted this sentinel step when the model submitted a plan with
+// a summary but no real steps; it rendered as a broken "1. (the planner…)" numbered
+// step. The backend no longer emits it (it keeps `steps` empty now), but historical
+// events still carry it — drop it defensively so old plans render the clean no-steps
+// state. MUST stay byte-identical to the former backend constant in plans.py.
+const LEGACY_NO_STEPS_SENTINEL = "(the planner returned no concrete steps)";
+
 /** The latest proposed plan (highest revision wins — a re-plan supersedes the prior
  * one). Returns null before any plan exists. */
 export function derivePlan(events: AgentEvent[]): PlanView | null {
@@ -620,7 +627,9 @@ export function derivePlan(events: AgentEvent[]): PlanView | null {
       latest = {
         id: e.id,
         summary: e.summary,
-        steps: e.steps,
+        // Drop the legacy no-steps placeholder so a summary-only plan renders cleanly
+        // instead of showing a broken numbered "1. (the planner…)" step.
+        steps: e.steps.filter((s) => s.title !== LEGACY_NO_STEPS_SENTINEL),
         revision: e.revision,
         context: e.context ?? "",
       };
