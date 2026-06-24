@@ -168,12 +168,15 @@ class Valve:
         # BW-01 — while a plan REVISION is pending (the build re-entered PLANNING
         # via request_plan and has NOT been re-approved), every terminal decision
         # below would key off the STALE prior-revision plan (still marked complete)
-        # and force-FINISH a build the user is actively re-planning. Suppress ALL
-        # stale-plan terminals for this turn — both the completed_via_notify
-        # done-build finish AND the generic noop_limit→FINISHED — and fall through
-        # (return False) to the engine's plan-nudge / replan path so the model is
-        # driven toward submit_plan. Releases automatically once the revised plan
-        # is approved (then plan_approved.seq > planning.seq → this is False again).
+        # and force-FINISH a build the user is actively re-planning. Suppress the
+        # stale-plan FINISH decisions for this turn — both the completed_via_notify
+        # done-build finish (3 no-ops) AND the generic noop_limit→FINISHED (6) — so
+        # a pending re-plan can never read as a COMPLETED build. At the 3-no-op cap
+        # the run falls through to the plan-nudge; at the 6-no-op CEILING it does
+        # NOT fall through to an infinite nudge (which would HANG) — it emits a
+        # NON-FINISH PAUSED(actionless) halt instead (see below). Releases
+        # automatically once the revised plan is approved (then plan_approved.seq >
+        # planning.seq → this is False again and finish is allowed).
         pending_revision = signals.in_planning_for_revision(events)
         if noops >= self._loop._ACTIONLESS_BREAK_CAP:
             # B5 — completion BEFORE pause. A model that signals "done" via
@@ -226,13 +229,39 @@ class Valve:
                 )
                 return True
 
-        if noops >= self._loop._max_consecutive_noops and not pending_revision:
+        if noops >= self._loop._max_consecutive_noops:
+            if pending_revision:
+                # BW-01 follow-up — the original fix suppressed the stale-plan
+                # FINISH here, but `in_planning_for_revision` is True for ANY
+                # pending plan (a re-plan, the first plan, or a no-PlanEvent run)
+                # where the model never submits — so simply skipping this terminal
+                # let the build HANG on an infinite nudge (no FINISH, no halt).
+                # Refinement: still never FINISH off a stale plan, but emit a
+                # NON-FINISH HALT at the ceiling so the run can't spin forever —
+                # PAUSED(actionless), matching the 3-no-op actionless pause, so the
+                # user can resume/redirect. Releases automatically once the revised
+                # plan is approved (then this is False again and finish is allowed).
+                await self._loop._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                "The agent produced repeated responses without"
+                                " submitting a revised plan while a re-plan is"
+                                " pending — pausing instead of burning tokens."
+                                " Resume to continue, or send a new instruction."
+                            ),
+                        ),
+                    )
+                )
+                await self._loop._emit(
+                    StatusEvent(status=ConversationStatus.PAUSED, detail="actionless")
+                )
+                return True
             # The model is spinning without acting and won't stop — end
             # cleanly rather than burn. (A real run resumes on a user steer;
             # the prompt steers toward finish/act.)
-            # BW-01: gated on `not pending_revision` so the 6-noop terminal
-            # cannot FINISH off a stale completed plan while the user awaits a
-            # revised plan; the pending-revision turn falls through to the nudge.
             actions_since = signals.actions_since_last_resume(events)
             if incomplete and actions_since == 0:
                 await self._loop._emit(

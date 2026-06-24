@@ -123,12 +123,14 @@ async def _build_rev1_then_enter_planning(**loop_kwargs):
 
 
 # --------------------------------------------------------------------------- #
-# 2. RE-PLAN PENDING → the valve does NOT finish at 3 (completed_via_notify)   #
-#    NOR at 6 (noop_limit) no-op turns; it falls through (returns False).      #
+# 2. RE-PLAN PENDING → the valve never FINISHES off the stale plan: at 3       #
+#    (completed_via_notify) it falls through to the nudge; at the 6-no-op       #
+#    CEILING it HALTS via PAUSED(actionless) — NOT FINISHED, and NOT an         #
+#    infinite nudge (the BW-01 follow-up: never finish, but never hang).        #
 # --------------------------------------------------------------------------- #
 
 
-async def test_pending_revision_suppresses_both_terminal_branches():
+async def test_pending_revision_suppresses_finish_and_halts_at_ceiling():
     loop, store, events = await _build_rev1_then_enter_planning()
 
     # Sanity: this IS the pending-revision state, and WITHOUT the guard the
@@ -138,24 +140,101 @@ async def test_pending_revision_suppresses_both_terminal_branches():
     assert signals.plan_steps_complete(events) is True
     assert signals.productive_actions_since_approval(events) > 0
 
-    # 3 no-ops: the completed_via_notify branch must be SUPPRESSED.
+    # 3 no-ops: the completed_via_notify FINISH must be SUPPRESSED → fall through.
     landed_at_3 = await loop._valve.actionless_valve(events, 3)
     assert landed_at_3 is False  # fell through to the nudge, did not land
 
-    # 6 no-ops: the generic noop_limit→FINISHED branch must be SUPPRESSED too.
-    landed_at_6 = await loop._valve.actionless_valve(events, 6)
-    assert landed_at_6 is False
+    # After the 3-no-op call: no terminal/halt yet, still the pending `planning`.
+    mid = await store.get_events(CID)
+    assert _last_status_detail(mid) == "planning"
 
-    # And crucially: NO terminal off the stale plan was emitted by either call.
+    # 6 no-ops (the CEILING): the stale-plan FINISH stays suppressed, but the run
+    # must HALT rather than hang — a NON-FINISH PAUSED(actionless).
+    landed_at_6 = await loop._valve.actionless_valve(events, 6)
+    assert landed_at_6 is True  # landed a terminal/halt — did NOT hang
+
     after = await store.get_events(CID)
+    # No FINISH off the stale plan was emitted by either call.
     assert not any(
         isinstance(e, StatusEvent)
         and e.status == ConversationStatus.FINISHED
         and e.detail in ("completed_via_notify", "noop_limit")
         for e in after
     )
-    # The most recent status is still the pending-revision `planning`, untouched.
-    assert _last_status_detail(after) == "planning"
+    # The halt is a PAUSED(actionless) — the user can resume/redirect.
+    assert _last_status_detail(after) == "actionless"
+    assert any(
+        isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.PAUSED
+        and e.detail == "actionless"
+        for e in after
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 2b. NEVER-HANG — a re-plan where the model NEVER submits a revised plan and   #
+#     keeps producing no-ops: it must NOT spin forever. Below the ceiling it    #
+#     nudges (False); AT the ceiling it HALTS (PAUSED), never FINISHES.         #
+# --------------------------------------------------------------------------- #
+
+
+async def test_pending_revision_never_submitting_halts_not_hangs():
+    loop, store, events = await _build_rev1_then_enter_planning()
+    assert signals.in_planning_for_revision(events) is True
+
+    # Below the 6-no-op ceiling the valve nudges (returns False) — it does NOT
+    # finish, but it also has not yet halted.
+    for n in (3, 4, 5):
+        assert await loop._valve.actionless_valve(events, n) is False
+    # No new terminal/halt was emitted while nudging — the most recent status is
+    # still the pending-revision `planning` (the nudges emit MessageEvents only).
+    # (The log already carries the rev-1 FINISHED from the prior build.)
+    mid = await store.get_events(CID)
+    assert _last_status_detail(mid) == "planning"
+
+    # AT the ceiling it HALTS — PAUSED(actionless), never returns-False-forever.
+    assert await loop._valve.actionless_valve(events, 6) is True
+    after = await store.get_events(CID)
+    assert _last_status_detail(after) == "actionless"
+    # No valve-emitted FINISH off the stale plan (the rev-1 build FINISHED in the
+    # log is the prior, legitimately-completed revision — not a new terminal).
+    assert not any(
+        isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.FINISHED
+        and e.detail in ("completed_via_notify", "noop_limit")
+        for e in after
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 2c. NEVER-HANG (first plan) — a FIRST plan / no-PlanEvent run that re-entered #
+#     planning but never submits also halts at the ceiling (in_planning_for_    #
+#     revision is True for a never-approved first plan, plan_steps_complete is  #
+#     False — without the ceiling halt this would hang on an infinite nudge).   #
+# --------------------------------------------------------------------------- #
+
+
+async def test_pending_first_plan_never_submitting_halts_at_ceiling():
+    agent = ScriptedAgent([_notify("thinking about the plan...")])
+    loop, store = build_loop(agent)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    await loop.send_message("go")
+    await loop.enter_planning("build me a site")  # planning marker, no plan submitted
+    events = await store.get_events(CID)
+
+    # Pending (planning, never approved); there is NO plan at all.
+    assert signals.in_planning_for_revision(events) is True
+    assert signals.plan_steps_complete(events) is False
+
+    # At the ceiling: HALT via PAUSED(actionless), not FINISHED, not hang.
+    assert await loop._valve.actionless_valve(events, 6) is True
+    after = await store.get_events(CID)
+    assert _last_status_detail(after) == "actionless"
+    assert not any(
+        isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED
+        for e in after
+    )
 
 
 # --------------------------------------------------------------------------- #
