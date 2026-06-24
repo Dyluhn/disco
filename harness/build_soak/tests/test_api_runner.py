@@ -884,6 +884,142 @@ async def test_unhandled_gate_does_not_hang_and_fails_closed(tmp_path):
     assert record["code"] == "BUILD_DID_NOT_FINISH"
 
 
+# ---- Bug 15: progress-aware terminal wait (no false BUILD_DID_NOT_FINISH) ----
+
+
+def _append_event(db_path, cid, seq, *, kind="action", source="agent"):
+    """Append ONE new durable event — the runner's progress signal (advancing max seq)."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO events (conversation_id, seq, id, kind, source, created_at, payload) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (cid, seq, f"evt_{seq}", kind, source, "",
+             json.dumps({"seq": seq, "kind": kind, "source": source})),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+class _ProgressTransport(FakeTransport):
+    """Models a SLOW-BUT-PROGRESSING build: every GET /state appends a NEW event (the
+    progress signal the wait resets its inactivity timer on) and reports RUNNING until
+    `finish_after` polls, then FINISHED forever. `finish_after=None` → never reaches a
+    terminal (always progressing — the hard-cap path)."""
+
+    def __init__(self, db_path, *, finish_after=None, start_seq=100, **kw):
+        super().__init__(db_path, states=["RUNNING"], **kw)
+        self._reads = 0
+        self._finish_after = finish_after
+        self._seq = start_seq
+
+    async def get_json(self, path):
+        if path.endswith("/state"):
+            self._reads += 1
+            self._seq += 1
+            _append_event(self.db_path, self.cid, self._seq)  # NEW event ⇒ progress
+            if self._finish_after is not None and self._reads >= self._finish_after:
+                return 200, {"execution_status": "FINISHED"}
+            return 200, {"execution_status": "RUNNING"}
+        return await super().get_json(path)
+
+
+@pytest.mark.asyncio
+async def test_progress_aware_wait_does_not_cut_off_a_progressing_build(tmp_path):
+    # The must_plan repro at the unit level: a TINY inactivity window (a blind wall-clock
+    # would give up almost immediately) must NOT cut off a build that keeps EMITTING NEW
+    # events — the wait holds until the REAL FINISHED terminal.
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())
+    transport = _ProgressTransport(db, finish_after=8)
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    status = await client.poll_until_terminal_or_gate(_CID, inactivity_s=0.05, hard_cap_s=30.0)
+    assert status == "FINISHED"
+    assert transport._reads >= 8  # it actually waited through many progressing polls
+
+
+@pytest.mark.asyncio
+async def test_progress_aware_wait_inactive_build_returns_inactive_timeout(tmp_path):
+    # No new events + a frozen status for the inactivity window = a genuine wedge →
+    # INACTIVE_TIMEOUT (which the drive falls through to classify normally, a real finding).
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log()[:-1])  # frozen log, no FINISHED
+    transport = FakeTransport(db, states=["RUNNING"] * 6)
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    status = await client.poll_until_terminal(_CID, inactivity_s=0.1, hard_cap_s=30.0)
+    assert status == "INACTIVE_TIMEOUT"
+
+
+@pytest.mark.asyncio
+async def test_progress_aware_wait_hard_cap_bounds_a_progressing_run(tmp_path):
+    # A build that keeps progressing but never reaches a terminal is BOUNDED by the hard
+    # cap — and because it was STILL progressing at the cap, the outcome is the inconclusive
+    # PROGRESSING_TIMEOUT (NOT a wedge), never an infinite wait.
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log()[:-1])
+    transport = _ProgressTransport(db, finish_after=None)  # never terminal, always progressing
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    status = await client.poll_until_terminal(_CID, inactivity_s=10.0, hard_cap_s=0.2)
+    assert status == "PROGRESSING_TIMEOUT"
+    assert transport._reads >= 1  # the run was bounded, not hung forever
+
+
+@pytest.mark.asyncio
+async def test_progressing_cutoff_is_invalid_run_not_product_fail(tmp_path):
+    # THE Bug 15 pin: a still-actively-progressing build cut off by the hard cap is
+    # INCONCLUSIVE (INVALID_RUN / RUN_TIMEOUT_WHILE_PROGRESSING) so §17 re-runs it — it is
+    # NEVER frozen mid-flight and mislabeled a product BUILD_DID_NOT_FINISH.
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log()[:-1])
+    transport = _ProgressTransport(db, finish_after=None)
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    record = await run_once(
+        client,
+        _smoke_scenario(),
+        run_id="run_prog_001",
+        out_root=tmp_path / "out",
+        model="m",
+        autonomous=False,
+        commit="abc",
+        timeout_s=10.0,  # generous inactivity — never trips while events advance
+        hard_cap_s=0.2,  # tiny ceiling — bounds the never-terminating run
+    )
+    assert record["status"] == "INVALID_RUN"
+    assert record["code"] == "RUN_TIMEOUT_WHILE_PROGRESSING"
+    assert record["code"] != "BUILD_DID_NOT_FINISH"
+    assert record["status"] != "FAIL"
+
+
+@pytest.mark.asyncio
+async def test_genuinely_inactive_build_is_a_real_finding_not_inconclusive(tmp_path):
+    # The flip side: a genuinely WEDGED build (no new events, frozen status) for the
+    # inactivity window IS a real product finding — BUILD_DID_NOT_FINISH — NOT the
+    # inconclusive INVALID_RUN reserved for an actively-progressing cutoff.
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log()[:-1])
+    transport = FakeTransport(
+        db,
+        states=["RUNNING"] * 6,
+        workspace={"index.html": "<h1>Build Smoke OK</h1>"},
+        preview_html="<h1>Build Smoke OK</h1>",
+    )
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    record = await run_once(
+        client,
+        _smoke_scenario(),
+        run_id="run_wedge_001",
+        out_root=tmp_path / "out",
+        model="m",
+        autonomous=False,
+        commit="abc",
+        timeout_s=0.1,  # short inactivity — the wedge trips it
+        hard_cap_s=30.0,
+    )
+    assert record["status"] == "FAIL"
+    assert record["code"] == "BUILD_DID_NOT_FINISH"
+
+
 # ---- evidence lock freezes the dossier --------------------------------------
 
 

@@ -89,6 +89,14 @@ UNPARSEABLE_EVENTS = "UNPARSEABLE_EVENTS"
 EVIDENCE_HASH_MISMATCH = "EVIDENCE_HASH_MISMATCH"
 MISSING_REQUIRED_EVIDENCE = "MISSING_REQUIRED_EVIDENCE"
 SCENARIO_CONTRACT_UNSATISFIABLE = "SCENARIO_CONTRACT_UNSATISFIABLE"
+# A POST-create runner-side outcome that is NOT adjudicable as a product result: the
+# runner could not obtain a terminal verdict. RUN_INTERRUPTED — a mid-run transport loss
+# (server crashed / network dropped). RUN_TIMEOUT_WHILE_PROGRESSING (Bug 15) — the hard
+# cap was hit while the build was STILL actively progressing (a slow-but-advancing build
+# cut off mid-flight), so it must NOT be recorded as a product BUILD_DID_NOT_FINISH; §17
+# re-runs an INVALID_RUN instead of freezing a false product failure.
+RUN_INTERRUPTED = "RUN_INTERRUPTED"
+RUN_TIMEOUT_WHILE_PROGRESSING = "RUN_TIMEOUT_WHILE_PROGRESSING"
 
 HARNESS_VALIDITY_CODES = frozenset(
     {
@@ -97,6 +105,8 @@ HARNESS_VALIDITY_CODES = frozenset(
         EVIDENCE_HASH_MISMATCH,
         MISSING_REQUIRED_EVIDENCE,
         SCENARIO_CONTRACT_UNSATISFIABLE,
+        RUN_INTERRUPTED,
+        RUN_TIMEOUT_WHILE_PROGRESSING,
     }
 )
 

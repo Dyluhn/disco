@@ -704,3 +704,52 @@ import-linter KEPT, full tools + core suites green.
 placeholder back. This fix guarantees the placeholder can never mutate disk and the model always gets a
 clean recoverable error on ANY path, but a CAPABLE model is still needed for the gate-level revise/steer
 scenarios to reliably PASS.
+
+### Bug 15 — the runner's terminal wait was a PROGRESS-BLIND wall-clock → a still-progressing build was cut off mid-flight + mislabeled `BUILD_DID_NOT_FINISH` (HARNESS) — FIXED
+
+This was the §17 **no-fluke intermittency source**: the SAME `must_plan_before_tool` scenario PASSED in
+one re-soak and FAILED (`BUILD_DID_NOT_FINISH`) in the next, with no product change between them.
+
+**Root cause** (`harness/build_soak/adapters/disco_api.py` `poll_until_terminal` /
+`poll_until_terminal_or_gate`, used by `run.py` `_drive_to_terminal`): the terminal wait gave up at a
+FIXED wall-clock `timeout_s` *regardless of whether the conversation was still actively producing events*.
+In the confirmed re-soak, `must_plan_before_tool` was emitting an event every ~10–13s and reached FINISHED
+(`completed_via_notify`) at seq 42 — but the runner's 240s deadline hit at ~seq 31 **while the build was
+still progressing**. It froze a non-terminal 32-event snapshot (last status RUNNING) and the classifier
+read the missing terminal as a PRODUCT `BUILD_DID_NOT_FINISH`. The build finished 51s later. This
+conflated "model slow / deadline short" with "the loop failed to finish."
+
+**Fix** (`fix-bug15-progress-timeout`, **harness only** — no product/engine/messages/recitation touched).
+The terminal wait is now **progress-aware** (`DiscoApiClient._poll_progress_aware`,
+`adapters/disco_api.py`). It tracks a cheap progress fingerprint — `(event_count, max_seq)` from the
+durable event log (`_progress_marker`) plus status transitions — and KEEPS WAITING while either advances.
+The wait ends only on:
+- a **genuine terminal / gate / pause** status → returned as before (a slowly-but-genuinely FINISHED run
+  now collects the FULL events incl. the terminal and classifies normally — the must_plan seq-42 case
+  PASSES);
+- **genuine inactivity** — no new events and no status change for the `inactivity_s` window →
+  `INACTIVE_TIMEOUT`, which the drive falls through to classify normally (a real wedge IS a finding:
+  `BUILD_DID_NOT_FINISH` / `STUCK`); or
+- a generous **hard cap** (`hard_cap_s`, default 1200s, well above a normal ~5min build) that bounds a
+  truly-non-terminating run.
+
+**Honest timeout classification:** a hard-cap cutoff reached **while the build was still progressing**
+(events advanced within the inactivity window) returns the new `PROGRESSING_TIMEOUT` sentinel →
+`_drive_to_terminal` raises `InconclusiveRunError` → `run_once` records **`INVALID_RUN`** with code
+`RUN_TIMEOUT_WHILE_PROGRESSING` (`failure_codes.py`, a harness-validity code), NOT a product
+`BUILD_DID_NOT_FINISH`. INVALID_RUN means "the runner could not obtain a terminal verdict," so the §17
+no-fluke policy **re-runs** it instead of recording a false product failure. Genuine inactivity stays a
+real terminal/stuck finding — the two are distinguished (actively-progressing-then-cut-off = inconclusive;
+stopped-progressing/wedged = real).
+
+**The knobs** (`run.py` CLI): `--timeout` is now the **progress-aware inactivity window** (no-progress
+silence budget, default 180s) — NOT a blind wall-clock; the separate **`--hard-cap`** (default 1200s) is
+the safety ceiling. A still-progressing build is never cut off by `--timeout` elapsing.
+
+**Proof** (`tests/test_api_runner.py`, fake transport): (a) a TINY inactivity window does NOT cut off a
+build that keeps emitting events — the wait holds to the real FINISHED; (b) a frozen (no-new-events) build
+returns `INACTIVE_TIMEOUT` → `BUILD_DID_NOT_FINISH` (a real finding, NOT inconclusive); (c) the hard cap
+bounds an always-progressing never-terminating run → `PROGRESSING_TIMEOUT` → `INVALID_RUN` /
+`RUN_TIMEOUT_WHILE_PROGRESSING`, pinned to be **NEVER** `BUILD_DID_NOT_FINISH` / `FAIL`. Ruff +
+basedpyright clean, import-linter KEPT, full build-soak suite green. Live re-run of `must_plan_before_tool`
+against the shared :8000 now WAITS for the real terminal and classifies on it.

@@ -82,6 +82,22 @@ GATE_STATES = frozenset(
 )
 AWAITING_PLAN_APPROVAL = "AWAITING_PLAN_APPROVAL"
 
+# ---- progress-aware terminal-wait sentinels (Bug 15) ------------------------
+# The terminal wait is PROGRESS-AWARE, not a blind wall-clock: while the conversation
+# is still emitting NEW events (max seq / event count advancing) or its status is
+# actively transitioning, we KEEP WAITING. A wall-clock cutoff only ends the wait when
+# the run is GENUINELY INACTIVE (no progress for the inactivity window) or a generous
+# HARD CAP bounds a truly-hung run. The two timeout outcomes are NOT the same finding:
+#   * PROGRESSING_TIMEOUT — the hard cap was hit while the build was STILL actively
+#     progressing (events advanced within the inactivity window). The runner could NOT
+#     obtain a terminal verdict; this is INCONCLUSIVE (model-speed / harness limitation),
+#     NOT a product BUILD_DID_NOT_FINISH → the caller records INVALID_RUN so §17 re-runs it.
+#   * INACTIVE_TIMEOUT — the build went genuinely SILENT (no new events) for the inactivity
+#     window: a real wedge. The caller falls through to normal classification (the
+#     collected non-terminal run is a genuine finding: BUILD_DID_NOT_FINISH / STUCK).
+PROGRESSING_TIMEOUT = "PROGRESSING_TIMEOUT"
+INACTIVE_TIMEOUT = "INACTIVE_TIMEOUT"
+
 # Workspace-snapshot manifest bounds (Bug 9 fix): cap per-file captured content and the
 # number of files walked so a pathological workspace can't blow up the dossier.
 _WS_MANIFEST_MAX_BYTES = 5 * 1024 * 1024  # capture content for files up to 5 MiB
@@ -101,6 +117,20 @@ _RESERVED_CONTROL_PORTS = frozenset({8000, 8800, 5173})
 _NON_MUTATING_TOOLS = frozenset(
     {"submit_plan", "file_read", "file_list", "search", "extract", "ask_user", "clarify", "think"}
 )
+
+
+class InconclusiveRunError(Exception):
+    """A POST-create terminal-wait that could NOT obtain a verdict because the build was
+    cut off by the HARD CAP while it was STILL ACTIVELY PROGRESSING (Bug 15). This is NOT
+    a product failure (the loop never failed to finish — it simply hadn't finished by the
+    safety ceiling) and NOT pre-create INFRA_FAILURE; the runner degrades it to INVALID_RUN
+    so the §17 no-fluke policy re-runs it instead of recording a false BUILD_DID_NOT_FINISH.
+    `facts` carries the progress evidence (last seq seen, elapsed) for the dossier."""
+
+    def __init__(self, reason: str, facts: dict[str, Any] | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.facts = facts or {}
 
 
 class InfraProbeError(Exception):
@@ -283,24 +313,60 @@ class DiscoApiClient:
     def _status_of(state: dict[str, Any]) -> str:
         return str(state.get("execution_status") or state.get("status") or "")
 
-    async def poll_until_terminal_or_gate(
-        self, conversation_id: str, *, timeout_s: float
-    ) -> str:
-        """Poll GET /state until the run reaches a TERMINAL state or a GATE the
-        runner must act on (e.g. AWAITING_PLAN_APPROVAL). Returns that status.
-        Times out -> "TIMEOUT" (a product/run outcome: STUCK_RUNNING territory).
+    def _progress_marker(self, conversation_id: str) -> tuple[int, int]:
+        """A cheap PROGRESS fingerprint for the conversation: (event_count, max_seq) from
+        the durable event log. Either advancing means the build is STILL PRODUCING new
+        events — the signal the progress-aware wait resets its inactivity timer on (Bug 15).
+        A missing/locked DB reads as no-progress (-1) rather than crashing the poll."""
+        uri = f"file:{self._db_path}?mode=ro"
+        try:
+            conn = sqlite3.connect(uri, uri=True)
+        except sqlite3.Error:
+            return (0, -1)
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*), COALESCE(MAX(seq), -1) FROM events WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+        except sqlite3.Error:
+            return (0, -1)
+        finally:
+            conn.close()
+        return (int(row[0]), int(row[1])) if row else (0, -1)
 
-        IDLE RACE (live-surfaced): POST /messages KICKS the loop ASYNCHRONOUSLY, so a
-        freshly-created conversation reads IDLE for a beat before the kick stamps
-        RUNNING. IDLE is terminal for adjudication, but as a DRIVE-STOP it is ambiguous
-        — pre-kick "not started yet" vs parked "nothing left to do". We only stop on
-        IDLE once the run has gone active at least once (`seen_active`); a pre-kick IDLE
-        is ignored so we don't bail before the agent even plans."""
-        deadline = time.monotonic() + timeout_s
+    async def _poll_progress_aware(
+        self,
+        conversation_id: str,
+        *,
+        stop_on_gate: bool,
+        inactivity_s: float,
+        hard_cap_s: float,
+    ) -> str:
+        """The shared PROGRESS-AWARE terminal wait (Bug 15). Poll GET /state until EITHER:
+          (a) a genuine terminal / gate / pause status is reached → return it; OR
+          (b) the build goes GENUINELY INACTIVE — no NEW events and no status change for
+              `inactivity_s` → return INACTIVE_TIMEOUT (a real wedge: classify normally); OR
+          (c) the generous `hard_cap_s` ceiling is hit. If the build was STILL progressing
+              within the last inactivity window when the cap hit → PROGRESSING_TIMEOUT
+              (inconclusive, NOT a product fail); otherwise → INACTIVE_TIMEOUT.
+
+        A still-actively-progressing build is NEVER cut off by a mere wall-clock elapsing:
+        the inactivity timer RESETS whenever the event count / max seq advances OR the status
+        transitions. Only genuine silence or the safety ceiling ends the wait.
+
+        IDLE RACE (live-surfaced): POST /messages KICKS the loop ASYNCHRONOUSLY, so a freshly
+        -created conversation reads IDLE for a beat before the kick stamps RUNNING. IDLE is
+        terminal for adjudication but ambiguous as a DRIVE-STOP — pre-kick "not started yet"
+        vs parked "nothing left". We only stop on IDLE once the run has gone active at least
+        once (`seen_active`); a pre-kick IDLE is ignored so we don't bail before it plans."""
+        start = time.monotonic()
+        last_progress = start
+        marker = self._progress_marker(conversation_id)
+        last_status: str | None = None
         seen_active = False
-        while time.monotonic() < deadline:
+        while True:
             last = self._status_of(await self.get_state(conversation_id))
-            if last in GATE_STATES:
+            if stop_on_gate and last in GATE_STATES:
                 return last
             if last in _WORK_TERMINALS:
                 return last
@@ -313,28 +379,58 @@ class DiscoApiClient:
                 # pre-kick / settling — keep waiting for the loop to start.
             else:
                 seen_active = True  # RUNNING or any active transitional status
-            await asyncio.sleep(self._poll)
-        return "TIMEOUT"
 
-    async def poll_until_terminal(self, conversation_id: str, *, timeout_s: float) -> str:
-        """Poll GET /state until a strictly TERMINAL state (no gate stop). Used after
-        a plan is approved / for autonomous runs with no interactive gate. Same IDLE
-        pre-kick guard as above (stop on IDLE only after the run went active)."""
-        deadline = time.monotonic() + timeout_s
-        seen_active = False
-        while time.monotonic() < deadline:
-            last = self._status_of(await self.get_state(conversation_id))
-            if last in _WORK_TERMINALS:
-                return last
-            if last == PAUSED_STATE:
-                return last  # let the driver decide (bounded resume) — never silently spin
-            if last == "IDLE":
-                if seen_active:
-                    return last
-            else:
-                seen_active = True
+            now = time.monotonic()
+            # Progress = new events appeared OR the status transitioned since last poll.
+            cur_marker = self._progress_marker(conversation_id)
+            if cur_marker != marker or last != last_status:
+                marker = cur_marker
+                last_status = last
+                last_progress = now
+
+            inactive_for = now - last_progress
+            if now - start >= hard_cap_s:
+                # Safety ceiling. Was it still progressing recently? Then this is an
+                # inconclusive model-speed cutoff, NOT a wedge → PROGRESSING_TIMEOUT.
+                return (
+                    PROGRESSING_TIMEOUT if inactive_for < inactivity_s else INACTIVE_TIMEOUT
+                )
+            if inactive_for >= inactivity_s:
+                return INACTIVE_TIMEOUT
             await asyncio.sleep(self._poll)
-        return "TIMEOUT"
+
+    async def poll_until_terminal_or_gate(
+        self,
+        conversation_id: str,
+        *,
+        inactivity_s: float,
+        hard_cap_s: float,
+    ) -> str:
+        """Progress-aware wait that ALSO stops on a GATE the runner must act on (e.g.
+        AWAITING_PLAN_APPROVAL). Returns the terminal/gate/pause status, or a Bug-15
+        timeout sentinel (INACTIVE_TIMEOUT / PROGRESSING_TIMEOUT)."""
+        return await self._poll_progress_aware(
+            conversation_id,
+            stop_on_gate=True,
+            inactivity_s=inactivity_s,
+            hard_cap_s=hard_cap_s,
+        )
+
+    async def poll_until_terminal(
+        self,
+        conversation_id: str,
+        *,
+        inactivity_s: float,
+        hard_cap_s: float,
+    ) -> str:
+        """Progress-aware wait to a strictly TERMINAL state (no gate stop). Used after a
+        plan is approved / for autonomous runs with no interactive gate."""
+        return await self._poll_progress_aware(
+            conversation_id,
+            stop_on_gate=False,
+            inactivity_s=inactivity_s,
+            hard_cap_s=hard_cap_s,
+        )
 
     async def wait_until_status_leaves(
         self, conversation_id: str, status: str, *, timeout_s: float
