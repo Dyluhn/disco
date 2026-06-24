@@ -1,9 +1,26 @@
-"""BW-05 (single-bracket citation normalization) + BW-07 (table repair)."""
+"""BW-05 (single-bracket citation normalization) + BW-07 (table repair +
+truncation-continuation join)."""
 
+from __future__ import annotations
+
+from typing import Any
+
+from disco.core.llm import (
+    CallContext,
+    CompletionRequest,
+    CompletionResponse,
+    LLMRouter,
+    TokenUsage,
+)
+from disco.retrieval.deep_research.decompose import SubQuestion
+from disco.retrieval.deep_research.gather import GatherLegContext, SubQuestionResult
 from disco.retrieval.deep_research.synthesis import (
     _normalize_citations,
     _repair_tables,
+    synthesize_section,
 )
+from disco.retrieval.models import Passage
+from disco.retrieval.vectorstore import InMemoryVectorStore
 
 # ---- BW-05: bare [id] -> [[id]] ----------------------------------------
 
@@ -80,3 +97,159 @@ def test_repair_pads_ragged_rows():
     md = "H1 | H2 | H3\nx | y"
     out = _repair_tables(md)
     assert "| x | y |  |" in out  # padded to 3 columns
+
+
+# ---- BW-07: truncation -> continuation join (finish_reason == "length") ---
+
+
+class _FakeNLI:
+    """Deterministic NLI stub — every non-empty claim is 'entail'."""
+
+    def entail(self, premise: str, hypothesis: str) -> str:
+        return "entail" if premise and hypothesis else "neutral"
+
+    def score(self, premise: str, hypothesis: str) -> float:
+        return 1.0 if self.entail(premise, hypothesis) == "entail" else 0.0
+
+
+class _ScriptedRouter(LLMRouter):
+    """Replays a queue of (text, finish_reason) for the rag_answerer role so a
+    test can drive synthesize_section's truncation/continuation path."""
+
+    def __init__(self, script: list[tuple[str, str]]) -> None:
+        self._script = list(script)
+        self.calls = 0
+
+    async def complete(
+        self, request: CompletionRequest, *, context: Any = None
+    ) -> CompletionResponse:
+        self.calls += 1
+        text, finish = (
+            self._script.pop(0) if self._script else ("(exhausted)", "stop")
+        )
+        return CompletionResponse(
+            text=text,
+            tool_calls=[],
+            usage=TokenUsage(input_tokens=1, output_tokens=1),
+            finish_reason=finish,  # type: ignore[arg-type]
+            model_used="fake",
+            routing=None,
+        )
+
+
+def _passage() -> Passage:
+    return Passage(
+        id="p1",
+        source_url="http://example.test/x",
+        source_title="Source X",
+        text="Alpha scored 90 and Beta scored 85 on the benchmark.",
+    )
+
+
+async def _run_synth(router: LLMRouter) -> str:
+    sub = SubQuestionResult(
+        subq=SubQuestion(title="How do the models compare?"),
+        passages=[_passage()],
+    )
+
+    async def _emit(_kind: str, _payload: dict[str, Any]) -> None:
+        return None
+
+    section = await synthesize_section(
+        sub,
+        router=router,
+        embedder=None,
+        vector_store=InMemoryVectorStore(),
+        namespace="ns",
+        nli=_FakeNLI(),
+        section_id="s1",
+        top_k_for_section=4,
+        emit=_emit,
+        leg_context=GatherLegContext(
+            subq_id="sq1",
+            namespace="ns",
+            call_context=CallContext(conversation_id="conv_trunc"),
+        ),
+    )
+    return section.markdown
+
+
+async def test_truncation_continues_mid_table_row_without_loss() -> None:
+    """A section cut mid-table-row (`finish_reason=="length"`) is continued from
+    the exact cut point and glued WITHOUT a spurious separator: the half-written
+    cell completes (``| Alpha | 9`` + ``0 |`` -> ``| Alpha | 90 |``) — no merged
+    rows, no lost or duplicated content."""
+    router = _ScriptedRouter([
+        (
+            "## Findings\n\nResults [[p1]]:\n\n"
+            "| Model | Score |\n| --- | --- |\n| Alpha | 9",
+            "length",
+        ),
+        ("0 |\n| Beta | 85 |", "stop"),
+    ])
+    md = await _run_synth(router)
+
+    assert router.calls == 2  # exactly one continuation call
+    # the split number was rejoined into a single cell (no loss, no spurious gap)
+    assert "| Alpha | 90 |" in md
+    assert "| Beta | 85 |" in md
+    # rows were NOT merged together (the pre-fix bug glued "9" + "0 |\n| Beta")
+    assert "| Alpha | 90 || Beta" not in md
+    # no duplication of the continued content
+    assert md.count("Beta") == 1
+    assert md.count("Alpha") == 1
+    # section no longer terminates mid-table: it ends on a closed pipe row
+    assert md.rstrip().endswith("|")
+
+
+async def test_truncation_at_row_boundary_starts_a_fresh_line() -> None:
+    """When the cut lands on a clean line boundary (the cut text ends with a
+    newline), the continuation begins on a FRESH line — a new row never merges
+    into the previous one. This is the case the pre-fix strip()-then-glue logic
+    broke (it produced ``| Alpha | 90 || Beta | 85 |``)."""
+    router = _ScriptedRouter([
+        (
+            "Intro [[p1]].\n\n"
+            "| Model | Score |\n| --- | --- |\n| Alpha | 90 |\n",
+            "length",
+        ),
+        ("| Beta | 85 |", "stop"),
+    ])
+    md = await _run_synth(router)
+
+    assert router.calls == 2
+    assert "| Alpha | 90 |" in md
+    assert "| Beta | 85 |" in md
+    # the boundary bug: two rows fused on one line
+    assert "| Alpha | 90 || Beta" not in md
+    assert "90 |\n| Beta | 85 |" in md  # joined on a fresh line, in order
+    assert md.count("Beta") == 1
+
+
+async def test_no_continuation_when_first_response_completes() -> None:
+    """A normal (`finish_reason=="stop"`) section makes exactly one call — the
+    truncation guard never fires."""
+    router = _ScriptedRouter([
+        ("A complete section about Alpha [[p1]].", "stop"),
+    ])
+    md = await _run_synth(router)
+
+    assert router.calls == 1
+    assert "Alpha" in md
+
+
+async def test_truncation_guard_is_bounded() -> None:
+    """A model that keeps returning `length` is bounded: the guard continues at
+    most twice (3 router calls total), then stops with the accumulated text."""
+    router = _ScriptedRouter([
+        ("part-1 [[p1]]", "length"),
+        (" part-2", "length"),
+        (" part-3", "length"),
+        (" part-4", "length"),
+    ])
+    md = await _run_synth(router)
+
+    assert router.calls == 3  # initial + 2 bounded continuations
+    assert "part-1" in md
+    assert "part-3" in md
+    assert "part-4" not in md  # the 4th would-be call never happens

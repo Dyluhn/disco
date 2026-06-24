@@ -518,12 +518,18 @@ async def synthesize_section(
             ),
             context=leg_context.call_context,
         )
-        markdown = resp.text.strip()
-
         # BW-07 (2) — TRUNCATION GUARD. The section cap is small; when a section
         # is cut off mid-content (`finish_reason=="length"`, often mid-table)
         # remark-gfm receives a half-table and renders raw pipes. Continue from
         # the cut point (bounded) so the section terminates on a clean boundary.
+        #
+        # NOTE: accumulate the RAW text (do NOT strip yet) — the trailing
+        # whitespace IS the cut boundary. Stripping first makes
+        # `markdown[-1:].isspace()` permanently False, so every continuation
+        # glues directly and merges adjacent rows/words ("| a | 10 |" + "| b |"
+        # -> "| a | 10 || b |", losing the row break). The final strip happens
+        # once, after the loop.
+        markdown = resp.text
         _cont = 0
         while resp.finish_reason == "length" and _cont < 2:
             _cont += 1
@@ -533,7 +539,7 @@ async def synthesize_section(
                         profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
                         messages=[
                             LLMMessage(role="user", content=instruction),
-                            LLMMessage(role="assistant", content=markdown),
+                            LLMMessage(role="assistant", content=markdown.rstrip()),
                             LLMMessage(
                                 role="user",
                                 content=(
@@ -551,11 +557,20 @@ async def synthesize_section(
                 )
             except Exception:  # noqa: BLE001 — keep the partial section
                 break
-            extra = resp.text.strip()
-            if not extra:
+            extra = resp.text
+            if not extra.strip():
                 break
-            # Glue directly if we were cut mid-token; otherwise start a new line.
-            markdown = markdown + ("" if not markdown[-1:].isspace() else "\n") + extra
+            if markdown[-1:].isspace():
+                # Cut fell on a line/word boundary — start the continuation on a
+                # fresh line so a new table row or paragraph never merges into the
+                # last one (the half-table case BW-07 exists to fix).
+                markdown = markdown.rstrip() + "\n" + extra.lstrip()
+            else:
+                # Cut landed mid-token/mid-row — glue the fragments with no
+                # separator so the partial token/cell completes ("| a | 10" +
+                # "0 |" -> "| a | 100 |"), never inserting a spurious space.
+                markdown = markdown + extra.lstrip()
+        markdown = markdown.strip()
 
         # CHART VALIDATION & RETRY
         chart_matches = re.findall(r"```chart\n(.*?)\n```", markdown, re.DOTALL)
