@@ -198,12 +198,14 @@ _SHELL_TOOLS = frozenset({"shell", "shell_exec"})
 # when its title/detail names GENUINE verification — NOT new content. Deliberately
 # narrow + phrase-anchored to avoid substring false-positives that would misread a
 # CONTENT step as verify-only (the codex catch): bare `test`/`render` are EXCLUDED
-# because "Add a **test**imonials section" and "**render** the gallery" are real work,
-# not verification. Verification phrasing is required instead — "verify", "validate",
-# "check", "confirm", "qa", "smoke test", "lint", and the page-behaviour phrases
-# "renders"/"renders correctly"/"displays correctly", plus the verbs "test that …",
-# "test it", "tests pass". A step that can't be confidently classified as PURE
-# verification stays NON-verify (→ no honest finish, the conservative direction).
+# because "Add a **test**imonials section" / "**render** the gallery" are real work,
+# and the bare NOUN "renders" ("Create product **renders**" = images/output) is real
+# work too. Verification phrasing is required instead — "verify", "validate", "check",
+# "confirm", "qa", "smoke test", "lint", the verbs "test that …"/"test it"/"tests
+# pass", and "renders"/"displays" ONLY as a verification PHRASE (with a qualifier like
+# "correctly"/"properly" or an explicit subject like "the page renders"). A step that
+# can't be confidently classified as PURE verification stays NON-verify (→ no honest
+# finish, the conservative direction).
 _VERIFY_STEP_RE = re.compile(
     r"\bverif(?:y|ies|ied|ication)\b"
     r"|\bvalidat(?:e|es|ed|ing|ion)\b"
@@ -212,22 +214,78 @@ _VERIFY_STEP_RE = re.compile(
     r"|\bqa\b"
     r"|\bsmoke[\s-]?tests?\b"
     r"|\blint(?:s|ed|ing)?\b"
-    r"|\brenders\b"
-    r"|\b(?:renders?|displays?) correctly\b"
+    # "renders"/"displays" count ONLY as a verification PHRASE — a trailing qualifier
+    # ("renders correctly/properly/as expected/fine/cleanly/well") or an explicit
+    # subject ("the page renders", "it displays"). The bare/standalone noun-ish
+    # "renders" is EXCLUDED so a CONTENT step "Create product renders" / "Add hero
+    # renders" (renders = images/output) is NOT misread as verification.
+    r"|\b(?:renders?|displays?) (?:correctly|properly|as expected|fine|cleanly|well)\b"
+    r"|\b(?:the )?(?:page|site|app|layout|content|everything|it) (?:renders?|displays?)\b"
     r"|\btest(?:s|ed|ing)? (?:that|it)\b"
     r"|\btests? pass(?:es|ed)?\b",
     re.IGNORECASE,
 )
 # A shell command counts as a REAL non-browser CONTENT/STRUCTURE validation only when
-# it actually inspects the markup — an HTML/XML parser, a structure/markup checker, or
-# a content grep. A bare existence/dump (`ls`/`test -f`/`stat`/`cat`/`wc`/`file`) proves
-# nothing the deliverable-on-disk check (condition 3) doesn't already, so it does NOT
-# count as a validation (the codex catch).
-_VALIDATION_CMD_RE = re.compile(
-    r"htmlparser|html\.parser|html5lib|\blxml\b|beautifulsoup|\bbs4\b|xmllint|\btidy\b"
-    r"|elementtree|\betree\b|\bgrep\b|\bvalidate\b|markup",
+# it STRUCTURALLY invokes a markup parser/validator (the parser is the EXECUTABLE/module
+# actually run) or a content grep that reads index.html — NOT merely because a word like
+# "validate"/"markup" appears in the text (`echo validate index.html` must NOT count —
+# the codex catch), and never a bare existence/dump (`ls`/`test -f`/`stat`/`cat`/`wc`).
+# Commands whose first token is a no-op/echo are excluded outright; see
+# `_is_real_validation_command`.
+# First token = a dedicated markup validator/linter invoked directly.
+_VALIDATOR_EXECUTABLES = frozenset(
+    {"xmllint", "tidy", "html5validator", "html5check", "vnu", "htmlhint", "htmllint"}
+)
+# First token = a content-search tool (a grep/assertion that actually reads the file).
+_GREP_EXECUTABLES = frozenset({"grep", "egrep", "fgrep", "rg", "ripgrep", "ag"})
+# First token = a python interpreter (only a real parser-module invocation counts).
+_PYTHON_EXECUTABLES = frozenset({"python", "python3", "py", "python2"})
+# First token = an explicit no-op / text-echo / existence-or-dump → NEVER a validation.
+_NONVALIDATION_EXECUTABLES = frozenset(
+    {"echo", "printf", ":", "true", "false", "cat", "ls", "stat", "test", "[", "[[",
+     "wc", "file", "head", "tail", "touch", "cp", "mv", "rm", "dd", "tee"}
+)
+# A python -c/-m body that actually IMPORTS/USES an HTML/XML parser or markup validator.
+_PYTHON_PARSER_RE = re.compile(
+    r"htmlparser|html\.parser|html5lib|html5validator|\blxml\b|beautifulsoup|\bbs4\b"
+    r"|xml\.etree|elementtree|\betree\b|xmllint|markupsafe",
     re.IGNORECASE,
 )
+
+
+def _is_real_validation_command(cmd: str) -> bool:
+    """True iff `cmd` STRUCTURALLY runs a content/structure validation against
+    index.html — the invoked tool is a markup parser/validator (or a grep that reads
+    the file), not a word echoed in text. Rejects `echo validate index.html`,
+    `printf "markup" index.html`, no-ops, and bare existence/dump commands."""
+    cmd = cmd.strip()
+    if "index.html" not in cmd:
+        return False
+    tokens = cmd.split()
+    if not tokens:
+        return False
+    first = tokens[0].rsplit("/", 1)[-1]  # strip any leading path
+    if first.startswith("#") or first in _NONVALIDATION_EXECUTABLES:
+        return False
+    if first in _VALIDATOR_EXECUTABLES or first in _GREP_EXECUTABLES:
+        return True
+    if first in _PYTHON_EXECUTABLES:
+        # Must be a -c/-m invocation (actually executing code) AND name a real parser
+        # module — `python -c "print('validate')"` must NOT pass.
+        ran_code = bool(re.search(r"(?:^|\s)-[cm]\b", cmd))
+        return ran_code and bool(_PYTHON_PARSER_RE.search(cmd))
+    return False
+
+
+def _shell_command_text(action: ActionEvent) -> str:
+    """The command string a shell action ran — preferring the canonical command arg
+    (so the first-token executable analysis is reliable), else the joined values."""
+    args = action.tool_call.arguments or {}
+    for key in ("command", "cmd", "script", "code"):
+        v = args.get(key)
+        if isinstance(v, str) and v.strip():
+            return v
+    return " ".join(str(v) for v in args.values())
 # Distinctive substring of `browser.BROWSER_UNAVAILABLE_MSG` (kept inline rather than
 # imported — core must not depend on the tools package). Matched against the error/
 # content text a failed `browser` action leaves in the log.
@@ -272,19 +330,18 @@ def _nonbrowser_static_validation_passed(events: list[Event]) -> bool:
     (an HTML/XML parser, a markup/structure check, or a content grep on
     `index.html`) RAN and SUCCEEDED, with no later FAILED such validation. This is
     the positive evidence the delivered file is well-formed when the browser is
-    unavailable. A bare existence/dump (`ls`/`test -f`/`stat`/`cat`/`wc`) does NOT
-    count — it only re-proves the file exists (condition 3), not that its content is
-    valid (the codex catch). A FAILED validation yields False so a broken parse
-    BLOCKS the honest finish; no qualifying validation at all → False (we require a
-    passing one)."""
+    unavailable. A bare existence/dump (`ls`/`test -f`/`stat`/`cat`/`wc`) or a mere
+    echo of the word "validate"/"markup" does NOT count — only a STRUCTURAL parser/
+    validator invocation does (`_is_real_validation_command`, the codex catch). A
+    FAILED validation yields False so a broken parse BLOCKS the honest finish; no
+    qualifying validation at all → False (we require a passing one)."""
     edit_seq = _last_edit_seq(events)
     # action_id -> the shell action is a REAL content validation against index.html.
     validation_actions: set[str] = set()
     verdict: bool | None = None
     for ev in events:
         if isinstance(ev, ActionEvent) and ev.tool_call.tool_name in _SHELL_TOOLS:
-            cmd = " ".join(str(v) for v in (ev.tool_call.arguments or {}).values())
-            if "index.html" in cmd and _VALIDATION_CMD_RE.search(cmd):
+            if _is_real_validation_command(_shell_command_text(ev)):
                 validation_actions.add(ev.id)
         elif isinstance(ev, ObservationEvent):
             if (ev.seq or 0) > edit_seq and ev.action_id in validation_actions:

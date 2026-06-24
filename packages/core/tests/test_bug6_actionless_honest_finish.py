@@ -186,6 +186,17 @@ _PLAN_CONTENT_TAIL = {
         {"title": "Add a testimonials section"},
     ],
 }
+def _plan_with_tail(title):
+    return {
+        "summary": "bakery landing page",
+        "steps": [
+            {"title": "Build the HTML structure in index.html"},
+            {"title": "Add the CSS styling in style.css"},
+            {"title": title},
+        ],
+    }
+
+
 _HTML = "<html><body><h1>Bakery</h1></body></html>"
 # A REAL content/structure validation (HTML parser) referencing index.html.
 _VALIDATE_CMD = (
@@ -365,6 +376,46 @@ async def test_negative_browser_failure_evidence_blocks_honest_finish(mode):
     agent = ScriptedAgent(
         _deliver_then_idle_steps(browser_steps=(_NAVIGATE, _NAVIGATE))
     )
+    state, events = await _approve_and_run(execu, agent)
+
+    sts = _statuses(events)
+    assert not _has_honest_marker(events), sts
+    assert state.execution_status != ConversationStatus.FINISHED, sts
+    assert any(
+        s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts
+    ), sts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tail", ["Create product renders", "Add product renders"])
+async def test_negative_renders_noun_step_not_verify(tail):
+    """NEGATIVE (codex re-review #1 — "renders" the NOUN) — the only not-done step is
+    CONTENT whose text contains the bare noun "renders" ("Create product renders" =
+    images/output), NOT a verification phrase. It must NOT read as verify-only →
+    NO honest finish; PAUSE/actionless."""
+    execu = _BrowserlessStaticExecutor(index_exists=True, validation_ok=True)
+    agent = ScriptedAgent(
+        _deliver_then_idle_steps(plan=_plan_with_tail(tail), done_idxs=(1, 2), active_idx=3)
+    )
+    state, events = await _approve_and_run(execu, agent)
+
+    sts = _statuses(events)
+    assert not _has_honest_marker(events), sts
+    assert state.execution_status != ConversationStatus.FINISHED, sts
+    assert any(
+        s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts
+    ), sts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cmd", ["echo validate index.html", 'printf "markup" index.html'])
+async def test_negative_echoed_validation_word_is_not_a_validation(cmd):
+    """NEGATIVE (codex re-review #2 — echoed word ≠ validation) — the only post-write
+    shell merely ECHOES the word "validate"/"markup" alongside index.html (the shell
+    succeeds), but no parser/validator is actually invoked. Structural classification
+    rejects it → NO honest finish; PAUSE/actionless."""
+    execu = _BrowserlessStaticExecutor(index_exists=True, validation_ok=True)
+    agent = ScriptedAgent(_deliver_then_idle_steps(validate_cmd=cmd))
     state, events = await _approve_and_run(execu, agent)
 
     sts = _statuses(events)

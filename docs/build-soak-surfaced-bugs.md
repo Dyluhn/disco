@@ -281,6 +281,18 @@ unsatisfiable on the no-browser backend.) Evidence:
 > text/elements), not just console errors. Three added negatives:
 > `test_negative_content_step_not_verify…`, `test_negative_existence_check_is_not_a_validation`,
 > `test_negative_browser_failure_evidence_blocks_honest_finish[network|blank]`.
+>
+> **Hardening (codex re-review).** Two residual GAMEABLE false-finish paths closed: (1) `_VERIFY_STEP_RE`
+> no longer matches a standalone `renders` — "renders"/"displays" count ONLY as a verification PHRASE
+> (a qualifier "renders correctly/properly", or an explicit subject "the page renders"/"it displays"),
+> so a CONTENT step "Create product renders" / "Add hero renders" (renders = images/output) is NON-verify;
+> (2) validation is now STRUCTURAL via `_is_real_validation_command` (+ `_shell_command_text`) — the
+> first token (invoked executable) must be a markup parser/validator (`xmllint`/`tidy`/`html5validator`/
+> grep) or a `python -c/-m` that actually imports a parser module (`html.parser`/`lxml`/`html5lib`/etc.);
+> `echo validate index.html`, `printf "markup" index.html`, no-ops, and `python -c "print('validate')"`
+> are rejected (substring presence of "validate"/"markup" no longer counts). Two added negatives:
+> `test_negative_renders_noun_step_not_verify[Create product renders|Add product renders]`,
+> `test_negative_echoed_validation_word_is_not_a_validation[echo|printf]`. Suite: 12 Bug-6 tests green.
 
 ### Bug 7 — build preview/serve port == agent-server port (8000) collides on the `process` backend — PRODUCT/CONFIG — FIXED
 
