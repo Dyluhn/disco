@@ -584,23 +584,37 @@ violation).
 **Fix** (`fix-bug13-revision-oracle`, harness only — `events.py` + `oracles/revision.py` +
 `oracles/tool_scope.py`; no product/engine/messages/recitation/uv.lock): a mutating action is correlated
 with its result by `action_id` (the ActionEvent's `id` ↔ the Observation/AgentError `action_id`; verified
-on frozen evidence) and counts ONLY when it ACTUALLY EXECUTED — i.e. it has a SUCCESS observation. A
-shared `events.action_executed(events, action_id)` returns True only for a paired ObservationEvent whose
-`tool_result.success` is not False; an AgentError pairing (gate rejection) or a `success=False`
-observation (failed, no mutation) does NOT count. `_first_mutating_action_after` and the tool_scope
-`WRITE_TOOL_ATTEMPTED_IN_PLANNING` loop both apply it. **Anti-false-PASS preserved:** an EXECUTED write
-before revised approval (success observation, file mutated) STILL counts → STILL FAILs
-`WRITE_BEFORE_REVISION_APPROVAL` / `WRITE_TOOL_ATTEMPTED_IN_PLANNING`. The ONLY change is excluding
-rejected/failed attempts. (An action with no observation at all is separately caught as
-`ACTION_NO_OBSERVATION` by the EventChainOracle, so requiring a success observation cannot hide a
-genuinely-executed pre-approval write.)
+on frozen evidence) and counts unless it was **GATE-REJECTED before the executor ran**. The discriminator
+is gate-rejection, **NOT the `success` flag** (codex anti-false-PASS correction): a write tool can mutate
+disk and THEN report `success=False` (a partial / failed-after-mutation write), so treating any
+`success=False` as "not executed" would wrongly EXCLUDE a real mutation → a false-PASS. A shared
+`events.action_executed(events, action_id)` therefore returns:
+
+  * paired with an **ObservationEvent** (a `tool_result` exists) → True (reached the executor; ran; may
+    have mutated) regardless of success True/False → COUNTS as a write;
+  * paired ONLY with an **AgentErrorEvent and NO observation** → False (the recoverable rejection from
+    `_gate_planning_mode` / `_gate_midstep_steer_replan` / the K1 elision guard — the tool never reached
+    the executor, nothing mutated, the §11.3 contract working) → does NOT count;
+  * paired with **neither** (dangling) → True, conservatively (lean anti-false-PASS; also caught as
+    `ACTION_NO_OBSERVATION` by the EventChainOracle).
+
+`_first_mutating_action_after` and the tool_scope `WRITE_TOOL_ATTEMPTED_IN_PLANNING` loop both apply it.
+**Anti-false-PASS preserved:** any write that reached the executor before revised approval — including a
+mutate-then-fail `success=False` write — STILL counts → STILL FAILs `WRITE_BEFORE_REVISION_APPROVAL` /
+`WRITE_TOOL_ATTEMPTED_IN_PLANNING`. The ONLY thing excluded is a gate-rejected (AgentError + no
+observation) attempt — exactly the Bug-13 case (the rejected pre-approval write at seq 59 / agent_error at
+seq 60).
 
 Proof: new harness unit tests — `tests/test_revision_oracle.py::test_rejected_preapproval_write_then_clean_replan_passes`
-(rejected attempt → no `WRITE_BEFORE_REVISION_APPROVAL`, revised chain holds → PASS) and
-`::test_executed_preapproval_write_still_fails` (a SUCCESS-observed pre-approval write → STILL
-`WRITE_BEFORE_REVISION_APPROVAL`); `tests/test_classifier.py::test_rejected_write_in_planning_is_not_a_violation`
-(rejected planning write → no `WRITE_TOOL_ATTEMPTED_IN_PLANNING`). All existing oracle/classifier tests
-(the legitimate-violation cases, which all use SUCCESS-observed writes) stay green; full harness suite green.
+(gate-rejected attempt: agent_error + no observation → no `WRITE_BEFORE_REVISION_APPROVAL`, revised chain
+holds → PASS), `::test_executed_preapproval_write_still_fails` (a success-observed pre-approval write →
+STILL `WRITE_BEFORE_REVISION_APPROVAL`), and `::test_mutate_then_fail_preapproval_write_still_fails` (the
+codex case — a pre-approval write with a `success=False` observation reached the executor and may have
+mutated → STILL `WRITE_BEFORE_REVISION_APPROVAL`); `tests/test_classifier.py::test_rejected_write_in_planning_is_not_a_violation`
+(gate-rejected planning write → no `WRITE_TOOL_ATTEMPTED_IN_PLANNING`) and
+`::test_failed_write_in_planning_still_a_violation` (a `success=False` planning write that ran → STILL
+`WRITE_TOOL_ATTEMPTED_IN_PLANNING`). All existing oracle/classifier tests (the legitimate-violation cases)
+stay green; full harness suite green.
 
 **Confirms Bug 12 works live.** Re-classifying the frozen `revise_after_finish` run (read-only, into a
 copy — the original frozen evidence is untouched) now shows **RevisionOracle PASS** and **ToolScopeOracle

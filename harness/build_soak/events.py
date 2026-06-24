@@ -281,31 +281,49 @@ def action_id_of(ev: dict[str, Any]) -> str | None:
 
 
 def action_executed(events: list[dict[str, Any]], action_id: str) -> bool:
-    """True iff the action identified by `action_id` ACTUALLY EXECUTED and mutated —
-    i.e. it is paired with a SUCCESS ObservationEvent (tool_result.success is not
-    False).
+    """True iff the action identified by `action_id` REACHED THE EXECUTOR — i.e. it
+    could have mutated the workspace — and is therefore counted as a write.
 
-    A pairing that is an AgentErrorEvent (the planning/approval gate REJECTED the
-    call), or an ObservationEvent whose tool_result.success is False (a failed call
-    that did NOT mutate), is the §11.3 tool-rejection-recovery contract WORKING — NOT
-    an executed write. So those do NOT count as a mutation. This is the anti-Bug-13
-    distinction: a rejected write ATTEMPT is the gate working, not a write that
-    EXECUTED before approval.
+    The signal is GATE-REJECTION, NOT the success flag (the codex anti-false-PASS
+    correction):
 
-    Note: an executed write ALWAYS leaves a success observation in valid frozen
-    evidence; an action with no paired observation at all is separately caught as
-    ACTION_NO_OBSERVATION by the EventChainOracle, so requiring a success observation
-    here cannot hide a genuinely-executed pre-approval write (no false-PASS).
+      * Paired with an ObservationEvent (a `tool_result` exists) -> the call reached
+        the executor and RAN. It COUNTS as executed regardless of
+        `tool_result.success` True/False: a write can mutate disk and THEN report
+        success=False (a partial / failed-after-mutation write), so treating any
+        `success=False` as "not executed" would wrongly exclude a real mutation -> a
+        false-PASS. Any observation => counts.
+
+      * Paired ONLY with an AgentErrorEvent and NO tool_result observation -> the
+        call was REJECTED BEFORE the executor ran (the recoverable rejection from
+        `_gate_planning_mode` / `_gate_midstep_steer_replan` / the K1 elision guard).
+        The tool never reached the executor, so NOTHING mutated — the §11.3
+        tool-rejection-recovery contract WORKING, not a §11.4/§11.7 write-before-
+        approval violation. Does NOT count. This is the Bug-13 case (the rejected
+        pre-approval write paired with an agent_error and no observation).
+
+      * Paired with NEITHER (a dangling action with no response) -> conservatively
+        COUNT it (lean anti-false-PASS): an unpaired action must not mask a real
+        violation. (A genuinely missing observation is also separately caught as
+        ACTION_NO_OBSERVATION by the EventChainOracle.)
     """
+    has_observation = False
+    has_agent_error = False
     for e in events:
-        if kind_of(e) != KIND_OBSERVATION:
-            continue
-        if str(e.get("action_id")) != action_id:
-            continue
-        tr = e.get("tool_result") or {}
-        if tr.get("success") is not False:
-            return True
-    return False
+        k = kind_of(e)
+        if k == KIND_OBSERVATION and str(e.get("action_id")) == action_id:
+            has_observation = True
+        elif (
+            k == KIND_AGENT_ERROR
+            and e.get("action_id") is not None
+            and str(e.get("action_id")) == action_id
+        ):
+            has_agent_error = True
+    if has_observation:
+        return True  # reached the executor (ran; may have mutated) -> counts
+    if has_agent_error:
+        return False  # gate-rejected pre-execution, no tool_result -> nothing mutated
+    return True  # dangling/unpaired -> conservatively count (anti-false-PASS)
 
 
 def has_observation_for_action(events: list[dict[str, Any]], action_id: str) -> bool:

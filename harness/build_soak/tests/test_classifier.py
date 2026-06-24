@@ -96,6 +96,24 @@ def test_rejected_write_in_planning_is_not_a_violation():
     assert c["status"] == "PASS", c
 
 
+def test_failed_write_in_planning_still_a_violation():
+    # codex anti-false-PASS mirror: a planning write that REACHED the executor and
+    # returned a tool_result observation with success=False (ran, may have mutated
+    # then failed) is STILL WRITE_TOOL_ATTEMPTED_IN_PLANNING. Only a gate-rejected
+    # write (agent_error + NO observation) is the §11.3 PASS; an observed-but-failed
+    # write is the product letting a write fall through and execute in planning.
+    events = [
+        msg(1, "user", "build"),
+        action(2, "file_write", args={"path": "index.html", "content": "bad"}, action_id="a2"),
+        observation(3, "a2", tool="file_write", success=False),  # ran, then failed
+        plan(4, revision=1),
+        status(5, "AWAITING_PLAN_APPROVAL", "evt_4"),
+    ]
+    c = classify(events)
+    assert c["status"] == "FAIL"
+    assert c["code"] == "WRITE_TOOL_ATTEMPTED_IN_PLANNING"
+
+
 def test_action_no_observation_from_fixture():
     events = [
         msg(1, "user", "build"),

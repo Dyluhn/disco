@@ -201,6 +201,30 @@ def test_executed_preapproval_write_still_fails():
     assert fail.facts["first_write_tool_after_followup_seq"] == 10
 
 
+def test_mutate_then_fail_preapproval_write_still_fails():
+    # codex anti-false-PASS: the pre-approval write REACHED the executor and produced
+    # a tool_result observation with success=False — a write that may have MUTATED disk
+    # and THEN failed (partial/failed-after-mutation). The signal is gate-rejection
+    # (agent_error + NO observation), NOT the success flag, so an observed-but-failed
+    # write STILL counts → STILL WRITE_BEFORE_REVISION_APPROVAL. (Treating success=False
+    # as "not executed" would wrongly exclude a real mutation → a false-PASS.)
+    events = _initial_build() + [
+        msg(8, "user", "revise the hero and add pricing"),
+        status(9, "RUNNING", "planning"),
+        action(10, "file_replace_lines", args={"path": "index.html"}, action_id="act10"),
+        observation(11, "act10", tool="file_replace_lines", success=False),  # ran, then failed
+        plan(12, revision=2),
+        awaiting(13, 12),
+        status(14, "RUNNING", "plan_approved"),
+        status(15, "FINISHED"),
+    ]
+    scenario = {"id": "s", "followups": [{"requires_plan_revision": True}]}
+    results = _run(events, scenario)
+    fail = next(r for r in results if r.failed)
+    assert fail.code == "WRITE_BEFORE_REVISION_APPROVAL"
+    assert fail.facts["first_write_tool_after_followup_seq"] == 10
+
+
 def test_no_followup_skips():
     results = _run(_initial_build())
     assert all(r.skipped for r in results)

@@ -64,16 +64,18 @@ def _followup_user_seqs(events: list[dict[str, Any]], boundary: int) -> list[int
 
 
 def _first_mutating_action_after(events: list[dict[str, Any]], after_seq: int) -> int | None:
-    """Seq of the first mutating action after `after_seq` that ACTUALLY EXECUTED.
+    """Seq of the first mutating action after `after_seq` that REACHED THE EXECUTOR.
 
-    A mutating action is paired with its result by `action_id`; it counts ONLY when
-    it executed and mutated — i.e. it has a SUCCESS observation. A mutating action the
-    gate REJECTED (an agent_error pairing) or that failed without mutating (success is
-    False) did NOT write the workspace — that is the §11.3 tool-rejection-recovery
-    contract WORKING, not a §11.4 write-before-revised-approval violation. Counting a
-    rejected pre-approval write ATTEMPT as a write was the Bug-13 false-FAIL. The
-    anti-false-PASS half is preserved: an EXECUTED write (success observation) still
-    counts → still drives WRITE_BEFORE_REVISION_APPROVAL.
+    A mutating action is paired with its result by `action_id`; it counts unless it
+    was GATE-REJECTED before execution — an agent_error pairing with NO tool_result
+    observation (`action_executed` False). A call that reached the executor (ANY
+    observation, success True OR False — a write can mutate then report failure)
+    counts. A gate-rejected pre-approval write never wrote the workspace — that is the
+    §11.3 tool-rejection-recovery contract WORKING, not a §11.4 write-before-revised-
+    approval violation. Counting that rejected ATTEMPT as a write was the Bug-13
+    false-FAIL. The anti-false-PASS half is preserved: any write that EXECUTED (incl.
+    a mutate-then-fail success=False write) still counts → still drives
+    WRITE_BEFORE_REVISION_APPROVAL.
     """
     for e in events:
         if kind_of(e) != KIND_ACTION or seq_of(e) <= after_seq:
