@@ -194,44 +194,56 @@ def _outbound_headers(target: _UpstreamTarget) -> dict[str, str]:
     return headers
 
 
-def _key_needles(api_key: str | None) -> list[str]:
-    """Every literal STRING form of the provider key that could leak back to Pi — the
-    bare key and its ``Bearer <key>`` header form. Bearer-form first so the longer
-    match is replaced before the bare key."""
-    if not api_key:
-        return []
-    return [f"Bearer {api_key}", api_key]
-
-
-def _key_byte_needles(api_key: str | None) -> list[bytes]:
-    """Every literal BYTE form of the provider key a hostile/buggy upstream could echo
-    back to Pi: the bare key + its ``Bearer <key>`` header form, PLUS the common
-    ENCODED transforms a provider might apply when reflecting request data — URL
-    percent-encoding, JSON-string escaping, and base64 (standard + url-safe, padded
-    and unpadded). Deliberately bounded to these specific, realistic forms (not a
-    regex-of-everything). Sorted LONGEST-first so an overlapping/containing form is
-    replaced before a shorter one nested inside it (``Bearer <key>`` before ``<key>``;
-    a padded base64 before its unpadded prefix)."""
-    if not api_key:
-        return []
-    forms: set[str] = {api_key, f"Bearer {api_key}"}
-    # URL percent-encoding (safe="" → the whole key is encoded).
-    forms.add(urllib.parse.quote(api_key, safe=""))
+def _encoded_forms(plain: str) -> set[str]:
+    """The common ENCODED transforms a provider might apply when reflecting a request
+    string ``plain`` back to us — URL percent-encoding, JSON-string escaping, and
+    base64 (standard + url-safe, padded and unpadded) — PLUS the raw value itself.
+    Deliberately bounded to these specific, realistic forms (not a regex-of-everything)."""
+    forms: set[str] = {plain}
+    # URL percent-encoding (safe="" → the whole string is encoded).
+    forms.add(urllib.parse.quote(plain, safe=""))
     # JSON-string escaping (drop the quotes json.dumps wraps it in).
-    forms.add(json.dumps(api_key)[1:-1])
-    raw = api_key.encode("utf-8")
+    forms.add(json.dumps(plain)[1:-1])
+    raw = plain.encode("utf-8")
     for enc in (base64.b64encode(raw), base64.urlsafe_b64encode(raw)):
         s = enc.decode("ascii")
         forms.add(s)
         forms.add(s.rstrip("="))  # unpadded variant
-    needles = [f.encode("utf-8") for f in forms if f]
+    return forms
+
+
+def _key_forms(api_key: str | None) -> list[str]:
+    """The ONE shared encoded-aware needle set used for BOTH the Pi-facing egress
+    redaction AND the server-side log redaction. Every literal + encoded STRING form
+    of the provider key a hostile/buggy upstream could echo back (or that could
+    surface in an upstream error we log): the bare key, its ``Bearer <key>``
+    Authorization-header form, and the encoded transforms (percent / JSON-escape /
+    base64) of BOTH — because base64 is NOT substring-preserving, the encoded whole
+    ``Bearer <key>`` header is not found by the bare-key encodings and must be added
+    explicitly. Sorted LONGEST-first so an overlapping/containing form is replaced
+    before a shorter one nested inside it (``Bearer <key>`` before ``<key>``; a
+    padded base64 before its unpadded prefix)."""
+    if not api_key:
+        return []
+    forms: set[str] = set()
+    for plain in (api_key, f"Bearer {api_key}"):  # bare key AND the full header string
+        forms |= _encoded_forms(plain)
+    return sorted((f for f in forms if f), key=len, reverse=True)
+
+
+def _key_byte_needles(api_key: str | None) -> list[bytes]:
+    """The shared ``_key_forms`` needle set as BYTES (for redacting a relayed body /
+    SSE chunk), re-sorted LONGEST-first by byte length."""
+    needles = [f.encode("utf-8") for f in _key_forms(api_key)]
     return sorted(needles, key=len, reverse=True)
 
 
 def _redact_text(text: str, api_key: str | None) -> str:
-    """Strip every form of the provider key from a Pi-facing STRING (content-type,
-    error message, log line)."""
-    for needle in _key_needles(api_key):
+    """Strip every (literal + encoded) form of the provider key from a Pi-facing or
+    server-LOGGED string (content-type, error message, log line) using the SAME
+    encoded-aware needle set as the egress byte redaction — so an encoded key form
+    (esp. base64) in an upstream error body is redacted in OUR logs too."""
+    for needle in _key_forms(api_key):
         text = text.replace(needle, _REDACTED)
     return text
 
@@ -444,7 +456,10 @@ def make_pi_inference_router(
             if remaining <= 0:
                 # The reservation consumed the last of the budget — there is no room
                 # to generate. Reject rather than force a min-1 cap (which would let a
-                # request through at an exhausted budget).
+                # request through at an exhausted budget). REFUND the reservation: this
+                # request never reaches upstream, so it must not burn the budget it
+                # just reserved (otherwise a rejected request silently drains the cap).
+                token_store.release(token, estimate)
                 _LOG.info(
                     "pi-gateway no budget remaining after reserve token=%s used=%d budget=%d",
                     rec.fingerprint, rec.used_tokens, rec.budget_tokens,

@@ -246,6 +246,17 @@ class PiInferenceTokenStore:
         rec.used_tokens += amt
         return True
 
+    def release(self, token: str, amount: int) -> None:
+        """Refund a previously ``reserve``d ``amount`` when a request is rejected
+        BEFORE it ever reaches upstream (a pre-call 4xx/429), so a rejected request
+        does not burn budget it never spent. Clamped at zero; an unknown token is a
+        harmless no-op. (``settle_usage`` reconciles a call that DID run; this undoes
+        a reservation for a call that did NOT.)"""
+        rec = self._tokens.get(token)
+        if rec is None:
+            return
+        rec.used_tokens = max(0, rec.used_tokens - max(0, int(amount)))
+
     def settle_usage(
         self,
         token: str,

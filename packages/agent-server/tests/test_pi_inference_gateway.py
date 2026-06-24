@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import urllib.parse
 from types import SimpleNamespace
 
@@ -968,3 +969,131 @@ async def test_upstream_error_body_not_relayed_stream(tmp_path) -> None:
     assert _SECRET_VALUE not in resp.text  # error body never relayed
     assert "upstream boom" not in resp.text
     assert "upstream request failed" in resp.text  # generic message instead
+
+
+# ===========================================================================
+# Codex round-3 residual fixes — regression coverage.
+# ===========================================================================
+
+# -- P0: the ENCODED full ``Bearer <key>`` Authorization-header form is redacted --
+
+
+def test_encoded_bearer_header_form_is_in_needle_set() -> None:
+    """base64 is NOT substring-preserving, so the encoded WHOLE ``Bearer <key>``
+    header is a distinct needle the bare-key encodings cannot cover — it must be
+    present in its own right."""
+    bearer_b64 = base64.b64encode(f"Bearer {_SECRET_VALUE}".encode()).decode("ascii")
+    bare_b64 = base64.b64encode(_SECRET_VALUE.encode()).decode("ascii")
+    assert bearer_b64 != bare_b64
+    assert bearer_b64.encode("utf-8") not in bare_b64.encode("utf-8")  # not nested
+    needles = _key_byte_needles(_SECRET_VALUE)
+    assert bearer_b64.encode("utf-8") in needles  # the encoded header form is covered
+    assert bare_b64.encode("utf-8") in needles  # (and the bare-key form still is)
+
+
+async def test_encoded_bearer_header_echo_redacted_success(tmp_path) -> None:
+    """A provider that echoes the base64 of the whole Authorization header must not
+    leak it back to Pi in a 200 body."""
+    bearer_b64 = base64.b64encode(f"Bearer {_SECRET_VALUE}".encode()).decode("ascii")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=json.dumps(
+                {
+                    "echoed_b64_auth": bearer_b64,  # base64("Bearer <key>")
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                }
+            ).encode("utf-8"),
+            headers={"content-type": "application/json"},
+        )
+
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
+    )
+    app = _make_app(store, tmp_path, handler=handler)
+    resp = await _post(app, token, {"messages": [{"role": "user", "content": "hi"}]})
+    assert resp.status_code == 200
+    assert bearer_b64 not in resp.text  # encoded header form redacted
+    assert _SECRET_VALUE not in resp.text
+
+
+async def test_encoded_bearer_header_echo_redacted_stream(tmp_path) -> None:
+    """The encoded whole-header form is also redacted out of a streamed body."""
+    bearer_b64 = base64.b64encode(f"Bearer {_SECRET_VALUE}".encode()).decode("ascii")
+    sse = (
+        b'data: {"choices":[{"delta":{"content":"' + bearer_b64.encode("utf-8") + b'"}}]}\n\n'
+        b'data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}\n\n'
+        b"data: [DONE]\n\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=sse, headers={"content-type": "text/event-stream"})
+
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
+    )
+    app = _make_app(store, tmp_path, handler=handler)
+    resp = await _post(
+        app, token, {"messages": [{"role": "user", "content": "hi"}], "stream": True}
+    )
+    assert resp.status_code == 200
+    assert bearer_b64 not in resp.text  # encoded header form redacted from the stream
+    assert _SECRET_VALUE not in resp.text
+
+
+# -- P1: an ENCODED key in an upstream error body is redacted in OUR logs ----
+
+
+async def test_encoded_key_in_error_body_redacted_in_log(tmp_path, caplog) -> None:
+    """The server-side error log uses the SAME encoded-aware redactor as egress, so a
+    base64-encoded key in an upstream error body does not get written to our logs."""
+    key_b64 = base64.b64encode(_SECRET_VALUE.encode()).decode("ascii")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            500,
+            content=json.dumps({"error": "boom", "leaked_b64": key_b64}).encode("utf-8"),
+            headers={"content-type": "application/json"},
+        )
+
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
+    )
+    app = _make_app(store, tmp_path, handler=handler)
+    with caplog.at_level(logging.WARNING, logger="disco.pi_inference"):
+        resp = await _post(app, token, {"messages": [{"role": "user", "content": "hi"}]})
+    assert resp.status_code == 500
+    logged = "\n".join(rec.getMessage() for rec in caplog.records)
+    assert "status=500" in logged  # the error WAS logged...
+    assert key_b64 not in logged  # ...but the encoded key was redacted out of the log
+    assert _SECRET_VALUE not in logged
+
+
+# -- P2: a remaining<=0 pre-upstream reject REFUNDS its reservation ----------
+
+
+async def test_remaining_zero_reject_refunds_reservation(tmp_path) -> None:
+    """When ``reserve`` succeeds but leaves remaining==0, the request is rejected
+    BEFORE upstream — and the reservation is refunded, so the surviving budget is not
+    burned by a call that never ran."""
+    store = PiInferenceTokenStore()
+    body = {"messages": [{"role": "user", "content": "hi"}]}
+    est = _estimate_prompt_tokens(body)
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=est,  # exactly the prompt estimate → remaining==0 after reserve
+    )
+    captured: list[httpx.Request] = []
+    app = _make_app(store, tmp_path, handler=_capturing_handler(captured))
+    resp = await _post(app, token, body)
+    assert resp.status_code == 429
+    assert captured == []  # never reached upstream
+    # The reservation was refunded — the budget is intact, not drained by the reject.
+    assert store.validate(token).used_tokens == 0
