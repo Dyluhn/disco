@@ -756,6 +756,51 @@ against the shared :8000 now WAITS for the real terminal and classifies on it.
 
 ---
 
+### Bug 16 — a reserved-port preview SERVE STUCKs the build (Bug-7 containment refused the bind but gave NO recovery) — PRODUCT — FIXED
+
+Surfaced by a §17 **no-fluke replay** (intermittent on the local 27B's port choice). The model served its
+static deliverable via the preview shell: `tmux send-keys -t disco-{cid8}-preview -l 'python3 -m http.server
+8000'`, then retried `5173`. Both are in the reserved control/UI set, so the Bug-7 process-backend
+containment (`reserved_port_command_violation`, `ProcessSandboxInstance.exec_shell`) correctly REJECTED the
+binds (they'd crash the agent-server / collide with vite) — but gave the model **no recovery path**: it never
+established a preview, so the resolver found no conversation-owned port, `verify_web_app` reported
+not-serving, and the build STUCKed `verify_no_progress`. (The existing `ensure_preview` remap covers only the
+default auto-serve, NOT a raw model-launched `http.server <reserved>` via shell/tmux.)
+
+**Fix** (`fix-bug16-reserved-port-serve`, combining RCA 3b remap + 3a actionable refusal):
+- **3b remap (load-bearing)** — `ProcessSandboxInstance.exec_shell` now calls
+  `remap_reserved_preview_serve` (`preview_target.py`) BEFORE the containment check: a `python -m http.server
+  <reserved>` SERVE (bare, or wrapped in the `tmux send-keys -t disco-{cid8}-preview -l '...'` form the
+  `shell_exec("preview", …)` path produces) is transparently rewritten to the process-safe port
+  (`process_safe_preview_port()` → 3000) — **never** binding 8000/8800/5173, so the Bug-7 crash vector stays
+  CLOSED. The remapped server runs in the conversation's preview tmux session → it is conversation-owned →
+  `resolve_preview_port(host_shared=True)` (the same resolver `verify_web_app({})` and the finish gate use)
+  targets it → the build can FINISH. The containment refusal STILL runs on the (possibly remapped) command,
+  so a reserved-port KILL (`fuser`/`lsof`) and any arbitrary reserved bind (`--port`, `:8000`, `listen`) are
+  NOT remapped and still exit 126 before the subprocess launcher.
+- **3a actionable refusal** — `reserved_port_command_violation`'s message now names the rejected port, the
+  whole reserved set, AND a concrete safe replacement ("serve … on a non-reserved port such as 3000
+  instead"). And `_exec_outcome` (`system.py`) promotes an `ExecResult(126, stderr="refused: …")` to the
+  ToolOutcome `error` text (not a bare "exited 126") so the model — whose loop drops tool `content` and emits
+  only `error` — actually SEES the recovery guidance.
+
+**Must-not-regress (verified):** kills + arbitrary reserved binds still refused (exit 126, never launched);
+`expose_port()` still None for reserved process ports; explicit verify URLs to 8000/8800/5173 on shared-host
+still rejected; isolated containers keep 8000 canonical; W-45 broken-app still fails verify.
+
+**Proof — LIVE soak was running (local 27B busy), so per policy the UNIT tests are the required proof** (no
+live soak run, port 8000 never bound by this work): `test_preview_target.py` (actionable message; remap of
+bare + tmux-wrapped serve; remap leaves non-reserved/kills/arbitrary-binds untouched; remap→conversation-
+owned→resolver-targets-safe-port composition), `test_sandbox.py` (process `exec_shell` remaps a reserved
+serve before exec via an `echo` proxy — no real bind; kills + arbitrary binds still refused 126 with the
+actionable message), `test_shell_spill.py` (a `refused:` 126 surfaces as the `error` text; ordinary nonzero
+exits keep the concise summary). Ruff + basedpyright clean, import-linter KEPT, preview/verify/finish/shell
+suite green. (One pre-existing, untouched env-dependent assertion in
+`test_process_backend_expose_port_defense` fails only because the LIVE soak currently holds port 3000 — not
+a regression of this change.)
+
+---
+
 ## Runner hygiene — kill abandoned conversations (harness only)
 
 **Symptom.** The runner left a build conversation **RUNNING** whenever it stopped watching —

@@ -191,6 +191,57 @@ async def test_process_backend_expose_port_defense():
         await inst.destroy()
 
 
+async def test_process_exec_shell_remaps_reserved_preview_serve():
+    # Bug 16 (§17 no-fluke): a reserved-port preview SERVE is REMAPPED to a safe port
+    # BEFORE execution, instead of refused — so a model serving on 8000 recovers rather
+    # than STUCKing. Proven hermetically via an `echo` proxy (NO real bind: we never
+    # touch port 8000/3000) that the reserved port has already been rewritten by the
+    # time the command runs.
+    import tempfile
+    from pathlib import Path
+
+    from disco.core.loop.preview_target import (
+        process_safe_preview_port,
+        reserved_control_ports,
+    )
+    from disco.tools.sandbox.process import ProcessSandboxInstance
+
+    safe = str(process_safe_preview_port(reserved=reserved_control_ports()))
+    with tempfile.TemporaryDirectory() as tmp:
+        inst = ProcessSandboxInstance("i", "o", "c", SandboxSpec(), Path(tmp))
+        # `echo ... http.server 8000` would normally trip the containment refusal; the
+        # remap rewrites the reserved port first, so the command runs and echoes `safe`.
+        res = await inst.exec_shell("echo python3 -m http.server 8000", timeout_s=10)
+        assert res.exit_code == 0, res.stderr
+        assert safe in res.stdout
+        assert "8000" not in res.stdout  # the reserved port was rewritten before exec
+        await inst.destroy()
+
+
+async def test_process_exec_shell_still_refuses_reserved_kill_and_arbitrary_bind():
+    # Must-not-regress: the remap covers ONLY the http.server serve shape. A reserved-
+    # port KILL and an arbitrary reserved BIND are STILL refused (exit 126) with the
+    # actionable message — and the refusal returns BEFORE the real subprocess launcher.
+    import tempfile
+    from pathlib import Path
+
+    from disco.core.loop.preview_target import (
+        process_safe_preview_port,
+        reserved_control_ports,
+    )
+    from disco.tools.sandbox.process import ProcessSandboxInstance
+
+    safe = str(process_safe_preview_port(reserved=reserved_control_ports()))
+    with tempfile.TemporaryDirectory() as tmp:
+        inst = ProcessSandboxInstance("i", "o", "c", SandboxSpec(), Path(tmp))
+        for cmd in ("fuser -k 8000/tcp", "uvicorn app:app --port 8000"):
+            res = await inst.exec_shell(cmd, timeout_s=10)
+            assert res.exit_code == 126, cmd
+            assert res.stderr.startswith("refused:"), cmd
+            assert safe in res.stderr  # actionable: names a safe replacement
+        await inst.destroy()
+
+
 async def test_session_recreate_fires_rehydrate_hook():
     """bp-13 §2 (orchestrator fix): a mid-session death forces _recreate, which
     must invoke the owner's on_recreate hook AFTER the fresh instance is up —

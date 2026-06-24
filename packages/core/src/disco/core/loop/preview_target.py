@@ -346,6 +346,11 @@ def reserved_port_command_violation(
     crash vector and the gate's own probes never bind)."""
     reserved = reserved_control_ports() if reserved is None else reserved
     low = command.lower()
+    # Bug 16 — the refusal must be ACTIONABLE: name the rejected port, the whole
+    # reserved set, AND a concrete safe replacement, so a model that hits it can recover
+    # to a non-reserved port instead of retrying the same reserved one and STUCKing.
+    reserved_csv = ", ".join(str(r) for r in sorted(reserved))
+    safe = process_safe_preview_port(reserved=reserved)
     for p in sorted(reserved):
         ps = re.escape(str(p))
         bind_patterns = (
@@ -364,16 +369,59 @@ def reserved_port_command_violation(
         for pat in bind_patterns:
             if re.search(pat, low):
                 return (
-                    f"refused: binds reserved control port {p} (the agent-server/"
-                    "app-server control port — serve your app on a different port)"
+                    f"refused: port {p} is reserved for the platform "
+                    f"(reserved control/UI ports: {reserved_csv}) — serve your app on a "
+                    f"non-reserved port such as {safe} instead"
                 )
         for pat in kill_patterns:
             if re.search(pat, low):
                 return (
-                    f"refused: targets reserved control port {p} (the agent-server/"
-                    "app-server control port)"
+                    f"refused: port {p} is reserved for the platform "
+                    f"(reserved control/UI ports: {reserved_csv}); do not kill it — serve "
+                    f"your own app on a non-reserved port such as {safe} instead"
                 )
     return None
+
+
+# The static-preview SERVE shape: `python -m http.server <port>` — the ONE reserved-port
+# command we REMAP (vs refuse) so a build can recover. See remap_reserved_preview_serve.
+_HTTP_SERVER_SERVE_RE = re.compile(r"(http\.server\s+)(\d+)")
+
+
+def remap_reserved_preview_serve(
+    command: str,
+    reserved: frozenset[int] | None = None,
+    safe_port: int | None = None,
+) -> str | None:
+    """Bug 16 — the RECOVERABLE counterpart to `reserved_port_command_violation`.
+
+    If `command` is (or wraps, via `tmux send-keys ... -l '...'`) a
+    `python -m http.server <port>` STATIC PREVIEW SERVE whose port is a RESERVED
+    control/UI port, return the command with that port rewritten to a process-safe
+    preview port; otherwise return None (nothing to remap).
+
+    On the process/local shared host a model that serves its deliverable on 8000/5173
+    would be refused by the containment scan — and, with no preview established, the
+    build STUCKs (`verify_no_progress`, the §17 no-fluke intermittency). Transparently
+    remapping the SERVE to a safe port keeps the Bug-7 crash vector CLOSED (we never bind
+    a reserved control port) while letting the build finish: the remapped server runs in
+    the conversation's `disco-{cid8}-preview` tmux session, so it is conversation-owned
+    and `resolve_preview_port(host_shared=True)` targets it. ONLY the unambiguous
+    `http.server <reserved>` serve shape is remapped — kill commands (`fuser`/`lsof`) and
+    other reserved binds (`--port`, `:8000`, `listen`) are NOT remapped and are left for
+    `reserved_port_command_violation` to refuse with the actionable message above."""
+    reserved = reserved_control_ports() if reserved is None else reserved
+    safe_port = (
+        process_safe_preview_port(reserved=reserved) if safe_port is None else safe_port
+    )
+
+    def _sub(m: re.Match[str]) -> str:
+        if int(m.group(2)) in reserved:
+            return f"{m.group(1)}{safe_port}"
+        return m.group(0)
+
+    new = _HTTP_SERVER_SERVE_RE.sub(_sub, command)
+    return new if new != command else None
 
 
 __all__ = [
@@ -383,6 +431,7 @@ __all__ = [
     "parse_port_ownership",
     "port_ownership_probe_command",
     "process_safe_preview_port",
+    "remap_reserved_preview_serve",
     "reserved_control_ports",
     "reserved_port_command_violation",
     "resolve_preview_port",

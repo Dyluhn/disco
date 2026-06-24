@@ -185,6 +185,45 @@ async def test_spill_threshold_override_via_env(monkeypatch):
     assert len(spill_paths) == 1
 
 
+async def test_refusal_text_surfaces_as_error_not_bare_exit_126():
+    # Bug 16 (3a): a direct `shell` that hits the containment refusal (exit 126,
+    # stderr="refused: ...") must render the refusal TEXT as the ToolOutcome.error,
+    # NOT a bare "shell exited 126" — the loop emits AgentErrorEvent(error=...) and
+    # drops content, so without this the model never sees the actionable guidance.
+    sbx = FakeSandboxInstance()
+    refusal = (
+        "refused: port 8000 is reserved for the platform (reserved control/UI ports: "
+        "5173, 8000, 8800) — serve your app on a non-reserved port such as 3000 instead"
+    )
+
+    async def _exec(cmd, *, timeout_s):
+        return ExecResult(exit_code=126, stdout="", stderr=refusal)
+
+    sbx.exec_shell = _exec
+    ctx = _ctx(sbx, assist=False)
+    res = await ShellTool().run(_args("python3 -m http.server 8000"), ctx)
+
+    assert res.success is False
+    assert res.error == refusal  # the actionable text, not "shell exited 126"
+    assert "3000" in res.error and "exited 126" not in res.error
+
+
+async def test_non_refusal_nonzero_exit_keeps_concise_summary():
+    # Must-not-regress: an ordinary command failure still reports the concise
+    # "... exited N" summary (only `refused:` 126 stderr is promoted to the error).
+    sbx = FakeSandboxInstance()
+
+    async def _exec(cmd, *, timeout_s):
+        return ExecResult(exit_code=2, stdout="", stderr="no such file")
+
+    sbx.exec_shell = _exec
+    ctx = _ctx(sbx, assist=False)
+    res = await ShellTool().run(_args("cat missing"), ctx)
+
+    assert res.success is False
+    assert res.error is not None and "exited 2" in res.error
+
+
 async def test_spill_does_not_touch_stderr_or_exit_code():
     """stdout-only spill: stderr + exit_code are preserved verbatim."""
     payload = b"Y" * 60_000

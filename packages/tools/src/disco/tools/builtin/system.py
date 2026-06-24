@@ -61,7 +61,17 @@ def _exec_outcome(res: ExecResult, *, what: str, timeout_s: int) -> ToolOutcome:
     if res.timed_out:
         error: str | None = f"{what} timed out after {timeout_s}s (partial output preserved)"
     elif not ok:
-        error = f"{what} exited {res.exit_code}"
+        # Bug 16 — surface a containment REFUSAL (ExecResult(126, stderr="refused: ...")
+        # — e.g. a reserved-port bind/kill) as the error TEXT, not a bare "exited 126".
+        # The loop emits AgentErrorEvent(error=result.error) and DROPS content, so
+        # without this the model never sees the actionable "serve on a non-reserved port
+        # such as N" guidance and re-tries the same reserved port → STUCK. Other nonzero
+        # exits keep the concise summary.
+        stderr = (res.stderr or "").strip()
+        if res.exit_code == 126 and stderr.startswith("refused:"):
+            error = stderr
+        else:
+            error = f"{what} exited {res.exit_code}"
     else:
         error = None
     return ToolOutcome(
