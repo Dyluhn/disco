@@ -268,6 +268,19 @@ unsatisfiable on the no-browser backend.) Evidence:
 > pre-fix code, so a true server bounce was not done): `test_bug6_actionless_honest_finish.py` —
 > 1 positive (exact repro → FINISHED + honest marker, not PAUSED/STUCK) + 3 negatives (no
 > deliverable, failed validation, zero-work).
+>
+> **Hardening (codex review).** Three anti-false-finish holes tightened so the honest finish fires
+> ONLY for a genuinely-complete, content-validated, browser-unavailable static build: (1)
+> `_VERIFY_STEP_RE` is now phrase-anchored — bare `test`/`render` dropped so "Add a **test**imonials
+> section" / "**render** the gallery" are NOT misread as verify-only (verify/validate/check/confirm/
+> qa/smoke/lint + "renders correctly" / "displays correctly" / "test that…/it" / "tests pass" only);
+> (2) `_nonbrowser_static_validation_passed` now requires a REAL content/structure check
+> (`_VALIDATION_CMD_RE`: HTML/XML parser, structure check, or content grep) — a bare `ls`/`test -f`/
+> `stat`/`cat` existence check no longer counts; (3) `_real_web_failure_evidence` now also blocks on
+> browser NETWORK failures (the daemon's `network` ring) and BLANK renders (no meaningful
+> text/elements), not just console errors. Three added negatives:
+> `test_negative_content_step_not_verify…`, `test_negative_existence_check_is_not_a_validation`,
+> `test_negative_browser_failure_evidence_blocks_honest_finish[network|blank]`.
 
 ### Bug 7 — build preview/serve port == agent-server port (8000) collides on the `process` backend — PRODUCT/CONFIG — FIXED
 

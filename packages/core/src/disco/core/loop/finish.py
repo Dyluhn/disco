@@ -194,12 +194,39 @@ _FILE_WRITE_TOOLS = frozenset(
 )
 # Shell tools that can run a non-browser (HTMLParser/static-parse) validation.
 _SHELL_TOOLS = frozenset({"shell", "shell_exec"})
-# Conservative verify-step lexicon: a not-done plan step counts as "verify-only"
-# iff its title/detail names a verification/render/test action — NOT new content.
-# Word-boundary + stem matched (verify/verifies/verification, validate/validation,
-# check/checks, render/renders, test/tests, qa, smoke).
+# Conservative verify-step lexicon. A not-done plan step counts as "verify-only" ONLY
+# when its title/detail names GENUINE verification — NOT new content. Deliberately
+# narrow + phrase-anchored to avoid substring false-positives that would misread a
+# CONTENT step as verify-only (the codex catch): bare `test`/`render` are EXCLUDED
+# because "Add a **test**imonials section" and "**render** the gallery" are real work,
+# not verification. Verification phrasing is required instead — "verify", "validate",
+# "check", "confirm", "qa", "smoke test", "lint", and the page-behaviour phrases
+# "renders"/"renders correctly"/"displays correctly", plus the verbs "test that …",
+# "test it", "tests pass". A step that can't be confidently classified as PURE
+# verification stays NON-verify (→ no honest finish, the conservative direction).
 _VERIFY_STEP_RE = re.compile(
-    r"\b(?:verif\w*|validat\w*|check\w*|render\w*|test\w*|qa|smoke\w*)\b", re.IGNORECASE
+    r"\bverif(?:y|ies|ied|ication)\b"
+    r"|\bvalidat(?:e|es|ed|ing|ion)\b"
+    r"|\bcheck(?:s|ed|ing)?\b"
+    r"|\bconfirm(?:s|ed|ing)?\b"
+    r"|\bqa\b"
+    r"|\bsmoke[\s-]?tests?\b"
+    r"|\blint(?:s|ed|ing)?\b"
+    r"|\brenders\b"
+    r"|\b(?:renders?|displays?) correctly\b"
+    r"|\btest(?:s|ed|ing)? (?:that|it)\b"
+    r"|\btests? pass(?:es|ed)?\b",
+    re.IGNORECASE,
+)
+# A shell command counts as a REAL non-browser CONTENT/STRUCTURE validation only when
+# it actually inspects the markup — an HTML/XML parser, a structure/markup checker, or
+# a content grep. A bare existence/dump (`ls`/`test -f`/`stat`/`cat`/`wc`/`file`) proves
+# nothing the deliverable-on-disk check (condition 3) doesn't already, so it does NOT
+# count as a validation (the codex catch).
+_VALIDATION_CMD_RE = re.compile(
+    r"htmlparser|html\.parser|html5lib|\blxml\b|beautifulsoup|\bbs4\b|xmllint|\btidy\b"
+    r"|elementtree|\betree\b|\bgrep\b|\bvalidate\b|markup",
+    re.IGNORECASE,
 )
 # Distinctive substring of `browser.BROWSER_UNAVAILABLE_MSG` (kept inline rather than
 # imported — core must not depend on the tools package). Matched against the error/
@@ -209,11 +236,13 @@ _BROWSER_UNAVAILABLE_TEXT = "browser verification is unavailable"
 
 def _missing_steps_all_verify(events: list[Event]) -> bool:
     """Bug 6 — True iff a plan exists, is INCOMPLETE, and EVERY not-done
-    (missing/active) step is a verification-only step (its title/detail names a
-    verify/check/render/test action, not new content). Conservative: any not-done
-    step that is NOT clearly a verify step → False (real work remains, so the
-    actionless valve must PAUSE, never honest-finish). Returns False when the plan
-    is complete (no missing steps — the `completed_via_notify` branch owns that)."""
+    (missing/active) step is a verification-only step (its title/detail names
+    genuine verification per `_VERIFY_STEP_RE` — verify/validate/check/confirm/qa/
+    smoke/lint/renders-correctly — NOT new content like "add a testimonials
+    section" or "render the gallery"). Conservative: any not-done step that is NOT
+    clearly verification → False (real work remains, so the actionless valve must
+    PAUSE, never honest-finish). Returns False when the plan is complete (no missing
+    steps — the `completed_via_notify` branch owns that)."""
     plan, states = effective_plan_progress(events)
     if plan is None or not plan.steps:
         return False
@@ -239,26 +268,29 @@ def _last_edit_seq(events: list[Event]) -> int:
 
 def _nonbrowser_static_validation_passed(events: list[Event]) -> bool:
     """Bug 6 — True iff, AFTER the last file write/edit, a NON-browser shell
-    validation that referenced the static deliverable (`index.html`) RAN and
-    SUCCEEDED, with no later FAILED such validation. This is the file-level
-    parse/HTMLParser check the agent runs when the browser is unavailable — the
-    positive evidence the delivered file is well-formed. A FAILED validation
-    (error observation / non-success) yields False so a broken parse BLOCKS the
-    honest finish; no validation at all → False (we require a passing one)."""
+    validation that GENUINELY inspects the static deliverable's CONTENT/STRUCTURE
+    (an HTML/XML parser, a markup/structure check, or a content grep on
+    `index.html`) RAN and SUCCEEDED, with no later FAILED such validation. This is
+    the positive evidence the delivered file is well-formed when the browser is
+    unavailable. A bare existence/dump (`ls`/`test -f`/`stat`/`cat`/`wc`) does NOT
+    count — it only re-proves the file exists (condition 3), not that its content is
+    valid (the codex catch). A FAILED validation yields False so a broken parse
+    BLOCKS the honest finish; no qualifying validation at all → False (we require a
+    passing one)."""
     edit_seq = _last_edit_seq(events)
-    # action_id -> the shell action's command references the static deliverable.
-    static_shell_actions: set[str] = set()
+    # action_id -> the shell action is a REAL content validation against index.html.
+    validation_actions: set[str] = set()
     verdict: bool | None = None
     for ev in events:
         if isinstance(ev, ActionEvent) and ev.tool_call.tool_name in _SHELL_TOOLS:
             cmd = " ".join(str(v) for v in (ev.tool_call.arguments or {}).values())
-            if "index.html" in cmd:
-                static_shell_actions.add(ev.id)
+            if "index.html" in cmd and _VALIDATION_CMD_RE.search(cmd):
+                validation_actions.add(ev.id)
         elif isinstance(ev, ObservationEvent):
-            if (ev.seq or 0) > edit_seq and ev.action_id in static_shell_actions:
+            if (ev.seq or 0) > edit_seq and ev.action_id in validation_actions:
                 verdict = bool(ev.tool_result.success)
         elif isinstance(ev, AgentErrorEvent):
-            if (ev.seq or 0) > edit_seq and ev.action_id in static_shell_actions:
+            if (ev.seq or 0) > edit_seq and ev.action_id in validation_actions:
                 verdict = False
     return verdict is True
 
@@ -286,10 +318,12 @@ def _browser_unavailable_observed(events: list[Event]) -> bool:
 
 def _real_web_failure_evidence(events: list[Event]) -> bool:
     """Bug 6 (W-45 guard) — True iff there is genuine 'the app is BROKEN' evidence
-    (not mere infra-unavailability): a `verify_web_app` verdict or `browser`
-    observation with console errors, network failures, or a served-but-blank
-    render. ANY such evidence BLOCKS the honest actionless finish — only an
-    unverifiable (never a broken) build may finish honestly."""
+    (not mere infra-unavailability): a `verify_web_app` verdict or a SUCCESSFUL
+    `browser` observation showing console errors, NETWORK failures, or a
+    served-but-blank render. ANY such evidence BLOCKS the honest actionless finish —
+    only an unverifiable (never a broken) build may finish honestly. A FAILED browser
+    call is infra-unavailability (an AgentErrorEvent, not an ObservationEvent) and is
+    NOT treated as app-broken here."""
     for ev in events:
         if not isinstance(ev, ObservationEvent):
             continue
@@ -302,7 +336,19 @@ def _real_web_failure_evidence(events: list[Event]) -> bool:
             if http_ok and st.get("meaningful_content") is False:
                 return True  # served HTTP 200 but rendered nothing → broken, not unverifiable
         elif res.tool_name == "browser":
+            if not res.success:
+                continue  # a failed/unavailable browser call is infra, not app-broken
+            # console errors — the app threw at runtime.
             if any(c.get("level") == "error" for c in (st.get("console") or [])):
+                return True
+            # NETWORK failures — the daemon's `network` ring holds failed/4xx-5xx
+            # requests (B7). A page that loaded with broken requests is NOT a clean
+            # unverifiable delivery.
+            if st.get("network") or st.get("network_failures"):
+                return True
+            # BLANK render — the page served but nothing a user would see mounted
+            # (empty/trivial DOM: no meaningful text, no elements/links/forms).
+            if not _browser_content_meaningful(st):
                 return True
     return False
 

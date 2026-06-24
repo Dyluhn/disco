@@ -112,6 +112,62 @@ class _BrowserlessStaticExecutor(FakeExecutor):
         )
 
 
+class _BrokenThenUnavailableExecutor(_BrowserlessStaticExecutor):
+    """The first browser navigate SUCCEEDS but the page is broken (a network
+    failure, or a blank render); a later navigate finds the daemon gone
+    (unavailable). This makes conditions 1-5 of the honest finish pass (the browser
+    IS observed-unavailable on the second call) so the test isolates condition 6 —
+    `_real_web_failure_evidence` must BLOCK on the first observation's failure."""
+
+    def __init__(self, *, mode):
+        super().__init__(index_exists=True, validation_ok=True)
+        self._mode = mode  # "network" | "blank"
+        self._browser_calls = 0
+
+    async def execute(self, call):
+        if call.tool_name == "browser":
+            self.calls.append(call)
+            self._browser_calls += 1
+            if self._browser_calls == 1:
+                if self._mode == "network":
+                    structured = {
+                        "url": "http://127.0.0.1:8000/",
+                        "console": [],
+                        "network": [
+                            {"url": "http://127.0.0.1:8000/app.js", "failure": "net::ERR_FAILED"}
+                        ],
+                        "title": "Bakery",
+                        "text": "Welcome to the bakery — fresh bread daily.",
+                        "elements": [{"tag": "h1"}],
+                    }
+                else:  # blank render — served but nothing mounted
+                    structured = {
+                        "url": "http://127.0.0.1:8000/",
+                        "console": [],
+                        "network": [],
+                        "title": "",
+                        "text": "",
+                        "elements": [],
+                    }
+                return ToolResult(
+                    call_id=call.call_id,
+                    tool_name="browser",
+                    success=True,
+                    content="navigated",
+                    structured=structured,
+                )
+            # later navigate: the daemon died → unavailable (the condition-5 signal).
+            return ToolResult(
+                call_id=call.call_id,
+                tool_name="browser",
+                success=False,
+                content="",
+                structured={"browser_unavailable": True},
+                error=BROWSER_UNAVAILABLE_MSG,
+            )
+        return await super().execute(call)
+
+
 _PLAN = {
     "summary": "bakery landing page",
     "steps": [
@@ -120,32 +176,52 @@ _PLAN = {
         {"title": "Verify the page renders correctly in the browser"},
     ],
 }
+# A plan whose final not-done step is CONTENT (not verification) — for the
+# verify-only-lexicon negative (a content step must never read as verify-only).
+_PLAN_CONTENT_TAIL = {
+    "summary": "bakery landing page",
+    "steps": [
+        {"title": "Build the HTML structure in index.html"},
+        {"title": "Add the CSS styling in style.css"},
+        {"title": "Add a testimonials section"},
+    ],
+}
+_HTML = "<html><body><h1>Bakery</h1></body></html>"
+# A REAL content/structure validation (HTML parser) referencing index.html.
+_VALIDATE_CMD = (
+    "python3 -c \"from html.parser import HTMLParser as P; "
+    "P().feed(open('index.html').read())\""
+)
+# A bare existence check — proves the file EXISTS, validates NOTHING about content.
+_EXISTENCE_CMD = "ls -la index.html"
+_NAVIGATE = action_step("browser", {"action": "navigate", "url": "http://127.0.0.1:8000/"})
+_IDLE_TAIL = [
+    _notify("Files delivered; browser verification isn't available on this backend."),
+    _notify("The static deliverable is in place; I validated the HTML parses."),
+    _notify("Done — the page is built; render couldn't be browser-checked here."),
+    _notify("Standing by."),
+    finish_step(),
+]
 
 
-def _deliver_then_idle_steps():
-    """Write both deliverables, mark the two build steps done + the verify step
-    active, attempt browser-verify (unavailable) + a shell HTMLParser validation,
-    then go idle (notify spam) — the EXACT Bug 6 reproduction shape."""
-    html = "<html><body><h1>Bakery</h1></body></html>"
-    validate = (
-        "python3 -c \"from html.parser import HTMLParser as P; "
-        "P().feed(open('index.html').read())\""
-    )
-    return [
-        action_step("submit_plan", _PLAN),
-        action_step("file_write", {"path": "index.html", "content": html}),
+def _deliver_then_idle_steps(
+    *, plan=_PLAN, done_idxs=(1, 2), active_idx=3, validate_cmd=_VALIDATE_CMD,
+    browser_steps=(_NAVIGATE,),
+):
+    """Write both deliverables, mark the build steps done + the active step active,
+    attempt browser-verify (unavailable) + a shell validation, then go idle (notify
+    spam) — the Bug 6 reproduction shape, parameterized for the negative variants."""
+    steps = [
+        action_step("submit_plan", plan),
+        action_step("file_write", {"path": "index.html", "content": _HTML}),
         action_step("file_write", {"path": "style.css", "content": "h1{color:#a30}"}),
-        action_step("plan_step", {"index": 1, "state": "done"}),
-        action_step("plan_step", {"index": 2, "state": "done"}),
-        action_step("plan_step", {"index": 3, "state": "active"}),
-        action_step("browser", {"action": "navigate", "url": "http://127.0.0.1:8000/"}),
-        action_step("shell", {"command": validate}),
-        _notify("Files delivered; browser verification isn't available on this backend."),
-        _notify("The static deliverable is in place; I validated the HTML parses."),
-        _notify("Done — the page is built; render couldn't be browser-checked here."),
-        _notify("Standing by."),
-        finish_step(),
     ]
+    steps += [action_step("plan_step", {"index": i, "state": "done"}) for i in done_idxs]
+    steps.append(action_step("plan_step", {"index": active_idx, "state": "active"}))
+    steps += list(browser_steps)
+    steps.append(action_step("shell", {"command": validate_cmd}))
+    steps += _IDLE_TAIL
+    return steps
 
 
 async def _approve_and_run(executor, agent):
@@ -235,3 +311,65 @@ async def test_negative_zero_work_after_approval_stucks_not_honest_finish():
     assert not _has_honest_marker(events), sts
     assert state.execution_status == ConversationStatus.STUCK, sts
     assert any(d == "approve_plan_no_execution" for _, d in sts), sts
+
+
+@pytest.mark.asyncio
+async def test_negative_content_step_not_verify_does_not_honest_finish():
+    """NEGATIVE (codex #1 — verify-only lexicon) — the build is otherwise
+    finishable (deliverable on disk, a real validation passed, browser
+    unavailable) but the only NOT-DONE step is CONTENT ("Add a testimonials
+    section"), NOT verification. A content step must never read as verify-only →
+    NO honest finish; the valve PAUSES so the remaining work isn't dropped."""
+    execu = _BrowserlessStaticExecutor(index_exists=True, validation_ok=True)
+    agent = ScriptedAgent(
+        _deliver_then_idle_steps(plan=_PLAN_CONTENT_TAIL, done_idxs=(1, 2), active_idx=3)
+    )
+    state, events = await _approve_and_run(execu, agent)
+
+    sts = _statuses(events)
+    assert not _has_honest_marker(events), sts
+    assert state.execution_status != ConversationStatus.FINISHED, sts
+    assert any(
+        s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts
+    ), sts
+
+
+@pytest.mark.asyncio
+async def test_negative_existence_check_is_not_a_validation():
+    """NEGATIVE (codex #2 — real validation required) — same finishable shape but
+    the only post-write shell is `ls index.html`, which proves the file EXISTS
+    (condition 3 already), NOT that its content is valid. A bare existence check is
+    NOT a content validation → NO honest finish; PAUSE/actionless."""
+    execu = _BrowserlessStaticExecutor(index_exists=True, validation_ok=True)
+    agent = ScriptedAgent(_deliver_then_idle_steps(validate_cmd=_EXISTENCE_CMD))
+    state, events = await _approve_and_run(execu, agent)
+
+    sts = _statuses(events)
+    assert not _has_honest_marker(events), sts
+    assert state.execution_status != ConversationStatus.FINISHED, sts
+    assert any(
+        s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts
+    ), sts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["network", "blank"])
+async def test_negative_browser_failure_evidence_blocks_honest_finish(mode):
+    """NEGATIVE (codex #3 — real web-failure evidence) — conditions 1-5 all hold
+    (the second navigate is observed-unavailable), but a SUCCESSFUL browser
+    observation shows a NETWORK failure (mode=network) or a BLANK render
+    (mode=blank). Such evidence means the app is BROKEN, not merely unverifiable →
+    NO honest finish (W-45); PAUSE/actionless instead."""
+    execu = _BrokenThenUnavailableExecutor(mode=mode)
+    # Two navigates: the first observes the broken page, the second is unavailable.
+    agent = ScriptedAgent(
+        _deliver_then_idle_steps(browser_steps=(_NAVIGATE, _NAVIGATE))
+    )
+    state, events = await _approve_and_run(execu, agent)
+
+    sts = _statuses(events)
+    assert not _has_honest_marker(events), sts
+    assert state.execution_status != ConversationStatus.FINISHED, sts
+    assert any(
+        s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts
+    ), sts
