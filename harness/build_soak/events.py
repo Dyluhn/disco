@@ -266,6 +266,102 @@ def has_action(
     return False
 
 
+def action_id_of(ev: dict[str, Any]) -> str | None:
+    """The durable id an ObservationEvent / AgentErrorEvent's `action_id` points
+    back to — i.e. the ActionEvent's own `id`. None for non-action events.
+
+    Correlation key for pairing an action with its result: the real loop stamps the
+    observation/error with `action_id == <the action event's id>` (verified on
+    frozen evidence: action `id` evt_X ↔ observation/agent_error `action_id` evt_X).
+    """
+    if kind_of(ev) != KIND_ACTION:
+        return None
+    aid = ev.get("id")
+    return str(aid) if aid is not None else None
+
+
+# Stable message signatures the PRE-EXECUTION gates/guards emit when they refuse a
+# tool BEFORE the executor runs — the ONLY provably-non-mutating rejections. These
+# are fixed module-constant strings in the product (only the tool name is
+# interpolated into the wrapper), so a substring match on the invariant portion is
+# stable. Verified against the product source:
+#   * disco.core.loop.engine `_gate_planning_mode`     (write/exec tool in PLANNING)
+#   * disco.core.loop.engine `_MIDSTEP_STEER_REFUSAL`  (mutating tool at the apply
+#     boundary after a mid-step change steer — the Bug-13 seq-60 case)
+#   * disco.core.loop.observe K1 elision-marker execution guard (arg carries an
+#     elision placeholder; rejected before execution)
+# FRAGILITY: this couples the harness to the product's refusal WORDING. The robust
+# fix would be a structured marker on the AgentErrorEvent the gates emit (e.g.
+# `error_type="gate_rejected"` / a rejection code) — a tiny, gate-only product change
+# the oracle could key on instead of strings. The AgentErrorEvent today carries only
+# a free-text `error` (no structured field, `meta` is empty), so we match the stable
+# strings and DEFER the product marker (flagged in build-soak-surfaced-bugs.md). If a
+# gate's message text changes, update this allowlist.
+_GATE_REJECTION_MARKERS: tuple[str, ...] = (
+    "is not available in PLANNING mode. No workspace mutation",
+    "was not applied. A change request arrived while you were mid-step",
+    "contain an internal elision placeholder",
+)
+
+
+def _is_recognized_gate_rejection(error_text: str) -> bool:
+    """True iff `error_text` is a RECOGNIZED pre-execution gate/guard rejection (a
+    refusal that provably ran BEFORE the executor → nothing mutated). A generic
+    AgentErrorEvent is NOT enough: the product emits AgentErrorEvent for many cases —
+    tool failed, action invalid, EXECUTION RAISED (the tool may have started, mutated
+    disk, then raised → AgentError, no observation, but it DID mutate), or the human
+    declined. Only the closed allowlist above is provably non-mutating."""
+    return any(marker in error_text for marker in _GATE_REJECTION_MARKERS)
+
+
+def action_executed(events: list[dict[str, Any]], action_id: str) -> bool:
+    """True iff the action identified by `action_id` MAY HAVE MUTATED the workspace —
+    i.e. it is counted as a write. The discriminator is a RECOGNIZED PRE-EXECUTION
+    GATE REJECTION, NOT the success flag and NOT the mere presence of an AgentError
+    (the two codex anti-false-PASS corrections):
+
+      * Paired with an ObservationEvent (a `tool_result` exists) -> the call reached
+        the executor and RAN. COUNTS regardless of `tool_result.success` True/False: a
+        write can mutate disk and THEN report success=False (a partial /
+        failed-after-mutation write), so excluding `success=False` would hide a real
+        mutation -> false-PASS. Any observation => counts.
+
+      * Paired ONLY with an AgentErrorEvent whose text matches a RECOGNIZED gate/guard
+        rejection (`_is_recognized_gate_rejection` — `_gate_planning_mode` /
+        `_gate_midstep_steer_replan` / the K1 elision guard) and NO observation -> the
+        tool was refused BEFORE the executor ran, so NOTHING mutated. The §11.3
+        tool-rejection-recovery contract WORKING, not a §11.4/§11.7 violation. Does NOT
+        count. This is the Bug-13 case (the rejected pre-approval write at seq 59 /
+        agent_error at seq 60, which carries the `_MIDSTEP_STEER_REFUSAL` text).
+
+      * Any OTHER AgentErrorEvent (tool raised after possibly mutating, invalid
+        action, human declined) with no observation -> POSSIBLY MUTATED -> COUNTS
+        (anti-false-PASS). A bare AgentError is NOT proof of non-mutation.
+
+      * Paired with NEITHER (dangling, no response) -> COUNTS conservatively (an
+        unpaired action must not mask a real violation; a genuinely missing
+        observation is also caught as ACTION_NO_OBSERVATION by the EventChainOracle).
+    """
+    has_observation = False
+    gate_rejected = False
+    for e in events:
+        k = kind_of(e)
+        if k == KIND_OBSERVATION and str(e.get("action_id")) == action_id:
+            has_observation = True
+        elif (
+            k == KIND_AGENT_ERROR
+            and e.get("action_id") is not None
+            and str(e.get("action_id")) == action_id
+            and _is_recognized_gate_rejection(str(e.get("error") or ""))
+        ):
+            gate_rejected = True
+    if has_observation:
+        return True  # reached the executor (ran; may have mutated) -> counts
+    if gate_rejected:
+        return False  # recognized pre-execution gate/guard rejection -> nothing mutated
+    return True  # other AgentError (may have mutated) / dangling -> count (anti-false-PASS)
+
+
 def has_observation_for_action(events: list[dict[str, Any]], action_id: str) -> bool:
     """True when an OBSERVATION or AGENT_ERROR event references `action_id`.
 
