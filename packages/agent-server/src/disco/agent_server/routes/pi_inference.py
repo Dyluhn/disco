@@ -32,6 +32,7 @@ raw Pi pass-through must not do.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
@@ -52,12 +53,32 @@ from ..pi_inference import InvalidGatewayToken, PiInferenceTokenStore
 
 _LOG = logging.getLogger("disco.pi_inference")
 
-# Loopback peers the endpoint serves. A unix-socket peer surfaces as
-# ``request.client is None`` (no TCP peer) and is also treated as local.
-_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "::ffff:127.0.0.1", "localhost"})
-
 # Upstream request timeout. Generous — a build turn can be a long generation.
 _UPSTREAM_TIMEOUT_S = 600.0
+
+# What Pi receives instead of any provider-key bytes / raw upstream error string.
+_REDACTED = "[REDACTED]"
+_GENERIC_UPSTREAM_ERROR = "upstream request failed"
+
+# Portable OpenAI chat-completion fields we relay to the provider. Anything NOT in
+# this allow-list is dropped before the upstream call — in particular the provider
+# routing aliases below, which OpenRouter et al. honor to override the pinned model
+# (``models`` fallback list, ``provider`` routing, ``route``, ``transforms``). The
+# pinned model id is the ONLY routing signal that leaves this process.
+_PORTABLE_CHAT_FIELDS = frozenset(
+    {
+        "messages", "model", "temperature", "top_p", "n", "stream", "stream_options",
+        "stop", "max_tokens", "max_completion_tokens", "presence_penalty",
+        "frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "seed",
+        "user", "tools", "tool_choice", "parallel_tool_calls", "functions",
+        "function_call", "response_format", "modalities", "audio", "prediction",
+        "reasoning_effort", "service_tier", "metadata", "store",
+    }
+)
+
+# Explicitly-named provider routing/fallback aliases (a subset of "not portable")
+# — listed so a dropped one is logged by name for the audit trail.
+_ROUTING_ALIASES = frozenset({"models", "provider", "route", "transforms"})
 
 # Only ever parse usage from the TAIL of a stream (the final SSE chunk carries
 # ``usage`` when the client asked for stream_options.include_usage). Bounding the
@@ -78,14 +99,29 @@ class _UpstreamTarget:
     api_key: str | None
 
 
-def _client_is_local(request: Request) -> bool:
-    """True when the request's peer is loopback or a unix socket. The gateway is a
-    LOCAL capability; a remote peer must never reach it even with a token."""
+def _client_is_local(request: Request, *, trust_local_no_peer: bool) -> bool:
+    """True when the request's peer is a real loopback address. The gateway is a
+    LOCAL capability; a remote peer must never reach it even with a token.
+
+    Fail-closed: a missing peer (``request.client is None``) is REJECTED by default.
+    A peerless request can be a unix-socket deployment, but it can equally be a
+    misconfigured proxy that strips the peer — so it is trusted ONLY when the server
+    is explicitly configured for a trusted unix-socket deployment
+    (``trust_local_no_peer``). Loopback is decided with ``ipaddress`` (covers all of
+    127.0.0.0/8, ::1, and IPv4-mapped loopback), never a string prefix that a host
+    like ``127.evil.example`` could spoof."""
     client = request.client
     if client is None:  # unix socket / ASGI with no TCP peer
-        return True
+        return trust_local_no_peer
     host = (client.host or "").strip()
-    return host in _LOOPBACK_HOSTS or host.startswith("127.")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return host == "localhost"  # the only non-numeric host we accept
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:  # ::ffff:127.0.0.1 → 127.0.0.1
+        ip = mapped
+    return ip.is_loopback
 
 
 def _bearer(request: Request) -> str | None:
@@ -156,6 +192,58 @@ def _outbound_headers(target: _UpstreamTarget) -> dict[str, str]:
     return headers
 
 
+def _key_needles(api_key: str | None) -> list[str]:
+    """Every literal form of the provider key that could leak back to Pi — the bare
+    key and its ``Bearer <key>`` header form. Bearer-form first so the longer match
+    is replaced before the bare key."""
+    if not api_key:
+        return []
+    return [f"Bearer {api_key}", api_key]
+
+
+def _redact_text(text: str, api_key: str | None) -> str:
+    """Strip every form of the provider key from a Pi-facing STRING (content-type,
+    error message, log line)."""
+    for needle in _key_needles(api_key):
+        text = text.replace(needle, _REDACTED)
+    return text
+
+
+def _redact_bytes(data: bytes, api_key: str | None) -> bytes:
+    """Strip every form of the provider key from Pi-facing BYTES (a relayed body or
+    SSE chunk). Best-effort per buffer: a hostile/buggy upstream that echoes the
+    request ``Authorization`` header (or embeds the key in a body / error / SSE
+    chunk) must never hand it back to Pi."""
+    for needle in _key_needles(api_key):
+        data = data.replace(needle.encode("utf-8"), _REDACTED.encode("ascii"))
+    return data
+
+
+def _sanitize_body(body: dict, *, model_id: str) -> tuple[dict, list[str]]:
+    """Build the upstream body from ONLY portable OpenAI chat-completion fields and
+    PIN the model. Provider routing/fallback aliases (``models``/``provider``/
+    ``route``/``transforms``) and any other non-portable key are dropped, so Pi
+    cannot steer routing past the pinned model. Returns (clean_body, dropped_keys)."""
+    clean = {k: v for k, v in body.items() if k in _PORTABLE_CHAT_FIELDS}
+    dropped = sorted(k for k in body if k not in _PORTABLE_CHAT_FIELDS)
+    clean["model"] = model_id  # pinned model overrides any Pi-sent `model`
+    return clean, dropped
+
+
+def _estimate_prompt_tokens(body: dict) -> int:
+    """Rough up-front prompt-size estimate (~4 chars/token) so budget is charged
+    BEFORE the call — not only when the provider returns a usage tail. Reconciled to
+    the provider's actual counts after completion (``settle_usage``)."""
+    try:
+        text = json.dumps(body.get("messages", ""), ensure_ascii=False)
+        tools = body.get("tools")
+        if tools:
+            text += json.dumps(tools, ensure_ascii=False)
+    except (TypeError, ValueError):
+        text = ""
+    return max(1, len(text) // 4)
+
+
 def _extract_usage(obj: object) -> tuple[int, int] | None:
     """Pull (input_tokens, output_tokens) from an OpenAI-shaped ``usage`` object,
     or None when absent."""
@@ -198,12 +286,15 @@ def make_pi_inference_router(
     config_store: ConfigStore | None = None,
     secret_store: SecretStore | None = None,
     http_transport: httpx.AsyncBaseTransport | None = None,
+    trust_local_no_peer: bool = False,
 ) -> APIRouter:
     """Build the gateway router. ``token_store`` is the shared run-scoped token store.
     ``config_store`` / ``secret_store`` default to the real shared stores (constructed
     fresh per request so a settings/secret change is honored live, mirroring the rest
     of the agent-server). ``http_transport`` is a test seam for the UPSTREAM provider
-    call (an ``httpx.MockTransport``); None = real network."""
+    call (an ``httpx.MockTransport``); None = real network. ``trust_local_no_peer``
+    opts a trusted unix-socket deployment into accepting peerless requests
+    (``request.client is None``); it defaults False (fail-closed)."""
     router = APIRouter()
 
     def _stores() -> tuple[ConfigStore, SecretStore]:
@@ -214,7 +305,7 @@ def make_pi_inference_router(
     @router.post("/internal/pi-kernel/v1/chat/completions")
     async def pi_chat_completions(request: Request) -> Response:
         # 1) Loopback-only. A remote peer never reaches the model, token or not.
-        if not _client_is_local(request):
+        if not _client_is_local(request, trust_local_no_peer=trust_local_no_peer):
             return JSONResponse(
                 {"error": {"message": "gateway is loopback-only", "type": "forbidden"}},
                 status_code=403,
@@ -232,18 +323,7 @@ def make_pi_inference_router(
             )
         assert token is not None  # validate() raises on a falsy token; narrow for typing
 
-        # 3) Budget gate — refuse to start a call once the cap is reached.
-        if rec.is_over_budget():
-            _LOG.info(
-                "pi-gateway over budget token=%s used=%d budget=%d",
-                rec.fingerprint, rec.used_tokens, rec.budget_tokens,
-            )
-            return JSONResponse(
-                {"error": {"message": "token budget exhausted", "type": "budget_exceeded"}},
-                status_code=429,
-            )
-
-        # 4) Parse Pi's OpenAI-compatible body.
+        # 3) Parse Pi's OpenAI-compatible body.
         try:
             body = await request.json()
         except (json.JSONDecodeError, ValueError):
@@ -254,7 +334,7 @@ def make_pi_inference_router(
                 status_code=400,
             )
 
-        # 5) Resolve the BOUND model (token, not request) → provider target.
+        # 4) Resolve the BOUND model (token, not request) → provider target.
         config, secrets_store = _stores()
         target = resolve_upstream(
             rec.model_key, config_store=config, secret_store=secrets_store
@@ -274,13 +354,45 @@ def make_pi_inference_router(
                 status_code=502,
             )
 
-        # 6) PIN the model: ignore whatever Pi put in `model`, always use the bound
-        #    model id. This is the model-switch defense (ignore-and-pin). The rest of
-        #    the body — messages, tools, params — is relayed VERBATIM (no Disco
-        #    system-prompt / tool-schema injection).
-        body["model"] = target.model_id
-        stream = bool(body.get("stream", False))
-        payload = json.dumps(body).encode("utf-8")
+        # 5) PIN + SANITIZE: keep only portable chat fields, pin the bound model id,
+        #    and DROP provider routing/fallback aliases so Pi cannot steer routing
+        #    past the pin. Messages/tools/params are relayed verbatim otherwise (no
+        #    Disco system-prompt / tool-schema injection).
+        clean, dropped = _sanitize_body(body, model_id=target.model_id)
+        if dropped:
+            _LOG.info(
+                "pi-gateway dropped non-portable fields token=%s fields=%s",
+                rec.fingerprint, ",".join(dropped),
+            )
+        stream = bool(clean.get("stream", False))
+
+        # 6) Budget: atomically RESERVE an up-front prompt estimate (the real gate —
+        #    a concurrent/oversized request cannot slip past), clamp max_tokens to the
+        #    remaining budget, and force usage emission on streams so usage always
+        #    accrues. Reconciled to actual usage after the call.
+        estimate = _estimate_prompt_tokens(clean)
+        if not token_store.reserve(token, estimate):
+            _LOG.info(
+                "pi-gateway over budget token=%s used=%d budget=%d",
+                rec.fingerprint, rec.used_tokens, rec.budget_tokens,
+            )
+            return JSONResponse(
+                {"error": {"message": "token budget exhausted", "type": "budget_exceeded"}},
+                status_code=429,
+            )
+        remaining = rec.budget_remaining()
+        if remaining is not None:
+            cap = max(1, remaining)
+            requested = clean.get("max_tokens")
+            if not isinstance(requested, int) or requested > cap:
+                clean["max_tokens"] = cap  # clamp generation to what budget allows
+        if stream:
+            opts = clean.get("stream_options")
+            opts = dict(opts) if isinstance(opts, dict) else {}
+            opts["include_usage"] = True  # force a usage tail so streams are charged
+            clean["stream_options"] = opts
+
+        payload = json.dumps(clean).encode("utf-8")
         headers = _outbound_headers(target)
         url = f"{target.base_url}/chat/completions"
 
@@ -296,28 +408,48 @@ def make_pi_inference_router(
                 resp = await client.post(url, content=payload, headers=headers)
             except httpx.HTTPError as exc:
                 await client.aclose()
+                # Reconcile budget (no usage → reservation stands) and return a
+                # GENERIC error; the real (redacted) detail is logged server-side.
+                token_store.settle_usage(
+                    token, reserved=estimate, input_tokens=None, output_tokens=None
+                )
+                _LOG.warning(
+                    "pi-gateway upstream connection error token=%s detail=%s",
+                    rec.fingerprint, _redact_text(str(exc), target.api_key),
+                )
                 return JSONResponse(
-                    {"error": {"message": f"upstream connection error: {exc}", "type": "upstream"}},
+                    {"error": {"message": _GENERIC_UPSTREAM_ERROR, "type": "upstream"}},
                     status_code=502,
                 )
             data = resp.content
             status = resp.status_code
-            media = resp.headers.get("content-type", "application/json")
+            media = _redact_text(
+                resp.headers.get("content-type", "application/json"), target.api_key
+            )
             await client.aclose()
-            # Record usage for accounting (never the token / key).
+            # Reconcile usage from the provider's report (or keep the reservation).
             try:
                 u = _extract_usage(json.loads(data))
             except (json.JSONDecodeError, ValueError):
                 u = None
+            token_store.settle_usage(
+                token,
+                reserved=estimate,
+                input_tokens=(u[0] if u is not None else None),
+                output_tokens=(u[1] if u is not None else None),
+            )
             if u is not None:
-                token_store.record_usage(token, input_tokens=u[0], output_tokens=u[1])
                 _LOG.info(
                     "pi-gateway usage token=%s model=%s in=%d out=%d",
                     rec.fingerprint, target.model_id, u[0], u[1],
                 )
-            # Relay the provider's response verbatim. It cannot contain the key (we
-            # never sent the key in the body, and the provider doesn't echo auth).
-            return Response(content=data, status_code=status, media_type=media)
+            # Relay the provider's response, but REDACT any provider-key bytes a
+            # hostile/buggy upstream or proxy might have echoed back.
+            return Response(
+                content=_redact_bytes(data, target.api_key),
+                status_code=status,
+                media_type=media,
+            )
 
         # Streaming: open the upstream stream and relay bytes through unchanged,
         # observing the trailing usage for accounting without altering the stream.
@@ -328,23 +460,29 @@ def make_pi_inference_router(
                     "POST", url, content=payload, headers=headers
                 ) as resp:
                     if resp.status_code >= 400:
-                        yield await resp.aread()
+                        # Redact any echoed key from an error body before relaying.
+                        yield _redact_bytes(await resp.aread(), target.api_key)
                         return
                     async for chunk in resp.aiter_bytes():
                         if chunk:
+                            # Observe the ORIGINAL bytes for usage; relay REDACTED.
                             tail = (tail + chunk)[-_USAGE_TAIL_BYTES:]
-                            yield chunk
+                            yield _redact_bytes(chunk, target.api_key)
             except httpx.HTTPError as exc:
-                yield (
-                    b'data: {"error": {"message": "upstream stream error: '
-                    + str(exc).encode("utf-8", "replace")
-                    + b'"}}\n\n'
+                # Generic Pi-facing error; real (redacted) detail logged server-side.
+                _LOG.warning(
+                    "pi-gateway upstream stream error token=%s detail=%s",
+                    rec.fingerprint, _redact_text(str(exc), target.api_key),
                 )
+                yield b'data: {"error": {"message": "upstream request failed"}}\n\n'
             finally:
                 await client.aclose()
                 in_tok, out_tok = _usage_from_sse_tail(tail.decode("utf-8", "replace"))
                 if in_tok or out_tok:
-                    token_store.record_usage(token, input_tokens=in_tok, output_tokens=out_tok)
+                    # Reconcile the up-front reservation to actual stream usage.
+                    token_store.settle_usage(
+                        token, reserved=estimate, input_tokens=in_tok, output_tokens=out_tok
+                    )
                     _LOG.info(
                         "pi-gateway usage token=%s model=%s in=%d out=%d",
                         rec.fingerprint, target.model_id, in_tok, out_tok,

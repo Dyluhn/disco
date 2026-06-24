@@ -27,6 +27,7 @@ revoke / budget only. The endpoint composes it with the provider+secrets layer.
 from __future__ import annotations
 
 import hashlib
+import math
 import secrets
 import time
 from collections.abc import Callable
@@ -34,6 +35,10 @@ from dataclasses import dataclass, field
 
 # 32 random bytes = 256 bits of entropy, URL-safe so it rides a bearer header.
 _TOKEN_BYTES = 32
+
+# A token is a SHORT-LIVED capability. Cap any requested TTL to a few hours so a
+# caller can't mint a near-immortal token (a stale capability is an attack surface).
+_MAX_TTL_S = 6 * 3600.0
 
 
 def fingerprint(token: str) -> str:
@@ -110,11 +115,22 @@ class PiInferenceTokenStore:
         conversation_id: str,
         model_key: str,
         ttl_s: float,
-        budget_tokens: int = 0,
+        budget_tokens: int,
     ) -> str:
         """Mint a new 256-bit token bound to one kernel/conversation/model with a
-        TTL and (optional) token budget. Returns the raw bearer value — the ONLY
-        time it is exposed; the caller hands it to the Pi kernel and never logs it."""
+        TTL and token budget. Returns the raw bearer value — the ONLY time it is
+        exposed; the caller hands it to the Pi kernel and never logs it.
+
+        Fail-closed on unsafe inputs: a non-finite or non-positive ``ttl_s`` is
+        rejected (no immortal/zero token), an oversized TTL is CLAMPED to
+        ``_MAX_TTL_S``, and a non-positive ``budget_tokens`` is rejected (a token
+        must always carry a real cap — an uncapped capability is the bug we are
+        guarding against)."""
+        if not isinstance(ttl_s, (int, float)) or not math.isfinite(ttl_s) or ttl_s <= 0:
+            raise ValueError("ttl_s must be a positive, finite number of seconds")
+        ttl_s = min(float(ttl_s), _MAX_TTL_S)  # clamp to the hard ceiling
+        if not isinstance(budget_tokens, int) or budget_tokens <= 0:
+            raise ValueError("budget_tokens must be a positive integer")
         token = secrets.token_urlsafe(_TOKEN_BYTES)
         self._tokens[token] = GatewayToken(
             kernel_id=kernel_id,
@@ -162,10 +178,14 @@ class PiInferenceTokenStore:
         rec.revoked = True
         return True
 
+    # TODO(epic-A/E integration): call revoke_conversation on cancel/kill/terminal-status/shutdown
     def revoke_conversation(self, conversation_id: str) -> int:
         """Revoke EVERY token bound to a conversation (called on cancel / finish /
         error so no kernel can keep driving the model after the run ends). Returns
-        the count revoked."""
+        the count revoked. Idempotent and store-robust: an unknown conversation or
+        an already-revoked token is a harmless no-op (it skips revoked records and
+        never raises), so the epic-owned cancel/kill/shutdown hooks can call it
+        unconditionally."""
         n = 0
         for rec in self._tokens.values():
             if rec.conversation_id == conversation_id and not rec.revoked:
@@ -202,3 +222,43 @@ class PiInferenceTokenStore:
         if rec is None:
             return
         rec.used_tokens += max(0, int(input_tokens)) + max(0, int(output_tokens))
+
+    def reserve(self, token: str, amount: int) -> bool:
+        """Atomically reserve ``amount`` ESTIMATED tokens against the budget BEFORE
+        the upstream call, returning False (reserving nothing) when the cap is
+        already reached or the token is unknown.
+
+        This is the real budget gate (the old pre-call ``is_over_budget`` peek let an
+        oversized or concurrent request slip past). Under single-threaded asyncio the
+        read-check-write here runs with NO ``await`` in the middle, so two concurrent
+        gateway calls cannot both pass a near-full cap — whichever reserves first
+        moves ``used_tokens`` and the other then sees the cap reached. Reconcile the
+        estimate to the provider's actual usage afterward via ``settle_usage``."""
+        rec = self._tokens.get(token)
+        if rec is None:
+            return False
+        if rec.budget_tokens > 0 and rec.used_tokens >= rec.budget_tokens:
+            return False
+        rec.used_tokens += max(0, int(amount))
+        return True
+
+    def settle_usage(
+        self,
+        token: str,
+        *,
+        reserved: int,
+        input_tokens: int | None,
+        output_tokens: int | None,
+    ) -> None:
+        """Reconcile a completed call: swap the up-front ``reserved`` estimate for the
+        provider's ACTUAL usage. When the provider reported no usage at all (both
+        None — e.g. a stream with no usage tail), the reservation STANDS as the charge
+        so usage still accrues. Never lets the counter go negative. Unknown tokens are
+        a harmless no-op."""
+        rec = self._tokens.get(token)
+        if rec is None:
+            return
+        if input_tokens is None and output_tokens is None:
+            return
+        actual = max(0, int(input_tokens or 0)) + max(0, int(output_tokens or 0))
+        rec.used_tokens = max(0, rec.used_tokens + actual - max(0, int(reserved)))

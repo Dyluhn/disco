@@ -18,17 +18,21 @@ an ``httpx.MockTransport`` and the endpoint is driven over ``ASGITransport``.
 
 from __future__ import annotations
 
+import asyncio
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
 from disco.agent_server.pi_inference import (
+    _MAX_TTL_S,
     GatewayToken,
     InvalidGatewayToken,
     PiInferenceTokenStore,
     fingerprint,
 )
 from disco.agent_server.routes.pi_inference import (
+    _client_is_local,
     make_pi_inference_router,
     resolve_upstream,
 )
@@ -75,7 +79,7 @@ def test_issue_mints_256bit_token_bound_to_model() -> None:
     assert rec.fingerprint == fingerprint(token)
     # Two issues never collide.
     assert store.issue(
-        kernel_id="k1", conversation_id="c1", model_key="m", ttl_s=60
+        kernel_id="k1", conversation_id="c1", model_key="m", ttl_s=60, budget_tokens=10
     ) != token
 
 
@@ -83,7 +87,9 @@ def test_token_value_is_not_stored_in_the_record() -> None:
     """The raw bearer value is the store's KEY, never a record field — so a record
     repr / log line cannot leak the secret."""
     store = PiInferenceTokenStore()
-    token = store.issue(kernel_id="k", conversation_id="c", model_key="m", ttl_s=60)
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key="m", ttl_s=60, budget_tokens=10
+    )
     rec = store.validate(token)
     assert token not in repr(rec)
     for value in vars(rec).values():
@@ -100,13 +106,17 @@ def test_validate_unknown_revoked_expired() -> None:
     with pytest.raises(InvalidGatewayToken):
         store.validate(None)
     # revoked
-    token = store.issue(kernel_id="k", conversation_id="c", model_key="m", ttl_s=60)
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key="m", ttl_s=60, budget_tokens=10
+    )
     assert store.revoke(token) is True
     with pytest.raises(InvalidGatewayToken) as er:
         store.validate(token)
     assert er.value.reason == "revoked"
     # expired
-    fresh = store.issue(kernel_id="k", conversation_id="c", model_key="m", ttl_s=10)
+    fresh = store.issue(
+        kernel_id="k", conversation_id="c", model_key="m", ttl_s=10, budget_tokens=10
+    )
     assert store.validate(fresh).model_key == "m"
     clock.now += 11  # past TTL
     with pytest.raises(InvalidGatewayToken) as ee:
@@ -116,9 +126,15 @@ def test_validate_unknown_revoked_expired() -> None:
 
 def test_revoke_conversation_and_kernel() -> None:
     store = PiInferenceTokenStore()
-    a = store.issue(kernel_id="k1", conversation_id="c1", model_key="m", ttl_s=60)
-    b = store.issue(kernel_id="k2", conversation_id="c1", model_key="m", ttl_s=60)
-    c = store.issue(kernel_id="k1", conversation_id="c2", model_key="m", ttl_s=60)
+    a = store.issue(
+        kernel_id="k1", conversation_id="c1", model_key="m", ttl_s=60, budget_tokens=10
+    )
+    b = store.issue(
+        kernel_id="k2", conversation_id="c1", model_key="m", ttl_s=60, budget_tokens=10
+    )
+    c = store.issue(
+        kernel_id="k1", conversation_id="c2", model_key="m", ttl_s=60, budget_tokens=10
+    )
     assert store.revoke_conversation("c1") == 2
     with pytest.raises(InvalidGatewayToken):
         store.validate(a)
@@ -207,7 +223,7 @@ def _secret_store(tmp_path) -> SecretStore:
     return store
 
 
-def _make_app(token_store: PiInferenceTokenStore, tmp_path, *, handler):
+def _make_app(token_store: PiInferenceTokenStore, tmp_path, *, handler, trust_local_no_peer=False):
     """A FastAPI app mounting only the gateway router, wired to a mock upstream."""
     app = FastAPI()
     app.include_router(
@@ -216,6 +232,7 @@ def _make_app(token_store: PiInferenceTokenStore, tmp_path, *, handler):
             config_store=_config_store(tmp_path),
             secret_store=_secret_store(tmp_path),
             http_transport=httpx.MockTransport(handler),
+            trust_local_no_peer=trust_local_no_peer,
         )
     )
     return app
@@ -268,7 +285,8 @@ def test_resolve_upstream_reads_key_from_secret_store(tmp_path) -> None:
 async def test_remote_peer_rejected_even_with_valid_token(tmp_path) -> None:
     store = PiInferenceTokenStore()
     token = store.issue(
-        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
     )
     captured: list[httpx.Request] = []
     app = _make_app(store, tmp_path, handler=_capturing_handler(captured))
@@ -294,7 +312,8 @@ async def test_missing_and_invalid_token_401(tmp_path) -> None:
     assert (await _post(app, "bogus-token", body)).status_code == 401
     # a revoked token is also 401
     token = store.issue(
-        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
     )
     store.revoke(token)
     assert (await _post(app, token, body)).status_code == 401
@@ -307,7 +326,8 @@ async def test_missing_and_invalid_token_401(tmp_path) -> None:
 async def test_model_switch_attempt_is_ignored_and_pinned(tmp_path) -> None:
     store = PiInferenceTokenStore()
     token = store.issue(
-        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
     )
     captured: list[httpx.Request] = []
     app = _make_app(store, tmp_path, handler=_capturing_handler(captured))
@@ -334,7 +354,8 @@ async def test_model_switch_attempt_is_ignored_and_pinned(tmp_path) -> None:
 async def test_provider_key_never_reaches_pi(tmp_path) -> None:
     store = PiInferenceTokenStore()
     token = store.issue(
-        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
     )
     captured: list[httpx.Request] = []
     app = _make_app(store, tmp_path, handler=_capturing_handler(captured))
@@ -359,7 +380,8 @@ async def test_provider_key_never_reaches_pi(tmp_path) -> None:
 async def test_no_disco_prompt_or_tool_injection(tmp_path) -> None:
     store = PiInferenceTokenStore()
     token = store.issue(
-        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
     )
     captured: list[httpx.Request] = []
     app = _make_app(store, tmp_path, handler=_capturing_handler(captured))
@@ -459,3 +481,278 @@ async def test_streaming_passthrough_and_usage(tmp_path) -> None:
     assert resp.content == sse  # relayed byte-for-byte
     assert _SECRET_VALUE not in resp.text
     assert store.validate(token).used_tokens == 8  # 5 + 3 from the trailing usage
+
+
+# ===========================================================================
+# Codex BLOCK fixes — regression coverage.
+# ===========================================================================
+
+# -- P2: issue() rejects/clamps unsafe TTL + budget -------------------------
+
+
+def test_issue_rejects_unsafe_ttl_and_budget() -> None:
+    store = PiInferenceTokenStore()
+    base = dict(kernel_id="k", conversation_id="c", model_key="m")
+    for bad_ttl in (0, -5, float("inf"), float("nan")):
+        with pytest.raises(ValueError):
+            store.issue(**base, ttl_s=bad_ttl, budget_tokens=100)
+    for bad_budget in (0, -1):
+        with pytest.raises(ValueError):
+            store.issue(**base, ttl_s=60, budget_tokens=bad_budget)
+
+
+def test_issue_clamps_oversized_ttl() -> None:
+    clock = _Clock()
+    store = PiInferenceTokenStore(clock=clock)
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key="m",
+        ttl_s=10**9, budget_tokens=100,  # absurd TTL
+    )
+    rec = store.validate(token)
+    assert rec.expires_at == clock.now + _MAX_TTL_S  # clamped to the ceiling
+
+
+# -- P1: loopback check fails closed on a missing peer ----------------------
+
+
+def _req(host):
+    client = None if host is None else SimpleNamespace(host=host, port=1)
+    return SimpleNamespace(client=client)
+
+
+def test_loopback_no_peer_fails_closed_by_default() -> None:
+    assert _client_is_local(_req(None), trust_local_no_peer=False) is False
+    # only when a deployment explicitly opts into a trusted unix socket:
+    assert _client_is_local(_req(None), trust_local_no_peer=True) is True
+
+
+def test_loopback_uses_ip_address_not_string_prefix() -> None:
+    assert _client_is_local(_req("127.0.0.1"), trust_local_no_peer=False) is True
+    assert _client_is_local(_req("::1"), trust_local_no_peer=False) is True
+    assert _client_is_local(_req("127.5.9.9"), trust_local_no_peer=False) is True
+    assert _client_is_local(_req("::ffff:127.0.0.1"), trust_local_no_peer=False) is True
+    # a remote host that merely starts with "127." textually is NOT loopback:
+    assert _client_is_local(_req("127.0.0.1.evil.example"), trust_local_no_peer=False) is False
+    assert _client_is_local(_req("8.8.8.8"), trust_local_no_peer=False) is False
+
+
+async def test_no_peer_request_is_403_by_default(tmp_path) -> None:
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
+    )
+    captured: list[httpx.Request] = []
+    app = _make_app(store, tmp_path, handler=_capturing_handler(captured))
+    resp = await _post(
+        app, token, {"messages": [{"role": "user", "content": "hi"}]}, client=None
+    )
+    assert resp.status_code == 403  # peerless rejected even with a valid token
+    assert captured == []
+
+
+async def test_no_peer_request_allowed_when_opted_in(tmp_path) -> None:
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
+    )
+    captured: list[httpx.Request] = []
+    app = _make_app(
+        store, tmp_path, handler=_capturing_handler(captured), trust_local_no_peer=True
+    )
+    resp = await _post(
+        app, token, {"messages": [{"role": "user", "content": "hi"}]}, client=None
+    )
+    assert resp.status_code == 200
+    assert len(captured) == 1
+
+
+# -- P1: provider routing / fallback fields are stripped --------------------
+
+
+async def test_provider_routing_fields_are_stripped(tmp_path) -> None:
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
+    )
+    captured: list[httpx.Request] = []
+    app = _make_app(store, tmp_path, handler=_capturing_handler(captured))
+    resp = await _post(
+        app,
+        token,
+        {
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "vendor/other-99b",
+            "models": ["vendor/other-99b", "vendor/expensive"],
+            "provider": {"order": ["sneaky"], "allow_fallbacks": True},
+            "route": "fallback",
+            "transforms": ["middle-out"],
+            "made_up_field": "x",
+        },
+    )
+    assert resp.status_code == 200
+    sent = json.loads(captured[0].content)
+    for stripped in ("models", "provider", "route", "transforms", "made_up_field"):
+        assert stripped not in sent
+    # the pinned model is the ONLY routing signal that leaves the process.
+    assert sent["model"] == _REAL_MODEL_ID
+    assert sent["messages"] == [{"role": "user", "content": "hi"}]
+
+
+# -- P1: budget reservation can't be bypassed -------------------------------
+
+
+async def test_streaming_without_include_usage_still_accrues(tmp_path) -> None:
+    # A provider that ignores stream_options.include_usage and emits NO usage tail.
+    sse = (
+        b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n'
+        b"data: [DONE]\n\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # The gateway must have forced include_usage on the outbound request.
+        body = json.loads(request.content)
+        assert body["stream_options"]["include_usage"] is True
+        return httpx.Response(200, content=sse, headers={"content-type": "text/event-stream"})
+
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
+    )
+    app = _make_app(store, tmp_path, handler=handler)
+    resp = await _post(
+        app, token, {"messages": [{"role": "user", "content": "hi"}], "stream": True}
+    )
+    assert resp.status_code == 200
+    # Even with no usage tail, the up-front prompt reservation stands.
+    assert store.validate(token).used_tokens > 0
+
+
+async def test_oversized_request_clamped_to_remaining_budget(tmp_path) -> None:
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=500,
+    )
+    captured: list[httpx.Request] = []
+    app = _make_app(store, tmp_path, handler=_capturing_handler(captured))
+    resp = await _post(
+        app,
+        token,
+        {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 1_000_000},
+    )
+    assert resp.status_code == 200
+    sent = json.loads(captured[0].content)
+    assert 0 < sent["max_tokens"] <= 500  # clamped down to what the budget allows
+    assert sent["max_tokens"] < 1_000_000
+
+
+async def test_concurrent_calls_cannot_both_pass_cap(tmp_path) -> None:
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1,  # only one reservation can fit
+    )
+    captured: list[httpx.Request] = []
+    app = _make_app(store, tmp_path, handler=_capturing_handler(captured))
+    body = {"messages": [{"role": "user", "content": "hi"}]}
+    r1, r2 = await asyncio.gather(
+        _post(app, token, body), _post(app, token, body)
+    )
+    statuses = sorted([r1.status_code, r2.status_code])
+    assert statuses == [200, 429]  # exactly one passed the gate
+    assert len(captured) == 1  # only one call reached the provider
+
+
+# -- P0: provider key never leaks back to Pi (echo / error / stream) --------
+
+
+async def test_key_redacted_when_upstream_echoes_it(tmp_path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        # A hostile/buggy upstream that echoes the request auth header + key.
+        echoed = request.headers.get("authorization")
+        return httpx.Response(
+            200,
+            content=json.dumps(
+                {
+                    "echoed_auth": echoed,  # "Bearer <provider-key>"
+                    "note": f"your key is {_SECRET_VALUE}",
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                }
+            ).encode("utf-8"),
+            headers={"content-type": f"application/json; leaked={_SECRET_VALUE}"},
+        )
+
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
+    )
+    app = _make_app(store, tmp_path, handler=handler)
+    resp = await _post(app, token, {"messages": [{"role": "user", "content": "hi"}]})
+    assert resp.status_code == 200
+    # The provider key is absent from EVERYTHING Pi receives.
+    assert _SECRET_VALUE not in resp.text
+    assert f"Bearer {_SECRET_VALUE}" not in resp.text
+    assert _SECRET_VALUE not in json.dumps(dict(resp.headers))
+
+
+async def test_key_redacted_in_stream(tmp_path) -> None:
+    sse = (
+        b'data: {"choices":[{"delta":{"content":"leak='
+        + _SECRET_VALUE.encode("utf-8")
+        + b'"}}]}\n\n'
+        b'data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}\n\n'
+        b"data: [DONE]\n\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=sse, headers={"content-type": "text/event-stream"})
+
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
+    )
+    app = _make_app(store, tmp_path, handler=handler)
+    resp = await _post(
+        app, token, {"messages": [{"role": "user", "content": "hi"}], "stream": True}
+    )
+    assert resp.status_code == 200
+    assert _SECRET_VALUE not in resp.text  # redacted from the SSE chunk
+
+
+async def test_upstream_error_is_generic_and_redacted(tmp_path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(f"boom while using key {_SECRET_VALUE}")
+
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
+    )
+    app = _make_app(store, tmp_path, handler=handler)
+    resp = await _post(app, token, {"messages": [{"role": "user", "content": "hi"}]})
+    assert resp.status_code == 502
+    assert _SECRET_VALUE not in resp.text  # exception string never reaches Pi
+    assert resp.json()["error"]["message"] == "upstream request failed"  # generic
+
+
+async def test_stream_upstream_error_is_generic_and_redacted(tmp_path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(f"boom while using key {_SECRET_VALUE}")
+
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=1000,
+    )
+    app = _make_app(store, tmp_path, handler=handler)
+    resp = await _post(
+        app, token, {"messages": [{"role": "user", "content": "hi"}], "stream": True}
+    )
+    assert _SECRET_VALUE not in resp.text
+    assert "upstream request failed" in resp.text  # generic stream error
