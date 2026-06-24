@@ -25,6 +25,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ElementBox } from "./ElementBox";
+import { activateSlide } from "./slideToggle";
 import type { JsonPatchOp, LoweredElement, OverlaySpec } from "./types";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -114,17 +115,12 @@ export function SlideCanvas({
     const doc = iframe.contentDocument;
     if (!doc || !doc.body) return;
 
-    // Find the active slide's section in the iframe. If absent, the iframe content
-    // isn't ready yet (e.g. jsdom doesn't render srcdoc) — bail and KEEP the zero-rect
-    // specs so DOM nodes stay alive for tests.
-    const activeSection = doc.querySelector<HTMLElement>(
-      `[data-slide-id="${activeSlideId}"]`,
-    );
+    // Show only the active slide (shared with SlideThumbnail via slideToggle so the
+    // two iframes can't drift). If absent, the iframe content isn't ready yet (e.g.
+    // jsdom doesn't render srcdoc) — bail and KEEP the zero-rect specs so DOM nodes
+    // stay alive for tests.
+    const activeSection = activateSlide(doc, activeSlideId);
     if (!activeSection) return;
-
-    // We own slide nav (no allow-scripts): show only the active section.
-    doc.querySelectorAll(".slide").forEach((el) => el.classList.remove("active"));
-    activeSection.classList.add("active");
 
     // Measure ONLY this slide's stamped EDITABLE text elements. getBoundingClientRect
     // from contentDocument is already iframe-VIEWPORT-relative, which equals the overlay

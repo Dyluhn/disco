@@ -23,6 +23,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { LayersPanel } from "./LayersPanel";
 import { SlideCanvas } from "./SlideCanvas";
+import { SlideThumbnail } from "./SlideThumbnail";
 import type { ElementMapEntry } from "./SlideCanvas";
 import type { JsonPatchOp, LoweredDeck, LoweredElement } from "./types";
 
@@ -147,7 +148,10 @@ export function DeckEditor({
               position: "relative",
               width: "100%",
               paddingBottom: "56.25%",
-              background: slide.bg_color,
+              // Neutral light backdrop — the real themed slide is painted on top by
+              // SlideThumbnail. (Was `slide.bg_color`: a raw dark swatch that read as
+              // a black/blank thumbnail and never matched the main preview.)
+              background: "#fff",
               border: i === activeSlideIdx ? "2px solid #6366f1" : "1px solid #ddd",
               borderRadius: "4px",
               cursor: "pointer",
@@ -158,6 +162,9 @@ export function DeckEditor({
             aria-label={`Slide ${i + 1}`}
             title={`Slide ${i + 1}`}
           >
+            {/* True mini-render of THIS slide, using the same renderHtml as the main
+                canvas — so the rail matches the (themed, light) main preview. */}
+            <SlideThumbnail renderHtml={renderHtml} slideId={slide.slide_id} />
             <span
               style={{
                 position: "absolute",
@@ -166,6 +173,8 @@ export function DeckEditor({
                 fontSize: "8px",
                 color: "#999",
                 fontFamily: "var(--ui, system-ui)",
+                zIndex: 1,
+                pointerEvents: "none",
               }}
             >
               {i + 1}

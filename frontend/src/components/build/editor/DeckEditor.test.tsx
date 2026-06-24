@@ -309,6 +309,52 @@ describe("DeckEditor — BW-13 continuation render↔pointer identity", () => {
   });
 });
 
+// ─── Slide rail: true mini-renders, not raw bg_color swatches ─────────────────
+
+describe("DeckEditor — slide rail thumbnails", () => {
+  it("each rail thumbnail renders an iframe with the renderHtml srcDoc (not a bg_color div)", () => {
+    render(<DeckEditor deck={makeDeck()} renderHtml={FIXTURE_HTML} onPatch={vi.fn()} />);
+    const strip = screen.getByLabelText("Slide strip");
+    const thumbIframes = strip.querySelectorAll("iframe");
+    // One faithful mini-render iframe per slide (2 slides in makeDeck()).
+    expect(thumbIframes).toHaveLength(2);
+    thumbIframes.forEach((f) => expect(f.getAttribute("srcdoc")).toBe(FIXTURE_HTML));
+  });
+
+  it("the rail does NOT paint the raw dark bg_color as the thumbnail fill", () => {
+    // slide-1's bg_color is "#f8f8f8" in makeDeck(); the OLD bug set that as the
+    // button background. The button must now be a neutral light backdrop with the
+    // real render on top — assert no button uses a slide.bg_color fill.
+    render(<DeckEditor deck={makeDeck()} renderHtml={FIXTURE_HTML} onPatch={vi.fn()} />);
+    const strip = screen.getByLabelText("Slide strip");
+    strip.querySelectorAll("button").forEach((btn) => {
+      // background is normalised by jsdom; the light backdrop is rgb(255,255,255).
+      expect((btn as HTMLElement).style.background).not.toBe("#000000");
+      expect((btn as HTMLElement).style.background).toContain("255");
+    });
+  });
+
+  it("highlights the active slide's thumbnail with the accent border", () => {
+    render(<DeckEditor deck={makeDeck()} renderHtml={FIXTURE_HTML} onPatch={vi.fn()} />);
+    const strip = screen.getByLabelText("Slide strip");
+    const buttons = strip.querySelectorAll("button");
+    // Slide 0 is active by default → its button carries aria-current + accent border.
+    expect(buttons[0].getAttribute("aria-current")).toBe("true");
+    // jsdom normalises the accent hex #6366f1 → rgb(99, 102, 241).
+    expect((buttons[0] as HTMLElement).style.border).toContain("rgb(99, 102, 241)");
+    expect((buttons[1] as HTMLElement).style.border).not.toContain("rgb(99, 102, 241)");
+    expect(buttons[1].getAttribute("aria-current")).toBeNull();
+  });
+
+  it("falls back to a placeholder (still an iframe-less light box) when renderHtml is null", () => {
+    render(<DeckEditor deck={makeDeck()} renderHtml={null} onPatch={vi.fn()} />);
+    const strip = screen.getByLabelText("Slide strip");
+    // No render yet → no thumbnail iframes, but the buttons still exist (light, not black).
+    expect(strip.querySelectorAll("iframe")).toHaveLength(0);
+    expect(strip.querySelectorAll("button").length).toBe(2);
+  });
+});
+
 // ─── 1: iframe gets srcDoc ────────────────────────────────────────────────────
 
 describe("DeckEditor — iframe substrate", () => {
