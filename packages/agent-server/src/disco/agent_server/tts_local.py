@@ -15,11 +15,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import logging
 import os
 import time
 import urllib.request
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from disco.core.env import disco_env
@@ -70,13 +73,22 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _fetch(url: str, dest: Path, sha: str) -> None:
+def _fetch(
+    url: str,
+    dest: Path,
+    sha: str,
+    reporthook: Callable[[int, int, int], None] | None = None,
+) -> None:
     """Download `url` → `dest` on first use and verify its SHA256. A checksum
     mismatch raises (never caches garbage from a moved/replaced release).
 
     Logs progress at 10 % intervals so the server log shows the download is
     alive — the first-run Kokoro download is ~300 MB and takes 30–90 s on a
     fast connection (WALK-13 / D1).
+
+    `reporthook(count, block_size, total_size)` — optional EXTRA hook (same
+    signature urllib uses) so a caller (`ensure_model`) can surface REAL
+    byte/percent progress to the UI in addition to the server-log buckets.
     """
     if dest.exists() and dest.stat().st_size > 0:
         return
@@ -90,6 +102,8 @@ def _fetch(url: str, dest: Path, sha: str) -> None:
     _last_bucket: list[int] = [-1]  # mutable closure for progress tracking
 
     def _hook(count: int, block_size: int, total_size: int) -> None:
+        if reporthook is not None:
+            reporthook(count, block_size, total_size)
         if total_size <= 0:
             return
         pct = min(100, count * block_size * 100 // total_size)
@@ -104,6 +118,84 @@ def _fetch(url: str, dest: Path, sha: str) -> None:
         tmp.unlink(missing_ok=True)
         raise RuntimeError(f"TTS weight checksum mismatch for {url}: got {got}, want {sha}")
     tmp.rename(dest)
+
+
+# ---- W-08: real byte-level model download with progress --------------------
+
+# A download-progress callback receives small JSON-able dicts describing the
+# CURRENT state of the weight-file download (bytes downloaded / total / percent
+# / which file). It may be sync or async; both are awaited safely. `None`
+# disables it. The numbers are the REAL urllib byte counts — never fabricated.
+DownloadProgress = Callable[[dict[str, Any]], Awaitable[None] | None]
+
+
+async def ensure_model(on_progress: DownloadProgress | None = None) -> None:
+    """Download any MISSING Kokoro weight file into the cache dir, emitting REAL
+    byte-level progress via `on_progress`. A no-op (and zero progress events)
+    when both files are already present.
+
+    This pre-fetches the weights BEFORE synthesis so the first `synthesize()`
+    loads from disk instead of blocking silently on a ~300 MB fetch with no UI
+    signal. The blocking `urlretrieve` runs in a thread; the async side polls the
+    shared byte counters every ~300 ms and emits a `downloading_model` event so
+    the progress bar advances smoothly without flooding the SSE stream.
+
+    Each event: ``{"stage": "downloading_model", "file": <name>, "downloaded":
+    <bytes>, "total": <bytes>, "pct": <0-100>, "file_index": n, "file_total":
+    m}``. `total` may be 0 briefly until the server reports Content-Length.
+    """
+    d = _data_dir()
+    files = [
+        ("kokoro-v1.0.onnx", _MODEL_URL, _MODEL_SHA),
+        ("voices-v1.0.bin", _VOICES_URL, _VOICES_SHA),
+    ]
+    missing = [
+        (name, url, sha)
+        for (name, url, sha) in files
+        if not ((d / name).exists() and (d / name).stat().st_size > 0)
+    ]
+    file_total = len(missing)
+    for idx, (name, url, sha) in enumerate(missing, start=1):
+        dest = d / name
+        counters = {"downloaded": 0, "total": 0}
+
+        def _hook(count: int, block_size: int, total_size: int, _c=counters) -> None:
+            _c["total"] = max(0, total_size)
+            done = count * block_size
+            _c["downloaded"] = min(done, total_size) if total_size > 0 else done
+
+        async def _emit(_name=name, _idx=idx, _c=counters) -> None:
+            if on_progress is None:
+                return
+            total = _c["total"]
+            downloaded = _c["downloaded"]
+            pct = min(100, downloaded * 100 // total) if total > 0 else 0
+            event = {
+                "stage": "downloading_model",
+                "file": _name,
+                "downloaded": downloaded,
+                "total": total,
+                "pct": pct,
+                "file_index": _idx,
+                "file_total": file_total,
+            }
+            res = on_progress(event)
+            if inspect.isawaitable(res):
+                await res
+
+        task = asyncio.create_task(asyncio.to_thread(_fetch, url, dest, sha, _hook))
+        # Emit a 0 % frame immediately so the bar appears the instant the
+        # download starts, then poll while the thread downloads.
+        await _emit()
+        while not task.done():
+            await asyncio.sleep(0.3)
+            await _emit()
+        await task  # propagate a download / checksum-mismatch error to the caller
+        # Final 100 % frame (the poll may have stopped just shy of the last block).
+        counters["downloaded"] = counters["total"] or (
+            dest.stat().st_size if dest.exists() else counters["downloaded"]
+        )
+        await _emit()
 
 
 class _KokoroEngine:

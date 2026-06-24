@@ -805,9 +805,27 @@ def test_progress_emits_download_only_when_missing(
     configure_tts, tts_enabled, tmp_path, monkeypatch
 ) -> None:
     """W-08: the downloading_model event fires ONLY when the bundled model files
-    are genuinely absent (a real first-run download)."""
+    are genuinely absent (a real first-run download), and each frame carries the
+    REAL byte/percent counters the progress bar renders."""
     configure_tts(tts_enabled)
-    events = _collect_progress(monkeypatch, model_present=False)
+    import disco.agent_server.tts_local as tts_local
+
+    # Point the weights dir at an EMPTY tmp so the model is genuinely absent, and
+    # fake the network fetch so ensure_model surfaces real byte progress without
+    # hitting GitHub.  (No need to mock model_files_present — the real check sees
+    # the empty dir and reports absent.)
+    weights = tmp_path / "weights"
+    weights.mkdir()
+    monkeypatch.setattr(tts_local, "_data_dir", lambda: weights)
+
+    def _fake_fetch(url, dest, sha, reporthook=None):
+        if reporthook is not None:
+            reporthook(1, 50, 100)  # 50 %
+            reporthook(2, 50, 100)  # 100 %
+        dest.write_bytes(b"z" * 100)
+
+    monkeypatch.setattr(tts_local, "_fetch", _fake_fetch)
+    events: list[dict] = []
 
     async def _on_progress(ev: dict) -> None:
         events.append(ev)
@@ -825,6 +843,10 @@ def test_progress_emits_download_only_when_missing(
     assert "downloading_model" in stages
     # The download note must precede synthesis.
     assert stages.index("downloading_model") < stages.index("synthesizing")
+    # Every download frame carries the real byte/percent fields the FE bar reads.
+    dl = [e for e in events if e["stage"] == "downloading_model"]
+    assert all({"downloaded", "total", "pct", "file_index", "file_total"} <= e.keys() for e in dl)
+    assert any(e["pct"] == 100 for e in dl)  # reaches 100 % at the end of the file
 
 
 def test_progress_cache_hit_no_download(

@@ -72,6 +72,12 @@ interface AudioProgress {
   stage: AudioStage;
   current?: number;
   total?: number;
+  // W-08: REAL voice-model download byte counters (only on `downloading_model`).
+  downloaded?: number;
+  bytesTotal?: number;
+  pct?: number;
+  fileIndex?: number;
+  fileTotal?: number;
 }
 
 type AudioState =
@@ -99,8 +105,15 @@ function audioStageLabel(progress: AudioProgress | undefined): string {
   switch (progress.stage) {
     case "preparing":
       return "Preparing script…";
-    case "downloading_model":
-      return "Downloading voice model…";
+    case "downloading_model": {
+      const part =
+        progress.fileTotal && progress.fileTotal > 1
+          ? ` (file ${progress.fileIndex ?? 1}/${progress.fileTotal})`
+          : "";
+      return progress.pct != null
+        ? `Downloading voice model${part}… ${progress.pct}%`
+        : "Downloading voice model…";
+    }
     case "synthesizing":
       return progress.total
         ? `Synthesizing turns ${progress.current ?? 0}/${progress.total}…`
@@ -112,6 +125,25 @@ function audioStageLabel(progress: AudioProgress | undefined): string {
     default:
       return "Generating audio…";
   }
+}
+
+/** Bytes → a compact "12.3 MB" label for the download progress note. */
+function fmtMB(bytes: number | undefined): string {
+  if (!bytes || bytes <= 0) return "0 MB";
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Determinate fill 0–100 for the current generation stage, or null when the
+ * stage has no measurable progress (indeterminate spinner only). */
+function audioProgressPct(progress: AudioProgress | undefined): number | null {
+  if (!progress) return null;
+  if (progress.stage === "downloading_model" && progress.pct != null) {
+    return Math.max(0, Math.min(100, progress.pct));
+  }
+  if (progress.stage === "synthesizing" && progress.total) {
+    return Math.max(0, Math.min(100, ((progress.current ?? 0) / progress.total) * 100));
+  }
+  return null;
 }
 
 // ── File System Access API types ──────────────────────────────────────────────
@@ -593,6 +625,11 @@ function AudioSection({
               total?: number;
               mp3_url?: string;
               reason?: string;
+              // W-08: real voice-model download byte counters.
+              downloaded?: number;
+              pct?: number;
+              file_index?: number;
+              file_total?: number;
             };
             try {
               ev = JSON.parse(dataLine.slice(5).trim());
@@ -614,7 +651,12 @@ function AudioSection({
                 progress: {
                   stage: ev.stage as AudioStage,
                   current: ev.current,
-                  total: ev.total,
+                  total: ev.stage === "downloading_model" ? undefined : ev.total,
+                  downloaded: ev.downloaded,
+                  bytesTotal: ev.stage === "downloading_model" ? ev.total : undefined,
+                  pct: ev.pct,
+                  fileIndex: ev.file_index,
+                  fileTotal: ev.file_total,
                 },
               });
             }
@@ -676,24 +718,53 @@ function AudioSection({
         onChoose={generate}
       />
 
-      {audio.status === "generating" && (
-        <div className="flex flex-col gap-hair" data-tts-stage={audio.progress?.stage ?? ""}>
-          <div className="flex items-center gap-hair">
-            <Loader2 className="size-3.5 animate-spin text-text-faint" aria-hidden />
-            <span className="font-ui text-[0.78rem] text-text-muted">
-              {audioStageLabel(audio.progress)}
-            </span>
+      {audio.status === "generating" && (() => {
+        const pct = audioProgressPct(audio.progress);
+        const isDownload = audio.progress?.stage === "downloading_model";
+        return (
+          <div
+            className="flex min-w-[12rem] flex-col gap-hair"
+            data-tts-stage={audio.progress?.stage ?? ""}
+            data-tts-pct={pct != null ? Math.round(pct) : ""}
+          >
+            <div className="flex items-center gap-hair">
+              <Loader2 className="size-3.5 animate-spin text-text-faint" aria-hidden />
+              <span className="font-ui text-[0.78rem] text-text-muted">
+                {audioStageLabel(audio.progress)}
+              </span>
+            </div>
+            {/* W-08: REAL progress bar next to the button. Determinate fill for a
+                voice-model download (actual bytes/percent) or synthesis (turn
+                n/m); indeterminate (no bar) for the un-measurable prep/mix
+                stages. Never fabricated — `pct` is the server's byte count. */}
+            {pct != null && (
+              <div
+                className="h-1 w-full overflow-hidden rounded-full bg-hairline"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(pct)}
+                aria-label={isDownload ? "Voice model download progress" : "Audio synthesis progress"}
+              >
+                <div
+                  className="h-full rounded-full bg-accent transition-[width] duration-200"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            )}
+            {/* The ~300 MB note is HONEST — shown only during a genuine first-run
+                voice-model download, with the real running byte count. */}
+            {isDownload && (
+              <span className="font-ui text-[0.73rem] tabular-nums text-text-faint">
+                {audio.progress?.bytesTotal
+                  ? `${fmtMB(audio.progress.downloaded)} / ${fmtMB(audio.progress.bytesTotal)}`
+                  : "Downloading voice model (~300 MB, first run only)"}
+                {" — this may take a minute."}
+              </span>
+            )}
           </div>
-          {/* W-08: the ~300 MB download note is HONEST — shown only while a
-              genuine first-run voice-model download is actually happening, never
-              on a warm cache or a remote TTS backend. */}
-          {audio.progress?.stage === "downloading_model" && (
-            <span className="font-ui text-[0.73rem] text-text-faint">
-              Downloading voice model (~300 MB, first run only) — this may take a minute.
-            </span>
-          )}
-        </div>
-      )}
+        );
+      })()}
 
       {audio.status === "done" && (
         // Real play + export affordances — gated on a real audio URL, never a fake.
