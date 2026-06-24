@@ -567,8 +567,27 @@ class ConfigState:
         return _live_browser_from(self._store.load())
 
     def update_live_browser_config(self, dto: LiveBrowserConfigDTO) -> LiveBrowserConfigDTO:
-        """Persist the live-browser toggle. Affects the next /browser/live-url call."""
+        """Persist the live-browser toggle. Affects the next /browser/live-url call.
+
+        Defense in depth: REJECT enabling noVNC when the configured sandbox backend
+        can't run the live stack (only gVisor ships Xvfb/x11vnc/websockify — see
+        LIVE_VIEW_BACKENDS). The Settings UI already greys the toggle on an unsupported
+        backend, but a stale persisted flag or a direct API call must not be able to set
+        enabled=true for a backend that can't stream it (it would only ever produce the
+        live_start_failed error at runtime). Turning it OFF is always allowed."""
         from disco.core.llm.config import LiveBrowserSettings
+        from disco.tools.sandbox._container import LIVE_VIEW_BACKENDS
+
+        if dto.enabled:
+            backend = self._store.load().sandbox.backend
+            if backend not in LIVE_VIEW_BACKENDS:
+                raise ConfigValidationError(
+                    "unsupported_backend",
+                    detail=(
+                        f"Live browser needs a containerized gVisor sandbox — it can't run "
+                        f"on the {backend} sandbox. Switch the sandbox backend to gVisor first."
+                    ),
+                )
 
         self._store.save_live_browser(LiveBrowserSettings(enabled=dto.enabled))
         return _live_browser_from(self._store.load())

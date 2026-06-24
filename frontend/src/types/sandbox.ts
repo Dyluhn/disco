@@ -38,6 +38,12 @@ export interface BackendMeta {
   primaryPrefill?: string;
   primaryHint?: string; // inline guidance under the primary field (e.g. "use the tailnet IP")
   provides: string; // the short "what you provide" subline
+  // Whether this backend can actually run + stream the noVNC live-view stack
+  // (Xvfb/x11vnc/websockify). MUST mirror the server's LIVE_VIEW_BACKENDS set
+  // (_container.py): only gVisor ships the stack + carries the accepted live-jail
+  // security model. The Live-browser Settings toggle is greyed (and enabling is
+  // rejected) when the selected backend has this false.
+  supportsLiveView: boolean;
 }
 
 const FIELD_LABEL: Record<SandboxField, string> = {
@@ -72,6 +78,7 @@ export const BACKEND_META: BackendMeta[] = [
     primaryHint:
       "Use your Tailscale IP or hostname (e.g. ssh://sandbox@100.x.y.z) — NOT the LAN IP. Only the tailnet reaches the host keyless.",
     provides: "You provide: the remote host to reach over Tailscale SSH. Everything else has a default.",
+    supportsLiveView: true, // the only backend that ships the noVNC stack + live-jail model
   },
   {
     id: "local",
@@ -87,6 +94,7 @@ export const BACKEND_META: BackendMeta[] = [
       "Lower isolation → the confirmation default leans TIGHTER: risky actions pause at MEDIUM, not just HIGH.",
     primaryField: null,
     provides: "You provide: nothing — it runs on this host with sensible defaults. Save and go.",
+    supportsLiveView: false, // shared-kernel local backend: no live stream here
   },
   {
     id: "podman",
@@ -101,9 +109,17 @@ export const BACKEND_META: BackendMeta[] = [
     confirmNote: "Container-grade behind a host boundary — not for adversarial workloads.",
     primaryField: null,
     provides: "You provide: the rootless Podman URL under Advanced. A stub here — configures but doesn't run.",
+    supportsLiveView: false, // deployment stub; doesn't expose preview ports here
   },
 ];
 
 export function backendMeta(id: string): BackendMeta | undefined {
   return BACKEND_META.find((b) => b.id === id);
+}
+
+/** Whether the given sandbox backend can run + stream the noVNC live view. Mirrors the
+ * server's LIVE_VIEW_BACKENDS (only gVisor). Unknown/undefined backend → false (honest:
+ * if we don't recognise it, don't claim live-browser works). */
+export function backendSupportsLiveView(backendId: string | undefined | null): boolean {
+  return !!backendId && (backendMeta(backendId)?.supportsLiveView ?? false);
 }
