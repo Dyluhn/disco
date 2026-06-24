@@ -54,6 +54,10 @@ export async function createDeepResearchConversation(
     {
       owner_id: OWNER_ID,
       surface: "deep_research",
+      // BW-09: this is a SEED, not the final stored title. The backend sanitizes
+      // it (word-boundary, ~60-char `fallback_title`) before persisting, so the
+      // verbose raw query is never written + masked by a CSS truncate at render.
+      // The slice just caps what we send over the wire.
       title: opts.query.slice(0, 100),
       model_override: opts.leaderId ?? null,
       // depth_tier is read by the runtime's set_depth path; pass it through

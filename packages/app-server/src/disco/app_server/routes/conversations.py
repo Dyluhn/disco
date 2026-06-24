@@ -34,8 +34,9 @@ def make_conversations_router(store: SqliteEventStore) -> APIRouter:
         cursor: str | None = Query(default=None),
         limit: int = Query(default=50),
     ) -> list[ConversationSummaryDTO]:
+        # BW-08: the History surface never shows 0-event ghost conversations.
         summaries = await store.list_conversation_summaries(
-            owner_id=owner_id, limit=limit, cursor=cursor
+            owner_id=owner_id, limit=limit, cursor=cursor, nonempty_only=True
         )
         return [
             ConversationSummaryDTO(

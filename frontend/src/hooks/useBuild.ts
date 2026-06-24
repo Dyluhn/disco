@@ -42,23 +42,18 @@ export function useBuild(
   const [assistChoice, setAssistChoice] = useState(false);
 
   // G1/DR-4: pre-created cid for the empty state UploadComposer.
-  // Created eagerly on mount with default settings so a paperclip is rendered
-  // before the user types anything. On submit, this cid is USED instead of
-  // creating a new one, so uploads already in the pending session survive.
+  // BW-08: pre-create is LAZY — it does NOT POST /conversations on mount. The
+  // eager mount-create minted a fresh server row for every visit to the empty
+  // state (25/25 build + 271/271 agent of those rows had 0 events), flooding
+  // History/Projects with "(untitled)" ghosts. Instead the cid is created on a
+  // REAL signal: an actual upload (ensurePreCid, called by the paperclip) or
+  // submit (which falls through to create.mutate when no preCid exists). The
+  // same cid is reused so uploads in the pending session survive the kick.
   const [preCid, setPreCid] = useState<string | null>(null);
   const preCreate = useMutation({
     mutationFn: (opts: { modelOverride: string | null; autonomous: boolean }) =>
       createBuildConversation(opts.modelOverride, surface, opts.autonomous),
   });
-
-  useEffect(() => {
-    if (resumeCid || session !== null || !agentLive()) return;
-    if (preCid) return; // already pre-created; don't re-create
-    preCreate.mutate(
-      { modelOverride: null, autonomous: false },
-      { onSuccess: setPreCid },
-    );
-  }, [resumeCid, session]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const stream = useBuildStream(session);
 

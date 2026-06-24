@@ -96,6 +96,32 @@ async def test_repair_writes_once(store):
         await store.list_conversation_summaries(owner_id=owner)
         assert spy.call_count == 1
 
+async def test_zero_event_conversations_hidden_from_summaries(store):
+    """BW-08: a pre-created conversation that never got any events (the eager-
+    create ghost) must NOT appear in the History/Projects listing. Only
+    conversations with at least one event are listed."""
+    owner = "local"
+    # A real, used conversation (has a first user message).
+    store.create_conversation("conv_used", owner_id=owner)
+    await store.append(
+        "conv_used",
+        MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="hi")),
+    )
+    # A ghost: pre-created row with zero events.
+    store.create_conversation("conv_ghost", owner_id=owner)
+
+    # nonempty_only=True (the History/Projects path) hides the ghost.
+    summaries = await store.list_conversation_summaries(owner_id=owner, nonempty_only=True)
+    ids = [s.conversation_id for s in summaries]
+    assert ids == ["conv_used"]
+    assert "conv_ghost" not in ids
+
+    # The default (internal readers, e.g. the activity feed) still sees both, so
+    # a freshly-kicked running task mid-first-append is never dropped.
+    all_ids = [s.conversation_id for s in await store.list_conversation_summaries(owner_id=owner)]
+    assert set(all_ids) == {"conv_used", "conv_ghost"}
+
+
 async def test_schema_migration_adds_column(tmp_path):
     db_path = tmp_path / "test.db"
     
