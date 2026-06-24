@@ -108,3 +108,99 @@ scenarios:
           - path: "index.html"
             must_contain: ["Contact"]
       terminal_status_in: ["FINISHED", "VERIFIED"]
+
+  # ---- §3/§28 diversity: multi-file static delivery ------------------------
+  # Exercises multi-file delivery: three files that must ALL be present with their own
+  # unique marker plus a SHARED css class linking them — a richer output-truth check than
+  # the single-file smoke. Every marker is dictated verbatim by the prompt so a competent
+  # model satisfies it and the deterministic OutputTruthOracle can verify it.
+  - id: multifile_static_site
+    mode: api
+    prompt: >-
+      Create a small multi-page static website with three files: index.html (the Home
+      page), about.html (the About page), and a shared style.css. Give index.html an
+      <h1> heading exactly 'Welcome Home' and about.html an <h1> heading exactly
+      'About Us'. Both pages must include a navigation bar using the CSS class
+      'site-nav' (defined in style.css) with links between the pages — the Home page
+      links to about.html and the About page links back to index.html. Serve the site
+      and finish.
+    assertions:
+      event_chain:
+        require_user_event: true
+        require_plan_before_execution: true
+        require_action_observation_pairs: true
+      workspace:
+        files:
+          - path: "index.html"
+            must_contain: ["Welcome Home", "site-nav", "about.html"]
+          - path: "about.html"
+            must_contain: ["About Us", "site-nav", "index.html"]
+          - path: "style.css"
+            must_contain: [".site-nav"]
+      preview:
+        required: true
+        must_contain: ["Welcome Home"]
+      terminal_status_in: ["FINISHED", "VERIFIED"]
+
+  # ---- §3 complex revisions (2 sequential change follow-ups) ----------------
+  # A stepping stone toward §3's "complex revisions >= 3 follow-ups": this is TWO
+  # sequential change follow-ups, each requiring a FRESH revised plan (rev increments
+  # 1 -> 2 -> 3) before any write (the §11.4 chain, enforced by RevisionOracle). The
+  # final workspace must carry the CUMULATIVE result of both revisions. A 3-followup
+  # variant can extend this later.
+  - id: revise_twice_complex
+    mode: api
+    prompt: "Create an index.html landing page for a SaaS product with a hero section and the heading 'Acme Cloud'."
+    followups:
+      - text: "Add a pricing section with three tiers labeled 'Starter', 'Pro', and 'Enterprise'."
+        requires_plan_revision: true
+        trigger: after_terminal
+      - text: "Now change every call-to-action button to say 'Get Started'."
+        requires_plan_revision: true
+        trigger: after_terminal
+    assertions:
+      event_chain:
+        require_user_event: true
+        require_plan_before_execution: true
+        require_action_observation_pairs: true
+      revisions:
+        initial_plan_revision: 1
+        expected_final_plan_revision: 3
+        forbid_write_before_revision_approval: true
+      workspace:
+        files:
+          - path: "index.html"
+            must_contain: ["Acme Cloud", "Starter", "Pro", "Enterprise", "Get Started"]
+      terminal_status_in: ["FINISHED", "VERIFIED"]
+
+  # ---- §28 richer build->verify->finish (achievable, single-pass) -----------
+  # Exercises the build -> serve -> verify -> finish loop on a RICHER deliverable (a form
+  # with multiple required elements) than the smoke. Kept ACHIEVABLE on purpose: a clean
+  # single pass with deterministic markers, NOT a forced failure. Markers are quote-style
+  # agnostic (substrings the model will emit regardless of single/double quotes) so it is
+  # not flaky.
+  #
+  # NOTE: a TRUE broken-then-fixed fault-injection scenario (force a verify failure, then
+  # assert the loop repairs + re-verifies before finishing) needs RUNNER SUPPORT to inject
+  # a verify failure into the live build — there is no such hook yet. That variant is
+  # DEFERRED; this scenario proves the honest verify->finish path on a non-trivial page.
+  - id: verify_catches_broken_then_fixed
+    mode: api
+    prompt: >-
+      Create an index.html contact page with an <h1> heading exactly 'Contact Us' and an
+      HTML <form> containing a text input for the visitor's name, an email input, and a
+      submit button labeled 'Send'. Serve the page and verify it loads in a browser before
+      finishing.
+    assertions:
+      event_chain:
+        require_user_event: true
+        require_plan_before_execution: true
+        require_action_observation_pairs: true
+      workspace:
+        files:
+          - path: "index.html"
+            must_contain: ["Contact Us", "<form", "name", "email", "Send"]
+      preview:
+        required: true
+        must_contain: ["Contact Us"]
+      terminal_status_in: ["FINISHED", "VERIFIED"]

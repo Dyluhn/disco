@@ -205,6 +205,11 @@ class DiscoApiClient:
         # two. Re-read the snapshot until every declared file is present (or this budget
         # elapses) so a genuinely-present file is never reported missing.
         self._snapshot_wait_s = snapshot_wait_s
+        # The conversation_id this client most recently CREATED (set in
+        # create_build_conversation). Lets the runner reach the cid for teardown even when
+        # drive_scenario raised before returning a CollectedRun (so an abandoned RUNNING
+        # build can still be killed from run_once's finally). None until a create succeeds.
+        self.last_conversation_id: str | None = None
 
     # -- pre-create infra probe (§9; the ONLY infra source) -------------------
 
@@ -255,6 +260,10 @@ class DiscoApiClient:
         if status >= 400 or "conversation_id" not in data:
             raise RuntimeError(f"create_conversation failed: HTTP {status} {data}")
         cid = str(data["conversation_id"])
+        # Record the created cid IMMEDIATELY (before the kick) so the runner can tear it
+        # down even if the subsequent message POST / drive raises — a created-but-abandoned
+        # conversation must never leak as a RUNNING build on the shared server.
+        self.last_conversation_id = cid
         # POST the user task — appends the USER message AND kicks the loop.
         mstatus, _ = await self._t.post_json(
             f"/conversations/{cid}/messages", {"content": prompt}
@@ -280,6 +289,21 @@ class DiscoApiClient:
         ``ValueError: invalid literal for int() ... 'RUNNING'`` the moment a build paused."""
         status, data = await self._t.post_json(
             f"/conversations/{conversation_id}/resume", {}
+        )
+        return {"http_status": status, **(data if isinstance(data, dict) else {})}
+
+    async def kill(self, conversation_id: str) -> dict[str, Any]:
+        """KILL (force-terminate) a conversation the runner is DONE with — the hygiene
+        teardown so an abandoned RUNNING / PAUSED / AWAITING build the runner stopped
+        watching (inconclusive cutoff, error path, or post-evidence release) does not
+        leak and load the shared server. POST /conversations/{cid}/kill
+        (conversations.py:275 — halts the agent, tears down its sandbox, revokes its
+        capabilities). IDEMPOTENT: a kill on an already-terminal conversation is harmless.
+
+        The HTTP code is returned under `http_status` (mirrors :meth:`resume`); the route
+        body is ``{"killed": true, "state": {...}}``. Returns ``{"http_status": int, ...}``."""
+        status, data = await self._t.post_json(
+            f"/conversations/{conversation_id}/kill", {}
         )
         return {"http_status": status, **(data if isinstance(data, dict) else {})}
 

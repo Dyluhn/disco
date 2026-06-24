@@ -753,3 +753,74 @@ bounds an always-progressing never-terminating run → `PROGRESSING_TIMEOUT` →
 `RUN_TIMEOUT_WHILE_PROGRESSING`, pinned to be **NEVER** `BUILD_DID_NOT_FINISH` / `FAIL`. Ruff +
 basedpyright clean, import-linter KEPT, full build-soak suite green. Live re-run of `must_plan_before_tool`
 against the shared :8000 now WAITS for the real terminal and classifies on it.
+
+---
+
+## Runner hygiene — kill abandoned conversations (harness only)
+
+**Symptom.** The runner left a build conversation **RUNNING** whenever it stopped watching —
+an inconclusive `PROGRESSING_TIMEOUT` / hard-cap cutoff, an error path (mid-run transport loss →
+`INVALID_RUN`), or simply releasing the conversation after evidence collection. Leaked RUNNING convs
+accumulated and loaded the shared server (observed: 10+ leaked, manually `/kill`'d).
+
+**Fix** (`run.py` + `adapters/disco_api.py`, **harness only**). `run_once` now wraps the
+drive → assemble → classify body in a **try/finally**; the `finally` calls `_release_conversation`,
+which **kills the conversation the run created** via the existing kill route
+(`POST /conversations/{cid}/kill`, conversations.py:275) — a new `DiscoApiClient.kill()` adapter method
+mirroring `resume()`. Properties:
+
+- The cid is tracked on the client (`last_conversation_id`, set in `create_build_conversation`
+  immediately after create, before the kick) so the teardown can reach it **even when drive_scenario
+  raised before returning** a `CollectedRun`. It is reset to `None` at the start of each `run_once` so a
+  reused client only ever kills the conversation **this** run created.
+- The kill happens **AFTER** evidence is collected + frozen (the §6 terminal-events read already
+  happened inside `drive_scenario`; `assemble_dossier` ran before the `finally` on the happy path), so it
+  never races the dossier.
+- It kills **only a still-non-terminal** conversation (RUNNING / PAUSED / AWAITING_*). A conversation that
+  reached a genuine terminal (FINISHED / ERROR / STUCK / IDLE) is left alone — no wasted teardown, no
+  double-kill.
+- Best-effort + **idempotent**: any error (server gone, already terminal) is swallowed so teardown never
+  turns a recorded verdict into a crash. A pre-create `INFRA_FAILURE` (no conversation created) returns
+  before the try/finally — nothing to kill.
+
+**Proof** (`tests/test_api_runner.py`, fake transport): an inconclusive/abandoned run (never-terminal,
+progressing cutoff → `INVALID_RUN`) issues **exactly one** `/conversations/{cid}/kill`; a cleanly-terminal
+run (smoke PASS) issues **zero** kills; `kill()` is idempotent on an already-terminal conv; and
+`_release_conversation` swallows an unreachable server (no exception escapes teardown).
+
+## New bare-Build scenarios (§3 / §28 diversity)
+
+Three scenarios added to `scenarios.yaml`, mirroring the existing schema; each has a deterministically
+checkable oracle expectation (specific files + `must_contain` markers and/or a required preview), all
+satisfiable by a competent model and verifiable by the existing oracles. None assert `tool_scope` (no
+per-turn tool-scope evidence yet — file header). **Not yet soaked live** (model busy); validated by unit
+tests + schema checks only.
+
+1. **`multifile_static_site`** — a 3-file static site (`index.html` + `about.html` + shared `style.css`
+   with a `site-nav` nav linking the pages). Asserts all three files exist with per-page markers
+   (`'Welcome Home'` / `'About Us'`), the shared class (`site-nav` referenced in the pages, `.site-nav`
+   defined in the css), cross-page nav links, preview required (root serves `'Welcome Home'`), terminal
+   FINISHED/VERIFIED. *Exercises multi-file delivery.*
+2. **`revise_twice_complex`** — initial SaaS landing build, then **two** sequential change follow-ups
+   (add a 3-tier pricing section → change every CTA to `'Get Started'`), each requiring a fresh revised
+   plan (rev 1→2→3) before any write (the §11.4 RevisionOracle chain). Final `index.html` must carry the
+   **cumulative** result (`Acme Cloud` + `Starter`/`Pro`/`Enterprise` + `Get Started`), terminal FINISHED.
+   *Stepping stone toward §3's "complex revisions ≥3 follow-ups" — this is 2; a 3-followup variant can
+   extend it later.*
+3. **`verify_catches_broken_then_fixed`** — a richer build → serve → **verify** → finish on a contact page
+   with a `<form>` (name + email inputs + a `'Send'` submit). Kept **achievable** (clean single pass,
+   quote-style-agnostic markers — not a forced failure). Asserts the deliverable content + preview +
+   terminal FINISHED. **NOTE:** a TRUE broken-then-fixed fault-injection scenario (force a verify failure,
+   assert the loop repairs + re-verifies before finishing) needs **runner support to inject a verify
+   failure** into the live build — no such hook yet, so that variant is **deferred**.
+
+**Schema guard** (`tests/test_api_runner.py::test_every_scenario_loads_with_a_valid_schema` +
+`::test_new_scenarios_assert_deterministic_oracle_checkable_output`): every scenario in `scenarios.yaml`
+loads, has the required keys, uses only known assertion/event-chain keys + the terminal vocabulary, never
+asserts `tool_scope`, and any `requires_plan_revision` followups declare
+`revisions.expected_final_plan_revision` (the ContractOracle well-formedness rule).
+
+**Flakiness note.** All markers are dictated verbatim by the prompts so a competent model emits them; the
+verify scenario's markers are quote-agnostic substrings to avoid single/double-quote drift. The mildest
+risk is exact-class-name fidelity in `multifile_static_site` (`site-nav`), but the prompt names it
+explicitly. None are expected to be flaky for a capable model.
