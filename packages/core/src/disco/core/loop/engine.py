@@ -1575,6 +1575,27 @@ class AgentLoop:
                         arguments=option.arguments,
                     ),
                 )
+                # SECURITY — a picked RUNNABLE alternative is gated EXACTLY like a
+                # direct tool call of the same tool. A confirm-required tool
+                # (HIGH-risk / BlastRadiusConfirm publish-guard / unknown-scope)
+                # offered as an ask_user option must still hit the risk-confirm
+                # gate: the user's PICK selects the action, it is NOT consent to
+                # its blast radius. Mirror the run-loop call site (engine.py
+                # ~:1345): route the synthesized action through _gate_risk_confirm
+                # under the same lock BEFORE executing.
+                #   - HALT  → the gate has already emitted the PROPOSED action and
+                #             the WAITING_FOR_CONFIRMATION status (pending_action_id
+                #             now points at it). Stop here without executing or
+                #             transitioning to RUNNING; confirm()/reject() drive it
+                #             from the gate, identical to a direct call.
+                #   - FALLTHROUGH → not gated: emit the action + RUNNING and execute
+                #             below (preserving the existing pick UX for non-risky
+                #             tools). The scope-aware analysis uses the SAME injected
+                #             analyzer/policy the normal path uses — no tool list is
+                #             hardcoded in core.
+                disp, action = await self._gate_risk_confirm(action)
+                if disp is Disp.HALT:
+                    return await self.get_state()
                 emitted = await self._emit(action)
                 await self._emit(
                     StatusEvent(

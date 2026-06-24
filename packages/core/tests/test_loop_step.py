@@ -359,6 +359,194 @@ async def test_pick_alternative_runs_the_selected_option():
     assert len(obs) == 1
 
 
+class _SudoHighAnalyzer:
+    """Scope-free risk double: HIGH iff the action's shell command is `sudo true`
+    (the picked option), LOW otherwise. Lets the warm-up real-work step through
+    (so the run reaches the ask_user gate) while flagging the picked alternative,
+    so the test isolates the pick path's gating — using the SAME injected-analyzer
+    seam the normal tool-call path uses."""
+
+    def assess(self, action):
+        from disco.core import SecurityRisk
+
+        tc = action.tool_call
+        cmd = (tc.arguments.get("command") if tc else "") or ""
+        return SecurityRisk.HIGH if "sudo true" in cmd else SecurityRisk.LOW
+
+
+def _risky_alt_agent():
+    """A scripted agent that does real work, then offers an ask_user gate with a
+    RUNNABLE option 'a' (shell `sudo true`) and a benign option 'b'."""
+    alt_call = action_step(
+        tool="ask_user",
+        args={
+            "summary": "shell keeps failing",
+            "options": [
+                {
+                    "id": "a",
+                    "title": "Sudo it",
+                    "description": "elevate",
+                    "tool_name": "shell",
+                    "arguments": {"command": "sudo true"},
+                },
+                {
+                    "id": "b",
+                    "title": "Skip",
+                    "description": "do nothing",
+                    "tool_name": "shell",
+                    "arguments": {"command": "true"},
+                },
+            ],
+        },
+    )
+    # Real work first — the fresh-session backstop refuses a zero-work ask_user.
+    return ScriptedAgent([action_step("shell", {}), alt_call, finish_step()])
+
+
+async def _drive_to_risky_pick_gate(policy, analyzer):
+    """Run to the AWAITING_USER_DECISION gate, then pick the HIGH-risk option 'a'.
+    Returns (loop, store)."""
+    loop, store = build_loop(_risky_alt_agent(), policy=policy, analyzer=analyzer)
+    await loop.send_message("clean up")
+    await loop.run()
+    from disco.core import ConversationStatus
+
+    assert (
+        await store.get_state(CID)
+    ).execution_status == ConversationStatus.AWAITING_USER_DECISION
+    await loop.pick_alternative("a")
+    return loop, store
+
+
+async def test_pick_high_risk_alternative_is_gated_not_executed() -> None:
+    """SECURITY (close BlastRadiusConfirm bypass): picking an alternative whose
+    tool_name is a confirm-required (HIGH-risk) tool must route through the SAME
+    risk-confirm gate a direct call would hit — emitting WAITING_FOR_CONFIRMATION
+    and NOT executing the tool until the user confirms.
+
+    Pre-fix this FAILS: pick_alternative executed the synthesized action directly
+    via _execute_and_observe, bypassing _gate_risk_confirm entirely."""
+    from disco.core import ActionEvent, ConversationStatus, ObservationEvent
+    from disco.core.loop import ConfirmRisky
+
+    loop, store = await _drive_to_risky_pick_gate(
+        ConfirmRisky(), _SudoHighAnalyzer()
+    )
+
+    state = await store.get_state(CID)
+    # Parked on the confirm gate — NOT resumed to RUNNING, NOT finished.
+    assert state.execution_status == ConversationStatus.WAITING_FOR_CONFIRMATION
+
+    events = await store.get_events(CID)
+    # The synthesized (PROPOSED) action for option 'a' was recorded...
+    synthesized = [
+        e
+        for e in events
+        if isinstance(e, ActionEvent)
+        and e.tool_call is not None
+        and e.tool_call.tool_name == "shell"
+        and e.tool_call.arguments.get("command") == "sudo true"
+    ]
+    assert len(synthesized) == 1
+    # ...and the confirm gate points at it.
+    assert state.pending_action_id == synthesized[0].id
+    # CRITICAL: it did NOT execute — no observation, executor never ran `sudo true`.
+    assert [
+        e
+        for e in events
+        if isinstance(e, ObservationEvent) and e.action_id == synthesized[0].id
+    ] == []
+    assert all(
+        c.arguments.get("command") != "sudo true" for c in loop.executor.calls
+    )
+
+
+async def test_pick_high_risk_alternative_confirm_then_executes() -> None:
+    """After the gated pick, confirm() executes EXACTLY the pending option —
+    identical to confirming a direct risky tool call."""
+    from disco.core import ObservationEvent
+    from disco.core.loop import ConfirmRisky
+
+    loop, store = await _drive_to_risky_pick_gate(
+        ConfirmRisky(), _SudoHighAnalyzer()
+    )
+    pending_id = (await store.get_state(CID)).pending_action_id
+
+    await loop.confirm()
+
+    events = await store.get_events(CID)
+    # The pending option now executed (observation paired to the proposed action).
+    assert [
+        e for e in events if isinstance(e, ObservationEvent) and e.action_id == pending_id
+    ]
+    assert any(
+        c.arguments.get("command") == "sudo true" for c in loop.executor.calls
+    )
+
+
+async def test_pick_high_risk_alternative_reject_does_not_execute() -> None:
+    """Declining the gated pick records the denial and does NOT execute the
+    option — same as rejecting a direct risky tool call."""
+    from disco.core import AgentErrorEvent, ConversationStatus, ObservationEvent
+    from disco.core.loop import ConfirmRisky
+
+    loop, store = await _drive_to_risky_pick_gate(
+        ConfirmRisky(), _SudoHighAnalyzer()
+    )
+    pending_id = (await store.get_state(CID)).pending_action_id
+
+    await loop.reject("not approving sudo")
+
+    events = await store.get_events(CID)
+    # Denial recorded against the proposed action; it never executed.
+    assert [
+        e
+        for e in events
+        if isinstance(e, AgentErrorEvent) and e.action_id == pending_id
+    ]
+    assert [
+        e for e in events if isinstance(e, ObservationEvent) and e.action_id == pending_id
+    ] == []
+    assert all(
+        c.arguments.get("command") != "sudo true" for c in loop.executor.calls
+    )
+    assert (await store.get_state(CID)).execution_status == ConversationStatus.RUNNING
+
+
+async def test_pick_low_risk_alternative_executes_on_pick_no_regression() -> None:
+    """No regression: under the SAME confirm-on-HIGH policy, a LOW-risk picked
+    alternative is NOT gated — it executes immediately on pick, preserving the
+    existing pick UX for non-risky tools."""
+    from disco.core import ActionEvent, ConversationStatus, ObservationEvent, SecurityRisk
+    from disco.core.loop import ConfirmRisky
+    from loop_fakes import FakeAnalyzer
+
+    loop, store = await _drive_to_risky_pick_gate(
+        ConfirmRisky(), FakeAnalyzer(SecurityRisk.LOW)
+    )
+
+    # LOW < HIGH threshold → no gate; the option ran straight away.
+    state = await store.get_state(CID)
+    assert state.execution_status != ConversationStatus.WAITING_FOR_CONFIRMATION
+    events = await store.get_events(CID)
+    synthesized = [
+        e
+        for e in events
+        if isinstance(e, ActionEvent)
+        and e.tool_call is not None
+        and e.tool_call.arguments.get("command") == "sudo true"
+    ]
+    assert len(synthesized) == 1
+    assert [
+        e
+        for e in events
+        if isinstance(e, ObservationEvent) and e.action_id == synthesized[0].id
+    ]
+    assert any(
+        c.arguments.get("command") == "sudo true" for c in loop.executor.calls
+    )
+
+
 async def test_pick_label_only_alternative_replies_with_the_label_no_tool() -> None:
     """BW-03 end-to-end: an option with NO tool_name is the user's ANSWER, not a
     runnable action. Picking it injects the option's label as a USER reply and
