@@ -1,0 +1,28 @@
+{
+  "name": "@disco/pi-kernel",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Disco Pi Build Kernel — the inner-loop sidecar that embeds Pi with no built-in tools, in-memory auth/session, emitting a JSON line-protocol event stream over stdio (Disco Pi Build Kernel Campaign, EPIC B / PR B1).",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "disco-pi-kernel": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit",
+    "start": "node ./dist/index.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.80.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.19",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.4"
+  }
+}
