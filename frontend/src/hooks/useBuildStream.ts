@@ -335,11 +335,15 @@ export function useBuildStream(
     void resumeConversation(session.cid);
   }, [session?.cid]);
 
-  // True when the conversation is resumable: PAUSED always; IDLE only when the
-  // event log contains an approved plan that was never finished (interrupted run).
+  // True when the conversation is resumable: PAUSED always; a terminal ERROR or
+  // STUCK (the recovery path — re-kick from history, no lost progress); IDLE only
+  // when the event log contains an approved plan that was never finished
+  // (interrupted run). The backend's resume_conversation enforces the same set.
   const canResume = useMemo(
     () =>
       state.status === "PAUSED" ||
+      state.status === "ERROR" ||
+      state.status === "STUCK" ||
       (state.status === "IDLE" && state.events.some((e) => e.kind === "plan")),
     [state.status, state.events],
   );

@@ -209,6 +209,10 @@ def make_conversations_router(
             sbackend = runtime.sandbox_backend_name()
             if sbackend is not None:
                 result["sandbox_backend"] = sbackend
+        # Overlay the stored (auto-titled) conversation title so a resumed surface
+        # can render the clean H1 instead of the raw first prompt. None until the
+        # async auto-titler lands — the UI falls back to a truncated first task.
+        result["title"] = await store.get_title(conversation_id)
         return result
 
     @router.get("/conversations/{conversation_id}/workspace/{path:path}")
