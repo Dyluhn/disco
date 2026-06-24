@@ -1,0 +1,49 @@
+# Build Soak — pre-create infra signatures (guidelines §8, §9).
+#
+# INFRA_FAILURE is NARROW (§9): it may ONLY fire for a RUNNER-SIDE failure that
+# happens BEFORE a conversation_id exists — i.e. before any product action became
+# testable. Once POST /conversations has returned a cid, every downstream failure
+# (including a post-create driver-preflight StatusEvent(ERROR, "Driver ...
+# unreachable")) is a PRODUCT/run outcome, classified by the oracle — NEVER infra.
+#
+# The runner runs a pre-create model/health probe; if it matches a signature here
+# the run is INFRA_FAILURE (with the matched signature + the bounded retry policy),
+# and NO conversation is created. The signatures mirror the real provider error
+# shapes the driver raises (openai_provider.py): a transient 429/5xx/timeout/conn
+# error -> LLMTransientError; "no endpoints found" -> LLMProviderUnavailable.
+
+signatures:
+  - id: provider_5xx_before_conversation
+    stage: before_conversation_creation
+    component: model_provider
+    match:
+      http_status: [500, 502, 503, 504]
+    max_retries: 2
+
+  - id: provider_429_before_conversation
+    stage: before_conversation_creation
+    component: model_provider
+    match:
+      http_status: [429]
+    max_retries: 2
+
+  - id: provider_dns_failure_before_conversation
+    stage: before_conversation_creation
+    component: model_provider
+    match:
+      error_kind: ["dns", "name_resolution"]
+    max_retries: 1
+
+  - id: provider_timeout_before_conversation
+    stage: before_conversation_creation
+    component: model_provider
+    match:
+      error_kind: ["timeout", "connect_timeout", "connection_error"]
+    max_retries: 2
+
+  - id: agent_server_unreachable_before_conversation
+    stage: before_conversation_creation
+    component: agent_server
+    match:
+      error_kind: ["connection_error", "timeout"]
+    max_retries: 2

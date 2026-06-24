@@ -46,7 +46,25 @@ SRC_SYSTEM = "system"
 
 # Terminal conversation statuses (a run "ends" in one of these). Mirrors
 # disco.core ConversationStatus values that are terminal-ish for adjudication.
-TERMINAL_STATUSES = frozenset({"FINISHED", "ERROR", "IDLE"})
+#
+# STUCK IS TERMINAL (codex #1): the loop's bounded no-progress / approve-but-never-
+# execute exits stamp StatusEvent(STUCK) (e.g. finish.py terminalizes
+# STUCK/approve_plan_no_execution after the execution-nudge cap). The loop has
+# EXITED — there is no further work without a fresh user turn — so it is terminal
+# for adjudication. Omitting it let a STUCK approve-no-exec run read as "still
+# running / incomplete" and slip past the approval chain as a false PASS; recognizing
+# it as terminal makes the EventChainOracle classify it as the FAIL it is
+# (APPROVE_PLAN_NO_EXECUTION). PAUSED is deliberately NOT terminal: a cooperative
+# pause is resumable (the user re-kicks), so a paused run is legitimately incomplete,
+# never a failure.
+TERMINAL_STATUSES = frozenset({"FINISHED", "ERROR", "IDLE", "STUCK"})
+
+# The subset of terminal states in which the post-approval EXECUTION chain is
+# expected to have produced an action (§11.2). A FINISHED run claims it completed;
+# a STUCK run gave up in-loop — for BOTH, an approved plan that emitted no execution
+# action is the APPROVE_PLAN_NO_EXECUTION failure. ERROR (a thrown/preflight failure)
+# and IDLE (parked) are terminal but do NOT carry that execution expectation.
+EXECUTION_EXPECTED_TERMINALS = frozenset({"FINISHED", "STUCK"})
 
 # The status the loop stamps while a proposed plan is halted for the human to
 # approve (engine.py _gate_planning_mode, non-autonomous path). It MUST precede a
@@ -281,8 +299,9 @@ def has_tool_rejection(events: list[dict[str, Any]]) -> bool:
 
 
 def terminal_status(events: list[dict[str, Any]]) -> str | None:
-    """The last terminal status the run reached (FINISHED/ERROR/IDLE), else None
-    (the run never reached a terminal state — STUCK_RUNNING territory)."""
+    """The last terminal status the run reached (FINISHED/ERROR/IDLE/STUCK), else
+    None (the run never reached a terminal state — STUCK_RUNNING territory). A
+    later RUNNING re-opens the run (follow-up/replan) and clears the marker."""
     result: str | None = None
     for e in events:
         if kind_of(e) != KIND_STATUS:

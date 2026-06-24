@@ -58,6 +58,9 @@ markers = [
     # W7: fast input/output boundary CONTRACTS (W1 sandbox-error typing, W2 task supervision,
     # W3 slides/artifact, W10 guardrails). Selected into the fast PR tier: `-m boundary_contract`.
     "boundary_contract",
+    # Build Soak (S3): the opt-in LIVE-API path that hits a running agent-server on
+    # :8000 with a real model. Skipped by default (env-guarded); never runs in CI.
+    "live",
 ]
 addopts = "-q"
 

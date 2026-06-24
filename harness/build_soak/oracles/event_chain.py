@@ -23,6 +23,7 @@ from typing import Any
 
 from .. import failure_codes as fc
 from ..events import (
+    EXECUTION_EXPECTED_TERMINALS,
     KIND_ACTION,
     KIND_AGENT_ERROR,
     KIND_OBSERVATION,
@@ -99,14 +100,22 @@ class EventChainOracle:
         # AUTONOMOUS EXCEPTION: an autonomous build auto-approves INLINE (engine.py
         # ~L855) emitting RUNNING/plan_approved with NO awaiting status — that is a
         # LEGITIMATE chain, so the B link is required only for interactive runs.
+        #
+        # STUCK is judged too (codex #1): the loop's approve-but-never-execute exit
+        # stamps StatusEvent(STUCK/approve_plan_no_execution). That run approved a
+        # plan and emitted no action, so the C->D link below breaks and it classifies
+        # as APPROVE_PLAN_NO_EXECUTION — the FAIL it is, NOT a false PASS (which is
+        # what happened while STUCK read as non-terminal/incomplete).
         approvals = plan_approved_seqs(events)
         awaiting = awaiting_approval_seqs(events)
         plan_seqs = [seq_of(e) for e in events if kind_of(e) == KIND_PLAN]
         term = terminal_status(events)
         autonomous = is_autonomous(scenario)
         # A run still parked at AWAITING_PLAN_APPROVAL (or otherwise non-terminal) is
-        # legitimately incomplete, not a chain break — only judge a FINISHED run.
-        if plan_seqs and term == "FINISHED":
+        # legitimately incomplete, not a chain break — only judge a run that reached a
+        # terminal where the post-approval execution chain was expected (FINISHED or
+        # the give-up STUCK).
+        if plan_seqs and term in EXECUTION_EXPECTED_TERMINALS:
             first_plan = min(plan_seqs)
 
             # Link A->B: PlanEvent -> AWAITING_PLAN_APPROVAL (interactive only).

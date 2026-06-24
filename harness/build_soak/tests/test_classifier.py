@@ -145,6 +145,51 @@ def test_agent_error_pairing_does_not_break_chain():
     assert c["status"] == "PASS"
 
 
+def test_stuck_approve_no_execution_classifies_as_terminal_fail():
+    # codex #1: the loop's approve-but-never-execute exit terminalizes the run as
+    # StatusEvent(STUCK, detail=approve_plan_no_execution) (finish.py execution-nudge
+    # cap). STUCK is a TERMINAL state — the run gave up, no further work without a
+    # fresh user turn. The dossier (plan approved, NO action after approval) must
+    # classify as the FAIL it is: APPROVE_PLAN_NO_EXECUTION / P0 — NOT INVALID_RUN and
+    # NOT a false PASS (which is what happened while STUCK read as non-terminal).
+    events = [
+        msg(1, "user", "build a page"),
+        status(2, "RUNNING"),
+        plan(3, revision=1),
+        awaiting(4, 3),
+        status(5, "RUNNING", "plan_approved"),
+        # no execution action ever appears
+        status(6, "STUCK", "approve_plan_no_execution"),
+    ]
+    scenario = {"id": "s", "assertions": {"event_chain": {"require_plan_before_execution": True}}}
+    c = classify(events, scenario=scenario)
+    assert c["status"] == "FAIL"
+    assert c["code"] == "APPROVE_PLAN_NO_EXECUTION"
+    assert c["severity"] == "P0"
+    assert c["first_broken_link"] == "approval_status -> execution_action"
+
+
+def test_paused_incomplete_required_output_is_build_did_not_finish():
+    # LIVE-SURFACED adjudicator gap (surfaced-bugs Bug 8): a bare-Build run that wrote
+    # work but PAUSED "actionless" (no-progress valve) instead of FINISHING used to
+    # classify PASS — the required output was never verified because OutputTruth skipped
+    # any non-finished terminal. It must FAIL-CLOSED: BUILD_DID_NOT_FINISH / P1.
+    events = [
+        msg(1, "user", "build a bakery page"),
+        status(2, "RUNNING"),
+        plan(3, revision=1),
+        awaiting(4, 3),
+        status(5, "RUNNING", "plan_approved"),
+        action(6, "file_write", args={"path": "index.html", "content": "x"}, action_id="a6"),
+        observation(7, "a6", tool="file_write"),
+        status(8, "PAUSED", "actionless"),  # the no-progress valve — NOT finished
+    ]
+    c = classify(events, scenario=_SCN, workspace_manifest={"index.html": "Build Smoke OK"})
+    assert c["status"] == "FAIL"
+    assert c["code"] == "BUILD_DID_NOT_FINISH"
+    assert c["severity"] == "P1"
+
+
 def test_classify_run_folder_writes_classification(tmp_path):
     conv = tmp_path / "conversations" / "conv_x"
     conv.mkdir(parents=True)

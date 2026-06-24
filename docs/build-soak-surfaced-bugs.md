@@ -196,3 +196,85 @@ planning allowlist (`runtime.py:1467`) is `{submit_plan, file_list, file_read, s
 extract}` — `think` is omitted, so the planner can't use the no-op reasoning scratchpad
 before proposing a plan. Quality gap, not a safety hole. Repair shape: add `think` to the
 planning allowlist (it is `read_only`-safe — a no-op scratchpad).
+
+---
+
+## S3 live-runner findings (2026-06-24, headless API runner vs the running :8000)
+
+These were surfaced by the FIRST live runs of the S3 headless runner against a real
+agent-server (`process` sandbox backend, homelab Qwen3.6-27B, no browser daemon). They are
+recorded per §17 — the product fixes are a LATER repair iteration; engine/messages/recitation
+were NOT touched. (The runner's own `pre-kick IDLE race` bug is NOT here — that was a harness
+bug, fixed + pinned in `test_pre_kick_idle_does_not_abort_the_drive`.)
+
+### Bug 6 — bare-Build PAUSES "actionless" instead of FINISHING a completed deliverable — PRODUCT
+
+`must_plan_before_tool` (conv_c0ff86840809442ca4bb08801156f053). The agent planned, was
+approved, and WROTE the full deliverable (`index.html` + `styles.css` + `script.js` exist in
+the sandbox). It then could not VERIFY: `verify_web_app` returns `UNVERIFIABLE` ("no browser
+daemon could be started on this sandbox backend"). The agent retried verification a few times,
+made no further file progress, and the loop's no-progress breaker fired:
+`StatusEvent(PAUSED, detail="actionless")` (seq27-28) — "produced 3 consecutive responses
+without doing any real work while plan steps remain undone — pausing instead of burning tokens."
+Note the C18 done-condition advisories: the file-write/served steps' done-conditions WERE MET
+(`file_exists(index.html): found`, served HTTP 200 — seq19-23); the only "undone" step was the
+browser VERIFY, which is structurally impossible on this backend. So a SUBSTANTIVELY-COMPLETE
+static build (deliverable written, done-conditions met) PAUSES rather than FINISHING. Likely §12
+angle: a false/early **terminalization-as-PAUSE on a complete build** — relates to the
+verify-gate + finish recognition; closest codes `NO_CLEAR_FAILURE_TO_USER` (P1, halts with no
+clean terminal the user can act on) / `MISSING_DONE_CONDITIONS`. Repair direction (NEXT
+repair-loop iteration, NOT fixed here): the loop should recognize plan-complete + FINISH, OR the
+verify-unavailable path should let a substantively-complete build finish, instead of
+actionless-pausing it. (The runner now RESUMES such a pause ≤3× as the user — see Bug 8 — which
+exposes whether the product can make progress; here it cannot, because the verify step is
+unsatisfiable on the no-browser backend.) Evidence:
+`trace_conversation.py conv_c0ff86840809442ca4bb08801156f053 25` (seq19-28).
+
+### Bug 7 — build preview/serve port == agent-server port (8000) collides on the `process` backend — PRODUCT/CONFIG
+
+`static_html_minimal` (conv_b59521ba06054d5189722e1f319b63f7). The plan's serve/verify steps are
+pinned to **port 8000**, which is ALSO the agent-server's own HTTP port. On the local `process`
+sandbox backend the sandbox shares the host network namespace, so the build's
+`python3 -m http.server 8000` squats the agent-server port and KILLED the live server mid-run
+(the second smoke aborted with `httpx.ConnectError`; on restart the lifecycle reconciler set the
+orphaned RUNNING conv → PAUSED — the PAUSED status is that restart artifact, not a no-progress
+pause). The agent itself DETECTED the conflict ("the agent server on 8000 isn't serving static
+files") and worked around it by serving on 8080, but the plan done-conditions + `verify_web_app`
+remain hardwired to 8000 → an UNSATISFIABLE verify loop, and any literal "serve on 8000" attempt
+is self-destructive on this backend. Likely §12 code: **`FALSE_FINISH_PREVIEW_BROKEN`** /
+preview-truth class (the required preview can never come up on the agent-server's port). Repair
+direction (later): the build preview port must not equal the agent-server port on a
+network-shared backend, or the `process` backend must isolate the network. Evidence:
+`trace_conversation.py conv_b59521ba06054d5189722e1f319b63f7 25`.
+
+**Live-smoke reproduction (clean, server survived) — conv_6d4dafa9c400484e860c1e74932770c0:** a
+bounded `static_html_minimal` live run reproduced this WITHOUT crashing the server (the agent
+served on 8080, not binding 8000). It wrote + served the page, but `verify_web_app({})` with no
+url DEFAULTS to `http://127.0.0.1:8000/` → "App not serving" (8000 is the agent-server, nothing
+the build can serve), the env keeps telling it to `python3 -m http.server 8000`, and after the
+`verify_no_progress` breaker the run terminalized **STUCK** (seq33-40). The S3 runner classified
+it deterministically as **FAIL / `BUILD_DID_NOT_FINISH` (P1)** — a TRUE outcome (the build never
+finished), and a live validation of the Bug 8 fix (pre-fix this STUCK-with-actions run would have
+SKIP→PASS). So the concrete product hook is `verify_web_app`'s default preview port (8000) ==
+the agent-server port; on an isolated sandbox the two 8000s don't collide, but the default still
+points the verifier at a port the build cannot own on the shared-net `process` backend.
+
+### Bug 8 — adjudicator GAP: a PAUSED-incomplete run classified PASS (HARNESS) — FIXED
+
+NOT a product bug — a harness fail-closed gap surfaced by Bug 6. A bare-Build run that ended
+PAUSED (or any non-`FINISHED`/non-work terminal) used to classify **PASS**: `terminal_status()`
+returns None for PAUSED (correctly — it is resumable), so the EventChain approval chain is not
+judged and `OutputTruthOracle` SKIPPED (it only checked output truth on a finished terminal). Net:
+a run that PAUSED without finishing AND whose required workspace/preview output was therefore never
+verified scored PASS (observed live: `must_plan_before_tool` → PASS over conv_c0ff86, which actually
+PAUSED actionless). Same fail-closed class as the foundation-slice false-negatives
+(`test_fail_closed.py`) and the STUCK-terminal fix. **Fix (this commit,** with §19 migration
+`migrations/2026_06_24_paused_incomplete_not_pass.md`**):** `OutputTruthOracle` now FAILS-CLOSED with
+the new **`BUILD_DID_NOT_FINISH`** (P1) when the scenario requires output (workspace/preview) and/or
+declares `terminal_status_in` but the run did NOT reach a finished/required terminal — never
+SKIP→PASS. A scenario asserting no output still SKIPs (unchanged). The RUNNER also now RESUMES a
+PAUSED run a bounded ≤3 times (acting as the user) before classifying, so a transient actionless
+pause that the user would clear is not mis-failed, while a build that just keeps pausing lands
+`BUILD_DID_NOT_FINISH`. Pinned: `test_classifier.test_paused_incomplete_required_output_is_build_did_not_finish`,
+`test_output_truth_oracle.test_not_finished_with_required_output_fails_closed`,
+`test_api_runner.test_paused_{then_finished_resumes_to_terminal,forever_is_bounded_then_build_did_not_finish}`.
