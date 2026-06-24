@@ -547,3 +547,183 @@ async def test_fail_release_emits_explicit_unverified_marker():
     assert ("FINISHED", None) in sts  # still bounded — releases, doesn't hang
     env = _env(events)
     assert any("INCOMPLETE" in m for m in env), env
+
+
+# ---- Bug 7 + Bug 6: process backend — the gate targets the conversation's served
+#      port (never the agent-server's 8000), and a delivered-but-unverifiable build
+#      FINISHES instead of pausing/STUCKing --------------------------------------
+
+
+class _ProcessGateSandbox:
+    """A process-backend-shaped sandbox for the finish gate: `workspace_path` is set
+    (Bug 7's shared-host signal), `exec_shell` answers the ownership probe (8000 owned
+    by a NON-conversation agent-server, 8080 owned — or not — by THIS conversation),
+    and `file_exists` reports the static deliverable."""
+
+    conversation_id = "conv"  # cid8 == "conv" → session prefix disco-conv-
+    workspace_path = "/tmp/sbx-proc"
+
+    def __init__(self, *, conv_owns_8080=True, index_exists=True):
+        self._conv_owns_8080 = conv_owns_8080
+        self._index_exists = index_exists
+        self.exec_calls = 0
+
+    async def exec_shell(self, cmd, *, timeout_s):  # noqa: ARG002 — signature parity
+        self.exec_calls += 1
+        eighty80 = (
+            '{"port": 8080, "pid": 9, "session": "disco-conv-preview"}'
+            if self._conv_owns_8080
+            else '{"port": 8080, "pid": null, "session": null}'
+        )
+        return _FakeExecResult(
+            '[{"port": 8000, "pid": 7, "session": "disco-other777-preview"},'
+            f" {eighty80},"
+            ' {"port": 5173, "pid": null, "session": null},'
+            ' {"port": 3000, "pid": null, "session": null},'
+            ' {"port": 5000, "pid": null, "session": null},'
+            ' {"port": 4321, "pid": null, "session": null}]'
+        )
+
+    async def file_exists(self, path):
+        return self._index_exists and path in ("index.html", "./index.html")
+
+
+class _ProcessVerifyExecutor(VerifyExecutor):
+    """VerifyExecutor on a PROCESS-shaped sandbox. `has_browser=False` models the
+    browserless process backend (no `browser` tool) for the Bug 6 honest-finish."""
+
+    def __init__(self, verdicts, *, sandbox, has_verify=True, has_browser=True):
+        super().__init__(verdicts, has_verify=has_verify)
+        if not has_browser:
+            self._tools = [t for t in self._tools if t.name != "browser"]
+        self._sandbox = sandbox
+
+    @property
+    def sandbox(self):
+        return self._sandbox
+
+
+def _not_serving_verdict(url="http://127.0.0.1:8080/"):
+    """A 'not serving' fail: server unreachable, browser never ran (no console/
+    network errors) — the UNVERIFIABLE-infra shape, NOT a broken app."""
+    return {
+        "passed": False,
+        "verdict": "fail",
+        "url": url,
+        "http_status": 0,
+        "title": "",
+        "meaningful_content": False,
+        "visible_text_chars": 0,
+        "elements_count": 0,
+        "console_errors": [],
+        "console_warnings": [],
+        "network_failures": [],
+        "screenshot_path": "",
+        "vision": {"used": False, "passed": None, "notes": []},
+        "failure_fingerprint": "CLEAN",
+        "summary": "App not serving: http://127.0.0.1:8080/ returned no response.",
+        "next_action": "Start the dev server on the preview port.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_process_gate_drives_verify_against_conversation_port_not_8000():
+    # Bug 7: the gate detects the conversation's served port (8080) — never the
+    # agent-server's 8000 — and DRIVES verify_web_app with that explicit url.
+    agent = ScriptedAgent(
+        [
+            action_step(tool="file_write", args={"path": "index.html", "content": "<h1>x</h1>"}),
+            finish_step(),  # finish WITHOUT a fresh verdict → the gate drives one
+        ]
+    )
+    sbx = _ProcessGateSandbox(conv_owns_8080=True)
+    execu = _ProcessVerifyExecutor(
+        [_verdict(passed=True, fp="CLEAN", url="http://127.0.0.1:8080/")], sandbox=sbx
+    )
+    loop, store = _gate_loop(agent, execu)
+    await loop.send_message("build me a page")
+    await loop.run()
+
+    events = await store.get_events("conv")
+    driven = [c for c in execu.calls if c.tool_name == "verify_web_app"]
+    assert driven, "the gate must drive a verify when the agent finishes without one"
+    # the driven verify targets 8080 (the conversation's port), NEVER 8000.
+    assert driven[-1].arguments == {"url": "http://127.0.0.1:8080/"}, driven[-1].arguments
+    assert "8000" not in str(driven[-1].arguments)
+    assert ("FINISHED", None) in _statuses(events)
+
+
+@pytest.mark.asyncio
+async def test_process_browser_unavailable_static_build_finishes_not_stuck():
+    # Bug 6: a complete static build whose preview is NOT reachable AND whose backend
+    # cannot run a headless browser (no `browser` tool) FINISHES honestly-unverifiable
+    # — index.html exists — instead of pausing/STUCKing.
+    agent = ScriptedAgent(
+        [
+            action_step(tool="file_write", args={"path": "index.html", "content": "<h1>x</h1>"}),
+            finish_step(),
+        ]
+    )
+    sbx = _ProcessGateSandbox(conv_owns_8080=False, index_exists=True)
+    execu = _ProcessVerifyExecutor(
+        [_not_serving_verdict()], sandbox=sbx, has_browser=False
+    )
+    loop, store = _gate_loop(agent, execu)
+    await loop.send_message("build me a page")
+    await loop.run()
+
+    sts = _statuses(await store.get_events("conv"))
+    # the honest-unverifiable marker precedes a clean FINISHED — never STUCK/PAUSED.
+    assert any(d == "unverifiable_static_finish" for _, d in sts), sts
+    assert ("FINISHED", None) in sts
+    assert not any(s in ("STUCK", "PAUSED") for s, _ in sts), sts
+
+
+@pytest.mark.asyncio
+async def test_process_browser_unavailable_but_no_deliverable_does_not_finish():
+    # Negative: same browserless not-serving case but NO index.html on disk → the
+    # honest finish must NOT fire (a missing deliverable is not an unverifiable one).
+    agent = ScriptedAgent(
+        [
+            action_step(tool="file_write", args={"path": "index.html", "content": "x"}),
+            finish_step(),
+            finish_step(),
+            finish_step(),
+            finish_step(),
+        ]
+    )
+    sbx = _ProcessGateSandbox(conv_owns_8080=False, index_exists=False)
+    execu = _ProcessVerifyExecutor(
+        [_not_serving_verdict()], sandbox=sbx, has_browser=False
+    )
+    loop, store = _gate_loop(agent, execu)
+    await loop.send_message("build me a page")
+    await loop.run()
+
+    sts = _statuses(await store.get_events("conv"))
+    assert not any(d == "unverifiable_static_finish" for _, d in sts), sts
+
+
+@pytest.mark.asyncio
+async def test_process_real_console_error_does_not_honest_finish():
+    # Negative (W-45 preserved): a REAL fail (console error — the browser DID run)
+    # must never be converted to an honest-unverifiable finish, even browserless.
+    agent = ScriptedAgent(
+        [
+            action_step(tool="file_write", args={"path": "index.html", "content": "x"}),
+            finish_step(),
+            finish_step(),
+            finish_step(),
+            finish_step(),
+        ]
+    )
+    sbx = _ProcessGateSandbox(conv_owns_8080=True, index_exists=True)
+    # reachable + a real console error → verdict "fail" with console_errors set.
+    broken = _verdict(passed=False, fp="BUG", url="http://127.0.0.1:8080/")
+    execu = _ProcessVerifyExecutor([broken], sandbox=sbx, has_browser=False)
+    loop, store = _gate_loop(agent, execu)
+    await loop.send_message("build me a page")
+    await loop.run()
+
+    sts = _statuses(await store.get_events("conv"))
+    assert not any(d == "unverifiable_static_finish" for _, d in sts), sts

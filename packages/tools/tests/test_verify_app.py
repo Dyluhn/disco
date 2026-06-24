@@ -300,6 +300,81 @@ async def test_run_browser_unavailable_is_terminal_not_degraded(monkeypatch):
     assert "skip browser-based verification" in out.content
 
 
+# ---- Bug 7: process-backend auto-detect targets the conversation's served port,
+#      never the agent-server's control port (8000) -----------------------------
+
+
+class _ProcessLikeSandbox:
+    """A process-backend-shaped sandbox: `workspace_path` is a host path (Bug 7's
+    shared-host signal) and `exec_shell` answers the port-ownership probe with 8000
+    owned by a NON-conversation agent-server and 8080 owned by THIS conversation."""
+
+    conversation_id = "conv_zzzz1111"  # cid8 == "conv_zzz"
+    workspace_path = "/tmp/sbx-proc"
+
+    def __init__(self):
+        self.probed_url: str | None = None
+
+    async def exec_shell(self, cmd, *, timeout_s=10):
+        # The ownership probe ships ports as bare argv; answer with the soak shape.
+        if "port" in cmd.lower() and ("8080" in cmd or "8000" in cmd):
+            return _ShellRes(
+                '[{"port": 8000, "pid": 7, "session": "disco-other777-preview"},'
+                ' {"port": 8080, "pid": 9, "session": "disco-conv_zzz-preview"},'
+                ' {"port": 5173, "pid": null, "session": null},'
+                ' {"port": 3000, "pid": null, "session": null},'
+                ' {"port": 5000, "pid": null, "session": null},'
+                ' {"port": 4321, "pid": null, "session": null}]'
+            )
+        return _ShellRes("0")  # HTTP probe → unreachable (we only assert the target)
+
+
+@pytest.mark.asyncio
+async def test_process_autodetect_targets_conversation_port_not_8000(monkeypatch):
+    """`verify_web_app({})` on the process backend must verify the conversation's
+    served port (8080), NEVER the agent-server's control port (8000)."""
+    sbx = _ProcessLikeSandbox()
+
+    async def fake_probe(self, ctx, url):
+        sbx.probed_url = url
+        return (False, 0)  # unreachable; we only care WHICH url was targeted
+
+    monkeypatch.setattr(VerifyWebAppTool, "_probe_http", fake_probe)
+    out = await VerifyWebAppTool().run(VerifyWebAppArgs(url=""), _ctx(sbx))
+    assert sbx.probed_url == "http://127.0.0.1:8080/", sbx.probed_url
+    assert "8000" not in (sbx.probed_url or "")
+    # not-serving verdict (we forced unreachable) — honest, not a fabricated pass.
+    assert out.structured["passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_process_autodetect_only_8000_owned_uses_safe_default(monkeypatch):
+    """When the ONLY listener is the agent-server on 8000, auto-detect targets a
+    process-safe default (the first non-control preview port, 5173), never 8000."""
+
+    class _OnlyAgentServer(_ProcessLikeSandbox):
+        async def exec_shell(self, cmd, *, timeout_s=10):
+            return _ShellRes(
+                '[{"port": 8000, "pid": 7, "session": "disco-other777-preview"},'
+                ' {"port": 8080, "pid": null, "session": null},'
+                ' {"port": 5173, "pid": null, "session": null},'
+                ' {"port": 3000, "pid": null, "session": null},'
+                ' {"port": 5000, "pid": null, "session": null},'
+                ' {"port": 4321, "pid": null, "session": null}]'
+            )
+
+    sbx = _OnlyAgentServer()
+
+    async def fake_probe(self, ctx, url):
+        sbx.probed_url = url
+        return (False, 0)
+
+    monkeypatch.setattr(VerifyWebAppTool, "_probe_http", fake_probe)
+    await VerifyWebAppTool().run(VerifyWebAppArgs(url=""), _ctx(sbx))
+    assert sbx.probed_url == "http://127.0.0.1:5173/", sbx.probed_url
+    assert "8000" not in (sbx.probed_url or "")
+
+
 def test_tool_definition_registered_low_risk():
     d = VerifyWebAppTool.definition
     assert d.name == "verify_web_app"

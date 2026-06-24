@@ -207,7 +207,7 @@ recorded per §17 — the product fixes are a LATER repair iteration; engine/mes
 were NOT touched. (The runner's own `pre-kick IDLE race` bug is NOT here — that was a harness
 bug, fixed + pinned in `test_pre_kick_idle_does_not_abort_the_drive`.)
 
-### Bug 6 — bare-Build PAUSES "actionless" instead of FINISHING a completed deliverable — PRODUCT
+### Bug 6 — bare-Build PAUSES "actionless" instead of FINISHING a completed deliverable — PRODUCT — FIXED
 
 `must_plan_before_tool` (conv_c0ff86840809442ca4bb08801156f053). The agent planned, was
 approved, and WROTE the full deliverable (`index.html` + `styles.css` + `script.js` exist in
@@ -230,7 +230,21 @@ exposes whether the product can make progress; here it cannot, because the verif
 unsatisfiable on the no-browser backend.) Evidence:
 `trace_conversation.py conv_c0ff86840809442ca4bb08801156f053 25` (seq19-28).
 
-### Bug 7 — build preview/serve port == agent-server port (8000) collides on the `process` backend — PRODUCT/CONFIG
+> **Bug 6 FIXED** on branch `fix-verify-backend` (Build Soak repair #4), shared root with Bug 7.
+> The honest-unverifiable finish path now recognizes a delivered-but-unverifiable build:
+> `FinishGate._gate_verify_web_app` (`finish.py`) gained `_maybe_honest_unverifiable_static_finish`
+> — when the ONLY verify failure is "not serving" (server unreachable; the browser never ran, so
+> no console/network errors and no blank-render judgement) AND the backend cannot run a headless
+> browser (no `browser` tool) AND `index.html` exists on disk, the gate emits
+> `StatusEvent(detail="unverifiable_static_finish")` + a visible UNVERIFIED note and FALLTHROUGH →
+> FINISHED, instead of refusing → `verify_no_progress` → STUCK. A REAL fail (console/network/blank/
+> missing deliverable) never reaches this branch (W-45 preserved), and it runs only AFTER
+> `gate_execution_nudge` (so `APPROVE_PLAN_NO_EXECUTION` still STUCKs and a zero-action run cannot
+> finish). With Bug 7 fixed too, the reachable-server + browser-unavailable case already finishes
+> via the existing `verdict="unverifiable", passed=True` path. Regression: `test_verify_web_app_gate.py::`
+> `test_process_browser_unavailable_static_build_finishes_not_stuck` (+ two negatives).
+
+### Bug 7 — build preview/serve port == agent-server port (8000) collides on the `process` backend — PRODUCT/CONFIG — FIXED
 
 `static_html_minimal` (conv_b59521ba06054d5189722e1f319b63f7). The plan's serve/verify steps are
 pinned to **port 8000**, which is ALSO the agent-server's own HTTP port. On the local `process`
@@ -258,6 +272,25 @@ finished), and a live validation of the Bug 8 fix (pre-fix this STUCK-with-actio
 SKIP→PASS). So the concrete product hook is `verify_web_app`'s default preview port (8000) ==
 the agent-server port; on an isolated sandbox the two 8000s don't collide, but the default still
 points the verifier at a port the build cannot own on the shared-net `process` backend.
+
+> **Bug 7 FIXED** on branch `fix-verify-backend` (Build Soak repair #4). Three coordinated fixes,
+> all keyed off one new shared resolver `disco.core.loop.preview_target` (single source of truth,
+> consumed by BOTH the finish gate in core AND `verify_web_app` in tools):
+> 1. **Backend-aware verify target** — `resolve_preview_port(host_shared, owned, conversation_id)`.
+>    On a shared-host backend (`process`/`local` — `sandbox.workspace_path` is set) it NEVER returns
+>    a reserved control port (8000), even if reachable/owned: it prefers a CONVERSATION-OWNED served
+>    port (tmux session `disco-{cid8}-…`), then any non-reserved owned port, else None →
+>    process-safe default (5173, never 8000). Both `FinishGate._detect_preview_url` and
+>    `VerifyWebAppTool._detect_preview_url` use it; the gate now passes `{"url": target}` to a driven
+>    `verify_web_app` instead of `{}`. Isolated (gVisor/Podman) backends keep 8000 (the box's app).
+> 2. **Process-backend control-port containment** — `ProcessSandboxInstance.exec_shell` refuses a
+>    command that binds/kills a reserved control port (8000/8800) via `reserved_port_command_violation`;
+>    `expose_port` refuses to advertise them; `SandboxSession.ensure_preview` remaps the 8000 default
+>    to a process-safe port on `process`/`local`. (Pragmatic denial now; a network namespace is the
+>    robust follow-up.)
+> 3. **Honest unverifiable-finish** — see Bug 6 above (shared root). Regression:
+>    `test_preview_target.py` (resolver + containment units), `test_verify_app.py::test_process_autodetect_*`
+>    (tool targets 8080/5173 not 8000), `test_verify_web_app_gate.py::test_process_gate_drives_verify_against_conversation_port_not_8000`.
 
 ### Bug 8 — adjudicator GAP: a PAUSED-incomplete run classified PASS (HARNESS) — FIXED
 

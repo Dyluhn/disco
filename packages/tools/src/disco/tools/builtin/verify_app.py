@@ -386,22 +386,47 @@ class VerifyWebAppTool:
         return _browser_content_meaningful(structured)
 
     async def _detect_preview_url(self, ctx: ToolContext) -> str:
-        """Find the live preview: prefer 8000, else the first owned preview port.
-        Falls back to http://127.0.0.1:8000/ (the probe will report it unreachable
-        rather than fabricate a pass)."""
+        """Find the live preview with the SAME backend-aware resolver the finish gate
+        uses (`preview_target.resolve_preview_port`).
+
+        On a SHARED-host backend (process/local — `sandbox.workspace_path` is set)
+        the agent-server's `:8000` is NOT the build's app (Bug 7): the resolver never
+        returns a reserved control port — it prefers the CONVERSATION-OWNED served
+        port, else any non-reserved owned port; if none, a process-safe default
+        preview port (8080, never 8000) so the HTTP probe reports it unreachable
+        rather than hitting the agent-server. On an ISOLATED backend (gVisor/Podman)
+        `:8000` IS the app, so the legacy "first owned, else 8000" behavior holds."""
         assert ctx.sandbox is not None
+        from disco.core.loop.preview_target import (
+            PortOwnership,
+            process_safe_preview_port,
+            resolve_preview_port,
+        )
+
         from ..sandbox.port_owner import port_owners
 
         try:
             owners = await port_owners(ctx.sandbox, list(_PREVIEW_PORTS))
-        except Exception:  # noqa: BLE001 — detection failure → canonical default
+        except Exception:  # noqa: BLE001 — detection failure → resolver default
             owners = {}
 
-        def _owned(p: int) -> bool:
-            o = owners.get(p)
-            return o is not None and o.pid is not None
-
-        chosen = next((p for p in _PREVIEW_PORTS if _owned(p)), 8000)
+        host_shared = getattr(ctx.sandbox, "workspace_path", None) is not None
+        owned = {
+            p: PortOwnership(pid=o.pid, session=o.session)
+            for p, o in owners.items()
+            if o is not None
+        }
+        chosen = resolve_preview_port(
+            host_shared=host_shared,
+            owned=owned,
+            conversation_id=str(getattr(ctx.sandbox, "conversation_id", "") or ""),
+            preview_ports=_PREVIEW_PORTS,
+        )
+        if chosen is None:
+            # Shared-host backend with no conversation-owned preview: target a
+            # process-safe default (never the control port) — the probe will report
+            # it unreachable rather than fabricate a pass against the agent-server.
+            chosen = process_safe_preview_port(_PREVIEW_PORTS)
         return f"http://127.0.0.1:{chosen}/"
 
     async def _probe_http(self, ctx: ToolContext, url: str) -> tuple[bool, int]:

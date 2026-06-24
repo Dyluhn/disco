@@ -121,6 +121,20 @@ class ProcessSandboxInstance:
 
     async def exec_shell(self, cmd: str, *, timeout_s: int) -> ExecResult:
         self._alive()
+        # Process-backend control-port containment (Bug 7): there is NO network
+        # namespace here, so the sandbox shares the host's loopback with the
+        # agent-server. A build command that binds/kills a reserved control port
+        # (8000 = agent-server, 8800 = app-server) collides with + crashes the
+        # agent-server — refuse it BEFORE running. Scoped to this backend only; an
+        # isolated container's 8000 is its own and is untouched.
+        from disco.core.loop.preview_target import (
+            reserved_control_ports,
+            reserved_port_command_violation,
+        )
+
+        why = reserved_port_command_violation(cmd, reserved_control_ports())
+        if why is not None:
+            return ExecResult(exit_code=126, stdout="", stderr=why)
         cmd = self._rewrite_workspace_paths(cmd)
         proc = await asyncio.create_subprocess_shell(
             cmd,
@@ -189,8 +203,15 @@ class ProcessSandboxInstance:
         """Dev-mode usability: host processes bind host ports directly, so hand
         back the local URL when the port is actually bound. No isolation boundary
         to defend on this backend, but stay within the curated USER set."""
+        from disco.core.loop.preview_target import reserved_control_ports
+
         from ._container import USER_PORTS
 
+        # Process-backend containment (Bug 7): never advertise a reserved control
+        # port (8000 = agent-server, 8800 = app-server) as a user preview URL — on
+        # the shared host that port is the server's own, not the build's app.
+        if port in reserved_control_ports():
+            return None
         if port not in USER_PORTS:
             return None
         import socket
