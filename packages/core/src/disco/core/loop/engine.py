@@ -922,6 +922,13 @@ class AgentLoop:
             # past to their handlers; and it ALSO closes the revision re-entry leak
             # (enter_planning() puts the loop back in PLANNING).
             planning_virtuals = {"ask_user", "clarify"}
+            # Free planning steps that must NOT count toward the explore-read cap:
+            # the ask/clarify escape hatches (handled by their own halt handlers,
+            # never executed) PLUS `think` — a pure NO-OP reasoning scratchpad. None
+            # of these GATHER context, so none should push the planner toward the
+            # forced-plan cap; `think` still falls through and EXECUTES (a harmless
+            # no-op), it just isn't tallied as a read.
+            planning_noncounting = planning_virtuals | {"think"}
             allowed = self._driver.planning_allowed_tool_names()
             if tc.tool_name not in allowed:
                 action = ActionEvent(
@@ -953,7 +960,7 @@ class AgentLoop:
             # search/extract) counts toward the explore cap + can force a plan at
             # the cap (logic in Planner), then falls through to the normal action
             # path. Phase-1 reads below the cap are unchanged.
-            if tc.tool_name not in planning_virtuals:
+            if tc.tool_name not in planning_noncounting:
                 await self._planner.note_planning_read_and_maybe_force()
         return Disp.FALLTHROUGH
 

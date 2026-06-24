@@ -10,8 +10,10 @@ from disco.core import ToolResult
 from disco.core.llm import OperatingMode, ToolSpec
 from loop_fakes import FakeExecutor, ScriptedAgent, build_loop
 
-# The production Build planning allowlist (runtime.py:1466) — read/explore + plan.
-PROD_PLANNING_TOOLS = frozenset({"submit_plan", "file_list", "file_read", "search", "extract"})
+# The production Build planning allowlist (runtime.py:1466) — read/explore + plan + think.
+PROD_PLANNING_TOOLS = frozenset(
+    {"submit_plan", "file_list", "file_read", "search", "extract", "think"}
+)
 
 # A realistic Build toolset the executor advertises (read tools + mutating tools).
 DEFAULT_TOOLS = [
@@ -20,6 +22,7 @@ DEFAULT_TOOLS = [
     "file_list",
     "search",
     "extract",
+    "think",
     "file_write",
     "shell",
     "serve",
