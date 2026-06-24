@@ -127,6 +127,52 @@ def resolve_preview_port(
     return None
 
 
+def target_url_port(url: str) -> int | None:
+    """The explicit port of a preview URL (scheme optional). None when the url is
+    empty / unparseable / carries NO explicit port — a port-less url cannot be
+    confirmed as a served preview, so the shared-host validator rejects it."""
+    from urllib.parse import urlsplit
+
+    u = (url or "").strip()
+    if not u:
+        return None
+    if "://" not in u:
+        u = "http://" + u
+    try:
+        return urlsplit(u).port
+    except ValueError:
+        return None
+
+
+def explicit_target_allowed(
+    *,
+    port: int | None,
+    host_shared: bool,
+    owned: Mapping[int, PortOwnership],
+    conversation_id: str,
+    reserved: frozenset[int] | None = None,
+) -> bool:
+    """Whether an AGENT-SUPPLIED explicit verify target is a valid preview to verify
+    — the SAME rule as auto-detect, applied to a hand-picked url so it can't bypass
+    the resolver. ISOLATED backend (`host_shared=False`): always honored (8000 is the
+    box's app; no shared-host foreign-port risk). SHARED host: honored ONLY for a
+    CONVERSATION-OWNED, NON-reserved port — never a control/UI port (8000/8800/5173),
+    never a sibling conversation's or an unattributable port (those would be a FALSE
+    PASS against the wrong app)."""
+    if not host_shared:
+        return True
+    if port is None:
+        return False
+    reserved = reserved_control_ports() if reserved is None else reserved
+    if port in reserved:
+        return False
+    o = owned.get(port)
+    if o is None or o.pid is None:
+        return False
+    prefixes = _conversation_session_prefixes(conversation_id)
+    return any((o.session or "").startswith(pre) for pre in prefixes)
+
+
 def process_safe_preview_port(
     preview_ports: tuple[int, ...] = PREVIEW_PORTS,
     reserved: frozenset[int] | None = None,
@@ -333,10 +379,12 @@ def reserved_port_command_violation(
 __all__ = [
     "PREVIEW_PORTS",
     "PortOwnership",
+    "explicit_target_allowed",
     "parse_port_ownership",
     "port_ownership_probe_command",
     "process_safe_preview_port",
     "reserved_control_ports",
     "reserved_port_command_violation",
     "resolve_preview_port",
+    "target_url_port",
 ]

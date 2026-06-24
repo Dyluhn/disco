@@ -284,8 +284,14 @@ points the verifier at a port the build cannot own on the shared-net `process` b
 >    agent-server (8000), Disco's own Vite UI (**5173** — now reserved alongside 8000/8800), or a
 >    SIBLING conversation's server → a FALSE PASS against the wrong app. None routes to the honest-
 >    unverifiable path (no false verify). The driven `verify_web_app` is passed `{"url": target}` (or
->    `{}`→tool auto-detect→same resolver→`""`/not-serving when undetectable). Isolated (gVisor/Podman)
->    backends keep 8000 (the box's app).
+>    `{}`→tool auto-detect→same resolver→`""`/not-serving when undetectable). The SAME rule applies to an
+>    AGENT-SUPPLIED **explicit** `url` (`verify_web_app({"url": "http://127.0.0.1:5173/"})` could
+>    otherwise bypass the resolver): on the shared host an explicit url is honored ONLY if its port is
+>    conversation-owned + non-reserved (`explicit_target_allowed` — probed live); a reserved/foreign port
+>    → not-this-build's-app (not-serving + clear reason), never a false PASS. The finish-gate None-path is
+>    sound: with the tool unable to emit a passing verdict for a foreign port, `target_url=None` (binding
+>    disabled) drives a fresh `{}` verify → not-serving → honest path (no spurious pass, no crash).
+>    Isolated (gVisor/Podman) backends keep 8000 + honor explicit urls as-is (the box's app).
 > 2. **Process control-port containment (BEST-EFFORT / defense-in-depth — NOT a guarantee)** —
 >    `ProcessSandboxInstance.exec_shell` refuses commands that bind/kill a reserved port via
 >    `reserved_port_command_violation`; `expose_port` refuses to advertise them; `ensure_preview` remaps
@@ -296,8 +302,10 @@ points the verifier at a port the build cannot own on the shared-net `process` b
 >    soak), **tracked as a follow-up**. Containment is not the load-bearing fix; #1 is.
 > 3. **Honest unverifiable-finish** — see Bug 6 above (shared root). Regression:
 >    `test_preview_target.py` (resolver returns None on no-conversation-owned port + reserves 5173 +
->    containment units), `test_verify_app.py::test_process_autodetect_*` (undetectable "", never 5173/
->    8000), `test_verify_web_app_gate.py::test_process_gate_drives_verify_against_conversation_port_not_8000`
+>    `explicit_target_allowed`/`target_url_port` + containment units), `test_verify_app.py::`
+>    `test_process_autodetect_*` (undetectable "", never 5173/8000) + `test_explicit_*` (explicit
+>    reserved/foreign url rejected, conversation-owned honored, isolated unchanged),
+>    `test_verify_web_app_gate.py::test_process_gate_drives_verify_against_conversation_port_not_8000`
 >    + the Bug-6 honest-finish loop test.
 
 ### Bug 8 — adjudicator GAP: a PAUSED-incomplete run classified PASS (HARNESS) — FIXED

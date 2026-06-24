@@ -317,7 +317,19 @@ class VerifyWebAppTool:
     async def run(self, args: VerifyWebAppArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
         try:
-            url = (args.url or "").strip() or await self._detect_preview_url(ctx)
+            explicit = (args.url or "").strip()
+            if explicit:
+                # An agent-supplied url must pass the SAME backend-aware rule as
+                # auto-detect (Bug 7 explicit-url bypass): on a shared host it is only
+                # honored if it is the conversation's OWN served port — never a
+                # reserved control/UI port (8000/8800/5173) or a sibling's. Otherwise
+                # it is NOT this build's preview → not-serving/undetectable (→ honest
+                # path), never a false PASS against the wrong app.
+                if not await self._explicit_url_allowed(explicit, ctx):
+                    return self._rejected_explicit_outcome(explicit)
+                url = explicit
+            else:
+                url = await self._detect_preview_url(ctx)
             reachable, http_status = await self._probe_http(ctx, url)
 
             structured: dict[str, Any] | None = None
@@ -384,6 +396,72 @@ class VerifyWebAppTool:
         from disco.core.loop.finish import _browser_content_meaningful
 
         return _browser_content_meaningful(structured)
+
+    async def _explicit_url_allowed(self, url: str, ctx: ToolContext) -> bool:
+        """Validate an agent-supplied explicit verify url against the backend-aware
+        rule. ISOLATED backend → honored as-is (today's behavior). SHARED host →
+        honored ONLY if the url's port is conversation-owned + non-reserved (probed
+        live, including the explicit port even if outside the canonical preview set)."""
+        assert ctx.sandbox is not None
+        host_shared = getattr(ctx.sandbox, "workspace_path", None) is not None
+        if not host_shared:
+            return True
+        from disco.core.loop.preview_target import (
+            PortOwnership,
+            explicit_target_allowed,
+            target_url_port,
+        )
+
+        from ..sandbox.port_owner import port_owners
+
+        port = target_url_port(url)
+        if port is None:
+            return False  # no explicit port → cannot confirm it is a served preview
+        ports = sorted(set(_PREVIEW_PORTS) | {port})
+        try:
+            owners = await port_owners(ctx.sandbox, ports)
+        except Exception:  # noqa: BLE001 — probe failure → cannot confirm ownership → reject
+            owners = {}
+        owned = {
+            p: PortOwnership(pid=o.pid, session=o.session)
+            for p, o in owners.items()
+            if o is not None
+        }
+        return explicit_target_allowed(
+            port=port,
+            host_shared=True,
+            owned=owned,
+            conversation_id=str(getattr(ctx.sandbox, "conversation_id", "") or ""),
+        )
+
+    def _rejected_explicit_outcome(self, url: str) -> ToolOutcome:
+        """A not-serving verdict for an explicit url that is NOT this build's preview
+        on the shared host (a reserved control/UI port, or a foreign/unowned port).
+        Verdict-shaped exactly like a real not-serving result so the finish gate routes
+        it to the honest-unverifiable path — never a false PASS — with a CLEAR reason."""
+        from disco.core.loop.preview_target import reserved_control_ports, target_url_port
+
+        port = target_url_port(url)
+        if port is not None and port in reserved_control_ports():
+            reason = (
+                f"{url} is a RESERVED control/UI port ({port}: the agent-server, "
+                "app-server, or frontend) — not this build's preview, so it was NOT "
+                "verified."
+            )
+        else:
+            reason = (
+                f"{url} is not a port this build serves on (not owned by this "
+                "conversation) — it was NOT verified as your app."
+            )
+        verdict = compute_verdict(
+            url=url, reachable=False, http_status=0, structured=None, meaningful=False
+        )
+        verdict["summary"] = reason
+        verdict["next_action"] = (
+            "Serve your build on its own port and verify that, or leave url empty to "
+            "auto-detect your served preview."
+        )
+        return ToolOutcome(success=True, content=_render(verdict), structured=verdict)
 
     async def _detect_preview_url(self, ctx: ToolContext) -> str:
         """Find the live preview with the SAME backend-aware resolver the finish gate

@@ -672,11 +672,23 @@ async def test_process_browser_unavailable_static_build_finishes_not_stuck():
     await loop.send_message("build me a page")
     await loop.run()
 
-    sts = _statuses(await store.get_events("conv"))
+    events = await store.get_events("conv")
+    sts = _statuses(events)
     # the honest-unverifiable marker precedes a clean FINISHED — never STUCK/PAUSED.
     assert any(d == "unverifiable_static_finish" for _, d in sts), sts
     assert ("FINISHED", None) in sts
     assert not any(s in ("STUCK", "PAUSED") for s, _ in sts), sts
+    # gate None-path: the resolver returned None (no conversation-owned port), so the
+    # gate drove a fresh verify with {} (auto-detect) — never a guessed url — and the
+    # not-serving verdict routed to the honest path. No crash, no spurious PASS verdict.
+    driven = [c for c in execu.calls if c.tool_name == "verify_web_app"]
+    assert driven and driven[-1].arguments == {}, driven
+    assert not any(
+        isinstance(e, ObservationEvent)
+        and e.tool_result.tool_name == "verify_web_app"
+        and (e.tool_result.structured or {}).get("passed") is True
+        for e in events
+    ), "the None-path must never accept a passing verdict against a guessed port"
 
 
 @pytest.mark.asyncio

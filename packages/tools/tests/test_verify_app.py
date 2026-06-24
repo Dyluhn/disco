@@ -379,6 +379,85 @@ async def test_process_autodetect_no_conversation_port_is_undetectable(monkeypat
     assert out.structured["passed"] is False  # not-serving, never a false pass
 
 
+# ---- Bug 7 explicit-url bypass: an agent-supplied url is validated on the shared
+#      host too (reserved/foreign port → not-this-build's-app, no false PASS) --------
+
+
+@pytest.mark.asyncio
+async def test_explicit_reserved_port_rejected_on_shared_host():
+    """An explicit url pointed at a reserved control/UI port (5173 = Vite UI, 8000 =
+    agent-server, 8800 = app-server) on the shared host is NOT verified as the build's
+    app — not-serving verdict + a clear 'reserved' reason, never a false PASS."""
+    for bad in (
+        "http://127.0.0.1:5173/",
+        "http://127.0.0.1:8000/",
+        "http://127.0.0.1:8800/",
+    ):
+        out = await VerifyWebAppTool().run(
+            VerifyWebAppArgs(url=bad), _ctx(_ProcessLikeSandbox())
+        )
+        assert out.structured["passed"] is False, bad
+        assert out.structured["verdict"] == "fail", bad
+        assert "reserved" in out.structured["summary"].lower(), out.structured["summary"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_foreign_sibling_port_rejected_on_shared_host():
+    """An explicit url to a NON-reserved port owned by a SIBLING conversation (not
+    this one) is rejected — never verify another conversation's app as ours."""
+
+    class _SiblingOwns3000(_ProcessLikeSandbox):
+        async def exec_shell(self, cmd, *, timeout_s=10):
+            return _ShellRes(
+                '[{"port": 3000, "pid": 5, "session": "disco-sibling1-dev"},'
+                ' {"port": 8000, "pid": 7, "session": "disco-other777-preview"},'
+                ' {"port": 8080, "pid": null, "session": null},'
+                ' {"port": 5173, "pid": null, "session": null},'
+                ' {"port": 5000, "pid": null, "session": null},'
+                ' {"port": 4321, "pid": null, "session": null}]'
+            )
+
+    out = await VerifyWebAppTool().run(
+        VerifyWebAppArgs(url="http://127.0.0.1:3000/"), _ctx(_SiblingOwns3000())
+    )
+    assert out.structured["passed"] is False
+    assert "not owned by this conversation" in out.structured["summary"].lower()
+
+
+@pytest.mark.asyncio
+async def test_explicit_conversation_owned_port_is_honored_on_shared_host(monkeypatch):
+    """An explicit url to THIS conversation's OWN served port (8080, conversation-
+    owned) is honored normally and verified."""
+    sbx = _ProcessLikeSandbox()
+
+    async def fake_probe(self, ctx, url):
+        sbx.probed_url = url
+        return (False, 0)
+
+    monkeypatch.setattr(VerifyWebAppTool, "_probe_http", fake_probe)
+    await VerifyWebAppTool().run(
+        VerifyWebAppArgs(url="http://127.0.0.1:8080/"), _ctx(sbx)
+    )
+    assert sbx.probed_url == "http://127.0.0.1:8080/", sbx.probed_url
+
+
+@pytest.mark.asyncio
+async def test_explicit_url_honored_on_isolated_backend(monkeypatch):
+    """On an ISOLATED backend (no `workspace_path`) the explicit url is honored as-is
+    — 8000 is the box's app; unchanged from before the Bug 7 fix."""
+    probed: dict[str, str] = {}
+
+    async def fake_probe(self, ctx, url):
+        probed["url"] = url
+        return (False, 0)
+
+    monkeypatch.setattr(VerifyWebAppTool, "_probe_http", fake_probe)
+    await VerifyWebAppTool().run(
+        VerifyWebAppArgs(url="http://127.0.0.1:8000/"), _ctx(FakeSandbox("0"))
+    )
+    assert probed["url"] == "http://127.0.0.1:8000/"
+
+
 def test_tool_definition_registered_low_risk():
     d = VerifyWebAppTool.definition
     assert d.name == "verify_web_app"

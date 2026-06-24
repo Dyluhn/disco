@@ -7,11 +7,13 @@ from __future__ import annotations
 from disco.core.loop.preview_target import (
     PREVIEW_PORTS,
     PortOwnership,
+    explicit_target_allowed,
     parse_port_ownership,
     process_safe_preview_port,
     reserved_control_ports,
     reserved_port_command_violation,
     resolve_preview_port,
+    target_url_port,
 )
 
 CID = "conv_abcd1234ef"  # cid8 == "conv_abc"
@@ -134,6 +136,51 @@ def test_process_safe_preview_port_is_never_a_control_port():
 
 def test_reserved_control_ports_default_8000_8800_and_frontend_5173():
     assert reserved_control_ports() == frozenset({8000, 8800, 5173})
+
+
+# ---- explicit-url validation (Bug 7 explicit-url bypass) --------------------
+
+
+def test_target_url_port_parses_explicit_port_only():
+    assert target_url_port("http://127.0.0.1:5173/") == 5173
+    assert target_url_port("127.0.0.1:8080") == 8080
+    assert target_url_port("http://localhost:3000/app") == 3000
+    # no explicit port (or unparseable / empty) → None (cannot confirm a preview)
+    assert target_url_port("http://127.0.0.1/") is None
+    assert target_url_port("") is None
+    assert target_url_port("not a url") is None
+
+
+def test_explicit_target_rejected_for_reserved_or_foreign_on_shared_host():
+    conv = {8080: PortOwnership(pid=9, session="disco-conv_abc-preview")}
+    # reserved control/UI ports are never a valid explicit target on the shared host
+    for p in (8000, 8800, 5173):
+        assert not explicit_target_allowed(
+            port=p, host_shared=True, owned=conv, conversation_id=CID
+        )
+    # a sibling-owned / unattributed / unlistening port → rejected
+    foreign = {3000: PortOwnership(pid=5, session="disco-sibling1-dev")}
+    assert not explicit_target_allowed(
+        port=3000, host_shared=True, owned=foreign, conversation_id=CID
+    )
+    assert not explicit_target_allowed(
+        port=4321, host_shared=True, owned={}, conversation_id=CID
+    )
+    assert not explicit_target_allowed(
+        port=None, host_shared=True, owned=conv, conversation_id=CID
+    )
+
+
+def test_explicit_target_honored_for_conversation_owned_and_on_isolated():
+    conv = {8080: PortOwnership(pid=9, session="disco-conv_abc-preview")}
+    # this conversation's own non-reserved served port → honored
+    assert explicit_target_allowed(
+        port=8080, host_shared=True, owned=conv, conversation_id=CID
+    )
+    # isolated backend → any explicit target honored (8000 is the box's app)
+    assert explicit_target_allowed(
+        port=8000, host_shared=False, owned={}, conversation_id=CID
+    )
 
 
 # ---- ownership probe parsing ------------------------------------------------
