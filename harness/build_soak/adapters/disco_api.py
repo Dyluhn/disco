@@ -600,28 +600,35 @@ class DiscoApiClient:
             httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
         except OSError:
             return None
-        port = httpd.server_address[1]
-        if port in _RESERVED_CONTROL_PORTS:  # defensive — port 0 won't pick these
-            httpd.server_close()
-            return None
-        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-        thread.start()
+        # From here `httpd` owns a bound socket — it must be closed on EVERY path, including
+        # a failure to create/start the serving thread (else the socket/server leaks).
+        thread: threading.Thread | None = None
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as resp:
-                body = resp.read().decode("utf-8", "replace")
-                return int(resp.status), body
-        except urllib.error.HTTPError as exc:  # a real HTTP error status IS evidence
+            port = httpd.server_address[1]
+            if port in _RESERVED_CONTROL_PORTS:  # defensive — port 0 won't pick these
+                return None
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
             try:
-                body = exc.read().decode("utf-8", "replace")
-            except Exception:  # noqa: BLE001
-                body = ""
-            return int(exc.code), body
-        except (urllib.error.URLError, OSError, ValueError):
-            return None
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as resp:
+                    body = resp.read().decode("utf-8", "replace")
+                    return int(resp.status), body
+            except urllib.error.HTTPError as exc:  # a real HTTP error status IS evidence
+                try:
+                    body = exc.read().decode("utf-8", "replace")
+                except Exception:  # noqa: BLE001
+                    body = ""
+                return int(exc.code), body
+            except (urllib.error.URLError, OSError, ValueError):
+                return None
         finally:
-            httpd.shutdown()
+            # shutdown() only makes sense once serve_forever is actually running; server_close()
+            # is ALWAYS safe and is what frees the socket if the thread never started.
+            if thread is not None and thread.is_alive():
+                httpd.shutdown()
             httpd.server_close()
-            thread.join(timeout=2)
+            if thread is not None:
+                thread.join(timeout=2)
 
     def _snapshot_served_index(self, conversation_id: str) -> Path | None:
         """The durable served-root ``index.html`` Path for a STATIC build: at the snapshot
