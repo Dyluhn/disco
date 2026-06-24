@@ -42,31 +42,22 @@ export function DeckEditorPane({ cid, base }: DeckEditorPaneProps) {
   // earlier fetch resolves after it, so the iframe never shows a stale render.
   const renderSeqRef = useRef(0);
   const [saving, setSaving] = useState(false);
+  // BW-14: the export Theme is lifted here so a theme change also re-renders the LIVE
+  // preview iframe (not just the export download links). Passed down to DeckExportBar
+  // (controlled) and threaded into the render fetch below.
+  const [templateId, setTemplateId] = useState("disco-light");
 
-  // Load the deck editor data and render HTML on mount (and when cid/base change).
+  // Load the load-critical editor data (the LoweredDeck) on mount / cid+base change.
+  // The render HTML is fetched separately (below) so a theme switch can re-render the
+  // preview without reloading the whole editor.
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
 
-    // Both fetches run in parallel; only the editor data (deck) is load-critical.
-    // The render HTML failure degrades gracefully — overlays still exist at (0,0).
-    const deckFetch = getDeckForEditor(cid, base);
-    const renderFetch = getDeckRenderHtml(cid, base).catch((): string | null => {
-      // Render-preview failure is NON-fatal (the lowered deck still loads + edits save),
-      // but surface it — otherwise the canvas sits on "Loading slide preview…" forever.
-      if (!cancelled)
-        setPatchNotice(
-          "Couldn't load the slide preview. Editing still saves; reopen the deck to restore the visual.",
-        );
-      return null;
-    });
-
-    Promise.all([deckFetch, renderFetch])
-      .then(([d, html]) => {
-        if (cancelled) return;
-        setDeck(d);
-        setRenderHtml(html);
+    getDeckForEditor(cid, base)
+      .then((d) => {
+        if (!cancelled) setDeck(d);
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -83,6 +74,25 @@ export function DeckEditorPane({ cid, base }: DeckEditorPaneProps) {
     };
   }, [cid, base]);
 
+  // BW-14: fetch the render HTML for the iframe substrate — re-running on a TEMPLATE
+  // change so switching the Theme visibly re-renders the slides (not just the export
+  // hrefs). Guarded with renderSeqRef so an earlier fetch can't clobber a newer one.
+  // The render HTML is NON-fatal: a failure degrades to overlays at (0,0), not a crash.
+  useEffect(() => {
+    const seq = ++renderSeqRef.current;
+    getDeckRenderHtml(cid, base, templateId)
+      .then((html) => {
+        if (seq === renderSeqRef.current) setRenderHtml(html);
+      })
+      .catch(() => {
+        if (seq !== renderSeqRef.current) return;
+        setRenderHtml(null);
+        setPatchNotice(
+          "Couldn't load the slide preview. Editing still saves; reopen the deck to restore the visual.",
+        );
+      });
+  }, [cid, base, templateId]);
+
   const handlePatch = useCallback(
     (patch: JsonPatchOp[]) => {
       if (savingRef.current) return; // a save is in flight — drop, don't race/overwrite
@@ -97,7 +107,7 @@ export function DeckEditorPane({ cid, base }: DeckEditorPaneProps) {
           // Guard with a monotonic token so a slower earlier refresh can't overwrite
           // a newer one (rapid successive edits).
           const seq = ++renderSeqRef.current;
-          getDeckRenderHtml(cid, base)
+          getDeckRenderHtml(cid, base, templateId)
             .then((html) => {
               if (seq === renderSeqRef.current) setRenderHtml(html);
             })
@@ -128,7 +138,7 @@ export function DeckEditorPane({ cid, base }: DeckEditorPaneProps) {
           setSaving(false);
         });
     },
-    [cid, base],
+    [cid, base, templateId],
   );
 
   if (loading)
@@ -158,7 +168,12 @@ export function DeckEditorPane({ cid, base }: DeckEditorPaneProps) {
       {/* W-19: export bar — re-export the deck being edited (Theme + pptx/html) without
           leaving the tab. Shares DeckExportBar with ActivityFeed's SlidesDownload (W-16). */}
       <div className="shrink-0 border-b border-hairline px-body py-hair">
-        <DeckExportBar conversationId={cid} base={base} />
+        <DeckExportBar
+          conversationId={cid}
+          base={base}
+          templateId={templateId}
+          onTemplateChange={setTemplateId}
+        />
       </div>
       {patchNotice && (
         <p

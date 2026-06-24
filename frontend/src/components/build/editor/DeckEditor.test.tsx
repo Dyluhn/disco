@@ -156,6 +156,159 @@ function chartDeck(): LoweredDeck {
   };
 }
 
+// ─── BW-13 P1: continuation/overflow render↔pointer identity ──────────────────
+//
+// On a continuation slide the rendered bullets sit at LOCAL render positions (0,1,…)
+// but address the AUTHORED tail (body[20], body[21], …). The backend now stamps the
+// rendered `data-element-id` with the ORIGINAL authored index (`slide-1:body:20`),
+// matching the editor pointer model 1:1. SlideCanvas joins a rendered node to its
+// pointer via `elementMap.get(data-element-id)`, so if the ids disagreed the overlay
+// could not bind (or would bind the WRONG authored line). These fixtures mirror the
+// post-fix backend output (a two-slide deck whose slide-1 is the continuation).
+
+/** Render HTML for an overflow deck: slide-1 is the continuation, its bullet stamped
+ *  with the ORIGINAL authored index `slide-1:body:20` (NOT the local position 0). */
+const OVERFLOW_FIXTURE_HTML = `<!DOCTYPE html><html><head>
+<style>.slide{display:none}.slide.active{display:flex}</style></head>
+<body><div class="deck">
+<section class="slide active" data-slide-id="slide-0">
+  <h2 data-element-id="slide-0:title" data-slide-id="slide-0">Dense Bullets</h2>
+  <ul class="slide-bullets"><li data-element-id="slide-0:body:0" data-slide-id="slide-0">Head bullet</li></ul>
+</section>
+<section class="slide" data-slide-id="slide-1">
+  <h2 data-element-id="slide-1:title" data-slide-id="slide-1">Dense Bullets (cont.)</h2>
+  <ul class="slide-bullets"><li data-element-id="slide-1:body:20" data-slide-id="slide-1">Tail bullet twenty</li></ul>
+</section>
+</div></body></html>`;
+
+/** Lowered deck whose continuation slide-1 bullet keeps the AUTHORED pointer index. */
+function overflowDeck(): LoweredDeck {
+  return {
+    title: "Overflow Deck",
+    theme_name: "disco",
+    theme_mode: "light",
+    slides: [
+      {
+        slide_id: "slide-0",
+        slide_idx: 0,
+        layout: "bullets",
+        bg_color: "#ffffff",
+        elements: [
+          {
+            element_id: "slide-0:title",
+            slide_id: "slide-0",
+            kind: "title",
+            content: "Dense Bullets",
+            geometry: { x: 4, y: 6, w: 92, h: 12 },
+            font_size_vw: 2.5,
+            font_weight: "bold",
+            font_style: "normal",
+            json_pointer: "/slides/0/title",
+          },
+          {
+            element_id: "slide-0:body:0",
+            slide_id: "slide-0",
+            kind: "bullet",
+            content: "Head bullet",
+            geometry: { x: 6, y: 22, w: 90, h: 8 },
+            font_size_vw: 1.8,
+            font_weight: "normal",
+            font_style: "normal",
+            json_pointer: "/slides/0/body/0",
+          },
+        ],
+      },
+      {
+        // Continuation fragment: same authored slide (orig 0), tail bullet body[20].
+        slide_id: "slide-1",
+        slide_idx: 1,
+        layout: "bullets",
+        bg_color: "#ffffff",
+        elements: [
+          {
+            element_id: "slide-1:title",
+            slide_id: "slide-1",
+            kind: "title",
+            content: "Dense Bullets (cont.)",
+            geometry: { x: 4, y: 6, w: 92, h: 12 },
+            font_size_vw: 2.5,
+            font_weight: "bold",
+            font_style: "normal",
+            json_pointer: "/slides/0/title",
+          },
+          {
+            element_id: "slide-1:body:20",
+            slide_id: "slide-1",
+            kind: "bullet",
+            content: "Tail bullet twenty",
+            geometry: { x: 6, y: 22, w: 90, h: 8 },
+            font_size_vw: 1.8,
+            font_weight: "normal",
+            font_style: "normal",
+            json_pointer: "/slides/0/body/20",
+          },
+        ],
+      },
+    ],
+  };
+}
+
+describe("DeckEditor — BW-13 continuation render↔pointer identity", () => {
+  it("every rendered body data-element-id resolves to a pointer in the deck model", () => {
+    // The join SlideCanvas performs: elementMap.get(rendered data-element-id). If a
+    // rendered id is absent from the deck model the overlay cannot bind — exactly the
+    // pre-fix continuation bug (rendered `body:0` vs model `body:20`).
+    const deck = overflowDeck();
+    const modelIds = new Set(
+      deck.slides.flatMap((s) => s.elements.map((e) => e.element_id)),
+    );
+    const renderedBodyIds = [
+      ...OVERFLOW_FIXTURE_HTML.matchAll(/data-element-id="(slide-\d+:body:\d+)"/g),
+    ].map((m) => m[1]);
+    expect(renderedBodyIds).toContain("slide-1:body:20");
+    for (const id of renderedBodyIds) {
+      expect(modelIds.has(id)).toBe(true);
+    }
+  });
+
+  it("editing the continuation bullet patches the AUTHORED tail line, not body/0", () => {
+    const onPatch = vi.fn<[JsonPatchOp[]], void>();
+    const { container } = render(
+      <DeckEditor deck={overflowDeck()} renderHtml={OVERFLOW_FIXTURE_HTML} onPatch={onPatch} />,
+    );
+    // Navigate to the continuation slide.
+    const nextBtn = screen.getByRole("button", { name: /next slide/i });
+    fireEvent.click(nextBtn);
+
+    // The overlay is keyed by the SAME id the render stamps (slide-1:body:20).
+    const bulletOverlay = container.querySelector('[data-element-id="slide-1:body:20"]');
+    expect(bulletOverlay).not.toBeNull();
+    fireEvent.doubleClick(bulletOverlay!);
+
+    const textarea = container.querySelector("textarea");
+    expect(textarea).not.toBeNull();
+    fireEvent.change(textarea!, { target: { value: "Edited tail" } });
+    fireEvent.keyDown(textarea!, { key: "Enter" });
+
+    // The patch must target the AUTHORED tail line /slides/0/body/20 — proving the
+    // rendered continuation slide maps to the correct authored line in the real UI.
+    const patchCall = onPatch.mock.calls.find((c) =>
+      c[0].some(
+        (op) =>
+          op.op === "replace" &&
+          op.path === "/slides/0/body/20" &&
+          op.value === "Edited tail",
+      ),
+    );
+    expect(patchCall).toBeDefined();
+    // And it must NOT have written /slides/0/body/0 (the pre-fix mis-mapping).
+    const wrongCall = onPatch.mock.calls.find((c) =>
+      c[0].some((op) => op.op === "replace" && op.path === "/slides/0/body/0"),
+    );
+    expect(wrongCall).toBeUndefined();
+  });
+});
+
 // ─── 1: iframe gets srcDoc ────────────────────────────────────────────────────
 
 describe("DeckEditor — iframe substrate", () => {

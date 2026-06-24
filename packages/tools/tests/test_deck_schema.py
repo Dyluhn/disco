@@ -29,6 +29,7 @@ from disco.tools.builtin._deck_schema import (
     _infer_layout,
     _parse_theme,
     lower_deck,
+    lower_deck_for_editor,
 )
 
 # ---------------------------------------------------------------------------
@@ -232,6 +233,250 @@ def test_continuation_slide_has_cont_type():
     deck = lower_deck(authored)
     cont_slides = [s for s in deck.slides if "_cont" in s.type]
     assert len(cont_slides) >= 1, "No continuation slide found after overflow"
+
+
+# ---------------------------------------------------------------------------
+# BW-12 / BW-13 — editor and export agree; no duplicate title pages
+# ---------------------------------------------------------------------------
+
+
+def _title_overflow_deck() -> AuthoredDeck:
+    """A title slide carrying MORE than one body line — the BW-12 duplicate trap.
+
+    The old lowerer spilled body[1:] into a ``title_cont`` that re-inferred back
+    to the ``title`` layout → a SECOND identical title page.
+    """
+    return AuthoredDeck(
+        title="Dup Test",
+        theme="disco-light",
+        slides=[
+            AuthoredSlide(
+                type="title",
+                title="Welcome",
+                body=["Subtitle line", "Spilled line A", "Spilled line B"],
+            ),
+        ],
+    )
+
+
+def test_continuation_never_renders_a_second_title_layout():
+    """BW-12: a title slide that overflows must NOT produce two 'title' slides."""
+    deck = lower_deck(_title_overflow_deck())
+    title_layouts = [s for s in deck.slides if s.layout == "title"]
+    assert len(title_layouts) == 1, (
+        f"Expected exactly one title-layout slide, got {len(title_layouts)} "
+        f"(layouts={[s.layout for s in deck.slides]})"
+    )
+    # The overflow continuation is a bullets slide relabelled '(cont.)'
+    conts = [s for s in deck.slides if "_cont" in s.type]
+    assert conts and all(s.layout == "bullets" for s in conts)
+    assert all(s.title.endswith("(cont.)") for s in conts)
+
+
+def test_editor_count_matches_export_count():
+    """BW-13: lower_deck_for_editor must produce the SAME slide count as lower_deck."""
+    for authored in (_overflow_authored_deck(), _title_overflow_deck(), _sample_authored_deck()):
+        exported = lower_deck(authored)
+        editor = lower_deck_for_editor(authored)
+        assert len(editor.slides) == len(exported.slides), (
+            f"editor={len(editor.slides)} vs export={len(exported.slides)} "
+            f"for deck {authored.title!r}"
+        )
+
+
+def test_editor_continuation_bullets_point_at_original_body():
+    """BW-13: spilled bullets in the editor map back to real /slides/i/body/j pointers."""
+    editor = lower_deck_for_editor(_overflow_authored_deck())
+    # Gather every authored body index referenced across all (split) editor slides
+    referenced: set[str] = set()
+    for s in editor.slides:
+        for el in s.elements:
+            if el.kind in ("bullet", "subtitle"):
+                referenced.add(el.json_pointer)
+    # The dense slide is authored index 1 with 30 body lines — all must be addressable
+    for j in range(30):
+        assert f"/slides/1/body/{j}" in referenced, f"body/{j} not addressable in editor"
+
+
+# ---------------------------------------------------------------------------
+# BW-13 — NON-SUFFIX overflow (column layouts spill non-contiguously)
+# ---------------------------------------------------------------------------
+
+import re  # noqa: E402
+
+
+def _two_column_overflow_deck() -> AuthoredDeck:
+    """A two_column slide dense enough to overflow at the font floor.
+
+    Unlike bullets (which spills a contiguous TAIL), two_column drops the TAIL of
+    EACH column, so the overflow is a non-contiguous union — the case where the
+    old ``body[:consumed]`` editor model mis-mapped pointers.
+    """
+    body = [f"Line {i + 1}: " + ("content " * 14) for i in range(40)]
+    return AuthoredDeck(
+        title="Two-Column Overflow",
+        theme="disco-light",
+        slides=[AuthoredSlide(type="two_column", title="Dense Columns", body=body)],
+    )
+
+
+def _comparison_overflow_deck() -> AuthoredDeck:
+    """A comparison slide (body[0]/body[1] labels + dense 50/50 content)."""
+    body = ["LEFT SIDE", "RIGHT SIDE"] + [
+        f"Item {i + 1}: " + ("detail " * 14) for i in range(40)
+    ]
+    return AuthoredDeck(
+        title="Comparison Overflow",
+        theme="disco-light",
+        slides=[AuthoredSlide(type="comparison", title="Dense Compare", body=body)],
+    )
+
+
+def _assert_editor_pointer_parity(authored: AuthoredDeck, orig: int, nbody: int) -> None:
+    """Editor count == export count AND every editor bullet/subtitle points at the
+    AUTHORED body line whose text it displays — for ALL overflow kinds (BW-13)."""
+    exported = lower_deck(authored)
+    editor = lower_deck_for_editor(authored)
+
+    # Count parity (must also have actually split — multi-slide).
+    assert len(editor.slides) == len(exported.slides), (
+        f"editor={len(editor.slides)} vs export={len(exported.slides)}"
+    )
+    assert len(editor.slides) >= 2, "fixture did not overflow — not exercising the split"
+
+    body = authored.slides[orig].body
+    seen: dict[int, int] = {}
+    for s in editor.slides:
+        for el in s.elements:
+            if el.kind not in ("bullet", "subtitle"):
+                continue
+            m = re.search(rf"/slides/{orig}/body/(\d+)$", el.json_pointer)
+            assert m is not None, f"unexpected pointer {el.json_pointer}"
+            j = int(m.group(1))
+            # The pointer must reference the authored line this element DISPLAYS.
+            assert el.content == body[j].lstrip("• "), (
+                f"pointer {el.json_pointer} shows {el.content!r} "
+                f"but body[{j}]={body[j]!r}"
+            )
+            seen[j] = seen.get(j, 0) + 1
+
+    # Every authored body line addressable exactly once across the split.
+    assert sorted(seen) == list(range(nbody)), (
+        f"addressed {sorted(seen)} != 0..{nbody - 1}"
+    )
+    assert all(v == 1 for v in seen.values()), f"duplicate pointers: {seen}"
+
+
+def test_editor_two_column_non_suffix_overflow_pointer_parity():
+    """BW-13: two_column overflow (non-contiguous spill) — editor pointers stay correct."""
+    _assert_editor_pointer_parity(_two_column_overflow_deck(), orig=0, nbody=40)
+
+
+def test_editor_comparison_non_suffix_overflow_pointer_parity():
+    """BW-13: comparison overflow (labels + per-column tails) — editor pointers stay correct."""
+    _assert_editor_pointer_parity(_comparison_overflow_deck(), orig=0, nbody=42)
+
+
+def _bullets_overflow_deck() -> AuthoredDeck:
+    """A plain bullets slide dense enough to spill a contiguous TAIL into a continuation."""
+    body = [f"Bullet {i + 1}: " + ("word " * 16) for i in range(40)]
+    return AuthoredDeck(
+        title="Bullets Overflow",
+        theme="disco-light",
+        slides=[AuthoredSlide(type="bullets", title="Dense Bullets", body=body)],
+    )
+
+
+def _render_body_ids_by_slide(authored: AuthoredDeck) -> dict[str, dict[str, str]]:
+    """Parse render_html → {slide_id: {data-element-id: displayed_text}} for body lines.
+
+    This is what the REAL editor consumes: SlideCanvas joins each rendered
+    ``[data-element-id]`` node to the editor pointer model by that exact id. We pull
+    the ``{sid}:body:{j}`` ``<li>`` elements (id + their visible text) so a test can
+    assert the rendered identity equals the pointer model, not merely the count.
+    """
+    from disco.tools.builtin._pptx_render import render_html
+
+    html_str = render_html(lower_deck(authored))
+    out: dict[str, dict[str, str]] = {}
+    # <li data-element-id="slide-N:body:J" data-slide-id="slide-N">TEXT</li>
+    for eid, sid, text in re.findall(
+        r'<li data-element-id="([^"]+)" data-slide-id="([^"]+)">(.*?)</li>',
+        html_str,
+        re.DOTALL,
+    ):
+        out.setdefault(sid, {})[eid] = text
+    return out
+
+
+def _assert_render_pointer_identity_alignment(authored: AuthoredDeck, orig: int) -> None:
+    """BW-13 residual P1: the RENDERED editor slides (render_html, what DeckExportBar /
+    SlideCanvas key on) and the editor POINTER model (lower_deck_for_editor) must share
+    the SAME slide identity AND the SAME per-body-line element ids — so each rendered
+    editor slide maps to the correct authored line in the actual UI, not just in counts.
+
+    Asserted for overflow/continuation slides (where render position != authored index):
+      • identical set of slide ids,
+      • for every rendered ``{sid}:body:{orig_j}`` <li>, the editor model has the SAME
+        element id with a json_pointer to ``/slides/{orig}/body/{orig_j}``, AND
+      • the authored line that pointer addresses is the line the rendered <li> DISPLAYS.
+    """
+    editor = lower_deck_for_editor(authored)
+    rendered = _render_body_ids_by_slide(authored)
+    body = authored.slides[orig].body
+
+    # Must actually have split — otherwise we are not exercising continuation identity.
+    assert len(editor.slides) >= 2, "fixture did not overflow — not exercising the split"
+
+    # Same slide identity/order on both sides.
+    assert [s.slide_id for s in editor.slides] == sorted(
+        rendered, key=lambda s: int(s.split("-")[1])
+    ), "rendered slide ids != editor slide ids"
+
+    # Editor body element_id → json_pointer, keyed by slide id.
+    editor_body: dict[str, dict[str, str]] = {}
+    for s in editor.slides:
+        editor_body[s.slide_id] = {
+            el.element_id: el.json_pointer for el in s.elements if el.kind == "bullet"
+        }
+
+    for sid, rendered_lis in rendered.items():
+        for eid, displayed in rendered_lis.items():
+            # The rendered <li>'s id must exist VERBATIM in the editor pointer model.
+            assert eid in editor_body[sid], (
+                f"rendered {eid} on {sid} absent from editor model {sorted(editor_body[sid])}"
+            )
+            ptr = editor_body[sid][eid]
+            m = re.search(rf"/slides/{orig}/body/(\d+)$", ptr)
+            assert m is not None, f"unexpected pointer {ptr} for {eid}"
+            j = int(m.group(1))
+            # The id encodes the authored index; the pointer must agree with it...
+            assert eid.endswith(f":body:{j}"), f"id {eid} disagrees with pointer {ptr}"
+            # ...and the authored line that index addresses is what the slide DISPLAYS.
+            assert displayed == body[j].lstrip("• "), (
+                f"{eid} shows {displayed!r} but /body/{j}={body[j]!r}"
+            )
+
+
+def test_render_pointer_identity_two_column_overflow():
+    """BW-13 P1: two_column non-suffix overflow — rendered ids == editor pointer ids."""
+    _assert_render_pointer_identity_alignment(_two_column_overflow_deck(), orig=0)
+
+
+def test_render_pointer_identity_comparison_overflow():
+    """BW-13 P1: comparison non-suffix overflow — rendered ids == editor pointer ids."""
+    _assert_render_pointer_identity_alignment(_comparison_overflow_deck(), orig=0)
+
+
+def test_render_pointer_identity_bullets_continuation_overflow():
+    """BW-13 P1: bullets SUFFIX overflow — continuation-slide rendered ids == editor ids.
+
+    The continuation slide's bullets render at LOCAL positions 0,1,2… but address the
+    authored TAIL (body[k], body[k+1]…). Before the fix render_html stamped the local
+    position, so the rendered <li> id (``body:0``) never matched the editor pointer
+    (``body:21``) — the overlay could not bind. This pins them equal.
+    """
+    _assert_render_pointer_identity_alignment(_bullets_overflow_deck(), orig=0)
 
 
 # ---------------------------------------------------------------------------

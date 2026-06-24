@@ -38,6 +38,14 @@ interface DeckExportBarProps {
   /** Optional heading (e.g. the deck title) shown above the Theme row. */
   title?: string;
   className?: string;
+  /**
+   * BW-14: controlled template id. When BOTH `templateId` and `onTemplateChange`
+   * are supplied the bar is CONTROLLED by the parent — DeckEditorPane lifts this
+   * state so the live preview iframe can re-render on a theme change. Omitted →
+   * the bar manages its own template (ActivityFeed's standalone SlidesDownload).
+   */
+  templateId?: string;
+  onTemplateChange?: (id: string) => void;
 }
 
 const LINK_BTN =
@@ -55,9 +63,26 @@ const FORMATS: { fmt: ExportFmt; label: string }[] = [
 
 const PDF_FORMAT: { fmt: ExportFmt; label: string } = { fmt: "pdf", label: "PDF (.pdf)" };
 
-export function DeckExportBar({ conversationId, base, title, className }: DeckExportBarProps) {
+export function DeckExportBar({
+  conversationId,
+  base,
+  title,
+  className,
+  templateId: controlledTemplateId,
+  onTemplateChange,
+}: DeckExportBarProps) {
   const templates = useTemplates();
-  const [templateId, setTemplateId] = useState("disco-light");
+  // BW-14: controlled/uncontrolled template state. When the parent passes
+  // `templateId`+`onTemplateChange` the bar is controlled (DeckEditorPane lifts it
+  // to drive the live preview); otherwise it owns the state internally.
+  const [internalTemplate, setInternalTemplate] = useState("disco-light");
+  const templateId = controlledTemplateId ?? internalTemplate;
+  const setTemplateId = onTemplateChange ?? setInternalTemplate;
+
+  // BW-11: in-app export error (parsed from the route's {reason,message}) shown as a
+  // notice instead of ejecting the tab to a raw backend error page. Mirrors
+  // DeckEditorPane's patchNotice styling.
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
 
   // W-22: read the live sandbox backend once (it's stable for a run) so we can gate the
   // PDF affordance — PDF deck export needs a container backend (LibreOffice in the image).
@@ -77,6 +102,43 @@ export function DeckExportBar({ conversationId, base, title, className }: DeckEx
     `${agentHttpBase()}/conversations/${conversationId}/deck/export` +
     `?path=${encodeURIComponent(base)}` +
     `&template=${encodeURIComponent(templateId)}&fmt=${fmt}`;
+
+  // BW-11: download via fetch() so a failure surfaces IN-APP instead of navigating the
+  // tab to the route's raw JSON error. On success we synthesize a Blob object-URL
+  // download; on failure we parse the route's {detail:{reason,message}} (the BW-10
+  // pdf_unavailable 409, render_failed 422, etc.) and show it as a notice.
+  const handleExport = async (fmt: ExportFmt) => {
+    setExportNotice(null);
+    let res: Response;
+    try {
+      res = await fetch(exportHref(fmt), { headers: { accept: "*/*" } });
+    } catch {
+      setExportNotice("Couldn't reach the server to export the deck. Please retry.");
+      return;
+    }
+    if (!res.ok) {
+      let message = `The deck export failed (${res.status}). Please retry.`;
+      try {
+        const data: unknown = await res.json();
+        const detail = (data as { detail?: unknown })?.detail ?? data;
+        const msg = (detail as { message?: unknown })?.message;
+        if (typeof msg === "string" && msg) message = msg;
+      } catch {
+        /* non-JSON body (e.g. a proxy error) — keep the generic status message */
+      }
+      setExportNotice(message);
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${base}.${fmt}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div
@@ -98,13 +160,19 @@ export function DeckExportBar({ conversationId, base, title, className }: DeckEx
         id={`deck-template-${base}`}
         dataControl="build.deck-export-template"
       />
-      {/* Real download links — render-on-demand with the chosen template. */}
+      {/* Real download links — render-on-demand with the chosen template. The href
+          is kept (harness-addressable + copyable), but the click is intercepted so a
+          failed export shows an in-app notice instead of ejecting to the raw error. */}
       <div className="flex flex-wrap items-center gap-hair px-inline">
         {formats.map(({ fmt, label }) => (
           <a
             key={fmt}
             href={exportHref(fmt)}
             download
+            onClick={(e) => {
+              e.preventDefault();
+              void handleExport(fmt);
+            }}
             data-disco-control="build.deck-export"
             data-export-fmt={fmt}
             className={LINK_BTN}
@@ -114,6 +182,16 @@ export function DeckExportBar({ conversationId, base, title, className }: DeckEx
           </a>
         ))}
       </div>
+      {/* BW-11: in-app export failure notice (no eject-to-backend-error). */}
+      {exportNotice && (
+        <p
+          role="alert"
+          data-disco-control="build.deck-export-error"
+          className="font-ui text-[0.74rem] text-warn"
+        >
+          {exportNotice}
+        </p>
+      )}
     </div>
   );
 }

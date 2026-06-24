@@ -79,11 +79,18 @@ class _FakeExec:
 
 
 class _FakeSandboxInstance:
-    """Records the convert command + serves a soffice-shaped %PDF on read."""
+    """Records the convert command + serves a soffice-shaped %PDF on read.
 
-    def __init__(self, exec_result: _FakeExec, pdf_bytes: bytes) -> None:
+    ``probe_exit`` controls the BW-10 ``command -v soffice`` probe result
+    independently of the convert exec, so tests can simulate a stale image
+    (no LibreOffice → probe_exit != 0) vs a conversion-time failure."""
+
+    def __init__(
+        self, exec_result: _FakeExec, pdf_bytes: bytes, *, probe_exit: int = 0
+    ) -> None:
         self._exec = exec_result
         self._pdf = pdf_bytes
+        self._probe_exit = probe_exit
         self.cmds: list[str] = []
         self.destroyed = False
         self.written: dict[str, bytes] = {}
@@ -93,6 +100,8 @@ class _FakeSandboxInstance:
 
     async def exec_shell(self, cmd: str, *, timeout_s: int) -> _FakeExec:
         self.cmds.append(cmd)
+        if cmd.strip() == "command -v soffice":
+            return _FakeExec(exit_code=self._probe_exit)
         return self._exec
 
     async def read_file(self, path: str) -> bytes:
@@ -616,6 +625,60 @@ def test_export_pdf_soffice_failure_422() -> None:
     assert r.status_code == 422, r.text
     assert r.json()["detail"]["reason"] == "render_failed"
     assert inst.destroyed is True
+
+
+def test_export_pdf_stale_image_409_pdf_unavailable() -> None:
+    """BW-10: a container backend whose image has NO LibreOffice (soffice probe fails)
+    → honest 409 pdf_unavailable, NOT a generic render_failed. The box is torn down."""
+    inst = _FakeSandboxInstance(_FakeExec(exit_code=0), b"", probe_exit=127)
+    svc = _FakeSandboxService("gvisor", inst)
+    session = _Session(_AUTHORED)
+    client, store = _pdf_client(session, backend="gvisor", svc=svc)
+    cid = _create(client)
+    _declare_editable_slides(store, cid)
+
+    r = client.get(f"/conversations/{cid}/deck/export?path=deck&fmt=pdf")
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"]["reason"] == "pdf_unavailable"
+    assert "this sandbox image" in r.json()["detail"]["message"]
+    # Probe ran but no convert was attempted; box still torn down.
+    assert any(c.strip() == "command -v soffice" for c in inst.cmds)
+    assert not any("--convert-to pdf" in c for c in inst.cmds)
+    assert inst.destroyed is True
+
+
+def test_capabilities_reports_pdf_true_when_soffice_present() -> None:
+    """BW-10: the capabilities probe spins a box, finds soffice, reports pdf:true."""
+    inst = _FakeSandboxInstance(_FakeExec(exit_code=0), b"", probe_exit=0)
+    svc = _FakeSandboxService("gvisor", inst)
+    client, _store = _pdf_client(_Session(_AUTHORED), backend="gvisor", svc=svc)
+    cid = _create(client)
+    r = client.get(f"/conversations/{cid}/deck/export/capabilities")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body == {"pptx": True, "html": True, "pdf": True, "pdf_reason": None}
+    assert inst.destroyed is True
+
+
+def test_capabilities_reports_pdf_false_on_stale_image() -> None:
+    """BW-10: container backend but soffice absent → pdf:false, reason soffice_missing."""
+    inst = _FakeSandboxInstance(_FakeExec(exit_code=0), b"", probe_exit=127)
+    svc = _FakeSandboxService("local", inst)
+    client, _store = _pdf_client(_Session(_AUTHORED), backend="local", svc=svc)
+    cid = _create(client)
+    r = client.get(f"/conversations/{cid}/deck/export/capabilities")
+    assert r.json() == {"pptx": True, "html": True, "pdf": False, "pdf_reason": "soffice_missing"}
+
+
+def test_capabilities_reports_pdf_false_no_container_backend() -> None:
+    """BW-10: host process backend → pdf:false WITHOUT spinning a box (cheap pre-gate)."""
+    svc = _FakeSandboxService("process", _FakeSandboxInstance(_FakeExec(), b""))
+    client, _store = _pdf_client(_Session(_AUTHORED), backend="process", svc=svc)
+    cid = _create(client)
+    r = client.get(f"/conversations/{cid}/deck/export/capabilities")
+    assert r.json()["pdf"] is False
+    assert r.json()["pdf_reason"] == "no_container_backend"
+    assert svc.created is False  # no sandbox spun for a non-container backend
 
 
 def test_put_no_pdf_means_not_stale() -> None:

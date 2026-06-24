@@ -103,6 +103,73 @@ describe("DeckExportBar", () => {
     expect(html.getAttribute("href")).toContain("template=midnight-dark");
   });
 
+  it("BW-11: a failed export surfaces the route's message IN-APP (no eject to backend error)", async () => {
+    const user = userEvent.setup();
+    // /state → process backend; /deck/export → 409 with {detail:{reason,message}}.
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/deck/export")) {
+        return {
+          ok: false,
+          status: 409,
+          json: async () => ({
+            detail: { reason: "pdf_unavailable", message: "PDF unavailable in this sandbox image." },
+          }),
+        } as unknown as Response;
+      }
+      return { json: async () => ({ sandbox_backend: "process" }) } as unknown as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<DeckExportBar conversationId={CID} base={BASE} />);
+    const pptx = await screen.findByRole("link", { name: /PowerPoint/i });
+    await user.click(pptx);
+
+    // The route's message appears as an in-app notice (alert), not a navigation.
+    expect(await screen.findByRole("alert")).toHaveTextContent(/PDF unavailable in this sandbox image/i);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/deck/export"),
+      expect.anything(),
+    );
+  });
+
+  it("BW-11: a successful export synthesizes a Blob object-URL download (no error notice)", async () => {
+    const user = userEvent.setup();
+    const createObjectURL = vi.fn(() => "blob:mock-url");
+    const revokeObjectURL = vi.fn();
+    const urlObj = URL as unknown as Record<string, unknown>;
+    const origCreate = urlObj.createObjectURL;
+    const origRevoke = urlObj.revokeObjectURL;
+    urlObj.createObjectURL = createObjectURL;
+    urlObj.revokeObjectURL = revokeObjectURL;
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {});
+    try {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/deck/export")) {
+          return { ok: true, status: 200, blob: async () => new Blob(["deck"]) } as unknown as Response;
+        }
+        return { json: async () => ({ sandbox_backend: "process" }) } as unknown as Response;
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      render(<DeckExportBar conversationId={CID} base={BASE} />);
+      const html = await screen.findByRole("link", { name: /Web page/i });
+      await user.click(html);
+
+      await waitFor(() => expect(createObjectURL).toHaveBeenCalled());
+      expect(clickSpy).toHaveBeenCalled();
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:mock-url");
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    } finally {
+      clickSpy.mockRestore();
+      urlObj.createObjectURL = origCreate;
+      urlObj.revokeObjectURL = origRevoke;
+    }
+  });
+
   it("shows the optional title heading when provided", async () => {
     const { container } = render(
       <DeckExportBar conversationId={CID} base={BASE} title="Q3 Pitch Deck" />,

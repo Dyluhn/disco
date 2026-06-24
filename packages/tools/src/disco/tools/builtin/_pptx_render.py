@@ -1119,8 +1119,20 @@ def _html_for_c1_slide(slide: Slide, theme: Theme, *, slide_idx: int = 0) -> str
             f'{html.escape(el.text)}</p>'
         )
 
-    def _bullet_li(el: Element, bidx: int) -> str:
-        eid = f'{sid}:body:{bidx}'
+    # BW-13: map a rendered bullet's POSITION (its index among this slide's body
+    # lines, in render order) back to its ORIGINAL authored-body index via the
+    # slide's body_index_map — the SAME mapping lower_deck_for_editor uses. This
+    # keeps the rendered data-element-id ("{sid}:body:{orig}") aligned 1:1 with the
+    # editor pointer model for overflow / continuation / non-contiguous column spill
+    # (where render position != authored index). Empty map (hand-built / MinimalDeck
+    # Slide) → identity, so simple decks render byte-identically.
+    body_index_map: list[int] = getattr(slide, "body_index_map", None) or []
+
+    def _orig_bidx(render_pos: int) -> int:
+        return body_index_map[render_pos] if render_pos < len(body_index_map) else render_pos
+
+    def _bullet_li(el: Element, render_pos: int) -> str:
+        eid = f'{sid}:body:{_orig_bidx(render_pos)}'
         return (
             f'<li data-element-id="{eid}" data-slide-id="{sid}">'
             f'{html.escape(el.text.lstrip("• "))}</li>'
