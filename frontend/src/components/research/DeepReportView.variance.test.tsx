@@ -73,30 +73,32 @@ describe("DeepReportView — W-11 section presentation variance", () => {
     const { container } = renderReport(sections);
 
     const lead = container.querySelector("#sec0")!;
-    const figure = container.querySelector("#sec1")!;
+    const table = container.querySelector("#sec1")!;
     const list = container.querySelector("#sec2")!;
     const plain = container.querySelector("#sec3")!;
 
     // First section gets the lead/standfirst treatment (accent rule).
     expect(lead.className).toContain("border-l-2");
-    // A table-bearing section gets the figure card treatment.
-    expect(figure.className).toContain("rounded-card");
+    // A table-bearing section gets the data-card treatment.
+    expect(table.className).toContain("rounded-card");
     // The shapes are genuinely distinct from one another — not all identical.
     const classNames = new Set([
       lead.className,
-      figure.className,
+      table.className,
       list.className,
       plain.className,
     ]);
     expect(classNames.size).toBeGreaterThan(1);
-    expect(lead.className).not.toEqual(figure.className);
+    expect(lead.className).not.toEqual(table.className);
 
-    // Eyebrow labels surface the role/shape: lead vs figure differ.
+    // Eyebrow labels surface the role/shape honestly: a table-only section is
+    // labeled "Table", NOT "Figure" (BW-06 — no false graph promise).
     expect(screen.getByText("Key finding")).toBeInTheDocument();
-    expect(screen.getByText("Figure")).toBeInTheDocument();
+    expect(screen.getByText("Table")).toBeInTheDocument();
+    expect(screen.queryByText("Figure")).not.toBeInTheDocument();
   });
 
-  it("surfaces a data/figure section (table) with the figure callout treatment", () => {
+  it("labels a table-only section 'Table' (not 'Figure') with the data-card treatment", () => {
     const sections = [
       section({ id: "lead", title: "Intro", markdown: "Opening [[p1]]." }),
       section({
@@ -107,10 +109,31 @@ describe("DeepReportView — W-11 section presentation variance", () => {
     ];
     const { container } = renderReport(sections);
 
-    // figure treatment present + content (the table) still renders through Markdown.
-    expect(screen.getByText("Figure")).toBeInTheDocument();
+    // BW-06: a table earns the honest "Table" eyebrow, never a false "Figure".
+    expect(screen.getByText("Table")).toBeInTheDocument();
+    expect(screen.queryByText("Figure")).not.toBeInTheDocument();
     expect(container.querySelector("#data")!.className).toContain("rounded-card");
     expect(screen.getByRole("table")).toBeInTheDocument();
+  });
+
+  it("stamps 'Figure' ONLY when a real ```chart``` block is present", () => {
+    const sections = [
+      section({ id: "lead", title: "Intro", markdown: "Opening [[p1]]." }),
+      section({
+        id: "graph",
+        title: "Growth over time",
+        markdown:
+          "See the chart.\n\n```chart\n" +
+          '{"chart_type":"line","title":"Growth","data":[{"label":"2024","value":1},{"label":"2025","value":2}]}' +
+          "\n```",
+      }),
+    ];
+    const { container } = renderReport(sections);
+
+    // A genuine chart block keeps the "Figure" eyebrow (the graph promise is real).
+    expect(screen.getByText("Figure")).toBeInTheDocument();
+    expect(screen.queryByText("Table")).not.toBeInTheDocument();
+    expect(container.querySelector("#graph")!.className).toContain("rounded-card");
   });
 
   it("does not crash and preserves content for a single (lead) section", () => {
