@@ -35,7 +35,7 @@ from disco.core.loop.finish import _PREVIEW_PORTS
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
-from .browser import BrowserArgs, BrowserTool
+from .browser import BROWSER_UNAVAILABLE_MSG, BrowserArgs, BrowserTool
 
 # `_PREVIEW_PORTS` (imported above): SINGLE SOURCE OF TRUTH lives in core's finish
 # gate so the gate's preview detection (P1-1) and this tool's auto-detect stay
@@ -329,6 +329,33 @@ class VerifyWebAppTool:
                 )
                 if browser_outcome.success and browser_outcome.structured:
                     structured = browser_outcome.structured
+                elif (browser_outcome.structured or {}).get("browser_unavailable"):
+                    # ROOT-3 — no browser daemon on this backend. The server IS
+                    # reachable (HTTP probe passed); we simply cannot run the
+                    # render/console checks here. Return a TERMINAL verdict the agent
+                    # treats as done-with-verification, NOT a misleading blank-render
+                    # DEGRADED that it would try to "fix" forever.
+                    return ToolOutcome(
+                        success=True,
+                        content=(
+                            f"VERIFY_WEB_APP: UNVERIFIABLE (server reachable)\n"
+                            f"url: {url}  http_status: {http_status}\n"
+                            f"summary: server reachable at {url} (HTTP {http_status}); "
+                            f"{BROWSER_UNAVAILABLE_MSG}"
+                        ),
+                        structured={
+                            "verdict": "unverifiable",
+                            "passed": True,
+                            "url": url,
+                            "http_status": http_status,
+                            "browser_unavailable": True,
+                            "summary": (
+                                f"server reachable at {url} (HTTP {http_status}); "
+                                f"{BROWSER_UNAVAILABLE_MSG}"
+                            ),
+                            "next_action": "",
+                        },
+                    )
 
             meaningful = self._meaningful(structured)
             verdict = compute_verdict(

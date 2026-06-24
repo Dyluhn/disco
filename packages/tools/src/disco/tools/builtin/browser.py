@@ -40,6 +40,24 @@ from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 _DAEMON_PATH = "/workspace/.pmx/_browser_daemon.py"
 _DAEMON_URL = "http://127.0.0.1:8901"
 
+# ROOT-3 (slides spiral): the terminal, NON-retryable signal for "this sandbox
+# backend has no usable browser" (e.g. the process/dev backend ships no Playwright/
+# Chromium daemon). Worded so the agent treats it as done-with-that-step instead of
+# retrying the browser/verify in a loop. Exported so verify_web_app reuses the exact
+# phrasing and a test can assert on it.
+BROWSER_UNAVAILABLE_MSG = (
+    "browser verification is unavailable on this sandbox backend "
+    "(no browser daemon could be started); skip browser-based verification — do not "
+    "retry. This deliverable does not require a browser on this backend."
+)
+
+
+class BrowserUnavailableError(RuntimeError):
+    """ROOT-3 (slides spiral): the headless browser daemon could not be started on
+    this sandbox backend. Typed + terminal so the browser and verify tools surface a
+    clear 'skip browser verification' outcome rather than a generic error the agent
+    retries forever."""
+
 _MAX_TEXT = 4000  # cap the quarantined text the agent sees
 
 # B7 — render-budget caps. This observation goes into the agent's prompt on EVERY
@@ -267,6 +285,16 @@ class BrowserTool:
                 content=self._render_observation(data),
                 structured=data,
             )
+        except BrowserUnavailableError as e:
+            # ROOT-3 — terminal, non-retryable: this backend has no browser. Carry a
+            # structured flag so verify_web_app can degrade gracefully, and a clearly
+            # worded error so the agent skips browser-based verification.
+            return ToolOutcome(
+                success=False,
+                content="",
+                error=str(e),
+                structured={"browser_unavailable": True},
+            )
         except Exception as e:
             return ToolOutcome(success=False, content="", error=f"browser tool error: {e}")
 
@@ -303,7 +331,7 @@ class BrowserTool:
                 return
             await asyncio.sleep(1.0)
 
-        raise RuntimeError("Browser daemon failed to start")
+        raise BrowserUnavailableError(BROWSER_UNAVAILABLE_MSG)
 
     @staticmethod
     def _format_source(location: dict[str, Any]) -> str:
@@ -408,4 +436,4 @@ class BrowserTool:
 
 
 # The quarantine + fence are exported so tests can assert the structural property directly.
-__all__ = ["BrowserArgs", "BrowserTool"]
+__all__ = ["BrowserArgs", "BrowserTool", "BrowserUnavailableError", "BROWSER_UNAVAILABLE_MSG"]

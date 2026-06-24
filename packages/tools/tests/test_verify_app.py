@@ -272,6 +272,34 @@ async def test_run_server_unreachable_no_browser(monkeypatch):
     assert called["browser"] is False
 
 
+@pytest.mark.asyncio
+async def test_run_browser_unavailable_is_terminal_not_degraded(monkeypatch):
+    """ROOT-3 (slides spiral): when the browser daemon can't start, a REACHABLE
+    server must yield a terminal 'unverifiable' verdict the agent treats as
+    done-with-verification — NOT a misleading blank-render DEGRADED it retries."""
+    from disco.tools.builtin.browser import BROWSER_UNAVAILABLE_MSG
+
+    async def fake_browser_run(self, args, ctx):
+        # Mirrors BrowserTool's BrowserUnavailableError handling.
+        return ToolOutcome(
+            success=False,
+            content="",
+            error=BROWSER_UNAVAILABLE_MSG,
+            structured={"browser_unavailable": True},
+        )
+
+    monkeypatch.setattr(verify_app.BrowserTool, "run", fake_browser_run)
+    out = await VerifyWebAppTool().run(
+        VerifyWebAppArgs(url="http://127.0.0.1:8000/"), _ctx(FakeSandbox("200"))
+    )
+    assert out.success is True
+    assert out.structured["browser_unavailable"] is True
+    assert out.structured["verdict"] == "unverifiable"
+    assert out.structured["verdict"] != "degraded"
+    assert out.structured["passed"] is True
+    assert "skip browser-based verification" in out.content
+
+
 def test_tool_definition_registered_low_risk():
     d = VerifyWebAppTool.definition
     assert d.name == "verify_web_app"

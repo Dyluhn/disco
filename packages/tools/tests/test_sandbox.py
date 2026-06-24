@@ -45,6 +45,67 @@ async def test_file_round_trip_and_escape_rejection():
     await inst.destroy()
 
 
+async def test_process_shell_resolves_workspace_prefix():
+    """ROOT-1 (slides spiral): on the process backend the shell `cwd` is the real
+    per-instance temp dir, which has no literal `/workspace`. exec_shell must rewrite
+    a genuine `/workspace` path token to the real dir so `ls`/`cat /workspace/X` work
+    exactly like the container backends — while a NEW relative path still resolves via
+    cwd and a longer name like `/workspaces` is NOT touched."""
+    svc = ProcessSandboxService()
+    inst = await svc.create(SandboxSpec(), owner_id="local", conversation_id="c")
+    await inst.write_file("deck.pptx", b"DECKBYTES")
+
+    # Absolute /workspace path resolves to the real workspace file.
+    res = await inst.exec_shell("cat /workspace/deck.pptx", timeout_s=10)
+    assert res.exit_code == 0
+    assert res.stdout == "DECKBYTES"
+
+    # `ls /workspace` lists the workspace contents.
+    res = await inst.exec_shell("ls /workspace", timeout_s=10)
+    assert res.exit_code == 0
+    assert "deck.pptx" in res.stdout
+
+    # A NEW-file RELATIVE path still works via cwd (no rewrite needed).
+    res = await inst.exec_shell("echo hi > new.txt && cat new.txt", timeout_s=10)
+    assert res.exit_code == 0
+    assert res.stdout.strip() == "hi"
+    assert await inst.read_file("new.txt") == b"hi\n"
+
+    # A longer name (`/workspaces`) is NOT a `/workspace` token → left alone (so it
+    # does not resolve to the real dir and the `cat` genuinely fails to find it).
+    res = await inst.exec_shell("cat /workspaces/deck.pptx", timeout_s=10)
+    assert res.exit_code != 0
+
+    await inst.destroy()
+
+
+async def test_process_shell_workspace_rewrite_rejects_traversal_escape():
+    """ROOT-1 P1 (security): the /workspace shell rewrite must NOT be the thing that
+    grants a path-traversal escape. A `/workspace/..`-rooted token that resolves
+    OUTSIDE the workspace fails closed (SandboxPermissionError) — exactly like the
+    file tools' jailed /workspace — instead of being rewritten to an out-of-jail
+    absolute path."""
+    from disco.tools.sandbox.base import SandboxPermissionError
+
+    svc = ProcessSandboxService()
+    inst = await svc.create(SandboxSpec(), owner_id="local", conversation_id="c")
+
+    # Classic traversal: /workspace/../../../etc/passwd must be rejected, NOT rewritten
+    # to <realdir>/../../../etc/passwd (which would resolve to /etc/passwd).
+    with pytest.raises(SandboxPermissionError):
+        await inst.exec_shell("cat /workspace/../../../etc/passwd", timeout_s=10)
+    # A single-level escape out of the workspace is likewise rejected.
+    with pytest.raises(SandboxPermissionError):
+        await inst.exec_shell("cat /workspace/../outside", timeout_s=10)
+
+    # Sanity: a NON-escaping /workspace path with a subdir still rewrites + works.
+    await inst.write_file("sub/keep.txt", b"OK")
+    res = await inst.exec_shell("cat /workspace/sub/keep.txt", timeout_s=10)
+    assert res.exit_code == 0 and res.stdout == "OK"
+
+    await inst.destroy()
+
+
 async def test_process_file_exists_present_absent_and_escape():
     """B4 — the process backend's `file_exists` is a workspace-jailed existence
     check: True for a real file, False for a missing one, and False (never

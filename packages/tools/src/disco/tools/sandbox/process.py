@@ -18,6 +18,7 @@ than production.
 from __future__ import annotations
 
 import asyncio
+import re
 import shlex
 import shutil
 import tempfile
@@ -33,6 +34,19 @@ from .base import (
     SandboxSpec,
     SandboxUnavailableError,
     strip_redundant_workspace_prefix,
+)
+
+# ROOT-1 (slides spiral): a genuine `/workspace`-rooted path token in a shell
+# command — the leading `/workspace` AND the rest of the path up to the next token
+# boundary (whitespace / quote / shell operator / end). Capturing the WHOLE token
+# (not just the `/workspace` prefix) lets the rewrite RESOLVE + JAIL it via the same
+# helper the file tools use, so a `..` traversal can't escape the jail.
+# The lookbehind keeps it from matching a mid-path occurrence ('/foo/workspace') or a
+# substring ('myworkspace'); the lookahead right after `/workspace` keeps it from
+# matching a longer name ('/workspaces') — it only fires when `/workspace` is followed
+# by a path separator, a token boundary, or end-of-string.
+_WORKSPACE_TOKEN_RE = re.compile(
+    r"(?<![\w/.])/workspace(?=/|$|[\s'\";|&<>()`])(?:/[^\s'\";|&<>()`]*)?"
 )
 
 
@@ -72,8 +86,42 @@ class ProcessSandboxInstance:
             "TMPDIR": str(self._workspace),
         }
 
+    def _rewrite_workspace_paths(self, cmd: str) -> str:
+        """ROOT-1 (slides spiral): make a literal ``/workspace`` resolve in the shell.
+
+        The build/agent prompts tell the model files live in ``/workspace``, and the
+        FILE tools honor that (``strip_redundant_workspace_prefix`` maps
+        ``workspace/foo`` → ``foo``, jailed to the real dir). But this backend's shell
+        runs with ``cwd`` = the real per-instance ``/tmp/disco-sbx-.../sbx_.../`` dir,
+        which has NO literal ``/workspace`` — so a model command like
+        ``ls /workspace/deck.pptx`` exits 2 and the agent hunts around (``find /`` …).
+        On the container backends ``/workspace`` genuinely exists, so this only bites
+        the process (dev) backend.
+
+        Rewrite each genuine ``/workspace``-rooted path TOKEN (word-boundary — never
+        ``/workspaces`` and never a mid-substring) to its ``shlex.quote``-d absolute
+        real-workspace path. Relative paths already resolve via ``cwd``, so a NEW-file
+        relative path (``echo hi > out.txt``) is untouched — only a ``/workspace``
+        prefix is translated.
+
+        [SECURITY — P1] The rewrite RESOLVES + JAILS each token through ``_resolve`` —
+        the SAME jail the file tools use — so the shell ``/workspace`` semantics match
+        the file-tool ``/workspace`` semantics exactly (single source of truth). A
+        token whose ``..`` traversal escapes the workspace (e.g.
+        ``/workspace/../../etc/passwd``) makes ``_resolve`` raise
+        ``SandboxPermissionError`` and the whole command is rejected (fail closed) —
+        the rewrite must never itself manufacture an out-of-jail absolute path.
+        """
+        def _sub(m: re.Match[str]) -> str:
+            # _resolve strips the redundant /workspace prefix, joins onto the real
+            # workspace root, resolves, and raises SandboxPermissionError on escape.
+            return shlex.quote(str(self._resolve(m.group(0))))
+
+        return _WORKSPACE_TOKEN_RE.sub(_sub, cmd)
+
     async def exec_shell(self, cmd: str, *, timeout_s: int) -> ExecResult:
         self._alive()
+        cmd = self._rewrite_workspace_paths(cmd)
         proc = await asyncio.create_subprocess_shell(
             cmd,
             cwd=str(self._workspace),

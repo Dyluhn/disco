@@ -328,6 +328,32 @@ async def test_file_lands_in_workspace_not_host_cwd(tmp_workspace):
     )
 
 
+async def test_result_carries_delivery_note_and_real_paths(tmp_workspace):
+    """ROOT-4 (slides spiral): a successful generation must return the REAL on-disk
+    path(s) + an explicit done/delivered/call-finish signal so the agent finishes
+    instead of hunting /workspace and verify-looping."""
+    tool = SlidesTool()
+    sbx = _jailed_sandbox(tmp_workspace)
+    ctx = _ctx(sbx)
+
+    with patch("disco.tools.builtin.slides._marp_available", return_value=False):
+        outcome = await tool.run(
+            SlidesGenerateArgs(markdown="# Hello", filename="deck", format="html"),
+            ctx,
+        )
+
+    assert outcome.success
+    # The done/delivered/finish signal is present.
+    assert "Deck generated AND delivered" in outcome.content
+    assert "no further" in outcome.content.lower()
+    assert "finish" in outcome.content.lower()
+    # The REAL absolute on-disk path is included (so no /workspace shell hunt).
+    expected = str(tmp_workspace.resolve() / "deck.html")
+    assert expected in outcome.content
+    # The note does not disturb the artifacts list.
+    assert outcome.artifacts == ["deck.html"]
+
+
 # ---- AGENT_TOOLS registration + scoping --------------------------------------
 
 
