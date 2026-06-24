@@ -32,8 +32,9 @@ const CLOSE = "</think>";
 // decoration back into its own thought, and because each turn re-decorates, the prefix
 // STACKS — "Reasoning: Reasoning: Reasoning: …". The backend now strips this before
 // storing, but historical events (and any provider that slips through) still carry it,
-// so we defensively strip the leaked LEADING decorators here too.
-const DECOR_PREFIX = /^(?:\s*(?:reasoning|thought|observation|output)\s*:\s*)+/i;
+// so we defensively strip the leaked LEADING decorators here too. Scoped to the two
+// surface forms the View applies to thoughts (Reasoning / Thought), matching the backend.
+const DECOR_PREFIX = /^(?:\s*(?:reasoning|thought)\s*:\s*)+/i;
 
 /** Strip leaked, stacked surface-form prefixes ("Reasoning: Reasoning: …") off the
  * FRONT of a thought. Only leading repeated decorators are removed; a legitimate

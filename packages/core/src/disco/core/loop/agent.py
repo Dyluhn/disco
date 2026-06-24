@@ -58,8 +58,12 @@ from .boundaries import AgentStep, StreamHook
 # the model's response text BEFORE it is stored as the ActionEvent thought, which
 # both cleans the stored event AND breaks the feedback loop (the clean thought goes
 # back into context, gets exactly one fresh decoration, never compounds).
+#
+# Scoped to ONLY the surface forms the View applies to AGENT thoughts (Reasoning /
+# Thought) — the "Observation:" / "Output:" forms decorate tool-result messages, not
+# thoughts, so a thought never legitimately starts with one and we don't strip them.
 _THOUGHT_DECOR_RE = re.compile(
-    r"^(?:\s*(?:Reasoning|Thought|Observation|Output)\s*:\s*)+",
+    r"^(?:\s*(?:Reasoning|Thought)\s*:\s*)+",
     re.IGNORECASE,
 )
 

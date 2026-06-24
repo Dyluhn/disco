@@ -93,6 +93,30 @@ def test_blank_and_malformed_steps_drop_to_empty() -> None:
     assert ev.steps == []
 
 
+def test_non_string_field_values_are_coerced_not_crashed() -> None:
+    """Malformed-value tolerance: a model that submits a NON-string value (int,
+    list, dict) for summary / context / step title / detail must NOT crash the
+    parse — the value is stringified (as the old `str(...)`-coercing code did),
+    then tag-stripped."""
+    ev = _planner().plan_from_args(
+        {
+            "summary": 42,  # int, not str
+            "context": ["a", "b"],  # list, not str
+            "steps": [
+                {"title": 7, "detail": {"k": "v"}},  # int title, dict detail
+                ["nested"],  # not str, not dict → skipped, no crash
+            ],
+        },
+        events=[],
+    )
+    assert isinstance(ev, PlanEvent)
+    assert ev.summary == "42"
+    assert ev.context == "['a', 'b']"
+    assert len(ev.steps) == 1  # the bare list step is skipped, not crashed
+    assert ev.steps[0].title == "7"
+    assert ev.steps[0].detail == "{'k': 'v'}"
+
+
 def test_real_steps_still_survive() -> None:
     """The happy path is unchanged: real steps come through intact."""
     ev = _planner().plan_from_args(

@@ -62,13 +62,18 @@ _PLAN_TAG_RE = re.compile(
 )
 
 
-def _strip_plan_tags(text: str | None) -> str:
+def _strip_plan_tags(text: object | None) -> str:
     """Defensively remove leaked plan-template wrapper tags from a submitted plan
     field (summary / step title / detail / context). Idempotent: a clean field is
-    returned unchanged (modulo surrounding whitespace)."""
+    returned unchanged (modulo surrounding whitespace).
+
+    Accepts `object | None` and coerces to `str` AFTER the falsy check: a model
+    that submits a non-string value (int / list / dict) for one of these fields
+    must NOT crash the plan parse — it is stringified exactly as the old
+    `str(...)`-coercing code did, then tag-stripped."""
     if not text:
         return ""
-    return _PLAN_TAG_RE.sub("", text).strip()
+    return _PLAN_TAG_RE.sub("", str(text)).strip()
 
 
 class Planner:
