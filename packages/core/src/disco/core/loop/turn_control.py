@@ -165,6 +165,16 @@ class Valve:
         serve spams and ~20 prose messages sailed past every DC-05a cap until
         the stuck detector fired ~95 events later."""
         incomplete, _ = signals.plan_is_incomplete(events)
+        # BW-01 — while a plan REVISION is pending (the build re-entered PLANNING
+        # via request_plan and has NOT been re-approved), every terminal decision
+        # below would key off the STALE prior-revision plan (still marked complete)
+        # and force-FINISH a build the user is actively re-planning. Suppress ALL
+        # stale-plan terminals for this turn — both the completed_via_notify
+        # done-build finish AND the generic noop_limit→FINISHED — and fall through
+        # (return False) to the engine's plan-nudge / replan path so the model is
+        # driven toward submit_plan. Releases automatically once the revised plan
+        # is approved (then plan_approved.seq > planning.seq → this is False again).
+        pending_revision = signals.in_planning_for_revision(events)
         if noops >= self._loop._ACTIONLESS_BREAK_CAP:
             # B5 — completion BEFORE pause. A model that signals "done" via
             # notify_user (×N) instead of finish() trips the actionless valve.
@@ -179,7 +189,8 @@ class Valve:
             # FINISH an empty workspace; a "done" plan with zero state-changing
             # actions is a hallucinated completion, not a build.
             if (
-                signals.plan_steps_complete(events)
+                not pending_revision
+                and signals.plan_steps_complete(events)
                 and signals.productive_actions_since_approval(events) > 0
             ):
                 # W-32 — DO NOT force-finish directly. The old code emitted
@@ -215,10 +226,13 @@ class Valve:
                 )
                 return True
 
-        if noops >= self._loop._max_consecutive_noops:
+        if noops >= self._loop._max_consecutive_noops and not pending_revision:
             # The model is spinning without acting and won't stop — end
             # cleanly rather than burn. (A real run resumes on a user steer;
             # the prompt steers toward finish/act.)
+            # BW-01: gated on `not pending_revision` so the 6-noop terminal
+            # cannot FINISH off a stale completed plan while the user awaits a
+            # revised plan; the pending-revision turn falls through to the nudge.
             actions_since = signals.actions_since_last_resume(events)
             if incomplete and actions_since == 0:
                 await self._loop._emit(

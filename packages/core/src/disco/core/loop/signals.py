@@ -286,6 +286,43 @@ def plan_steps_complete(events: list[Event]) -> bool:
     return not incomplete
 
 
+def in_planning_for_revision(events: list[Event]) -> bool:
+    """BW-01 — True iff a plan REVISION is currently pending: the build re-entered
+    PLANNING (a StatusEvent detail=="planning", emitted by request_plan) MORE
+    recently than the latest plan approval (StatusEvent detail=="plan_approved").
+
+    Mirrors the seq predicate at engine.py:1062-1077 (the post-restart mode
+    reconstruction), inverted: that code stays in execution mode iff
+    plan_approved_seq > reenter_planning_seq; a revision is pending in the
+    opposite case — planning re-entered AFTER the last approval and not yet
+    re-approved. Releases AUTOMATICALLY once the revised plan is approved (then
+    plan_approved.seq > planning.seq again).
+
+    Cases:
+      * never planned / no "planning" marker → False (nothing pending).
+      * "planning" seen but never approved → True (first plan still pending —
+        a revision request that hasn't been approved is, likewise, pending).
+      * latest approval is more recent than the latest "planning" → False
+        (a freshly-approved build, including right after a revision lands).
+
+    The actionless valve reads this to SUPPRESS stale-plan terminal decisions
+    while the user awaits a revised plan (BW-01: the valve force-finished off the
+    still-"done" prior revision's checklist during a pending re-plan).
+    """
+    planning_seq: int | None = None
+    approved_seq: int | None = None
+    for e in events:
+        if isinstance(e, StatusEvent):
+            if e.detail == "planning":
+                planning_seq = e.seq or 0
+            elif e.detail == "plan_approved":
+                approved_seq = e.seq or 0
+    if planning_seq is None:
+        return False  # never (re-)entered planning → no pending revision
+    # planning was entered; pending iff it is the most recent of the two markers
+    return approved_seq is None or planning_seq > approved_seq
+
+
 def actions_since_last_resume(events: list[Event]) -> int:
     """Count ActionEvents (excluding meta/bookkeeping tools and the
     verify-on-finish probe) since the last
