@@ -194,35 +194,50 @@ _FILE_WRITE_TOOLS = frozenset(
 )
 # Shell tools that can run a non-browser (HTMLParser/static-parse) validation.
 _SHELL_TOOLS = frozenset({"shell", "shell_exec"})
-# Conservative verify-step lexicon. A not-done plan step counts as "verify-only" ONLY
-# when its title/detail names GENUINE verification — NOT new content. Deliberately
-# narrow + phrase-anchored to avoid substring false-positives that would misread a
-# CONTENT step as verify-only (the codex catch): bare `test`/`render` are EXCLUDED
-# because "Add a **test**imonials section" / "**render** the gallery" are real work,
-# and the bare NOUN "renders" ("Create product **renders**" = images/output) is real
-# work too. Verification phrasing is required instead — "verify", "validate", "check",
-# "confirm", "qa", "smoke test", "lint", the verbs "test that …"/"test it"/"tests
-# pass", and "renders"/"displays" ONLY as a verification PHRASE (with a qualifier like
-# "correctly"/"properly" or an explicit subject like "the page renders"). A step that
-# can't be confidently classified as PURE verification stays NON-verify (→ no honest
-# finish, the conservative direction).
-_VERIFY_STEP_RE = re.compile(
-    r"\bverif(?:y|ies|ied|ication)\b"
-    r"|\bvalidat(?:e|es|ed|ing|ion)\b"
-    r"|\bcheck(?:s|ed|ing)?\b"
-    r"|\bconfirm(?:s|ed|ing)?\b"
+# Verify-only step classification — STRUCTURAL, not a word list. The recurring
+# false-positive class is a verification WORD appearing as a CONTENT noun: test→
+# testimonials, render→product renders, validation→input validation, lint→lint config,
+# check→checkout. Whack-a-moling individual words never converges, so a step is
+# "verify-only" iff BOTH hold:
+#   (A) it has a verification-ACTION framing (a verify verb acting on the deliverable,
+#       or a clear verification-outcome phrase) — `_VERIFY_ACTION_RE`; AND
+#   (B) it has NO creation/content verb at all — `_CONTENT_VERB_RE` is a hard NEGATIVE
+#       OVERRIDE: a step that adds/creates/builds/sets-up/etc. is content work, never
+#       verification, even when it also contains a verify-ish word ("Add input
+#       validation", "Set up linting").
+# Bare nouns alone (`validation`, `lint`, `render`, `test`, `check`) never match — only
+# the action framing in (A) does. When in doubt → NON-verify (stay paused, the safe
+# choice that can never false-finish real work).
+_CONTENT_VERB_RE = re.compile(
+    r"\b(?:add(?:s|ed|ing)?|create(?:s|d)?|creating|build(?:s|ing)?|built"
+    r"|implement(?:s|ed|ing)?|writ(?:e|es|ing)|wrote|design(?:s|ed|ing)?"
+    r"|styl(?:e|es|ed|ing)|mak(?:e|es|ing)|made|configure(?:s|d)?|configuring|config"
+    r"|install(?:s|ed|ing)?|includ(?:e|es|ed|ing)|insert(?:s|ed|ing)?"
+    r"|append(?:s|ed|ing)?|generat(?:e|es|ed|ing)|develop(?:s|ed|ing)?"
+    r"|scaffold(?:s|ed|ing)?|integrat(?:e|es|ed|ing)|updat(?:e|es|ed|ing)"
+    r"|fix(?:es|ed|ing)?|refactor(?:s|ed|ing)?|polish(?:es|ed|ing)?"
+    r"|setup|set[\s-]?up|wire[\s-]?up)\b",
+    re.IGNORECASE,
+)
+_VERIFY_ACTION_RE = re.compile(
+    # (A1) a verification VERB (precise stems — `check(?:s|ed|ing)?` won't match
+    # "checkout"/"checkbox"; `test(?:s|ed|ing)?` won't match "testimonials") followed
+    # by a verification TARGET ("that/the/it/…") — "Verify the page", "Check that
+    # links work", "Validate the HTML", "Ensure it renders".
+    r"\b(?:verif(?:y|ies|ied|ying)|validat(?:e|es|ed|ing)|check(?:s|ed|ing)?"
+    r"|confirm(?:s|ed|ing)?|ensure(?:s|d)?|ensuring|test(?:s|ed|ing)?"
+    r"|review(?:s|ed|ing)?|inspect(?:s|ed|ing)?)\s+"
+    r"(?:that|the|it|its|all|each|every|whether|if|for|no|cross)\b"
+    # (A2) recognized standalone verification tokens/actions.
     r"|\bqa\b"
     r"|\bsmoke[\s-]?tests?\b"
-    r"|\blint(?:s|ed|ing)?\b"
-    # "renders"/"displays" count ONLY as a verification PHRASE — a trailing qualifier
-    # ("renders correctly/properly/as expected/fine/cleanly/well") or an explicit
-    # subject ("the page renders", "it displays"). The bare/standalone noun-ish
-    # "renders" is EXCLUDED so a CONTENT step "Create product renders" / "Add hero
-    # renders" (renders = images/output) is NOT misread as verification.
+    r"|\brun(?:s|ning)? (?:the |a )?(?:linter|lint|tests?|test suite|checks?)\b"
+    # (A3) verification-OUTCOME phrases (a state asserted, not content created).
     r"|\b(?:renders?|displays?) (?:correctly|properly|as expected|fine|cleanly|well)\b"
     r"|\b(?:the )?(?:page|site|app|layout|content|everything|it) (?:renders?|displays?)\b"
-    r"|\btest(?:s|ed|ing)? (?:that|it)\b"
-    r"|\btests? pass(?:es|ed)?\b",
+    r"|\btests? pass(?:es|ed)?\b"
+    r"|\blint(?:er)? pass(?:es|ed)?\b"
+    r"|\bno console errors?\b",
     re.IGNORECASE,
 )
 # A shell command counts as a REAL non-browser CONTENT/STRUCTURE validation only when
@@ -294,13 +309,15 @@ _BROWSER_UNAVAILABLE_TEXT = "browser verification is unavailable"
 
 def _missing_steps_all_verify(events: list[Event]) -> bool:
     """Bug 6 — True iff a plan exists, is INCOMPLETE, and EVERY not-done
-    (missing/active) step is a verification-only step (its title/detail names
-    genuine verification per `_VERIFY_STEP_RE` — verify/validate/check/confirm/qa/
-    smoke/lint/renders-correctly — NOT new content like "add a testimonials
-    section" or "render the gallery"). Conservative: any not-done step that is NOT
-    clearly verification → False (real work remains, so the actionless valve must
-    PAUSE, never honest-finish). Returns False when the plan is complete (no missing
-    steps — the `completed_via_notify` branch owns that)."""
+    (missing/active) step is a verification-only step. A step qualifies iff it has a
+    verification-ACTION framing (`_VERIFY_ACTION_RE`) AND has NO creation/content verb
+    (`_CONTENT_VERB_RE`, a hard negative override). So "Verify the page renders
+    correctly" qualifies, while "Add input validation", "Set up linting", "Create
+    product renders", "Add a testimonials section" do NOT (content verb present) and a
+    bare noun like "validation"/"lint" does NOT (no action framing). Conservative: any
+    not-done step that isn't UNAMBIGUOUS verification → False (real work remains, so the
+    actionless valve must PAUSE, never honest-finish). Returns False when the plan is
+    complete (no missing steps — the `completed_via_notify` branch owns that)."""
     plan, states = effective_plan_progress(events)
     if plan is None or not plan.steps:
         return False
@@ -310,8 +327,10 @@ def _missing_steps_all_verify(events: list[Event]) -> bool:
     for i in missing:
         step = plan.steps[i]
         text = f"{step.title} {step.detail or ''}"
-        if not _VERIFY_STEP_RE.search(text):
-            return False
+        if _CONTENT_VERB_RE.search(text):
+            return False  # creation/content work → never verify-only (negative override)
+        if not _VERIFY_ACTION_RE.search(text):
+            return False  # no verification-action framing → not verify-only
     return True
 
 

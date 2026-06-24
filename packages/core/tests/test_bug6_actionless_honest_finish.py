@@ -387,12 +387,25 @@ async def test_negative_browser_failure_evidence_blocks_honest_finish(mode):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tail", ["Create product renders", "Add product renders"])
-async def test_negative_renders_noun_step_not_verify(tail):
-    """NEGATIVE (codex re-review #1 — "renders" the NOUN) — the only not-done step is
-    CONTENT whose text contains the bare noun "renders" ("Create product renders" =
-    images/output), NOT a verification phrase. It must NOT read as verify-only →
-    NO honest finish; PAUSE/actionless."""
+@pytest.mark.parametrize(
+    "tail",
+    [
+        "Create product renders",  # "renders" the NOUN (images/output), not a phrase
+        "Add product renders",
+        "Add input validation",  # "validation" the content noun (a feature), not verify
+        "Add form validation",
+        "Set up linting",  # "linting" the content noun (tooling config), not verify
+        "Configure ESLint",
+        "Add a testimonials section",  # "test" inside a content noun
+    ],
+)
+async def test_negative_verification_word_as_content_noun_not_verify(tail):
+    """NEGATIVE (codex re-review — the content-noun CLASS) — the only not-done step is
+    CONTENT whose text contains a verification-ish WORD as a noun or a creation verb
+    ("Create product renders", "Add input validation", "Set up linting"). The
+    structural classifier (verification-ACTION framing AND no creation verb) must read
+    these as NON-verify → NO honest finish; PAUSE/actionless. Kills the whole
+    test→testimonials / render→renders / validation→input-validation class."""
     execu = _BrowserlessStaticExecutor(index_exists=True, validation_ok=True)
     agent = ScriptedAgent(
         _deliver_then_idle_steps(plan=_plan_with_tail(tail), done_idxs=(1, 2), active_idx=3)

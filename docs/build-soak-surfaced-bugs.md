@@ -293,6 +293,23 @@ unsatisfiable on the no-browser backend.) Evidence:
 > are rejected (substring presence of "validate"/"markup" no longer counts). Two added negatives:
 > `test_negative_renders_noun_step_not_verify[Create product renders|Add product renders]`,
 > `test_negative_echoed_validation_word_is_not_a_validation[echo|printf]`. Suite: 12 Bug-6 tests green.
+>
+> **Hardening (codex re-review 2 — STRUCTURAL, kills the whole content-noun class).** Whack-a-moling
+> individual verification words (test→testimonials, render→product-renders, validation→input-validation,
+> lint→lint-config, check→checkout) never converges, so the verify-only classifier is now structural:
+> a not-done step is verify-only iff it has a verification-ACTION framing (`_VERIFY_ACTION_RE`: a verify
+> VERB — verify/validate/check/confirm/ensure/test/review, precise stems so "checkout"/"testimonials"
+> don't match — followed by a target "that/the/it/…", or a standalone "qa"/"smoke test"/"run the
+> linter", or an outcome phrase "renders correctly"/"the page renders"/"tests pass"/"no console errors")
+> AND has NO creation/content verb (`_CONTENT_VERB_RE` hard negative override: add/create/build/
+> implement/write/design/style/make/set up/configure/install/include/insert/append/generate/scaffold/
+> integrate/update/fix/refactor/…). So "Add input validation", "Set up linting", "Create product
+> renders", "Add a testimonials section", "Build the contact form" are ALL non-verify, and a bare noun
+> ("validation"/"lint") never matches (no action framing). When in doubt → NON-verify (stay paused, the
+> safe direction). The positive repro step "Verify the page renders correctly" still qualifies (verb +
+> "the", no creation verb). Added negative: `test_negative_verification_word_as_content_noun_not_verify`
+> over [Create/Add product renders, Add input/form validation, Set up linting, Configure ESLint, Add a
+> testimonials section]. Suite: 17 Bug-6 tests green.
 
 ### Bug 7 — build preview/serve port == agent-server port (8000) collides on the `process` backend — PRODUCT/CONFIG — FIXED
 
