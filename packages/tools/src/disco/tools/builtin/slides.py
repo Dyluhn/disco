@@ -372,10 +372,46 @@ class SlidesTool:
         # ---- C2 deck pipeline (primary path when goal is supplied) ----
         use_c2 = bool(args.goal) and args.mode != "markdown"
         if use_c2:
-            return await self._run_c2_pipeline(args, ctx, fmt)
+            outcome = await self._run_c2_pipeline(args, ctx, fmt)
+        else:
+            # ---- Marp / markdown path (fallback or explicit mode="markdown") ----
+            outcome = await self._run_marp_path(args, ctx, fmt)
 
-        # ---- Marp / markdown path (fallback or explicit mode="markdown") ----
-        return await self._run_marp_path(args, ctx, fmt)
+        # ROOT-4 (slides spiral): completion recognition. A generated deck is a
+        # finished BINARY deliverable — once it is written + delivered the agent must
+        # finish, not "verify"/rewrite it. Append the REAL on-disk path(s) (so it does
+        # not hunt for /workspace) plus an explicit done/delivered/call-finish signal.
+        if outcome.success and outcome.artifacts:
+            outcome = outcome.model_copy(
+                update={"content": outcome.content + self._delivery_note(ctx, outcome.artifacts)}
+            )
+        return outcome
+
+    @staticmethod
+    def _delivery_note(ctx: ToolContext, artifacts: list[str]) -> str:
+        """A self-sufficient 'done + delivered + here are the paths' footer so the
+        model finishes instead of verify-looping. Uses the sandbox's real workspace
+        root for absolute paths on the process backend (so a shell ``ls`` is never
+        needed); container backends expose None → list the workspace-relative names."""
+        ws: str | None = None
+        try:
+            ws = ctx.sandbox.workspace_path if ctx.sandbox is not None else None
+        except Exception:  # noqa: BLE001 — path resolution must never break the result
+            ws = None
+        if ws:
+            import posixpath
+
+            paths = "\n".join(f"  - {posixpath.join(ws, a)}" for a in artifacts)
+        else:
+            paths = "\n".join(f"  - {a}" for a in artifacts)
+        return (
+            "\n\nDeck generated AND delivered. Files on disk:\n"
+            f"{paths}\n"
+            "This is a finished binary deliverable (NOT a web app) — no further "
+            "verification is needed. Do NOT re-open, re-read, re-verify, or file_write "
+            "into these files; they are already produced and delivered to the user. "
+            "Call finish to complete the task."
+        )
 
     async def _run_c2_pipeline(
         self, args: SlidesGenerateArgs, ctx: ToolContext, fmt: str

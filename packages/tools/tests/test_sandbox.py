@@ -45,6 +45,40 @@ async def test_file_round_trip_and_escape_rejection():
     await inst.destroy()
 
 
+async def test_process_shell_resolves_workspace_prefix():
+    """ROOT-1 (slides spiral): on the process backend the shell `cwd` is the real
+    per-instance temp dir, which has no literal `/workspace`. exec_shell must rewrite
+    a genuine `/workspace` path token to the real dir so `ls`/`cat /workspace/X` work
+    exactly like the container backends — while a NEW relative path still resolves via
+    cwd and a longer name like `/workspaces` is NOT touched."""
+    svc = ProcessSandboxService()
+    inst = await svc.create(SandboxSpec(), owner_id="local", conversation_id="c")
+    await inst.write_file("deck.pptx", b"DECKBYTES")
+
+    # Absolute /workspace path resolves to the real workspace file.
+    res = await inst.exec_shell("cat /workspace/deck.pptx", timeout_s=10)
+    assert res.exit_code == 0
+    assert res.stdout == "DECKBYTES"
+
+    # `ls /workspace` lists the workspace contents.
+    res = await inst.exec_shell("ls /workspace", timeout_s=10)
+    assert res.exit_code == 0
+    assert "deck.pptx" in res.stdout
+
+    # A NEW-file RELATIVE path still works via cwd (no rewrite needed).
+    res = await inst.exec_shell("echo hi > new.txt && cat new.txt", timeout_s=10)
+    assert res.exit_code == 0
+    assert res.stdout.strip() == "hi"
+    assert await inst.read_file("new.txt") == b"hi\n"
+
+    # A longer name (`/workspaces`) is NOT a `/workspace` token → left alone (so it
+    # does not resolve to the real dir and the `cat` genuinely fails to find it).
+    res = await inst.exec_shell("cat /workspaces/deck.pptx", timeout_s=10)
+    assert res.exit_code != 0
+
+    await inst.destroy()
+
+
 async def test_process_file_exists_present_absent_and_escape():
     """B4 — the process backend's `file_exists` is a workspace-jailed existence
     check: True for a real file, False for a missing one, and False (never

@@ -55,6 +55,16 @@ _PRESSURE_DIRECTIVE = (
 # ("  123\t<code>"). file_edit strips it defensively so a paste-back still matches.
 _LINENO_PREFIX = re.compile(r"(?m)^\s*\d+\t")
 
+# ROOT-2 (slides spiral): generated BINARY deliverables. file_write only ever writes
+# TEXT (args.content is a str), so a file_write targeting an EXISTING file of one of
+# these types would CORRUPT the artifact. The confused post-generation agent tried to
+# file_write content="placeholder" into a finished .pptx repeatedly (a core driver of
+# the spiral) — refuse it with a clear, terminal message so the agent stops and
+# recognises the deliverable is already produced. A NEW file is never blocked.
+_BINARY_DELIVERABLE_EXTS = frozenset(
+    {"pptx", "pdf", "docx", "xlsx", "png", "jpg", "jpeg", "gif", "mp3", "mp4", "wav", "zip"}
+)
+
 # Per-conversation read-before-rewrite tracker (F1).
 # Structure: {conv_id: {"read_since_write": set[str]}}
 #   read_since_write: canonical paths (workspace-prefix-stripped) for which a
@@ -409,6 +419,23 @@ class FileWriteTool:
         # which does not require a full-rewrite guard because it operates on
         # specific lines anchored to the current content.
         if old_text is not None:  # file exists (we read it above)
+            # ROOT-2 — binary-deliverable clobber guard. The target is an EXISTING file
+            # of a generated-binary type; a text file_write would corrupt it. Refuse
+            # with a terminal message so the agent stops trying to "fix"/overwrite a
+            # finished deck/doc and recognises it is already delivered. (Only EXISTING
+            # binaries are blocked — a new text file of any name is still allowed.)
+            ext = args.path.rsplit(".", 1)[-1].lower() if "." in args.path else ""
+            if ext in _BINARY_DELIVERABLE_EXTS:
+                return ToolOutcome(
+                    success=False,
+                    error="binary_deliverable_clobber",
+                    content=(
+                        f"{args.path} is a generated binary deliverable; do not overwrite "
+                        f"it with text. It is already produced and delivered. If it truly "
+                        f"needs to change, regenerate it with the tool that produced it "
+                        f"(e.g. slides_generate) — never file_write into it."
+                    ),
+                )
             canonical = _canonical(args.path)
             if canonical not in _conv_state(ctx.conversation_id)["read_since_write"]:
                 return ToolOutcome(

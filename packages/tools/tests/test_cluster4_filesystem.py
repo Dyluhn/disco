@@ -93,3 +93,39 @@ async def test_file_append_returns_artifact_path():
     )
     assert out2.artifacts == ["x.txt"]
     await inst.destroy()
+
+
+# ---- ROOT-2 (slides spiral): binary-deliverable clobber guard ---------------
+
+
+async def test_file_write_refuses_text_into_existing_binary_deliverable():
+    """A file_write (text-only) targeting an EXISTING generated binary (.pptx, …)
+    is refused with a clear terminal message — it would corrupt the artifact, and
+    the confused post-generation agent kept trying exactly this."""
+    ctx, inst = await _ctx()
+    # Simulate a generated, delivered deck on disk.
+    await inst.write_file("local_llms_2026.pptx", b"PK\x03\x04 binary pptx bytes")
+    out = await FileWriteTool().run(
+        FileWriteTool().definition.args_model(
+            path="local_llms_2026.pptx", content="placeholder"
+        ),
+        ctx,
+    )
+    assert out.success is False
+    assert out.error == "binary_deliverable_clobber"
+    assert "generated binary deliverable" in out.content
+    # The on-disk bytes are untouched (not clobbered with the text).
+    assert (await inst.read_file("local_llms_2026.pptx")).startswith(b"PK\x03\x04")
+    await inst.destroy()
+
+
+async def test_file_write_allows_new_text_file():
+    """The guard must NOT block authoring a brand-new text file of any name."""
+    ctx, inst = await _ctx()
+    out = await FileWriteTool().run(
+        FileWriteTool().definition.args_model(path="notes.txt", content="hello"),
+        ctx,
+    )
+    assert out.success is True
+    assert (await inst.read_file("notes.txt")).decode() == "hello"
+    await inst.destroy()

@@ -464,13 +464,48 @@ async def test_browser_ensure_daemon_restart_on_failure():
     ]
     
     await tool._ensure_daemon(ctx)
-    
+
     # Verify it tried to write the daemon and start it
     assert ctx.sandbox.write_file.called
     assert ctx.sessions.exec.called
     assert ctx.sessions.exec.call_args[0] == (
         "__browser", "python3 /workspace/.pmx/_browser_daemon.py", None
     )
+
+
+@pytest.mark.asyncio
+async def test_browser_unavailable_is_terminal_not_retryable(monkeypatch):
+    """ROOT-3 (slides spiral): when the daemon never comes up, run() must return a
+    clear, terminal 'skip browser verification' ToolOutcome (success=False +
+    structured browser_unavailable flag) — NOT a raw exception or a generic error
+    the agent retries in a loop."""
+    from disco.tools.builtin.browser import (
+        BROWSER_UNAVAILABLE_MSG,
+        BrowserArgs,
+        BrowserUnavailableError,
+    )
+
+    # Don't actually sleep through the 10s daemon poll.
+    monkeypatch.setattr("disco.tools.builtin.browser.asyncio.sleep", AsyncMock())
+
+    tool = BrowserTool()
+    ctx = MagicMock(spec=ToolContext)
+    ctx.sandbox = AsyncMock()
+    ctx.sessions = AsyncMock()
+    ctx.timeout_s = 30
+    # Every health check fails → the daemon never starts.
+    ctx.sandbox.exec_shell.return_value = ExecResult(exit_code=1, stdout="", stderr="")
+
+    # _ensure_daemon raises the TYPED terminal error...
+    with pytest.raises(BrowserUnavailableError):
+        await tool._ensure_daemon(ctx)
+
+    # ...and run() converts it into a terminal, non-retryable outcome (no exception).
+    out = await tool.run(BrowserArgs(action="navigate", url="http://127.0.0.1:8000/"), ctx)
+    assert out.success is False
+    assert out.structured == {"browser_unavailable": True}
+    assert out.error == BROWSER_UNAVAILABLE_MSG
+    assert "do not retry" in out.error
 
 @pytest.mark.integration
 @pytest.mark.asyncio
