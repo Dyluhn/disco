@@ -652,3 +652,55 @@ required substrings, but a build that does not complete is a failure regardless 
 policy as Bug 8.) That STUCK outcome is a separate, genuine run result, NOT a harness artifact; forcing
 the run to PASS would be a false-PASS. Bug 13 is strictly the WRITE_BEFORE_REVISION_APPROVAL false-FAIL,
 and it is fixed.
+### Bug 14 — executor-boundary elision-marker guard coverage gap (the copied placeholder could reach `file_replace_lines` + any executor-direct path) — PRODUCT — FIXED
+
+Surfaced by the live soak (`revise_after_finish` + `steer_while_running`), both adjudicated STUCK on
+`repeated_action_error`. **Root cause is two-layered, and only ONE layer is a loop bug:**
+
+1. **Model-quality (NOT a bug — the STUCK is CORRECT):** the weak local driver saw its OWN prior large
+   tool-call args rendered in history as the context-saving elision placeholder
+   (`<N chars elided — re-issue the call or file_read the path …; do not copy this placeholder into a
+   tool argument>`, `events._arg_snip_marker_neutral`) and COPIED that placeholder verbatim into
+   `file_replace_lines.new_text`. The K1 guard rejected the call recoverably, the model re-issued the
+   SAME bad action, and the `StuckDetector` — correctly comparing the RAW (un-elided)
+   `ActionEvent.tool_call.arguments`, NOT the rendered/snipped view (`equality.event_content_eq`) —
+   saw a genuine repeat and fired a LEGITIMATE STUCK. The detector is RIGHT; it was not changed.
+
+2. **The loop hardening gap (the actual fix):** the existing K1 elision guard lived only in the
+   **Observer** (`loop/observe.py`, before `executor.execute`). Not every execution path funnels through
+   the Observer, so a `file_replace_lines` (or any future mutator, or a direct `executor.execute` call)
+   reaching the executor on a non-Observer path was UNGUARDED — the copied placeholder could have
+   overwritten real content (DATA LOSS), exactly the K1 failure class for a non-`file_write` mutator.
+
+**Fix** (`fix-bug14-executor-elision`, executor + tests only — `messages.py`/`recitation.py`/`engine.py`
+untouched): a GENERIC tool-boundary guard in `DefaultToolExecutor.execute()`
+(`packages/tools/src/disco/tools/executor.py`, step 1.5 — after tool resolution, BEFORE pydantic
+validation / `tool.run`). It reuses the existing K1 detector `events.find_elided_arg_markers(call.arguments)`
+(which anchors on the marker's STRUCTURE — count anchor OR its signature tail prose — so a legitimate arg
+that merely mentions "elided" is NOT rejected) and, on any hit, returns a RECOVERABLE failed `ToolResult`
+(`invalid_arguments`: "argument(s) … contain the elision placeholder text … this call was NOT executed.
+Re-issue with the FULL content, or file_read the path first"). The executor is the UNIVERSAL chokepoint
+every tool call funnels through, so the placeholder can now NEVER mutate disk on ANY path — file_write,
+file_replace_lines, any future mutator, or a direct executor call. It returns a recoverable tool failure
+only — NOT a success, finish, or planning-state change — so Bug 6 / Bug 12 / W-45 are unaffected.
+
+**Must-not-regress (verified):** core storage keeps FULL args — `SqliteEventStore` persists
+`event.model_dump(mode="json")` and `ActionEvent.to_llm_message()` applies `_snip_args` only at
+LLM-context RENDER time, never at storage; the durable event log is intact. The LLM context still snips
+assistant tool-call args. The `StuckDetector` still catches truly-identical repeats.
+
+**Proof** (unit — forcing the exact live model behavior is impractical):
+`packages/tools/tests/test_executor_elision_guard.py` — the executor-DIRECT path: `file_replace_lines`
+with the marker in `new_text` → recoverable `invalid_arguments`, tool NEVER runs, file on disk UNCHANGED;
+a paraphrased (count-less) marker in `file_write.content` → also rejected, disk unchanged; a clean edit
+runs normally; a benign marker-shaped arg is NOT false-rejected. `packages/core/tests/test_loop_stuck.py`
+— two `file_replace_lines` with DISTINCT `new_text` of identical length (both snip to the SAME marker)
+are NOT stuck (raw-args comparison pinned), while truly-identical repeats ARE still stuck.
+`packages/core/tests/test_k1_elision_guard.py` — the Observer path now also covers `file_replace_lines`
+(rejected, executor not called, one `AgentErrorEvent`, names `new_text`). Ruff + basedpyright clean,
+import-linter KEPT, full tools + core suites green.
+
+**NOTE:** the revise/steer soak STUCK is PARTLY model-quality — a capable driver does not copy the
+placeholder back. This fix guarantees the placeholder can never mutate disk and the model always gets a
+clean recoverable error on ANY path, but a CAPABLE model is still needed for the gate-level revise/steer
+scenarios to reliably PASS.

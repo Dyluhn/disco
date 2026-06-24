@@ -130,6 +130,17 @@ def _write_action(call_id: str, *, path: str, content: str) -> ActionEvent:
     )
 
 
+def _replace_lines_action(call_id: str, *, path: str, new_text: str) -> ActionEvent:
+    return ActionEvent(
+        thought="patching the file",
+        tool_call=ToolCall(
+            tool_name="file_replace_lines",
+            call_id=call_id,
+            arguments={"path": path, "start_line": 1, "end_line": 5, "new_text": new_text},
+        ),
+    )
+
+
 async def _drive_execute(loop, action: ActionEvent) -> list[Event]:  # noqa: ANN001
     """Append the action (the run loop's _emit) then drive _execute_and_observe,
     which runs the K1 guard before the executor. Returns the post-call events."""
@@ -196,6 +207,36 @@ async def test_rejection_wording_is_tier_gated():
     msg_off = [e for e in events_off if isinstance(e, AgentErrorEvent)][0].error
     assert "CURRENT WORKSPACE" not in msg_off
     assert "call file_read on the path for the authoritative content" in msg_off
+
+
+# ---------------------------------------------------------------------------
+# (1c) Bug 14 — a NON-file_write mutator (file_replace_lines) carrying the marker
+#      in `new_text` is ALSO rejected before execution (the Observer guard is
+#      tool-generic; the file_write recovery clause is the only file_write-specific
+#      branch). Pairs with the executor-boundary guard test in the tools package
+#      (test_executor_elision_guard) which covers the executor-DIRECT path.
+# ---------------------------------------------------------------------------
+
+
+async def test_marker_in_file_replace_lines_is_rejected_and_not_executed():
+    marker = _snip_args({"new_text": "x" * 5000})["new_text"]
+    loop = _make_loop()
+    action = _replace_lines_action("call_rl1", path="src/app.js", new_text=marker)
+    events = await _drive_execute(loop, action)
+
+    # The mutator was NEVER reached — no placeholder could overwrite the file.
+    assert len(loop.executor.calls) == 0, (
+        "K1 must reject file_replace_lines carrying the elision marker BEFORE "
+        "execution; there is no file_write-style recovery for a line-edit body"
+    )
+    errs = [e for e in events if isinstance(e, AgentErrorEvent)]
+    assert len(errs) == 1
+    assert errs[0].action_id == action.id
+    assert errs[0].tool_call_id == action.tool_call.call_id
+    # No success observation (one observation per action — an error, not a run).
+    assert not [e for e in events if isinstance(e, ObservationEvent)]
+    # The error names the offending key (new_text), not content.
+    assert "new_text" in errs[0].error
 
 
 # ---------------------------------------------------------------------------
