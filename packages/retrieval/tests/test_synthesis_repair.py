@@ -267,6 +267,95 @@ async def test_no_continuation_when_first_response_completes() -> None:
     assert "Alpha" in md
 
 
+async def test_empty_response_retries_then_uses_retry_content() -> None:
+    """The blank-last-section bug: a successful completion (finish_reason=="stop")
+    comes back with EMPTY text. synthesize_section must retry once and use the
+    retry's content — never store the empty body that the UI renders as a titled
+    card with no content."""
+    router = _ScriptedRouter([
+        ("", "stop"),  # first call: empty, successful — the bug trigger
+        ("A real section about Alpha [[p1]].", "stop"),  # retry produces content
+    ])
+    md = await _run_synth(router)
+
+    assert router.calls == 2  # exactly one empty-response retry
+    assert "Alpha" in md
+    assert md.strip()  # NEVER an empty body
+
+
+async def test_empty_length_response_retries_with_wider_budget() -> None:
+    """The production root cause: a reasoning model returns empty content with
+    finish_reason=="length" (the whole budget went to hidden reasoning). The
+    retry must WIDEN max_tokens so reasoning can finish AND emit prose."""
+    seen_tokens: list[int | None] = []
+
+    class _RecordingRouter(LLMRouter):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def complete(
+            self, request: CompletionRequest, *, context: Any = None
+        ) -> CompletionResponse:
+            self.calls += 1
+            seen_tokens.append(request.max_tokens)
+            if self.calls == 1:
+                text, finish = "", "length"  # reasoning ate the whole budget
+            else:
+                text, finish = "Recovered prose about Alpha [[p1]].", "stop"
+            return CompletionResponse(
+                text=text, tool_calls=[],
+                usage=TokenUsage(input_tokens=1, output_tokens=1),
+                finish_reason=finish,  # type: ignore[arg-type]
+                model_used="fake", routing=None,
+            )
+
+    router = _RecordingRouter()
+    md = await _run_synth(router)
+    assert router.calls == 2
+    assert seen_tokens[0] == 1400  # initial cap
+    assert seen_tokens[1] == 2800  # widened on length-exhaustion retry
+    assert "Alpha" in md
+    assert md.strip()
+
+
+async def test_empty_response_after_retry_degrades_honestly() -> None:
+    """If the section is STILL empty after the retry, the body degrades to an
+    honest placeholder — a titled section card is NEVER rendered blank."""
+    router = _ScriptedRouter([
+        ("   ", "stop"),  # whitespace-only
+        ("\n\n", "stop"),  # retry: also empty
+    ])
+    sub = SubQuestionResult(
+        subq=SubQuestion(title="Historical context?"),
+        passages=[_passage()],
+    )
+
+    async def _emit(_kind: str, _payload: dict[str, Any]) -> None:
+        return None
+
+    section = await synthesize_section(
+        sub,
+        router=router,
+        embedder=None,
+        vector_store=InMemoryVectorStore(),
+        namespace="ns",
+        nli=_FakeNLI(),
+        section_id="s1",
+        top_k_for_section=4,
+        emit=_emit,
+        leg_context=GatherLegContext(
+            subq_id="sq1",
+            namespace="ns",
+            call_context=CallContext(conversation_id="conv_empty"),
+        ),
+    )
+
+    assert router.calls == 2
+    assert section.markdown.strip()  # honest message, not a blank card
+    assert "could not be generated" in section.markdown
+    assert section.confidence == "low"
+
+
 async def test_truncation_guard_is_bounded() -> None:
     """A model that keeps returning `length` is bounded: the guard continues at
     most twice (3 router calls total), then stops with the accumulated text."""

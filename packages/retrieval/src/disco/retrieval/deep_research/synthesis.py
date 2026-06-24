@@ -518,6 +518,35 @@ async def synthesize_section(
             ),
             context=leg_context.call_context,
         )
+        # EMPTY-RESPONSE RETRY. A section's `content` can come back empty even on a
+        # successful call. The dominant cause in production is a REASONING model
+        # (the rag_answerer is MiniMax/Qwen-class): the model spends its whole token
+        # budget on hidden reasoning and returns `finish_reason=="length"` with an
+        # EMPTY content channel — the truncation guard below can't recover it because
+        # each continuation also reasons to exhaustion. A blank generation or a soft
+        # refusal (`finish_reason=="stop"`, empty text) is the other path. Either way
+        # the empty body was stored verbatim and the UI rendered a titled section
+        # card with NO content (the blank last-section bug — observed live as a
+        # stored section with markdown='' / cited=[] / confidence=low).
+        #
+        # Retry ONCE. When the empty was length-exhaustion, give the reasoning room
+        # to finish AND still emit prose by widening the budget; otherwise reissue at
+        # the normal cap. The final empty-section guard (after post-processing) still
+        # catches anything that stays empty.
+        if not resp.text.strip():
+            _retry_tokens = 2800 if resp.finish_reason == "length" else 1400
+            try:
+                resp = await cast(_RouterWithCtx, router).complete(
+                    CompletionRequest(
+                        profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
+                        messages=leg_messages,
+                        temperature=_SYNTHESIS_TEMPERATURE,
+                        max_tokens=_retry_tokens,
+                    ),
+                    context=leg_context.call_context,
+                )
+            except Exception:  # noqa: BLE001 — handled by the empty-section guard
+                pass
         # BW-07 (2) — TRUNCATION GUARD. The section cap is small; when a section
         # is cut off mid-content (`finish_reason=="length"`, often mid-table)
         # remark-gfm receives a half-table and renders raw pipes. Continue from
@@ -638,6 +667,21 @@ async def synthesize_section(
             id=section_id,
             title=sub_result.subq.title,
             markdown=f"*(Section synthesis failed: {type(exc).__name__})*",
+            confidence="low",
+        )
+
+    # EMPTY-SECTION GUARD (final). If the body is STILL empty after the
+    # empty-response retry + the truncation/chart/table post-processing (e.g. the
+    # only content was an invalid chart that _validate_charts dropped, or the
+    # model just never produced prose), degrade HONESTLY. Never store a blank
+    # body — the UI renders the section's title+confidence header unconditionally,
+    # so an empty markdown shows as a titled card with no content (a false
+    # affordance). This says plainly that the section had no usable output.
+    if not markdown.strip():
+        return ReportSection(
+            id=section_id,
+            title=sub_result.subq.title,
+            markdown="*(This section could not be generated from the gathered sources.)*",
             confidence="low",
         )
 
