@@ -199,7 +199,6 @@ _EXPECTED_AGENT_TOOLS = [
     "code_exec",
     "deck_patch",   # C-EDIT-4: RFC-6902 deck edits
     "delegate_explore",
-    "deploy_preview",
     "extract",
     "file_append",
     "file_edit",
@@ -211,6 +210,11 @@ _EXPECTED_AGENT_TOOLS = [
     "file_write",
     "image_generate",
     "plan_step",
+    # EPIC F: platform-owned preview surface — supersedes the old `deploy_preview`.
+    "preview_logs",
+    "preview_start",
+    "preview_status",
+    "preview_stop",
     "search",
     "server_status",
     "sheet_generate",

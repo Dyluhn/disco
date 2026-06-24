@@ -157,6 +157,45 @@ async def test_tool_lazily_constructs_manager_when_absent() -> None:
     assert getattr(sandbox, "_preview_manager", None) is not None
 
 
+# ----------------------------------------------------------------- agent-scope resolution
+
+
+@pytest.mark.parametrize(
+    "tool_name", ["preview_start", "preview_status", "preview_logs", "preview_stop"]
+)
+@pytest.mark.parametrize("tier", ["standard", "weak"])
+def test_preview_tools_resolve_in_agent_scope(tool_name: str, tier: str) -> None:
+    """P1 #2 regression: the preview_* tools are REGISTERED *and* in the agent
+    security scope, so `ToolRegistry.get()` resolves them (instead of returning None,
+    which the executor turns into unknown_tool). Without the AGENT_TOOLS entry the
+    agent literally could not call a registered tool — a false affordance."""
+    from disco.core.llm import ModelExecutionPolicy
+    from disco.tools import agent_scope, build_default_registry
+
+    policy = (
+        ModelExecutionPolicy.standard()
+        if tier == "standard"
+        else ModelExecutionPolicy(tier="weak", anchored_edit=False)
+    )
+    registry = build_default_registry()
+    scope = agent_scope(model_policy=policy)
+
+    # In the security allowlist (callable) — get() returns the tool, not None.
+    assert tool_name in scope.allowed_tools
+    resolved = registry.get(tool_name, scope=scope)
+    assert resolved is not None, f"{tool_name} resolved as unknown_tool in agent scope"
+    assert resolved.definition.name == tool_name
+
+
+def test_superseded_deploy_preview_is_gone_from_agent_scope() -> None:
+    """The old `deploy_preview` placeholder is superseded by the EPIC F preview_*
+    surface — it must no longer linger in the scope as a name with no registered tool."""
+    from disco.tools import AGENT_TOOLS
+
+    assert "deploy_preview" not in AGENT_TOOLS
+    assert {"preview_start", "preview_status", "preview_logs", "preview_stop"} <= AGENT_TOOLS
+
+
 # small arg-model constructors (the status/logs/stop arg models)
 def _status_args():
     from disco.tools.builtin.preview import PreviewStatusArgs

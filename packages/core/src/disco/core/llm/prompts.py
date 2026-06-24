@@ -445,7 +445,7 @@ _AGENT_PLANNING_CAPABILITY_BLOCK = (
     "retry, proceed without the image. Use chart / table / sheet tools for data, "
     "never this.\n"
     "  • `audio_overview` — produce an audio summary of the deliverable.\n"
-    "  • `deploy_preview`, `serve`, `server_status`, `plan_step`, and other execution meta-tools.\n"
+    "  • `preview_start`, `serve`, `server_status`, `plan_step`, and other execution meta-tools.\n"
     "Plan confidently against this full capability set.  The engine, not you, decides when a "
     "tool becomes callable — approval unlocks all of the above at once."
 )

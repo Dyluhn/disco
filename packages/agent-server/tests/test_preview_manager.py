@@ -230,6 +230,64 @@ async def test_restart_budget_exhausts_to_crashed() -> None:
     await mgr.aclose()
 
 
+# ----------------------------------------------------------- supervise: live ≠ crashed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "state",
+    [PreviewStatus.STARTING, PreviewStatus.UNAVAILABLE, PreviewStatus.RESTARTING],
+)
+async def test_live_but_unhealthy_session_is_not_restarted(state: PreviewStatus) -> None:
+    """P1 #1 regression: a session whose PROCESS is still alive but momentarily not
+    answering health (slow/headless boot, or up-but-unroutable) must NOT be restarted
+    or misclassified as CRASHED — for ANY non-terminal state, not just RUNNING. The
+    previous guard only spared RUNNING, so STARTING/UNAVAILABLE/RESTARTING sessions got
+    a spurious restart (re-exec into a busy shell → CRASHED → restart budget burned)."""
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000])
+    session = await mgr.start(serve_dir="dist", name="app", supervise=True)
+    assert session.status is PreviewStatus.RUNNING
+
+    # Process stays ALIVE, but it stops answering health (drop the port from 'serving'
+    # WITHOUT killing the shell session).
+    sandbox._serving.discard(session.port)
+    assert sandbox.sessions._running["app"] is True
+    assert await mgr._probe_health(session.port) is False
+    session.status = state
+    exec_before = len(sandbox.sessions.exec_calls)
+
+    await mgr._supervise_once()
+
+    assert session.status is state  # NOT flipped to CRASHED
+    assert session.restart_count == 0  # budget NOT burned
+    assert len(sandbox.sessions.exec_calls) == exec_before  # NOT re-launched
+    await mgr.aclose()
+
+
+@pytest.mark.asyncio
+async def test_restart_budget_decrements_only_on_genuine_process_exit() -> None:
+    """The supervisor spends a restart ONLY when the process has actually exited. An
+    alive-but-unhealthy pass leaves the budget intact; a genuine exit then restarts."""
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000])
+    session = await mgr.start(serve_dir="dist", name="app", supervise=True)
+
+    # Alive but not answering → no restart, budget intact.
+    sandbox._serving.discard(session.port)
+    await mgr._supervise_once()
+    assert session.restart_count == 0
+    assert session.status is not PreviewStatus.CRASHED
+
+    # Now the process genuinely EXITS → the supervisor restarts it (budget decrements).
+    sandbox.sessions.crash("app")
+    assert await mgr._session_alive("app") is False
+    await mgr._supervise_once()
+    assert session.restart_count == 1
+    assert session.status is PreviewStatus.RUNNING  # back up on the same port
+    await mgr.aclose()
+
+
 # --------------------------------------------------------------------------- degrade / limits
 
 

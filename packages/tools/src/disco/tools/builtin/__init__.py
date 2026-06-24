@@ -2,8 +2,9 @@
 
 Ships the headless-buildable tools: file_read/write/edit/list, shell, code_exec,
 search, extract, and `browser` (web reach + the prompt-injection content defense,
-read/act separation — runs through the sandbox). Deferred: `deploy_preview` (a real
-dev server + controlled preview boundary).
+read/act separation — runs through the sandbox). EPIC F: the platform-owned preview
+surface (`preview_start/status/logs/stop`) supersedes the old `deploy_preview`
+placeholder — the model declares intent, the platform owns the port/serving/health.
 """
 
 from __future__ import annotations
@@ -85,8 +86,9 @@ __all__ = [
 ]
 
 def build_default_registry() -> ToolRegistry:
-    """Register the core toolset. `deploy_preview` is intentionally absent (deferred);
-    scoping intersects with what's registered, so it's simply never offered until built."""
+    """Register the core toolset. The EPIC F preview surface (preview_start/status/
+    logs/stop) is registered below and supersedes the old `deploy_preview` placeholder;
+    scoping intersects with what's registered, so only registered tools are ever offered."""
     registry = ToolRegistry()
     for tool in (
         FileReadTool(),

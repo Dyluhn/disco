@@ -373,11 +373,16 @@ class PreviewManager:
                     if session.status in (PreviewStatus.STARTING, PreviewStatus.RESTARTING):
                         self._mark_running(session)
                     continue
-                # Not answering. Re-confirm it's really down (the shell session exited)
-                # before spending a restart — a slow/headless server may still be alive.
-                if session.status is PreviewStatus.RUNNING and await self._session_alive(
-                    session.name
-                ):
+                # Not answering health. ONLY restart a preview whose PROCESS has ACTUALLY
+                # exited. A STARTING/UNAVAILABLE/RESTARTING session (still booting, or up
+                # but unroutable), or a slow/headless RUNNING one, whose shell session is
+                # still alive is NOT crashed — it is not-yet-restartable. Restarting a
+                # live session would re-`exec` into a still-busy shell (ShellSessionManager
+                # raises busy), get misclassified as CRASHED by `_launch`, and burn a
+                # restart from the budget for nothing. So the liveness guard applies to
+                # EVERY state, not just RUNNING: the budget decrements only on a genuine
+                # process exit.
+                if await self._session_alive(session.name):
                     continue
                 await self._restart(session)
 
