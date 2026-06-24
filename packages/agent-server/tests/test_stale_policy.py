@@ -397,6 +397,369 @@ async def test_patch_route_409_after_running_event(tmp_path, monkeypatch):
     assert rt._model_override.get(cid) == "old-model"  # unmutated
 
 
+# ── STATE-AWARE gate: terminal-state model swap (errored/finished/stuck/paused) ──
+
+
+async def _seed_terminal(rt, cid: str, status: ConversationStatus) -> None:
+    """A conversation that has done real work and then landed in `status` — the shape
+    a build/agent run leaves behind when it errors, finishes, stops, or pauses."""
+    from disco.core import ToolCall
+
+    rt._store.create_conversation(cid)
+    await rt._store.append(
+        cid, PlanEvent(summary="p", steps=[PlanStep(title="s1")], revision=1)
+    )
+    await rt._store.append(
+        cid, ActionEvent(thought="t", tool_call=ToolCall(tool_name="shell", arguments={}))
+    )
+    await rt._store.append(cid, StatusEvent(status=status))
+
+
+async def test_settable_on_terminal_states(tmp_path, monkeypatch):
+    """A model swap is ALLOWED in every terminal/parked state (errored/finished/
+    stuck/paused) — these are the deliberate "change the model before resuming" cases."""
+    for status in (
+        ConversationStatus.ERROR,
+        ConversationStatus.STUCK,
+        ConversationStatus.FINISHED,
+        ConversationStatus.PAUSED,
+    ):
+        rt = _rt(tmp_path, monkeypatch)
+        await _seed_terminal(rt, "c1", status)
+        settable, terminal = await rt._settings._settable_kind("c1")
+        assert settable is True, f"{status} must be settable"
+        assert terminal is True, f"{status} must be the terminal path"
+
+
+async def test_not_settable_while_running(tmp_path, monkeypatch):
+    """RUNNING is NOT settable — swapping the brain mid-step is incoherent (409)."""
+    rt = _rt(tmp_path, monkeypatch)
+    rt._store.create_conversation("c1")
+    await rt._store.append("c1", StatusEvent(status=ConversationStatus.RUNNING))
+    settable, _ = await rt._settings._settable_kind("c1")
+    assert settable is False
+
+
+async def test_not_settable_while_live_task(tmp_path, monkeypatch):
+    """A live in-flight task disqualifies even a status that reads terminal (the run
+    is still draining)."""
+    rt = _rt(tmp_path, monkeypatch)
+    await _seed_terminal(rt, "c1", ConversationStatus.FINISHED)
+    loop = asyncio.get_event_loop()
+    future: asyncio.Future[None] = loop.create_future()
+    task: asyncio.Task[None] = asyncio.ensure_future(asyncio.shield(future))
+    try:
+        rt._tasks["c1"] = task  # type: ignore[assignment]
+        settable, _ = await rt._settings._settable_kind("c1")
+        assert settable is False
+    finally:
+        future.cancel()
+        task.cancel()
+        with __import__("contextlib").suppress(asyncio.CancelledError):
+            await task
+
+
+async def test_not_settable_in_gate_state(tmp_path, monkeypatch):
+    """A gate-awaiting state (mid-run, waiting on the user) is NOT settable."""
+    rt = _rt(tmp_path, monkeypatch)
+    rt._store.create_conversation("c1")
+    await rt._store.append(
+        "c1", StatusEvent(status=ConversationStatus.WAITING_FOR_CONFIRMATION)
+    )
+    settable, _ = await rt._settings._settable_kind("c1")
+    assert settable is False
+
+
+async def test_settable_idle_with_unfinished_plan(tmp_path, monkeypatch):
+    """IDLE-with-an-approved-unfinished-plan (an interrupted run) is settable+terminal."""
+    from disco.core import ToolCall
+
+    rt = _rt(tmp_path, monkeypatch)
+    rt._store.create_conversation("c1")
+    await rt._store.append(
+        "c1", PlanEvent(summary="p", steps=[PlanStep(title="s1")], revision=1)
+    )
+    await rt._store.append(
+        "c1", ActionEvent(thought="t", tool_call=ToolCall(tool_name="shell", arguments={}))
+    )
+    # No FINISHED — left IDLE mid-execution.
+    settable, terminal = await rt._settings._settable_kind("c1")
+    assert settable is True and terminal is True
+
+
+async def test_apply_change_on_errored_persists_and_evicts(tmp_path, monkeypatch):
+    """The headline fix: model_override on an ERRORED conversation is APPLIED + persisted,
+    and the cached loop/executor (bound to the old model) is evicted so the next kick
+    re-resolves. The live sandbox is re-parked (preserved), not destroyed."""
+    rt = _rt(tmp_path, monkeypatch)
+    await _seed_terminal(rt, "c1", ConversationStatus.ERROR)
+    rt._model_override["c1"] = "old-model"
+    # Cached loop + executor from the failed run; the executor holds a live sandbox.
+    sentinel_sandbox = object()
+    fake_executor = MagicMock()
+    fake_executor._sandbox = sentinel_sandbox
+    rt._loops["c1"] = MagicMock()
+    rt._executors["c1"] = fake_executor
+
+    ok = await rt.apply_settings_change("c1", model_override="new-model")
+    assert ok is True
+    assert rt._model_override.get("c1") == "new-model"  # persisted
+    assert "c1" not in rt._loops  # old loop evicted
+    assert "c1" not in rt._executors  # old executor evicted
+    # Sandbox preserved (re-parked) so the rebuilt loop adopts the SAME workspace.
+    assert rt._pending_sessions.get("c1") is sentinel_sandbox
+
+
+async def test_apply_change_on_finished_reresolves_driver(tmp_path, monkeypatch):
+    """PROOF the new model drives the next turn: after a FINISHED-state swap, the router
+    the next kick composes (`_router_now(pick=override)`) resolves AGENT_DRIVER to the NEW
+    model — `_loop_for` builds its router with exactly this pick."""
+    from disco.core.llm.types import ModelRole
+
+    rt = _rt(tmp_path, monkeypatch)
+    await _seed_terminal(rt, "c1", ConversationStatus.FINISHED)
+    cfg = rt._config_store.load()
+    old = cfg.assignments.get(ModelRole.AGENT_DRIVER)
+    new = next(k for k in cfg.models if k != old)
+    rt._model_override["c1"] = old
+    rt._loops["c1"] = MagicMock()
+
+    ok = await rt.apply_settings_change("c1", model_override=new)
+    assert ok is True
+    assert "c1" not in rt._loops
+    # The next compose resolves AGENT_DRIVER to the NEW model (not the old one).
+    router = rt._router_now(pick=rt._model_override["c1"])
+    assert router._config.assignments[ModelRole.AGENT_DRIVER] == new
+
+
+async def test_loop_for_rebuilds_with_new_model_after_swap(tmp_path, monkeypatch):
+    """End-to-end re-resolution via `_loop_for` (research surface — no sandbox needed):
+    compose a loop pinned to model-a, FINISH it, swap to model-b, and confirm the NEXT
+    `_loop_for` returns a NEW loop whose agent carries model-b (the old loop was evicted)."""
+    from disco.core.llm.types import ModelRole
+
+    rt = _rt(tmp_path, monkeypatch)
+    rt._store.create_conversation("c1")
+    rt.set_surface("c1", "research")
+    cfg = rt._config_store.load()
+    model_a = cfg.assignments.get(ModelRole.AGENT_DRIVER)
+    model_b = next(k for k in cfg.models if k != model_a)
+
+    rt.set_model_override("c1", model_a)
+    loop1 = rt._loop_for("c1")
+    assert loop1.agent._model_override == model_a
+
+    # The run finishes, leaving the loop cached and bound to model-a.
+    await rt._store.append("c1", StatusEvent(status=ConversationStatus.FINISHED))
+
+    ok = await rt.apply_settings_change("c1", model_override=model_b)
+    assert ok is True
+    assert "c1" not in rt._loops  # evicted
+
+    loop2 = rt._loop_for("c1")
+    assert loop2 is not loop1  # genuinely re-composed
+    assert loop2.agent._model_override == model_b  # the NEW model drives
+
+
+# ── P1: explicit DEFAULT (null) reset in a terminal state (no silent-ignore) ──
+
+
+async def test_explicit_null_on_terminal_clears_override_to_default(tmp_path, monkeypatch):
+    """P1 — a user choosing DEFAULT (null) on a TERMINAL conversation that had an explicit
+    model A must CLEAR the override (no silent-ignore) so the next turn runs the SERVER
+    DEFAULT, not A. Asserts the override is cleared, the loop is evicted, and the
+    re-resolved AGENT_DRIVER is the default (not A)."""
+    from disco.core.llm.types import ModelRole
+
+    rt = _rt(tmp_path, monkeypatch)
+    await _seed_terminal(rt, "c1", ConversationStatus.FINISHED)
+    cfg = rt._config_store.load()
+    # The server default AGENT_DRIVER resolves via model_for (a role assignment OR the
+    # default_model fallback) — not necessarily an explicit assignments entry.
+    default = cfg.model_for(ModelRole.AGENT_DRIVER)
+    model_a = next(k for k in cfg.models if k != default)
+    rt._model_override["c1"] = model_a
+    rt._loops["c1"] = MagicMock()
+
+    # The PATCH route passes model_provided=True for an explicit null (reset to default).
+    ok = await rt.apply_settings_change("c1", model_override=None, model_provided=True)
+    assert ok is True
+    assert "c1" not in rt._model_override  # CLEARED (not left at model_a)
+    assert "c1" not in rt._loops  # evicted → next kick re-resolves
+    # The next compose resolves AGENT_DRIVER to the DEFAULT, not the prior explicit A.
+    resolved = rt._router_now(pick=rt._model_override.get("c1"))._config.model_for(
+        ModelRole.AGENT_DRIVER
+    )
+    assert resolved == default
+    assert resolved != model_a
+
+
+async def test_untouched_terminal_leaves_override(tmp_path, monkeypatch):
+    """The other half: an UNTOUCHED picker (model_override field ABSENT, model_provided
+    False) must LEAVE the conversation's model A unchanged — no clear, no evict."""
+    rt = _rt(tmp_path, monkeypatch)
+    await _seed_terminal(rt, "c1", ConversationStatus.FINISHED)
+    rt._model_override["c1"] = "model-a"
+    rt._loops["c1"] = MagicMock()
+    sentinel_loop = rt._loops["c1"]
+
+    # No model field, no assist → settable, but nothing requested → model untouched, loop
+    # NOT evicted.
+    ok = await rt.apply_settings_change("c1", model_provided=False)
+    assert ok is True
+    assert rt._model_override.get("c1") == "model-a"  # left as-is
+    assert rt._loops.get("c1") is sentinel_loop  # not evicted (no change requested)
+
+
+async def test_explicit_null_pre_kick_seeds_sticky_not_clear(tmp_path, monkeypatch):
+    """P3 preserved: an explicit null on the PRISTINE pre-kick path seeds the sticky
+    last-selected model (a convenience), NOT a clear — so a create-time seed survives."""
+    rt = _rt(tmp_path, monkeypatch)
+    rt._store.create_conversation("c1")
+    cfg = rt._config_store.load()
+    sticky = next(iter(cfg.models))  # any valid catalogue key
+    rt.set_last_selected_model(sticky)
+
+    ok = await rt.apply_settings_change("c1", model_override=None, model_provided=True)
+    assert ok is True
+    assert rt._model_override.get("c1") == sticky  # sticky-seeded, NOT cleared/left empty
+
+
+async def test_patch_route_explicit_null_resets_terminal_to_default(tmp_path, monkeypatch):
+    """PATCH /settings {"model_override": null} on a terminal conversation → 200 + the
+    override is cleared (the route honors the explicit field via model_fields_set)."""
+    from disco.agent_server.app import create_app
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("PMX_DB", str(tmp_path / "c.db"))
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store=store)
+    app = create_app(store, runtime=rt)
+    client = TestClient(app)
+
+    cid = client.post("/conversations", json={"surface": "build"}).json()["conversation_id"]
+    await _seed_terminal(rt, cid, ConversationStatus.FINISHED)
+    rt._model_override[cid] = "explicit-model-a"
+
+    r = client.patch(f"/conversations/{cid}/settings", json={"model_override": None})
+    assert r.status_code == 200
+    assert r.json()["model_override"] is None  # cleared
+    assert cid not in rt._model_override
+    sr = client.get(f"/conversations/{cid}/state")
+    assert sr.json()["model_override"] is None
+
+
+async def test_patch_route_assist_only_leaves_terminal_model(tmp_path, monkeypatch):
+    """PATCH /settings with assist ONLY (model_override field ABSENT) on a terminal
+    conversation must NOT touch the model — the field's absence means leave-as-is."""
+    from disco.agent_server.app import create_app
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("PMX_DB", str(tmp_path / "c.db"))
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store=store)
+    app = create_app(store, runtime=rt)
+    client = TestClient(app)
+
+    cid = client.post("/conversations", json={"surface": "build"}).json()["conversation_id"]
+    await _seed_terminal(rt, cid, ConversationStatus.FINISHED)
+    rt._model_override[cid] = "model-a"
+
+    r = client.patch(f"/conversations/{cid}/settings", json={"assist": True})
+    assert r.status_code == 200
+    assert rt._model_override.get(cid) == "model-a"  # model left untouched
+    assert rt.is_assist(cid) is True
+
+
+async def test_resume_after_swap_composes_new_model(tmp_path, monkeypatch):
+    """FULL-path proof (apply_settings_change → resume_conversation → kick → _loop_for):
+    an ERRORED conversation swapped to model-b and then RESUMED composes its next-turn loop
+    on model-b. Uses the research surface (no sandbox) and neutralizes the run task so no
+    live model call is needed — we assert only the COMPOSED loop's driver model."""
+    from disco.core.llm.types import ModelRole
+
+    rt = _rt(tmp_path, monkeypatch)
+    rt._store.create_conversation("c1")
+    rt.set_surface("c1", "research")
+    cfg = rt._config_store.load()
+    model_a = cfg.assignments.get(ModelRole.AGENT_DRIVER)
+    model_b = next(k for k in cfg.models if k != model_a)
+    rt.set_model_override("c1", model_a)
+
+    # A run that errored out (research surface ERROR is resumable).
+    await rt._store.append(
+        "c1", _agent_msg("partial answer before the driver died")
+    )
+    await rt._store.append("c1", StatusEvent(status=ConversationStatus.ERROR))
+
+    # Neutralize the spawned run task — kick still composes _loops[cid] via _loop_for
+    # BEFORE creating the task, which is all we assert.
+    async def _noop_run(conversation_id, loop):  # noqa: ANN001
+        return None
+
+    async def _noop_finalize(conversation_id):  # noqa: ANN001
+        return None
+
+    monkeypatch.setattr(rt, "_run_with_persistence", _noop_run)
+    # The neutralized task returns cleanly → the W11 supervision callback would schedule
+    # a reconcile; stub it so the test loop closes without a dangling coroutine warning.
+    monkeypatch.setattr(rt, "_finalize_clean_return", _noop_finalize)
+
+    # The terminal-state swap is accepted + evicts any cached loop.
+    assert await rt.apply_settings_change("c1", model_override=model_b) is True
+
+    result = await rt.resume_conversation("c1")
+    assert result["ok"] is True
+    # The loop kick composed for the NEXT turn is bound to the NEW model.
+    composed = rt._loops.get("c1")
+    assert composed is not None
+    assert composed.agent._model_override == model_b
+
+
+async def test_patch_route_ok_on_errored_conversation(tmp_path, monkeypatch):
+    """PATCH /settings model_override on an ERRORED conversation → 200; persisted."""
+    from disco.agent_server.app import create_app
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("PMX_DB", str(tmp_path / "c.db"))
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store=store)
+    app = create_app(store, runtime=rt)
+    client = TestClient(app)
+
+    cid = client.post("/conversations", json={"surface": "build"}).json()["conversation_id"]
+    await _seed_terminal(rt, cid, ConversationStatus.ERROR)
+    rt._model_override[cid] = "old-model"
+
+    r = client.patch(f"/conversations/{cid}/settings", json={"model_override": "new-model"})
+    assert r.status_code == 200
+    assert r.json()["model_override"] == "new-model"
+    assert rt._model_override.get(cid) == "new-model"
+    # /state overlays the pinned model so the picker can reflect it on resume.
+    sr = client.get(f"/conversations/{cid}/state")
+    assert sr.json()["model_override"] == "new-model"
+
+
+async def test_patch_route_409_while_running_still_blocks(tmp_path, monkeypatch):
+    """The mid-run guard is intact: a genuinely RUNNING conversation still 409s."""
+    from disco.agent_server.app import create_app
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("PMX_DB", str(tmp_path / "c.db"))
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store=store)
+    app = create_app(store, runtime=rt)
+    client = TestClient(app)
+
+    cid = client.post("/conversations", json={"surface": "build"}).json()["conversation_id"]
+    rt._model_override[cid] = "old-model"
+    await store.append(cid, StatusEvent(status=ConversationStatus.RUNNING))
+
+    r = client.patch(f"/conversations/{cid}/settings", json={"model_override": "new-model"})
+    assert r.status_code == 409
+    assert rt._model_override.get(cid) == "old-model"  # unmutated
+
+
 async def test_patch_route_ok_after_uploads_before_kick(tmp_path, monkeypatch):
     """ENVIRONMENT MessageEvent + DatasourceEvent stay patchable (setup events)."""
     from disco.agent_server.app import create_app

@@ -4,14 +4,14 @@
  * the gate (confirm/reject) + the kill switch. Components consume only this.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import {
   createBuildConversation,
   killConversation,
   patchConversationSettings,
 } from "@/api/agent";
-import { agentLive } from "@/api/client";
+import { agentHttpBase, agentLive } from "@/api/client";
 import { useBuildStream, type BuildSession } from "./useBuildStream";
 
 /** Opens a build-like conversation. `surface` is "build" (software framing) or
@@ -32,7 +32,13 @@ export function useBuild(
   seedContext?: string | null,
 ) {
   const [session, setSession] = useState<BuildSession | null>(null);
-  const [modelId, setModelId] = useState<string | null>(null); // null → server default
+  const [modelId, setModelIdRaw] = useState<string | null>(null); // null → server default
+  // Track an explicit user pick so the resume-seed (below) never clobbers it.
+  const modelTouched = useRef(false);
+  const setModelId = useCallback((id: string | null) => {
+    modelTouched.current = true;
+    setModelIdRaw(id);
+  }, []);
   // Create-time choice: run this build headless (no questions, auto-approve plan).
   // Off by default. Locked once the conversation is created (it's a per-run mode).
   const [autonomousChoice, setAutonomousChoice] = useState(false);
@@ -56,6 +62,79 @@ export function useBuild(
   });
 
   const stream = useBuildStream(session);
+
+  // On the resume path, seed the model picker with the conversation's CURRENT pinned
+  // model (from /state) so it reflects reality rather than a misleading "default" —
+  // unless the user has already picked. One-shot, guarded by modelTouched.
+  useEffect(() => {
+    if (!resumeCid || !agentLive() || modelTouched.current) return;
+    let cancelled = false;
+    void fetch(`${agentHttpBase()}/conversations/${resumeCid}/state`)
+      .then((r) => r.json())
+      .then((s: { model_override?: string | null }) => {
+        if (!cancelled && !modelTouched.current && s.model_override) {
+          setModelIdRaw(s.model_override);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [resumeCid]);
+
+  // #24 + terminal-state model swap: land the model pick on the backend BEFORE a
+  // terminal-state continuation (resume / replan / steer) re-kicks, so the NEW model
+  // composes the next turn instead of being silently ignored. The state-aware backend
+  // gate accepts the change in terminal/parked states (ERROR/STUCK/FINISHED/PAUSED/IDLE)
+  // and 409s mid-run — which we swallow, so this is a safe no-op while RUNNING.
+  //
+  // TOUCHED-vs-UNTOUCHED: only PATCH when the user actually changed the picker
+  // (modelTouched). An untouched picker — including one seeded from /state on resume —
+  // means "leave the model as-is", so we send NOTHING (the backend leaves it). When
+  // touched we ALWAYS send model_override, INCLUDING when the user explicitly chose
+  // DEFAULT (modelId === null) — that is an intentional RESET, and the backend clears the
+  // override so the next turn runs the server default (NOT a silent-ignore).
+  const applyModelBeforeContinue = useCallback(async () => {
+    if (!session?.cid) return;
+    if (!modelTouched.current) return; // user didn't change the model → leave it
+    const s = stream.status;
+    const terminal =
+      s === "ERROR" || s === "STUCK" || s === "FINISHED" || s === "PAUSED" || s === "IDLE";
+    if (!terminal) return;
+    try {
+      // modelId may be null here — an EXPLICIT default pick → backend resets to default.
+      await patchConversationSettings(session.cid, { modelOverride: modelId });
+    } catch {
+      /* gate rejected (a run is in flight) — keep the existing model */
+    }
+  }, [session?.cid, stream.status, modelId]);
+
+  // Resume a terminal/paused conversation — PATCH the (possibly newly-picked) model
+  // first so the re-kick composes with it, then call the underlying HTTP resume.
+  const resume = useCallback(async () => {
+    await applyModelBeforeContinue();
+    stream.resume();
+  }, [applyModelBeforeContinue, stream.resume]);
+
+  // Re-enter plan mode (the "Plan a change…" composer in the settled state) — same
+  // patch-before-kick discipline so a model change before replanning takes effect.
+  const requestPlan = useCallback(
+    async (text: string) => {
+      await applyModelBeforeContinue();
+      stream.requestPlan(text);
+    },
+    [applyModelBeforeContinue, stream.requestPlan],
+  );
+
+  // Steer / answer a settled (FINISHED/STUCK/PAUSED) conversation — also honor a
+  // pending model change. Mid-run steer hits the early-return (no-op patch) above.
+  const steer = useCallback(
+    async (text: string) => {
+      await applyModelBeforeContinue();
+      stream.steer(text);
+    },
+    [applyModelBeforeContinue, stream.steer],
+  );
 
   // Resume path: when a route param hands us a cid, jump straight in. The
   // task label is informational on resume; the loop already has its history.
@@ -148,6 +227,13 @@ export function useBuild(
      *  Exposed only when a server exists (offline → Attach stays disabled). */
     ensurePreCid: agentLive() ? ensurePreCid : undefined,
     ...stream,
+    // Override the stream's continuations with the patch-before-kick variants so a
+    // terminal-state model change actually drives the next turn (must come AFTER the
+    // `...stream` spread, which carries the un-patched originals).
+    resume,
+    requestPlan,
+    steer,
+    answer: steer,
     // A failed create (e.g. backend unreachable) was silent — the surface stayed
     // on the empty state with no signal. Expose it so the UI can show an error.
     submitError: create.error ?? null,

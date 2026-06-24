@@ -98,41 +98,47 @@ def make_conversations_router(
 
     @router.patch("/conversations/{conversation_id}/settings")
     async def update_settings(conversation_id: str, body: UpdateSettingsBody) -> dict:
-        """runthru-v2 ROOT-1: apply the user's model pick / autonomous / assist choice
-        to a PRE-CREATED conversation right before the kick. The build surface
-        pre-creates a cid on mount with defaults, then the user picks a model; without
-        this the pick was dropped and the run used the default (local Qwen) instead.
+        """runthru-v2 ROOT-1: apply the user's model pick / autonomous / assist choice.
+        The build surface pre-creates a cid on mount with defaults, then the user picks a
+        model; without this the pick was dropped and the run used the default (local Qwen).
 
-        model_override and assist are gated by apply_settings_change (atomic pristine
-        check + per-cid lock): if the conversation already has work/run events OR a
-        composed loop OR a live run task, the change is REJECTED with 409 and settings
-        are left UNMUTATED. autonomous is applied unconditionally (no pristine gate).
-
-        This generalises the prior `cid in _loops` check: the pristine check also
-        catches the compose-gap (loop composed but RUNNING not yet emitted) and
-        post-restart state (RUNNING/FINISHED in the event store)."""
+        STATE-AWARE gate (apply_settings_change, atomic + per-cid lock): a model_override /
+        assist change is REJECTED with 409 (settings UNMUTATED) ONLY while a run is
+        ACTIVELY in flight — a live run task, RUNNING, or a gate-awaiting state — because
+        swapping the brain mid-step is incoherent. It is ALLOWED on a TERMINAL conversation
+        (ERROR / STUCK / FINISHED / PAUSED, or IDLE-with-unfinished-plan) so the user can
+        change the model before resuming/replanning, AND on a pristine pre-kick IDLE
+        conversation (the original flow). On a terminal change the cached loop bound to the
+        old model is evicted so the next kick re-resolves the driver with the NEW model.
+        autonomous is applied unconditionally (no gate)."""
         if runtime is None:
             raise HTTPException(status_code=503, detail="runtime not available")
         _reject_if_imported(store, conversation_id)
 
-        # Gate model_override + assist together under the atomic pristine check.
-        if body.model_override is not None or body.assist is not None:
-            resolved_model = (
-                _resolve_model(body.model_override, runtime)
-                if body.model_override is not None
-                else None
-            )
+        # Gate model_override + assist together under the atomic state-aware check.
+        # PATCH is a PARTIAL update: a model_override field PRESENT (even as null) is an
+        # explicit choice — null on a terminal conversation means "reset to default" and
+        # must be APPLIED, not dropped (the #24 silent-ignore). A field ABSENT means leave
+        # unchanged. `model_fields_set` (Pydantic) is the present-vs-absent signal; the
+        # sticky/clear resolution then happens inside apply_settings_change (which knows the
+        # terminal-vs-pristine state). No _resolve_model here — sticky-seeding a null is a
+        # PRE-KICK convenience owned by apply_settings_change, and applying it on the route
+        # would mask an explicit terminal reset.
+        model_field_set = "model_override" in body.model_fields_set
+        if model_field_set or body.assist is not None:
             ok = await runtime.apply_settings_change(
                 conversation_id,
-                model_override=resolved_model,
+                model_override=body.model_override,
                 assist=body.assist,
+                model_provided=model_field_set,
             )
             if not ok:
                 raise HTTPException(
                     status_code=409,
                     detail={
                         "reason": "conversation_not_pristine",
-                        "hint": "model/assist settings are fixed once work has begun",
+                        "hint": "model/assist settings are fixed while a run is in flight"
+                        " — change them once the run has finished, errored, stopped, or paused",
                     },
                 )
 
@@ -213,6 +219,12 @@ def make_conversations_router(
         # can render the clean H1 instead of the raw first prompt. None until the
         # async auto-titler lands — the UI falls back to a truncated first task.
         result["title"] = await store.get_title(conversation_id)
+        # Overlay the conversation's pinned driver model so a resumed surface seeds its
+        # model picker with the ACTUAL current model (not a misleading "default"), and so
+        # a terminal-state model swap is verifiable. None ⇒ the conversation runs the
+        # router default; the picker then falls back to last-selected/default.
+        if runtime is not None:
+            result["model_override"] = runtime._model_override.get(conversation_id)
         return result
 
     @router.get("/conversations/{conversation_id}/workspace/{path:path}")

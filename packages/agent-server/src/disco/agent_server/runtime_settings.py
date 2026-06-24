@@ -41,6 +41,20 @@ from disco.core import (
 )
 from disco.core.llm import ModelExecutionPolicy
 
+# Terminal / parked statuses where a deliberate model (or assist) swap is COHERENT:
+# the prior turn has fully concluded (or cooperatively stopped), so re-pinning the
+# driver before the NEXT kick (resume / replan) can't land incoherently mid-step.
+# RUNNING and the gate-awaiting states are deliberately excluded — a swap there would
+# change the brain underneath an in-flight plan/step (runthru-v2 ROOT-1's real target).
+_TERMINAL_SETTABLE_STATES = frozenset(
+    {
+        ConversationStatus.ERROR,
+        ConversationStatus.STUCK,
+        ConversationStatus.FINISHED,
+        ConversationStatus.PAUSED,
+    }
+)
+
 
 class RuntimeSettings:
     def __init__(self, rt: Any) -> None:
@@ -87,6 +101,25 @@ class RuntimeSettings:
             # P3: also persist as the last-selected model so new conversations
             # seed from it by default (server-side, no localStorage).
             self.set_last_selected_model(model_id)
+
+    def _clear_model_override_unlocked(self, conversation_id: str) -> None:
+        """Explicit RESET — drop the per-conversation override so the next kick composes
+        the SERVER-DEFAULT driver. Does NOT touch last-selected (the global P3 sticky is a
+        convenience for NEW conversations, not this one's pin). Inner (non-locking) form;
+        call ONLY from apply_settings_change (which holds the per-cid lock)."""
+        if self._rt._model_override.pop(conversation_id, None) is not None:
+            self._rt._save_overrides()
+
+    def _resolve_sticky_model(self) -> str | None:
+        """The validated last-selected model (P3 sticky), or None. Mirrors the cfg guard in
+        conversations._resolve_model so a stale/deleted sticky key never composes — used to
+        seed an explicit-null model_override on the PRISTINE pre-kick path (NOT terminal)."""
+        last = self.get_last_selected_model()
+        if last:
+            cfg = self._rt._config_store.load()
+            if last in cfg.models:
+                return last
+        return None
 
     def set_model_override(self, conversation_id: str, model_id: str | None) -> None:
         """Pin the driver model for a conversation (the Build chat model picker). The id
@@ -343,43 +376,119 @@ class RuntimeSettings:
                 return False
         return True
 
+    async def _settable_kind(self, conversation_id: str) -> tuple[bool, bool]:
+        """Decide whether a model/assist change may be applied, and whether the
+        conversation is in a TERMINAL state (vs the pristine pre-kick state).
+
+        Returns (settable, terminal):
+          - (False, _)     → reject (409): a run is ACTIVELY in flight (live task),
+                              or the status is RUNNING / a gate-awaiting state — a
+                              mid-step driver swap would be incoherent.
+          - (True, True)   → a deliberate TERMINAL swap (ERROR/STUCK/FINISHED/PAUSED, or
+                              IDLE-with-an-unfinished-approved-plan): allowed. The caller
+                              evicts the cached loop so the NEXT kick re-resolves the model.
+          - (True, False)  → the pristine PRE-KICK path (fresh IDLE conversation, possibly
+                              with setup-only events / uploads): allowed exactly as before.
+
+        A live in-flight task is the hard "actively running" signal and rejects in EVERY
+        case — even a status that reads terminal can't be mutated while its task drains."""
+        # Never mutate settings under a live run (the only genuinely-incoherent case).
+        task = self._rt._tasks.get(conversation_id)
+        if task is not None and not task.done():
+            return (False, False)
+        # Authoritative status from the event store (covers post-restart state too).
+        state = await self._rt._store.get_state(conversation_id)
+        status = state.execution_status
+        if status in _TERMINAL_SETTABLE_STATES:
+            return (True, True)
+        if status == ConversationStatus.IDLE:
+            # IDLE splits two ways: an INTERRUPTED run (approved plan, never FINISHED) is
+            # a terminal-style resume target → settable; a truly-fresh IDLE conversation
+            # falls through to the strict pristine check (which also catches the
+            # compose-gap: a loop composed / task scheduled but RUNNING not yet emitted).
+            from .runtime import _has_unfinished_plan
+
+            events = await self._rt._store.get_events(conversation_id)
+            if _has_unfinished_plan(events):
+                return (True, True)
+            return (await self._conversation_is_pristine(conversation_id), False)
+        # RUNNING / WAITING_FOR_CONFIRMATION / AWAITING_* → mid-run, not settable.
+        return (False, False)
+
     async def apply_settings_change(
         self,
         conversation_id: str,
         *,
         model_override: str | None = None,
         assist: bool | None = None,
+        model_provided: bool | None = None,
     ) -> bool:
-        """Atomically apply pre-kick settings under the per-cid lock.
+        """Atomically apply a model/assist change under the per-cid lock.
 
-        Acquires the lock ONCE, checks _conversation_is_pristine, and — if
-        pristine — calls the inner (non-locking) setters. Returns True on
-        success (settings applied); False when the conversation already has
-        work/run events or a composed loop/live task (the caller should
-        respond 409; settings are left UNMUTATED on False).
+        Acquires the lock ONCE, classifies the conversation via `_settable_kind`, and —
+        when settable — calls the inner (non-locking) setters. Returns True on success
+        (settings applied); False when a run is actively in flight or the conversation is
+        mid-step (the caller responds 409; settings are left UNMUTATED on False).
+
+        State-aware (terminal model swap): a TERMINAL conversation (ERROR / STUCK /
+        FINISHED / PAUSED, or IDLE-with-unfinished-plan) IS settable — the user may change
+        the model before resuming/replanning. After mutating, the cached loop + executor
+        (composed against the OLD model) are evicted so the NEXT kick re-resolves the
+        driver/summarizer/policy/tool-scope with the NEW model. The pristine pre-kick path
+        is byte-identical to before (incl. the compose→register race guard).
+
+        `model_provided` is a tri-state distinguishing "the caller explicitly sent a
+        model_override field" from "it was omitted" — needed so an explicit NULL (the user
+        choosing DEFAULT on a terminal conversation = reset-to-default) is APPLIED as a
+        CLEAR, not silently ignored (the #24 silent-ignore class). None ⇒ inferred from
+        model_override (a non-None value counts as provided), preserving every existing
+        caller that passes a concrete key. The PATCH route passes the explicit
+        `model_override in model_fields_set` so a provided-null is honored.
+
+        Null semantics depend on state: on a TERMINAL conversation a provided-null CLEARS
+        the override (next turn = server default); on the PRISTINE pre-kick path a
+        provided-null seeds the P3 sticky last-selected (unchanged convenience), never a
+        clear — so a create-time seed is preserved.
 
         Callers MUST NOT hold the per-cid lock already (the inner setters are
         non-reentrant to avoid deadlock)."""
+        if model_provided is None:
+            model_provided = model_override is not None
         lock = self._settings_locks.setdefault(conversation_id, asyncio.Lock())
         async with lock:
-            if not await self._conversation_is_pristine(conversation_id):
+            settable, terminal = await self._settable_kind(conversation_id)
+            if not settable:
                 return False
-            # FINAL synchronous guard (closes the compose→register race): the pristine
-            # check above does `await get_events`, and `kick()` is SYNC and does NOT take
-            # this lock — so a kick scheduled during that await composes + registers
-            # `_loops[cid]` AFTER the in-memory check inside _conversation_is_pristine
-            # already passed. Re-check the in-memory composition here with NO await before
-            # the (synchronous) mutation, so settings can never change under an
-            # already-composed loop / live task.
-            if conversation_id in self._rt._loops:
+            # FINAL synchronous guard (closes the compose→register race): `_settable_kind`
+            # awaits the store, and `kick()` is SYNC and does NOT take this lock — so a kick
+            # scheduled during that await composes + registers `_loops[cid]` + a live task
+            # AFTER the check passed. Re-check with NO await before the (synchronous)
+            # mutation. A live task disqualifies in EVERY case; a freshly-composed loop
+            # disqualifies the pristine pre-kick path (the terminal path expects a cached
+            # loop and evicts it below).
+            live = self._rt._tasks.get(conversation_id)
+            if live is not None and not live.done():
                 return False
-            task = self._rt._tasks.get(conversation_id)
-            if task is not None and not task.done():
+            if not terminal and conversation_id in self._rt._loops:
                 return False
-            if model_override is not None:
-                self._set_model_override_unlocked(conversation_id, model_override)
+            if model_provided:
+                if model_override:
+                    # Pin a concrete catalogue key.
+                    self._set_model_override_unlocked(conversation_id, model_override)
+                elif terminal:
+                    # Explicit DEFAULT (null) on a terminal conversation = reset-to-default.
+                    self._clear_model_override_unlocked(conversation_id)
+                else:
+                    # Explicit null pre-kick = P3 sticky-seed convenience (NOT a clear).
+                    sticky = self._resolve_sticky_model()
+                    if sticky:
+                        self._set_model_override_unlocked(conversation_id, sticky)
             if assist is not None:
                 self._set_assist_unlocked(conversation_id, assist)
+            # Terminal swap: drop the loop/executor bound to the OLD model so the next
+            # kick re-composes with the NEW one (the model-pill-silently-ignored fix).
+            if terminal and (model_provided or assist is not None):
+                self._rt._evict_loop_for_model_change(conversation_id)
             return True
 
     # ---- artifact_mode (C6) ------------------------------------------------
