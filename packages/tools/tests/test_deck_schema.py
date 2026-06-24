@@ -299,6 +299,85 @@ def test_editor_continuation_bullets_point_at_original_body():
 
 
 # ---------------------------------------------------------------------------
+# BW-13 — NON-SUFFIX overflow (column layouts spill non-contiguously)
+# ---------------------------------------------------------------------------
+
+import re  # noqa: E402
+
+
+def _two_column_overflow_deck() -> AuthoredDeck:
+    """A two_column slide dense enough to overflow at the font floor.
+
+    Unlike bullets (which spills a contiguous TAIL), two_column drops the TAIL of
+    EACH column, so the overflow is a non-contiguous union — the case where the
+    old ``body[:consumed]`` editor model mis-mapped pointers.
+    """
+    body = [f"Line {i + 1}: " + ("content " * 14) for i in range(40)]
+    return AuthoredDeck(
+        title="Two-Column Overflow",
+        theme="disco-light",
+        slides=[AuthoredSlide(type="two_column", title="Dense Columns", body=body)],
+    )
+
+
+def _comparison_overflow_deck() -> AuthoredDeck:
+    """A comparison slide (body[0]/body[1] labels + dense 50/50 content)."""
+    body = ["LEFT SIDE", "RIGHT SIDE"] + [
+        f"Item {i + 1}: " + ("detail " * 14) for i in range(40)
+    ]
+    return AuthoredDeck(
+        title="Comparison Overflow",
+        theme="disco-light",
+        slides=[AuthoredSlide(type="comparison", title="Dense Compare", body=body)],
+    )
+
+
+def _assert_editor_pointer_parity(authored: AuthoredDeck, orig: int, nbody: int) -> None:
+    """Editor count == export count AND every editor bullet/subtitle points at the
+    AUTHORED body line whose text it displays — for ALL overflow kinds (BW-13)."""
+    exported = lower_deck(authored)
+    editor = lower_deck_for_editor(authored)
+
+    # Count parity (must also have actually split — multi-slide).
+    assert len(editor.slides) == len(exported.slides), (
+        f"editor={len(editor.slides)} vs export={len(exported.slides)}"
+    )
+    assert len(editor.slides) >= 2, "fixture did not overflow — not exercising the split"
+
+    body = authored.slides[orig].body
+    seen: dict[int, int] = {}
+    for s in editor.slides:
+        for el in s.elements:
+            if el.kind not in ("bullet", "subtitle"):
+                continue
+            m = re.search(rf"/slides/{orig}/body/(\d+)$", el.json_pointer)
+            assert m is not None, f"unexpected pointer {el.json_pointer}"
+            j = int(m.group(1))
+            # The pointer must reference the authored line this element DISPLAYS.
+            assert el.content == body[j].lstrip("• "), (
+                f"pointer {el.json_pointer} shows {el.content!r} "
+                f"but body[{j}]={body[j]!r}"
+            )
+            seen[j] = seen.get(j, 0) + 1
+
+    # Every authored body line addressable exactly once across the split.
+    assert sorted(seen) == list(range(nbody)), (
+        f"addressed {sorted(seen)} != 0..{nbody - 1}"
+    )
+    assert all(v == 1 for v in seen.values()), f"duplicate pointers: {seen}"
+
+
+def test_editor_two_column_non_suffix_overflow_pointer_parity():
+    """BW-13: two_column overflow (non-contiguous spill) — editor pointers stay correct."""
+    _assert_editor_pointer_parity(_two_column_overflow_deck(), orig=0, nbody=40)
+
+
+def test_editor_comparison_non_suffix_overflow_pointer_parity():
+    """BW-13: comparison overflow (labels + per-column tails) — editor pointers stay correct."""
+    _assert_editor_pointer_parity(_comparison_overflow_deck(), orig=0, nbody=42)
+
+
+# ---------------------------------------------------------------------------
 # _fit_text — font step-down
 # ---------------------------------------------------------------------------
 

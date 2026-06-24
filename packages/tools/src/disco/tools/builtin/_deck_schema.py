@@ -52,6 +52,18 @@ _BODY_TOP = _MARGIN + _TITLE_H + _GAP + _BAR_H + _GAP
 _BODY_H = _SLIDE_H - _BODY_TOP - _MARGIN
 _BODY_INDENT = 228_600           # 0.25 in left indent for bullets
 
+# Column geometry — SINGLE source of truth shared by the two_column / comparison
+# layout fns AND _body_partition, so the editor's overflow split is byte-identical
+# to the export's (BW-13 non-suffix overflow parity).
+_COL_GAP = 182_880               # 0.2 in gap between the two columns
+_COL_W = (_CW - _COL_GAP) // 2
+_COL_BAR_TOP = _MARGIN + _TITLE_H + 45_720
+_COL_TOP = _COL_BAR_TOP + _BAR_H + _GAP
+_TWO_COL_H = _SLIDE_H - _COL_TOP - _MARGIN          # two_column body box height
+_CMP_LABEL_H = 457_200           # 0.5 in column-label strip (comparison)
+_CMP_CONTENT_TOP = _COL_TOP + _CMP_LABEL_H + _GAP
+_CMP_CONTENT_H = _SLIDE_H - _CMP_CONTENT_TOP - _MARGIN  # comparison content box height
+
 # ---------------------------------------------------------------------------
 # LayoutHint — resolved layout values (never None in Layer 2)
 # ---------------------------------------------------------------------------
@@ -767,9 +779,9 @@ def _layout_two_column(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element
         fill_hex=theme.accent,
     ))
 
-    col_top = bar_top + _BAR_H + _GAP
-    col_h = _SLIDE_H - col_top - _MARGIN
-    col_w = (_CW - 182_880) // 2  # 0.2in gap between columns
+    col_top = _COL_TOP
+    col_h = _TWO_COL_H
+    col_w = _COL_W
 
     mid = max(1, len(slide.body) // 2)
     left_lines = slide.body[:mid]
@@ -798,7 +810,7 @@ def _layout_two_column(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element
         line_h = col_font * 12_700 * 1.3
         els.append(Element(
             id=_uid(), kind="text",
-            left=_MARGIN + col_w + 182_880,
+            left=_MARGIN + col_w + _COL_GAP,
             top=col_top + int(i * line_h),
             width=col_w, height=int(line_h * 1.15),
             text=f"• {line}",
@@ -838,9 +850,9 @@ def _layout_comparison(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element
         fill_hex=theme.accent,
     ))
 
-    col_top = bar_top + _BAR_H + _GAP
-    col_w = (_CW - 182_880) // 2
-    label_h = 457_200  # 0.5in for column labels
+    col_top = _COL_TOP
+    col_w = _COL_W
+    label_h = _CMP_LABEL_H  # 0.5in for column labels
 
     # Column labels (first two body lines or empty)
     left_label = slide.body[0] if len(slide.body) > 0 else ""
@@ -862,7 +874,7 @@ def _layout_comparison(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element
     if right_label:
         els.append(Element(
             id=_uid(), kind="text",
-            left=_MARGIN + col_w + 182_880, top=col_top,
+            left=_MARGIN + col_w + _COL_GAP, top=col_top,
             width=col_w, height=label_h,
             text=right_label,
             font_name=_first_font(theme.font_ui),
@@ -871,8 +883,8 @@ def _layout_comparison(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element
             bold=True,
         ))
 
-    content_top = col_top + label_h + _GAP
-    content_h = _SLIDE_H - content_top - _MARGIN
+    content_top = _CMP_CONTENT_TOP
+    content_h = _CMP_CONTENT_H
     mid = max(0, len(content_lines) // 2)
     left_c = content_lines[:mid]
     right_c = content_lines[mid:]
@@ -898,7 +910,7 @@ def _layout_comparison(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element
         lh = col_font * 12_700 * 1.3
         els.append(Element(
             id=_uid(), kind="text",
-            left=_MARGIN + col_w + 182_880, top=content_top + int(i * lh),
+            left=_MARGIN + col_w + _COL_GAP, top=content_top + int(i * lh),
             width=col_w, height=int(lh * 1.15),
             text=f"• {line}",
             font_name=_first_font(theme.font_reading),
@@ -928,6 +940,70 @@ _LAYOUT_FNS: dict[str, object] = {
 
 
 # ---------------------------------------------------------------------------
+# _body_partition — which body positions a layout renders vs. spills
+# ---------------------------------------------------------------------------
+
+
+def _body_partition(
+    aslide: AuthoredSlide, layout: LayoutHint, theme: Theme
+) -> tuple[list[int], list[int]]:
+    """Partition ``aslide.body`` positions into ``(rendered, overflow)``.
+
+    Returns the indices into ``aslide.body`` this layout actually shows vs. spills,
+    IN RENDER ORDER.  This is the single source of truth the editor lowering uses
+    to map each rendered bullet back to its authored ``/body/{j}`` pointer, and it
+    must agree EXACTLY with what the layout fn draws / drops (BW-13).
+
+    Two overflow kinds:
+      • SUFFIX (contiguous): every layout except the column layouts spills a
+        contiguous tail of the body, so the split is derived from the layout fn's
+        own overflow length.
+      • NON-SUFFIX (column layouts): ``two_column`` / ``comparison`` consume the
+        body NON-contiguously — each column drops ITS OWN tail, so the rendered
+        set interleaves the two column heads and the overflow is the UNION of the
+        two column tails.  The naive ``body[:consumed]`` prefix model is wrong for
+        this case, which is exactly the editor↔export pointer drift BW-13 fixes.
+    """
+    n = len(aslide.body)
+    if n == 0:
+        return [], []
+
+    if layout == "two_column":
+        mid = max(1, n // 2)
+        _fl, fitted_l, _ovl = _fit_text(aslide.body[:mid], _COL_W, _TWO_COL_H)
+        _fr, fitted_r, _ovr = _fit_text(aslide.body[mid:], _COL_W, _TWO_COL_H)
+        kl, kr = len(fitted_l), len(fitted_r)
+        # Render order mirrors the layout fn: left head, then right head.
+        rendered = list(range(0, kl)) + list(range(mid, mid + kr))
+        # Overflow mirrors ov_l + ov_r: left tail, then right tail.
+        overflow = list(range(kl, mid)) + list(range(mid + kr, n))
+        return rendered, overflow
+
+    if layout == "comparison":
+        # body[0]/body[1] are the (always-shown) column labels; body[2:] is the
+        # 50/50-split content that can overflow per column.
+        content = aslide.body[2:]
+        nc = len(content)
+        mid = max(0, nc // 2)
+        _fl, fitted_l, _ovl = _fit_text(content[:mid], _COL_W, _CMP_CONTENT_H)
+        _fr, fitted_r, _ovr = _fit_text(content[mid:], _COL_W, _CMP_CONTENT_H)
+        kl, kr = len(fitted_l), len(fitted_r)
+        rendered = [p for p in (0, 1) if p < n]              # labels
+        rendered += list(range(2, 2 + kl))                   # left content head
+        rendered += list(range(2 + mid, 2 + mid + kr))       # right content head
+        overflow = list(range(2 + kl, 2 + mid))              # left content tail
+        overflow += list(range(2 + mid + kr, n))             # right content tail
+        return rendered, overflow
+
+    # Contiguous-suffix layouts (bullets / image_* / title / section_header /
+    # closing / full_image / metrics / table): overflow is the body tail.
+    layout_fn = _LAYOUT_FNS.get(layout, _layout_bullets)
+    _els, overflow_lines = layout_fn(aslide, theme)  # type: ignore[operator]
+    k = n - len(overflow_lines)
+    return list(range(0, k)), list(range(k, n))
+
+
+# ---------------------------------------------------------------------------
 # lower_deck — main entry point
 # ---------------------------------------------------------------------------
 
@@ -940,18 +1016,24 @@ class _EffSlide:
 
     The render path (``lower_deck``) and the editor path
     (``lower_deck_for_editor``) BOTH iterate this same expansion so their slide
-    counts are guaranteed identical (BW-13).  Each continuation fragment carries
-    ``render_body`` (exactly the body lines that belong on THIS slide) and
-    ``body_offset`` (where those lines start in the ORIGINAL slide's body) so the
-    editor can map every spilled bullet back to its real
+    counts are guaranteed identical (BW-13).  Each fragment carries ``render_body``
+    (exactly the body lines that belong on THIS slide, in render order) and the
+    parallel ``body_index_map`` (the ORIGINAL authored-body index of each rendered
+    line) so the editor can map every spilled bullet back to its real
     ``/slides/{orig_index}/body/{j}`` JSON pointer.
+
+    ``body_index_map`` (not a single ``body_offset``) is required because the
+    column layouts consume the body NON-contiguously: ``render_body[k]`` is the
+    line ``aslide.body``-local, and ``body_index_map[k]`` is where it really lives
+    in the ORIGINAL slide's body — these are NOT a contiguous run for two_column /
+    comparison overflow (BW-13 non-suffix case).
     """
 
-    aslide: AuthoredSlide   # original slide OR a synthesized "_cont" fragment
-    layout: LayoutHint      # resolved ONCE here (image-side alternation included)
-    render_body: list[str]  # body lines this fragment actually shows (fitted slice)
-    orig_index: int         # index into authored.slides (image bytes + pointer base)
-    body_offset: int        # offset into the ORIGINAL body this fragment starts at
+    aslide: AuthoredSlide      # original slide OR a synthesized "_cont" fragment
+    layout: LayoutHint         # resolved ONCE here (image-side alternation included)
+    render_body: list[str]     # body lines this fragment shows, in render order
+    body_index_map: list[int]  # original-body index of each render_body line
+    orig_index: int            # index into authored.slides (image bytes + pointer base)
     is_cont: bool
 
 
@@ -966,36 +1048,42 @@ def _expand_slides(
     duplicate title pages).  ``image_alt`` is advanced HERE only; callers must
     consume ``_EffSlide.layout`` rather than re-inferring (which would
     double-advance the image-side alternation counter).
+
+    ``index_map`` threads each fragment's local body position back to its index in
+    the ORIGINAL authored slide, so a NON-suffix (column) overflow keeps every
+    spilled bullet pointed at the right ``/body/{j}`` (BW-13).
     """
     eff: list[_EffSlide] = []
 
-    def _walk(aslide: AuthoredSlide, depth: int, orig_index: int, body_offset: int) -> None:
+    def _walk(
+        aslide: AuthoredSlide, depth: int, orig_index: int, index_map: list[int]
+    ) -> None:
         if depth > _MAX_CONT_DEPTH:
             return  # guard: discard overflow beyond depth cap
         layout = _infer_layout(aslide, image_alt)
-        layout_fn = _LAYOUT_FNS.get(layout, _layout_bullets)
-        _elements, overflow = layout_fn(aslide, theme)  # type: ignore[operator]
-        consumed = len(aslide.body) - len(overflow)
+        rendered_pos, overflow_pos = _body_partition(aslide, layout, theme)
         eff.append(_EffSlide(
             aslide=aslide,
             layout=layout,
-            render_body=aslide.body[:consumed],
+            render_body=[aslide.body[p] for p in rendered_pos],
+            body_index_map=[index_map[p] for p in rendered_pos],
             orig_index=orig_index,
-            body_offset=body_offset,
             is_cont=depth > 0,
         ))
-        if overflow:
+        if overflow_pos:
+            # Spilled lines, in overflow order, with their ORIGINAL indices — same
+            # content the export's layout fn drops (determinism preserved).
             cont = AuthoredSlide(
                 type=f"{aslide.type}_cont",
                 title=f"{aslide.title} (cont.)",
-                body=overflow,
+                body=[aslide.body[p] for p in overflow_pos],
                 layout_hint="bullets",   # FORCE bullets — never map back to title/section/closing
                 notes=None,              # notes stay on the original slide
             )
-            _walk(cont, depth + 1, orig_index, body_offset + consumed)
+            _walk(cont, depth + 1, orig_index, [index_map[p] for p in overflow_pos])
 
     for i, aslide in enumerate(slides):
-        _walk(aslide, depth=0, orig_index=i, body_offset=0)
+        _walk(aslide, depth=0, orig_index=i, index_map=list(range(len(aslide.body))))
     return eff
 
 
@@ -1169,8 +1257,8 @@ def lower_deck_for_editor(authored: AuthoredDeck) -> LoweredDeck:
         aslide = eff.aslide
         layout = eff.layout
         orig = eff.orig_index
-        boff = eff.body_offset
         render_body = eff.render_body
+        body_index_map = eff.body_index_map
         slide_id = f"slide-{si}"
         bg_color = theme.surface_1 if layout == "section_header" else theme.bg
         elements: list[LoweredElement] = []
@@ -1204,25 +1292,28 @@ def lower_deck_for_editor(authored: AuthoredDeck) -> LoweredDeck:
         )
         elements[-1].element_id = f"{slide_id}:title"
 
-        # Subtitle (first body line on title/section/closing slides).  ``boff``
-        # is the original-body index of this fragment's first line.
+        # Subtitle (first body line on title/section/closing slides).  Its real
+        # authored index comes from body_index_map (NOT a contiguous offset).
         if layout in ("title", "section_header", "closing") and render_body:
             sub_top = _E_TITLE_TOP + _E_TITLE_H + 2.0
             _add(
                 kind="subtitle", content=render_body[0],
                 x=_E_TITLE_LEFT, y=sub_top, w=_E_TITLE_W, h=_E_BULLET_H,
                 fsz=1.8, fw="normal", fi="italic",
-                jptr=f"/slides/{orig}/body/{boff}",
+                jptr=f"/slides/{orig}/body/{body_index_map[0]}",
             )
             elements[-1].element_id = f"{slide_id}:subtitle"
             body_start = 1
         else:
             body_start = 0
 
-        # Bullet body lines — only the lines that belong to THIS fragment.
+        # Bullet body lines — only the lines that belong to THIS fragment.  Each
+        # rendered line maps back to its ORIGINAL authored index via
+        # body_index_map, so NON-suffix (column) overflow points correctly (BW-13).
         body_y = _E_BODY_TOP
-        for local_j, line in enumerate(render_body[body_start:], start=body_start):
-            orig_bj = boff + local_j
+        for local_j in range(body_start, len(render_body)):
+            line = render_body[local_j]
+            orig_bj = body_index_map[local_j]
             content_stripped = line.lstrip("• ")
             _add(
                 kind=f"body:{orig_bj}", content=content_stripped,
