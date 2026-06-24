@@ -377,6 +377,108 @@ def test_editor_comparison_non_suffix_overflow_pointer_parity():
     _assert_editor_pointer_parity(_comparison_overflow_deck(), orig=0, nbody=42)
 
 
+def _bullets_overflow_deck() -> AuthoredDeck:
+    """A plain bullets slide dense enough to spill a contiguous TAIL into a continuation."""
+    body = [f"Bullet {i + 1}: " + ("word " * 16) for i in range(40)]
+    return AuthoredDeck(
+        title="Bullets Overflow",
+        theme="disco-light",
+        slides=[AuthoredSlide(type="bullets", title="Dense Bullets", body=body)],
+    )
+
+
+def _render_body_ids_by_slide(authored: AuthoredDeck) -> dict[str, dict[str, str]]:
+    """Parse render_html → {slide_id: {data-element-id: displayed_text}} for body lines.
+
+    This is what the REAL editor consumes: SlideCanvas joins each rendered
+    ``[data-element-id]`` node to the editor pointer model by that exact id. We pull
+    the ``{sid}:body:{j}`` ``<li>`` elements (id + their visible text) so a test can
+    assert the rendered identity equals the pointer model, not merely the count.
+    """
+    from disco.tools.builtin._pptx_render import render_html
+
+    html_str = render_html(lower_deck(authored))
+    out: dict[str, dict[str, str]] = {}
+    # <li data-element-id="slide-N:body:J" data-slide-id="slide-N">TEXT</li>
+    for eid, sid, text in re.findall(
+        r'<li data-element-id="([^"]+)" data-slide-id="([^"]+)">(.*?)</li>',
+        html_str,
+        re.DOTALL,
+    ):
+        out.setdefault(sid, {})[eid] = text
+    return out
+
+
+def _assert_render_pointer_identity_alignment(authored: AuthoredDeck, orig: int) -> None:
+    """BW-13 residual P1: the RENDERED editor slides (render_html, what DeckExportBar /
+    SlideCanvas key on) and the editor POINTER model (lower_deck_for_editor) must share
+    the SAME slide identity AND the SAME per-body-line element ids — so each rendered
+    editor slide maps to the correct authored line in the actual UI, not just in counts.
+
+    Asserted for overflow/continuation slides (where render position != authored index):
+      • identical set of slide ids,
+      • for every rendered ``{sid}:body:{orig_j}`` <li>, the editor model has the SAME
+        element id with a json_pointer to ``/slides/{orig}/body/{orig_j}``, AND
+      • the authored line that pointer addresses is the line the rendered <li> DISPLAYS.
+    """
+    editor = lower_deck_for_editor(authored)
+    rendered = _render_body_ids_by_slide(authored)
+    body = authored.slides[orig].body
+
+    # Must actually have split — otherwise we are not exercising continuation identity.
+    assert len(editor.slides) >= 2, "fixture did not overflow — not exercising the split"
+
+    # Same slide identity/order on both sides.
+    assert [s.slide_id for s in editor.slides] == sorted(
+        rendered, key=lambda s: int(s.split("-")[1])
+    ), "rendered slide ids != editor slide ids"
+
+    # Editor body element_id → json_pointer, keyed by slide id.
+    editor_body: dict[str, dict[str, str]] = {}
+    for s in editor.slides:
+        editor_body[s.slide_id] = {
+            el.element_id: el.json_pointer for el in s.elements if el.kind == "bullet"
+        }
+
+    for sid, rendered_lis in rendered.items():
+        for eid, displayed in rendered_lis.items():
+            # The rendered <li>'s id must exist VERBATIM in the editor pointer model.
+            assert eid in editor_body[sid], (
+                f"rendered {eid} on {sid} absent from editor model {sorted(editor_body[sid])}"
+            )
+            ptr = editor_body[sid][eid]
+            m = re.search(rf"/slides/{orig}/body/(\d+)$", ptr)
+            assert m is not None, f"unexpected pointer {ptr} for {eid}"
+            j = int(m.group(1))
+            # The id encodes the authored index; the pointer must agree with it...
+            assert eid.endswith(f":body:{j}"), f"id {eid} disagrees with pointer {ptr}"
+            # ...and the authored line that index addresses is what the slide DISPLAYS.
+            assert displayed == body[j].lstrip("• "), (
+                f"{eid} shows {displayed!r} but /body/{j}={body[j]!r}"
+            )
+
+
+def test_render_pointer_identity_two_column_overflow():
+    """BW-13 P1: two_column non-suffix overflow — rendered ids == editor pointer ids."""
+    _assert_render_pointer_identity_alignment(_two_column_overflow_deck(), orig=0)
+
+
+def test_render_pointer_identity_comparison_overflow():
+    """BW-13 P1: comparison non-suffix overflow — rendered ids == editor pointer ids."""
+    _assert_render_pointer_identity_alignment(_comparison_overflow_deck(), orig=0)
+
+
+def test_render_pointer_identity_bullets_continuation_overflow():
+    """BW-13 P1: bullets SUFFIX overflow — continuation-slide rendered ids == editor ids.
+
+    The continuation slide's bullets render at LOCAL positions 0,1,2… but address the
+    authored TAIL (body[k], body[k+1]…). Before the fix render_html stamped the local
+    position, so the rendered <li> id (``body:0``) never matched the editor pointer
+    (``body:21``) — the overlay could not bind. This pins them equal.
+    """
+    _assert_render_pointer_identity_alignment(_bullets_overflow_deck(), orig=0)
+
+
 # ---------------------------------------------------------------------------
 # _fit_text — font step-down
 # ---------------------------------------------------------------------------

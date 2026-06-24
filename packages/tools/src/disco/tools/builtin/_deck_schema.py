@@ -248,6 +248,14 @@ class Slide:
     notes: str | None = None
     chart: ChartSpec | None = None   # propagated when AuthoredSlide.chart is set
     table: TableSpec | None = None   # propagated when AuthoredSlide.table is set
+    # BW-13: the ORIGINAL authored-body index of each rendered body line, in render
+    # order — the SAME ``body_index_map`` the editor pointer model (lower_deck_for_editor)
+    # uses. ``render_html`` stamps ``data-element-id="{slide}:body:{orig}"`` from this so
+    # a rendered editor slide's element ids match the pointer model 1:1, even for
+    # overflow / continuation / non-contiguous column spill (where render position !=
+    # authored index). Empty (default) → identity: stamp by render position (simple
+    # slides, hand-built Slides, the MinimalDeck shim path).
+    body_index_map: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -1151,6 +1159,9 @@ def lower_deck(
             notes=aslide.notes,
             chart=aslide.chart,
             table=aslide.table,
+            # Carry the SHARED expansion's index map so render_html stamps the same
+            # authored-body pointer the editor's lower_deck_for_editor model uses (BW-13).
+            body_index_map=list(eff.body_index_map),
         ))
 
     return Deck(
