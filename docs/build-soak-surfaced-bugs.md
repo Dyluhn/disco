@@ -327,3 +327,54 @@ pause that the user would clear is not mis-failed, while a build that just keeps
 `BUILD_DID_NOT_FINISH`. Pinned: `test_classifier.test_paused_incomplete_required_output_is_build_did_not_finish`,
 `test_output_truth_oracle.test_not_finished_with_required_output_fails_closed`,
 `test_api_runner.test_paused_{then_finished_resumes_to_terminal,forever_is_bounded_then_build_did_not_finish}`.
+
+### Bug 9 — runner workspace-collection returned an EMPTY manifest for a SUCCEEDED build (HARNESS) — FIXED
+
+NOT a product bug — a RUNNER collection defect surfaced by the first live soak smoke. A build
+that genuinely SUCCEEDED (`file_write index.html` → served → `DELIVERABLE index.html` "Build Smoke
+OK" → `FINISHED`) produced an empty `workspace-manifest.json` (`{}`), so `OutputTruthOracle`
+false-FAILed it with **`FALSE_FINISH_NO_OUTPUT`**. A runner that false-fails every successful run
+is useless.
+
+**Root cause.** `collect_workspace` fetched each declared path via the single-origin preview proxy
+(`GET /conversations/{cid}/preview-app/<path>`), which proxies the agent's ephemeral DEV SERVER.
+Post-FINISH that route 404s (the served preview isn't up/registered for that exact path), so the
+manifest came back empty even though `index.html` was really written. Live-verified that **no** HTTP
+route serves arbitrary workspace source for a finished static build: `…/preview-app/index.html`
+(proxy down), `…/workspace/index.html` (image-only allowlist `.pmx/screenshots|plots`), and
+`…/artifacts/index.html` (declared-`files` only — an app deliverable is `artifact_kind="app"`) ALL
+404.
+
+**Fix (this commit, `fix-soak-workspace-collect`, HARNESS-only `adapters/disco_api.py`).**
+`collect_workspace` now reads the AUTHORITATIVE host ProjectStore SNAPSHOT directly
+(`<projects_root>/<cid>/workspace/…` — the SAME durable source the product's own
+preview-edit/artifact-download routes fall back to once a run is terminal), independent of
+dev-server state. It walks the snapshot (symlink-jailed: `resolve()` + `is_relative_to`) into a
+manifest `{path: {present, size, sha256, content}}` reflecting the WHOLE workspace, keying each
+declared path by its exact scenario string so the unchanged oracle's `path in files` check matches.
+A genuinely-missing declared file is OMITTED (never a `present:false` key — that would mask
+`FALSE_FINISH_NO_OUTPUT` into `ARTIFACT_TRUTH_MISMATCH`), so a real missing deliverable still FAILs.
+A bounded re-read (`--snapshot-wait`, default 15s) absorbs the snapshot-vs-`FINISHED` flush race
+(the build appends `FINISHED` inside `loop.run()`, then `_maybe_snapshot` writes the workspace).
+When no `projects_root` is configured (snapshot disabled in the deterministic fake-transport tests)
+or a declared file is missing from the snapshot, it falls back to the preview proxy — never WORSE
+than before. **LIVE-PROVEN:** re-running `static_html_minimal` now populates the manifest from the
+snapshot (`index.html` present, content "Build Smoke OK", real sha256/size, `source≠preview_proxy`)
+and the classification advances PAST `FALSE_FINISH_NO_OUTPUT` (the workspace truth checks PASS).
+Pinned: `test_api_runner.test_collect_workspace_{reads_snapshot_when_preview_proxy_404s,
+genuinely_missing_file_is_omitted,falls_back_to_proxy_without_projects_root}`.
+
+### Bug 10 — runner PREVIEW-collection has the SAME ephemeral-proxy fragility (HARNESS) — OPEN
+
+Surfaced by the Bug 9 live re-run: with the workspace manifest now correct, the SAME
+`static_html_minimal` smoke fails one step later with **`FALSE_FINISH_PREVIEW_BROKEN`**
+(`preview_health_status: 404`). `collect_preview` reads the preview via the same fragile
+`GET …/preview-app/` proxy, which 404s post-FINISH because the model's served preview
+(`python3 -m http.server 8080 -d /workspace`, a backgrounded shell process) is torn down when the
+run ends. This is NOT a bad build and NOT Bug 9: the event log PROVES the preview served correctly
+DURING the run (`verify_web_app` on :8080 → passed; `shell curl …8080 | grep 'Build Smoke OK'` →
+exit 0). `…/preview-edit/index.html` (which reads the snapshot) returns 200, so the deliverable is
+durably present. The fix is the Bug-9 pattern applied to preview, but it needs a DECISION on preview
+semantics (does a static build's post-FINISH non-serving count as broken, or should the preview
+oracle adjudicate the LAST live serve evidence / the snapshot-served root?) so it does not MASK a
+genuinely-broken dynamic preview. Tracked as the next repair; out of Bug 9's scope.

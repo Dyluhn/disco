@@ -14,7 +14,9 @@ routes/conversations.py; the plan gate + steer are WS-ONLY, verified in routes/w
   poll_until_terminal        GET /conversations/{cid}/state           conversations.py:195
   collect_events             read disco.db DIRECTLY, post-terminal (race-free; trace pattern)
   collect_state              GET /conversations/{cid}/state
-  collect_workspace          GET /conversations/{cid}/preview-app/<path>   preview.py (snapshot)
+  collect_workspace          read the host ProjectStore SNAPSHOT directly (authoritative;
+                             Bug 9 fix — NOT the dev-server preview proxy, which 404s when
+                             the served app isn't up). Falls back to the preview proxy.
   collect_preview            GET /conversations/{cid}/preview + preview-app root
 
 approve_plan / request_plan are WS-ONLY (there is no REST approval route — verified
@@ -36,10 +38,13 @@ websockets) behind the opt-in `@pytest.mark.live` marker.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import os
 import sqlite3
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Protocol
 
 import httpx  # the adapter MAY import an http client (oracle path stays disco/http-free)
@@ -76,6 +81,12 @@ GATE_STATES = frozenset(
     }
 )
 AWAITING_PLAN_APPROVAL = "AWAITING_PLAN_APPROVAL"
+
+# Workspace-snapshot manifest bounds (Bug 9 fix): cap per-file captured content and the
+# number of files walked so a pathological workspace can't blow up the dossier.
+_WS_MANIFEST_MAX_BYTES = 5 * 1024 * 1024  # capture content for files up to 5 MiB
+_WS_MANIFEST_MAX_FILES = 2000
+_SNAPSHOT_POLL_S = 0.5  # re-read cadence while a just-finished build's snapshot flushes
 
 # Tools that DON'T count as a "file write" for the mid-run steer trigger (the
 # planning-safe read/ask set; mirrors ToolScopeOracle.PLANNING_SAFE_TOOLS).
@@ -138,10 +149,24 @@ class DiscoApiClient:
         *,
         db_path: str,
         poll_interval_s: float = 1.0,
+        projects_root: str | None = None,
+        snapshot_wait_s: float = 0.0,
     ) -> None:
         self._t = transport
         self._db_path = db_path
         self._poll = poll_interval_s
+        # ProjectStore root for the authoritative workspace SNAPSHOT read (Bug 9 fix).
+        # None ⇒ snapshot read DISABLED (deterministic fake-transport tests keep the
+        # pure preview-proxy path, byte-identical to before). The live CLI passes ""
+        # so it mirrors the agent-server's OWN default root resolution (same env), and
+        # the snapshot unit test injects a tmp root.
+        self._projects_root = projects_root
+        # How long to wait for the snapshot to flush after the run reaches a terminal
+        # state — the build appends FINISHED INSIDE loop.run(), then `_maybe_snapshot`
+        # writes the workspace to the ProjectStore; a fast collect can read between the
+        # two. Re-read the snapshot until every declared file is present (or this budget
+        # elapses) so a genuinely-present file is never reported missing.
+        self._snapshot_wait_s = snapshot_wait_s
 
     # -- pre-create infra probe (§9; the ONLY infra source) -------------------
 
@@ -349,21 +374,120 @@ class DiscoApiClient:
     async def collect_workspace(
         self, conversation_id: str, file_paths: list[str]
     ) -> dict[str, Any]:
-        """Fetch each scenario-declared workspace file via the single-origin preview
-        proxy (serves the live dev server OR the on-host snapshot). Returns
-        {path: content} for the OutputTruthOracle. A file that cannot be served at all
-        (4xx/5xx — not on the live server and not in the host snapshot) is OMITTED, so
-        the oracle distinguishes a genuinely-absent deliverable (FALSE_FINISH_NO_OUTPUT)
-        from a served-but-wrong one (ARTIFACT_TRUTH_MISMATCH)."""
-        out: dict[str, Any] = {}
-        for path in file_paths:
+        """Collect the conversation's workspace files AUTHORITATIVELY (Bug 9 fix).
+
+        ROOT CAUSE this replaces: the old path fetched each declared file via the
+        single-origin preview proxy (``GET …/preview-app/<path>``). That proxies the
+        agent's DEV SERVER, so it returns the file ONLY when the served preview is up,
+        registered, and serving that exact route — fragile. A build that genuinely
+        SUCCEEDED (index.html written, served, FINISHED) produced an EMPTY manifest
+        because the proxy 404'd → the OutputTruthOracle false-FAILed it
+        (FALSE_FINISH_NO_OUTPUT). Verified live: ``…/preview-app/index.html``,
+        ``…/workspace/index.html`` (image-only allowlist), and ``…/artifacts/index.html``
+        (declared-"files" only; an app deliverable is artifact_kind="app") ALL 404 for a
+        finished static build — there is no HTTP route that serves arbitrary workspace
+        source. The durable, dev-server-independent truth is the host ProjectStore
+        SNAPSHOT (``<projects_root>/<cid>/workspace/…``), the SAME source the product's
+        own preview-edit / artifact-download routes fall back to once a run is terminal.
+
+        Returns a manifest keyed by workspace-relative path:
+            {path: {"present": True, "size": int, "sha256": hex, "content": str}}
+        for EVERY file in the snapshot (a faithful workspace reflection, not just the
+        declared paths), plus each declared path under its EXACT scenario-declared key
+        so the OutputTruthOracle's ``path in files`` presence check matches. A declared
+        file that is genuinely absent is OMITTED (never a present:false key — that would
+        mask FALSE_FINISH_NO_OUTPUT into ARTIFACT_TRUTH_MISMATCH), so a real
+        missing-deliverable build STILL FAILs correctly. ``content`` is the decoded UTF-8
+        text (so must_contain substring checks run on the real file); a binary / oversized
+        file keeps present+size+sha256 with empty content.
+
+        Fallback: when no projects_root is configured (snapshot disabled) OR a declared
+        file is missing from the snapshot (e.g. a live, not-yet-snapshotted run), each
+        still-missing declared path is fetched via the preview proxy — so a no-storage
+        deployment is never WORSE than the old behavior, only better when a snapshot exists.
+        """
+        declared = list(file_paths)
+        manifest: dict[str, Any] = {}
+
+        if self._projects_root is not None:
+            deadline = time.monotonic() + self._snapshot_wait_s
+            while True:
+                manifest = self._read_snapshot_manifest(conversation_id, declared)
+                missing = [p for p in declared if p not in manifest]
+                if not missing or time.monotonic() >= deadline:
+                    break
+                # snapshot mid-flush (FINISHED was appended before _maybe_snapshot wrote
+                # the workspace) — wait and re-read so a present file isn't called missing.
+                await asyncio.sleep(_SNAPSHOT_POLL_S)
+
+        # Fallback for any declared path the snapshot doesn't have: the preview proxy.
+        for path in declared:
+            if path in manifest:
+                continue
             rel = path.lstrip("/")
             status, text, _hdrs = await self._t.get_text(
                 f"/conversations/{conversation_id}/preview-app/{rel}"
             )
             if status < 400:
-                out[path] = text
-        return out
+                entry = _file_entry(text.encode("utf-8"))
+                entry["source"] = "preview_proxy"
+                manifest[path] = entry
+        return manifest
+
+    def _read_snapshot_manifest(
+        self, conversation_id: str, declared: list[str]
+    ) -> dict[str, Any]:
+        """Walk the host ProjectStore snapshot workspace for `conversation_id` and
+        build the per-file manifest. Symlink-jailed (resolve + is_relative_to) so a
+        planted ``leak.html -> /etc/passwd`` can never escape the workspace. Empty dict
+        when no snapshot exists yet (caller retries / falls back to the preview proxy)."""
+        ws = self._snapshot_workspace_dir(conversation_id)
+        if ws is None:
+            return {}
+        manifest: dict[str, Any] = {}
+        count = 0
+        for root, _dirs, names in os.walk(ws):  # followlinks=False → no dir-symlink escape
+            for name in sorted(names):
+                fp = Path(root) / name
+                try:
+                    resolved = fp.resolve()
+                    if not resolved.is_relative_to(ws) or not resolved.is_file():
+                        continue
+                    rel = resolved.relative_to(ws).as_posix()
+                    data = resolved.read_bytes()
+                except OSError:
+                    continue
+                manifest[rel] = _file_entry(data)
+                count += 1
+                if count >= _WS_MANIFEST_MAX_FILES:
+                    break
+            if count >= _WS_MANIFEST_MAX_FILES:
+                break
+        # Guarantee each DECLARED path is keyed by its EXACT scenario string (the oracle
+        # checks `spec["path"] in files`); the walk keys by the leading-slash-free relpath.
+        for path in declared:
+            rel = path.lstrip("/")
+            if path not in manifest and rel in manifest:
+                manifest[path] = manifest[rel]
+        return manifest
+
+    def _snapshot_workspace_dir(self, conversation_id: str) -> Path | None:
+        """The host ProjectStore ``workspace/`` directory for this conversation, or None
+        when no projects_root is configured/valid or the snapshot isn't on disk yet.
+        Uses the product's OWN ProjectStore so the runner resolves the SAME root the
+        agent-server does (DISCO_DATA_DIR / XDG_DATA_HOME / ~/.local/share/disco/projects)."""
+        if self._projects_root is None:
+            return None
+        try:
+            from disco.tools.projects.store import ProjectStore, StorageStatus
+
+            store = ProjectStore(self._projects_root)
+            if store.status() != StorageStatus.OK:
+                return None
+            ws = store.path_for(conversation_id).resolve()
+        except Exception:  # noqa: BLE001 — any resolution failure ⇒ no snapshot available
+            return None
+        return ws if ws.is_dir() else None
 
     async def collect_preview(self, conversation_id: str) -> dict[str, Any]:
         """Capture preview truth: availability + the served ROOT html + its HTTP
@@ -409,6 +533,28 @@ class DiscoApiClient:
 
 
 # ---- helpers ----------------------------------------------------------------
+
+
+def _file_entry(data: bytes) -> dict[str, Any]:
+    """A single workspace-manifest entry: existence + identity (size, sha256) plus the
+    decoded text content. The OutputTruthOracle reads ``content`` for must_contain
+    substring checks; a binary / oversized file keeps present+size+sha256 with empty
+    content (binary deliverables carry no text assertions)."""
+    entry: dict[str, Any] = {
+        "present": True,
+        "size": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+    if len(data) <= _WS_MANIFEST_MAX_BYTES:
+        try:
+            entry["content"] = data.decode("utf-8")
+        except UnicodeDecodeError:
+            entry["content"] = ""
+            entry["binary"] = True
+    else:
+        entry["content"] = ""
+        entry["truncated"] = True
+    return entry
 
 
 def _payload(row: dict[str, Any]) -> dict[str, Any]:

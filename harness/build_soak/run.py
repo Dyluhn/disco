@@ -475,8 +475,18 @@ async def _amain(args: argparse.Namespace) -> int:
     model = args.model or os.environ.get("DISCO_SOAK_MODEL") or None
     autonomous = bool(args.autonomous or scenario.get("autonomous"))
 
+    # Bug 9: read the authoritative host ProjectStore SNAPSHOT for workspace collection
+    # (not the fragile dev-server preview proxy). "" mirrors the agent-server's OWN root
+    # resolution from the SAME env (DISCO_DATA_DIR / XDG_DATA_HOME / ~/.local/share). The
+    # snapshot wait absorbs the FINISHED-before-_maybe_snapshot flush window.
+    projects_root = args.projects_root or os.environ.get("DISCO_PROJECTS_ROOT") or ""
     transport: Transport = HttpTransport(args.base_url)
-    client = DiscoApiClient(transport, db_path=db_path)
+    client = DiscoApiClient(
+        transport,
+        db_path=db_path,
+        projects_root=projects_root,
+        snapshot_wait_s=args.snapshot_wait,
+    )
 
     worst = 0
     for i in range(args.iterations):
@@ -514,6 +524,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--autonomous", action="store_true", help="headless auto-approve")
     p.add_argument("--base-url", default=_DEFAULT_BASE_URL)
     p.add_argument("--db", default=None, help="disco.db path (default $DISCO_DB or repo/disco.db)")
+    p.add_argument(
+        "--projects-root",
+        default=None,
+        help="ProjectStore root for the authoritative workspace snapshot read "
+        "(default $DISCO_PROJECTS_ROOT or the agent-server's own resolved default)",
+    )
+    p.add_argument(
+        "--snapshot-wait",
+        type=float,
+        default=15.0,
+        help="seconds to wait for a just-finished build's workspace snapshot to flush",
+    )
     p.add_argument("--timeout", type=float, default=600.0, help="per-phase poll timeout (s)")
     p.add_argument("--scenarios", default=str(_SCENARIOS))
     args = p.parse_args(argv)

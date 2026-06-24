@@ -257,6 +257,84 @@ async def test_missing_workspace_file_is_false_finish(tmp_path):
     assert classification["code"] == "FALSE_FINISH_NO_OUTPUT"
 
 
+# ---- Bug 9: authoritative workspace SNAPSHOT collection ---------------------
+
+
+def _plant_snapshot(root, cid, files):
+    """Write `files` ({relpath: text}) into the host ProjectStore layout
+    <root>/<cid>/workspace/<relpath> the runner reads for collect_workspace."""
+    ws = root / cid / "workspace"
+    for rel, text in files.items():
+        p = ws / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+    return ws
+
+
+@pytest.mark.asyncio
+async def test_collect_workspace_reads_snapshot_when_preview_proxy_404s(tmp_path):
+    # Bug 9: a build genuinely SUCCEEDED (index.html written + FINISHED) but the
+    # dev-server preview proxy 404s, so the OLD collect produced an empty manifest →
+    # the oracle false-FAILed (FALSE_FINISH_NO_OUTPUT). The authoritative host snapshot
+    # has the file; collect_workspace must populate the manifest from it even though
+    # the proxy is dead.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    _plant_snapshot(proj, _CID, {"index.html": "<h1>Build Smoke OK</h1>"})
+    # transport.get_text 404s for everything (the dead preview proxy — the root cause).
+    transport = FakeTransport(db, states=["FINISHED"], workspace={})
+    client = DiscoApiClient(
+        transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj)
+    )
+
+    manifest = await client.collect_workspace(_CID, ["index.html"])
+
+    assert "index.html" in manifest, manifest
+    entry = manifest["index.html"]
+    assert entry["present"] is True
+    assert "Build Smoke OK" in entry["content"]
+    assert entry["size"] == len(b"<h1>Build Smoke OK</h1>")
+    assert len(entry["sha256"]) == 64
+    # came from the snapshot, NOT the (dead) preview proxy
+    assert entry.get("source") != "preview_proxy"
+
+
+@pytest.mark.asyncio
+async def test_collect_workspace_genuinely_missing_file_is_omitted(tmp_path):
+    # Do NOT mask a real missing deliverable: a declared file absent from BOTH the
+    # snapshot and the preview proxy must be OMITTED (no present:false key) so the
+    # unchanged oracle still emits FALSE_FINISH_NO_OUTPUT.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    _plant_snapshot(proj, _CID, {"other.txt": "unrelated"})  # snapshot exists, no index.html
+    transport = FakeTransport(db, states=["FINISHED"], workspace={})  # proxy 404s too
+    client = DiscoApiClient(
+        transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj)
+    )
+
+    manifest = await client.collect_workspace(_CID, ["index.html"])
+
+    assert "index.html" not in manifest  # genuinely missing → omitted (FALSE_FINISH stays)
+    assert manifest["other.txt"]["present"] is True  # the snapshot is faithfully reflected
+
+
+@pytest.mark.asyncio
+async def test_collect_workspace_falls_back_to_proxy_without_projects_root(tmp_path):
+    # No projects_root (snapshot disabled) ⇒ byte-identical to the old behavior: the
+    # preview proxy serves the file; the manifest carries it tagged source=preview_proxy.
+    db = tmp_path / "disco.db"
+    transport = FakeTransport(
+        db, states=["FINISHED"], workspace={"index.html": "<h1>Build Smoke OK</h1>"}
+    )
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)  # projects_root=None
+
+    manifest = await client.collect_workspace(_CID, ["index.html"])
+
+    assert manifest["index.html"]["present"] is True
+    assert manifest["index.html"]["source"] == "preview_proxy"
+    assert "Build Smoke OK" in manifest["index.html"]["content"]
+
+
 # ---- infra gate fires ONLY pre-create (codex #3) ----------------------------
 
 
