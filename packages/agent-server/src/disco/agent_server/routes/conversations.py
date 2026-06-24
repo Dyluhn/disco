@@ -14,6 +14,7 @@ from disco.core.store.sqlite import SqliteEventStore
 from fastapi import APIRouter, HTTPException, Query, Response
 
 from ..runtime import ConversationRuntime
+from ..title_service import fallback_title
 from ._common import (
     _WORKSPACE_PREFIXES,
     CreateConversationBody,
@@ -48,11 +49,17 @@ def make_conversations_router(
     @router.post("/conversations")
     async def create_conversation(body: CreateConversationBody) -> dict:
         conversation_id = f"conv_{uuid.uuid4().hex}"
+        # BW-09: sanitize a seeded title at the SOURCE so a verbose raw seed (e.g.
+        # the Deep Research surface seeding query.slice(0, 100)) is never persisted
+        # raw + masked by a CSS truncate at render. Run it through the SAME
+        # word-boundary / ~60-char cleaner the auto-titler's fallback uses. None /
+        # empty seed → leave it unset so the async auto-titler still owns the title.
+        seeded_title = fallback_title(body.title) or None if body.title else None
         store.create_conversation(
             conversation_id,
             owner_id=body.owner_id,
             space_id=body.space_id,
-            title=body.title,
+            title=seeded_title,
             surface=body.surface,  # persist so History routes it (even mid-run, no report yet)
         )
         # Select the surface (Build composes tools + sandbox + the ConfirmRisky gate) +
