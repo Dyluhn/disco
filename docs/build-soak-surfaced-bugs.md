@@ -247,6 +247,18 @@ direction (later): the build preview port must not equal the agent-server port o
 network-shared backend, or the `process` backend must isolate the network. Evidence:
 `trace_conversation.py conv_b59521ba06054d5189722e1f319b63f7 25`.
 
+**Live-smoke reproduction (clean, server survived) — conv_6d4dafa9c400484e860c1e74932770c0:** a
+bounded `static_html_minimal` live run reproduced this WITHOUT crashing the server (the agent
+served on 8080, not binding 8000). It wrote + served the page, but `verify_web_app({})` with no
+url DEFAULTS to `http://127.0.0.1:8000/` → "App not serving" (8000 is the agent-server, nothing
+the build can serve), the env keeps telling it to `python3 -m http.server 8000`, and after the
+`verify_no_progress` breaker the run terminalized **STUCK** (seq33-40). The S3 runner classified
+it deterministically as **FAIL / `BUILD_DID_NOT_FINISH` (P1)** — a TRUE outcome (the build never
+finished), and a live validation of the Bug 8 fix (pre-fix this STUCK-with-actions run would have
+SKIP→PASS). So the concrete product hook is `verify_web_app`'s default preview port (8000) ==
+the agent-server port; on an isolated sandbox the two 8000s don't collide, but the default still
+points the verifier at a port the build cannot own on the shared-net `process` backend.
+
 ### Bug 8 — adjudicator GAP: a PAUSED-incomplete run classified PASS (HARNESS) — FIXED
 
 NOT a product bug — a harness fail-closed gap surfaced by Bug 6. A bare-Build run that ended
