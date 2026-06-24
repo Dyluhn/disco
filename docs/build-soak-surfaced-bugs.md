@@ -86,7 +86,7 @@ were NOT touched here.
 | 1 | `WRITE_TOOL_ALLOWED_IN_PLANNING` | P0 | **FIXED** (fix-planning-gate) | `test_build_plan_contract.py::test_write_tool_in_planning_produces_recoverable_rejection` (now passing) | `engine.py:841` `_gate_planning_mode` | §11.1, §11.7, §20.1 |
 | 2 | `WRITE_TOOL_ALLOWED_IN_PLANNING` | P0 | **FIXED** (fix-planning-gate) | `test_tool_rejection_recovery.py::test_disallowed_tool_call_visible_as_rejection` (now passing) | `engine.py:841` `_gate_planning_mode` | §11.3, §20.3 |
 | 3 | `WRITE_BEFORE_REVISION_APPROVAL` | P1 | **FIXED** (fix-planning-gate) | `test_build_replan_contract.py::test_agent_cannot_write_before_revised_plan_approval` (now passing) | `engine.py:841` `_gate_planning_mode` (revision re-entry) | §11.4, §20.2 |
-| 4 | `APPROVE_PLAN_NO_EXECUTION` | P0 | open (xfail, strict) | `test_plan_approval_execution.py::test_kick_after_approval_produces_action_or_terminal_failure` | `finish.py` `gate_execution_nudge` (~L1008, `_EXECUTION_NUDGE_CAP` release) | §11.2, §20.4 |
+| 4 | `APPROVE_PLAN_NO_EXECUTION` | P0 | **FIXED** (fix-approve-noexec) | `test_plan_approval_execution.py::test_kick_after_approval_produces_action_or_terminal_failure` (xfail removed, now passing) | `finish.py` `gate_execution_nudge` (`_EXECUTION_NUDGE_CAP` → STUCK terminal) | §11.2, §20.4 |
 | 5 | `THINK_NOT_EXPOSED_IN_PLANNING` | P2 (gap) | **FIXED** (fix-think-planning) | `test_build_plan_contract.py::test_first_turn_planning_exposes_think` (xfail removed, now passing) + `test_planning_write_rejection.py::test_think_allowed_in_planning_executes_then_plans` | `runtime.py:1466` planning allowlist + `engine.py` `_gate_planning_mode` | §11.1, §15.2, §20.1 |
 
 > **Bugs 1–3 FIXED** on branch `fix-planning-gate` (two commits): the PLANNING phase gate
@@ -113,7 +113,7 @@ were NOT touched here.
 > The three strict-xfail markers were removed (now normal passing tests) and a dedicated
 > real-loop regression suite (`test_planning_write_rejection.py`) covers every non-allowlist tool
 > family (file_write/finish/serve/remember/notify_user/shell) plus the positive paths (read tools
-> still execute, ask_user still halts). Bug 4 is a separate fix and remains strict-xfail.
+> still execute, ask_user still halts).
 >
 > **Bug 5 FIXED** on branch `fix-think-planning` (Build Soak repair #3). `think` — a pure NO-OP,
 > read-only reasoning scratchpad (`tools/builtin/think.py`, `read_only=True`) — was omitted from
@@ -127,6 +127,19 @@ were NOT touched here.
 > allowlist + advertised toolset mirror production. The strict-xfail was removed (now passing) and
 > a real-loop test (`test_think_allowed_in_planning_executes_then_plans`) proves think is not
 > rejected, executes, leaves the explore-read cap at 0, and the model then submits its plan.
+>
+> **Bug 4 FIXED** on branch `fix-approve-noexec` (Build Soak repair #2): `gate_execution_nudge`
+> (`finish.py`) no longer RELEASES to a false `FINISHED:execution_nudge_cap` when the
+> `_EXECUTION_NUDGE_CAP` (3) is reached without a productive action since approval. It now
+> terminalizes the run **`STUCK`** with detail `approve_plan_no_execution` (a plan approved but
+> never executed is a terminal explicit failure per §11.2, not a success) — bounded at 3 nudges,
+> HALT, no infinite loop. STUCK (not ERROR) matches the existing bounded no-progress terminals;
+> ERROR is reserved for thrown exceptions. `productive_action_since_approval()` is unchanged, so a
+> run with ≥1 real post-approval action still FINISHES normally (the gate falls through/resets).
+> The strict-xfail on `test_kick_after_approval_produces_action_or_terminal_failure` was removed
+> (now a normal passing test); `test_w5_execution_nudge_cap.py` and the `test_loop_step.py` W-5
+> livelock test were flipped from FINISHED→STUCK; the C18 plan_step tests gained a real productive
+> action so they finish legitimately (they previously relied on the buggy cap-release).
 
 ## Root causes
 
@@ -163,15 +176,18 @@ events alone (the offered/allowed tool schemas are not persisted) — that needs
 runner to capture per-turn tool scope (the S3 slice). The §20 contract test proves the
 ALLOWED/rejection contract directly against the real loop.
 
-### Bug 4 — approval can finish with zero execution
+### Bug 4 — approval can finish with zero execution — FIXED
 
-After `approve_plan`, an agent that immediately tries to finish without doing any work is
+After `approve_plan`, an agent that immediately tries to finish without doing any work was
 nudged up to `_EXECUTION_NUDGE_CAP` (3) times by `finish.py gate_execution_nudge`, then the
-gate RELEASES to `FINISHED` with a loud warning (proven by `test_w5_execution_nudge_cap.py`).
-Per §11.2 / §20.4 the post-approval contract is "at least one action OR a terminal explicit
-failure" — a `FINISHED` with no action and no `ERROR` violates it. Repair shape: the nudge-cap
-release should land a terminal FAILURE (or surface a clear unexecuted-plan error), not a
-silent `FINISHED`. (Do NOT just raise the cap — that hides the problem.)
+gate RELEASED to `FINISHED` with a loud warning. Per §11.2 / §20.4 the post-approval contract
+is "at least one action OR a terminal explicit failure" — a `FINISHED` with no action violates
+it. **Fix:** at the cap, instead of releasing to `FINISHED:execution_nudge_cap`, the gate now
+emits a "plan was not executed" system-reminder + `StatusEvent(STUCK, detail=
+"approve_plan_no_execution")` and HALTs — bounded at 3, no infinite loop. STUCK (not ERROR)
+matches the existing bounded no-progress terminals. `productive_action_since_approval()` was NOT
+weakened, so a run with ≥1 real post-approval action still FINISHES (the gate falls through and
+resets the nudge streak). The cap was NOT raised (that would hide the problem).
 
 ### Bug 5 — `think` not offered in PLANNING (minor gap)
 

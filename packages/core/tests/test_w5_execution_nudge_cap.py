@@ -1,18 +1,22 @@
 """W5 — execution-nudge gate cap (finish.py gate_execution_nudge).
 
-The spec (§10.9 W5): give the one UNcapped gate an explicit cap-3 + visible-warning
-release. After _EXECUTION_NUDGE_CAP consecutive nudges without productive action, the
-gate RELEASES with a LOUD warning rather than spinning until max_iterations.
+The spec (§10.9 W5 / §11.2): give the one UNcapped gate an explicit cap-3 +
+visible-warning terminal. After _EXECUTION_NUDGE_CAP consecutive nudges without
+productive action, the gate TERMINALIZES the run as a FAILURE — STUCK with
+detail `approve_plan_no_execution` (a plan approved but never executed is a
+terminal failure per §11.2, NOT a false FINISHED) — rather than spinning until
+max_iterations.
 
 Tests:
-  1. After exactly 3 nudges the gate releases (FINISHED, not PAUSED/STUCK).
-  2. The release emits a visible ⚠ warning message that mentions the count.
+  1. After exactly 3 nudges the gate terminalizes STUCK (not FINISHED/PAUSED).
+  2. The terminal emits a visible warning that the plan was not executed.
 """
 
 from __future__ import annotations
 
 import pytest
 from disco.core import (
+    ConversationStatus,
     MessageEvent,
     StatusEvent,
     ToolResult,
@@ -62,7 +66,9 @@ def _env_messages(events) -> list[str]:
 @pytest.mark.asyncio
 async def test_execution_nudge_releases_after_cap():
     """After exactly _EXECUTION_NUDGE_CAP (3) nudges without productive action
-    the gate releases: run lands FINISHED and the ⚠ warning is in the trace."""
+    the gate terminalizes the run STUCK (approve_plan_no_execution) with a
+    visible "plan was not executed" warning in the trace — NOT a false
+    FINISHED (§11.2)."""
     # 1. Plan phase: agent submits a plan then stops (AWAITING_PLAN_APPROVAL).
     # 2. Approval: approve_plan() emits plan_approved + switches to execution mode.
     # 3. Execution phase: agent immediately tries to finish without doing work.
@@ -103,20 +109,26 @@ async def test_execution_nudge_releases_after_cap():
         f"expected 3 nudges before cap, got {len(nudges)}: {env}"
     )
 
-    # The release warning is present.
-    warnings = [m for m in env if "⚠ The execution gate fired" in m]
-    assert len(warnings) == 1, f"expected one ⚠ release warning, got: {env}"
-    assert "Releasing the finish gate" in warnings[0], warnings[0]
+    # The terminal warning is present and says the plan was not executed.
+    warnings = [m for m in env if "no execution action was taken" in m]
+    assert len(warnings) == 1, f"expected one terminal warning, got: {env}"
+    assert "The plan was not executed" in warnings[0], warnings[0]
 
-    # Run lands FINISHED.
+    # Run terminalizes STUCK/approve_plan_no_execution — NOT FINISHED.
     statuses = [e.status.value for e in events if isinstance(e, StatusEvent)]
-    assert "FINISHED" in statuses, f"expected FINISHED in {statuses}"
+    assert "FINISHED" not in statuses, f"must not FINISH, got {statuses}"
+    terminal = next(
+        e
+        for e in reversed(events)
+        if isinstance(e, StatusEvent) and e.status == ConversationStatus.STUCK
+    )
+    assert terminal.detail == "approve_plan_no_execution", terminal.detail
 
 
 @pytest.mark.asyncio
 async def test_execution_nudge_release_is_loud():
-    """The release warning must mention how many times the gate fired so the
-    user can diagnose a run that finished without executing its plan."""
+    """The terminal warning must mention how many reminders fired so the user
+    can diagnose a run that was approved but never executed its plan."""
     plan_agent = ScriptedAgent(
         [
             action_step(
@@ -142,9 +154,16 @@ async def test_execution_nudge_release_is_loud():
 
     events = await store.get_events(CID)
     env = _env_messages(events)
-    warnings = [m for m in env if "⚠ The execution gate fired" in m]
-    assert warnings, "release warning not found"
+    warnings = [m for m in env if "no execution action was taken" in m]
+    assert warnings, "terminal warning not found"
     # Must reference the count (3).
     assert "3" in warnings[0], (
-        f"release warning should mention count 3: {warnings[0]!r}"
+        f"terminal warning should mention count 3: {warnings[0]!r}"
     )
+    # And it terminalizes STUCK/approve_plan_no_execution, not FINISHED.
+    terminal = next(
+        e
+        for e in reversed(events)
+        if isinstance(e, StatusEvent) and e.status == ConversationStatus.STUCK
+    )
+    assert terminal.detail == "approve_plan_no_execution", terminal.detail
