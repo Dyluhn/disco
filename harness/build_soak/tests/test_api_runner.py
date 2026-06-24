@@ -424,7 +424,49 @@ async def test_collect_preview_uses_durable_snapshot_when_proxy_404s(tmp_path):
 
     assert preview["health"]["status"] == 200
     assert "Build Smoke OK" in preview["content"]
-    assert preview["source"] == "snapshot_static"
+    assert preview["source"] == "snapshot_serve_probe"
+
+
+@pytest.mark.asyncio
+async def test_collect_preview_no_verify_serves_and_probes_for_genuine_evidence(tmp_path):
+    # Residual hole #2: a build that NEVER ran an in-run verify must NOT get a forged 200 from
+    # mere absence-of-failure. Option A — the runner SERVES the snapshot static content itself
+    # and PROBES it: a 200 here is GENUINE positive evidence the deliverable actually serves the
+    # required content (no in-run verify needed). The probe body is the REAL served bytes.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    _plant_snapshot(proj, _CID, {"index.html": "<h1>Build Smoke OK</h1>"})
+    _seed_db(db, _CID, [])  # NO in-run verify at all
+    transport = _DeadPreviewTransport(db, states=["FINISHED"])
+    client = DiscoApiClient(
+        transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj)
+    )
+
+    preview = await client.collect_preview(_CID)
+
+    assert preview["source"] == "snapshot_serve_probe"  # REAL serve+probe, not a forged 200
+    assert preview["health"]["status"] == 200
+    assert "Build Smoke OK" in preview["content"]
+
+
+@pytest.mark.asyncio
+async def test_collect_preview_no_verify_probe_carries_real_wrong_body(tmp_path):
+    # The serve+probe returns the REAL served bytes — so a wrong-content snapshot cannot be
+    # forged into a pass: the probe body genuinely lacks the required needle (the oracle's
+    # must_contain then FAILs on it). No fabricated content.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    _plant_snapshot(proj, _CID, {"index.html": "<h1>WRONG CONTENT</h1>"})
+    _seed_db(db, _CID, [])  # NO in-run verify
+    transport = _DeadPreviewTransport(db, states=["FINISHED"])
+    client = DiscoApiClient(
+        transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj)
+    )
+
+    preview = await client.collect_preview(_CID)
+
+    assert "Build Smoke OK" not in preview["content"]  # real body — cannot forge the needle
+    assert "WRONG CONTENT" in preview["content"]
 
 
 @pytest.mark.asyncio
@@ -443,7 +485,7 @@ async def test_collect_preview_does_not_mask_failing_in_run_verify(tmp_path):
     preview = await client.collect_preview(_CID)
 
     assert preview["health"]["status"] == 404
-    assert preview.get("source") != "snapshot_static"
+    assert preview.get("source") != "snapshot_serve_probe"
 
 
 @pytest.mark.asyncio
@@ -464,7 +506,7 @@ async def test_collect_preview_does_not_substitute_on_verifier_execution_failure
     preview = await client.collect_preview(_CID)
 
     assert preview["health"]["status"] == 404  # NOT substituted — execution failure respected
-    assert preview.get("source") != "snapshot_static"
+    assert preview.get("source") != "snapshot_serve_probe"
 
 
 @pytest.mark.asyncio
@@ -530,13 +572,15 @@ async def test_collect_preview_live_proxy_wins_over_snapshot(tmp_path):
 
     assert preview["health"]["status"] == 200
     assert "LIVE" in preview["content"]
-    assert preview.get("source") != "snapshot_static"
+    assert preview.get("source") != "snapshot_serve_probe"
 
 
 @pytest.mark.asyncio
 async def test_static_build_classifies_pass_with_dead_proxy_via_durable_sources(tmp_path):
-    # End-to-end mirror of the live PASS: with the post-FINISH preview proxy DOWN, BOTH the
-    # workspace (Bug 9) and the preview (Bug 10) come from the durable snapshot → PASS.
+    # End-to-end mirror of the live PASS: with the post-FINISH preview proxy DOWN, the
+    # workspace (Bug 9) reads the snapshot and the preview (Bug 10) is the runner's own
+    # serve+PROBE of the snapshot static content (clean_smoke_log has NO in-run verify, so
+    # the 200 is GENUINE probe evidence, never a forged absence-of-failure) → PASS.
     db = tmp_path / "disco.db"
     proj = tmp_path / "projects"
     _seed_db(db, _CID, clean_smoke_log())

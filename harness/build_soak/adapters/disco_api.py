@@ -91,6 +91,10 @@ _SNAPSHOT_POLL_S = 0.5  # re-read cadence while a just-finished build's snapshot
 # lifecycle._find_snapshot_index / SandboxSession._detect_serve_dir skip set exactly, so a
 # .pmx/.disco/node_modules index.html is NEVER mistaken for the build's served root.
 _SERVE_SKIP_DIRS = frozenset({".pmx", ".disco", "node_modules"})
+# Reserved control ports the durable serve+probe must NEVER bind (defense in depth — the
+# probe binds port 0 so the OS assigns a free EPHEMERAL high port, never these): the
+# agent-server (8000), the app-server (8800), and the conventional vite dev port (5173).
+_RESERVED_CONTROL_PORTS = frozenset({8000, 8800, 5173})
 
 # Tools that DON'T count as a "file write" for the mid-run steer trigger (the
 # planning-safe read/ask set; mirrors ToolScopeOracle.PLANNING_SAFE_TOOLS).
@@ -524,17 +528,22 @@ class DiscoApiClient:
         Bug 10 (same ephemeral-proxy fragility as Bug 9): post-FINISH the live preview
         proxy 404s because the model's served preview (a backgrounded ``python -m
         http.server``) is torn down when the run ends — false `FALSE_FINISH_PREVIEW_BROKEN`.
-        When the LIVE proxy is up we use it (best truth). When it is down, we fall back to
-        the DURABLE source for a STATIC build: the served-root file (``index.html``) that is
-        still in the host snapshot. This is scoped TIGHTLY so a real failure is never masked:
-          * accepted ONLY when a served-root file is actually present in the snapshot
-            (no deliverable / empty workspace → stays 404 → FALSE_FINISH_PREVIEW_BROKEN);
-          * the substituted ``content`` is the REAL snapshot HTML, so a wrong-content
-            deliverable still trips PREVIEW_TRUTH_MISMATCH (the oracle's must_contain);
-          * NOT accepted when the build's own in-run web-app verification ENDED in failure
-            (`verify_web_app` last `passed` is False) — a genuinely-broken preview still FAILs;
-          * dynamic-app previews (a live server with no durable static root) are NOT covered
-            here — that's the documented follow-up.
+
+        TRUTH HIERARCHY (no forged 200 — every preview-OK carries GENUINE POSITIVE evidence
+        the deliverable actually serves the required content):
+          1. The LIVE proxy serves (status < 400 AND non-empty) → that IS the truth, used as-is.
+          2. Proxy down + a STATIC served-root (``index.html``) is durable in the snapshot →
+             the runner SERVES that snapshot dir itself on an OS-assigned FREE high port (never
+             a reserved control port) and HTTP-PROBES it, then tears the server down. The REAL
+             probe (status + body) is the evidence — independent of whether the agent ran an
+             in-run verify. A non-serving / unreadable / wrong-content snapshot → the probe
+             genuinely fails / lacks the needle → the preview FAILs (NOT masked). Absence of an
+             in-run verify is NOT treated as a pass; the serve+probe supplies the positive proof.
+          3. The build's OWN in-run web-app verification ENDED in failure (`_in_run_verify_failed`)
+             → believe the agent's broken-verdict; do NOT claim OK even if the static shell serves.
+          4. No static served-root (dynamic-only app, or no deliverable) → honest 404
+             (FALSE_FINISH_PREVIEW_BROKEN). Live dynamic-app preview verification is the
+             documented follow-up — never a forged pass.
         """
         avail_status, avail = await self._t.get_json(
             f"/conversations/{conversation_id}/preview"
@@ -547,30 +556,80 @@ class DiscoApiClient:
             "content": text,
             "available": bool(avail.get("available")) if avail_status < 400 else False,
         }
-        # The live preview proxy actually served → that IS the truth.
+        # (1) The live preview proxy actually served → that IS the truth.
         if status < 400 and text:
             return live
-        # Live proxy down (post-FINISH teardown). Substitute the durable static preview
-        # ONLY when a served-root file is in the snapshot AND the in-run verify didn't fail.
-        if self._projects_root is not None and not self._in_run_verify_failed(conversation_id):
-            served = self._snapshot_served_root(conversation_id)
-            if served is not None:
-                return {
-                    "health": {"status": 200},
-                    "content": served,
-                    "available": True,
-                    "source": "snapshot_static",
-                }
-        return live  # honest 404 → FALSE_FINISH_PREVIEW_BROKEN (no durable deliverable)
+        # (3) The agent's own in-run verify ended in failure → believe it; no durable claim.
+        if self._projects_root is None or self._in_run_verify_failed(conversation_id):
+            return live
+        # (4) No static served-root → honest 404 (dynamic-only / no deliverable).
+        served_index = self._snapshot_served_index(conversation_id)
+        if served_index is None:
+            return live
+        # (2) Serve the snapshot static content ourselves + PROBE it for GENUINE evidence.
+        probe = await asyncio.to_thread(self._serve_probe_snapshot, served_index.parent)
+        if probe is None:
+            return live  # couldn't serve/probe → no positive evidence → honest 404
+        probe_status, probe_body = probe
+        return {
+            "health": {"status": probe_status},
+            "content": probe_body,
+            "available": probe_status < 400,
+            "source": "snapshot_serve_probe",
+        }
 
-    def _snapshot_served_root(self, conversation_id: str) -> str | None:
-        """The durable served-root HTML for a STATIC build: ``index.html`` at the snapshot
+    def _serve_probe_snapshot(self, served_dir: Path) -> tuple[int, str] | None:
+        """Serve `served_dir` on an OS-assigned FREE loopback port (NEVER a reserved control
+        port — port 0 lets the OS pick an ephemeral high port, guarded defensively) and
+        HTTP-probe ``GET /`` for GENUINE evidence the static deliverable serves + with what
+        content. Returns (status, body) or None if it could not be served/probed. The server
+        is ALWAYS torn down (finally). Loopback-only bind (127.0.0.1)."""
+        import functools
+        import http.server
+        import threading
+        import urllib.error
+        import urllib.request
+
+        class _QuietHandler(http.server.SimpleHTTPRequestHandler):
+            # silence per-request stderr noise; signature matches BaseHTTPRequestHandler
+            def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+                return
+
+        handler = functools.partial(_QuietHandler, directory=str(served_dir))
+        try:
+            httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        except OSError:
+            return None
+        port = httpd.server_address[1]
+        if port in _RESERVED_CONTROL_PORTS:  # defensive — port 0 won't pick these
+            httpd.server_close()
+            return None
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as resp:
+                body = resp.read().decode("utf-8", "replace")
+                return int(resp.status), body
+        except urllib.error.HTTPError as exc:  # a real HTTP error status IS evidence
+            try:
+                body = exc.read().decode("utf-8", "replace")
+            except Exception:  # noqa: BLE001
+                body = ""
+            return int(exc.code), body
+        except (urllib.error.URLError, OSError, ValueError):
+            return None
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=2)
+
+    def _snapshot_served_index(self, conversation_id: str) -> Path | None:
+        """The durable served-root ``index.html`` Path for a STATIC build: at the snapshot
         workspace root (preferred), else the shallowest ``index.html`` in the tree —
-        MIRRORING the product's ``lifecycle._find_snapshot_index`` exactly, including its
-        skip set (``.pmx`` / ``.disco`` / ``node_modules``) so the runner never picks an
-        INTERNAL ``index.html`` (e.g. a ``.pmx`` tool asset) as the served root (hole #3).
-        Symlink-jailed. None ⇒ no static deliverable (so the caller does NOT substitute —
-        a genuinely-absent preview stays broken)."""
+        MIRRORING the product's ``lifecycle._find_snapshot_index`` skip set
+        (``.pmx`` / ``.disco`` / ``node_modules``) so an internal ``index.html`` is never
+        picked as the served root. Symlink-jailed (resolved path must stay inside the
+        workspace). None ⇒ no static served-root (so the caller does NOT claim a preview)."""
         ws = self._snapshot_workspace_dir(conversation_id)
         if ws is None:
             return None
@@ -593,12 +652,24 @@ class DiscoApiClient:
         for cand in candidates:
             try:
                 resolved = cand.resolve()
-                if not resolved.is_relative_to(ws) or not resolved.is_file():
-                    continue
-                return resolved.read_bytes().decode("utf-8")
-            except (OSError, UnicodeDecodeError):
+                if resolved.is_relative_to(ws) and resolved.is_file():
+                    return resolved
+            except OSError:
                 continue
         return None
+
+    def _snapshot_served_root(self, conversation_id: str) -> str | None:
+        """The served-root ``index.html`` CONTENT (decoded) — thin wrapper over
+        :meth:`_snapshot_served_index` (which handles root-preference, the
+        ``.pmx``/``.disco``/``node_modules`` skip set, and the symlink jail). None ⇒ no
+        static served-root."""
+        p = self._snapshot_served_index(conversation_id)
+        if p is None:
+            return None
+        try:
+            return p.read_bytes().decode("utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
 
     def _in_run_verify_failed(self, conversation_id: str) -> bool:
         """True iff the build's LAST in-run ``verify_web_app`` FAILED — where FAILED means

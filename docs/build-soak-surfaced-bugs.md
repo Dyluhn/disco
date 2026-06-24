@@ -379,26 +379,37 @@ run ends. This is NOT a bad build and NOT Bug 9: the event log PROVES the previe
 DURING the run (`verify_web_app` on :8080 → passed; `shell curl …8080 | grep 'Build Smoke OK'` →
 exit 0); `…/preview-edit/index.html` (snapshot-backed) returns 200, so the deliverable is durable.
 
-**Fix (this commit, HARNESS-only `adapters/disco_api.py` `collect_preview`).** When the LIVE proxy
-serves (status < 400 AND non-empty), that IS the truth and is used unchanged. When it is down, the
-DURABLE static preview is substituted — but TIGHTLY scoped so a real failure is never masked:
-accepted ONLY when (1) a served-root file (`index.html`, root-preferred then shallowest) is actually
-present in the host snapshot — `_snapshot_served_root`, which now MIRRORS the product's
-`lifecycle._find_snapshot_index` skip set (`.pmx` / `.disco` / `node_modules`) so an internal tool
-`index.html` is never mistaken for the served root (anti-false-PASS hole #3) — AND (2) the build's own
-LAST in-run `verify_web_app` did NOT fail — `_in_run_verify_failed`, which now treats FAILURE as ANY
-of: `structured.passed is False`, the verifier FAILED TO EXECUTE (`tool_result.success is False`, which
-produces no verdict — anti-false-PASS hole #2), or a verdict/error signalling failure. So the
-substitution fires only off a verify that genuinely RAN and PASSED. The substituted `content` is the
-REAL snapshot HTML (never a fabricated 200/blank), so a wrong-content deliverable still trips a
-truth-mismatch; a missing served-root, a failing verify, OR a verifier execution error leaves the honest
-404 → `FALSE_FINISH_PREVIEW_BROKEN`. Dynamic-app previews (a live server with no durable static root)
-are explicitly NOT covered here — that remains the documented follow-up. **LIVE-PROVEN PASS**
-(`static_html_minimal` over `conv_75881694…`, re-confirmed `conv_e29cc4a2…`): proxy down post-FINISH,
-preview substituted from the snapshot (`served.html` = raw `index.html`, health 200), OutputTruthOracle
-PASS, overall **PASS**. Anti-false-PASS pins: `test_api_runner.test_collect_preview_does_not_substitute_
-on_verifier_execution_failure`, `test_snapshot_served_root_skips_internal_dirs`,
-`test_durable_preview_does_not_mask_wrong_content`.
+**Fix (HARNESS-only `adapters/disco_api.py` `collect_preview`).** When the LIVE proxy serves
+(status < 400 AND non-empty), that IS the truth and is used unchanged. When it is down, the runner
+produces a preview health/content ONLY from GENUINE POSITIVE EVIDENCE — never a forged 200:
+
+- **Serve + probe (Option A — positive evidence, the residual-gap fix).** When a STATIC served-root
+  (`index.html`, root-preferred then shallowest) is durable in the snapshot — `_snapshot_served_index`,
+  which MIRRORS the product's `lifecycle._find_snapshot_index` skip set (`.pmx` / `.disco` /
+  `node_modules`) so an internal tool `index.html` is never the served root (hole #3) — the runner
+  SERVES that snapshot dir itself on an OS-assigned FREE loopback port (port 0 → ephemeral high port;
+  NEVER a reserved control port 8000/8800/5173; always torn down in `finally`) and HTTP-PROBES `GET /`.
+  The REAL probe (status + served body) is the evidence — INDEPENDENT of whether the agent ran an
+  in-run verify, which closes the residual hole: a build that NEVER verified no longer gets a 200 from
+  mere absence-of-failure; it gets a 200 only if the deliverable ACTUALLY serves the required content.
+  A non-serving / unreadable / wrong-content snapshot → the probe genuinely fails / the body lacks the
+  needle → preview FAILs (never masked; the body is the REAL served bytes, so a wrong-content snapshot
+  can't forge the needle).
+- **Verifier-failure veto (hole #2).** If the build's own LAST in-run `verify_web_app` FAILED —
+  `_in_run_verify_failed`, where FAILURE = `structured.passed is False`, the verifier FAILED TO EXECUTE
+  (`tool_result.success is False`, no verdict), or a verdict/error signalling failure — the runner
+  believes that broken-verdict and does NOT claim OK even if the static shell would serve.
+- **No static served-root** (dynamic-only app, or no deliverable) → honest 404 →
+  `FALSE_FINISH_PREVIEW_BROKEN`. Live dynamic-app preview verification is the documented follow-up —
+  never a forged pass.
+
+**INVARIANT:** the runner NEVER reports preview-health-200 without genuine positive evidence the
+deliverable serves the required content. **LIVE-PROVEN PASS** (`static_html_minimal`, `conv_75881694…`
+→ `conv_e29cc4a2…` → `conv_c33248cc…`): proxy down post-FINISH, the runner served+probed the snapshot
+(health 200, `served.html` = the real probed body), OutputTruthOracle PASS, overall **PASS**.
+Anti-false-PASS pins: `test_api_runner.test_collect_preview_{no_verify_serves_and_probes_for_genuine_evidence,
+no_verify_probe_carries_real_wrong_body,does_not_substitute_on_verifier_execution_failure}`,
+`test_snapshot_served_root_skips_internal_dirs`, `test_durable_preview_does_not_mask_wrong_content`.
 Pinned: `test_api_runner.test_collect_preview_{uses_durable_snapshot_when_proxy_404s,
 does_not_mask_failing_in_run_verify,no_durable_deliverable_stays_broken,live_proxy_wins_over_snapshot}`,
 `test_static_build_classifies_pass_with_dead_proxy_via_durable_sources`,
