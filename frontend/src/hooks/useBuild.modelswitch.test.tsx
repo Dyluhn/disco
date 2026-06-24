@@ -103,16 +103,51 @@ describe("useBuild — terminal-state model swap", () => {
     expect(streamRequestPlan).toHaveBeenCalledWith("add a dark theme");
   });
 
-  it("does NOT patch the model while RUNNING (mid-run swap is incoherent)", async () => {
+  it("does NOT patch the model while RUNNING — even when the picker was touched", async () => {
     streamStatus = "RUNNING";
     const { result } = renderHook(() => useBuild("conv_run"), { wrapper: wrapper() });
 
+    await act(async () => {
+      result.current.setModelId("model-x"); // touched, but mid-run
+    });
     await act(async () => {
       await result.current.steer("keep going but smaller");
     });
 
     expect(patchConversationSettings).not.toHaveBeenCalled();
     expect(streamSteer).toHaveBeenCalledWith("keep going but smaller");
+  });
+
+  it("PATCHes null (RESET to default) when the user explicitly picks DEFAULT on a terminal conv", async () => {
+    streamStatus = "FINISHED";
+    const { result } = renderHook(() => useBuild("conv_reset"), { wrapper: wrapper() });
+
+    // The conversation was seeded to its current model; the user then explicitly chooses
+    // DEFAULT (the picker emits null). That is a deliberate reset, NOT a no-op.
+    await act(async () => {
+      result.current.setModelId(null);
+    });
+    await act(async () => {
+      await result.current.resume();
+    });
+
+    expect(patchConversationSettings).toHaveBeenCalledWith("conv_reset", {
+      modelOverride: null,
+    });
+    expect(streamResume).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT patch when the picker was UNTOUCHED on a terminal conv (leave model as-is)", async () => {
+    streamStatus = "FINISHED";
+    const { result } = renderHook(() => useBuild("conv_untouched"), { wrapper: wrapper() });
+
+    // No setModelId — the user didn't change the picker (even though it was seeded).
+    await act(async () => {
+      await result.current.resume();
+    });
+
+    expect(patchConversationSettings).not.toHaveBeenCalled();
+    expect(streamResume).toHaveBeenCalledTimes(1);
   });
 
   it("seeds the picker from the conversation's current model on resume", async () => {

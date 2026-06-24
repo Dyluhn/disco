@@ -87,13 +87,22 @@ export function useBuild(
   // composes the next turn instead of being silently ignored. The state-aware backend
   // gate accepts the change in terminal/parked states (ERROR/STUCK/FINISHED/PAUSED/IDLE)
   // and 409s mid-run — which we swallow, so this is a safe no-op while RUNNING.
+  //
+  // TOUCHED-vs-UNTOUCHED: only PATCH when the user actually changed the picker
+  // (modelTouched). An untouched picker — including one seeded from /state on resume —
+  // means "leave the model as-is", so we send NOTHING (the backend leaves it). When
+  // touched we ALWAYS send model_override, INCLUDING when the user explicitly chose
+  // DEFAULT (modelId === null) — that is an intentional RESET, and the backend clears the
+  // override so the next turn runs the server default (NOT a silent-ignore).
   const applyModelBeforeContinue = useCallback(async () => {
     if (!session?.cid) return;
+    if (!modelTouched.current) return; // user didn't change the model → leave it
     const s = stream.status;
     const terminal =
       s === "ERROR" || s === "STUCK" || s === "FINISHED" || s === "PAUSED" || s === "IDLE";
     if (!terminal) return;
     try {
+      // modelId may be null here — an EXPLICIT default pick → backend resets to default.
       await patchConversationSettings(session.cid, { modelOverride: modelId });
     } catch {
       /* gate rejected (a run is in flight) — keep the existing model */

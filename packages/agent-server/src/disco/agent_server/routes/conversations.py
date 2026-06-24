@@ -115,17 +115,22 @@ def make_conversations_router(
             raise HTTPException(status_code=503, detail="runtime not available")
         _reject_if_imported(store, conversation_id)
 
-        # Gate model_override + assist together under the atomic pristine check.
-        if body.model_override is not None or body.assist is not None:
-            resolved_model = (
-                _resolve_model(body.model_override, runtime)
-                if body.model_override is not None
-                else None
-            )
+        # Gate model_override + assist together under the atomic state-aware check.
+        # PATCH is a PARTIAL update: a model_override field PRESENT (even as null) is an
+        # explicit choice — null on a terminal conversation means "reset to default" and
+        # must be APPLIED, not dropped (the #24 silent-ignore). A field ABSENT means leave
+        # unchanged. `model_fields_set` (Pydantic) is the present-vs-absent signal; the
+        # sticky/clear resolution then happens inside apply_settings_change (which knows the
+        # terminal-vs-pristine state). No _resolve_model here — sticky-seeding a null is a
+        # PRE-KICK convenience owned by apply_settings_change, and applying it on the route
+        # would mask an explicit terminal reset.
+        model_field_set = "model_override" in body.model_fields_set
+        if model_field_set or body.assist is not None:
             ok = await runtime.apply_settings_change(
                 conversation_id,
-                model_override=resolved_model,
+                model_override=body.model_override,
                 assist=body.assist,
+                model_provided=model_field_set,
             )
             if not ok:
                 raise HTTPException(

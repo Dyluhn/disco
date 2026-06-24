@@ -102,6 +102,25 @@ class RuntimeSettings:
             # seed from it by default (server-side, no localStorage).
             self.set_last_selected_model(model_id)
 
+    def _clear_model_override_unlocked(self, conversation_id: str) -> None:
+        """Explicit RESET — drop the per-conversation override so the next kick composes
+        the SERVER-DEFAULT driver. Does NOT touch last-selected (the global P3 sticky is a
+        convenience for NEW conversations, not this one's pin). Inner (non-locking) form;
+        call ONLY from apply_settings_change (which holds the per-cid lock)."""
+        if self._rt._model_override.pop(conversation_id, None) is not None:
+            self._rt._save_overrides()
+
+    def _resolve_sticky_model(self) -> str | None:
+        """The validated last-selected model (P3 sticky), or None. Mirrors the cfg guard in
+        conversations._resolve_model so a stale/deleted sticky key never composes — used to
+        seed an explicit-null model_override on the PRISTINE pre-kick path (NOT terminal)."""
+        last = self.get_last_selected_model()
+        if last:
+            cfg = self._rt._config_store.load()
+            if last in cfg.models:
+                return last
+        return None
+
     def set_model_override(self, conversation_id: str, model_id: str | None) -> None:
         """Pin the driver model for a conversation (the Build chat model picker). The id
         is a catalogue KEY; RouterAgent reassigns AGENT_DRIVER to it. Must be set before
@@ -402,6 +421,7 @@ class RuntimeSettings:
         *,
         model_override: str | None = None,
         assist: bool | None = None,
+        model_provided: bool | None = None,
     ) -> bool:
         """Atomically apply a model/assist change under the per-cid lock.
 
@@ -417,8 +437,23 @@ class RuntimeSettings:
         driver/summarizer/policy/tool-scope with the NEW model. The pristine pre-kick path
         is byte-identical to before (incl. the compose→register race guard).
 
+        `model_provided` is a tri-state distinguishing "the caller explicitly sent a
+        model_override field" from "it was omitted" — needed so an explicit NULL (the user
+        choosing DEFAULT on a terminal conversation = reset-to-default) is APPLIED as a
+        CLEAR, not silently ignored (the #24 silent-ignore class). None ⇒ inferred from
+        model_override (a non-None value counts as provided), preserving every existing
+        caller that passes a concrete key. The PATCH route passes the explicit
+        `model_override in model_fields_set` so a provided-null is honored.
+
+        Null semantics depend on state: on a TERMINAL conversation a provided-null CLEARS
+        the override (next turn = server default); on the PRISTINE pre-kick path a
+        provided-null seeds the P3 sticky last-selected (unchanged convenience), never a
+        clear — so a create-time seed is preserved.
+
         Callers MUST NOT hold the per-cid lock already (the inner setters are
         non-reentrant to avoid deadlock)."""
+        if model_provided is None:
+            model_provided = model_override is not None
         lock = self._settings_locks.setdefault(conversation_id, asyncio.Lock())
         async with lock:
             settable, terminal = await self._settable_kind(conversation_id)
@@ -436,13 +471,23 @@ class RuntimeSettings:
                 return False
             if not terminal and conversation_id in self._rt._loops:
                 return False
-            if model_override is not None:
-                self._set_model_override_unlocked(conversation_id, model_override)
+            if model_provided:
+                if model_override:
+                    # Pin a concrete catalogue key.
+                    self._set_model_override_unlocked(conversation_id, model_override)
+                elif terminal:
+                    # Explicit DEFAULT (null) on a terminal conversation = reset-to-default.
+                    self._clear_model_override_unlocked(conversation_id)
+                else:
+                    # Explicit null pre-kick = P3 sticky-seed convenience (NOT a clear).
+                    sticky = self._resolve_sticky_model()
+                    if sticky:
+                        self._set_model_override_unlocked(conversation_id, sticky)
             if assist is not None:
                 self._set_assist_unlocked(conversation_id, assist)
             # Terminal swap: drop the loop/executor bound to the OLD model so the next
             # kick re-composes with the NEW one (the model-pill-silently-ignored fix).
-            if terminal and (model_override is not None or assist is not None):
+            if terminal and (model_provided or assist is not None):
                 self._rt._evict_loop_for_model_change(conversation_id)
             return True
 

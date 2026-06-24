@@ -561,6 +561,116 @@ async def test_loop_for_rebuilds_with_new_model_after_swap(tmp_path, monkeypatch
     assert loop2.agent._model_override == model_b  # the NEW model drives
 
 
+# ── P1: explicit DEFAULT (null) reset in a terminal state (no silent-ignore) ──
+
+
+async def test_explicit_null_on_terminal_clears_override_to_default(tmp_path, monkeypatch):
+    """P1 — a user choosing DEFAULT (null) on a TERMINAL conversation that had an explicit
+    model A must CLEAR the override (no silent-ignore) so the next turn runs the SERVER
+    DEFAULT, not A. Asserts the override is cleared, the loop is evicted, and the
+    re-resolved AGENT_DRIVER is the default (not A)."""
+    from disco.core.llm.types import ModelRole
+
+    rt = _rt(tmp_path, monkeypatch)
+    await _seed_terminal(rt, "c1", ConversationStatus.FINISHED)
+    cfg = rt._config_store.load()
+    # The server default AGENT_DRIVER resolves via model_for (a role assignment OR the
+    # default_model fallback) — not necessarily an explicit assignments entry.
+    default = cfg.model_for(ModelRole.AGENT_DRIVER)
+    model_a = next(k for k in cfg.models if k != default)
+    rt._model_override["c1"] = model_a
+    rt._loops["c1"] = MagicMock()
+
+    # The PATCH route passes model_provided=True for an explicit null (reset to default).
+    ok = await rt.apply_settings_change("c1", model_override=None, model_provided=True)
+    assert ok is True
+    assert "c1" not in rt._model_override  # CLEARED (not left at model_a)
+    assert "c1" not in rt._loops  # evicted → next kick re-resolves
+    # The next compose resolves AGENT_DRIVER to the DEFAULT, not the prior explicit A.
+    resolved = rt._router_now(pick=rt._model_override.get("c1"))._config.model_for(
+        ModelRole.AGENT_DRIVER
+    )
+    assert resolved == default
+    assert resolved != model_a
+
+
+async def test_untouched_terminal_leaves_override(tmp_path, monkeypatch):
+    """The other half: an UNTOUCHED picker (model_override field ABSENT, model_provided
+    False) must LEAVE the conversation's model A unchanged — no clear, no evict."""
+    rt = _rt(tmp_path, monkeypatch)
+    await _seed_terminal(rt, "c1", ConversationStatus.FINISHED)
+    rt._model_override["c1"] = "model-a"
+    rt._loops["c1"] = MagicMock()
+    sentinel_loop = rt._loops["c1"]
+
+    # No model field, no assist → settable, but nothing requested → model untouched, loop
+    # NOT evicted.
+    ok = await rt.apply_settings_change("c1", model_provided=False)
+    assert ok is True
+    assert rt._model_override.get("c1") == "model-a"  # left as-is
+    assert rt._loops.get("c1") is sentinel_loop  # not evicted (no change requested)
+
+
+async def test_explicit_null_pre_kick_seeds_sticky_not_clear(tmp_path, monkeypatch):
+    """P3 preserved: an explicit null on the PRISTINE pre-kick path seeds the sticky
+    last-selected model (a convenience), NOT a clear — so a create-time seed survives."""
+    rt = _rt(tmp_path, monkeypatch)
+    rt._store.create_conversation("c1")
+    cfg = rt._config_store.load()
+    sticky = next(iter(cfg.models))  # any valid catalogue key
+    rt.set_last_selected_model(sticky)
+
+    ok = await rt.apply_settings_change("c1", model_override=None, model_provided=True)
+    assert ok is True
+    assert rt._model_override.get("c1") == sticky  # sticky-seeded, NOT cleared/left empty
+
+
+async def test_patch_route_explicit_null_resets_terminal_to_default(tmp_path, monkeypatch):
+    """PATCH /settings {"model_override": null} on a terminal conversation → 200 + the
+    override is cleared (the route honors the explicit field via model_fields_set)."""
+    from disco.agent_server.app import create_app
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("PMX_DB", str(tmp_path / "c.db"))
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store=store)
+    app = create_app(store, runtime=rt)
+    client = TestClient(app)
+
+    cid = client.post("/conversations", json={"surface": "build"}).json()["conversation_id"]
+    await _seed_terminal(rt, cid, ConversationStatus.FINISHED)
+    rt._model_override[cid] = "explicit-model-a"
+
+    r = client.patch(f"/conversations/{cid}/settings", json={"model_override": None})
+    assert r.status_code == 200
+    assert r.json()["model_override"] is None  # cleared
+    assert cid not in rt._model_override
+    sr = client.get(f"/conversations/{cid}/state")
+    assert sr.json()["model_override"] is None
+
+
+async def test_patch_route_assist_only_leaves_terminal_model(tmp_path, monkeypatch):
+    """PATCH /settings with assist ONLY (model_override field ABSENT) on a terminal
+    conversation must NOT touch the model — the field's absence means leave-as-is."""
+    from disco.agent_server.app import create_app
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("PMX_DB", str(tmp_path / "c.db"))
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store=store)
+    app = create_app(store, runtime=rt)
+    client = TestClient(app)
+
+    cid = client.post("/conversations", json={"surface": "build"}).json()["conversation_id"]
+    await _seed_terminal(rt, cid, ConversationStatus.FINISHED)
+    rt._model_override[cid] = "model-a"
+
+    r = client.patch(f"/conversations/{cid}/settings", json={"assist": True})
+    assert r.status_code == 200
+    assert rt._model_override.get(cid) == "model-a"  # model left untouched
+    assert rt.is_assist(cid) is True
+
+
 async def test_resume_after_swap_composes_new_model(tmp_path, monkeypatch):
     """FULL-path proof (apply_settings_change → resume_conversation → kick → _loop_for):
     an ERRORED conversation swapped to model-b and then RESUMED composes its next-turn loop

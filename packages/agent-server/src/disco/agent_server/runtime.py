@@ -1061,11 +1061,16 @@ class ConversationRuntime:
         *,
         model_override: str | None = None,
         assist: bool | None = None,
+        model_provided: bool | None = None,
     ) -> bool:
-        """Delegator: atomically apply pre-kick settings under the per-cid lock.
-        Returns True if pristine and applied; False → caller should 409."""
+        """Delegator: atomically apply pre-kick / terminal-state settings under the per-cid
+        lock. `model_provided` distinguishes an explicit null (reset-to-default) from an
+        omitted field. Returns True if settable and applied; False → caller should 409."""
         return await self._settings.apply_settings_change(
-            conversation_id, model_override=model_override, assist=assist
+            conversation_id,
+            model_override=model_override,
+            assist=assist,
+            model_provided=model_provided,
         )
 
     # ---- artifact_mode (C6) ------------------------------------------------
