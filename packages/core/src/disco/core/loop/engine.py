@@ -902,24 +902,27 @@ class AgentLoop:
                     return Disp.HALT
                 return Disp.CONTINUE
             # tc is a tool call that is NEITHER submit_plan NOR no-tool prose.
-            # Only the planning allowlist may run before plan approval:
-            #   - the read/explore tools (file_read/file_list/search/extract,
-            #     governed by _planning_tools),
-            #   - submit_plan (defensively included even where _planning_tools
-            #     omits it), and
-            #   - the virtual ask_user/clarify escape hatches.
-            # ANY OTHER tool (file_write, shell, browser, serve, finish, ...) must
-            # NOT mutate the workspace or execute before the plan is approved
-            # (spec §11.1/11.3/11.7). REJECT it — never execute — with a RECOVERABLE
-            # observation the model sees: record the attempted ActionEvent (so the
-            # assistant tool_call stays PAIRED with a tool-role result — KV
-            # stability, same discipline as the hard-deny path) + a paired
-            # AgentErrorEvent (kept visible by View), then hand the model another
-            # turn so it can submit_plan / read / ask. This ALSO closes the revision
-            # re-entry leak: enter_planning() puts the loop back in PLANNING, so a
-            # write before the revised plan is approved hits this same gate.
+            # Only the planning allowlist may run before plan approval. That
+            # allowlist is DERIVED FROM THE SAME read-only-capability ∩ name
+            # intersection used for tool VISIBILITY (Driver.planning_allowed_tool_
+            # names ↔ tools_for_step), so the gate and the advertised tools can
+            # never drift: the read/explore tools (file_read/file_list/search/
+            # extract — capability-and-allowlist gated), submit_plan (always, even
+            # if unadvertised), and the virtual ask_user/clarify escape hatches.
+            # ANY OTHER tool (file_write, shell, browser, serve, finish, remember,
+            # notify_user, delegate_explore, ...) must NOT mutate the workspace or
+            # execute before the plan is approved (spec §11.1/11.3/11.7). REJECT it
+            # — never execute — with a RECOVERABLE observation the model sees:
+            # record the attempted ActionEvent (so the assistant tool_call stays
+            # PAIRED with a tool-role result — KV stability, same discipline as the
+            # hard-deny path) + a paired AgentErrorEvent (kept visible by View),
+            # then hand the model another turn so it can submit_plan / read / ask.
+            # This gate runs BEFORE the per-tool meta/finish handlers (see the run
+            # loop) so finish/serve/remember/notify_user/delegate_explore can't slip
+            # past to their handlers; and it ALSO closes the revision re-entry leak
+            # (enter_planning() puts the loop back in PLANNING).
             planning_virtuals = {"ask_user", "clarify"}
-            allowed = set(self._planning_tools) | {self._plan_tool} | planning_virtuals
+            allowed = self._driver.planning_allowed_tool_names()
             if tc.tool_name not in allowed:
                 action = ActionEvent(
                     thought=step.thought,
@@ -1251,6 +1254,22 @@ class AgentLoop:
                 # (handled above); a fall-through disp always carries a real step.
                 assert step is not None
 
+                # (e.3) PLANNING PHASE GATE — runs BEFORE the per-tool meta/finish
+                # handlers below so NOTHING outside the planning allowlist reaches
+                # its handler or execution while in PLANNING. submit_plan is
+                # intercepted, a no-tool prose turn is nudged, read/explore tools +
+                # ask_user/clarify fall through to their normal paths, and EVERY
+                # other tool (finish/serve/remember/notify_user/delegate_explore/
+                # file_write/shell/browser/…) gets a recoverable rejection — closing
+                # the bypass where a finish/serve/remember could run before plan
+                # approval. In EXECUTION mode this is an immediate no-op fall-through,
+                # so the meta/finish handlers behave exactly as before.
+                disp = await self._gate_planning_mode(step, events)
+                if disp is Disp.CONTINUE:
+                    continue
+                if disp is Disp.HALT:
+                    return await self.get_state()
+
                 # (e.4) TURN-TAKING NORMALIZATION (GAP B fix). Completion is now
                 # AFFIRMATIVE: the agent ends a run only by calling the `finish`
                 # tool, never by emitting a tool-less prose turn (which the old
@@ -1285,13 +1304,11 @@ class AgentLoop:
                     if disp is Disp.CONTINUE:
                         continue
 
-                disp = await self._gate_planning_mode(step, events)
-                if disp is Disp.CONTINUE:
-                    continue
-                if disp is Disp.HALT:
-                    return await self.get_state()
                 # Any productive step (planning read OR execution action) resets the
                 # nudge counter so a recovered loop gets a fresh budget next time.
+                # (The planning phase gate above already intercepted/rejected the
+                # non-fall-through cases; a step reaching here is a real action or an
+                # allowlist planning read.)
                 self._plan_nudges = 0
 
                 # (e.6) TRUNCATION (W-31). The provider cut the assistant message

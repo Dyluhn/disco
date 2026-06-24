@@ -10,8 +10,9 @@ Drives the REAL AgentLoop via loop_fakes (no live model, no sandbox).
 
 from __future__ import annotations
 
+import pytest
 from _buildsoak_fakes import BuildExecutor, build_plan_loop
-from disco.core import ActionEvent, AgentErrorEvent, ObservationEvent, PlanEvent
+from disco.core import ActionEvent, AgentErrorEvent, ObservationEvent, PlanEvent, StatusEvent
 from disco.core.events import ConversationStatus
 from loop_fakes import ScriptedAgent, action_step
 
@@ -104,3 +105,77 @@ async def test_write_during_revision_is_rejected_before_revised_approval():
     plans = [e for e in events if isinstance(e, PlanEvent)]
     assert [p.revision for p in plans] == [1, 2], "the revised plan submitted after rejection"
     assert (await loop.get_state()).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+
+
+# Every non-allowlist tool FAMILY — not just file_write. The meta/finish handlers
+# (notify_user/remember/serve/delegate_explore/finish) run BEFORE the planning gate
+# in the loop, so the gate must sit AHEAD of them: a scripted finish/serve/remember/
+# notify_user/shell in PLANNING must be rejected (recoverable), never dispatched to
+# its handler or executor.
+@pytest.mark.parametrize("tool", ["finish", "serve", "remember", "notify_user", "shell"])
+async def test_non_allowlist_tool_rejected_in_planning(tool):
+    agent = ScriptedAgent([action_step(tool, {}), _submit_plan_step("recover")])
+    executor = BuildExecutor()
+    cid = f"pw-{tool}"
+    loop, store = build_plan_loop(agent, conversation_id=cid, executor=executor)
+    await loop.send_message("create a page")
+    await loop.run()
+
+    events = await store.get_events(cid)
+
+    # The disallowed tool was ATTEMPTED + REJECTED (paired AgentErrorEvent) ...
+    attempts = [e for e in events if isinstance(e, ActionEvent) and e.tool_call.tool_name == tool]
+    assert len(attempts) == 1, f"expected exactly one attempted {tool} ActionEvent"
+    rejections = [
+        e for e in events if isinstance(e, AgentErrorEvent) and e.action_id == attempts[0].id
+    ]
+    assert len(rejections) == 1, f"{tool} was not rejected with a paired AgentErrorEvent"
+    assert rejections[0].tool_call_id == attempts[0].tool_call.call_id
+
+    # ... its handler/executor never ran: no FINISHED, no executor call for it.
+    assert not any(
+        isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED for e in events
+    ), f"{tool} reached the finish/meta handler in PLANNING"
+    assert not any(c.tool_name == tool for c in executor.calls), f"{tool} reached the executor"
+
+    # ... and the model recovered: submit_plan after the rejection halts for approval.
+    assert len([e for e in events if isinstance(e, PlanEvent)]) == 1
+    assert (await loop.get_state()).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+
+
+async def test_allowlist_read_tools_still_execute_in_planning():
+    """The planning allowlist (read/explore) still runs in PLANNING — the gate
+    rejects ONLY non-allowlist tools, it does not block exploration."""
+    agent = ScriptedAgent(
+        [
+            action_step("file_read", {"path": "a.txt"}),
+            action_step("file_list", {"path": "."}),
+            action_step("search", {"query": "x"}),
+            action_step("extract", {"path": "a.txt"}),
+            _submit_plan_step("plan"),
+        ]
+    )
+    executor = BuildExecutor()
+    loop, store = build_plan_loop(agent, conversation_id="pw-reads", executor=executor)
+    await loop.send_message("build")
+    await loop.run()
+
+    events = await store.get_events("pw-reads")
+    ran = {c.tool_name for c in executor.calls}
+    assert {"file_read", "file_list", "search", "extract"} <= ran, f"a read was blocked: {ran}"
+    assert not any(isinstance(e, AgentErrorEvent) for e in events), "a read tool was rejected"
+    assert len([e for e in events if isinstance(e, PlanEvent)]) == 1
+    assert (await loop.get_state()).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+
+
+async def test_ask_user_allowed_in_planning_halts_for_input():
+    """ask_user is an allowlisted virtual escape hatch — it must NOT be rejected; it
+    halts at AWAITING_USER_QUESTION via its existing handler."""
+    agent = ScriptedAgent([action_step("ask_user", {"question": "which color?"})])
+    loop, store = build_plan_loop(agent, conversation_id="pw-ask")
+    await loop.send_message("build a page")
+    await loop.run()
+
+    events = await store.get_events("pw-ask")
+    assert not any(isinstance(e, AgentErrorEvent) for e in events), "ask_user was wrongly rejected"
+    assert (await loop.get_state()).execution_status == ConversationStatus.AWAITING_USER_QUESTION

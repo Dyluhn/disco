@@ -48,14 +48,31 @@ were NOT touched here.
 | 4 | `APPROVE_PLAN_NO_EXECUTION` | P0 | open (xfail, strict) | `test_plan_approval_execution.py::test_kick_after_approval_produces_action_or_terminal_failure` | `finish.py` `gate_execution_nudge` (~L1008, `_EXECUTION_NUDGE_CAP` release) | §11.2, §20.4 |
 | 5 | `THINK_NOT_EXPOSED_IN_PLANNING` | P2 (gap) | open (xfail, strict) | `test_build_plan_contract.py::test_first_turn_planning_exposes_think` | `runtime.py:1467` planning allowlist | §11.1, §15.2, §20.1 |
 
-> **Bugs 1–3 FIXED** on branch `fix-planning-gate`: `_gate_planning_mode` (engine.py) now
-> rejects any tool call that is not in the planning allowlist (`submit_plan` + `_plan_tool`
-> defensively, the read/explore tools `file_read`/`file_list`/`search`/`extract`, and the
-> virtual `ask_user`/`clarify`) with a recoverable, model-visible `AgentErrorEvent` paired by
-> `tool_call_id` (`Disp.CONTINUE`) — it NEVER falls through to execution. The three strict-xfail
-> markers were removed (the tests are now normal passing tests) and a dedicated real-loop
-> regression suite was added (`test_planning_write_rejection.py`). Bugs 4 + 5 are separate
-> fixes and remain strict-xfail.
+> **Bugs 1–3 FIXED** on branch `fix-planning-gate` (two commits): the PLANNING phase gate
+> (`_gate_planning_mode`, engine.py) rejects any tool call that is not in the planning allowlist
+> with a recoverable, model-visible `AgentErrorEvent` paired by `tool_call_id` (`Disp.CONTINUE`)
+> — it NEVER falls through to execution, and it NEVER reaches a per-tool handler.
+>
+> Two hardening passes after the codex review of the first commit:
+> 1. **Gate runs BEFORE the per-tool meta/finish handlers.** The first commit's check ran
+>    *after* the `notify_user`/`remember`/`serve`/`delegate_explore`/`finish` dispatch, so those
+>    bypassed it and could run in PLANNING. The `_gate_planning_mode` call was moved ahead of all
+>    those handlers in the run loop, so the invariant is total: in PLANNING the ONLY tools that
+>    ever reach a handler/execution are the planning allowlist; everything else
+>    (finish/serve/remember/notify_user/delegate_explore/file_write/shell/browser/…) gets the
+>    recoverable rejection. In EXECUTION mode the gate is an immediate no-op fall-through, so the
+>    meta/finish handlers are unchanged.
+> 2. **Allowlist derived from the read-only capability set, not `_planning_tools` alone.** The
+>    gate now sources its allowlist from `Driver.planning_allowed_tool_names()`, which reuses the
+>    EXACT read-only-capability ∩ name-allowlist intersection that `tools_for_step()` uses for
+>    tool VISIBILITY — plus `submit_plan` (always) and the virtual `ask_user`/`clarify`. Gate and
+>    advertised tools can no longer drift (a misconfigured `_planning_tools` naming a write tool
+>    is still excluded by the capability backstop).
+>
+> The three strict-xfail markers were removed (now normal passing tests) and a dedicated
+> real-loop regression suite (`test_planning_write_rejection.py`) covers every non-allowlist tool
+> family (file_write/finish/serve/remember/notify_user/shell) plus the positive paths (read tools
+> still execute, ask_user still halts). Bugs 4 + 5 are separate fixes and remain strict-xfail.
 
 ## Root causes
 
