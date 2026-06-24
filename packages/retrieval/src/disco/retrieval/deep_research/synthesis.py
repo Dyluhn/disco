@@ -163,6 +163,118 @@ def _validate_charts(markdown: str) -> str:
     return "".join(out)
 
 
+def _normalize_citations(markdown: str, valid_ids: set[str]) -> str:
+    """BW-05 — promote bare single-bracket ``[id]`` citations to ``[[id]]`` when
+    ``id`` is a known passage id. The synthesis prompt asks for ``[[id]]`` but
+    models intermittently emit a single bracket; the frontend parsers and the
+    backend cited-id extraction only match the double-bracket form, so a bare
+    ``[id]`` leaks through as literal prose AND is never tracked/NLI-checked.
+
+    Only ids actually present in ``valid_ids`` are rewritten, so prose brackets
+    (markdown links, ``[1]`` footnote-style noise, bracketed asides) are left
+    untouched."""
+    if not valid_ids:
+        return markdown
+
+    def repl(m: re.Match[str]) -> str:
+        return f"[[{m.group(1)}]]" if m.group(1) in valid_ids else m.group(0)
+
+    # (?<!\[) / (?!\]) ensure we never touch an already-doubled [[id]].
+    return re.sub(r"(?<!\[)\[([\w-]+)\](?!\])", repl, markdown)
+
+
+_DELIM_CELL_RE = re.compile(r"^\s*:?-{1,}:?\s*$")
+
+
+def _is_delimiter_row(line: str) -> bool:
+    """A GFM table delimiter row — every cell is ``-``/``:--``/``--:``/``:-:``."""
+    s = line.strip()
+    if "|" not in s or "-" not in s:
+        return False
+    inner = s.strip("|")
+    cells = inner.split("|")
+    return bool(cells) and all(_DELIM_CELL_RE.match(c) for c in cells)
+
+
+def _normalize_table_row(line: str, ncols: int) -> str:
+    """Re-emit a pipe row with leading/trailing pipes and exactly ``ncols``
+    cells (pad short, clip long) so remark-gfm parses it."""
+    inner = line.strip()
+    if inner.startswith("|"):
+        inner = inner[1:]
+    if inner.endswith("|"):
+        inner = inner[:-1]
+    cells = [c.strip() for c in inner.split("|")]
+    if len(cells) < ncols:
+        cells += [""] * (ncols - len(cells))
+    elif len(cells) > ncols:
+        cells = cells[:ncols]
+    return "| " + " | ".join(cells) + " |"
+
+
+def _repair_tables(markdown: str) -> str:
+    """BW-07 — repair malformed GFM tables so remark-gfm parses them instead of
+    falling back to a literal-pipe paragraph.
+
+    For each run of consecutive pipe-bearing lines (outside fenced code blocks),
+    this normalizes rows that are missing their leading/trailing pipe and injects
+    a ``|---|`` delimiter row when a multi-column header is followed by data rows
+    with no delimiter. A lone single pipe line (a truncated/header-only fragment,
+    or just prose that happens to contain a ``|``) is left untouched — we only
+    rewrite a run we are confident is a real table (>= 2 rows, header has >= 2
+    cells, or it already carries a delimiter)."""
+    lines = markdown.split("\n")
+    out: list[str] = []
+    in_fence = False
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+        stripped = line.lstrip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            out.append(line)
+            i += 1
+            continue
+        if in_fence or "|" not in line:
+            out.append(line)
+            i += 1
+            continue
+
+        # Gather a run of consecutive pipe-bearing, non-fence, non-blank lines.
+        run: list[str] = []
+        j = i
+        while j < n:
+            lj = lines[j]
+            if lj.lstrip().startswith("```") or "|" not in lj or not lj.strip():
+                break
+            run.append(lj)
+            j += 1
+
+        has_delim = any(_is_delimiter_row(r) for r in run)
+        header_cells = len([c for c in run[0].strip().strip("|").split("|")])
+        is_table = has_delim or (len(run) >= 2 and header_cells >= 2)
+        if not is_table:
+            out.extend(run)
+            i = j
+            continue
+
+        # Real table: normalize. Determine column count from the header row.
+        ncols = max(2, header_cells)
+        rebuilt: list[str] = [_normalize_table_row(run[0], ncols)]
+        body = run[1:]
+        if body and _is_delimiter_row(body[0]):
+            rebuilt.append("| " + " | ".join(["---"] * ncols) + " |")
+            body = body[1:]
+        else:
+            rebuilt.append("| " + " | ".join(["---"] * ncols) + " |")
+        for r in body:
+            rebuilt.append(_normalize_table_row(r, ncols))
+        out.extend(rebuilt)
+        i = j
+    return "\n".join(out)
+
+
 _SECTION_PROMPT = (
     "You are writing one section of an analytical research report. Your job is "
     "to SYNTHESIZE across the cited sources — not summarize them serially.\n\n"
@@ -408,6 +520,43 @@ async def synthesize_section(
         )
         markdown = resp.text.strip()
 
+        # BW-07 (2) — TRUNCATION GUARD. The section cap is small; when a section
+        # is cut off mid-content (`finish_reason=="length"`, often mid-table)
+        # remark-gfm receives a half-table and renders raw pipes. Continue from
+        # the cut point (bounded) so the section terminates on a clean boundary.
+        _cont = 0
+        while resp.finish_reason == "length" and _cont < 2:
+            _cont += 1
+            try:
+                resp = await cast(_RouterWithCtx, router).complete(
+                    CompletionRequest(
+                        profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
+                        messages=[
+                            LLMMessage(role="user", content=instruction),
+                            LLMMessage(role="assistant", content=markdown),
+                            LLMMessage(
+                                role="user",
+                                content=(
+                                    "Your previous reply was cut off. Continue "
+                                    "EXACTLY where you stopped — do not repeat any "
+                                    "earlier text and do not add a preamble. If you "
+                                    "were mid-table, finish the table."
+                                ),
+                            ),
+                        ],
+                        temperature=_SYNTHESIS_TEMPERATURE,
+                        max_tokens=1400,
+                    ),
+                    context=leg_context.call_context,
+                )
+            except Exception:  # noqa: BLE001 — keep the partial section
+                break
+            extra = resp.text.strip()
+            if not extra:
+                break
+            # Glue directly if we were cut mid-token; otherwise start a new line.
+            markdown = markdown + ("" if not markdown[-1:].isspace() else "\n") + extra
+
         # CHART VALIDATION & RETRY
         chart_matches = re.findall(r"```chart\n(.*?)\n```", markdown, re.DOTALL)
         if chart_matches:
@@ -451,6 +600,10 @@ async def synthesize_section(
 
         # Final safety validation (degrade invalid charts to tables)
         markdown = _validate_charts(markdown)
+        # BW-05 — promote bare [id] citations to [[id]] so they render + track.
+        markdown = _normalize_citations(markdown, {p.id for p in passages})
+        # BW-07 (1) — repair malformed/half tables so remark-gfm never sees one.
+        markdown = _repair_tables(markdown)
 
     except Exception as exc:  # noqa: BLE001 — synthesis failure → honest empty
         return ReportSection(
