@@ -196,6 +196,19 @@ _PLAN_NUDGE = (
     "</system-reminder>"
 )
 
+# Bug 12 (§11.4) — refusal for a mutating tool that reaches the apply boundary
+# AFTER a change/revision steer landed mid-step (the in-flight write-through race).
+# The build has been put back into PLANNING; the model must submit a revised plan.
+_MIDSTEP_STEER_REFUSAL = (
+    "<system-reminder>\n"
+    "REFUSED: `{tool}` was not applied. A change request arrived while you were "
+    "mid-step, so this action would have landed on the OLD, now-stale plan. The "
+    "build has re-entered PLANNING. Fold the new request into a REVISED plan and "
+    "call `submit_plan`; once it is approved you can apply the change. You may also "
+    "read (file_read/file_list/search/extract) or ask/clarify first.\n"
+    "</system-reminder>"
+)
+
 # _STUCK_ESCAPE_TEMP moved to loop/driver.py (with the drive step that applies it).
 
 # _EXECUTION_NUDGE moved to loop/finish.py (with the execution-nudge gate).
@@ -1420,6 +1433,16 @@ class AgentLoop:
                     if await self._meta.handle_ask_user(step, events) is Disp.HALT:
                         return await self.get_state()
 
+                # Bug 12 (§11.4) — close the in-flight steer write-through race: a
+                # change steer that landed DURING this drive_step (after the
+                # top-of-loop re-plan check) must not get one mutating call through
+                # on the OLD plan. Re-poll + re-enter PLANNING + defer the write.
+                disp = await self._gate_midstep_steer_replan(step)
+                if disp is Disp.CONTINUE:
+                    continue
+                if disp is Disp.HALT:
+                    return await self.get_state()
+
                 # (h) build the ActionEvent
                 # A real action is being taken — the invisible-step streak is over.
                 self._invisible_steps = 0
@@ -1791,6 +1814,57 @@ class AgentLoop:
         )
         await self._planner.emit_replan_framing_if_revision(text)
         return True
+
+    async def _gate_midstep_steer_replan(self, step: AgentStep) -> Disp:
+        """Bug 12 (§11.4) — close the IN-FLIGHT steer write-through race. The
+        top-of-loop re-plan check (`_run_drive`) runs BEFORE `drive_step()`; a
+        change/revision steer that lands WHILE the model is mid-turn is therefore
+        missed by it, and the in-flight step may be a WRITE against the OLD plan.
+
+        This apply-time gate runs AFTER `drive_step()` returns, just before the
+        ActionEvent is built/executed. For a MUTATING tool (anything the planning
+        gate would reject — reads/think/explore pass) it RE-POLLS the log for a
+        fresh unprocessed CHANGE follow-up since the last approval; if one is
+        pending it RE-ENTERS PLANNING and REJECTS this call recoverably (the same
+        shape as `_gate_planning_mode`: record the ActionEvent so the assistant
+        tool_call stays PAIRED with a tool-role result, then a paired
+        AgentErrorEvent the View keeps). So no write lands on the stale plan — the
+        model must submit a revised plan first. A pure Q&A follow-up is exempt
+        (`signals.is_revision_intent`); a read/think mid-step is never deferred.
+
+        Lock-free (caller holds `self._lock`). Returns CONTINUE when it deferred
+        the call, else FALLTHROUGH (the common, no-steer case — zero behavior
+        change for a normal execution turn)."""
+        if self.mode == OperatingMode.PLANNING:
+            return Disp.FALLTHROUGH  # the planning gate already governs writes
+        tc = step.tool_call
+        if tc is None:
+            return Disp.FALLTHROUGH
+        # MUTATING = anything the planning gate would reject. Reusing the SAME set
+        # as `_gate_planning_mode` (read-only-capability ∩ allowlist, + submit_plan
+        # + ask/clarify) means a read/think/explore tool falls through and only a
+        # real workspace mutation / execution is gated — no drift, no read dead-end.
+        if tc.tool_name in self._driver.planning_allowed_tool_names():
+            return Disp.FALLTHROUGH
+        # Re-poll: a steer may have landed DURING the just-finished drive_step.
+        fresh = await self._events()
+        if not await self._maybe_reenter_planning_for_followup(fresh):
+            return Disp.FALLTHROUGH  # no pending change follow-up (or Q&A) — proceed
+        action = ActionEvent(
+            thought=step.thought,
+            tool_call=tc,
+            self_assessed_risk=step.self_assessed_risk,
+            llm_response_id=step.llm_response_id,
+        )
+        await self._emit(action)
+        await self._emit(
+            AgentErrorEvent(
+                error=_MIDSTEP_STEER_REFUSAL.format(tool=tc.tool_name),
+                action_id=action.id,
+                tool_call_id=tc.call_id,
+            )
+        )
+        return Disp.CONTINUE
 
     async def pause(self) -> ConversationState:
         """WALK-18 — cooperative pause. Deliberately does NOT take self._lock

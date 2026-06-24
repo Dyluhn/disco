@@ -169,19 +169,8 @@ async def test_revised_plan_approval_then_write_succeeds_with_ordered_chain():
     assert followup_seq < rev2_seq < awaiting_seq < approved_seq < write_seq
 
 
-# --------------------------------------------------------------------------- #
-# Test 3 — steer_while_running: a mid-run change follow-up re-enters PLANNING.  #
-# --------------------------------------------------------------------------- #
-async def test_change_followup_mid_run_reenters_planning():
-    cid = "bug12-steer"
-    agent = ScriptedAgent([_submit_plan_step("first")])
-    loop, store = build_plan_loop(agent, conversation_id=cid)
-    await loop.send_message("Create a two-page static site with Home and About.")
-    await loop.run()
-    await loop.approve_plan()
-    executor: BuildExecutor = loop.executor  # type: ignore[assignment]
-
-    async def _inject_followup() -> None:
+def _steer_injector(store, cid: str):
+    async def _inject() -> None:
         # A real product steer lands as a plain USER message mid-run (WS append),
         # NOT request_plan. Appended directly to the store (bypasses the lock the
         # drive loop holds) — exactly the live RUNNING->steer condition.
@@ -196,28 +185,121 @@ async def test_change_followup_mid_run_reenters_planning():
             ),
         )
 
-    # step0: a silent no-op that injects the follow-up (emits nothing, so the
-    #        follow-up is the latest event for iteration 1's re-entry check);
-    # step1: the model would WRITE on the OLD plan -> must be rejected in PLANNING;
-    # step2: the model submits the revised plan instead.
-    loop.agent = ScriptedAgent(
-        [_silent_noop(), _write_step("<h1>Contact</h1>", path="contact.html"),
-         _submit_plan_step("second")],
-        before={0: _inject_followup},
-    )
+    return _inject
+
+
+# --------------------------------------------------------------------------- #
+# Test 3 — steer_while_running, THE IN-FLIGHT RACE: a change steer that lands   #
+# DURING an in-flight drive_step (the step itself returns a WRITE) must NOT get #
+# one write through on the OLD plan — the apply-time gate defers it; only an    #
+# approved revised plan (rev 2) lets the write land. The top-of-loop check      #
+# alone cannot catch this (the steer arrives after it ran).                     #
+# --------------------------------------------------------------------------- #
+async def test_change_followup_mid_step_write_is_deferred_until_revised_plan():
+    cid = "bug12-steer-race"
+    agent = ScriptedAgent([_submit_plan_step("first")])
+    loop, store = build_plan_loop(agent, conversation_id=cid)
+    await loop.send_message("Create a two-page static site with Home and About.")
     await loop.run()
+    await loop.approve_plan()
+    executor: BuildExecutor = loop.executor  # type: ignore[assignment]
+
+    # `before={0: inject}` fires at the START of the step that RETURNS the write —
+    # the steer lands WHILE the write step is in flight, AFTER the top-of-loop
+    # re-plan check already ran. The apply-time gate must still defer the write.
+    loop.agent = ScriptedAgent(
+        [_write_step("<h1>Contact</h1>", path="contact.html"),
+         _submit_plan_step("second")],
+        before={0: _steer_injector(store, cid)},
+    )
+    await loop.run()  # -> AWAITING_PLAN_APPROVAL (rev 2); the mid-step write deferred
 
     events = await store.get_events(cid)
     followup_seq = _seq_of_user(events, "Contact page")
 
-    # re-entered PLANNING on the mid-run steer (_run_drive path).
+    # re-entered PLANNING off the in-flight steer (the apply-time gate path).
     assert any(
         isinstance(e, StatusEvent)
         and e.detail == "planning"
         and (e.seq or 0) > followup_seq
         for e in events
-    ), "mid-run steer did not re-enter PLANNING"
-    # the post-steer write on the OLD plan did not execute.
+    ), "in-flight steer did not re-enter PLANNING"
+    # the mid-step write on the OLD plan did NOT land (deferred, no successful obs).
+    assert "contact.html" not in executor.world
+    assert not any(
+        isinstance(e, ObservationEvent)
+        and e.tool_result.tool_name == "file_write"
+        and e.tool_result.success
+        and (e.seq or 0) > followup_seq
+        for e in events
+    ), "a write executed on the OLD plan from an in-flight steer"
+    plans = [e for e in events if isinstance(e, PlanEvent)]
+    assert [p.revision for p in plans] == [1, 2]
+    assert (
+        await loop.get_state()
+    ).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+
+    # Only an APPROVED revised plan lets the write through — the full chain holds
+    # even though the steer arrived mid-step.
+    await loop.approve_plan()
+    loop.agent = ScriptedAgent(
+        [_write_step("<h1>Contact</h1>", path="contact.html"), finish_step()]
+    )
+    await loop.run()
+    assert "contact.html" in executor.world
+
+    events = await store.get_events(cid)
+    rev2_seq = next(
+        e.seq for e in events if isinstance(e, PlanEvent) and e.revision == 2
+    )
+    approved_seq = next(
+        e.seq
+        for e in events
+        if isinstance(e, StatusEvent)
+        and e.detail == "plan_approved"
+        and (e.seq or 0) > followup_seq
+    )
+    write_seq = next(
+        e.seq
+        for e in events
+        if isinstance(e, ObservationEvent)
+        and e.tool_result.tool_name == "file_write"
+        and e.tool_result.success
+        and (e.seq or 0) > approved_seq
+    )
+    assert followup_seq < rev2_seq < approved_seq < write_seq
+
+
+# --------------------------------------------------------------------------- #
+# Test 3b — steer that arrives BETWEEN steps (the top-of-loop _run_drive check).#
+# A silent no-op step injects the steer (it persists nothing, so the steer is   #
+# the latest event for the NEXT iteration's top-of-loop check), re-entering     #
+# PLANNING; the subsequent write is then rejected by the planning gate.         #
+# --------------------------------------------------------------------------- #
+async def test_change_followup_between_steps_reenters_planning():
+    cid = "bug12-steer-between"
+    agent = ScriptedAgent([_submit_plan_step("first")])
+    loop, store = build_plan_loop(agent, conversation_id=cid)
+    await loop.send_message("Create a two-page static site with Home and About.")
+    await loop.run()
+    await loop.approve_plan()
+    executor: BuildExecutor = loop.executor  # type: ignore[assignment]
+
+    loop.agent = ScriptedAgent(
+        [_silent_noop(), _write_step("<h1>Contact</h1>", path="contact.html"),
+         _submit_plan_step("second")],
+        before={0: _steer_injector(store, cid)},
+    )
+    await loop.run()
+
+    events = await store.get_events(cid)
+    followup_seq = _seq_of_user(events, "Contact page")
+    assert any(
+        isinstance(e, StatusEvent)
+        and e.detail == "planning"
+        and (e.seq or 0) > followup_seq
+        for e in events
+    ), "between-steps steer did not re-enter PLANNING"
     assert "contact.html" not in executor.world
     plans = [e for e in events if isinstance(e, PlanEvent)]
     assert [p.revision for p in plans] == [1, 2]

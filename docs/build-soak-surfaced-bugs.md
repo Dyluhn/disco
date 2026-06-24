@@ -88,7 +88,7 @@ were NOT touched here.
 | 3 | `WRITE_BEFORE_REVISION_APPROVAL` | P1 | **FIXED** (fix-planning-gate) | `test_build_replan_contract.py::test_agent_cannot_write_before_revised_plan_approval` (now passing) | `engine.py:841` `_gate_planning_mode` (revision re-entry) | §11.4, §20.2 |
 | 4 | `APPROVE_PLAN_NO_EXECUTION` | P0 | **FIXED** (fix-approve-noexec) | `test_plan_approval_execution.py::test_kick_after_approval_produces_action_or_terminal_failure` (xfail removed, now passing) | `finish.py` `gate_execution_nudge` (`_EXECUTION_NUDGE_CAP` → STUCK terminal) | §11.2, §20.4 |
 | 5 | `THINK_NOT_EXPOSED_IN_PLANNING` | P2 (gap) | **FIXED** (fix-think-planning) | `test_build_plan_contract.py::test_first_turn_planning_exposes_think` (xfail removed, now passing) + `test_planning_write_rejection.py::test_think_allowed_in_planning_executes_then_plans` | `runtime.py:1466` planning allowlist + `engine.py` `_gate_planning_mode` | §11.1, §15.2, §20.1 |
-| 12 | `NO_REPLAN_AFTER_REVISION` | P0 | **FIXED** (fix-bug12-replan-followup) | `test_bug12_followup_replan.py` (4 real-loop tests: finished→followup, ordered chain, mid-run steer, Q&A negative) | `engine.py` `_maybe_reenter_planning_for_followup` (run() intake + `_run_drive`) + `signals.is_revision_intent` | §11.4 |
+| 12 | `NO_REPLAN_AFTER_REVISION` | P0 | **FIXED** (fix-bug12-replan-followup) | `test_bug12_followup_replan.py` (5 real-loop tests: finished→followup, ordered chain, in-flight steer race, between-steps steer, Q&A negative) | `engine.py` `_maybe_reenter_planning_for_followup` (run() intake + `_run_drive`) + `_gate_midstep_steer_replan` (apply-time, in-flight race) + `signals.is_revision_intent` | §11.4 |
 
 > **Bugs 1–3 FIXED** on branch `fix-planning-gate` (two commits): the PLANNING phase gate
 > (`_gate_planning_mode`, engine.py) rejects any tool call that is not in the planning allowlist
@@ -454,15 +454,30 @@ revise/change/add/update/remove/fix/edit/replace/make/build/… → re-plan; a c
 ("what font did you use?") → exempt; ambiguous → bias to planning, the safe contract). It sets
 `mode = PLANNING`, resets the explore-read counter, emits `StatusEvent(RUNNING, detail="planning")`,
 and emits the existing replan framing. The existing revision machinery (`Planner.plan_from_args` →
-revision = prev+1) then produces rev 2. Wired at BOTH paths: the `run()` intake (the FINISHED→followup
-case) AND `_run_drive()` before `drive_step()` (the mid-run RUNNING→steer case — `kick()` returns
-early when a task is active, so the intake never sees a mid-run steer). A re-entered run produces the
+revision = prev+1) then produces rev 2. Wired at THREE points: the `run()` intake (the FINISHED→followup
+case); `_run_drive()` before `drive_step()` (the mid-run RUNNING→steer case — `kick()` returns early
+when a task is active, so the intake never sees a mid-run steer); AND — closing the in-flight race
+below — `_gate_midstep_steer_replan` at the tool-apply boundary. A re-entered run produces the
 revision oracle's exact chain: `followup < revised PlanEvent(rev=prev+1) < AWAITING_PLAN_APPROVAL <
 RUNNING/plan_approved < write`. Q&A is exempt (answered in execution mode, no forced re-plan).
 
-Proof: `packages/core/tests/test_bug12_followup_replan.py` — 4 real-loop (`loop_fakes`) tests
+**In-flight steer race (codex-found follow-up, same branch):** the top-of-loop `_run_drive` re-plan
+check runs BEFORE `drive_step()`, so a change steer that lands WHILE the model is mid-turn is missed —
+the in-flight step can be a WRITE that lands once on the OLD plan before the next iteration re-enters
+planning (exactly what the revision oracle flags). Closed by a second, apply-time gate
+`AgentLoop._gate_midstep_steer_replan` (called just before the ActionEvent is built): for a MUTATING
+tool only (anything `Driver.planning_allowed_tool_names()` would reject — reads/think/explore pass, no
+drift) it RE-POLLS the log for a fresh pending change follow-up; if one is present it re-enters PLANNING
+and REJECTS the write recoverably (record the ActionEvent paired with an `AgentErrorEvent`, same shape
+as `_gate_planning_mode`). So even a steer that arrives during an in-flight write never gets one write
+through on the stale plan; the model must submit a revised plan first. Q&A still exempt.
+
+Proof: `packages/core/tests/test_bug12_followup_replan.py` — 5 real-loop (`loop_fakes`) tests
 reproducing the exact revise + steer conditions via the PLAIN product follow-up path (not
 `request_plan`): (1) finished→followup re-enters PLANNING + defers the stale-plan write + submits
-rev 2; (2) approving rev 2 then writes, asserting the full ordered chain; (3) a mid-run steer
-re-enters PLANNING (the `_run_drive` path); (4) negative — a pure Q&A follow-up is answered without a
-forced re-plan (no dead-end). The §20 contract suite + the planning-gate regression suite stay green.
+rev 2; (2) approving rev 2 then writes, asserting the full ordered chain; (3) the IN-FLIGHT steer race
+— the steer lands DURING the write step, the apply-time gate defers it, and only an approved revised
+plan lets the write land (proven: with the apply-gate disabled this test fails — the write goes through
+on the old plan); (3b) a between-steps steer re-enters PLANNING via the top-of-loop check; (4) negative
+— a pure Q&A follow-up is answered without a forced re-plan (no dead-end). The §20 contract suite + the
+planning-gate regression suite + the full core suite stay green.
