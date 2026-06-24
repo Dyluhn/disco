@@ -31,15 +31,19 @@ from .. import failure_codes as fc
 from ..events import (
     KIND_ACTION,
     KIND_MESSAGE,
+    KIND_PLAN,
     PLANNING_DETAIL,
     SRC_USER,
-    has_plan,
+    awaiting_approval_seqs,
+    has_action,
     has_status,
+    is_autonomous,
     kind_of,
     latest_plan_revision,
     plan_approved_seqs,
     seq_of,
     source_of,
+    terminal_status,
     tool_name_of,
 )
 from .schema import OracleResult, failing, passing, skipping
@@ -74,6 +78,14 @@ def _first_approval_after(events: list[dict[str, Any]], after_seq: int) -> int |
     return None
 
 
+def _first_plan_after(events: list[dict[str, Any]], after_seq: int) -> tuple[int, int] | None:
+    """(seq, revision) of the FIRST PlanEvent strictly after `after_seq`, else None."""
+    for e in events:
+        if kind_of(e) == KIND_PLAN and seq_of(e) > after_seq:
+            return seq_of(e), int(e.get("revision", 1))
+    return None
+
+
 class RevisionOracle:
     def check(
         self, events: list[dict[str, Any]], *, scenario: dict[str, Any] | None = None
@@ -89,10 +101,12 @@ class RevisionOracle:
             return [skipping(_ORACLE, reason="no follow-up user turns after the first approval")]
 
         followups_spec = scenario.get("followups") if scenario else None
+        autonomous = is_autonomous(scenario)
+        awaiting = awaiting_approval_seqs(events)
+        term = terminal_status(events)
 
         for i, fseq in enumerate(followups):
             rev_before = _rev_upto(events, fseq)
-            rev_after = _rev_after(events, fseq)
             mutated_seq = _first_mutating_action_after(events, fseq)
             declared = (
                 bool(followups_spec[i].get("requires_plan_revision"))
@@ -103,11 +117,11 @@ class RevisionOracle:
             if not requires_revision:
                 continue
 
-            new_plan_after = has_plan(events, after_seq=fseq)
             replanned = has_status(events, detail=PLANNING_DETAIL, after_seq=fseq)
 
-            # link: follow-up user event -> revised plan event
-            if not new_plan_after:
+            # LINK F->P: a revised PlanEvent must appear AFTER the follow-up.
+            revised_plan = _first_plan_after(events, fseq)
+            if revised_plan is None:
                 return [
                     failing(
                         _ORACLE,
@@ -116,15 +130,17 @@ class RevisionOracle:
                         facts={
                             "followup_user_event_seq": fseq,
                             "latest_plan_revision_before_followup": rev_before,
-                            "latest_plan_revision_after_followup": rev_after,
+                            "latest_plan_revision_after_followup": _rev_after(events, fseq),
                             "replanning_status_present": replanned,
                             "first_write_tool_after_followup_seq": mutated_seq,
                             "write_before_revised_plan_approval": mutated_seq is not None,
                         },
                     )
                 ]
+            p_seq, p_rev = revised_plan
 
-            if rev_after <= rev_before:
+            # LINK P-revision: the revised plan's revision must be previous + 1.
+            if p_rev != rev_before + 1:
                 return [
                     failing(
                         _ORACLE,
@@ -132,14 +148,41 @@ class RevisionOracle:
                         first_broken_link="revised_plan_event -> incremented_revision",
                         facts={
                             "followup_user_event_seq": fseq,
+                            "revised_plan_seq": p_seq,
                             "latest_plan_revision_before_followup": rev_before,
-                            "latest_plan_revision_after_followup": rev_after,
+                            "revised_plan_revision": p_rev,
+                            "expected_revision": rev_before + 1,
                         },
                     )
                 ]
 
-            # link: write after follow-up -> revision approval
-            revised_approval = _first_approval_after(events, fseq)
+            # ORDERING F < (stale approval) < P: a plan_approved BETWEEN the follow-up
+            # and the revised plan is a STALE approval — it cannot be approving the
+            # revised plan (which does not exist yet). This is the out-of-order
+            # revised-approval false-pass.
+            stale_approval = next(
+                (s for s in plan_approved_seqs(events) if fseq < s < p_seq), None
+            )
+            if stale_approval is not None:
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.STALE_PLAN_USED_AFTER_FOLLOWUP,
+                        first_broken_link="followup_user_event -> revised_plan_approval",
+                        facts={
+                            "followup_user_event_seq": fseq,
+                            "revised_plan_seq": p_seq,
+                            "stale_plan_approved_seq": stale_approval,
+                            "reason": "plan_approved precedes the revised plan (stale approval)",
+                        },
+                    )
+                ]
+
+            # The ONLY valid revised approval is one strictly AFTER the revised plan.
+            revised_approval = _first_approval_after(events, p_seq)
+
+            # LINK write -> revised approval: no mutation before the revised plan is
+            # approved (a write before a valid post-plan approval used the stale plan).
             if mutated_seq is not None and (
                 revised_approval is None or mutated_seq < revised_approval
             ):
@@ -150,9 +193,67 @@ class RevisionOracle:
                         first_broken_link="followup_write -> revised_plan_approval",
                         facts={
                             "followup_user_event_seq": fseq,
+                            "revised_plan_seq": p_seq,
                             "first_write_tool_after_followup_seq": mutated_seq,
                             "revised_plan_approval_seq": revised_approval,
                             "write_before_revised_plan_approval": True,
+                        },
+                    )
+                ]
+
+            # LINK P < [AWAITING] < C < D — the revised approval chain.
+            if revised_approval is None:
+                # No approval AFTER the revised plan. A run that FINISHED here used a
+                # stale plan (never approved the revision); a non-terminal run is just
+                # parked at the revised AWAITING gate (legitimately incomplete).
+                if term == "FINISHED":
+                    return [
+                        failing(
+                            _ORACLE,
+                            fc.STALE_PLAN_USED_AFTER_FOLLOWUP,
+                            first_broken_link="revised_plan_event -> revised_plan_approval",
+                            facts={
+                                "followup_user_event_seq": fseq,
+                                "revised_plan_seq": p_seq,
+                                "revised_plan_approval_seq": None,
+                                "terminal_status": term,
+                            },
+                        )
+                    ]
+                continue  # incomplete — not a failure
+
+            # LINK P -> AWAITING -> C: interactive runs require an AWAITING gate
+            # BETWEEN the revised plan and its approval (autonomous auto-approves
+            # inline with no gate — legitimate).
+            if not autonomous and not any(p_seq < s < revised_approval for s in awaiting):
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.PLAN_APPROVED_STATUS_MISSING,
+                        first_broken_link="revised_plan_event -> awaiting_plan_approval",
+                        facts={
+                            "followup_user_event_seq": fseq,
+                            "revised_plan_seq": p_seq,
+                            "revised_plan_approval_seq": revised_approval,
+                            "awaiting_seqs": awaiting,
+                            "reason": "no AWAITING gate between the revised plan and its approval",
+                        },
+                    )
+                ]
+
+            # LINK C -> D: a FINISHED revised build must show an execution action
+            # after the revised approval.
+            if term == "FINISHED" and not has_action(events, after_seq=revised_approval):
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.APPROVE_PLAN_NO_EXECUTION,
+                        first_broken_link="revised_plan_approval -> execution_action",
+                        facts={
+                            "followup_user_event_seq": fseq,
+                            "revised_plan_approval_seq": revised_approval,
+                            "action_after_revised_approval": False,
+                            "terminal_status": term,
                         },
                     )
                 ]

@@ -199,6 +199,69 @@ def test_autonomous_override_via_manifest_flag():
     assert c["status"] == "PASS"
 
 
+# ---- P0 #2c — REVISED approval must follow the revised plan (ordered revised chain) ----
+
+
+def _initial_build_with_awaiting():
+    return [
+        msg(1, "user", "build"),
+        plan(2, revision=1),
+        awaiting(3, 2),
+        status(4, "RUNNING", "plan_approved"),
+        action(5, "shell", action_id="a5"),
+        observation(6, "a5"),
+        status(7, "FINISHED"),
+    ]
+
+
+def _revised_approval_before_revised_plan_log():
+    return _initial_build_with_awaiting() + [
+        msg(8, "user", "revise it"),
+        status(9, "RUNNING", "plan_approved"),  # approval BEFORE the revised plan
+        plan(10, revision=2),
+        action(11, "file_write", args={"path": "x"}, action_id="a11"),
+        observation(12, "a11"),
+        status(13, "FINISHED"),
+    ]
+
+
+def test_revised_approval_before_revised_plan_fails_both_shapes():
+    full = classify(_revised_approval_before_revised_plan_log())
+    row = classify(to_db_rows(_revised_approval_before_revised_plan_log()))
+    assert full["status"] == "FAIL"
+    assert full["code"] == "STALE_PLAN_USED_AFTER_FOLLOWUP"
+    assert row["status"] == "FAIL"  # NOT PASS in row shape
+    assert row["code"] == "STALE_PLAN_USED_AFTER_FOLLOWUP"
+
+
+def test_legit_revised_chain_passes():
+    events = _initial_build_with_awaiting() + [
+        msg(8, "user", "revise the heading"),
+        status(9, "RUNNING", "planning"),
+        plan(10, revision=2),
+        awaiting(11, 10),
+        status(12, "RUNNING", "plan_approved"),
+        action(13, "file_write", args={"path": "index.html", "content": "x"}, action_id="a13"),
+        observation(14, "a13"),
+        status(15, "FINISHED"),
+    ]
+    c = classify(events)
+    assert c["status"] == "PASS", c
+
+
+def test_autonomous_revised_chain_passes():
+    events = _initial_build_with_awaiting() + [
+        msg(8, "user", "revise"),
+        plan(9, revision=2),
+        status(10, "RUNNING", "plan_approved"),  # inline approve, no awaiting
+        action(11, "file_write", args={"path": "x"}, action_id="a11"),
+        observation(12, "a11"),
+        status(13, "FINISHED"),
+    ]
+    c = classify(events, autonomous=True)
+    assert c["status"] == "PASS", c
+
+
 # ---- P0 #3 — required-but-missing tool-scope evidence -> INVALID_RUN ----
 
 

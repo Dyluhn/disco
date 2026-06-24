@@ -11,11 +11,11 @@ These were surfaced by the FOUNDATION slice (deterministic harness + contract te
 product fixes happen in a SEPARATE later repair step — engine.py / messages.py / recitation.py
 were NOT touched here.
 
-> **Harness fail-closed fixes (NOT product bugs).** Two codex reviews of the foundation found
-> P0 **false-negatives in the adjudicator itself** — cases where it would classify a REAL
+> **Harness fail-closed fixes (NOT product bugs).** Successive codex reviews of the foundation
+> found P0 **false-negatives in the adjudicator itself** — cases where it would classify a REAL
 > failure as PASS. A false-green oracle is the worst outcome for this campaign, so they were
 > fixed inside the harness (no product change) and pinned by
-> `harness/build_soak/tests/test_fail_closed.py`:
+> `harness/build_soak/tests/test_fail_closed.py` (+ the per-oracle unit tests):
 > 1. **DB-row payload drop** (`events.py` normalize_event): a real SQLite row
 >    `{seq,kind,source,payload(JSON)}` had its `payload` dropped, hiding
 >    `detail`/`tool_call`/`revision` from every predicate →
@@ -41,14 +41,45 @@ were NOT touched here.
 >    `tool_scope` with no captured tool-scope evidence used to SKIP into PASS; now it
 >    FAIL-CLOSES to INVALID_RUN (insufficient evidence, §8) — the event-only
 >    `WRITE_TOOL_ATTEMPTED_IN_PLANNING` check is unchanged.
+> 4. **Out-of-order REVISED approval** (`oracles/revision.py`): `_first_approval_after(fseq)`
+>    accepted ANY `plan_approved` after the follow-up — even one occurring BEFORE the revised
+>    `PlanEvent` (a stale approval, not the revised one), so a revision flow with the approval
+>    out of order PASSED. Now the oracle enforces the full ORDERED revised chain, mirroring the
+>    initial chain: `followup (F) < revised PlanEvent (P, rev=prev+1) < [interactive:
+>    AWAITING (W)] < RUNNING/plan_approved (C) < execution action (D)`, first-broken-link wins —
+>    no revised plan → `NO_REPLAN_AFTER_REVISION`; rev ≠ prev+1 → `PLAN_REVISION_NOT_INCREMENTED`;
+>    a `plan_approved` in (F,P) or a FINISHED run with no post-P approval →
+>    `STALE_PLAN_USED_AFTER_FOLLOWUP`; a write before the (post-P) approval →
+>    `WRITE_BEFORE_REVISION_APPROVAL`; missing AWAITING between P and C (interactive) →
+>    `PLAN_APPROVED_STATUS_MISSING`; approved-no-action on FINISH → `APPROVE_PLAN_NO_EXECUTION`.
+>    Same autonomous exemption as the initial chain.
 >
 > General principle now enforced: missing/ambiguous evidence → INVALID_RUN (never PASS); a
 > required invariant whose evidence is present but violated → FAIL; only a genuinely-complete,
-> genuinely-conforming run → PASS. The other oracles (revision, output_truth, harness_validity)
-> were audited for the same "checks only if precondition already true → silent pass" pattern
-> and the same row-vs-dict blindness; their remaining SKIPs are genuine not-applicable cases
-> (no approval/follow-up to judge; a non-finished terminal that already surfaced its own
-> error/cancel), and all read content through the normalizer so they inherit fix #1.
+> genuinely-conforming run → PASS.
+>
+> **Final ordered-invariant audit** — every "X exists after Y" the oracles rely on is now
+> enforced by SEQ ORDER relative to the other chain links, not mere existence:
+>
+> | # | Ordered pair (must hold by seq) | Oracle | Enforcement |
+> |---|---|---|---|
+> | 1 | PlanEvent(A) < AWAITING(B) [interactive] | EventChain | `any(s>first_plan)` + `any(A<s<C)` |
+> | 2 | AWAITING(B) < plan_approved(C) [interactive] | EventChain | `any(first_plan<s<first_approval)` |
+> | 3 | plan_approved(C) < execution action(D) | EventChain | `has_action(after_seq=last_approval)` |
+> | 4 | action(X) < observation/agent_error(X) | EventChain | `_has_later_response` seq>action; obs→action origin<obs |
+> | 5 | mutating action < first plan_approved (planning) | ToolScope | `seq < cutoff` (cutoff=approvals[0]) |
+> | 6 | followup(F) < revised PlanEvent(P) | Revision | `_first_plan_after(fseq)` |
+> | 7 | no plan_approved in (F,P) [stale] | Revision | `next(s for s if F<s<P)` |
+> | 8 | mutating action ≥ revised approval | Revision | `mutated_seq < revised_approval` (C strictly after P) |
+> | 9 | revised PlanEvent(P) < revised approval(C) | Revision | `_first_approval_after(p_seq)` |
+> | 10 | P < AWAITING(W) < C [interactive] | Revision | `any(p_seq<s<revised_approval)` |
+> | 11 | revised approval(C) < action(D) [finished] | Revision | `has_action(after_seq=revised_approval)` |
+>
+> `OutputTruthOracle` has no ordered-pair invariants (final-state + content checks); it uses
+> `terminal_status`, which is itself order-derived (last terminal, cleared on a re-entered
+> RUNNING). `HarnessValidity`/`Contract` have no ordered pairs. All oracles read content through
+> the normalizer, so they inherit fix #1, and every fixture now carries the AWAITING gate so it
+> represents a legitimate (ordered) approval.
 
 | # | Failure code | Severity | Test (xfail, strict) | Site | Spec |
 |---|---|---|---|---|---|

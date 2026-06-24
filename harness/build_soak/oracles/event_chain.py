@@ -31,6 +31,7 @@ from ..events import (
     has_action,
     has_plan,
     has_user_message,
+    is_autonomous,
     kind_of,
     plan_approved_seqs,
     seq_of,
@@ -56,16 +57,6 @@ def _wants_observation_pairs(scenario: dict[str, Any] | None) -> bool:
         return True
     ec = (scenario.get("assertions") or {}).get("event_chain") or {}
     return ec.get("require_action_observation_pairs", True) is not False
-
-
-def _is_autonomous(scenario: dict[str, Any] | None) -> bool:
-    """An autonomous build auto-approves its plan inline (no human AWAITING gate),
-    so the awaiting link is not required. Declared by the scenario (mirrors the §6
-    manifest `autonomous` flag); defaults to False (interactive Build — the §15
-    bare-Build scenarios are all `mode: api`, human-approved)."""
-    if not scenario:
-        return False
-    return bool(scenario.get("autonomous", False))
 
 
 class EventChainOracle:
@@ -112,7 +103,7 @@ class EventChainOracle:
         awaiting = awaiting_approval_seqs(events)
         plan_seqs = [seq_of(e) for e in events if kind_of(e) == KIND_PLAN]
         term = terminal_status(events)
-        autonomous = _is_autonomous(scenario)
+        autonomous = is_autonomous(scenario)
         # A run still parked at AWAITING_PLAN_APPROVAL (or otherwise non-terminal) is
         # legitimately incomplete, not a chain break — only judge a FINISHED run.
         if plan_seqs and term == "FINISHED":

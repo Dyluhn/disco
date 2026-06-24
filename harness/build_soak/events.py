@@ -341,3 +341,16 @@ def awaiting_approval_seqs(events: list[dict[str, Any]]) -> list[int]:
         if kind_of(e) == KIND_STATUS
         and str(e.get("status")) == AWAITING_PLAN_APPROVAL_STATUS
     ]
+
+
+def is_autonomous(scenario: dict[str, Any] | None) -> bool:
+    """An autonomous build auto-approves its plan INLINE (engine.py ~L855) — it
+    emits RUNNING/plan_approved with NO human AWAITING_PLAN_APPROVAL gate. That is a
+    LEGITIMATE chain, so the awaiting link is required only for interactive runs.
+    Declared by the scenario (mirrors the §6 manifest `autonomous` flag); defaults
+    to False (interactive — the §15 bare-Build scenarios are all `mode: api`,
+    human-approved). Shared by BOTH the initial chain (EventChainOracle) and the
+    revised chain (RevisionOracle) so they use one fail-closed default."""
+    if not scenario:
+        return False
+    return bool(scenario.get("autonomous", False))
