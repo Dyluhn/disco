@@ -1132,7 +1132,20 @@ class AgentLoop:
             ):
                 self.mode = self._execution_mode
 
-        await self._emit(StatusEvent(status=ConversationStatus.RUNNING))
+        # Bug 12 (§11.4) — FINISHED→followup path. A change/revision follow-up on
+        # an approved/finished build re-enters PLANNING here (the planning gate
+        # keys on self.mode) so the revision goes through a revised plan rather
+        # than a free write on the stale approved plan. Runs AFTER the post-restart
+        # mode reconstruction above so self.mode reflects reality. Pure Q&A is
+        # exempt (answered in execution mode, no forced re-plan). When it re-enters
+        # it already emits RUNNING/planning, so skip the plain RUNNING emit (which
+        # would shadow the durable `planning` marker).
+        async with self._lock:
+            _reentered_planning = await self._maybe_reenter_planning_for_followup(
+                await self._events()
+            )
+        if not _reentered_planning:
+            await self._emit(StatusEvent(status=ConversationStatus.RUNNING))
 
         # EXIT INVARIANT (Fix 3) — in-loop defense-in-depth atop the runtime
         # backstop (9c90d7e). run() emits RUNNING above; each of the drive
@@ -1248,6 +1261,15 @@ class AgentLoop:
                 disp, events = await self._valve.gate_bookkeeping_streak(events)
                 if disp is Disp.HALT:
                     return await self.get_state()
+
+                # Bug 12 (§11.4) — RUNNING→steer path. A change/revision follow-up
+                # can arrive WHILE the task is already RUNNING; runtime.kick()
+                # returns early when a task is active, so the run() intake above
+                # never saw it. Re-enter PLANNING here too so a mutating mid-run
+                # steer goes through a revised plan, not a write on the old plan.
+                # Lock is held here (caller frame). Pure Q&A is exempt.
+                if await self._maybe_reenter_planning_for_followup(events):
+                    events = await self._events()
 
                 # (d) build the model-facing View, condensing if triggered (§8)
                 view = await self._materialize_view(events)
@@ -1726,6 +1748,49 @@ class AgentLoop:
             # free-building against the OLD plan (logic in Planner).
             await self._planner.emit_replan_framing_if_revision(text)
         return await self.get_state()
+
+    async def _maybe_reenter_planning_for_followup(self, events: list[Event]) -> bool:
+        """Bug 12 (§11.4) — when a CHANGE/REVISION follow-up arrives on an
+        approved/finished build (FINISHED→followup OR a mid-run RUNNING→steer),
+        re-enter PLANNING so the next model turn runs with planning tools only and
+        a write is REJECTED by `_gate_planning_mode` until a revised plan is
+        submitted + approved. Without this the loop stays in execution mode and the
+        model free-builds against the STALE approved plan (NO_REPLAN_AFTER_REVISION).
+
+        Supplies the same `planning` marker `enter_planning()`/`request_plan()` emit
+        (so `signals.in_planning_for_revision` + the actionless valve + the
+        post-restart mode reconstruction all engage); the existing revision
+        machinery (`Planner.plan_from_args` → revision = prev+1) does the rest.
+
+        Lock-free (caller holds `self._lock`). Does NOT re-append the user message —
+        it is already in the log. Returns True iff it re-entered planning.
+
+        Conservative: fires ONLY for a plan-gated conversation already in execution
+        mode, with a fresh unprocessed user turn whose intent is a CHANGE
+        (`signals.is_revision_intent`). A pure Q&A follow-up ("what font did you
+        use?") is exempt — it is answered without a forced re-plan."""
+        # Already (re)planning → nothing to do (also guards against re-firing on
+        # the same follow-up once we've emitted the planning marker below).
+        if self.mode == OperatingMode.PLANNING:
+            return False
+        # Plan-gated only: a plan must have been approved at some point. Non-build
+        # surfaces (Research) never emit plan_approved, so this never fires there.
+        if not any(
+            isinstance(e, StatusEvent) and e.detail == "plan_approved" for e in events
+        ):
+            return False
+        text = signals.latest_unprocessed_user_text(events)
+        if text is None:
+            return False
+        if not signals.is_revision_intent(text):
+            return False  # pure Q&A — answerable without a forced re-plan
+        self.mode = OperatingMode.PLANNING
+        self._plan_explore_reads = 0  # (B2/B6) fresh planning segment
+        await self._emit(
+            StatusEvent(status=ConversationStatus.RUNNING, detail="planning")
+        )
+        await self._planner.emit_replan_framing_if_revision(text)
+        return True
 
     async def pause(self) -> ConversationState:
         """WALK-18 — cooperative pause. Deliberately does NOT take self._lock

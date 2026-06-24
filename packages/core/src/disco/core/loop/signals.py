@@ -8,6 +8,7 @@ no instance state, no emission, and no I/O. They were `@staticmethod`s on
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from ..events import (
@@ -642,3 +643,68 @@ def has_unprocessed_user_message(events: list[Event]) -> bool:
         default=0,
     )
     return last_user > last_progress
+
+
+def latest_unprocessed_user_text(events: list[Event]) -> str | None:
+    """The text of the most recent USER message IFF it is still unprocessed
+    (arrived after the most recent agent activity — see has_unprocessed_user_message).
+    Returns None when there is no fresh user turn. Used by Bug-12 follow-up
+    re-planning to inspect the new instruction's intent."""
+    if not has_unprocessed_user_message(events):
+        return None
+    latest: MessageEvent | None = None
+    for e in events:
+        if isinstance(e, MessageEvent) and e.source == EventSource.USER:
+            if latest is None or (e.seq or 0) >= (latest.seq or 0):
+                latest = e
+    if latest is None:
+        return None
+    return (latest.message.content or "").strip() or None
+
+
+# Bug 12 (§11.4) — change/revision verbs that mark a follow-up as MUTATING (it
+# asks for a workspace change), so a follow-up on an approved/finished build must
+# re-enter PLANNING and go through a revised plan rather than a free write on the
+# stale plan. Word-boundary matched (so "add" doesn't fire inside "additional",
+# "fix" not inside "prefix"). The list is deliberately broad: the failure mode is
+# an UNAUTHORIZED mutation, so ambiguity biases toward re-planning; only a clear
+# pure question (no change verb + reads like a question) is exempted.
+_CHANGE_VERB_RE = re.compile(
+    r"\b("
+    r"revise|revised|change|changed|add|adds|added|update|updated|remove|removed|"
+    r"delete|deleted|replace|replaced|fix|fixed|edit|edited|modify|modified|adjust|"
+    r"adjusted|tweak|tweaked|swap|swapped|rename|renamed|move|moved|set|insert|append|"
+    r"instead|also|different|differently|implement|build|create|rebuild|redo|rework|"
+    r"convert|increase|decrease|enlarge|shrink|recolor|restyle"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Leading words that mark a clear, non-mutating QUESTION (answerable without a
+# forced re-plan). Only consulted when NO change verb is present.
+_QUESTION_LEAD_RE = re.compile(
+    r"^\s*(what|which|why|how|when|where|who|whose|whom|is|are|was|were|do|does|did|"
+    r"can|could|will|would|should|has|have|had|may|might)\b",
+    re.IGNORECASE,
+)
+
+
+def is_revision_intent(text: str) -> bool:
+    """Bug 12 (§11.4) — conservative predicate: does this follow-up ask for a
+    workspace CHANGE (→ must re-enter PLANNING for a revised plan), or is it a
+    pure non-mutating question (→ answerable without a forced re-plan)?
+
+    Rule (bias toward re-planning, the safe contract — an unauthorized mutation
+    on a stale plan is the failure mode):
+      * any change/revision verb present → True (re-plan).
+      * otherwise, a clear question (leads with a question word or ends with '?')
+        → False (answer it, no dead-end).
+      * anything else ambiguous → True (re-plan)."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    if _CHANGE_VERB_RE.search(t):
+        return True
+    if t.endswith("?") or _QUESTION_LEAD_RE.match(t):
+        return False
+    return True
