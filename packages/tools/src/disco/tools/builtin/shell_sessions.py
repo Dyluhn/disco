@@ -25,7 +25,12 @@ class ShellExecTool:
         name="shell_exec",
         description=(
             "Execute a shell command in a persistent session. One foreground "
-            "process per session. Fails if busy."
+            "process per session — it FAILS with 'session busy' if a previous "
+            "command is still running. So ALWAYS background long-running processes "
+            "(dev servers, watchers) by appending ` &` — e.g. "
+            "`python3 -m http.server 8000 &` — so the session stays free to run "
+            "follow-up commands (curl checks, etc.). Never start a server in the "
+            "foreground; it blocks the session and wedges the build."
         ),
         args_model=ShellExecArgs,
         needs=frozenset({Capability.SHELL}),
