@@ -108,12 +108,13 @@ def test_start_has_no_port_parameter() -> None:
     assert "port" not in params
 
 
-def test_port_is_platform_allocated_not_model_supplied() -> None:
+@pytest.mark.asyncio
+async def test_port_is_platform_allocated_not_model_supplied() -> None:
     """_allocate_port is THE single place a port is chosen — verify it draws from the
     curated pool and the model never feeds in."""
     sandbox = _FakeSandbox()
     mgr = _mgr(sandbox, port_pool=[3000, 5173, 8080])
-    assert mgr._allocate_port() == 3000  # first of the platform pool
+    assert await mgr._allocate_port() == 3000  # first of the platform pool
 
 
 @pytest.mark.asyncio
@@ -357,3 +358,228 @@ def test_shared_host_pool_excludes_control_ports() -> None:
     assert 8000 not in shared and 5173 not in shared
     isolated = _default_port_pool(_FakeSandbox(backend_name="gvisor"))
     assert 8000 in isolated  # inside an isolated box 8000 is the box's own
+
+
+# ============================================================ P1 #1: raw-command ports
+
+from disco.agent_server.preview_manager import (  # noqa: E402
+    PreviewCommandError,
+    PreviewSession,
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -m http.server 9999 -d dist",   # positional http.server port
+        "uvicorn app:app --host 0.0.0.0 9000",   # trailing host:port-ish positional bind
+        "gunicorn app:app -b 0.0.0.0:8000",      # host:port bind argument
+        "serve -l :4321",                        # bare :port bind
+    ],
+)
+async def test_raw_command_binding_a_hardcoded_port_is_rejected(command: str) -> None:
+    """P1 #1: a raw command that binds a MODEL-chosen port through a form the flag-scrub
+    can't override is REJECTED — the platform must own the port, so the manager refuses to
+    launch a server on a port it doesn't control (rather than believing it owns another)."""
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    with pytest.raises(PreviewCommandError):
+        await mgr.start(command=command, supervise=False)
+    assert mgr.list() == []  # nothing registered; no port leaked
+
+
+@pytest.mark.asyncio
+async def test_raw_command_port_placeholder_is_filled_with_platform_port() -> None:
+    """P1 #1 escape hatch: a raw command may declare WHERE the port goes with the literal
+    `{port}` placeholder — the platform fills it with ITS allocated port (never the
+    model's), so positional-port servers stay platform-owned."""
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    session = await mgr.start(
+        command="python3 -m http.server {port} -d dist", supervise=False
+    )
+    assert session.port == 3000
+    assert "http.server 3000" in session.command
+    assert "{port}" not in session.command
+    assert session.status is PreviewStatus.RUNNING
+
+
+# ---------------------------------------------- P1 #1/#2: post-launch port ownership
+
+
+class _Owner:
+    def __init__(self, pid: int | None, session: str | None) -> None:
+        self.pid = pid
+        self.session = session
+
+
+class _ForeignOwnerSandbox(_FakeSandbox):
+    """The allocated port is answered by the LEGACY auto-preview's session, never ours."""
+
+    async def port_owner(self, port: int):  # noqa: ANN201
+        if port in self._serving:
+            return _Owner(pid=4242, session="disco-preview")  # auto-preview, name 'preview'
+        return _Owner(pid=None, session=None)
+
+
+class _OurOwnerSandbox(_FakeSandbox):
+    """The allocated port is owned by THIS preview's shell session (`disco-<name>`)."""
+
+    async def port_owner(self, port: int):  # noqa: ANN201
+        if port in self._serving:
+            return _Owner(pid=10, session="disco-app")
+        return _Owner(pid=None, session=None)
+
+
+@pytest.mark.asyncio
+async def test_foreign_owner_answering_is_not_marked_running() -> None:
+    """P1 #2: our process EADDRINUSE'd but the legacy auto-preview answers on the SAME
+    port — health alone would falsely PASS. The post-launch ownership check sees a FOREIGN
+    tmux session owns the port and refuses RUNNING (→ CRASHED), so a build is never
+    declared live against a server that isn't ours."""
+    sandbox = _ForeignOwnerSandbox()
+    sandbox._serving.add(3000)  # auto-preview already answers on the port
+    mgr = _mgr(sandbox, port_pool=[3000])
+    # Bypass allocation (which now SKIPS an occupied port) to drive the EADDRINUSE race
+    # directly: a session already pinned to the port a foreign server answers on.
+    session = PreviewSession(
+        name="app", port=3000, command="python3 -m http.server 3000 -d dist",
+        exec_dir="/workspace", intent={}, _supervise=False,
+    )
+    mgr._sessions["app"] = session
+    await mgr._launch(session)
+    assert session.status is PreviewStatus.CRASHED
+    assert "different process" in session.detail.lower()
+    assert session.url is None
+
+
+@pytest.mark.asyncio
+async def test_owned_port_is_marked_running() -> None:
+    """The positive case: when THIS preview's session owns the answering port, ownership
+    confirms and the preview goes RUNNING with its URL."""
+    sandbox = _OurOwnerSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000])
+    session = await mgr.start(serve_dir="dist", name="app", supervise=False)
+    assert session.status is PreviewStatus.RUNNING
+    assert session.port == 3000
+    assert session.url == "http://preview.test/3000/"
+
+
+# ----------------------------------------- P1 #2: allocation skips already-claimed ports
+
+
+class _TrackedSandbox(_FakeSandbox):
+    def __init__(self, tracked: set[int], **kw) -> None:
+        super().__init__(**kw)
+        self._tracked = set(tracked)
+
+    def tracked_ports(self) -> list[int]:
+        return sorted(self._tracked)
+
+
+@pytest.mark.asyncio
+async def test_allocation_skips_port_tracked_by_sandbox() -> None:
+    """P1 #2: a port the SANDBOX already tracks as a service (the legacy auto-preview on
+    8000, or an agent dev server) must not be allocated for a new preview — else the
+    existing server's response would falsely validate the new one."""
+    sandbox = _TrackedSandbox({3000})  # legacy auto-preview owns 3000
+    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    assert await mgr._allocate_port() == 5173  # 3000 skipped (sandbox-tracked)
+
+
+@pytest.mark.asyncio
+async def test_allocation_skips_port_with_live_listener() -> None:
+    """P1 #2: even an UNtracked but currently-listening curated port is skipped — a real
+    owner we don't track would otherwise answer health for a process that EADDRINUSE'd."""
+    sandbox = _FakeSandbox()
+    sandbox._serving.add(3000)  # a real listener already owns 3000
+    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    assert await mgr._allocate_port() == 5173  # 3000 skipped (live listener)
+
+
+@pytest.mark.asyncio
+async def test_start_coordinates_auto_preview_standdown() -> None:
+    """P1 #2: the first manager-owned start stands the legacy auto-preview DOWN (so the
+    two can't both claim a curated port). The manager calls `disable_auto_preview` once."""
+    calls: list[int] = []
+
+    class _CoordSandbox(_FakeSandbox):
+        async def disable_auto_preview(self) -> None:
+            calls.append(1)
+
+    sandbox = _CoordSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    await mgr.start(serve_dir="dist", name="app", supervise=False)
+    await mgr.start(serve_dir="web", name="web", supervise=False)
+    assert calls == [1]  # invoked exactly once, not per-start
+
+
+# ----------------------------------------------------- P1 #3: static serve_dir path
+
+
+class _StaticServingSessions:
+    """Simulates `python3 -m http.server <port> -d <dir>` launched from `exec_dir`,
+    resolving the served root the way a real shell would (so `-d dist` from a `dist`
+    cwd would serve `dist/dist` — the exact P1 #3 bug)."""
+
+    def __init__(self) -> None:
+        self.namespace = ""
+        self._running: dict[str, bool] = {}
+        self.port_root: dict[int, str] = {}
+
+    async def exec(self, name: str, command: str, exec_dir: str | None) -> None:
+        import posixpath
+
+        m = re.search(r"http\.server\s+(\d+)\s+-d\s+(\S+)", command)
+        assert m is not None
+        port, d = int(m.group(1)), m.group(2)
+        base = exec_dir or "/"
+        root = d if d.startswith("/") else posixpath.normpath(posixpath.join(base, d))
+        self.port_root[port] = root
+        self._running[name] = True
+
+    async def view(self, name: str, tail_chars: int = 2000) -> _View:
+        return _View(self._running.get(name, False), "")
+
+    async def kill_foreground(self, name: str) -> str:
+        self._running[name] = False
+        return "killed"
+
+
+class _StaticServingSandbox:
+    def __init__(self, files: set[str]) -> None:
+        self.backend_name = "gvisor"
+        self.workspace_path = "/workspace"
+        self.sessions = _StaticServingSessions()
+        self._files = files
+
+    def expose_port(self, port: int) -> str | None:
+        return f"http://preview.test/{port}/"
+
+    async def fetch_inside(self, port: int, path: str, *, timeout_s: int = 5):  # noqa: ANN201
+        import posixpath
+
+        root = self.sessions.port_root.get(port)
+        if root is None:
+            return None
+        target = posixpath.join(root, "index.html") if path in ("", "/") else (
+            posixpath.normpath(posixpath.join(root, path.lstrip("/")))
+        )
+        if target in self._files:
+            return (200, b"<h1>hi</h1>", "text/html")
+        return (404, b"Not Found", "text/plain")  # http.server answers, but wrong tree
+
+
+@pytest.mark.asyncio
+async def test_static_serve_dir_serves_the_directory_not_dist_dist() -> None:
+    """P1 #3: a real index.html under serve_dir is actually fetched (200) — the server
+    runs from the workspace with `-d serve_dir`, so the served root is workspace/serve_dir,
+    NOT serve_dir/serve_dir (which 404'd while health still falsely read 'answered')."""
+    sandbox = _StaticServingSandbox(files={"/workspace/dist/index.html"})
+    mgr = _mgr(sandbox, port_pool=[3000])
+    session = await mgr.start(serve_dir="dist", name="app", supervise=False)
+    assert session.status is PreviewStatus.RUNNING
+    assert sandbox.sessions.port_root[3000] == "/workspace/dist"  # not /workspace/dist/dist
+    status, _body, _ctype = await sandbox.fetch_inside(3000, "/")
+    assert status == 200  # the index is really served (not a 404 on the wrong tree)

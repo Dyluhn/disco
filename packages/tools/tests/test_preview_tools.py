@@ -101,6 +101,50 @@ def test_preview_start_spec_schema_has_no_port() -> None:
     assert "port" not in schema.get("properties", {})
 
 
+# --------------------------------------------------------------------------- forbid extra
+
+
+def test_preview_start_args_forbid_extra_keys() -> None:
+    """P2 #5: an invented key (e.g. a model-supplied `port`) is REJECTED, not silently
+    dropped — `preview_start(serve_dir='dist', port=3000)` must fail validation, which the
+    executor surfaces as `invalid_arguments` (never a silently-ignored, false-affordance
+    port)."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as ei:
+        PreviewStartArgs.model_validate({"serve_dir": "dist", "port": 3000})
+    assert "port" in str(ei.value)  # the offending extra key is named
+
+
+def test_all_preview_arg_models_forbid_extra_keys() -> None:
+    """P2 #5: every preview_* arg model forbids unknown keys."""
+    from disco.tools.builtin.preview import (
+        PreviewLogsArgs,
+        PreviewStatusArgs,
+        PreviewStopArgs,
+    )
+    from pydantic import ValidationError
+
+    for model in (PreviewStartArgs, PreviewStatusArgs, PreviewLogsArgs, PreviewStopArgs):
+        with pytest.raises(ValidationError):
+            model.model_validate({"bogus_key": 1})
+
+
+@pytest.mark.asyncio
+async def test_preview_start_rejects_hardcoded_port_command() -> None:
+    """P1 #1 at the tool seam: a raw command binding a hardcoded port is surfaced as a
+    recoverable `invalid_command` failure with guidance — never silently run on the
+    model's port."""
+    sandbox = _FakeSandbox()
+    _attach_manager(sandbox)
+    out = await PreviewStartTool().run(
+        PreviewStartArgs(command="python3 -m http.server 9999 -d dist"), _ctx(sandbox)
+    )
+    assert not out.success
+    assert out.error == "invalid_command"
+    assert "{port}" in out.content  # tells the model the safe placeholder
+
+
 # --------------------------------------------------------------------------- behavior
 
 

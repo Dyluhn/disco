@@ -78,6 +78,43 @@ _PORT_FLAG_RE = re.compile(
     """
 )
 
+# P1 #1 — port-bearing forms the flag-scrub above does NOT catch: a POSITIONAL
+# `http.server <port>`, or a `host:port` / `:port` BIND argument (gunicorn `-b
+# :8000`, `serve -l 0.0.0.0:8000`, …). These bind a MODEL-chosen port while the
+# platform believes it owns the allocated one — so we REJECT a raw command that
+# carries one (the model must drop the port, letting the platform inject PORT, or
+# use the literal `{port}` placeholder the platform fills). Matched only AFTER the
+# known flags are scrubbed. The `host:port` branch requires the colon/host to be
+# preceded by start/space/quote/paren/`=`, so a URL fetch (`http://127.0.0.1:8000/`)
+# — preceded by `/` — is NOT matched (reading a URL is not a bind).
+#
+# The trailing `\d{4,5}$` branch catches a POSITIONAL port as the final token
+# (`uvicorn app:app --host 0.0.0.0 9000`); it requires 4-5 digits (≥1000) so a small
+# trailing count like `--workers 16` / `--timeout 30` is NOT misread as a port. A model
+# that genuinely needs a trailing 4-5-digit non-port arg can use `{port}` to place the
+# real port and still pass the rest; the post-launch ownership check is the backstop.
+_RAW_HARDCODED_PORT_RE = re.compile(
+    r"""(?xi)
+    (?:
+        \bhttp\.server\s+\d{2,5}\b                       # python -m http.server 9999 (positional)
+      | (?:^|[\s='"(])
+        (?:0\.0\.0\.0|127\.0\.0\.1|localhost|\[::1\]|::1)?
+        :\d{2,5}\b                                        # host:port / :port BIND
+      | (?:^|\s)\d{4,5}\s*$                               # trailing positional port (uvicorn 9000)
+    )
+    """
+)
+
+# tmux session-name prefix the ShellSessionManager writes (see shell_sessions._PREFIX).
+# Used to confirm a listening port is owned by THIS preview's shell session.
+_TMUX_PREFIX = "disco"
+
+
+class PreviewCommandError(ValueError):
+    """A raw `command` cannot be made platform-port-safe (it binds a hardcoded port via
+    a form the platform can't override). The model must remove the port or use the
+    literal `{port}` placeholder. Surfaced to the model as a recoverable tool failure."""
+
 
 @dataclass
 class PreviewSession:
@@ -145,20 +182,44 @@ class PreviewManager:
         self._lock = asyncio.Lock()
         self._supervisor: asyncio.Task[None] | None = None
         self._closed = False
+        self._auto_preview_coordinated = False  # P1 #2: legacy auto-preview stood down once
 
     # ---- platform-owned port allocation ------------------------------------
 
-    def _allocate_port(self) -> int:
-        """THE single place a preview port is chosen. The model has no input here —
-        the port comes from the curated platform pool, skipping any port already held
-        by one of our previews. This is the ownership point that kills port-fixation."""
+    async def _allocate_port(self) -> int:
+        """THE single place a preview port is chosen. The model has no input here — the
+        port comes from the curated platform pool, skipping (a) any port already held by
+        one of our previews, (b) any port the SANDBOX is already tracking as a service —
+        the legacy static auto-preview or an agent-launched dev server (P1 #2: allocating
+        onto one would mean the legacy server's response falsely validates ours), and
+        (c) any port with a LIVE listener right now (a real owner we don't track). This
+        is the ownership point that kills port-fixation AND cross-server contamination."""
         taken = {s.port for s in self._sessions.values() if s.status is not PreviewStatus.STOPPED}
+        taken |= self._sandbox_tracked_ports()
         for port in self._pool:
-            if port not in taken:
-                return port
+            if port in taken:
+                continue
+            # A real listener already owns this curated port (not one of ours) →
+            # skip it, or its response would falsely validate a process that EADDRINUSE'd.
+            if await self._probe_health(port):
+                continue
+            return port
         raise NoPreviewPortAvailableError(
             f"all {len(self._pool)} platform preview ports are in use: {sorted(self._pool)}"
         )
+
+    def _sandbox_tracked_ports(self) -> set[int]:
+        """Curated ports the SANDBOX itself is already tracking (the static auto-preview
+        on 8000, any `ensure_service` dev server). Consulted so allocation never lands on
+        a port a legacy/coexisting server owns. Best-effort: a fake/old sandbox without
+        the accessor contributes nothing (the live-listener probe still guards us)."""
+        accessor = getattr(self._sandbox, "tracked_ports", None)
+        if accessor is None:
+            return set()
+        try:
+            return set(accessor())
+        except Exception:  # noqa: BLE001 — never let a tracking read break allocation
+            return set()
 
     # ---- intent → resolved command -----------------------------------------
 
@@ -172,14 +233,33 @@ class PreviewManager:
     ) -> str:
         """Turn model INTENT into the actual command, with the PLATFORM port baked in.
 
-        Precedence: an explicit `command` (port scrubbed + injected) > a known
-        `framework` template > static file serving of `serve_dir` (the safe MVP
-        default). A raw command never gets to pick the port — any `--port/-p/PORT=`
-        the model embedded is stripped and the platform port is injected via `PORT=`.
+        Precedence: an explicit `command` (port scrubbed/validated + injected) > a known
+        `framework` template > static file serving of `serve_dir` (the safe MVP default).
+
+        A raw command never gets to pick the port: any `--port/-p/PORT=` the model
+        embedded is stripped and the platform port is injected via `PORT=`. A raw command
+        that ALSO binds a port through a form the scrub can't override (a positional
+        `http.server <port>`, a `host:port` bind) is REJECTED (`PreviewCommandError`) —
+        unless it uses the literal `{port}` placeholder, which the platform fills with
+        ITS port (the explicit, safe way to put the platform port at a positional slot).
         """
         serve = serve_dir or self._sandbox_workspace() or "."
         if command:
             scrubbed = _PORT_FLAG_RE.sub(" ", command).strip()
+            if "{port}" in scrubbed:
+                # Model explicitly delegated the port slot to the platform — fill it with
+                # OUR port (and still export PORT for env-reading servers).
+                filled = scrubbed.replace("{port}", str(port)).strip()
+                return f"PORT={port} {filled}"
+            bound = _RAW_HARDCODED_PORT_RE.search(scrubbed)
+            if bound is not None:
+                raise PreviewCommandError(
+                    "preview command binds a hardcoded port "
+                    f"({bound.group(0).strip()!r}) — the platform owns the port, so it "
+                    "can't be supplied here. Remove the port (the platform injects PORT="
+                    "<its port>), or put the literal placeholder '{port}' where the port "
+                    "goes (e.g. 'python3 -m http.server {port} -d dist')."
+                )
             # Inject the platform port as an env var (honored by Node/Vite/Next/CRA/
             # Flask-via-env, …). The static template path below is used when the model
             # gives a dir/framework instead — that bakes the port into the flag directly.
@@ -206,6 +286,90 @@ class PreviewManager:
                 return f"preview-{leaf}"
         return "preview"
 
+    # ---- legacy auto-preview coordination (P1 #2) ---------------------------
+
+    async def _coordinate_auto_preview(self) -> None:
+        """Stand the sandbox's legacy fire-and-forget static auto-preview DOWN the first
+        time the platform manager starts a preview for this sandbox. After this, the
+        manager is the SINGLE authority for previews — the auto-preview can no longer
+        squat a curated port or answer health on a port the manager allocates (the P1 #2
+        false-validate). Best-effort + idempotent: a fake/old sandbox without the hook is
+        simply left as-is (allocation's tracked-port + live-listener guards still hold)."""
+        if self._auto_preview_coordinated:
+            return
+        self._auto_preview_coordinated = True
+        disable = getattr(self._sandbox, "disable_auto_preview", None)
+        if disable is None:
+            return
+        try:
+            await disable()
+        except Exception:  # noqa: BLE001 — coordination is best-effort, never fatal
+            _LOG.debug("auto-preview coordination failed", exc_info=True)
+
+    # ---- post-launch port-ownership verification (P1 #1 / P1 #2) ------------
+
+    async def _confirm_and_mark_running(self, session: PreviewSession) -> bool:
+        """Health answered on the platform port — but confirm THIS preview's process
+        actually OWNS that port before declaring RUNNING. Guards two ways something ELSE
+        can answer: a raw command bound a different port (P1 #1) and our process never
+        bound the allocated one, OR the legacy auto-preview / another server answered
+        while our process EADDRINUSE'd (P1 #2). Only POSITIVE evidence of a FOREIGN owner
+        blocks RUNNING (→ CRASHED); when ownership can't be determined (backend exposes no
+        probe) we trust health, so this never regresses a backend that can't attribute
+        ports. Returns True if marked running, False if a foreign owner was detected."""
+        owned = await self._verify_owns_port(session)
+        if owned is False:
+            session.status = PreviewStatus.CRASHED
+            session.url = None
+            session.detail = (
+                f"port {session.port} is answering but is owned by a DIFFERENT process — "
+                "this preview did not bind it (its server likely failed / the port was "
+                "already in use). Not marked running."
+            )
+            return False
+        self._mark_running(session)
+        return True
+
+    async def _verify_owns_port(self, session: PreviewSession) -> bool | None:
+        """True ⇒ the allocated port's listener is THIS preview's shell session; False ⇒
+        a different process owns it; None ⇒ undeterminable (no probe / no attribution) —
+        the caller then trusts health rather than blocking."""
+        owner = await self._port_owner(session.port)
+        if owner is None:
+            return None
+        if getattr(owner, "pid", None) is None:
+            return None  # nobody attributable listening (health said yes) → inconclusive
+        owner_session = getattr(owner, "session", None)
+        if not owner_session:
+            return None  # a listener exists but no tmux attribution → inconclusive
+        return self._owner_is_this_session(str(owner_session), session.name)
+
+    async def _port_owner(self, port: int) -> Any | None:
+        """Who owns `port` inside the sandbox (object with `.pid` + `.session`), or None
+        if it can't be probed. Prefers a `port_owner` method on the sandbox (tests + any
+        future fast path); otherwise uses the tools' in-sandbox /proc+tmux probe. Never
+        raises — a probe failure is an inconclusive (None), not a blocked preview."""
+        try:
+            probe = getattr(self._sandbox, "port_owner", None)
+            if probe is not None:
+                return await probe(port)
+            from disco.tools.sandbox.port_owner import port_owner
+
+            return await port_owner(self._sandbox, port)
+        except Exception:  # noqa: BLE001 — ownership probe must never raise into start()
+            return None
+
+    def _owner_is_this_session(self, owner_session: str, name: str) -> bool:
+        """Does the tmux session that owns the port belong to THIS preview? The shell
+        manager names sessions `disco-{namespace}{name}` (see shell_sessions._full_name);
+        match that exact name, with a namespace-agnostic `-{name}` suffix fallback so a
+        namespace/prefix drift can't cause a false NEGATIVE (which would wrongly block a
+        genuinely-ours preview)."""
+        ns = getattr(getattr(self._sandbox, "sessions", None), "namespace", "") or ""
+        if owner_session == f"{_TMUX_PREFIX}-{ns}{name}":
+            return True
+        return owner_session.endswith(f"-{name}") or owner_session == name
+
     # ---- start (idempotent) -------------------------------------------------
 
     async def start(
@@ -227,7 +391,14 @@ class PreviewManager:
         """
         if self._closed:
             raise RuntimeError("PreviewManager is closed")
+        # P1 #2: once the platform manager owns previews for this sandbox, stand the
+        # legacy fire-and-forget auto-preview DOWN, so the two can't both claim a curated
+        # port (and a stale auto-preview can't answer health on a manager-allocated port).
+        await self._coordinate_auto_preview()
         key = name or self._default_name(serve_dir, framework)
+        # Resolve (and validate) the command BEFORE taking the lock / allocating, so a
+        # rejected raw command (PreviewCommandError) leaks no port or half-built session.
+        # `serve` here is dir-only intent; the concrete port is injected after allocation.
         async with self._lock:
             existing = self._sessions.get(key)
             if existing is not None and existing.status is not PreviewStatus.STOPPED:
@@ -237,11 +408,14 @@ class PreviewManager:
                     await self._restart(existing)
                 return existing
 
-            port = self._allocate_port()
+            port = await self._allocate_port()
             resolved = self._resolve_command(
                 port, serve_dir=serve_dir, command=command, framework=framework
             )
-            exec_dir = cwd or serve_dir or self._sandbox_workspace()
+            # P1 #3: run the server FROM the workspace (not serve_dir) so the static
+            # `-d <serve_dir>` resolves to workspace/<serve_dir> — running from serve_dir
+            # with `-d <serve_dir>` served `<serve_dir>/<serve_dir>` (404 / wrong tree).
+            exec_dir = cwd or self._sandbox_workspace() or serve_dir
             session = PreviewSession(
                 name=key,
                 port=port,
@@ -277,7 +451,10 @@ class PreviewManager:
     async def _poll_until_healthy(self, session: PreviewSession) -> None:
         for _ in range(self._health_attempts):
             if await self._probe_health(session.port):
-                self._mark_running(session)
+                # Health alone is not enough — confirm OUR process owns the port before
+                # RUNNING (a foreign server answering ⇒ CRASHED, not a false success).
+                if not await self._confirm_and_mark_running(session):
+                    return
                 return
             await asyncio.sleep(self._health_interval_s)
         # Never answered in time. Distinguish "process is up but no URL" from a crash:
@@ -369,9 +546,10 @@ class PreviewManager:
                 ):
                     continue
                 if await self._probe_health(session.port):
-                    # Recovered or steady — make sure the URL/status reflect health.
+                    # Recovered or steady — make sure the URL/status reflect health, but
+                    # only after confirming the responder is OUR process (P1 #2).
                     if session.status in (PreviewStatus.STARTING, PreviewStatus.RESTARTING):
-                        self._mark_running(session)
+                        await self._confirm_and_mark_running(session)
                     continue
                 # Not answering health. ONLY restart a preview whose PROCESS has ACTUALLY
                 # exited. A STARTING/UNAVAILABLE/RESTARTING session (still booting, or up
@@ -417,7 +595,7 @@ class PreviewManager:
         if session.status is PreviewStatus.STOPPED:
             return
         if await self._probe_health(session.port):
-            self._mark_running(session)
+            await self._confirm_and_mark_running(session)
         elif session.status is PreviewStatus.RUNNING:
             if await self._session_alive(session.name):
                 session.detail = "running; health probe momentarily unanswered"

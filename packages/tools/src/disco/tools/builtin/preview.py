@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Any
 
 from disco.core import SecurityRisk
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 
@@ -61,6 +61,10 @@ def _render(session: Any) -> str:
 class PreviewStartArgs(BaseModel):
     """Intent for a preview — note there is NO `port` field, by design. The platform
     owns port allocation; a model declares only WHAT to serve."""
+
+    # P2 #5: reject unknown keys (e.g. a model-invented `port`) instead of silently
+    # dropping them — a swallowed `port=3000` looked accepted but did nothing.
+    model_config = ConfigDict(extra="forbid")
 
     serve_dir: str | None = Field(
         default=None,
@@ -127,13 +131,20 @@ class PreviewStartTool:
                 error="no_intent",
             )
         mgr = _manager(ctx)
-        session = await mgr.start(
-            serve_dir=args.serve_dir,
-            command=args.command,
-            framework=args.framework,
-            cwd=args.cwd,
-            name=args.name,
-        )
+        from disco.agent_server.preview_manager import PreviewCommandError
+
+        try:
+            session = await mgr.start(
+                serve_dir=args.serve_dir,
+                command=args.command,
+                framework=args.framework,
+                cwd=args.cwd,
+                name=args.name,
+            )
+        except PreviewCommandError as exc:
+            # P1 #1: a raw command that binds a hardcoded port the platform can't own is
+            # rejected with actionable guidance, never silently run on a model-chosen port.
+            return ToolOutcome(success=False, content=str(exc), error="invalid_command")
         return ToolOutcome(
             success=session.status.value not in ("crashed",),
             content=_render(session),
@@ -145,6 +156,8 @@ class PreviewStartTool:
 
 
 class PreviewStatusArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # P2 #5
+
     name: str | None = Field(
         default=None, description="A specific preview's name; omit for all previews."
     )
@@ -182,6 +195,8 @@ class PreviewStatusTool:
 
 
 class PreviewLogsArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # P2 #5
+
     name: str | None = Field(
         default=None, description="A specific preview's name; omit for all previews."
     )
@@ -219,6 +234,8 @@ class PreviewLogsTool:
 
 
 class PreviewStopArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # P2 #5
+
     name: str | None = Field(
         default=None, description="A specific preview's name; omit to stop all previews."
     )
