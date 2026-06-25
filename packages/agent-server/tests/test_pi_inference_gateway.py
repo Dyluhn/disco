@@ -657,6 +657,33 @@ async def test_oversized_request_clamped_to_remaining_budget(tmp_path) -> None:
     assert sent["max_tokens"] < 1_000_000
 
 
+async def test_oversized_max_tokens_clamped_to_provider_ceiling(tmp_path) -> None:
+    # #108: with a LARGE budget the budget clamp won't bound an absurd SDK-default
+    # max_tokens — but several providers 400 over ~524288 (MiniMax-M3). The gateway must
+    # cap to the provider-portable ceiling (131072) regardless of budget. (Previously this
+    # was patched only in the dev MiniMax relay; now it lives in the gateway.)
+    from disco.agent_server.routes.pi_inference import _MAX_TOKENS_CEILING
+
+    store = PiInferenceTokenStore()
+    token = store.issue(
+        kernel_id="k", conversation_id="c", model_key=_SELECTED_KEY, ttl_s=60,
+        budget_tokens=8_000_000,  # large enough that the budget clamp won't bound it
+    )
+    captured: list[httpx.Request] = []
+    app = _make_app(store, tmp_path, handler=_capturing_handler(captured))
+    # (a) Pi sends an oversized max_tokens
+    resp = await _post(
+        app, token,
+        {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 4_000_000},
+    )
+    assert resp.status_code == 200
+    assert json.loads(captured[0].content)["max_tokens"] <= _MAX_TOKENS_CEILING
+    # (b) Pi sends NO max_tokens — the injected cap must also respect the ceiling
+    resp = await _post(app, token, {"messages": [{"role": "user", "content": "hi"}]})
+    assert resp.status_code == 200
+    assert json.loads(captured[1].content)["max_tokens"] <= _MAX_TOKENS_CEILING
+
+
 async def test_concurrent_calls_cannot_both_pass_cap(tmp_path) -> None:
     store = PiInferenceTokenStore()
     body = {"messages": [{"role": "user", "content": "hi"}]}

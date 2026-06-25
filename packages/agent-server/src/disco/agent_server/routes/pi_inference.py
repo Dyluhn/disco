@@ -324,14 +324,31 @@ async def _redact_stream(
         yield _redact_bytes(carry, api_key)
 
 
+# Pi's SDK can emit an absurd default max_tokens (~4M) that several providers reject
+# with a 400 (MiniMax-M3 400s on max_tokens > 524288). A value this large is never a
+# real caller intent — it's the SDK's "unbounded" sentinel — so clamp it to a sane,
+# provider-portable ceiling (128K output) at the gateway. This lives HERE (not in the
+# dev MiniMax relay) so every build's model turn succeeds regardless of how the stack
+# is fronted. Reasonable caller values pass through untouched.
+_MAX_TOKENS_SANITY = 524_288  # above this == the SDK's unbounded default, not real intent
+_MAX_TOKENS_CEILING = 131_072  # clamp target: 128K output, accepted across providers
+_MAX_TOKENS_FIELDS = ("max_tokens", "max_completion_tokens")
+
+
 def _sanitize_body(body: dict, *, model_id: str) -> tuple[dict, list[str]]:
     """Build the upstream body from ONLY portable OpenAI chat-completion fields and
     PIN the model. Provider routing/fallback aliases (``models``/``provider``/
     ``route``/``transforms``) and any other non-portable key are dropped, so Pi
-    cannot steer routing past the pinned model. Returns (clean_body, dropped_keys)."""
+    cannot steer routing past the pinned model. An absurd SDK-default ``max_tokens``
+    is clamped to a portable ceiling (see ``_MAX_TOKENS_*``) so the call isn't 400'd.
+    Returns (clean_body, dropped_keys)."""
     clean = {k: v for k, v in body.items() if k in _PORTABLE_CHAT_FIELDS}
     dropped = sorted(k for k in body if k not in _PORTABLE_CHAT_FIELDS)
     clean["model"] = model_id  # pinned model overrides any Pi-sent `model`
+    for _field in _MAX_TOKENS_FIELDS:
+        v = clean.get(_field)
+        if isinstance(v, int) and v > _MAX_TOKENS_SANITY:
+            clean[_field] = _MAX_TOKENS_CEILING
     return clean, dropped
 
 
@@ -576,6 +593,11 @@ def make_pi_inference_router(
             ]
             requested_cap = min(gen_limits) if gen_limits else None
             output_cap = remaining if requested_cap is None else min(requested_cap, remaining)
+            # Never inject/clamp ABOVE the provider-portable hard ceiling: a large budget
+            # with no caller max_tokens would otherwise set an oversized cap that some
+            # providers 400 (MiniMax-M3 > 524288). Belt-and-suspenders with the
+            # _sanitize_body clamp, which covers the unlimited-budget (remaining is None) path.
+            output_cap = min(output_cap, _MAX_TOKENS_CEILING)
             # RESERVE the completion budget too, so a concurrent call sees it consumed
             # and cannot overspend the same tokens (output_cap <= remaining → fits).
             if token_store.reserve(token, output_cap):
