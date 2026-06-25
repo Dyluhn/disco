@@ -424,3 +424,95 @@ def test_unpin_statuses_exclude_paused_and_gates() -> None:
     assert ConversationStatus.FINISHED in s
     assert ConversationStatus.ERROR in s
     assert ConversationStatus.STUCK in s
+
+
+# ---- finding #3: the CRASH terminalizer path (symmetric with the clean path) -------
+
+
+def _crash_fake(store: SqliteEventStore):
+    """Minimal fake carrying the collaborators `_terminalize_crashed` touches, with the
+    REAL method + the pin helpers bound so the SHIPPED crash-terminalization runs."""
+    fake = types.SimpleNamespace()
+    fake._store = store
+    fake._pinned_kernels = {}
+    fake._run_generation = {}
+    fake._emit_persistence_reminder = AsyncMock()
+    fake._CONCLUDED_STATUSES = ConversationRuntime._CONCLUDED_STATUSES
+    for name in (
+        "_terminalize_crashed",
+        "_clear_pinned_kernel",
+        "_unpin_if_current_generation",
+    ):
+        setattr(fake, name, types.MethodType(getattr(ConversationRuntime, name), fake))
+    return fake
+
+
+async def test_crash_terminalize_after_new_run_started_does_not_corrupt_it(
+    store: SqliteEventStore,
+) -> None:
+    """Finding #3 (crash path made SYMMETRIC with the clean path): `_on_run_task_done`
+    pops the run's task then schedules `_terminalize_crashed` ASYNC. Before it runs, a
+    fresh user turn can start a NEWER run (bumping the run-generation) and REUSE the pin.
+    The STALE crash terminalizer (carrying the OLD generation) must NOT append ERROR into
+    the newer run's event log NOR clear the newer run's pin.
+
+    Simulated: generation 1 crashed, but generation 2 has already started (run_generation
+    == 2, status RUNNING, pinned). The crash terminalizer for generation 1 runs and must
+    be a complete no-op."""
+    from disco.core import StatusEvent
+
+    # Generation 2 is the live run: RUNNING + pinned.
+    await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING))
+    rt = _crash_fake(store)
+    pin = object()
+    rt._pinned_kernels[CID] = pin
+    rt._run_generation[CID] = 2  # a NEWER run (gen 2) already reused the pin
+
+    # The stale crash terminalizer for the OLD run (generation 1).
+    await rt._terminalize_crashed(CID, RuntimeError("gen-1 boom"), 1)
+
+    state = await store.get_state(CID)
+    assert state.execution_status == ConversationStatus.RUNNING  # NO stale ERROR appended
+    assert rt._pinned_kernels[CID] is pin  # gen-2's pin SURVIVES
+    rt._emit_persistence_reminder.assert_not_awaited()  # no stale reminder either
+
+
+async def test_crash_terminalize_with_no_newer_generation_terminalizes_and_unpins(
+    store: SqliteEventStore,
+) -> None:
+    """A normal crash (NO newer generation) still terminalizes to ERROR and releases the
+    pin, exactly as before the generation guard was added — both for a matching generation
+    and for the legacy `generation=None` caller (the stranded-run sweep)."""
+    from disco.core import StatusEvent
+
+    # Matching generation: the crash IS the current run.
+    await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING))
+    rt = _crash_fake(store)
+    rt._pinned_kernels[CID] = object()
+    rt._run_generation[CID] = 1
+
+    await rt._terminalize_crashed(CID, RuntimeError("boom"), 1)
+
+    state = await store.get_state(CID)
+    assert state.execution_status == ConversationStatus.ERROR
+    err = [
+        e
+        for e in await store.get_events(CID)
+        if getattr(e, "status", None) == ConversationStatus.ERROR
+    ]
+    assert err and "RuntimeError" in (err[-1].detail or "")  # exception named in detail
+    assert CID not in rt._pinned_kernels  # pin released on terminalization
+    rt._emit_persistence_reminder.assert_awaited()
+
+    # Legacy/stranded caller (generation=None) → unconditional terminalize, as before.
+    cid2 = "conv-crash-legacy"
+    store.create_conversation(cid2, owner_id="local")
+    await store.append(cid2, StatusEvent(status=ConversationStatus.RUNNING))
+    rt._pinned_kernels[cid2] = object()
+    rt._run_generation[cid2] = 7  # irrelevant — None caller skips the generation check
+
+    await rt._terminalize_crashed(cid2, RuntimeError("legacy boom"), None)
+
+    state2 = await store.get_state(cid2)
+    assert state2.execution_status == ConversationStatus.ERROR
+    assert cid2 not in rt._pinned_kernels

@@ -1655,8 +1655,14 @@ class ConversationRuntime:
                 )
             return
         # An exception escaped loop.run(). Schedule (best-effort) a terminal ERROR.
+        # Thread the run-generation (finding #3) so the crash terminalizer — like the
+        # clean-return finalizer above — only terminalizes/unpins if a NEWER run has not
+        # since reused the pin (it pops `_tasks` before scheduling this async cleanup, so
+        # a fresh user turn can start generation N+1 in the window).
         with contextlib.suppress(RuntimeError):  # no running loop (shutdown) → skip
-            asyncio.create_task(self._terminalize_crashed(conversation_id, exc))
+            asyncio.create_task(
+                self._terminalize_crashed(conversation_id, exc, generation)
+            )
 
     async def _finalize_clean_return(
         self, conversation_id: str, generation: int | None = None
@@ -1770,12 +1776,30 @@ class ConversationRuntime:
         return acted
 
     async def _terminalize_crashed(
-        self, conversation_id: str, exc: BaseException
+        self, conversation_id: str, exc: BaseException, generation: int | None = None
     ) -> None:
         """Append a terminal ERROR status + a user-visible reminder for a crashed run.
-        Idempotent: never overwrites an already-concluded status."""
+        Idempotent: never overwrites an already-concluded status.
+
+        Generation-guarded (finding #3 — the crash path made SYMMETRIC with the clean
+        path). `_on_run_task_done` pops this run's task then schedules THIS terminalizer
+        async, so in the window before it runs a fresh user turn can start a NEWER run
+        (generation N+1) that REUSES the conversation's pin. A stale crash must then
+        neither append ERROR into the newer run's event log nor clear the newer run's
+        pin — so if a newer generation already started, skip terminalization entirely.
+        `generation` is None for legacy/stranded callers with no competing newer run
+        (terminalize as before)."""
         try:
             state = await self._store.get_state(conversation_id)
+            # Re-check the live run-generation AFTER the await: a newer run may have been
+            # kicked while this stale crash cleanup was scheduled. The check + the ERROR
+            # append below are separated only by synchronous statements (no await), so a
+            # newer run can never slip in between the guard and the append.
+            if (
+                generation is not None
+                and self._run_generation.get(conversation_id) != generation
+            ):
+                return  # a newer run owns this conversation — the crash is stale, drop it
             if state.execution_status in self._CONCLUDED_STATUSES:
                 return  # already concluded — don't clobber
             detail = f"uncaught {type(exc).__name__}: {exc}"[:200]
@@ -1785,7 +1809,9 @@ class ConversationRuntime:
                 StatusEvent(status=ConversationStatus.ERROR, detail=detail),
             )
             # Terminal ending → release the kernel pin (next run re-resolves). #1.
-            self._clear_pinned_kernel(conversation_id)
+            # Generation-guarded (finding #3): if a newer run reused the pin during the
+            # ERROR append above, leave it — that run owns the pin now.
+            self._unpin_if_current_generation(conversation_id, generation)
             await self._emit_persistence_reminder(
                 conversation_id,
                 f"The run stopped on an unexpected internal error ({type(exc).__name__}). "
