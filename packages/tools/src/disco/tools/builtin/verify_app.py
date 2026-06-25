@@ -403,7 +403,9 @@ class VerifyWebAppTool:
         honored ONLY if the url's port is conversation-owned + non-reserved (probed
         live, including the explicit port even if outside the canonical preview set)."""
         assert ctx.sandbox is not None
-        host_shared = getattr(ctx.sandbox, "workspace_path", None) is not None
+        from disco.core.loop.preview_target import backend_shares_host_network
+
+        host_shared = backend_shares_host_network(ctx.sandbox)
         if not host_shared:
             return True
         from disco.core.loop.preview_target import (
@@ -486,7 +488,9 @@ class VerifyWebAppTool:
         except Exception:  # noqa: BLE001 — detection failure → resolver default
             owners = {}
 
-        host_shared = getattr(ctx.sandbox, "workspace_path", None) is not None
+        from disco.core.loop.preview_target import backend_shares_host_network
+
+        host_shared = backend_shares_host_network(ctx.sandbox)
         owned = {
             p: PortOwnership(pid=o.pid, session=o.session)
             for p, o in owners.items()

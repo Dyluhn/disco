@@ -225,6 +225,11 @@ class ContainerInstance:
     """A running container (gVisor or Podman). Tools execute against it; the
     workspace is reached only through the file methods (exec/cp), never a path."""
 
+    #: Network-ISOLATED backend (bridge/no-NAT; preview ports are PUBLISHED, not
+    #: shared). Inside the box 127.0.0.1:8000 IS the build's own app, so control
+    #: ports are NOT reserved and 8000 is the canonical verifiable preview port.
+    shares_host_network: bool = False
+
     # Set by the service for a "filtered" box (allowlist + proxy sidecar + internal
     # net); None otherwise. Class attrs (not __init__ params) so the destroy()
     # teardown is inherited uniformly across every backend that supports the

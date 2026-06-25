@@ -38,6 +38,7 @@ from .boundaries import AgentStep
 from .control import Disp
 from .preview_target import (
     PREVIEW_PORTS,
+    backend_shares_host_network,
     parse_port_ownership,
     port_ownership_probe_command,
     resolve_preview_port,
@@ -904,9 +905,11 @@ class FinishGate:
         sbx = getattr(self._loop.executor, "sandbox", None)
         if sbx is None or not hasattr(sbx, "exec_shell"):
             return None
-        host_shared = getattr(sbx, "workspace_path", None) is not None
+        host_shared = backend_shares_host_network(sbx)
         if host_shared:
-            # Process/local: ownership-aware — never bind the agent-server's 8000.
+            # Process backend (shares host net): ownership-aware — never bind the
+            # agent-server's 8000. Isolated containers fall to the branch below where
+            # 8000 IS the app (the old `workspace_path` heuristic wrongly sent them here).
             try:
                 res = await sbx.exec_shell(
                     port_ownership_probe_command(_PREVIEW_PORTS), timeout_s=10

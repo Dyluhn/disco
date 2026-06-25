@@ -61,6 +61,24 @@ def reserved_control_ports() -> frozenset[int]:
     )
 
 
+def backend_shares_host_network(sandbox: object) -> bool:
+    """True iff the sandbox shares the host network namespace (the ``process``
+    backend) — where ``127.0.0.1:<reserved>`` IS the agent-server and control ports
+    MUST stay reserved. Isolated container backends (gVisor/Podman/local) return
+    False: their loopback is the box's own, so ``:8000`` is the build's verifiable
+    preview, not a control port.
+
+    Prefers the explicit ``shares_host_network`` flag the instances declare; falls
+    back to the legacy ``workspace_path``-presence heuristic ONLY when the flag is
+    absent (e.g. a test fake), preserving prior behavior there. The bug this fixes:
+    isolated containers ALSO have a ``workspace_path``, so the old heuristic
+    misclassified them as host-shared and excluded their real ``:8000`` preview."""
+    flag = getattr(sandbox, "shares_host_network", None)
+    if isinstance(flag, bool):
+        return flag
+    return getattr(sandbox, "workspace_path", None) is not None
+
+
 @dataclass(frozen=True)
 class PortOwnership:
     """The minimal ownership facts the resolver needs about a listening port: the
@@ -445,6 +463,7 @@ def remap_reserved_preview_serve(
 __all__ = [
     "PREVIEW_PORTS",
     "PortOwnership",
+    "backend_shares_host_network",
     "explicit_target_allowed",
     "parse_port_ownership",
     "port_ownership_probe_command",

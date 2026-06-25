@@ -114,6 +114,12 @@ def process_backend_signal_command_violation(command: str) -> str | None:
 class ProcessSandboxInstance:
     """[CONTRACT boundary] An in-subprocess instance with a jailed workspace."""
 
+    #: This backend shares the host network namespace (no isolation, §5.1), so
+    #: 127.0.0.1:<reserved> IS the agent-server/app-server — control ports MUST stay
+    #: reserved. Consumed by verify_app / finish preview targeting; do NOT key
+    #: host-shared off `workspace_path` (isolated containers have one too).
+    shares_host_network: bool = True
+
     def __init__(
         self, id: str, owner_id: str, conversation_id: str, spec: SandboxSpec, workspace: Path
     ) -> None:
