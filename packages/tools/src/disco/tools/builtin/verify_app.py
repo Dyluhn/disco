@@ -194,8 +194,11 @@ def compute_verdict(
         shown = http_status if reachable else "no response"
         summary = f"App not serving: {url} returned {shown}."
         next_action = (
-            "Start the dev server on the preview port (e.g. `python3 -m http.server 8000` "
-            "for static files, or your framework's dev command) and confirm it returns HTTP 200."
+            "Start the dev server on the preview port IN THE BACKGROUND so the shell "
+            "session stays free for follow-up checks — e.g. `python3 -m http.server 8000 &` "
+            "for static files (note the trailing `&`), or your framework's dev command "
+            "backgrounded — then confirm it returns HTTP 200. Do NOT run the server in the "
+            "foreground (it blocks the session; the next command fails with 'session busy')."
         )
     elif console_errors or network_failures:
         passed, verdict = False, "fail"
