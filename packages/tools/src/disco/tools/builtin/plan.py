@@ -25,7 +25,7 @@ from __future__ import annotations
 from typing import Literal
 
 from disco.core.dod import DoDPredicate
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..anatomy import SecurityRisk, ToolContext, ToolDef, ToolOutcome
 
@@ -149,6 +149,21 @@ class UpdatePlanProgressArgs(BaseModel):
             "missed update self-corrects the next time you call this."
         )
     )
+
+    @field_validator("steps", mode="before")
+    @classmethod
+    def _tolerate_truncated_steps(cls, v: object) -> object:
+        # ROBUSTNESS (bake-off issue #1, harness-owns-robustness): a streamed tool-call's
+        # args can arrive TRUNCATED (e.g. `{"steps": [""]}` when an arg-delta is dropped
+        # mid-stream). Hard-failing validation makes the model retry the identical bad call
+        # → repeated_action_error → STUCK build. This tool is non-critical declarative
+        # bookkeeping (each call is the FULL snapshot, so a dropped one self-corrects next
+        # call), so DROP un-parseable items instead of failing the whole call: a partial or
+        # empty snapshot is a harmless no-op, never a wedge. NOTE: masks the symptom, not the
+        # root streaming-truncation bug (tracked separately).
+        if isinstance(v, list):
+            return [s for s in v if isinstance(s, dict | PlanProgressItem)]
+        return v
 
 
 class UpdatePlanProgressTool:
