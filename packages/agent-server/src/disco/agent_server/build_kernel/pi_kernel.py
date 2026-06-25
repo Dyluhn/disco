@@ -43,16 +43,20 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from disco.core import (
+    ActionEvent,
+    AgentErrorEvent,
     ClarifyEvent,
     ClarifyQuestionItem,
     ConversationState,
     ConversationStatus,
+    Event,
     EventSource,
     LLMMessage,
     MessageEvent,
     PlanEvent,
     PlanStep,
     StatusEvent,
+    ToolCall,
     ToolResult,
 )
 from disco.core.env import disco_env
@@ -65,11 +69,44 @@ from .base import KernelEvent
 from .pi_event_mapper import map_pi_event
 from .pi_process import KernelInitConfig, PiProcess, default_pi_kernel_entry
 from .pi_session_artifact import write_pi_session_artifact
+from .pi_tool_bridge import BridgeDecision, BridgeOutcome, PiToolBridge
 
 if TYPE_CHECKING:
     from ..runtime import ConversationRuntime
 
 _LOG = logging.getLogger("disco.pi_kernel")
+
+# The loop-handled VIRTUAL / meta tools the Pi tool bridge must NOT route to the
+# executor — finish/submit_plan/ask/clarify/notify/remember/serve/delegate are
+# intercepted by the loop's MetaToolHandlers + plan gate (turn_control.py:905,
+# engine.py:1315), not run as executor tools. This is the AUTHORITATIVE set the
+# bridge short-circuits to ``BridgeDecision.VIRTUAL`` so the kernel dispatches them
+# to its real plan/ask/clarify gate + finish handlers (NOT a bare executor call).
+#
+# NOTE (P1/#4): `plan_step` and `update_plan_progress` are deliberately ABSENT —
+# they are REAL executor tools (plan-progress bookkeeping the loop runs through the
+# executor like any other tool), NOT loop-intercepted virtuals. Listing them here
+# would short-circuit them to VIRTUAL and silently skip the executor (diverging
+# from Disco, where they execute). They route through the bridge as real tools.
+_PI_VIRTUAL_TOOLS: frozenset[str] = frozenset(
+    {
+        "finish",
+        "submit_plan",
+        "propose_plan_update",
+        "ask_user",
+        "clarify",
+        "notify_user",
+        "remember",
+        "serve",
+        "delegate_explore",
+    }
+)
+
+# The VIRTUAL tools whose Python-side long-poll gate handlers exist (submit_plan /
+# ask_user / clarify). Normally intercepted in ``routes/pi_tools.py`` BEFORE the
+# bridge; listed here so a defensive VIRTUAL dispatch routes them to the real gate
+# handler instead of a no-op acknowledgement.
+_GATE_VIRTUALS: frozenset[str] = frozenset({"submit_plan", "ask_user", "clarify"})
 
 # The model alias Pi sees over the gateway. The gateway PINS the real model by the
 # run token, ignoring this value — it is purely cosmetic on the wire (campaign §4.2).
@@ -79,14 +116,6 @@ _GATEWAY_MODEL_ALIAS = "disco-selected"
 # ceiling) and capped so a runaway sidecar cannot spend unbounded tokens.
 _RUN_TOKEN_TTL_S = 2 * 3600.0
 _RUN_TOKEN_BUDGET = 4_000_000
-
-# Tools that MUTATE the workspace — blocked until a plan is approved (E1/E3). The
-# allowlist + Action/Observation pairing still live in the bridge; this is the
-# plan-gate overlay on top.
-_WRITE_TOOLS: frozenset[str] = frozenset(
-    {"file_write", "file_replace_lines", "file_insert_lines", "shell_exec"}
-)
-
 
 @dataclass
 class _PiSession:
@@ -137,6 +166,13 @@ class PiKernel:
         # The ask/clarify gate future the bridge's ask_user/clarify call long-polls;
         # resolved by the user's next turn (send_user_turn) or pick_alternative.
         self._ask_gates: dict[str, asyncio.Future[str]] = {}
+        # The per-action risk-confirmation gate future a bridged tool call long-polls
+        # when the risk gate HALTed it pending (BridgeDecision.CONFIRM_REQUIRED);
+        # resolved by confirm() (execute the held action) / reject() (deny it). The
+        # proposed ActionEvent awaiting confirmation is parked alongside it so the
+        # continuation re-runs THAT action through the bridge's safe execute/observe.
+        self._confirm_gates: dict[str, asyncio.Future[ToolResult]] = {}
+        self._pending_actions: dict[str, ActionEvent] = {}
 
     # -- inspect spans (I2) ---------------------------------------------------
 
@@ -343,24 +379,31 @@ class PiKernel:
                     return ev.message.content or ""
         return ""
 
-    async def _conclude(self, conversation_id: str, session: _PiSession) -> None:
-        """The Pi loop returned (`agent_end`): emit the finish/verification spans (I2),
-        write the sanitized artifact (I3), record FINISHED, revoke the run token, and
-        tear the sidecar down. Idempotent via `session.finished`."""
+    async def _conclude(
+        self, conversation_id: str, session: _PiSession, *, dod_passed: bool | None = None
+    ) -> None:
+        """The Pi loop returned (`agent_end`) OR finish passed its gate: emit the
+        finish/verification spans (I2), write the sanitized artifact (I3), record
+        FINISHED, revoke the run token, and tear the sidecar down. Idempotent via
+        `session.finished`.
+
+        P1 FINISH GATE: the verification span now carries the REAL Definition-of-Done
+        verdict (FinishGate.finish_dod_gate_passed) instead of a hardcoded `deferred`.
+        When the finish TOOL already gated (``dod_passed`` set), reuse that verdict to
+        avoid a double evaluation; on the bare `agent_end` path (``dod_passed`` None —
+        Pi ended its own loop without our finish tool), evaluate the gate here so the
+        trace records whether the work actually met its acceptance criteria."""
         if session.finished:
             return
         session.finished = True
         self._span("finish_request", conversation_id, kernel_id=session.kernel_id)
-        # NOTE(seam): the Definition-of-Done / verifier gate lives in the Disco
-        # `AgentLoop` engine and is NOT reproduced for the Pi loop in this batch —
-        # running Pi's `finish` tool through the bridge into the loop DoD gate is a
-        # larger integration (a later PR). The span is emitted with a `deferred`
-        # status so the trace shape (§7.11) is complete and the gap is explicit.
+        if dod_passed is None:
+            dod_passed = await self._finish_dod_gate_passed(conversation_id)
         self._span(
             "verification_result",
             conversation_id,
-            status="deferred",
-            note="DoD/verifier gate not yet wired for PiKernel",
+            status="passed" if dod_passed else "unmet",
+            note="Definition-of-Done gate (FinishGate.finish_dod_gate_passed)",
         )
         self._write_artifact(conversation_id, session)
         with contextlib.suppress(Exception):
@@ -379,8 +422,6 @@ class PiKernel:
     async def _fail_session(self, conversation_id: str, exc: Exception) -> None:
         """Tear down a session that failed to bootstrap: append an error event, revoke
         the token, kill any spawned process."""
-        from disco.core import AgentErrorEvent
-
         with contextlib.suppress(Exception):
             await self._rt._store.append(
                 conversation_id,
@@ -412,13 +453,266 @@ class PiKernel:
             return None
         return f"{db}.pi_sessions"
 
+    # -- tool bridge (EPIC D — the SAFE in-process safety wrapper) ------------
+
+    def _tool_bridge(self, conversation_id: str) -> PiToolBridge:
+        """Build the safety-wrapper bridge over THIS conversation's live loop.
+
+        The loop is resolved through the runtime's inner resolver (``_loop_for``,
+        exactly as ``DiscoKernel.pick_alternative`` does) — never through a public
+        runtime method (those route through the active kernel → recursion). The
+        bridge composes the loop's executor/analyzer/policy/planning-allowlist and
+        drives a Pi tool call through the SAME ordered gate stack
+        ``AgentLoop._run_drive`` applies (reconcile → halted → replan → planning →
+        virtual → hard-deny → risk-confirm → append → execute/observe), NOT a bare
+        ``executor.execute()``."""
+        loop = self._rt._loop_for(conversation_id)
+        return PiToolBridge.from_loop(loop, virtual_tool_names=_PI_VIRTUAL_TOOLS)
+
+    async def route_pi_tool(
+        self, conversation_id: str, tool_call: ToolCall
+    ) -> ToolResult:
+        """Route ONE Pi-emitted tool call through Disco's FULL safety wrapper and map
+        the structured outcome back to the ``ToolResult`` Pi's tool expects.
+
+        THE SAFETY CORE of EPIC D. Replaces the unsafe ``runtime.execute_pi_tool``
+        path (a bare ``executor.execute()``): a Pi tool call is now gated EXACTLY as
+        a Disco-originated one. The ``BridgeDecision`` is wired to the landed
+        handlers — VIRTUAL → the real plan/ask/clarify + finish/DoD handlers;
+        CONFIRM_REQUIRED → a REAL confirm/reject continuation; HALTED/REFUSED →
+        returned WITHOUT executing (no observation side effects)."""
+        self._managed.add(conversation_id)
+        outcome = await self._tool_bridge(conversation_id).route(
+            tool_call, thought=f"[pi] {tool_call.tool_name}"
+        )
+        return await self._outcome_to_result(conversation_id, tool_call, outcome)
+
+    @staticmethod
+    def reconcile_dangling_tool_call(events: list[Event]) -> Event | None:
+        """Neutralize a tool call interrupted before its observation (no auto-replay).
+        Delegates to the bridge's documented dangling-observation decision — see
+        :meth:`PiToolBridge.reconcile_dangling_action`."""
+        return PiToolBridge.reconcile_dangling_action(events)
+
+    async def reconcile_dangling_on_resume(self, conversation_id: str) -> Event | None:
+        """P2/#6 — WIRE the dangling reconciliation on Pi resume/start.
+
+        Call BEFORE accepting any new Pi tool call after a resume (process restart /
+        kill recovery): detect a tool action interrupted between its ActionEvent and
+        its observation and, if found, append a synthetic interrupted-observation
+        AgentErrorEvent to RESTORE the pairing — WITHOUT re-executing (a partially-
+        applied side effect must not be blindly repeated). IDEMPOTENT (a second call
+        is a no-op). The bridge ALSO enforces this guard at the top of every
+        ``route`` (defense in depth)."""
+        loop = self._rt._loop_for(conversation_id)
+        events = await loop._events()
+        recovered = PiToolBridge.reconcile_dangling_action(events)
+        if recovered is not None:
+            await loop._emit(recovered)
+        return recovered
+
+    async def _outcome_to_result(
+        self,
+        conversation_id: str,
+        tool_call: ToolCall,
+        outcome: BridgeOutcome,
+    ) -> ToolResult:
+        """Map a ``BridgeOutcome`` to the ``ToolResult`` returned over the HTTP bridge.
+
+        EXECUTED → the executor's real result (paired observation already in the log).
+        FAILED/REFUSED → a structured failing result carrying the gate/executor error
+        (Pi reasons about it and adapts — recoverable, like Disco surfacing a failure).
+        HALTED → NOT executed; tell Pi to wait for the control surface.
+        CONFIRM_REQUIRED → long-poll the real confirm/reject continuation.
+        VIRTUAL → dispatch to the loop-handled finish/gate handlers."""
+        name = tool_call.tool_name
+        cid = tool_call.call_id
+        if outcome.decision is BridgeDecision.EXECUTED:
+            assert outcome.observation is not None
+            return outcome.observation.tool_result
+        if outcome.decision is BridgeDecision.VIRTUAL:
+            return await self._handle_virtual(conversation_id, tool_call)
+        if outcome.decision is BridgeDecision.CONFIRM_REQUIRED:
+            return await self._await_confirmation(conversation_id, tool_call, outcome)
+        if outcome.decision is BridgeDecision.HALTED:
+            return ToolResult(
+                call_id=cid,
+                tool_name=name,
+                success=False,
+                content=(
+                    "the conversation is not in a drivable state (awaiting "
+                    "confirmation / plan approval / a user answer, paused, or "
+                    "terminal); the call was NOT executed — wait for the control "
+                    "surface rather than retrying"
+                ),
+                structured={
+                    "kind": "halted",
+                    "tool_name": name,
+                    "pending_action_id": outcome.pending_action_id,
+                },
+                error="conversation not drivable",
+            )
+        # FAILED / REFUSED — surface the gate/executor error as a structured failure.
+        err_text = outcome.error.error if outcome.error is not None else "tool failed"
+        kind = "refused_by_gate" if outcome.decision is BridgeDecision.REFUSED else "tool_failed"
+        return ToolResult(
+            call_id=cid,
+            tool_name=name,
+            success=False,
+            content=err_text,
+            structured={"kind": kind, "tool_name": name},
+            error=err_text,
+        )
+
+    async def _handle_virtual(
+        self, conversation_id: str, tool_call: ToolCall
+    ) -> ToolResult:
+        """Dispatch a loop-handled VIRTUAL tool the bridge short-circuited (it was NOT
+        executed). ``finish`` runs the REAL Definition-of-Done gate (P1); the gate
+        tools route to their long-poll handlers (defense in depth — they are normally
+        intercepted before the bridge in ``routes/pi_tools.py``)."""
+        name = tool_call.tool_name
+        if name == "finish":
+            return await self._handle_finish(conversation_id, tool_call)
+        if name in _GATE_VIRTUALS:
+            return await self.handle_gate_tool(
+                conversation_id, name, dict(tool_call.arguments), tool_call.call_id
+            )
+        # notify_user / remember / serve / delegate_explore / propose_plan_update are
+        # NOT in the Pi build-kernel allowlist (they never reach here through the real
+        # route — the allowlist refuses them first). Acknowledge without executing so a
+        # defensive call is a safe no-op rather than a bare executor dispatch.
+        return ToolResult(
+            call_id=tool_call.call_id,
+            tool_name=name,
+            success=True,
+            content=f"{name!r} is a loop-handled meta tool; acknowledged (no executor action).",
+            structured={"kind": "virtual_ack", "tool_name": name},
+        )
+
+    async def _handle_finish(
+        self, conversation_id: str, tool_call: ToolCall
+    ) -> ToolResult:
+        """P1 FINISH GATE — route Pi's ``finish`` through the REAL Definition-of-Done
+        gate before marking the run finished (mirror the loop's finish handling,
+        engine.py:1372 → FinishGate.finish_dod_gate_passed).
+
+        The landed ``_conclude`` previously recorded FINISHED while explicitly noting
+        the DoD/verifier gate was "not wired". Now: evaluate the DoD; if UNMET, the
+        gate emits the specific unmet predicates and we return a failing result so Pi
+        keeps working (NOT finished); if MET (or no spec), conclude the run."""
+        passed = await self._finish_dod_gate_passed(conversation_id)
+        if not passed:
+            return ToolResult(
+                call_id=tool_call.call_id,
+                tool_name="finish",
+                success=False,
+                content=(
+                    "finish is BLOCKED: the external Definition-of-Done is not yet "
+                    "satisfied. The unmet acceptance criteria were just recorded — "
+                    "address them and call finish again. The run was NOT concluded."
+                ),
+                structured={"kind": "dod_unmet"},
+                error="definition of done not met",
+            )
+        session = self._sessions.get(conversation_id)
+        if session is not None:
+            await self._conclude(conversation_id, session, dod_passed=True)
+        else:
+            # No live session (raw/test path) — still terminalize + revoke caps.
+            with contextlib.suppress(Exception):
+                await self._rt._store.append(
+                    conversation_id,
+                    StatusEvent(source=EventSource.SYSTEM, status=ConversationStatus.FINISHED),
+                )
+            self._rt._revoke_pi_tokens(conversation_id)
+        return ToolResult(
+            call_id=tool_call.call_id,
+            tool_name="finish",
+            success=True,
+            content="Build finished — the Definition-of-Done gate passed and the run is complete.",
+            structured={"kind": "finished"},
+        )
+
+    async def _finish_dod_gate_passed(self, conversation_id: str) -> bool:
+        """Run the loop's REAL DoD gate (FinishGate.finish_dod_gate_passed via
+        ``AgentLoop._finish_dod_gate_passed``). Returns True iff the finish should be
+        allowed (no DoD spec → True, the legacy byte-identical path). Best-effort: a
+        gate that cannot evaluate (no workspace / build error) does not trap the run —
+        it logs and allows finish, exactly as the loop's own gate does."""
+        try:
+            loop = self._rt._loop_for(conversation_id)
+            return await loop._finish_dod_gate_passed()
+        except Exception:  # noqa: BLE001 — a gate error must never wedge the finish
+            _LOG.warning(
+                "Pi finish: DoD gate could not evaluate for %s; allowing finish "
+                "(refusing without evidence would be a silent fail)",
+                conversation_id,
+                exc_info=True,
+            )
+            return True
+
+    # -- per-action confirm/reject continuation (P0 graft item 4) -------------
+
+    async def _await_confirmation(
+        self,
+        conversation_id: str,
+        tool_call: ToolCall,
+        outcome: BridgeOutcome,
+    ) -> ToolResult:
+        """The risk gate HALTed this call pending confirmation. Park the held bridge
+        HTTP request on a confirm gate future (the proposed ActionEvent +
+        WAITING_FOR_CONFIRMATION status are already in the log) and long-poll until
+        ``confirm`` (execute it) / ``reject`` (deny it) resolves it — a REAL
+        continuation, replacing the documented no-op."""
+        assert outcome.action is not None
+        self._pending_actions[conversation_id] = outcome.action
+        self._span(
+            "pause_for_confirmation", conversation_id, action_id=outcome.action.id
+        )
+        try:
+            return await self._park_confirm(conversation_id, tool_call)
+        finally:
+            self._pending_actions.pop(conversation_id, None)
+
+    async def _park_confirm(
+        self, conversation_id: str, tool_call: ToolCall
+    ) -> ToolResult:
+        """Register + await the confirm gate future for ``conversation_id``. A second
+        pending confirm for the same conversation supersedes a stale one."""
+        loop = asyncio.get_running_loop()
+        existing = self._confirm_gates.get(conversation_id)
+        if existing is not None and not existing.done():
+            existing.set_result(
+                ToolResult(
+                    call_id=tool_call.call_id,
+                    tool_name=tool_call.tool_name,
+                    success=False,
+                    content="superseded by a newer pending action",
+                    structured={"kind": "confirm_superseded"},
+                    error="superseded",
+                )
+            )
+        fut: asyncio.Future[ToolResult] = loop.create_future()
+        self._confirm_gates[conversation_id] = fut
+        try:
+            return await fut
+        finally:
+            if self._confirm_gates.get(conversation_id) is fut:
+                self._confirm_gates.pop(conversation_id, None)
+
     # -- plan gate (E1/E2/E3) -------------------------------------------------
 
     def writes_blocked(self, conversation_id: str) -> bool:
-        """True when a managed Pi run has NOT had a plan approved — the bridge refuses
-        write tools (file_write/replace/insert/shell_exec) until then (E1/E3: submit a
-        plan before writing; a rejected plan re-blocks until re-approval). A NON-managed
-        conversation (the raw D2 bridge, no Pi session) is never blocked here."""
+        """True when a managed Pi run has NOT had a plan approved.
+
+        INFORMATIONAL ONLY since the EPIC-D graft: write-gating is now ENFORCED by the
+        bridge's REAL planning gate (loop.mode == PLANNING blocks writes/shell/finish
+        until ``approve_plan`` flips the loop into execution mode — engine.py:945-969),
+        NOT by this bookkeeping flag. Kept as a consistent read of the plan-approval
+        state (and for the UI/tests); the narrow ``_WRITE_TOOLS`` HTTP gate that USED
+        it was removed (it let non-write side effects run pre-approval). A NON-managed
+        conversation is never blocked here."""
         return (
             conversation_id in self._managed
             and not self._plan_approved.get(conversation_id, False)
@@ -541,7 +835,9 @@ class PiKernel:
                     if not q:
                         continue
                     qtype = it.get("type")
-                    qtype = qtype if qtype in ("short_text", "long_text", "choice") else "short_text"
+                    qtype = (
+                        qtype if qtype in ("short_text", "long_text", "choice") else "short_text"
+                    )
                     opts = it.get("options")
                     options = [str(o) for o in opts] if isinstance(opts, list) else []
                     items.append(
@@ -593,28 +889,70 @@ class PiKernel:
 
     def _resolve_pending(self, conversation_id: str, message: str) -> None:
         """Resolve any held plan/ask gate futures (on teardown/finish) so a long-poll
-        bridge request never hangs after the run ends."""
+        bridge request never hangs after the run ends. The confirm gate (a different
+        future type) is resolved with a structured failing ToolResult."""
         for registry in (self._plan_gates, self._ask_gates):
             fut = registry.get(conversation_id)
             if fut is not None and not fut.done():
                 fut.set_result(message)
+        cfut = self._confirm_gates.get(conversation_id)
+        if cfut is not None and not cfut.done():
+            action = self._pending_actions.get(conversation_id)
+            tc = action.tool_call if action is not None else None
+            cfut.set_result(
+                ToolResult(
+                    call_id=tc.call_id if tc else "pi_confirm",
+                    tool_name=tc.tool_name if tc else "unknown",
+                    success=False,
+                    content=f"the pending action was abandoned: {message}",
+                    structured={"kind": "confirm_abandoned"},
+                    error=message,
+                )
+            )
 
     async def approve_plan(self, conversation_id: str) -> None:
-        """E2: approve the pending plan — mark writes unblocked, transition out of
-        `AWAITING_PLAN_APPROVAL`, and resolve the held submit_plan call so Pi resumes
-        the SAME session. No recursion (see module docstring): the status transition is
-        appended directly, NOT via `_control.approve_plan` (which would kick a Disco
-        loop)."""
-        self._plan_approved[conversation_id] = True
-        await self._rt._store.append(
-            conversation_id, StatusEvent(status=ConversationStatus.RUNNING)
-        )
-        self._span("resume_after_approval", conversation_id)
+        """E2: approve the pending plan — flip the loop into execution mode, transition
+        out of `AWAITING_PLAN_APPROVAL`, and resolve the held submit_plan call so Pi
+        resumes the SAME session.
+
+        FAIL-CLOSED (P0/a): a no-op UNLESS the conversation currently has a pending
+        SUBMITTED plan — i.e. its status is `AWAITING_PLAN_APPROVAL` AND a live
+        submit_plan gate future is parked. Without this guard, a spurious approve_plan
+        (the ws.py route accepts it unconditionally) would mark writes approved before
+        ANY plan was submitted, opening the workspace pre-plan. Writes stay blocked
+        until a real PlanEvent + approval.
+
+        The mode flip routes through the loop's REAL `approve_plan` (engine.py:1552),
+        which emits the durable `plan_approved` marker and sets `loop.mode =
+        execution` so the bridge's planning gate OPENS — it does NOT kick a Disco
+        drive loop (no recursion); Pi continues its own session."""
+        state = await self._rt._store.get_state(conversation_id)
         fut = self._plan_gates.get(conversation_id)
-        if fut is not None and not fut.done():
-            fut.set_result(
-                "Plan approved — proceed with execution. Write tools are now permitted."
+        has_pending_plan = (
+            state.execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+            and fut is not None
+            and not fut.done()
+        )
+        if not has_pending_plan:
+            _LOG.info(
+                "approve_plan IGNORED for %s: no pending submitted plan "
+                "(status=%s, gate=%s) — fail-closed, writes stay blocked",
+                conversation_id,
+                state.execution_status,
+                "parked" if (fut is not None and not fut.done()) else "none",
             )
+            return
+        # Flip the loop into execution mode via the loop's own gate (emits the durable
+        # `plan_approved` marker + sets loop.mode so the bridge planning gate opens).
+        with contextlib.suppress(Exception):
+            await self._rt._loop_for(conversation_id).approve_plan()
+        self._plan_approved[conversation_id] = True
+        self._span("resume_after_approval", conversation_id)
+        # fut is guaranteed live by has_pending_plan above.
+        assert fut is not None
+        fut.set_result(
+            "Plan approved — proceed with execution. Write tools are now permitted."
+        )
 
     async def reject_plan(self, conversation_id: str, reason: str = "") -> None:
         """E3: reject the pending plan — writes stay blocked, the held submit_plan call
@@ -651,17 +989,79 @@ class PiKernel:
             with contextlib.suppress(Exception):
                 await session.proc.followup(text)
 
-    # -- action gate (Pi has no Disco BlastRadiusConfirm) ---------------------
+    # -- per-action confirm/reject gate (REAL continuation, P0 graft item 4) --
 
     async def confirm(self, conversation_id: str) -> None:
-        """Pi does not use Disco's per-action BlastRadiusConfirm gate (its plan gate is
-        the up-front approval). A confirm is a no-op (documented); never recurse into
-        `_control`."""
-        return None
+        """CONFIRM the pending risk-gated action — a REAL continuation (replaces the
+        former documented no-op).
+
+        When a bridged Pi tool call hits the risk gate, the bridge HALTs it pending
+        (BridgeDecision.CONFIRM_REQUIRED): the proposed ActionEvent + a
+        WAITING_FOR_CONFIRMATION status are in the log and the held HTTP request is
+        parked on the confirm gate. ``confirm`` resumes the SAME action through the
+        bridge's SAFE execute/observe core (K1 guard + one-observation pairing —
+        mirror of ``AgentLoop.confirm`` engine.py:1499) and resolves the held request
+        with the executor's result so Pi continues. A no-op if nothing is pending."""
+        action = self._pending_actions.get(conversation_id)
+        fut = self._confirm_gates.get(conversation_id)
+        if action is None or fut is None or fut.done():
+            return
+        await self._rt._store.append(
+            conversation_id, StatusEvent(status=ConversationStatus.RUNNING)
+        )
+        tc = action.tool_call
+        try:
+            outcome = await self._tool_bridge(conversation_id).resume_confirmed(action)
+            if outcome.decision is BridgeDecision.EXECUTED and outcome.observation is not None:
+                result = outcome.observation.tool_result
+            else:
+                err = outcome.error.error if outcome.error is not None else "tool failed"
+                result = ToolResult(
+                    call_id=tc.call_id if tc else "pi_confirm",
+                    tool_name=tc.tool_name if tc else "unknown",
+                    success=False,
+                    content=err,
+                    structured={"kind": "tool_failed"},
+                    error=err,
+                )
+        except Exception as exc:  # noqa: BLE001 — never wedge the held request
+            result = ToolResult(
+                call_id=tc.call_id if tc else "pi_confirm",
+                tool_name=tc.tool_name if tc else "unknown",
+                success=False,
+                content=f"confirmed action could not execute: {exc}",
+                structured={"kind": "confirm_error"},
+                error=str(exc),
+            )
+        if not fut.done():
+            fut.set_result(result)
 
     async def reject(self, conversation_id: str, reason: str = "rejected by user") -> None:
-        """No per-action gate for Pi — a no-op (see `confirm`)."""
-        return None
+        """REJECT the pending risk-gated action — a REAL continuation (replaces the
+        former no-op). Pair the already-proposed action with an AgentErrorEvent (so it
+        is never left dangling) WITHOUT executing the tool (mirror of
+        ``AgentLoop.reject`` engine.py:1515), then resolve the held request with the
+        denial so Pi adapts. A no-op if nothing is pending."""
+        action = self._pending_actions.get(conversation_id)
+        fut = self._confirm_gates.get(conversation_id)
+        if action is None or fut is None or fut.done():
+            return
+        await self._rt._store.append(
+            conversation_id, StatusEvent(status=ConversationStatus.RUNNING)
+        )
+        tc = action.tool_call
+        with contextlib.suppress(Exception):
+            await self._tool_bridge(conversation_id).reject_pending(action, reason)
+        result = ToolResult(
+            call_id=tc.call_id if tc else "pi_confirm",
+            tool_name=tc.tool_name if tc else "unknown",
+            success=False,
+            content=f"the action was REJECTED by the user ({reason}) and was NOT executed.",
+            structured={"kind": "rejected"},
+            error="rejected by user",
+        )
+        if not fut.done():
+            fut.set_result(result)
 
     async def pick_alternative(self, conversation_id: str, option_id: str) -> None:
         """Resolve a pending ask gate with the picked option id, if any (the
