@@ -10,6 +10,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { PiKernelRunner } from "../src/runner.ts";
+import { DISCO_TOOL_NAMES } from "../src/tools.ts";
 import type { KernelOutbound, ReadyEvent } from "../src/protocol.ts";
 
 const BUILTIN_TOOLS = ["read", "bash", "edit", "write"];
@@ -54,7 +55,62 @@ describe("pi-kernel no-tools posture", () => {
       expect(allToolNames, `built-in '${builtin}' must not be registered`).not.toContain(builtin);
     }
 
+    // G1: only the reviewed internal skills mount — no discovered project/user
+    // skill survives the override (and no built-in tools regardless).
+    const skills = opts!.resourceLoader!.getSkills().skills.map((s) => s.name).sort();
+    expect(skills).toEqual(["build-basic", "preview-repair"]);
+
     // No error frames during a clean init.
+    expect(frames.filter((f) => f.type === "error")).toEqual([]);
+  });
+
+  it("with a bridge, mounts the Disco custom tools and NO built-ins (noTools:'builtin')", async () => {
+    const frames: KernelOutbound[] = [];
+    runner = new PiKernelRunner({ emit: (e) => frames.push(e), heartbeatMs: 50 });
+
+    await runner.handleCommand({
+      type: "init",
+      config: {
+        gateway: {
+          baseUrl: "http://127.0.0.1:8731/v1",
+          model: "disco-build",
+          apiKey: "loopback-run-token",
+        },
+        bridge: { baseUrl: "http://127.0.0.1:8731", kernelId: "k-abc" },
+      },
+    });
+
+    // The ready frame reports the D1 tool surface: builtin-disabled + 14 custom.
+    const ready = frames.find((f): f is ReadyEvent => f.type === "ready");
+    expect(ready, "expected a ready frame").toBeDefined();
+    expect(ready!.tools.noTools).toBe("builtin");
+    expect(ready!.tools.customToolCount).toBe(14);
+    // Active tools are exactly the Disco custom set, never a built-in.
+    for (const builtin of BUILTIN_TOOLS) {
+      expect(ready!.tools.activeToolNames, `built-in '${builtin}' must not be active`).not.toContain(
+        builtin,
+      );
+    }
+    expect([...ready!.tools.activeToolNames].sort()).toEqual([...DISCO_TOOL_NAMES].sort());
+
+    // The exact options handed to createAgentSession.
+    const opts = runner.getInitOptions();
+    expect(opts!.noTools).toBe("builtin");
+    expect(opts!.customTools).toHaveLength(14);
+
+    // The live session's ACTIVE tools are exactly the 14 Disco custom tools.
+    // Under `noTools:"builtin"` the built-ins stay registered but INACTIVE
+    // (disabled) — so they can never be called — while the custom set is live.
+    const session = runner.getSession();
+    const activeNames = session!.getActiveToolNames();
+    for (const builtin of BUILTIN_TOOLS) {
+      expect(activeNames, `built-in '${builtin}' must not be active`).not.toContain(builtin);
+    }
+    for (const name of DISCO_TOOL_NAMES) {
+      expect(activeNames, `custom tool '${name}' must be active`).toContain(name);
+    }
+    expect([...activeNames].sort()).toEqual([...DISCO_TOOL_NAMES].sort());
+
     expect(frames.filter((f) => f.type === "error")).toEqual([]);
   });
 

@@ -50,6 +50,28 @@ export interface KernelGatewayConfig {
 }
 
 /**
+ * The loopback tool-bridge endpoint (Disco Pi Build Kernel Campaign §1.1 / PR
+ * D1+D2). When present the kernel starts with `noTools:"builtin"` and the Disco
+ * custom-tool set, each tool HTTP-bridging to
+ * `{baseUrl}/internal/pi-kernel/{kernelId}/tools/{name}` with the SAME ephemeral
+ * run token the inference gateway uses. When absent the kernel exposes no tools
+ * at all (`noTools:"all"`, empty custom set) — the B1 no-gateway lifecycle.
+ *
+ * Carries NO credential: the bridge reuses the gateway's run token (so tool
+ * calls and inference share one token), which the spawner injects via
+ * {@link KernelGatewayConfig.apiKey}.
+ */
+export interface KernelBridgeConfig {
+  /**
+   * Base URL of the loopback Disco agent-server hosting the tool bridge (e.g.
+   * `http://127.0.0.1:<port>`). Every bridged tool call POSTs here.
+   */
+  baseUrl: string;
+  /** Opaque kernel id binding every bridged tool call to this run's token. */
+  kernelId: string;
+}
+
+/**
  * Configuration for a kernel session. Intentionally minimal for B1: when no
  * `gateway` is supplied the model / provider is a PLACEHOLDER wired by the Disco
  * inference gateway in EPIC C, so nothing here selects a real model yet.
@@ -72,6 +94,13 @@ export interface KernelInitConfig {
    * has no model.
    */
   gateway?: KernelGatewayConfig;
+  /**
+   * The loopback tool bridge. When present the kernel mounts the Disco custom
+   * tool set (`noTools:"builtin"`); when absent it exposes no tools at all
+   * (`noTools:"all"`). The bridge reuses {@link KernelGatewayConfig.apiKey} as
+   * its run token, so tool calls and inference share one ephemeral credential.
+   */
+  bridge?: KernelBridgeConfig;
 }
 
 /** Start the Pi session. Must be the first command; sending it twice errors. */
@@ -126,9 +155,13 @@ export type KernelCommandType = KernelCommand["type"];
 export interface ToolSurface {
   /** Names of tools active on the agent. For a no-tools kernel this is `[]`. */
   activeToolNames: string[];
-  /** Count of SDK custom tools registered. For B1 this is `0`. */
+  /** Count of SDK custom tools registered. `0` without a bridge; `14` with one. */
   customToolCount: number;
-  /** The `noTools` mode the session was created with (always `"all"` in B1). */
+  /**
+   * The `noTools` mode the session was created with: `"all"` (no tools at all)
+   * without a bridge, `"builtin"` (built-ins disabled, Disco custom tools live)
+   * with one.
+   */
   noTools: "all" | "builtin" | null;
 }
 
@@ -228,6 +261,18 @@ export function parseCommand(value: unknown): KernelCommand | null {
       const config = (value as { config?: unknown }).config;
       if (config !== undefined && (typeof config !== "object" || config === null)) {
         return null;
+      }
+      // The tool bridge is optional, but if present it must be well-formed:
+      // a string `baseUrl` and a string `kernelId` (the D1 contract). A
+      // malformed bridge is a protocol error, not a silently-dropped field.
+      if (config !== undefined) {
+        const bridge = (config as { bridge?: unknown }).bridge;
+        if (bridge !== undefined) {
+          if (typeof bridge !== "object" || bridge === null) return null;
+          const { baseUrl, kernelId } = bridge as { baseUrl?: unknown; kernelId?: unknown };
+          if (typeof baseUrl !== "string" || baseUrl === "") return null;
+          if (typeof kernelId !== "string" || kernelId === "") return null;
+        }
       }
       return { type, config: config as KernelInitConfig | undefined };
     }

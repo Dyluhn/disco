@@ -3,8 +3,11 @@
  * PR B1).
  *
  * Embeds a Pi `AgentSession` with:
- * - NO built-in tools (`noTools: "all"`) and NO custom tools (those arrive in
- *   EPIC D), so the kernel cannot read/write/exec anything on its own (§2.2/§5.1).
+ * - A bridge-gated tool posture: WITHOUT a bridge, NO tools at all
+ *   (`noTools: "all"`, empty custom set); WITH a bridge, built-ins disabled
+ *   (`noTools: "builtin"`) and only the Disco custom tools, each HTTP-bridging
+ *   to the loopback agent-server — so the kernel can read/write/exec NOTHING
+ *   except through Disco's executor (§2.2/§5.1).
  * - In-memory auth, model registry, and session manager — nothing is written to
  *   disk as product truth.
  * - A resource loader locked to discover ZERO project-local `.pi` resources and
@@ -37,14 +40,16 @@ import {
   type CreateAgentSessionOptions,
 } from "@earendil-works/pi-coding-agent";
 
+import { registerDiscoProvider, GATEWAY_PROVIDER } from "./discoProvider.ts";
 import { mapAgentEvent } from "./events.ts";
 import {
   PROTOCOL_VERSION,
   type KernelCommand,
-  type KernelGatewayConfig,
   type KernelInitConfig,
   type KernelOutbound,
 } from "./protocol.ts";
+import { internalSkillsOverride } from "./skills.ts";
+import { buildDiscoTools } from "./tools.ts";
 
 /** Default heartbeat cadence (ms). Overridable per-init for tests. */
 export const DEFAULT_HEARTBEAT_MS = 1000;
@@ -62,8 +67,10 @@ export const DEFAULT_MAX_PENDING_AGENT_EVENTS = 1024;
 /**
  * The synthetic provider name under which the Disco inference gateway is
  * registered. It is the ONLY provider the kernel ever exposes as usable.
+ * Re-exported from {@link ./discoProvider.ts} (the single source of truth, C3)
+ * so existing importers of this symbol from the runner keep working.
  */
-export const GATEWAY_PROVIDER = "disco-gateway";
+export { GATEWAY_PROVIDER };
 
 /**
  * Provider-credential env vars Pi reads to auto-select a real model/provider and
@@ -293,7 +300,11 @@ export class PiKernelRunner {
       // consistent across both.
       const settingsManager = SettingsManager.create(cwd, agentDir);
 
-      // Loader that discovers ZERO project-local resources (§5.1).
+      // Loader that discovers ZERO project-local resources (§5.1). G1: the
+      // `skillsOverride` DROPS every disk/project/user/package-discovered skill
+      // and mounts ONLY the reviewed Disco-internal skills — so even though
+      // `noSkills` already suppresses discovery, the override is the hard
+      // guarantee that nothing but internal skills can ever reach the agent.
       const resourceLoader = new DefaultResourceLoader({
         cwd,
         agentDir,
@@ -303,6 +314,7 @@ export class PiKernelRunner {
         noPromptTemplates: true,
         noThemes: true,
         noContextFiles: true,
+        skillsOverride: internalSkillsOverride(),
       });
       // When we supply our own loader, createAgentSession does NOT reload it —
       // we must, and we pin project trust to false (never load project `.pi`).
@@ -314,8 +326,24 @@ export class PiKernelRunner {
       // no model is selected — a prompt fails loudly instead of falling back to
       // any real provider.
       const selectedModel = config?.gateway
-        ? registerGatewayModel(modelRegistry, config.gateway)
+        ? registerDiscoProvider(modelRegistry, config.gateway)
         : undefined;
+
+      // D1 tool posture. WITH a bridge: no built-in tools (`"builtin"`) but the
+      // Disco custom-tool set, each HTTP-bridging to the loopback agent-server
+      // with the SAME ephemeral run token the gateway uses (so tool calls and
+      // inference share one token — exactly what `routes/pi_tools.py` validates
+      // against the run-token store). WITHOUT a bridge: the B1 no-tools posture
+      // (`"all"` + empty set) is preserved, so the no-gateway lifecycle/security
+      // tests keep their `ready`-frame tool assertions.
+      const noToolsMode: "all" | "builtin" = config?.bridge ? "builtin" : "all";
+      const customTools = config?.bridge
+        ? buildDiscoTools({
+            baseUrl: config.bridge.baseUrl,
+            kernelId: config.bridge.kernelId,
+            token: config.gateway?.apiKey,
+          })
+        : [];
 
       const options: CreateAgentSessionOptions = {
         cwd,
@@ -326,9 +354,8 @@ export class PiKernelRunner {
         settingsManager,
         resourceLoader,
         ...(selectedModel ? { model: selectedModel } : {}),
-        // No built-in tools, and no custom tools yet (EPIC D adds the bridge).
-        noTools: "all",
-        customTools: [],
+        noTools: noToolsMode,
+        customTools,
       };
       this.initOptions = options;
 
@@ -370,7 +397,7 @@ export class PiKernelRunner {
         tools: {
           activeToolNames: session.getActiveToolNames(),
           customToolCount: options.customTools?.length ?? 0,
-          noTools: "all",
+          noTools: noToolsMode,
         },
       });
 
@@ -602,36 +629,6 @@ export class PiKernelRunner {
   private error(message: string, fatal = false): void {
     this.emitFrame({ type: "error", message, fatal });
   }
-}
-
-/**
- * Register the Disco gateway as the sole usable provider and return its model.
- * Built-in providers remain in the registry but are never usable (no credential
- * post-scrub); only this provider carries an injected key, so it is the only
- * model `getAvailable()` returns and the only endpoint a prompt can reach.
- */
-function registerGatewayModel(
-  modelRegistry: ModelRegistry,
-  gateway: KernelGatewayConfig,
-): ReturnType<ModelRegistry["find"]> {
-  modelRegistry.registerProvider(GATEWAY_PROVIDER, {
-    baseUrl: gateway.baseUrl,
-    apiKey: gateway.apiKey,
-    api: gateway.api ?? "openai-completions",
-    models: [
-      {
-        id: gateway.model,
-        name: gateway.model,
-        api: gateway.api ?? "openai-completions",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 0,
-        maxTokens: 0,
-      },
-    ],
-  });
-  return modelRegistry.find(GATEWAY_PROVIDER, gateway.model);
 }
 
 function describeError(err: unknown): string {

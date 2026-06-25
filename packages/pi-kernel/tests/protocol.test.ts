@@ -32,6 +32,38 @@ describe("parseCommand — well-formed commands", () => {
       expect(parseCommand(input)).toEqual(expected);
     }
   });
+
+  it("accepts an init carrying a well-formed bridge", () => {
+    const input = {
+      type: "init",
+      config: { bridge: { baseUrl: "http://127.0.0.1:8731", kernelId: "k-123" } },
+    };
+    expect(parseCommand(input)).toEqual({
+      type: "init",
+      config: { bridge: { baseUrl: "http://127.0.0.1:8731", kernelId: "k-123" } },
+    });
+  });
+});
+
+describe("parseCommand — malformed bridge is rejected", () => {
+  const badBridges: unknown[] = [
+    { type: "init", config: { bridge: 5 } }, // not an object
+    { type: "init", config: { bridge: null } }, // null object
+    { type: "init", config: { bridge: {} } }, // missing both fields
+    { type: "init", config: { bridge: { baseUrl: "http://x" } } }, // missing kernelId
+    { type: "init", config: { bridge: { kernelId: "k" } } }, // missing baseUrl
+    { type: "init", config: { bridge: { baseUrl: 1, kernelId: "k" } } }, // wrong baseUrl type
+    { type: "init", config: { bridge: { baseUrl: "http://x", kernelId: 2 } } }, // wrong kernelId type
+    { type: "init", config: { bridge: { baseUrl: "", kernelId: "k" } } }, // empty baseUrl
+    { type: "init", config: { bridge: { baseUrl: "http://x", kernelId: "" } } }, // empty kernelId
+  ];
+
+  it("returns null for every malformed bridge without throwing", () => {
+    for (const value of badBridges) {
+      expect(() => parseCommand(value)).not.toThrow();
+      expect(parseCommand(value), `should reject: ${JSON.stringify(value)}`).toBeNull();
+    }
+  });
 });
 
 describe("parseCommand — malformed input is rejected, never thrown", () => {
