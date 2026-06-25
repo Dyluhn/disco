@@ -35,6 +35,16 @@ import { fileURLToPath } from "node:url";
 
 import type { ResourceDiagnostic, Skill } from "@earendil-works/pi-coding-agent";
 
+import { DISCO_TOOL_NAMES } from "./tools.ts";
+
+/**
+ * The single source of truth for the fixed Disco tool set (D3 / §7.6), reused
+ * here so a reviewed skill's `allowed-tools` can declare ONLY real Disco tools.
+ * Importing {@link DISCO_TOOL_NAMES} (not a hand-copied list) keeps governance and
+ * the tool bridge from ever diverging.
+ */
+const DISCO_TOOL_SET: ReadonlySet<string> = new Set<string>(DISCO_TOOL_NAMES);
+
 /**
  * The controlled, in-repo directory that holds the reviewed Disco-owned skills.
  * Resolved relative to this module so it points at `packages/pi-kernel/skills`
@@ -74,6 +84,13 @@ const VALID_RISKS: ReadonlySet<string> = new Set<SkillRisk>(["low", "medium", "h
  */
 export interface InternalSkillManifest {
   id: string;
+  /**
+   * The frontmatter `name` — the identity the Pi SDK actually MOUNTS the skill
+   * under. Governance requires it to equal {@link InternalSkillManifest.id} (the
+   * controlled directory id) so the live mounted skill can never differ from the
+   * reviewed id (campaign §5.2).
+   */
+  name: string;
   version: string;
   surface: SkillSurface[];
   allowedTools: string[];
@@ -102,6 +119,21 @@ export interface SkillSet {
   diagnostics: ResourceDiagnostic[];
 }
 
+/**
+ * A live name-binding for one allowlisted skill: the reviewed identity (`name` ==
+ * the controlled directory id) bound to the canonicalized directory it must load
+ * from. The allowlist gate uses this to require that the FINAL loaded `Skill.name`
+ * for a skill mounted from `dir` equals `name`, so the live mounted name can never
+ * differ from the reviewed id (campaign §5.2, defense in depth on top of the
+ * {@link readSkillManifest} name==id check).
+ */
+export interface AllowlistedSkillBinding {
+  /** Reviewed allowlist id == controlled directory name == required live `Skill.name`. */
+  name: string;
+  /** Canonicalized (real-path) reviewed directory the skill must load from. */
+  dir: string;
+}
+
 export interface SkillLoaderConfig {
   /** Absolute, reviewed skill directories to hand to `additionalSkillPaths`. */
   additionalSkillPaths: string[];
@@ -121,6 +153,12 @@ export interface SkillLoaderConfig {
    * in allowlist order. Empty when the allowlist is empty.
    */
   manifests: InternalSkillManifest[];
+  /**
+   * Live name-bindings (id ↔ real dir) for every allowlisted skill, fed to the
+   * gate so the FINAL mounted `Skill.name` is checked against the reviewed id for
+   * the directory it loaded from. Empty when the allowlist is empty.
+   */
+  bindings: AllowlistedSkillBinding[];
 }
 
 /** One fully-resolved, vetted allowlist entry: its real dir + governance manifest. */
@@ -259,6 +297,36 @@ export function isAllowlistedSkill(skill: Skill, allowedDirs: readonly string[])
   return allowedDirs.some((dir) => isWithin(skill.filePath, dir));
 }
 
+/** The binding whose reviewed dir contains `skill`, or undefined if none does. */
+function bindingFor(
+  skill: Skill,
+  bindings: readonly AllowlistedSkillBinding[],
+): AllowlistedSkillBinding | undefined {
+  return bindings.find((b) => isWithin(skill.filePath, b.dir));
+}
+
+/**
+ * Assert every loaded skill's LIVE name equals the reviewed id for the directory
+ * it loaded from. Returns the offending skills (none → []). A skill not matched to
+ * any binding is left to the path-containment gate ({@link enforceAllowlist}); this
+ * check only governs skills that DID load from a reviewed dir but under a name that
+ * differs from that dir's reviewed id.
+ */
+function nameBindingViolations(
+  skills: readonly Skill[],
+  bindings: readonly AllowlistedSkillBinding[],
+): string[] {
+  if (bindings.length === 0) return [];
+  const out: string[] = [];
+  for (const s of skills) {
+    const binding = bindingFor(s, bindings);
+    if (binding !== undefined && s.name !== binding.name) {
+      out.push(`${s.name} <- ${s.filePath} (expected name '${binding.name}')`);
+    }
+  }
+  return out;
+}
+
 /**
  * The LOAD-TIME allowlist gate, installed as the loader's `skillsOverride`.
  *
@@ -269,7 +337,11 @@ export function isAllowlistedSkill(skill: Skill, allowedDirs: readonly string[])
  * aborts the whole resource load: the kernel refuses to start rather than mount a
  * skill it did not vet.
  */
-export function enforceAllowlist(base: SkillSet, allowedDirs: readonly string[]): SkillSet {
+export function enforceAllowlist(
+  base: SkillSet,
+  allowedDirs: readonly string[],
+  bindings: readonly AllowlistedSkillBinding[] = [],
+): SkillSet {
   const violations = base.skills.filter((s) => !isAllowlistedSkill(s, allowedDirs));
   if (violations.length > 0) {
     const detail = violations.map((s) => `${s.name} <- ${s.filePath}`);
@@ -278,6 +350,18 @@ export function enforceAllowlist(base: SkillSet, allowedDirs: readonly string[])
         `${detail.join("; ")}. Only reviewed Disco-owned skills under the controlled ` +
         `skills dir may be mounted (allowlist enforced at load time).`,
       detail,
+    );
+  }
+  // NAME BINDING: a skill that DID load from a reviewed dir must mount under that
+  // dir's reviewed id. A loaded `Skill.name` that differs from the reviewed id is
+  // refused, so the live mounted name can never drift from the reviewed identity.
+  const nameViolations = nameBindingViolations(base.skills, bindings);
+  if (nameViolations.length > 0) {
+    throw new SkillAllowlistViolation(
+      `[disco-skills] refusing to load ${nameViolations.length} skill(s) whose live mounted name ` +
+        `differs from the reviewed allowlist id: ${nameViolations.join("; ")}. The mounted skill ` +
+        `name must equal the controlled directory id it was reviewed under.`,
+      nameViolations,
     );
   }
   return base;
@@ -293,6 +377,7 @@ export function assertOnlyAllowlistedSkills(
   loadedSkills: readonly Skill[],
   allowedDirs: readonly string[],
   skillsRoot?: string,
+  bindings: readonly AllowlistedSkillBinding[] = [],
 ): void {
   // Defense in depth: independently re-verify (on canonicalized paths) that every
   // allowedDir is still contained in the real root, so an ESCAPED realpath that
@@ -320,6 +405,17 @@ export function assertOnlyAllowlistedSkills(
       detail,
     );
   }
+  // Backstop the live name-binding too: a skill that loaded from a reviewed dir but
+  // under a name differing from that dir's reviewed id must never reach the session.
+  const nameViolations = nameBindingViolations(loadedSkills, bindings);
+  if (nameViolations.length > 0) {
+    throw new SkillAllowlistViolation(
+      `[disco-skills] boot assertion failed: ${nameViolations.length} skill(s) reached the live ` +
+        `session under a name differing from their reviewed allowlist id: ${nameViolations.join("; ")}. ` +
+        `The mounted skill name must equal the controlled directory id.`,
+      nameViolations,
+    );
+  }
 }
 
 /**
@@ -332,13 +428,15 @@ export function assertOnlyAllowlistedSkills(
 export function buildSkillLoaderConfig(opts: SkillAllowlistOptions = {}): SkillLoaderConfig {
   const entries = resolveAllowlistedEntries(opts);
   const allowedDirs = entries.map((e) => e.dir);
+  const bindings: AllowlistedSkillBinding[] = entries.map((e) => ({ name: e.name, dir: e.dir }));
   const skillsRoot = realPathOrSelf(opts.skillsRoot ?? DISCO_SKILLS_ROOT);
   return {
     additionalSkillPaths: allowedDirs,
-    skillsOverride: (base: SkillSet) => enforceAllowlist(base, allowedDirs),
+    skillsOverride: (base: SkillSet) => enforceAllowlist(base, allowedDirs, bindings),
     allowedDirs,
     skillsRoot,
     manifests: entries.map((e) => e.manifest),
+    bindings,
   };
 }
 
@@ -364,6 +462,20 @@ export function readSkillManifest(id: string, filePath: string): InternalSkillMa
     );
   }
 
+  // NAME BINDING (campaign §5.2): the Pi SDK mounts and invokes a skill by its
+  // frontmatter `name`, NOT its `id`. If `name` could differ from the reviewed id,
+  // an allowlisted `build-basic/SKILL.md` could mount under an arbitrary name and
+  // the id check would be merely cosmetic. Require `name` == the controlled
+  // directory id so the LIVE mounted name equals the reviewed id.
+  const fmName = scalar(fm.name);
+  if (fmName !== id) {
+    throw new Error(
+      `skill '${id}' (${filePath}) declares name '${fmName ?? "<missing>"}' — ` +
+        `frontmatter name must match the directory id (the live mounted skill name ` +
+        `must equal the reviewed allowlist id)`,
+    );
+  }
+
   const version = scalar(fm.version);
   if (!version) {
     throw new Error(`skill '${id}' (${filePath}) is missing a 'version' field`);
@@ -385,6 +497,18 @@ export function readSkillManifest(id: string, filePath: string): InternalSkillMa
   if (allowedTools.length === 0) {
     throw new Error(`skill '${id}' (${filePath}) must declare 'allowed-tools'`);
   }
+  // FAIL-CLOSED on unknown tools: `allowed-tools` must name ONLY tools from the
+  // fixed Disco tool set (the single source of truth in tools.ts). A skill naming
+  // a tool outside that set — e.g. an attacker-chosen `totally_not_a_disco_tool` —
+  // is refused at LOAD TIME rather than silently passing governance.
+  for (const tool of allowedTools) {
+    if (!DISCO_TOOL_SET.has(tool)) {
+      throw new Error(
+        `skill '${id}' (${filePath}) declares allowed-tool '${tool}', which is not a Disco tool ` +
+          `(allowed: ${DISCO_TOOL_NAMES.join(", ")})`,
+      );
+    }
+  }
 
   const risk = scalar(fm.risk);
   if (!risk || !VALID_RISKS.has(risk)) {
@@ -396,6 +520,7 @@ export function readSkillManifest(id: string, filePath: string): InternalSkillMa
 
   return {
     id,
+    name: fmName,
     version,
     surface: surface as SkillSurface[],
     allowedTools,

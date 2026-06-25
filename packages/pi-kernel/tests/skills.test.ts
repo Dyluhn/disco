@@ -38,6 +38,7 @@ import {
   resolveAllowlistedSkillPaths,
   type SkillSet,
 } from "../src/skills.ts";
+import { DISCO_TOOL_NAMES } from "../src/tools.ts";
 
 // ---- temp-dir helpers --------------------------------------------------
 
@@ -183,6 +184,72 @@ describe("skill governance manifest (PR G1, §5.2)", () => {
     );
   });
 
+  it("readSkillManifest REJECTS a matching id but MISMATCHED name (P2 name binding)", () => {
+    // The id equals the directory id (passes the id check), but the frontmatter
+    // `name` — which the Pi SDK actually mounts the skill under — is arbitrary.
+    // Governance must refuse it so the live mounted name can't differ from the id.
+    const root = mkTemp("disco-gov-namebind-");
+    const dir = join(root, "build-basic");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "SKILL.md"),
+      `---\nname: arbitrary-skill\nid: build-basic\nversion: 1.0.0\nsurface: [build]\n` +
+        `allowed-tools: [think]\nrisk: low\ndescription: x\n---\n# x\n`,
+    );
+    expect(() => readSkillManifest("build-basic", join(dir, "SKILL.md"))).toThrow(
+      /frontmatter name must match the directory id/,
+    );
+  });
+
+  it("readSkillManifest ACCEPTS a manifest whose id AND name both match the dir id", () => {
+    const root = mkTemp("disco-gov-nameok-");
+    const dir = writeSkill(root, "build-basic"); // writes matching name+id
+    const m = readSkillManifest("build-basic", join(dir, "SKILL.md"));
+    expect(m.id).toBe("build-basic");
+    expect(m.name).toBe("build-basic");
+  });
+
+  it("readSkillManifest REJECTS an unknown allowed-tool (P2 fail-open fix)", () => {
+    // `allowed-tools` is non-empty but names a tool outside the fixed Disco set —
+    // must be refused, not silently passed.
+    const root = mkTemp("disco-gov-badtool-");
+    const dir = join(root, "toolsy");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "SKILL.md"),
+      `---\nname: toolsy\nid: toolsy\nversion: 1.0.0\nsurface: [build]\n` +
+        `allowed-tools: [think, totally_not_a_disco_tool]\nrisk: low\ndescription: x\n---\n# x\n`,
+    );
+    expect(() => readSkillManifest("toolsy", join(dir, "SKILL.md"))).toThrow(
+      /allowed-tool 'totally_not_a_disco_tool', which is not a Disco tool/,
+    );
+  });
+
+  it("readSkillManifest ACCEPTS a manifest whose allowed-tools are all real Disco tools", () => {
+    const root = mkTemp("disco-gov-goodtool-");
+    const dir = join(root, "toolsy-ok");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "SKILL.md"),
+      `---\nname: toolsy-ok\nid: toolsy-ok\nversion: 1.0.0\nsurface: [build]\n` +
+        `allowed-tools: [think, file_read, shell_exec, preview_start, finish]\nrisk: low\n` +
+        `description: x\n---\n# x\n`,
+    );
+    const m = readSkillManifest("toolsy-ok", join(dir, "SKILL.md"));
+    expect(m.allowedTools).toEqual(["think", "file_read", "shell_exec", "preview_start", "finish"]);
+  });
+
+  it("the real in-repo skills declare ONLY tools from the fixed Disco set", () => {
+    const manifests = loadAllowlistedSkillManifests({
+      allowlist: ["build-basic", "preview-repair"],
+    });
+    for (const m of manifests) {
+      for (const tool of m.allowedTools) {
+        expect(DISCO_TOOL_NAMES).toContain(tool);
+      }
+    }
+  });
+
   it("readSkillManifest rejects an invalid risk tier", () => {
     const root = mkTemp("disco-gov-risk-");
     const dir = join(root, "riskyskill");
@@ -299,6 +366,46 @@ describe("allowlist load-time gate (PR G3)", () => {
     const liar = fakeSkill("build-basic", join(mkTemp("disco-skills-liar-"), "SKILL.md"));
     expect(isAllowlistedSkill(liar, [dir])).toBe(false);
     expect(isAllowlistedSkill(fakeSkill("real", join(dir, "SKILL.md")), [dir])).toBe(true);
+  });
+
+  it("enforceAllowlist REJECTS a skill whose LIVE name differs from the reviewed id (P2)", () => {
+    // The skill loads from inside the reviewed `build-basic` dir (path gate passes)
+    // but mounts under an arbitrary name — the live name binding must refuse it.
+    const root = mkTemp("disco-namebind-gate-");
+    const dir = writeSkill(root, "build-basic");
+    const base: SkillSet = {
+      skills: [fakeSkill("arbitrary-skill", join(dir, "SKILL.md"))],
+      diagnostics: [],
+    };
+    expect(() => enforceAllowlist(base, [dir], [{ name: "build-basic", dir }])).toThrow(
+      SkillAllowlistViolation,
+    );
+    expect(() => enforceAllowlist(base, [dir], [{ name: "build-basic", dir }])).toThrow(
+      /live mounted name differs from the reviewed allowlist id/,
+    );
+  });
+
+  it("enforceAllowlist ACCEPTS a skill whose live name matches the reviewed id", () => {
+    const root = mkTemp("disco-namebind-ok-");
+    const dir = writeSkill(root, "build-basic");
+    const base: SkillSet = {
+      skills: [fakeSkill("build-basic", join(dir, "SKILL.md"))],
+      diagnostics: [],
+    };
+    expect(() => enforceAllowlist(base, [dir], [{ name: "build-basic", dir }])).not.toThrow();
+  });
+
+  it("boot assertion backstops the live name binding (mismatched name in final set)", () => {
+    const root = mkTemp("disco-namebind-boot-");
+    const dir = writeSkill(root, "build-basic");
+    expect(() =>
+      assertOnlyAllowlistedSkills(
+        [fakeSkill("arbitrary-skill", join(dir, "SKILL.md"))],
+        [dir],
+        undefined,
+        [{ name: "build-basic", dir }],
+      ),
+    ).toThrow(/under a name differing from their reviewed allowlist id/);
   });
 
   it("boot assertion fires loudly on a non-allowlisted skill in the final set", () => {

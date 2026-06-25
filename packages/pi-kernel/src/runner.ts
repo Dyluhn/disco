@@ -360,7 +360,12 @@ export class PiKernelRunner {
       // FINAL skill set against the canonicalized allowlist. Fires loudly even if
       // the `skillsOverride` gate were ever bypassed or the SDK changed under us.
       const loadedSkills = resourceLoader.getSkills().skills;
-      assertOnlyAllowlistedSkills(loadedSkills, skillCfg.allowedDirs, skillCfg.skillsRoot);
+      assertOnlyAllowlistedSkills(
+        loadedSkills,
+        skillCfg.allowedDirs,
+        skillCfg.skillsRoot,
+        skillCfg.bindings,
+      );
       this.loadedSkillNames = loadedSkills.map((s) => s.name);
 
       // P0 (registry restriction): the gateway is the ONLY usable provider. When
