@@ -314,10 +314,19 @@ export class PiKernelRunner {
       const cwd = this.mkTemp("disco-pi-kernel-cwd-");
       const agentDir = this.mkTemp("disco-pi-kernel-agent-");
 
+      // BAKE-OFF #5c: the model's PERCEIVED working directory must be the SANDBOX
+      // workspace root (where every tool routes via the bridge), NOT this host /tmp dir.
+      // Otherwise the model passes the /tmp path to preview_start and forms absolute paths
+      // the executor's workspace jail rejects ("path escapes workspace"). All product file
+      // ops go through the bridge to the sandbox; the SessionManager cwd is ONLY the
+      // model-facing label (the host /tmp dir above is kept for SettingsManager), so the
+      // container workspace root is the correct value to present.
+      const sessionCwd = "/workspace";
+
       // In-memory only — no auth.json / models.json / session files on disk.
       const authStorage = AuthStorage.inMemory();
       const modelRegistry = ModelRegistry.inMemory(authStorage);
-      const sessionManager = SessionManager.inMemory(cwd);
+      const sessionManager = SessionManager.inMemory(sessionCwd);
 
       // Settings shared with the loader so the (false) project-trust decision is
       // consistent across both.
