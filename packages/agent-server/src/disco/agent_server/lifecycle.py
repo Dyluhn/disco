@@ -624,6 +624,14 @@ class LifecycleManager:
         executor = self._rt._executors.get(conversation_id)
         session = getattr(executor, "_sandbox", None) if executor is not None else None
         if session is None:
+            # OBSERVABILITY (bake-off #5): a silent skip here means the build's
+            # workspace is NEVER persisted (lost on sandbox reap). Surfaced loudly so a
+            # kernel that doesn't wire its sandbox to the registered executor is caught.
+            _LOG.warning(
+                "snapshot SKIPPED for %s: no sandbox (executor=%s) — workspace NOT persisted",
+                conversation_id,
+                type(executor).__name__ if executor is not None else None,
+            )
             return
         # Title pulled from the conversations table; created_at is the row's
         # creation timestamp. Both are cheap reads we surface in the list view.
