@@ -116,13 +116,20 @@ def map_pi_event(frame: Mapping[str, Any], *, conversation_id: str) -> list[Even
     """Map one sidecar `agent_event` envelope (or protocol error frame) to zero
     or more Disco events.
 
+    Input is the OUTER protocol frame `PiProcess.events()` yields. An
+    ``agent_event`` envelope is wrapped: ``{"type":"agent_event","event":{kind,…}}``
+    (protocol.ts ``AgentEventMessage``); it is unwrapped to its inner ``{kind,…}``
+    envelope before mapping. The protocol-level error frame
+    ``{"type":"error",…}`` (runner.ts::error) is NOT wrapped and is mapped
+    directly. A bare inner ``{kind,…}`` envelope is also still accepted (back-compat).
+
     Mapping rules (see the module docstring for the rationale):
 
-    - ``message_update`` / ``message_end`` → an assistant ``MessageEvent``
-      carrying the running snapshot text. ``meta["pi_streaming"]`` flags an
-      in-progress (``message_update``) vs final (``message_end``) snapshot so the
-      wiring can de-duplicate/stream as it sees fit. Non-assistant or empty-text
-      messages → ``[]``.
+    - ``message_end`` → exactly one assistant ``MessageEvent`` carrying the FINAL
+      snapshot text — Disco persists the final assistant message as truth.
+    - ``message_update`` → ``[]``. Streaming partials must not each become a
+      stored ``MessageEvent``; live streaming is handled by the Batch-3 wiring,
+      not by appended events. Non-assistant or empty-text messages → ``[]``.
     - ``tool_execution_start`` / ``tool_execution_update`` / ``tool_execution_end``
       → ``[]``. The D2 HTTP tool bridge owns the Action/Observation pairing for
       bridged custom tools; emitting here would double-append.
@@ -138,9 +145,25 @@ def map_pi_event(frame: Mapping[str, Any], *, conversation_id: str) -> list[Even
     conversation at append time, not via an event field.
     """
     try:
+        # `PiProcess.events()` yields the OUTER protocol frame: an agent_event is
+        # wrapped as {"type":"agent_event","event":{kind,…}}. Unwrap to the inner
+        # envelope. The protocol-level error frame {"type":"error",…} is NOT
+        # wrapped, so it falls through unchanged; a bare {kind,…} envelope (no
+        # "agent_event" wrapper) is still accepted for back-compat.
+        if frame.get("type") == "agent_event":
+            inner = frame.get("event")
+            if not isinstance(inner, Mapping):
+                return []
+            frame = inner
+
         kind = _discriminator(frame)
 
         if kind in _ASSISTANT_MESSAGE_KINDS:
+            # Disco persists only the FINAL assistant message as truth; streaming
+            # partials (message_update) are surfaced live by the Batch-3 wiring and
+            # must NOT each become a stored MessageEvent.
+            if kind != "message_end":
+                return []
             text = _assistant_text(frame)
             if text is None:
                 return []
@@ -150,7 +173,7 @@ def map_pi_event(frame: Mapping[str, Any], *, conversation_id: str) -> list[Even
                     message=LLMMessage(role="assistant", content=text),
                     meta={
                         "pi_kind": kind,
-                        "pi_streaming": kind == "message_update",
+                        "pi_streaming": False,
                     },
                 )
             ]

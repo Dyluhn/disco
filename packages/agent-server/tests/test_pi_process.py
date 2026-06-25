@@ -244,3 +244,65 @@ async def test_aclose_kills_process_tree(tmp_path: Path) -> None:
     assert not _pid_alive(grandchild_pid), "grandchild (preview-server analogue) survived aclose"
     with pytest.raises(ProcessLookupError):
         os.killpg(pgid, 0)
+
+
+# ---- clean leader exit but a grandchild lingers ------------------------------
+
+# The leader exits CLEANLY (code 0) on stdin EOF, but it forked a long-lived
+# grandchild into the same process group first. A clean leader exit must NOT let
+# the grandchild (a preview-server analogue) outlive the tree: aclose must probe
+# the group and tear it down even on the graceful path.
+_CLEAN_LEADER_FORKS_GRANDCHILD = r"""
+import json, os, subprocess, sys
+
+# Fork a long-lived GRANDCHILD in the SAME process group before the leader leaves.
+child = subprocess.Popen(["sleep", "300"])
+with open(os.environ["FAKE_CHILD_PID_FILE"], "w") as fh:
+    fh.write(str(child.pid))
+
+sys.stdout.write(json.dumps({
+    "type": "ready", "protocolVersion": 1, "piVersion": "fake",
+    "model": None,
+    "tools": {"activeToolNames": [], "customToolCount": 0, "noTools": "all"},
+}) + "\n")
+sys.stdout.flush()
+
+# Block until stdin EOF (aclose closes stdin), then exit CLEANLY — leaving the
+# grandchild alive in the same group.
+sys.stdin.read()
+sys.exit(0)
+"""
+
+
+@pytest.mark.asyncio
+async def test_aclose_reaps_grandchild_after_clean_leader_exit(tmp_path: Path) -> None:
+    fake = tmp_path / "clean_leader_sidecar.py"
+    fake.write_text(_CLEAN_LEADER_FORKS_GRANDCHILD)
+    pidfile = tmp_path / "child.pid"
+
+    proc = PiProcess(
+        node_bin=sys.executable,  # run the fake with Python, not node
+        entry=str(fake),
+        env={**os.environ, "FAKE_CHILD_PID_FILE": str(pidfile)},
+        cwd=str(tmp_path),
+    )
+    ready = await proc.start({}, timeout=10.0)
+    assert ready["type"] == "ready"
+
+    pgid = proc.pgid
+    assert pgid is not None
+    grandchild_pid = int(pidfile.read_text().strip())
+    assert _pid_alive(grandchild_pid)
+
+    # The leader takes the GRACEFUL path (clean exit 0 on stdin EOF), but the
+    # grandchild lingers in the group — aclose must still tear the group down.
+    code = await proc.aclose(graceful_timeout=2.0, kill_timeout=1.5)
+    assert code == 0, "leader exited cleanly on stdin EOF"
+
+    for _ in range(40):
+        if not _pid_alive(grandchild_pid):
+            break
+        await asyncio.sleep(0.05)
+    assert not _pid_alive(grandchild_pid), "grandchild survived a CLEAN leader exit"
+    with pytest.raises(ProcessLookupError):
+        os.killpg(pgid, 0)

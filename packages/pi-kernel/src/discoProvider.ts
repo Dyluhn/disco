@@ -60,18 +60,52 @@ export interface DiscoGatewayConfig {
   api?: string;
 }
 
+/** Loopback hosts the gateway is reachable on — and the ONLY hosts a provider
+ * baseUrl may target. */
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost", "::1"]);
+
+/**
+ * Assert `baseUrl` points at the loopback Disco gateway and nothing else
+ * (defense-in-depth for the C3 "pinned to loopback gateway" contract). Rejects
+ * any non-loopback host (e.g. `https://api.openai.com/v1`) and any non-`http`
+ * scheme — the loopback gateway speaks plain `http`. Throws a clear `Error` on
+ * violation; returns the URL unchanged when it is loopback.
+ */
+function assertLoopbackBaseUrl(baseUrl: string): string {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    throw new Error(
+      `discoProvider: baseUrl is not a valid URL: ${JSON.stringify(baseUrl)}`,
+    );
+  }
+  // URL wraps IPv6 hosts in brackets ("[::1]"); strip them before comparing.
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  if (url.protocol !== "http:" || !LOOPBACK_HOSTS.has(host)) {
+    throw new Error(
+      `discoProvider: baseUrl must be the loopback gateway ` +
+        `(http://{127.0.0.1,localhost,[::1]}…), got ${JSON.stringify(baseUrl)}`,
+    );
+  }
+  return baseUrl;
+}
+
 /**
  * Build the Pi provider config for the loopback Disco gateway. The result
  * carries only `{ baseUrl, apiKey, api, models:[selected] }` — no other
  * provider credential, header, or env reference — so the sidecar can reach
  * exactly one endpoint with exactly one (ephemeral) credential.
  *
+ * `baseUrl` is pinned: a non-loopback host (or non-`http` scheme) throws.
+ *
  * Pure: it touches no registry, env, network, or disk.
  */
 export function buildDiscoProvider(cfg: DiscoGatewayConfig): ProviderConfig {
   const api = cfg.api ?? DEFAULT_GATEWAY_API;
+  const baseUrl = assertLoopbackBaseUrl(cfg.baseUrl);
   return {
-    baseUrl: cfg.baseUrl,
+    baseUrl,
     apiKey: cfg.apiKey,
     api,
     models: [

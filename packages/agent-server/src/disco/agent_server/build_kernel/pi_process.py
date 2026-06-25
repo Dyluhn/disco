@@ -422,19 +422,25 @@ class PiProcess:
                 pass
 
         # Graceful: give the sidecar a chance to flush `exit` and leave on its own.
-        if await self._wait_exit(graceful_timeout):
+        # A clean leader exit is NOT enough on its own — a child/grandchild (e.g. a
+        # preview server the agent spawned) can outlive the leader while staying in
+        # the same process group (it is reparented to init but keeps the pgid). So
+        # after the leader leaves we still probe the group and, if anything
+        # survives, run the SAME SIGTERM→(grace)→SIGKILL teardown.
+        if await self._wait_exit(graceful_timeout) and not self._group_alive():
             await self._reap()
             return proc.returncode
 
-        # Forceful escalation 1: SIGTERM the WHOLE group.
+        # Forceful escalation 1: SIGTERM the WHOLE group (leader still wedged, or a
+        # child/grandchild lingering after a clean leader exit).
         self._signal_group(signal.SIGTERM)
-        if await self._wait_exit(kill_timeout):
+        if await self._wait_group_gone(kill_timeout):
             await self._reap()
             return proc.returncode
 
         # Forceful escalation 2: SIGKILL the WHOLE group — nothing survives.
         self._signal_group(signal.SIGKILL)
-        await self._wait_exit(kill_timeout)
+        await self._wait_group_gone(kill_timeout)
         await self._reap()
         return proc.returncode
 
@@ -563,6 +569,37 @@ class PiProcess:
             return True
         except asyncio.TimeoutError:
             return False
+
+    def _group_alive(self) -> bool:
+        """True iff the child's process group still has at least one member.
+
+        After a clean leader exit a child/grandchild in the same group can linger
+        (it is reparented to init but keeps the pgid), so `os.killpg(pgid, 0)`
+        still succeeds until every member is gone."""
+        pgid = self._pgid
+        if pgid is None:
+            return False
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True  # exists but unsignalable by us — treat as alive
+        return True
+
+    async def _wait_group_gone(self, timeout: float) -> bool:
+        """Poll until the process group has no members, or `timeout` elapses.
+
+        Unlike `_wait_exit` (which waits on the LEADER only) this watches the
+        whole group, so a child/grandchild outliving a clean leader exit is not
+        mistaken for a fully-torn-down tree."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while self._group_alive():
+            if loop.time() >= deadline:
+                return False
+            await asyncio.sleep(0.02)
+        return True
 
     def _signal_group(self, sig: signal.Signals) -> None:
         pgid = self._pgid

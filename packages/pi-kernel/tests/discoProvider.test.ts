@@ -125,6 +125,39 @@ describe("buildDiscoProvider: only the loopback gateway + ephemeral token", () =
   });
 });
 
+describe("buildDiscoProvider: baseUrl is pinned to the loopback gateway", () => {
+  it("accepts loopback baseUrls (127.0.0.1 / localhost / [::1])", () => {
+    for (const base of [
+      "http://127.0.0.1:8731/v1",
+      "http://localhost:8731/v1",
+      "http://[::1]:8731/v1",
+    ]) {
+      const config = buildDiscoProvider(cfg({ baseUrl: base }));
+      expect(config.baseUrl).toBe(base);
+    }
+  });
+
+  it("rejects a public (non-loopback) host", () => {
+    expect(() => buildDiscoProvider(cfg({ baseUrl: "https://api.openai.com/v1" }))).toThrow(
+      /loopback gateway/,
+    );
+    expect(() => buildDiscoProvider(cfg({ baseUrl: "http://10.0.0.5:8731/v1" }))).toThrow(
+      /loopback gateway/,
+    );
+  });
+
+  it("rejects a non-http scheme even on a loopback host", () => {
+    // The loopback gateway speaks plain http; https://127.0.0.1 is not it.
+    expect(() => buildDiscoProvider(cfg({ baseUrl: "https://127.0.0.1:8731/v1" }))).toThrow(
+      /loopback gateway/,
+    );
+  });
+
+  it("rejects a malformed baseUrl", () => {
+    expect(() => buildDiscoProvider(cfg({ baseUrl: "not a url" }))).toThrow(/not a valid URL/);
+  });
+});
+
 describe("registerDiscoProvider: disco-gateway is the ONLY usable provider", () => {
   const saved = new Map<string, string | undefined>();
   let registry: ModelRegistry;
