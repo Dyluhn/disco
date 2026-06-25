@@ -170,23 +170,172 @@ async def test_out_of_allowlist_tool_is_refused_not_executed(tmp_path) -> None:
     assert [e for e in events if isinstance(e, ObservationEvent)] == []
 
 
-async def test_gate_tool_without_handler_returns_not_yet_wired(tmp_path) -> None:
-    """ask_user is allowlisted but its gate handler lands in the E batch; until then
-    the bridge returns a structured 'not yet wired' placeholder (not executed)."""
+# ---------------------------------------------------------------------------
+# E1/E2/E3 — the plan gate + ask/clarify gates (held PYTHON-side over the bridge).
+# ---------------------------------------------------------------------------
+
+
+async def _wait_status(store: SqliteEventStore, status, timeout: float = 5.0) -> None:
+    import asyncio
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        st = await store.get_state(CID)
+        if st.execution_status is status:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"status {status} not reached within {timeout}s")
+
+
+async def test_submit_plan_holds_then_approve_resumes(tmp_path) -> None:
+    """submit_plan appends a PlanEvent + AWAITING_PLAN_APPROVAL and LONG-POLLS; while
+    parked, a write tool is refused; approve_plan resolves the held call (Pi resumes)
+    and unblocks writes."""
+    import asyncio
+
+    from disco.core import ConversationStatus, PlanEvent
+
     store = SqliteEventStore(path=str(tmp_path / "events.db"))
     runtime, token_store, token = _new_convo(store)
     app = _make_app(token_store, runtime)
+    pk = runtime._pi_kernel
+
+    post = asyncio.create_task(
+        _post(
+            app, KERNEL, "submit_plan", token,
+            {"call_id": "p1", "arguments": {"summary": "ship it", "steps": [{"title": "scaffold"}]}},
+        )
+    )
+    await _wait_status(store, ConversationStatus.AWAITING_PLAN_APPROVAL)
+    # A PlanEvent was appended, and writes are blocked while unapproved.
+    events = await store.get_events(CID)
+    assert any(isinstance(e, PlanEvent) for e in events)
+    assert pk.writes_blocked(CID) is True
+    w = await _post(
+        app, KERNEL, "file_write", token,
+        {"call_id": "w1", "arguments": {"path": "x.txt", "content": "no"}},
+    )
+    assert w.json()["structured"]["kind"] == "plan_not_approved"
+    assert [e for e in (await store.get_events(CID)) if isinstance(e, ActionEvent)] == []
+
+    # Approve → the held submit_plan returns its verdict; writes now allowed.
+    await pk.approve_plan(CID)
+    resp = await post
+    body = resp.json()
+    assert body["success"] is True
+    assert "approved" in body["content"].lower()
+    assert pk.writes_blocked(CID) is False
+    w2 = await _post(
+        app, KERNEL, "file_write", token,
+        {"call_id": "w2", "arguments": {"path": "x.txt", "content": "yes"}},
+    )
+    assert w2.json()["success"] is True
+
+
+async def test_reject_plan_forces_replan_and_keeps_writes_blocked(tmp_path) -> None:
+    """reject_plan returns a 'submit a revised plan, do NOT write' verdict; writes stay
+    blocked until a NEW plan is submitted AND approved."""
+    import asyncio
+
+    from disco.core import ConversationStatus
+
+    store = SqliteEventStore(path=str(tmp_path / "events.db"))
+    runtime, token_store, token = _new_convo(store)
+    app = _make_app(token_store, runtime)
+    pk = runtime._pi_kernel
+
+    post = asyncio.create_task(
+        _post(
+            app, KERNEL, "submit_plan", token,
+            {"call_id": "p1", "arguments": {"summary": "v1", "steps": ["a", "b"]}},
+        )
+    )
+    await _wait_status(store, ConversationStatus.AWAITING_PLAN_APPROVAL)
+    await pk.reject_plan(CID, "no tests")
+    body = (await post).json()
+    assert "reject" in body["content"].lower()
+    assert pk.writes_blocked(CID) is True  # still blocked after rejection
+    w = await _post(
+        app, KERNEL, "file_write", token,
+        {"call_id": "w1", "arguments": {"path": "x.txt", "content": "no"}},
+    )
+    assert w.json()["structured"]["kind"] == "plan_not_approved"
+
+    # A REVISED plan, then approval, finally unblocks writes.
+    post2 = asyncio.create_task(
+        _post(
+            app, KERNEL, "submit_plan", token,
+            {"call_id": "p2", "arguments": {"summary": "v2", "steps": ["a", "b", "tests"]}},
+        )
+    )
+    await _wait_status(store, ConversationStatus.AWAITING_PLAN_APPROVAL)
+    await pk.approve_plan(CID)
+    assert (await post2).json()["success"] is True
+    assert pk.writes_blocked(CID) is False
+
+
+async def test_must_submit_plan_before_write(tmp_path) -> None:
+    """A managed Pi conversation with NO approved plan refuses write tools outright."""
+    store = SqliteEventStore(path=str(tmp_path / "events.db"))
+    runtime, token_store, token = _new_convo(store)
+    app = _make_app(token_store, runtime)
+    runtime._pi_kernel._managed.add(CID)  # the kernel is driving this conversation
 
     resp = await _post(
-        app, KERNEL, "ask_user", token,
-        {"call_id": "tc-ask", "arguments": {"question": "which framework?"}},
+        app, KERNEL, "file_write", token,
+        {"call_id": "w", "arguments": {"path": "x.txt", "content": "premature"}},
     )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["success"] is False
-    assert body["structured"]["kind"] == "not_yet_wired"
-    events = await store.get_events(CID)
-    assert [e for e in events if isinstance(e, ActionEvent)] == []
+    assert resp.json()["structured"]["kind"] == "plan_not_approved"
+    assert (await store.get_events(CID)) == []  # nothing executed
+
+
+async def test_ask_user_holds_then_user_turn_resolves(tmp_path) -> None:
+    """ask_user parks at AWAITING_USER_QUESTION; the user's next turn (send_user_turn)
+    IS the answer and resolves the held call."""
+    import asyncio
+
+    from disco.core import ConversationStatus
+
+    store = SqliteEventStore(path=str(tmp_path / "events.db"))
+    runtime, token_store, token = _new_convo(store)
+    app = _make_app(token_store, runtime)
+    pk = runtime._pi_kernel
+
+    post = asyncio.create_task(
+        _post(
+            app, KERNEL, "ask_user", token,
+            {"call_id": "a1", "arguments": {"question": "which framework?"}},
+        )
+    )
+    await _wait_status(store, ConversationStatus.AWAITING_USER_QUESTION)
+    await pk.send_user_turn(CID, "react")
+    assert (await post).json()["content"] == "react"
+
+
+async def test_clarify_holds_then_user_turn_resolves(tmp_path) -> None:
+    """clarify appends a ClarifyEvent + AWAITING_USER_QUESTION and long-polls until the
+    user answers."""
+    import asyncio
+
+    from disco.core import ClarifyEvent, ConversationStatus
+
+    store = SqliteEventStore(path=str(tmp_path / "events.db"))
+    runtime, token_store, token = _new_convo(store)
+    app = _make_app(token_store, runtime)
+    pk = runtime._pi_kernel
+
+    post = asyncio.create_task(
+        _post(
+            app, KERNEL, "clarify", token,
+            {"call_id": "c1", "arguments": {"question": "details?",
+                                            "items": [{"id": "q1", "question": "target?"}]}},
+        )
+    )
+    await _wait_status(store, ConversationStatus.AWAITING_USER_QUESTION)
+    assert any(isinstance(e, ClarifyEvent) for e in (await store.get_events(CID)))
+    await pk.send_user_turn(CID, "web app")
+    assert (await post).json()["content"] == "web app"
 
 
 # ---------------------------------------------------------------------------

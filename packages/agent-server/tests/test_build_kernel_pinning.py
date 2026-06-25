@@ -220,8 +220,13 @@ async def test_control_op_on_pi_gated_on_rolls_back_freshly_created_pin(
     pinned to a kernel that can't run."""
     monkeypatch.setenv(EXP_ENV, "1")
     rt = _runtime(store, build_kernel="pi_experimental")
+    # The real PiKernel no longer raises (Wave 2 de-stub); a kernel that DOES raise
+    # exercises the runtime's freshly-created-pin rollback (finding #2) directly.
+    raising = MagicMock()
+    raising.confirm = AsyncMock(side_effect=RuntimeError("pi kernel down"))
+    rt._pi_kernel = raising
     assert CID not in rt._pinned_kernels
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(RuntimeError):
         await rt.confirm(CID)
     assert CID not in rt._pinned_kernels  # rolled back — no leaked pin
     rt._control.confirm.assert_not_awaited()
@@ -248,11 +253,14 @@ async def test_control_op_raise_preserves_a_preexisting_pin(
 async def test_pi_selected_and_gated_on_fails_clean_no_append(
     monkeypatch: pytest.MonkeyPatch, store: SqliteEventStore
 ) -> None:
-    """With pi selected AND the gate on, the entry point pins pi and the stub raises
-    BEFORE any append — no partial run is created (zero events appended, no kick)."""
+    """With pi selected AND the gate on, the entry point pins pi; a kernel that raises
+    BEFORE any append creates no partial run (zero events appended, no kick)."""
     monkeypatch.setenv(EXP_ENV, "1")
     rt = _runtime(store, build_kernel="pi_experimental")
-    with pytest.raises(NotImplementedError):
+    raising = MagicMock()
+    raising.send_user_turn = AsyncMock(side_effect=RuntimeError("pi kernel down"))
+    rt._pi_kernel = raising
+    with pytest.raises(RuntimeError):
         await rt.send_user_turn(CID, "build it")
     assert [e for e in await store.get_events(CID) if hasattr(e, "message")] == []
     rt.kick.assert_not_called()
@@ -303,7 +311,10 @@ async def test_pi_send_raises_leaves_no_pin_so_next_reresolves(
     selection (here: gate flipped off → disco)."""
     monkeypatch.setenv(EXP_ENV, "1")
     rt = _runtime(store, build_kernel="pi_experimental")
-    with pytest.raises(NotImplementedError):
+    raising = MagicMock()
+    raising.send_user_turn = AsyncMock(side_effect=RuntimeError("pi kernel down"))
+    rt._pi_kernel = raising
+    with pytest.raises(RuntimeError):
         await rt.send_user_turn(CID, "build it")
     assert CID not in rt._pinned_kernels  # rolled back — no leaked pin
     # Next attempt re-resolves: operator flips the gate OFF → disco wins.
@@ -318,7 +329,10 @@ def test_pi_start_raises_leaves_no_pin(
     """Same rollback guarantee on the sync `start` entry point."""
     monkeypatch.setenv(EXP_ENV, "1")
     rt = _runtime(store, build_kernel="pi_experimental")
-    with pytest.raises(NotImplementedError):
+    raising = MagicMock()
+    raising.start = MagicMock(side_effect=RuntimeError("pi kernel down"))
+    rt._pi_kernel = raising
+    with pytest.raises(RuntimeError):
         rt.start(CID)
     assert CID not in rt._pinned_kernels
 

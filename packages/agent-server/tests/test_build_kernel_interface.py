@@ -295,40 +295,44 @@ async def test_runtime_control_ops_route_through_disco_kernel(store: SqliteEvent
     rt._control.request_plan.assert_awaited_once_with(CID, "replan please")
 
 
-async def test_runtime_control_ops_route_to_pi_stub_when_flagged(
+async def test_runtime_control_ops_route_to_pi_when_flagged(
     monkeypatch: pytest.MonkeyPatch, store: SqliteEventStore
 ) -> None:
     """When pi_experimental is selected AND flagged on, the public op routes to the
-    PiKernel stub, which raises NotImplementedError (never the live build)."""
+    REAL PiKernel (no longer a stub): confirm is a Pi no-op (Pi has no Disco
+    BlastRadiusConfirm action gate) and NEVER recurses into ControlOps."""
     monkeypatch.setenv(EXP_ENV, "1")
     rt = _fake_runtime(store, build_kernel="pi_experimental")
-    with pytest.raises(NotImplementedError):
-        await ConversationRuntime.confirm(rt, CID)
-    # The real loop's collaborator was never touched.
+    # Routes through _ensure_kernel_pinned → PiKernel.confirm (a no-op) without raising.
+    await ConversationRuntime.confirm(rt, CID)
+    # The Disco loop's collaborator was never touched (no recursion through the kernel).
     rt._control.confirm.assert_not_awaited()
+    assert rt._pinned_kernels[CID] is rt._pi_kernel
 
 
-# ---- PiKernel stub -----------------------------------------------------------
+# ---- PiKernel (real) — store-delegating ops + no-recursion action gate -------
 
 
-async def test_pi_kernel_all_ops_not_implemented(store: SqliteEventStore) -> None:
+async def test_pi_kernel_subscribe_and_get_state_delegate_to_store(
+    store: SqliteEventStore,
+) -> None:
+    """subscribe/get_state are byte-identical to DiscoKernel — straight off the store,
+    so the WS history-then-live + UI work unchanged under PiKernel."""
     k = PiKernel(_fake_runtime(store))
-    with pytest.raises(NotImplementedError):
-        k.start(CID)
-    for coro in (
-        k.send_user_turn(CID, "x"),
-        k.approve_plan(CID),
-        k.reject_plan(CID),
-        k.request_plan(CID),
-        k.confirm(CID),
-        k.reject(CID),
-        k.pick_alternative(CID, "o"),
-        k.pause(CID),
-        k.cancel(CID),
-        k.resume(CID),
-        k.kill(CID),
-        k.subscribe(CID),
-        k.get_state(CID),
-    ):
-        with pytest.raises(NotImplementedError):
-            await coro
+    state = await k.get_state(CID)
+    assert state.conversation_id == CID
+    it = await k.subscribe(CID)
+    assert hasattr(it, "__anext__")
+
+
+async def test_pi_kernel_action_gate_ops_are_noops_no_recursion(
+    store: SqliteEventStore,
+) -> None:
+    """Pi has no Disco per-action gate: confirm/reject are no-ops that never touch the
+    runtime's public methods (no recursion). They simply return."""
+    fake = _fake_runtime(store)
+    k = PiKernel(fake)
+    await k.confirm(CID)
+    await k.reject(CID, "no")
+    fake._control.confirm.assert_not_awaited()
+    fake._control.reject.assert_not_awaited()

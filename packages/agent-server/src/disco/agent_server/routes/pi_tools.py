@@ -24,12 +24,13 @@ Security mirrors the inference gateway (``routes/pi_inference.py``):
 * **Never raises.** The executor contract is "always a ``ToolResult``, never
   raise"; this route preserves it — every failure becomes a structured result.
 
-Gate tools (``submit_plan`` / ``ask_user`` / ``clarify``) are allowlisted but
-their plan-pause / ask / clarify HANDLERS land in the E batch. For THIS PR they
-are routed to the executor when it already knows the name (e.g. ``submit_plan`` is
-a registered tool), else a structured "not yet wired" placeholder is returned —
-the bridge + allowlist are complete and testable, the long-poll plan gate is NOT
-built here (see the SEAM marker below).
+Gate tools (``submit_plan`` / ``ask_user`` / ``clarify``) are handed off to the
+``PiKernel`` long-poll handlers (E1/E2/E3): the kernel appends the existing Disco
+gate event (``PlanEvent`` / ``AWAITING_PLAN_APPROVAL`` etc.), parks, and awaits an
+asyncio future that ``approve_plan`` / ``reject_plan`` / the user's next turn
+resolves — the verdict/answer returns here as the tool result, pausing Pi's loop
+over THIS held request. Write tools (file_write/replace/insert, shell_exec) are
+additionally refused with a structured block until a plan is approved.
 """
 
 from __future__ import annotations
@@ -40,6 +41,8 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from disco.core import ToolCall, ToolResult
+from disco.core.inspect import inspect_enabled
+from disco.core.obs import log_event
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 
@@ -77,9 +80,45 @@ _ALLOWED_PI_TOOLS: frozenset[str] = frozenset(
     }
 )
 
-# Gate tools — allowlisted, but the plan-pause / ask / clarify gate handlers are
-# the E batch's job. See the SEAM marker in the handler.
+# Gate tools — their plan-pause / ask / clarify handlers are held PYTHON-side by
+# `PiKernel` (E1/E2/E3): the bridge hands off to the kernel's long-poll handler.
 _GATE_TOOLS: frozenset[str] = frozenset({"submit_plan", "ask_user", "clarify"})
+
+# Tools that MUTATE the workspace — refused until a plan is approved (E1/E3). The
+# allowlist (above) gates WHICH tools may run; this gates WHEN a write may run.
+_WRITE_TOOLS: frozenset[str] = frozenset(
+    {"file_write", "file_replace_lines", "file_insert_lines", "shell_exec"}
+)
+
+
+def _span(name: str, conversation_id: str, **fields: object) -> None:
+    """Emit one §7.11 inspect span (I2) into the shared inspect sink, gated on
+    `DISCO_INSPECT=1`. The kernel emits the lifecycle/plan spans; the bridge owns
+    the per-tool `pi_tool_start` / `pi_tool_end` spans (it is the single place a
+    bridged tool executes)."""
+    if not inspect_enabled():
+        return
+    try:
+        log_event(name, cid=conversation_id, **fields)
+    except Exception:  # noqa: BLE001 — tracing must never break a tool call
+        pass
+
+
+def _plan_required_block(tool_name: str, call_id: str) -> ToolResult:
+    """A structured 'write refused — no approved plan' result (E1/E3). success=false;
+    nothing executed. Pi must submit_plan (and have it approved) before writing."""
+    return ToolResult(
+        call_id=call_id,
+        tool_name=tool_name,
+        success=False,
+        content=(
+            f"tool {tool_name!r} writes to the workspace, which is blocked until a plan "
+            "is approved: call submit_plan and wait for approval before writing. It was "
+            "NOT executed."
+        ),
+        structured={"kind": "plan_not_approved", "tool_name": tool_name},
+        error="plan not approved",
+    )
 
 
 def _result_json(result: ToolResult) -> JSONResponse:
@@ -213,24 +252,52 @@ def make_pi_tools_router(
 
         conversation_id = rec.conversation_id
 
-        # 5) SEAM (E batch): the plan-pause / ask / clarify gate is held PYTHON-side
-        #    over THIS request (long-poll on an asyncio gate future) — NOT built
-        #    here. For now a gate tool the executor does not already know returns a
-        #    structured "not yet wired" placeholder; one it DOES know (e.g.
-        #    submit_plan is a registered tool) is routed to the executor like any
-        #    other tool. E1/E3 replace this branch with the real gate handling.
+        # The single PiKernel instance owns the plan/ask/clarify gate state for every
+        # conversation it drives (the pinned kernel IS this instance when Pi is
+        # selected). The raw D2 bridge (tests / no Pi run) has no kernel → gates +
+        # write-block degrade off, so D2 behavior is unchanged.
+        pi_kernel = getattr(runtime, "_pi_kernel", None)
+
+        # 5) Gate tools (E1/E2/E3): the plan-pause / ask / clarify gate is held
+        #    PYTHON-side over THIS request — the kernel appends the Disco gate event,
+        #    parks at AWAITING_PLAN_APPROVAL / AWAITING_USER_QUESTION, and LONG-POLLS
+        #    an asyncio future until a control op (approve/reject/answer) resolves it.
+        #    The verdict/answer returns here as the tool result, so Pi's loop pauses
+        #    naturally and then continues the SAME session.
         if tool_name in _GATE_TOOLS:
-            try:
-                executor = runtime._executor_for(conversation_id)
-            except Exception:  # noqa: BLE001 — no executor (e.g. wrong surface) → not wired
-                executor = None
-            known = executor.callable_tool_names() if executor is not None else frozenset()
-            if tool_name not in known:
+            if pi_kernel is None:
                 return _result_json(_not_yet_wired_result(tool_name, call_id))
+            _span("pi_tool_start", conversation_id, tool=tool_name, call_id=call_id, gate=True)
+            try:
+                result = await pi_kernel.handle_gate_tool(
+                    conversation_id, tool_name, arguments, call_id
+                )
+            except Exception as exc:  # noqa: BLE001 — a gate failure must not 500 the bridge
+                _LOG.warning("pi-tools gate %s failed token=%s: %s", tool_name, rec.fingerprint, exc)
+                result = ToolResult(
+                    call_id=call_id,
+                    tool_name=tool_name,
+                    success=False,
+                    content=f"gate tool {tool_name!r} failed: {exc}",
+                    structured={"kind": "gate_error", "tool_name": tool_name},
+                    error=str(exc),
+                )
+            _span("pi_tool_end", conversation_id, tool=tool_name, success=result.success, gate=True)
+            return _result_json(result)
+
+        # 5b) Plan gate over WRITE tools (E1/E3): a write before an approved plan (or
+        #     after a rejection, until re-approval) is refused with a structured block
+        #     — nothing executed, no Action/Observation appended.
+        if tool_name in _WRITE_TOOLS and pi_kernel is not None and pi_kernel.writes_blocked(
+            conversation_id
+        ):
+            _LOG.info("pi-tools blocked write (no approved plan) tool=%s", tool_name)
+            return _result_json(_plan_required_block(tool_name, call_id))
 
         # 6) Execute + observe: append ActionEvent, run the executor (never raises),
         #    append the paired ObservationEvent (success) / AgentErrorEvent (failure).
         tool_call = ToolCall(tool_name=tool_name, arguments=arguments, call_id=call_id)
+        _span("pi_tool_start", conversation_id, tool=tool_name, call_id=call_id)
         try:
             result = await runtime.execute_pi_tool(conversation_id, tool_call)
         except Exception as exc:  # noqa: BLE001 — _executor_for may raise; never propagate
@@ -246,6 +313,7 @@ def make_pi_tools_router(
                 structured={"kind": "bridge_error", "tool_name": tool_name},
                 error=str(exc),
             )
+        _span("pi_tool_end", conversation_id, tool=tool_name, success=result.success)
         return _result_json(result)
 
     return router
