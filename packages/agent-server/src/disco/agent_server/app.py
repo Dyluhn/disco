@@ -46,6 +46,7 @@ from .routes import (
     make_ws_router,
 )
 from .routes._common import _sanitize_name, make_preview_upstream_resolver
+from .routes.pi_tools import make_pi_tools_router
 from .runtime import ConversationRuntime
 
 # `_sanitize_name` is re-exported here for tests that import it from this module
@@ -152,6 +153,11 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     pi_token_store = PiInferenceTokenStore()
     app.state.pi_token_store = pi_token_store
     app.include_router(make_pi_inference_router(pi_token_store))
+    # PR D2/D3 — the Pi tool bridge: a loopback, run-scoped endpoint that lets a Pi
+    # custom tool drive ONE Disco tool call (server-side allowlisted) through the
+    # conversation's DefaultToolExecutor, appending the Action/Observation pair. It
+    # validates against the SAME ephemeral token store, bound to the kernel.
+    app.include_router(make_pi_tools_router(pi_token_store, runtime))
     # Wire the SAME store onto the runtime so the lifecycle (terminalizers / cancel /
     # kill / delete / shutdown / startup reconcile) can revoke a conversation's tokens
     # the moment its run ends (EPIC C finding C#3). None-safe: the non-gateway / test

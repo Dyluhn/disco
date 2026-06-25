@@ -27,16 +27,20 @@ logger = logging.getLogger(__name__)
 
 from disco.core import (
     DEFAULT_OWNER_ID,
+    ActionEvent,
+    AgentErrorEvent,
     ConversationStatus,
     EventSource,
     LLMMessage,
     LLMSummarizingCondenser,
     MessageEvent,
     NoOpCondenser,
+    ObservationEvent,
     PlanEvent,
     ReportEvent,
     SkillStore,
     StatusEvent,
+    ToolCall,
     ToolResult,
     render_skills_for_prompt,
 )
@@ -1285,6 +1289,70 @@ class ConversationRuntime:
             )
             self._loops[conversation_id] = loop
         return loop
+
+    # ---- Pi tool bridge (PR D2) — additive; existing paths unchanged --------
+
+    def _executor_for(self, conversation_id: str) -> DefaultToolExecutor:
+        """[D2] Read-only accessor for a conversation's tool executor, lazily
+        building the loop (which constructs + REGISTERS the executor in
+        ``self._executors``) on first access. Used by the Pi tool bridge
+        (``routes/pi_tools.py``) to drive ONE externally-proposed tool call through
+        the SAME ``DefaultToolExecutor`` the in-process agent loop uses — same
+        sandbox, scope, broker, and policy.
+
+        Purely additive: building the loop here is exactly what ``_loop_for`` already
+        does for any caller; no existing behavior changes. Raises ``LookupError``
+        when the conversation's surface has no tool executor (e.g. a research
+        surface uses a no-tool executor and never populates ``_executors``)."""
+        executor = self._executors.get(conversation_id)
+        if executor is None:
+            # Building the loop populates self._executors for build-like surfaces.
+            self._loop_for(conversation_id)
+            executor = self._executors.get(conversation_id)
+        if executor is None:
+            raise LookupError(
+                f"no tool executor for conversation {conversation_id!r} "
+                "(its surface has no executable tools)"
+            )
+        return executor
+
+    async def execute_pi_tool(
+        self, conversation_id: str, tool_call: ToolCall
+    ) -> ToolResult:
+        """[D2] Execute ONE externally-driven (Pi sidecar) tool call against this
+        conversation's executor, MIRRORING ``observe.execute_and_observe``'s
+        Action→Observation pairing: append an ``ActionEvent``, run the executor
+        (which always returns a ``ToolResult`` and never raises), then append the
+        paired ``ObservationEvent`` (success) or ``AgentErrorEvent`` (failure), and
+        return the ``ToolResult``.
+
+        Additive single-call helper for the bridge; the in-process loop's own
+        ``execute_and_observe`` path is untouched. The F9/W-39/K1 observer guards
+        are loop-internal concerns and deliberately NOT replicated here — Pi owns
+        its own loop, so this is the one externally-driven execution per call."""
+        executor = self._executor_for(conversation_id)
+        action = ActionEvent(
+            source=EventSource.AGENT,
+            thought=f"[pi] {tool_call.tool_name}",
+            tool_call=tool_call,
+        )
+        await self._store.append(conversation_id, action)
+        result = await executor.execute(tool_call)
+        if result.success:
+            await self._store.append(
+                conversation_id,
+                ObservationEvent(tool_result=result, action_id=action.id),
+            )
+        else:
+            await self._store.append(
+                conversation_id,
+                AgentErrorEvent(
+                    error=result.error or "tool failed",
+                    action_id=action.id,
+                    tool_call_id=tool_call.call_id,
+                ),
+            )
+        return result
 
     def _mcp_egress_hosts(self) -> frozenset[str]:
         return self._mcp._mcp_egress_hosts()
