@@ -246,12 +246,15 @@ class PreviewManager:
         serve = serve_dir or self._sandbox_workspace() or "."
         if command:
             scrubbed = _PORT_FLAG_RE.sub(" ", command).strip()
-            if "{port}" in scrubbed:
-                # Model explicitly delegated the port slot to the platform — fill it with
-                # OUR port (and still export PORT for env-reading servers).
-                filled = scrubbed.replace("{port}", str(port)).strip()
-                return f"PORT={port} {filled}"
-            bound = _RAW_HARDCODED_PORT_RE.search(scrubbed)
+            has_placeholder = "{port}" in scrubbed
+            # Reject ANY other hardcoded/positional port the flag-scrub can't override —
+            # even on the `{port}`-placeholder path. The placeholder is the ONE sanctioned
+            # way to put the platform port at a positional slot, but the REST of the command
+            # must still be port-clean: a second, hardcoded port alongside `{port}` (e.g.
+            # 'http.server {port} 9999') would bind a model-chosen port the platform doesn't
+            # own (P1 #1). Blank the placeholder out so only OTHER ports trip the check.
+            residual = scrubbed.replace("{port}", " ") if has_placeholder else scrubbed
+            bound = _RAW_HARDCODED_PORT_RE.search(residual)
             if bound is not None:
                 raise PreviewCommandError(
                     "preview command binds a hardcoded port "
@@ -260,6 +263,11 @@ class PreviewManager:
                     "<its port>), or put the literal placeholder '{port}' where the port "
                     "goes (e.g. 'python3 -m http.server {port} -d dist')."
                 )
+            if has_placeholder:
+                # Model explicitly delegated the port slot to the platform — fill it with
+                # OUR port (and still export PORT for env-reading servers).
+                filled = scrubbed.replace("{port}", str(port)).strip()
+                return f"PORT={port} {filled}"
             # Inject the platform port as an env var (honored by Node/Vite/Next/CRA/
             # Flask-via-env, …). The static template path below is used when the model
             # gives a dir/framework instead — that bakes the port into the flag directly.
@@ -361,14 +369,13 @@ class PreviewManager:
 
     def _owner_is_this_session(self, owner_session: str, name: str) -> bool:
         """Does the tmux session that owns the port belong to THIS preview? The shell
-        manager names sessions `disco-{namespace}{name}` (see shell_sessions._full_name);
-        match that exact name, with a namespace-agnostic `-{name}` suffix fallback so a
-        namespace/prefix drift can't cause a false NEGATIVE (which would wrongly block a
-        genuinely-ours preview)."""
+        manager names sessions `disco-{namespace}{name}` (see shell_sessions._full_name).
+        Require that FULL, EXACT session identity — a loose `-{name}` suffix (or bare
+        `name`) match would accept a DIFFERENT conversation's `disco-{othercid}{name}` for
+        a common name (`preview`, `app`), false-marking RUNNING against a foreign listener
+        in the allocation/launch race window on process/local backends (P1 #2)."""
         ns = getattr(getattr(self._sandbox, "sessions", None), "namespace", "") or ""
-        if owner_session == f"{_TMUX_PREFIX}-{ns}{name}":
-            return True
-        return owner_session.endswith(f"-{name}") or owner_session == name
+        return owner_session == f"{_TMUX_PREFIX}-{ns}{name}"
 
     # ---- start (idempotent) -------------------------------------------------
 

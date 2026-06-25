@@ -405,6 +405,27 @@ async def test_raw_command_port_placeholder_is_filled_with_platform_port() -> No
     assert session.status is PreviewStatus.RUNNING
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -m http.server {port} 9999",      # placeholder AND a positional port
+        "gunicorn app:app -b :{port} -b :8000",    # placeholder AND a host:port bind
+        "uvicorn app:app --host 0.0.0.0 {port} 9000",  # placeholder AND trailing port
+    ],
+)
+async def test_placeholder_with_extra_hardcoded_port_is_rejected(command: str) -> None:
+    """P1 #1: the `{port}` placeholder is the sanctioned way to position the platform port,
+    but a SECOND, hardcoded/positional port alongside it would still bind a model-chosen
+    port the platform doesn't own. The hardcoded-port rejection runs even on the placeholder
+    path, so such a command is REFUSED (it can no longer slip past by also carrying `{port}`)."""
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    with pytest.raises(PreviewCommandError):
+        await mgr.start(command=command, supervise=False)
+    assert mgr.list() == []  # nothing registered; no port leaked, port 9999 never bound
+
+
 # ---------------------------------------------- P1 #1/#2: post-launch port ownership
 
 
@@ -464,6 +485,52 @@ async def test_owned_port_is_marked_running() -> None:
     assert session.status is PreviewStatus.RUNNING
     assert session.port == 3000
     assert session.url == "http://preview.test/3000/"
+
+
+class _ForeignNamespaceOwnerSandbox(_FakeSandbox):
+    """Another CONVERSATION's preview (different namespace, SAME common name `preview`)
+    answers on the allocated port — `disco-othercid-preview`, not this session's
+    `disco-preview`."""
+
+    async def port_owner(self, port: int):  # noqa: ANN201
+        if port in self._serving:
+            return _Owner(pid=4242, session="disco-othercid-preview")
+        return _Owner(pid=None, session=None)
+
+
+@pytest.mark.asyncio
+async def test_foreign_namespace_owner_with_same_name_is_not_misattributed() -> None:
+    """P1 #2: a different conversation's `disco-othercid-preview` ends in `-preview`, so a
+    loose `-{name}` suffix match would have mis-accepted it as OURS and false-marked RUNNING
+    against a foreign listener during the launch race. The exact-identity check requires the
+    full `disco-{ns}{name}` session id, so the foreign owner → CRASHED, not RUNNING."""
+    sandbox = _ForeignNamespaceOwnerSandbox()
+    sandbox._serving.add(3000)  # foreign conversation already answers on the port
+    mgr = _mgr(sandbox, port_pool=[3000])
+    session = PreviewSession(
+        name="preview", port=3000, command="python3 -m http.server 3000 -d dist",
+        exec_dir="/workspace", intent={}, _supervise=False,
+    )
+    mgr._sessions["preview"] = session
+    await mgr._launch(session)
+    assert session.status is PreviewStatus.CRASHED
+    assert session.url is None
+    assert "different process" in session.detail.lower()
+
+
+def test_owner_match_requires_full_exact_session_identity() -> None:
+    """Unit-level: `_owner_is_this_session` accepts ONLY the exact `disco-{ns}{name}` id.
+    A foreign-namespace session ending in `-{name}`, or the bare `{name}`, is rejected."""
+    sandbox = _FakeSandbox()
+    sandbox.sessions.namespace = ""  # this conversation: id is `disco-preview`
+    mgr = _mgr(sandbox, port_pool=[3000])
+    assert mgr._owner_is_this_session("disco-preview", "preview") is True
+    assert mgr._owner_is_this_session("disco-othercid-preview", "preview") is False
+    assert mgr._owner_is_this_session("preview", "preview") is False
+    # And it honors a non-empty namespace exactly.
+    sandbox.sessions.namespace = "mycid-"
+    assert mgr._owner_is_this_session("disco-mycid-preview", "preview") is True
+    assert mgr._owner_is_this_session("disco-preview", "preview") is False
 
 
 # ----------------------------------------- P1 #2: allocation skips already-claimed ports
