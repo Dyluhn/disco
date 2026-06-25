@@ -47,11 +47,25 @@ def _manager(ctx: ToolContext) -> Any:
 
 def _render(session: Any) -> str:
     url = session.url or "(no URL — see status)"
+    running = getattr(session.status, "value", "") == "running"
+    # BAKE-OFF #7: `url` is the HOST-published browser URL — NOT reachable from inside the
+    # sandbox. A model that curls it from its shell gets connection-refused (000) and wrongly
+    # concludes the build is broken. `running` already means the platform health-probed it
+    # (HTTP 200, in-sandbox) — so say it's verified and give the in-sandbox URL for any check.
+    verify = (
+        f"\n  status: ALREADY platform-health-verified (HTTP 200, probed in-sandbox) — it IS "
+        f"serving; you do NOT need to curl it.\n"
+        f"  in-sandbox url (curl THIS from your shell, NOT the browser url): "
+        f"http://localhost:{session.port}/"
+        if running
+        else ""
+    )
     return (
         f"preview '{session.name}': {session.status.value}\n"
-        f"  url:    {url}\n"
+        f"  browser url: {url}  (for the USER's browser — NOT reachable from inside the sandbox)\n"
         f"  port:   {session.port}  (platform-assigned)\n"
         f"  detail: {session.detail or 'ok'}"
+        f"{verify}"
     )
 
 
