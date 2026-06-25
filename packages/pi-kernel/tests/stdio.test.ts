@@ -298,6 +298,102 @@ describe("createOutboundWriter (P1 round-3: error frames cannot OOM the queue)",
   });
 });
 
+describe("createOutboundWriter (P1 round-4: cap enforced AT THE QUEUE, not per-producer)", () => {
+  it("bounds the queue when a producer IGNORES the false return: 10k distinct oversized errors stay <= maxQueue", async () => {
+    const stream = new BlockingStream();
+    const maxQueue = 4;
+    const writer = createOutboundWriter(stream as unknown as Writable, { maxQueue });
+    stream.block(); // stdout permanently stalled
+
+    // Model the INBOUND diagnostic-error producer (index.ts onLine/onOverflow):
+    // it calls write() and IGNORES the false return (stdin deliberately stays
+    // readable for cancel/EOF). Each frame embeds a UNIQUE byteLength, so they
+    // are DISTINCT and bypass the identical-message coalescing — the exact codex
+    // repro. The choke point must refuse to grow the queue regardless.
+    let acceptedAfterFirstFalse = 0;
+    let sawFalse = false;
+    for (let i = 0; i < 10_000; i++) {
+      const ok = writer.write({
+        type: "error",
+        message: `inbound line exceeds cap (${i} bytes); frame discarded`,
+      });
+      if (!ok) sawFalse = true;
+      else if (sawFalse) acceptedAfterFirstFalse += 1;
+    }
+
+    // The producer was told to back off (false) and then kept writing anyway.
+    expect(sawFalse).toBe(true);
+    // OLD push-always behavior accepted ~10k frames after the first false (codex:
+    // "10,000 distinct non-fatal errors were accepted after the first false").
+    // The choke point accepts NONE past the cap.
+    expect(acceptedAfterFirstFalse).toBe(0);
+
+    // PROVE the queue stayed bounded: release the reader and count everything that
+    // drains out. If the queue had grown to 10k, ~10k frames would flush. It
+    // stays at most maxQueue (buffered) + 1 (parked in-flight) + a coalesced
+    // drop-summary that reuses an existing slot — a small constant, NOT 10k.
+    stream.release();
+    await writer.flushed();
+    expect(stream.chunks.length).toBeLessThanOrEqual(maxQueue + 1);
+
+    // The loss is surfaced HONESTLY: a bounded running summary, not silence.
+    const errors = stream.chunks
+      .map((c) => JSON.parse(c) as KernelOutbound)
+      .filter((f): f is Extract<KernelOutbound, { type: "error" }> => f.type === "error");
+    expect(errors.some((e) => /frame\(s\) dropped under backpressure/.test(e.message))).toBe(true);
+  });
+
+  it("reserved exit + FATAL error still flush even while cap-eligible frames are being refused", async () => {
+    const stream = new BlockingStream();
+    const writer = createOutboundWriter(stream as unknown as Writable, { maxQueue: 4 });
+    stream.block();
+
+    // Flood the cap with distinct non-fatal errors (ignoring backpressure).
+    for (let i = 0; i < 5_000; i++) {
+      writer.write({ type: "error", message: `distinct ${i}` });
+    }
+    // Terminal frames are reserved (cap-exempt) and must STILL be accepted+flushed.
+    writer.write({ type: "error", message: "init failed", fatal: true });
+    writer.write({ type: "exit", code: 1 });
+
+    stream.release();
+    await writer.flushed();
+
+    const frames = stream.chunks.map((c) => JSON.parse(c) as KernelOutbound);
+    expect(frames.some((f) => f.type === "error" && f.fatal === true)).toBe(true);
+    expect(frames[frames.length - 1]).toMatchObject({ type: "exit", code: 1 });
+    // Still bounded despite the 5k flood.
+    expect(frames.length).toBeLessThanOrEqual(4 + 1 + 2);
+  });
+
+  it("NEGATIVE CONTROL: the old push-always behavior grows unbounded and FAILS the new bound", () => {
+    // A faithful model of the pre-fix writer: write() always pushes a cap-eligible
+    // frame, returning false at/over the cap but NEVER refusing the push. A
+    // producer that ignores the false (the inbound diagnostic-error path) grows
+    // the queue without bound — this is the bug the choke point fixes.
+    const maxQueue = 4;
+    const legacyQueue: KernelOutbound[] = [];
+    const legacyPushAlwaysWrite = (frame: KernelOutbound): boolean => {
+      legacyQueue.push(frame); // always grows — the defect
+      return legacyQueue.length < maxQueue;
+    };
+
+    let sawFalse = false;
+    for (let i = 0; i < 10_000; i++) {
+      const ok = legacyPushAlwaysWrite({
+        type: "error",
+        message: `inbound line exceeds cap (${i} bytes); frame discarded`,
+      });
+      if (!ok) sawFalse = true;
+    }
+
+    expect(sawFalse).toBe(true);
+    // The old behavior accepts all 10k — it would FAIL `length <= maxQueue + 1`.
+    expect(legacyQueue.length).toBe(10_000);
+    expect(legacyQueue.length).toBeGreaterThan(maxQueue + 1);
+  });
+});
+
 describe("PiKernelRunner.forwardAgentEvent (P1 round-3: producer-side backpressure)", () => {
   it("backpressures the in-flight prompt under a stalled stdout: queue bounded, nothing dropped, order kept", async () => {
     const stream = new BlockingStream();

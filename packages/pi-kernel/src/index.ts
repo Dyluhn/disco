@@ -55,6 +55,7 @@ import { PiKernelRunner, scrubProviderCredentialEnv } from "./runner.ts";
 import {
   encodeOutbound,
   parseCommand,
+  type ErrorEvent,
   type KernelCommand,
   type KernelOutbound,
 } from "./protocol.ts";
@@ -212,8 +213,16 @@ export interface OutboundWriterOptions {
  *  - the in-process queue is capped at `maxQueue` frames. When it fills, `write`
  *    returns `false` and `onBackpressure(true)` fires so the producer (and the
  *    inbound source) stops — memory stays bounded instead of accumulating
- *    `agent_event` frames behind a stalled reader. No `agent_event` / `ready`
- *    is ever DROPPED; the producer is BLOCKED instead;
+ *    `agent_event` frames behind a stalled reader. A COOPERATING producer that
+ *    honours the `false` return (e.g. the agent_event chain, which parks on
+ *    {@link OutboundWriter.whenWritable}) never loses a frame — it is BLOCKED;
+ *  - the cap is also enforced AT THE QUEUE itself (the choke point), not merely
+ *    per-producer: a producer that IGNORES the `false` return — notably the
+ *    inbound diagnostic-error path, which keeps stdin readable for cancel/EOF —
+ *    can NEVER push a cap-eligible frame past `maxQueue`. Such over-cap frames
+ *    are refused (folded into a single bounded "N frames dropped under
+ *    backpressure" summary on the tail, or dropped) rather than enqueued, so NO
+ *    producer can OOM the queue;
  *  - `heartbeat` frames coalesce under pressure (only the freshest is kept), and
  *    consecutive duplicate NON-fatal `error` frames coalesce too (a hostile peer
  *    spamming malformed input cannot grow the queue);
@@ -231,6 +240,9 @@ export function createOutboundWriter(
   const queue: KernelOutbound[] = [];
   let pumping = false;
   let backpressured = false;
+  // Running tally of cap-eligible frames REFUSED at the choke point (see `write`).
+  // Surfaced as a bounded in-place summary marker; never grows the queue.
+  let droppedUnderBackpressure = 0;
   let idleResolvers: Array<() => void> = [];
   let writableResolvers: Array<() => void> = [];
 
@@ -304,7 +316,8 @@ export function createOutboundWriter(
           return !backpressured;
         }
       }
-      if (frame.type === "error" && !isReservedFrame(frame)) {
+      const reserved = isReservedFrame(frame);
+      if (frame.type === "error" && !reserved) {
         // Coalesce a flood of identical NON-fatal diagnostic errors (e.g. a
         // hostile peer spamming malformed lines → repeated "malformed JSON
         // line"): collapse consecutive duplicates so they can't grow the queue.
@@ -320,11 +333,32 @@ export function createOutboundWriter(
           return !backpressured;
         }
       }
+      // CHOKE POINT (round-4 P1): a cap-eligible frame must NEVER grow the queue
+      // past `maxQueue`. The cap is enforced HERE, at the queue, not per-producer:
+      // a producer that ignores the `false` return — notably the inbound
+      // diagnostic-error path in main() (malformed/unrecognized/overflow), which
+      // deliberately keeps stdin readable for cancel/EOF — is bounded all the
+      // same. Distinct error frames that bypass the identical-message coalescing
+      // above can no longer accumulate without bound.
+      if (!reserved && queue.length >= maxQueue) {
+        droppedUnderBackpressure += 1;
+        // Surface the loss WITHOUT growing the queue: fold a bounded running
+        // summary into the tail when it is already a (coalescible) non-fatal
+        // error marker; otherwise the over-cap frame is simply dropped. Either
+        // path leaves `queue.length` unchanged, so memory stays bounded.
+        const tail = queue[queue.length - 1];
+        if (tail !== undefined && tail.type === "error" && tail.fatal !== true) {
+          (tail as ErrorEvent).message = `${droppedUnderBackpressure} frame(s) dropped under backpressure`;
+        }
+        setBackpressure(true);
+        void pump();
+        return false;
+      }
       queue.push(frame);
       void pump();
       // Engage producer backpressure once the (cap-eligible) queue is full.
       // Reserved frames never trip the cap, so a final error/exit always lands.
-      if (!isReservedFrame(frame) && queue.length >= maxQueue) {
+      if (!reserved && queue.length >= maxQueue) {
         setBackpressure(true);
       }
       return !backpressured;
@@ -590,10 +624,15 @@ export async function main(options: MainOptions = {}): Promise<void> {
   const feed = createLineReader(
     {
       onLine,
-      onOverflow: (byteLength) =>
+      // Coalesce by CATEGORY: the message is CONSTANT (it deliberately omits the
+      // per-frame `byteLength`, which would make every overflow frame distinct
+      // and defeat the identical-error coalescing — letting a peer streaming many
+      // distinct oversized lines grow the outbound queue). A flood of oversized
+      // lines now collapses to one bounded frame.
+      onOverflow: () =>
         writer.write({
           type: "error",
-          message: `inbound line exceeds ${resolveMaxLineBytes()} byte cap (${byteLength} bytes); frame discarded`,
+          message: `inbound line exceeds ${resolveMaxLineBytes()} byte cap; frame discarded`,
         }),
     },
     resolveMaxLineBytes(),
