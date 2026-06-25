@@ -105,6 +105,29 @@ _RAW_HARDCODED_PORT_RE = re.compile(
     """
 )
 
+# Shell control / chaining / background / substitution operators (plus newlines). A raw
+# preview command MUST be a SINGLE FOREGROUND process. Anything that can chain (`;`, `&&`,
+# `||`), background (`&`), pipe (`|`), or substitute (backtick, `$(...)`, `>(...)`, `<(...)`)
+# lets a model SMUGGLE a second listener on a hardcoded port ALONGSIDE the platform's
+# `{port}` server — e.g. `... http.server 4321 ... & python3 -m http.server {port} ...`,
+# where the backgrounded first process quietly binds 4321 while the second passes the
+# ownership probe. Regex-parsing arbitrary shell to spot that is a losing game, so we
+# RESTRICT THE GRAMMAR at the choke point and refuse these operators outright. This
+# operator-ban (with the post-launch ownership probe) is the real guarantee; the
+# positional-port scan below is belt-and-braces over the single surviving command.
+_SHELL_OPERATOR_RE = re.compile(r"&&|\|\||\$\(|>\(|<\(|[;&|`\n]")
+
+
+def _looks_like_port(token: str) -> bool:
+    """A bare positional PORT-LIKE token: a 2-5 digit integer in the plausible port range
+    (1-65535). Used (after the flag-scrub) to reject a hardcoded port sitting as a plain
+    positional arg — `http.server <port>`, `... <port>` — that the platform can't override.
+    NOT matched: a `host:port` / `:port` form (has a colon — the regex backstop covers it),
+    a single-digit count, or a flag value (the caller excludes any token following a flag,
+    so `--workers 4` / `--timeout 30` are never misread as a port)."""
+    return token.isdigit() and 2 <= len(token) <= 5 and 1 <= int(token) <= 65535
+
+
 # tmux session-name prefix the ShellSessionManager writes (see shell_sessions._PREFIX).
 # Used to confirm a listening port is owned by THIS preview's shell session.
 _TMUX_PREFIX = "disco"
@@ -223,6 +246,33 @@ class PreviewManager:
 
     # ---- intent → resolved command -----------------------------------------
 
+    def _reject_positional_port(self, residual: str) -> None:
+        """Parse the (operator-free, placeholder-blanked, flag-scrubbed) command with
+        `shlex.split` and reject any BARE positional port-like token — a hardcoded port the
+        platform can't override that the flag-scrub didn't catch (`http.server <port>`, or a
+        port positioned anywhere). HEURISTIC: a numeric token immediately following a flag
+        (a token starting with `-`) is treated as that flag's VALUE, not a port, so legit
+        numeric args like `--workers 4` / `--timeout 30` are not false-rejected. An
+        unparseable command (e.g. unbalanced quotes) is refused rather than silently run."""
+        try:
+            tokens = shlex.split(residual)
+        except ValueError as exc:
+            raise PreviewCommandError(
+                f"preview command could not be parsed as a single shell command ({exc}). "
+                "Provide a simple foreground command with the serve port as '{port}'."
+            ) from exc
+        prev_was_flag = False
+        for tok in tokens:
+            if _looks_like_port(tok) and not prev_was_flag:
+                raise PreviewCommandError(
+                    f"preview command carries a hardcoded port ({tok!r}) as a positional "
+                    "argument — the platform owns the port, so it can't be supplied here. "
+                    "Remove it (the platform injects PORT=<its port>), or put the literal "
+                    "placeholder '{port}' where the port goes (e.g. 'python3 -m "
+                    "http.server {port} -d dist')."
+                )
+            prev_was_flag = tok.startswith("-")
+
     def _resolve_command(
         self,
         port: int,
@@ -245,6 +295,19 @@ class PreviewManager:
         """
         serve = serve_dir or self._sandbox_workspace() or "."
         if command:
+            # GRAMMAR RESTRICTION (the real guarantee): a raw preview command must be a
+            # SINGLE FOREGROUND process. Reject shell control / chaining / backgrounding /
+            # piping / substitution operators (and newlines) at the root — they're how a
+            # model smuggles a second listener on a hardcoded port past the ownership probe.
+            if _SHELL_OPERATOR_RE.search(command):
+                raise PreviewCommandError(
+                    "preview command must be a SINGLE FOREGROUND process — shell control, "
+                    "chaining, backgrounding, piping, or substitution operators "
+                    "(; & | && || ` $(...) >(...) <(...) newlines) are not allowed (they can "
+                    "smuggle a second server on a hardcoded port the platform can't see). "
+                    "Use one command and put the serve port as the literal placeholder "
+                    "'{port}' (e.g. 'python3 -m http.server {port} -d dist')."
+                )
             scrubbed = _PORT_FLAG_RE.sub(" ", command).strip()
             has_placeholder = "{port}" in scrubbed
             # Reject ANY other hardcoded/positional port the flag-scrub can't override —
@@ -254,6 +317,14 @@ class PreviewManager:
             # 'http.server {port} 9999') would bind a model-chosen port the platform doesn't
             # own (P1 #1). Blank the placeholder out so only OTHER ports trip the check.
             residual = scrubbed.replace("{port}", " ") if has_placeholder else scrubbed
+            # shlex-tokenize the single command and reject any BARE positional port-like
+            # token (covers `http.server [flags] <port> [more]` and a port positioned
+            # anywhere). A numeric token immediately after a flag is that flag's value, not
+            # a port, so `--workers 4` / `--timeout 30` pass. The `{port}` placeholder is the
+            # only sanctioned way to express the serve port positionally.
+            self._reject_positional_port(residual)
+            # Backstop for `host:port` / `:port` BIND forms (gunicorn `-b :8000`, `serve -l
+            # 0.0.0.0:8000`) that carry a colon and so are not a bare integer token above.
             bound = _RAW_HARDCODED_PORT_RE.search(residual)
             if bound is not None:
                 raise PreviewCommandError(

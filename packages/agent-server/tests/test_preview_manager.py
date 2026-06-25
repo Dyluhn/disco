@@ -426,6 +426,84 @@ async def test_placeholder_with_extra_hardcoded_port_is_rejected(command: str) -
     assert mgr.list() == []  # nothing registered; no port leaked, port 9999 never bound
 
 
+# ====================================== P1 (re-sweep): grammar restriction at the input
+
+# The regex-only hardcoded-port detection can't beat arbitrary shell (a `&`-chained or
+# substituted second listener). So the manager RESTRICTS the grammar: a raw preview
+# command must be a SINGLE FOREGROUND process (no control/chaining/background/pipe/
+# substitution operators) AND carry no bare positional port-like token. The operator-ban
+# + post-launch ownership probe are the guarantees; the positional scan is belt-and-braces.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command",
+    [
+        # The exact smuggle: a backgrounded first listener on a curated port (4321 is
+        # positional-after-flags so the old regex missed it) `&`-chained to the {port}
+        # platform server, which passes the ownership probe while 4321 is also bound.
+        "python3 -m http.server --bind 0.0.0.0 4321 -d d & python3 -m http.server {port} -d d",
+        "python3 -m http.server {port} -d dist; python3 -m http.server 4321",  # `;` chain
+        "python3 -m http.server {port} -d dist | tee log",                     # `|` pipe
+        "true && python3 -m http.server {port} -d dist",                       # `&&`
+        "false || python3 -m http.server {port} -d dist",                      # `||`
+        "python3 -m http.server `echo {port}` -d dist",                        # backtick subst
+        "python3 -m http.server $(echo {port}) -d dist",                       # $() subst
+        ">(python3 -m http.server {port})",                                    # >( ) proc subst
+        "python3 -m http.server {port}\npython3 -m http.server 4321",          # newline
+    ],
+)
+async def test_raw_command_with_shell_operator_is_rejected(command: str) -> None:
+    """Grammar restriction: any shell control / chaining / background / pipe / substitution
+    operator (or newline) refuses the command at the root — killing the chained/backgrounded
+    second-listener smuggle vector before any detection regex has to win."""
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    with pytest.raises(PreviewCommandError):
+        await mgr.start(command=command, supervise=False)
+    assert mgr.list() == []  # nothing registered; no port leaked, 4321 never bound
+
+
+@pytest.mark.asyncio
+async def test_positional_port_after_flags_is_rejected() -> None:
+    """The half of the smuggle the flag-scrub regex missed on its own: a port sitting
+    positionally AFTER flags (`http.server --bind 0.0.0.0 4321 -d dist`). shlex tokenizing
+    sees 4321 as a bare positional port (not a flag value) and rejects it."""
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    cmd = "python3 -m http.server --bind 0.0.0.0 4321 -d dist"
+    with pytest.raises(PreviewCommandError):
+        await mgr.start(command=cmd, supervise=False)
+    assert mgr.list() == []
+
+
+@pytest.mark.asyncio
+async def test_clean_single_foreground_placeholder_command_works() -> None:
+    """The sanctioned form passes untouched: one foreground command with `{port}`."""
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    session = await mgr.start(command="python3 -m http.server {port} -d dist", supervise=False)
+    assert session.status is PreviewStatus.RUNNING
+    assert session.port == 3000
+    assert "http.server 3000" in session.command and "{port}" not in session.command
+
+
+@pytest.mark.asyncio
+async def test_numeric_flag_value_is_not_misread_as_port() -> None:
+    """A numeric token following a flag is that flag's VALUE, not a port: a legit
+    `uvicorn app:app --port {port} --workers 4` is accepted (4 is `--workers`'s value),
+    and the platform port is placed via the placeholder."""
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    session = await mgr.start(
+        command="uvicorn app:app --port {port} --workers 4", supervise=False
+    )
+    assert session.status is PreviewStatus.RUNNING
+    assert session.port == 3000
+    assert "--workers 4" in session.command  # the non-port numeric arg survived
+    assert "--port 3000" in session.command  # placeholder filled with the platform port
+
+
 # ---------------------------------------------- P1 #1/#2: post-launch port ownership
 
 
