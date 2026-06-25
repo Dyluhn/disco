@@ -13,8 +13,10 @@ result trail.
 
 from __future__ import annotations
 
+import json
+
 from disco.core import SecurityRisk
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..anatomy import ToolContext, ToolDef, ToolOutcome
 
@@ -28,6 +30,19 @@ class ThinkArgs(BaseModel):
             "it is discarded after the call returns."
         )
     )
+
+    @field_validator("thought", mode="before")
+    @classmethod
+    def _coerce_thought(cls, v: object) -> str:
+        # ROBUSTNESS (bake-off issue #3): a streamed arg can mangle `thought` into a
+        # non-string (e.g. {"tool_call": ""} when an arg-delta drops). think is a pure
+        # NO-OP whose value is DISCARDED, so coerce anything to a string rather than
+        # hard-fail validation → retry → repeated_action_error → STUCK. Same family as #1.
+        if isinstance(v, str):
+            return v
+        if v is None:
+            return ""
+        return json.dumps(v) if isinstance(v, dict | list) else str(v)
 
 
 class ThinkTool:
