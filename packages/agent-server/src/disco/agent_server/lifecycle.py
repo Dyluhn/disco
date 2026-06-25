@@ -651,6 +651,16 @@ class LifecycleManager:
             pass
         try:
             result = await snapshot_workspace(session, store.path_for(conversation_id))
+            # OBSERVABILITY (bake-off #5a): log the file_count so an empty snapshot of a
+            # build that DID write files (a flush/timing race vs the sandbox) is visible,
+            # not silent. file_count=0 here + a successful file_write in the events = race.
+            _LOG.info(
+                "snapshot for %s: %d files, %d bytes (sandbox=%s)",
+                conversation_id,
+                result.file_count,
+                result.total_bytes,
+                type(session).__name__,
+            )
             store.write_manifest(
                 conversation_id,
                 title=title,
