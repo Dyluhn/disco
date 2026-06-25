@@ -582,6 +582,11 @@ class DiscoApiClient:
                     break
                 await asyncio.sleep(_SNAPSHOT_POLL_S)
 
+        import sys as _sys  # bake-off #8 diagnostic
+        _sys.stderr.write(
+            f"[collect-diag] cid={conversation_id} snap_dir={snapshot_dir!s} "
+            f"manifest_keys={list(manifest.keys())} projects_root={self._projects_root!s}\n"
+        )
         # The snapshot is AUTHORITATIVE: return it as-is. A declared file absent from the
         # snapshot stays OMITTED — never proxy-substituted (hole #1).
         if snapshot_dir is not None:
