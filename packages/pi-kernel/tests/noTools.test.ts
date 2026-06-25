@@ -88,11 +88,13 @@ describe("pi-kernel no-tools posture", () => {
       },
     });
 
-    // The ready frame reports the D1 tool surface: builtin-disabled + 14 custom.
+    // The ready frame reports the D1 tool surface: builtin-disabled + 15 custom
+    // (the 14 original + update_plan_progress, added so the prompt-referenced
+    // declarative progress tool is actually offered with a schema).
     const ready = frames.find((f): f is ReadyEvent => f.type === "ready");
     expect(ready, "expected a ready frame").toBeDefined();
     expect(ready!.tools.noTools).toBe("builtin");
-    expect(ready!.tools.customToolCount).toBe(14);
+    expect(ready!.tools.customToolCount).toBe(15);
     // Active tools are exactly the Disco custom set, never a built-in.
     for (const builtin of BUILTIN_TOOLS) {
       expect(ready!.tools.activeToolNames, `built-in '${builtin}' must not be active`).not.toContain(
@@ -104,7 +106,7 @@ describe("pi-kernel no-tools posture", () => {
     // The exact options handed to createAgentSession.
     const opts = runner.getInitOptions();
     expect(opts!.noTools).toBe("builtin");
-    expect(opts!.customTools).toHaveLength(14);
+    expect(opts!.customTools).toHaveLength(15);
 
     // The live session's ACTIVE tools are exactly the 14 Disco custom tools.
     // Under `noTools:"builtin"` the built-ins stay registered but INACTIVE

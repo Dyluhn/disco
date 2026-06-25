@@ -53,6 +53,11 @@ export const DISCO_TOOL_NAMES = [
   "preview_logs",
   "finish",
   "think",
+  // Declarative plan-progress reporting. A REAL executor tool (routed through the
+  // bridge, not a virtual) — and the build prompt INSTRUCTS the model to call it, so
+  // it MUST be offered with a schema. Omitting it made the model dutifully call an
+  // unschema'd tool and improvise invalid args → validation failure → STUCK.
+  "update_plan_progress",
   // Gate tools — their orchestrator-side handlers (plan pause / ask / clarify)
   // land in the E batch. Listed here (and allowlisted server-side) so the bridge
   // is complete and testable now; until E wires them the server returns a
@@ -302,6 +307,45 @@ function toolSpecs(): ToolSpec[] {
         },
         ["summary"],
       ),
+    },
+    {
+      name: "update_plan_progress",
+      description:
+        "Report progress on the approved plan by rewriting the FULL list of step " +
+        "states (a declarative snapshot, NOT a delta). Pass EVERY step with its current " +
+        "state — mark the step you're working on 'active' and completed ones 'done'. " +
+        "Purely informational: advances the plan tracker, takes no workspace action.",
+      // Nested object-array — expressed inline because the `prop`/`objectSchema`
+      // helpers only model scalar + array-of-scalar. Mirrors `UpdatePlanProgressArgs`.
+      parameters: {
+        type: "object",
+        properties: {
+          steps: {
+            type: "array",
+            description:
+              "The FULL current state of EVERY plan step, in order. Rewrite the whole list each call.",
+            items: {
+              type: "object",
+              properties: {
+                index: {
+                  type: "integer",
+                  description: "1-based index of the plan step.",
+                },
+                state: {
+                  type: "string",
+                  enum: ["pending", "active", "done"],
+                  description:
+                    "This step's current state: 'pending', 'active' (in progress now), or 'done'.",
+                },
+              },
+              required: ["index", "state"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["steps"],
+        additionalProperties: false,
+      } as unknown as TSchema,
     },
     {
       name: "think",

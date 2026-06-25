@@ -74,6 +74,10 @@ _ALLOWED_PI_TOOLS: frozenset[str] = frozenset(
         "preview_logs",
         "finish",
         "think",
+        # Declarative plan-progress: a REAL executor tool the build prompt tells the
+        # model to call. It MUST be allowlisted + offered with a schema (mirrors
+        # DISCO_TOOL_NAMES); without it the model improvised invalid args → STUCK.
+        "update_plan_progress",
         "submit_plan",
         "ask_user",
         "clarify",
