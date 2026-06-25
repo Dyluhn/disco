@@ -146,6 +146,75 @@ async def test_active_run_gate_not_reaped_even_past_ttl(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_newer_run_reusing_pin_blocks_stale_reap(monkeypatch):
+    """Finding #3 (third path): the reaper reads gate state / liveness, then AWAITS
+    event reads before appending terminal STUCK + clearing the pin. If a NEWER run
+    starts in that window (a fresh message resumes the gate → `kick` bumps the
+    run-generation and REUSES the pin), the stale reaper must NOT append STUCK into
+    the newer run's log nor clear the newer run's pin. We simulate the newer run by
+    bumping `_run_generation[cid]` during the reaper's `get_events` await (after it
+    captured the generation, before its terminal append)."""
+    store = SqliteEventStore(":memory:")
+    rt = _runtime(store)
+    cid = await _gated_conv(store, "conv_gen_race", ConversationStatus.AWAITING_PLAN_APPROVAL)
+
+    # The gate-creating run pinned a kernel and recorded its run-generation.
+    sentinel_kernel = object()
+    rt._pinned_kernels[cid] = sentinel_kernel
+    rt._run_generation[cid] = 5
+
+    # Inject the race: a newer run kicks (generation 5 → 6, pin reused) precisely in
+    # the async window the reaper captured-generation-then-awaits.
+    real_get_events = store.get_events
+    fired = {"done": False}
+
+    async def _get_events_then_newer_run(conv_id, *a, **k):
+        result = await real_get_events(conv_id, *a, **k)
+        if conv_id == cid and not fired["done"]:
+            fired["done"] = True
+            rt._run_generation[cid] = 6  # a newer run now owns the conversation
+        return result
+
+    monkeypatch.setattr(store, "get_events", _get_events_then_newer_run)
+    monkeypatch.setenv("DISCO_ABANDONED_GATE_TTL_S", "0")
+
+    reaped = await rt.sweep_abandoned_gates_once()
+
+    # Stale reap is skipped: no STUCK in the NEWER run's log.
+    assert reaped == 0
+    assert (await store.get_state(cid)).execution_status is (
+        ConversationStatus.AWAITING_PLAN_APPROVAL
+    )
+    # The NEWER run's pin is left intact (that run owns it now).
+    assert rt._pinned_kernels.get(cid) is sentinel_kernel
+    assert rt._run_generation[cid] == 6
+
+
+@pytest.mark.asyncio
+async def test_genuinely_abandoned_gate_terminalizes_and_unpins(monkeypatch):
+    """The non-race path: a genuinely-abandoned gate (no newer run — its
+    run-generation is unchanged by reap time) still terminalizes to STUCK AND
+    releases its kernel pin via `_unpin_if_current_generation` (the generation
+    matches, so the pin clears), so an abandoned gated run never leaks its pin."""
+    store = SqliteEventStore(":memory:")
+    rt = _runtime(store)
+    cid = await _gated_conv(
+        store, "conv_abandoned_unpin", ConversationStatus.AWAITING_USER_DECISION
+    )
+    sentinel_kernel = object()
+    rt._pinned_kernels[cid] = sentinel_kernel
+    rt._run_generation[cid] = 3  # the gate-creating run's generation, never bumped
+
+    monkeypatch.setenv("DISCO_ABANDONED_GATE_TTL_S", "0")
+    reaped = await rt.sweep_abandoned_gates_once()
+
+    assert reaped == 1
+    assert (await store.get_state(cid)).execution_status is ConversationStatus.STUCK
+    # Terminal reap releases the pin too (same generation → cleared).
+    assert cid not in rt._pinned_kernels
+
+
+@pytest.mark.asyncio
 async def test_non_gate_conversations_never_reaped(monkeypatch):
     """RUNNING / FINISHED / IDLE conversations are not gates — even past the TTL
     the gate sweep leaves them alone (RUNNING is handled by the stranded sweep)."""
