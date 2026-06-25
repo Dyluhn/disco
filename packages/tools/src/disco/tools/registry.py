@@ -86,7 +86,15 @@ AGENT_TOOLS = frozenset(
         # W-45 — verify_web_app: structured web-app self-test → the finish gate's
         # clean pass/fail verdict (kills the 25-40× browser reload verify-loop).
         "verify_web_app",
-        "deploy_preview",
+        # EPIC F — platform-owned preview surface. These four SUPERSEDE the old
+        # `deploy_preview` placeholder (which was a deferred, never-registered name):
+        # the model declares intent (dir/framework/command) and the platform owns
+        # the port/serving/health. They are REGISTERED (build_default_registry), so
+        # they must be in scope here or the agent resolves them as unknown_tool.
+        "preview_start",
+        "preview_status",
+        "preview_logs",
+        "preview_stop",
         "server_status",
         # plan-mode meta tools: propose a plan (planning) + report capstones (execution).
         "submit_plan",
@@ -119,7 +127,7 @@ _ANCHORED_EDIT_TOOLS: frozenset[str] = frozenset({"file_str_replace"})
 _WEAK_TIER_ADVERTISED: frozenset[str] = AGENT_TOOLS - _ANCHORED_EDIT_TOOLS
 
 # C6: artifact_mode tool scope — a STRICT SUBSET of AGENT_TOOLS with NO shell/browser/
-# plan-gate/code_exec/file_str_replace/delegate_explore. Includes line-edit tools
+# preview/plan-gate/code_exec/file_str_replace/delegate_explore. Includes line-edit tools
 # (file_replace_lines / file_insert_lines) so artifacts remain editable post-creation.
 ARTIFACT_TOOLS: frozenset[str] = frozenset(
     {
@@ -148,7 +156,7 @@ def artifact_scope() -> ToolScope:
     """Return the ToolScope for artifact mode (C6) — NO shell/browser/plan-gate.
 
     ARTIFACT_TOOLS is a strict subset of AGENT_TOOLS: file writers + asset
-    generators + search/extract + think. Excludes shell*, browser, deploy_preview,
+    generators + search/extract + think. Excludes shell*, browser, preview_*,
     server_status, submit_plan, plan_step, code_exec, file_str_replace,
     delegate_explore. The INTERACTIVE/NeverConfirm loop is low-risk by design;
     the boundary is the intersection: artifact mode must NOT silently grant

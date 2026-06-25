@@ -38,7 +38,7 @@ def test_artifact_tools_excludes_dangerous_tools():
         "shell_write_to_process", "shell_kill_process",
         "browser",
         "code_exec",
-        "deploy_preview",
+        "preview_start", "preview_status", "preview_logs", "preview_stop",
         "server_status",
         "submit_plan",
         "plan_step",

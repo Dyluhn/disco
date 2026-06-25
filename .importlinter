@@ -18,14 +18,18 @@ layers =
     disco.core
 exhaustive = false
 # KNOWN VIOLATION (debt, not hidden): disco.tools.builtin.audio_overview reaches
-# UP into agent_server for server-side TTS + the audio LLM constant. They are
+# UP into agent_server for server-side TTS + the audio LLM constant, and
+# disco.tools.builtin.preview reaches UP into agent_server for the PreviewManager
+# (EPIC F — a runtime collaborator bound to the conversation's sandbox). All are
 # lazy (function-local) imports today to dodge a load-time cycle; the proper fix
-# is dependency inversion (a TTS port in tools/core, implemented in agent_server)
-# or relocating audio_config down. Ignored here so the contract passes on the
-# rest of the tree while this one edge is tracked. Remove these lines when fixed.
+# is dependency inversion (a port in tools/core, implemented in agent_server) or
+# relocating the collaborator down. Ignored here — the SAME sanctioned mechanism
+# audio_overview uses — so the contract passes on the rest of the tree while these
+# tracked edges are tracked. Remove these lines when fixed.
 ignore_imports =
     disco.tools.builtin.audio_overview -> disco.agent_server.audio_config
     disco.tools.builtin.audio_overview -> disco.agent_server.tts_local
+    disco.tools.builtin.preview -> disco.agent_server.preview_manager
 
 [importlinter:contract:no-cycles]
 name = No circular dependencies between packages

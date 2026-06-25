@@ -112,6 +112,10 @@ class SandboxSession:
         self._generation = 0  # bumped on every (re)create — telemetry + tests
         self._lock = asyncio.Lock()
         self._preview_task: asyncio.Task[None] | None = None  # tracked so destroy() can cancel
+        # EPIC F (P1 #2): once the platform PreviewManager owns previews for this
+        # session, the legacy fire-and-forget static auto-preview stands down (so the
+        # two can't both claim a curated port). Set by `disable_auto_preview()`.
+        self._auto_preview_disabled = False
 
         from .shell_sessions import ShellSessionManager
         # Process backend shares the host tmux server across conversations, so
@@ -298,6 +302,11 @@ class SandboxSession:
         agent-server itself), ensure_preview() backs off with False. Failures are
         logged, never raised: preview is a convenience, not a dependency of the box."""
 
+        if self._auto_preview_disabled:
+            # The platform PreviewManager owns previews for this session — don't spawn
+            # the legacy static auto-preview (it would race/collide on a curated port).
+            return
+
         async def _auto() -> None:
             try:
                 await self.ensure_preview()
@@ -305,6 +314,31 @@ class SandboxSession:
                 _LOG.debug("auto preview start failed", exc_info=True)
 
         self._preview_task = asyncio.create_task(_auto())
+
+    async def disable_auto_preview(self) -> None:
+        """EPIC F (P1 #2) — stand the legacy static auto-preview DOWN so the platform
+        PreviewManager is the SINGLE authority for previews on this session. Cancels a
+        still-pending auto-preview task, tears down an already-running static 'preview'
+        server + its tracked entry, and latches a flag so a later `_spawn_auto_preview`
+        (e.g. after a sandbox recreate) does not bring it back. Idempotent and best-
+        effort: preview is a convenience, so no failure here is allowed to raise."""
+        self._auto_preview_disabled = True
+        task, self._preview_task = self._preview_task, None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001 — swallow cleanly
+                pass
+        try:
+            await self.sessions.kill_foreground("preview")
+        except Exception:  # noqa: BLE001 — nothing running / already gone is fine
+            _LOG.debug("auto-preview kill on disable failed", exc_info=True)
+        # Drop the static auto-preview's tracked entry (it may be registered under the
+        # remapped process-safe port, so match by the well-known 'preview' name).
+        for p, svc in list(self._tracked_services.items()):
+            if svc.name == "preview":
+                self._tracked_services.pop(p, None)
 
     async def _resilient(self, op):
         """Run one instance op; on a typed mid-session death, re-create and raise a
@@ -552,6 +586,10 @@ class SandboxSession:
         ask "what's exposed on this conversation right now?" (see
         `tracked_services`). For multi-service builds use `ensure_service`
         directly (BP-G9 acceptance: API on 3000 + frontend on 5173)."""
+        if self._auto_preview_disabled:
+            # The platform PreviewManager owns previews here — back off (P1 #2).
+            return False
+
         from disco.core.loop.preview_target import (
             process_safe_preview_port,
             reserved_control_ports,
@@ -678,8 +716,19 @@ class SandboxSession:
         Cancels any in-flight auto-preview task before tearing down the instance so
         teardown never races a half-started preview (TOCTOU fix — the task is now
         tracked as self._preview_task and cancelled here).
+
+        P2 #4: also closes a cached platform `PreviewManager` (set on `_preview_manager`
+        by the preview_* tools) — its supervisor task sleeps forever otherwise, leaking
+        past the sandbox it supervised.
         """
         self._closed = True
+        # Close a cached PreviewManager so its supervisor task can't outlive the sandbox.
+        mgr, self._preview_manager = getattr(self, "_preview_manager", None), None
+        if mgr is not None:
+            try:
+                await mgr.aclose()
+            except Exception:  # noqa: BLE001 — teardown is best-effort; never raise
+                _LOG.debug("preview manager aclose on destroy failed", exc_info=True)
         # Cancel the auto-preview task first so it can't race the instance teardown.
         task, self._preview_task = self._preview_task, None
         if task is not None and not task.done():

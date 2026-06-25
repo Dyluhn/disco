@@ -16,6 +16,7 @@ pending!" warnings.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 import pytest
 from disco.tools.sandbox.port_owner import port_owner
@@ -118,6 +119,31 @@ async def test_destroy_cancels_inflight_preview_task():
     # garbage-collected WITHOUT being awaited.
 
 
+@pytest.mark.asyncio
+async def test_destroy_closes_cached_preview_manager():
+    """P2 #4: a started PreviewManager cached on the session (`_preview_manager`, set by
+    the preview_* tools) runs a supervisor task that sleeps forever. `destroy()` must
+    `aclose()` it so the task is cancelled/done — it can't leak past the sandbox it
+    supervised."""
+    from disco.agent_server.preview_manager import PreviewManager
+
+    session = SandboxSession(_FakeSvc(), conversation_id="conv-pmgr-leak")
+    mgr = PreviewManager(
+        session, port_pool=[8188], health_attempts=1, health_interval_s=0.0,
+        supervise_interval_s=0.01,
+    )
+    mgr._ensure_supervisor()  # spin up the supervisor task (as a real start would)
+    sup = mgr._supervisor
+    assert sup is not None and not sup.done(), "supervisor task should be running"
+
+    session._preview_manager = mgr  # how the tools cache it on the session
+
+    await session.destroy()
+
+    assert mgr._closed is True
+    assert sup.done(), "supervisor task must be cancelled/done after destroy()"
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_preview_session_lifecycle_process_backend():
@@ -125,6 +151,19 @@ async def test_preview_session_lifecycle_process_backend():
     ns = "disco-conv-bp0-"  # conversation_id[:8] + '-' under the manager's 'disco-' prefix
     try:
         inst = await session._ensure()
+
+        # Deterministically retire the fire-and-forget auto-preview before driving the
+        # EXPLICIT ensure_preview below. Both use the 'preview' tmux session name, so
+        # letting them race is the source of intermittent 'duplicate session' failures
+        # (the race pre-dates and is independent of the manager work). Let the auto-
+        # preview FINISH (it swallows its own errors), then kill the 'preview' session it
+        # created so the explicit path below starts from a clean slate.
+        if session._preview_task is not None:
+            with contextlib.suppress(Exception):
+                await session._preview_task
+        with contextlib.suppress(Exception):
+            await session.sessions.kill_foreground("preview")
+        await asyncio.sleep(0.5)  # let the auto-preview's port free before we re-bind
 
         # (a) ensure_preview starts the static server as the visible 'preview' session
         assert await session.ensure_preview(_PORT) is True

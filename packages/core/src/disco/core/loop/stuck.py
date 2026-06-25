@@ -52,7 +52,7 @@ _F6_FILE_MUTATING_TOOLS = frozenset({
 # (the black-screen-game). `serve` is intercepted by the engine into a
 # DeliverableEvent (no ObservationEvent), so it is not a probe here.
 _NO_PROGRESS_PROBE_TOOLS = frozenset(
-    {"browser", "server_status", "deploy_preview", "verify_web_app"}
+    {"browser", "server_status", "preview_status", "verify_web_app"}
 )
 # Distinct varied edits that must recur against ONE stable probe outcome before
 # the no-progress breaker trips. 4 mirrors the circuit-breaker's failure budget.
