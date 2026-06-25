@@ -48,7 +48,11 @@ import {
   type KernelInitConfig,
   type KernelOutbound,
 } from "./protocol.ts";
-import { internalSkillsOverride } from "./skills.ts";
+import {
+  assertOnlyAllowlistedSkills,
+  buildSkillLoaderConfig,
+  type SkillAllowlistOptions,
+} from "./skills.ts";
 import { buildDiscoTools } from "./tools.ts";
 
 /** Default heartbeat cadence (ms). Overridable per-init for tests. */
@@ -186,6 +190,13 @@ export interface RunnerOptions {
    * {@link DEFAULT_MAX_PENDING_AGENT_EVENTS}.
    */
   maxPendingAgentEvents?: number;
+  /**
+   * Disco skill-allowlist override (EPIC G). Defaults to the in-repo Disco
+   * allowlist + controlled skills dir (an EMPTY allowlist → zero skills loaded,
+   * the safe default). Tests / the spawner override `allowlist` / `skillsRoot`
+   * to opt a reviewed Disco skill in or to exercise the load-time gate.
+   */
+  skillAllowlist?: SkillAllowlistOptions;
 }
 
 export class PiKernelRunner {
@@ -195,6 +206,7 @@ export class PiKernelRunner {
   private readonly defaultHeartbeatMs: number;
   private readonly now: () => number;
   private readonly maxPendingAgentEvents: number;
+  private readonly skillAllowlist?: SkillAllowlistOptions;
 
   /**
    * Single-lane ordered tail for agent_event forwarding (round-3 P1). Each
@@ -211,6 +223,8 @@ export class PiKernelRunner {
 
   private session?: AgentSession;
   private initOptions?: CreateAgentSessionOptions;
+  private resourceLoader?: DefaultResourceLoader;
+  private loadedSkillNames: string[] = [];
   private unsubscribe?: () => void;
   private heartbeat?: ReturnType<typeof setInterval>;
   private tempDirs: string[] = [];
@@ -223,6 +237,7 @@ export class PiKernelRunner {
     this.onExit = options.onExit;
     this.defaultHeartbeatMs = options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
     this.now = options.now ?? (() => Date.now());
+    this.skillAllowlist = options.skillAllowlist;
     this.maxPendingAgentEvents = Math.max(
       1,
       Math.floor(options.maxPendingAgentEvents ?? DEFAULT_MAX_PENDING_AGENT_EVENTS),
@@ -239,6 +254,14 @@ export class PiKernelRunner {
   /** The exact options passed to `createAgentSession` (for no-tools asserts). */
   getInitOptions(): CreateAgentSessionOptions | undefined {
     return this.initOptions;
+  }
+
+  /**
+   * Names of the skills the loader actually mounted (EPIC G). Only allowlisted,
+   * Disco-owned skills can ever appear here; an empty allowlist yields `[]`.
+   */
+  getLoadedSkillNames(): string[] {
+    return [...this.loadedSkillNames];
   }
 
   /** agent_events buffered but not yet emitted (round-3 P1 #2 bound check). */
@@ -300,11 +323,20 @@ export class PiKernelRunner {
       // consistent across both.
       const settingsManager = SettingsManager.create(cwd, agentDir);
 
-      // Loader that discovers ZERO project-local resources (§5.1). G1: the
-      // `skillsOverride` DROPS every disk/project/user/package-discovered skill
-      // and mounts ONLY the reviewed Disco-internal skills — so even though
-      // `noSkills` already suppresses discovery, the override is the hard
-      // guarantee that nothing but internal skills can ever reach the agent.
+      // EPIC G (§1.1–§1.3): restrict skill loading to the Disco-owned allowlist.
+      // `buildSkillLoaderConfig` resolves the vetted allowlist to absolute,
+      // in-repo skill dirs — canonicalized so a symlinked skill dir/SKILL.md that
+      // escapes the controlled root is REFUSED, and governance-validated (§5.2) —
+      // and returns the `skillsOverride` load-time gate that THROWS on anything
+      // the loader resolved that is not contained in a reviewed allowlisted dir.
+      // An EMPTY allowlist (the default) → no paths and a gate that rejects
+      // everything else.
+      const skillCfg = buildSkillLoaderConfig(this.skillAllowlist);
+
+      // Loader that discovers ZERO project-local resources (§5.1). `noSkills:true`
+      // disables discovery of project-local (`.pi/skills`), user, and global skill
+      // dirs entirely — only the allowlisted `additionalSkillPaths` are even
+      // considered, and the `skillsOverride` gate vets whatever survives.
       const resourceLoader = new DefaultResourceLoader({
         cwd,
         agentDir,
@@ -314,11 +346,22 @@ export class PiKernelRunner {
         noPromptTemplates: true,
         noThemes: true,
         noContextFiles: true,
-        skillsOverride: internalSkillsOverride(),
+        additionalSkillPaths: skillCfg.additionalSkillPaths,
+        skillsOverride: skillCfg.skillsOverride,
       });
+      this.resourceLoader = resourceLoader;
       // When we supply our own loader, createAgentSession does NOT reload it —
       // we must, and we pin project trust to false (never load project `.pi`).
+      // The allowlist `skillsOverride` runs INSIDE this reload: if a non-vetted
+      // skill was somehow resolved, reload() rejects and we fail loudly below.
       await resourceLoader.reload({ resolveProjectTrust: async () => false });
+
+      // EPIC G boot assertion (backstop, defense in depth): re-check the loader's
+      // FINAL skill set against the canonicalized allowlist. Fires loudly even if
+      // the `skillsOverride` gate were ever bypassed or the SDK changed under us.
+      const loadedSkills = resourceLoader.getSkills().skills;
+      assertOnlyAllowlistedSkills(loadedSkills, skillCfg.allowedDirs, skillCfg.skillsRoot);
+      this.loadedSkillNames = loadedSkills.map((s) => s.name);
 
       // P0 (registry restriction): the gateway is the ONLY usable provider. When
       // supplied, register it and pin the session model to it; built-ins stay

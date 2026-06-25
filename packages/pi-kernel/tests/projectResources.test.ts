@@ -18,8 +18,9 @@
  *      assertions below are not vacuous.
  *   2. RUNNER-MIRROR LOADER — a `DefaultResourceLoader` built with the EXACT
  *      option set `PiKernelRunner.init` uses (runner.ts §5.1: `noExtensions`/
- *      `noSkills`/`noPromptTemplates`/`noThemes`/`noContextFiles` + the
- *      `internalSkillsOverride()` + `reload({resolveProjectTrust:()=>false})`),
+ *      `noSkills`/`noPromptTemplates`/`noThemes`/`noContextFiles` + the EPIC G
+ *      allowlist `additionalSkillPaths`/`skillsOverride` (containment gate) +
+ *      `reload({resolveProjectTrust:()=>false})`),
  *      but pointed AT the malicious workspace, ignores every `.pi` resource.
  *   3. FULL SESSION — that loader, driven through the REAL `createAgentSession`
  *      path (cwd = the malicious workspace), mounts only internal skills and no
@@ -44,9 +45,18 @@ import {
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 
-import { internalSkillsOverride, INTERNAL_SKILL_IDS } from "../src/skills.ts";
+import { buildSkillLoaderConfig } from "../src/skills.ts";
 import { PiKernelRunner, GATEWAY_PROVIDER } from "../src/runner.ts";
 import type { KernelOutbound, ReadyEvent } from "../src/protocol.ts";
+
+/**
+ * The reviewed Disco-owned skills opted in for this test (EPIC G allowlist). The
+ * default kernel allowlist is EMPTY (zero skills); these are the vetted in-repo
+ * skills under the controlled skills root, mounted ONLY because the test names
+ * them — exercising the allowlist path while proving project `.pi` skills stay
+ * inert.
+ */
+const REVIEWED_SKILL_IDS = ["build-basic", "preview-repair"] as const;
 
 /** Tracked temp dirs / sessions / runners, torn down after each test. */
 const tempDirs: string[] = [];
@@ -180,6 +190,11 @@ async function buildIsolatedLoader(
   agentDir: string,
 ): Promise<{ loader: DefaultResourceLoader; settingsManager: SettingsManager }> {
   const settingsManager = SettingsManager.create(cwd, agentDir);
+  // EPIC G containment wiring: the reviewed Disco skills enter via the allowlisted
+  // `additionalSkillPaths`, and the `skillsOverride` gate throws on anything the
+  // loader resolved outside a reviewed dir (so a project `.pi/skills` skill — even
+  // if discovery were on — could never survive).
+  const skillCfg = buildSkillLoaderConfig({ allowlist: REVIEWED_SKILL_IDS });
   const loader = new DefaultResourceLoader({
     cwd,
     agentDir,
@@ -189,7 +204,8 @@ async function buildIsolatedLoader(
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
-    skillsOverride: internalSkillsOverride(),
+    additionalSkillPaths: skillCfg.additionalSkillPaths,
+    skillsOverride: skillCfg.skillsOverride,
   });
   await loader.reload({ resolveProjectTrust: async () => false });
   return { loader, settingsManager };
@@ -216,7 +232,7 @@ describe("G3 runner-mirror loader — pointed at the malicious workspace, ignore
     const { loader } = await buildIsolatedLoader(ws, agentDir);
 
     const { skills, diagnostics } = loader.getSkills();
-    expect(skills.map((s) => s.name)).toEqual([...INTERNAL_SKILL_IDS]);
+    expect(skills.map((s) => s.name)).toEqual([...REVIEWED_SKILL_IDS]);
     expect(skills.map((s) => s.name)).not.toContain(PROJECT_SKILL_ID);
     // No mounted skill resolves to anything under the workspace.
     for (const s of skills) {
@@ -302,7 +318,7 @@ describe("G3 full session — a Pi session whose cwd IS the malicious workspace 
 
     // The session's resource loader mounts only the internal skills.
     const names = session.resourceLoader.getSkills().skills.map((s) => s.name);
-    expect(names).toEqual([...INTERNAL_SKILL_IDS]);
+    expect(names).toEqual([...REVIEWED_SKILL_IDS]);
     expect(names).not.toContain(PROJECT_SKILL_ID);
     expect(session.resourceLoader.getExtensions().extensions).toEqual([]);
   });
@@ -311,7 +327,14 @@ describe("G3 full session — a Pi session whose cwd IS the malicious workspace 
 describe("G3 real runner — production wiring loads zero project resources and never makes a workspace its cwd", () => {
   it("after a live init, the production loader mounts only internal skills and no extensions", async () => {
     const frames: KernelOutbound[] = [];
-    runner = new PiKernelRunner({ emit: (e) => frames.push(e), heartbeatMs: 10_000 });
+    runner = new PiKernelRunner({
+      emit: (e) => frames.push(e),
+      heartbeatMs: 10_000,
+      // Opt the reviewed Disco skills into the (otherwise empty) EPIC G allowlist
+      // so the production loader has skills to mount; project `.pi` skills remain
+      // structurally out of scope (throwaway cwd) and gated regardless.
+      skillAllowlist: { allowlist: [...REVIEWED_SKILL_IDS] },
+    });
 
     await runner.handleCommand({
       type: "init",
@@ -335,7 +358,7 @@ describe("G3 real runner — production wiring loads zero project resources and 
     // createAgentSession loads zero project resources.
     const loader = opts!.resourceLoader!;
     const names = loader.getSkills().skills.map((s) => s.name);
-    expect(names).toEqual([...INTERNAL_SKILL_IDS]);
+    expect(names).toEqual([...REVIEWED_SKILL_IDS]);
     expect(loader.getExtensions().extensions).toEqual([]);
     expect(loader.getPrompts().prompts).toEqual([]);
     expect(loader.getAgentsFiles().agentsFiles).toEqual([]);
@@ -343,7 +366,7 @@ describe("G3 real runner — production wiring loads zero project resources and 
     // The live session agrees, and routes only to the gateway provider.
     const session = runner.getSession()!;
     expect(session.resourceLoader.getSkills().skills.map((s) => s.name)).toEqual([
-      ...INTERNAL_SKILL_IDS,
+      ...REVIEWED_SKILL_IDS,
     ]);
     expect(session.model?.provider).toBe(GATEWAY_PROVIDER);
 

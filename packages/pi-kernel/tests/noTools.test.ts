@@ -25,7 +25,14 @@ describe("pi-kernel no-tools posture", () => {
 
   it("creates the session with noTools:'all' and zero tools", async () => {
     const frames: KernelOutbound[] = [];
-    runner = new PiKernelRunner({ emit: (e) => frames.push(e), heartbeatMs: 50 });
+    // Opt the reviewed Disco skills into the (otherwise empty) EPIC G allowlist so
+    // the loader has skills to mount — proving only reviewed skills survive while
+    // the tool posture stays empty.
+    runner = new PiKernelRunner({
+      emit: (e) => frames.push(e),
+      heartbeatMs: 50,
+      skillAllowlist: { allowlist: ["build-basic", "preview-repair"] },
+    });
 
     await runner.handleCommand({ type: "init" });
 
@@ -55,8 +62,9 @@ describe("pi-kernel no-tools posture", () => {
       expect(allToolNames, `built-in '${builtin}' must not be registered`).not.toContain(builtin);
     }
 
-    // G1: only the reviewed internal skills mount — no discovered project/user
-    // skill survives the override (and no built-in tools regardless).
+    // EPIC G: only the reviewed, allowlisted Disco skills mount — no discovered
+    // project/user skill survives the containment gate (and no built-in tools
+    // regardless).
     const skills = opts!.resourceLoader!.getSkills().skills.map((s) => s.name).sort();
     expect(skills).toEqual(["build-basic", "preview-repair"]);
 
