@@ -613,9 +613,11 @@ class LifecycleManager:
         """Mirror the live workspace out to disk + update the manifest."""
         store = self._rt._project_store_now()
         if store is None:
+            _LOG.warning("snapshot %s: no project store — workspace NOT persisted", conversation_id)
             return
         status = store.status()
         if status != StorageStatus.OK:
+            _LOG.warning("snapshot %s: store status=%s — NOT saved", conversation_id, status.value)
             await self._rt._emit_persistence_reminder(
                 conversation_id,
                 f"project storage is {status.value}; this build was NOT saved.",

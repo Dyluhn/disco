@@ -2339,7 +2339,13 @@ class ConversationRuntime:
             ConversationStatus.PAUSED,
             ConversationStatus.IDLE,
         }
-        if surface in self._BUILD_LIKE_SURFACES and state.execution_status in _ENDED:
+        # The disco loop sets the RETURNED state's execution_status terminal; the PiKernel
+        # instead APPENDS a FINISHED StatusEvent and returns a non-terminal state object
+        # (bake-off #5a — its workspace then never snapshotted, scoring it a false 0%). Re-read
+        # the AUTHORITATIVE state from the store (computed from the event log, so it is terminal
+        # for BOTH kernels) for the end-gate.
+        ended_state = await self._store.get_state(conversation_id)
+        if surface in self._BUILD_LIKE_SURFACES and ended_state.execution_status in _ENDED:
             await self._maybe_snapshot(conversation_id)
             # FINISHED now rides the idle sweep like STUCK/ERROR/PAUSED;
             # suspend = sweep_idle_once -> _suspend
