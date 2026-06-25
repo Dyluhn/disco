@@ -84,11 +84,14 @@ _ALLOWED_PI_TOOLS: frozenset[str] = frozenset(
 # `PiKernel` (E1/E2/E3): the bridge hands off to the kernel's long-poll handler.
 _GATE_TOOLS: frozenset[str] = frozenset({"submit_plan", "ask_user", "clarify"})
 
-# Tools that MUTATE the workspace — refused until a plan is approved (E1/E3). The
-# allowlist (above) gates WHICH tools may run; this gates WHEN a write may run.
-_WRITE_TOOLS: frozenset[str] = frozenset(
-    {"file_write", "file_replace_lines", "file_insert_lines", "shell_exec"}
-)
+# NOTE (EPIC-D graft): the former narrow `_WRITE_TOOLS` pre-approval gate was REMOVED.
+# It keyed on a kernel bookkeeping flag and only covered the four write tools — so
+# non-write side effects (e.g. preview_start) could run pre-approval. Every non-gate
+# tool now routes through the in-process `PiToolBridge` (PiKernel.route_pi_tool),
+# whose REAL planning gate (loop.mode == PLANNING blocks writes/shell/finish until
+# `approve_plan` flips the loop into execution mode — engine.py:945-969) is the SOLE,
+# authoritative pre-approval gate. The bridge ALSO applies hard-deny, risk/confirm,
+# the K1 elision guard, the halted-state gate, and the stale-plan replan gate.
 
 
 def _span(name: str, conversation_id: str, **fields: object) -> None:
@@ -102,23 +105,6 @@ def _span(name: str, conversation_id: str, **fields: object) -> None:
         log_event(name, cid=conversation_id, **fields)
     except Exception:  # noqa: BLE001 — tracing must never break a tool call
         pass
-
-
-def _plan_required_block(tool_name: str, call_id: str) -> ToolResult:
-    """A structured 'write refused — no approved plan' result (E1/E3). success=false;
-    nothing executed. Pi must submit_plan (and have it approved) before writing."""
-    return ToolResult(
-        call_id=call_id,
-        tool_name=tool_name,
-        success=False,
-        content=(
-            f"tool {tool_name!r} writes to the workspace, which is blocked until a plan "
-            "is approved: call submit_plan and wait for approval before writing. It was "
-            "NOT executed."
-        ),
-        structured={"kind": "plan_not_approved", "tool_name": tool_name},
-        error="plan not approved",
-    )
 
 
 def _result_json(result: ToolResult) -> JSONResponse:
@@ -273,7 +259,9 @@ def make_pi_tools_router(
                     conversation_id, tool_name, arguments, call_id
                 )
             except Exception as exc:  # noqa: BLE001 — a gate failure must not 500 the bridge
-                _LOG.warning("pi-tools gate %s failed token=%s: %s", tool_name, rec.fingerprint, exc)
+                _LOG.warning(
+                    "pi-tools gate %s failed token=%s: %s", tool_name, rec.fingerprint, exc
+                )
                 result = ToolResult(
                     call_id=call_id,
                     tool_name=tool_name,
@@ -285,22 +273,34 @@ def make_pi_tools_router(
             _span("pi_tool_end", conversation_id, tool=tool_name, success=result.success, gate=True)
             return _result_json(result)
 
-        # 5b) Plan gate over WRITE tools (E1/E3): a write before an approved plan (or
-        #     after a rejection, until re-approval) is refused with a structured block
-        #     — nothing executed, no Action/Observation appended.
-        if tool_name in _WRITE_TOOLS and pi_kernel is not None and pi_kernel.writes_blocked(
-            conversation_id
-        ):
-            _LOG.info("pi-tools blocked write (no approved plan) tool=%s", tool_name)
-            return _result_json(_plan_required_block(tool_name, call_id))
-
-        # 6) Execute + observe: append ActionEvent, run the executor (never raises),
-        #    append the paired ObservationEvent (success) / AgentErrorEvent (failure).
+        # 6) Route through the in-process SAFETY WRAPPER (EPIC-D graft). A Pi tool call
+        #    is driven through `PiKernel.route_pi_tool` → `PiToolBridge.route`, which
+        #    applies the SAME ordered gate stack `AgentLoop._run_drive` does (reconcile
+        #    → halted → replan → planning → virtual → hard-deny → risk/confirm → append
+        #    → execute/observe) — NOT a bare `executor.execute()`. The bridge appends
+        #    the Action/Observation (or AgentErrorEvent) pair and the kernel maps the
+        #    structured outcome (incl. VIRTUAL finish/DoD + CONFIRM_REQUIRED long-poll)
+        #    back to the ToolResult Pi expects. When no PiKernel is wired (a bare D2
+        #    bridge with no managed run), fall back to the executor-only path.
         tool_call = ToolCall(tool_name=tool_name, arguments=arguments, call_id=call_id)
         _span("pi_tool_start", conversation_id, tool=tool_name, call_id=call_id)
         try:
-            result = await runtime.execute_pi_tool(conversation_id, tool_call)
-        except Exception as exc:  # noqa: BLE001 — _executor_for may raise; never propagate
+            if pi_kernel is not None:
+                result = await pi_kernel.route_pi_tool(conversation_id, tool_call)
+            else:
+                # FAIL-CLOSED: a Pi tool call with no managed PiKernel has no gate stack
+                # (the bare `runtime.execute_pi_tool` skips hard-deny/risk-confirm/K1/
+                # planning). Refuse rather than execute ungated — the safe Build path
+                # always routes through PiKernel.route_pi_tool → PiToolBridge.
+                result = ToolResult(
+                    call_id=call_id,
+                    tool_name=tool_name,
+                    success=False,
+                    content="no managed Pi kernel; refusing ungated tool execution",
+                    structured={"kind": "no_managed_kernel", "tool_name": tool_name},
+                    error="no_managed_kernel",
+                )
+        except Exception as exc:  # noqa: BLE001 — the bridge/executor may raise; never propagate
             _LOG.warning(
                 "pi-tools bridge could not execute tool=%s token=%s: %s",
                 tool_name, rec.fingerprint, exc,
