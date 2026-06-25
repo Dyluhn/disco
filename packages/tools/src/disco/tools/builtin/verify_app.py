@@ -194,11 +194,15 @@ def compute_verdict(
         shown = http_status if reachable else "no response"
         summary = f"App not serving: {url} returned {shown}."
         next_action = (
-            "Start the dev server on the preview port IN THE BACKGROUND so the shell "
-            "session stays free for follow-up checks — e.g. `python3 -m http.server 8000 &` "
-            "for static files (note the trailing `&`), or your framework's dev command "
-            "backgrounded — then confirm it returns HTTP 200. Do NOT run the server in the "
-            "foreground (it blocks the session; the next command fails with 'session busy')."
+            "Serve through the PLATFORM preview, not your own server: call `preview_start` "
+            "(serve_dir for static files, or framework/command). The platform picks the "
+            "port, serves, supervises, and health-verifies it — a 'running' status MEANS it "
+            "is serving (HTTP 200, probed in-sandbox). Do NOT install or run your own server "
+            "(`python -m http.server`, `http-server`, a framework dev command on a port you "
+            "pick, etc.) — a model-run server collides with the platform preview on a "
+            "different port and wedges the 'preview' session. If you already called "
+            "preview_start, just re-check `preview_status` (give it a moment to come up); "
+            "never re-serve manually."
         )
     elif console_errors or network_failures:
         passed, verdict = False, "fail"

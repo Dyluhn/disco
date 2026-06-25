@@ -122,7 +122,11 @@ def test_verdict_not_serving():
     )
     assert v["passed"] is False and v["verdict"] == "fail"
     assert "not serving" in v["summary"].lower()
-    assert "dev server" in v["next_action"].lower()
+    # Remediation must steer to the PLATFORM preview (preview_start) and warn AGAINST a
+    # manual server — a model-run server duels the PreviewManager (bake-off #9 dueling).
+    nxt = v["next_action"].lower()
+    assert "preview_start" in nxt
+    assert "do not" in nxt or "don't" in nxt  # explicitly discourages a self-run server
 
 
 # ---- fingerprint stability + allowlist --------------------------------------

@@ -26,11 +26,14 @@ class ShellExecTool:
         description=(
             "Execute a shell command in a persistent session. One foreground "
             "process per session — it FAILS with 'session busy' if a previous "
-            "command is still running. So ALWAYS background long-running processes "
-            "(dev servers, watchers) by appending ` &` — e.g. "
-            "`python3 -m http.server 8000 &` — so the session stays free to run "
-            "follow-up commands (curl checks, etc.). Never start a server in the "
-            "foreground; it blocks the session and wedges the build."
+            "command is still running. So ALWAYS background a long-running process "
+            "(a file watcher, a build daemon) by appending ` &` — e.g. "
+            "`npm run watch &` — so the session stays free for follow-up commands. "
+            "To SERVE a preview of your app, use the `preview_start` tool (the platform "
+            "owns serving + the port + health checks) — do NOT run your own web server "
+            "here (`python -m http.server`, `http-server`, …); it collides with the "
+            "platform preview. Never start a non-exiting process in the foreground; it "
+            "wedges the session."
         ),
         args_model=ShellExecArgs,
         needs=frozenset({Capability.SHELL}),
