@@ -648,6 +648,35 @@ def _exit_code(status: str) -> int:
     }.get(status, 1)
 
 
+_KERNEL_KIND = {"disco": "disco", "pi": "pi_experimental"}
+
+
+async def _select_build_kernel(app_base_url: str, kernel: str) -> str | None:
+    """EPIC K: pin the GLOBAL Build kernel before a soak run (PUT the app-server
+    build-kernel config). Returns None on success, else an error string. For the
+    experimental Pi kernel the server gate (DISCO_PI_KERNEL_EXPERIMENTAL) MUST be on,
+    else the server refuses the selection — fail fast rather than silently soak the
+    DiscoKernel under a `--kernel pi` label (which would corrupt the bake-off)."""
+    import httpx
+
+    kind = _KERNEL_KIND[kernel]
+    url = f"{app_base_url.rstrip('/')}/api/build-kernel/config"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            await c.put(url, json={"kind": kind})
+            cfg = (await c.get(url)).json()
+    except Exception as exc:  # noqa: BLE001 — surface as INFRA, never a product verdict
+        return f"could not reach build-kernel config at {url}: {exc}"
+    if cfg.get("kind") != kind:
+        return f"kernel select failed: requested {kind!r}, server reports {cfg.get('kind')!r}"
+    if kernel == "pi" and not cfg.get("experimental_enabled"):
+        return (
+            "pi kernel selected but experimental_enabled=false — set "
+            "DISCO_PI_KERNEL_EXPERIMENTAL=1 on the agent-server AND app-server"
+        )
+    return None
+
+
 async def _amain(args: argparse.Namespace) -> int:
     from .adapters.disco_api import HttpTransport  # live deps only on the CLI path
 
@@ -673,6 +702,17 @@ async def _amain(args: argparse.Namespace) -> int:
         db_path=db_path,
         projects_root=projects_root,
         snapshot_wait_s=args.snapshot_wait,
+    )
+
+    # EPIC K: pin the Build kernel for this whole run before any iteration. A failure
+    # here is INFRA (the bake-off can't run), not a product verdict.
+    kernel_err = await _select_build_kernel(args.app_base_url, args.kernel)
+    if kernel_err:
+        print(f"[build-soak] kernel-select INFRA failure: {kernel_err}", file=sys.stderr)
+        return 3
+    print(
+        f"[build-soak] kernel={args.kernel} ({_KERNEL_KIND[args.kernel]}) pinned for this run",
+        file=sys.stderr,
     )
 
     worst = 0
@@ -711,6 +751,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", default=_DEFAULT_OUT, help="output root for run folders")
     p.add_argument("--autonomous", action="store_true", help="headless auto-approve")
     p.add_argument("--base-url", default=_DEFAULT_BASE_URL)
+    p.add_argument(
+        "--kernel",
+        choices=("disco", "pi"),
+        default="disco",
+        help="EPIC K bake-off selector: which Build kernel to drive — disco (default) "
+        "or pi (experimental). Sets the GLOBAL build-kernel config before the run.",
+    )
+    p.add_argument(
+        "--app-base-url",
+        default="http://127.0.0.1:8800",
+        help="app-server base URL (the build-kernel config endpoint lives here)",
+    )
     p.add_argument("--db", default=None, help="disco.db path (default $DISCO_DB or repo/disco.db)")
     p.add_argument(
         "--projects-root",
