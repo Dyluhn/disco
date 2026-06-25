@@ -157,6 +157,12 @@ class LifecycleManager:
                                 detail="reconciled: orphaned RUNNING after server restart",
                             ),
                         )
+                        # Revoke any gateway token left for this orphaned run (EPIC C
+                        # finding C#3). On a fresh boot the in-memory store is empty so
+                        # this is normally a no-op, but it is the correct, defensive
+                        # action for any token whose owning run no longer lives — a
+                        # resume re-issues a fresh one. None-safe + idempotent.
+                        self._rt._revoke_pi_tokens(cid)
                         reconciled += 1
             if len(ids) < page:
                 break

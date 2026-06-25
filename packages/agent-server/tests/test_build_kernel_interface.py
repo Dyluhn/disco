@@ -60,6 +60,7 @@ def _fake_runtime(store: SqliteEventStore, *, build_kernel: str = "disco") -> ty
     fake.kick = MagicMock()
     fake._pinned_kernels = {}
     fake._run_generation = {}
+    fake._pi_token_store = None  # C#3: revoke is None-safe when no gateway store wired
 
     control = MagicMock()
     control.confirm = AsyncMock()
@@ -94,6 +95,7 @@ def _fake_runtime(store: SqliteEventStore, *, build_kernel: str = "disco") -> ty
         "_ensure_kernel_pinned",
         "_clear_pinned_kernel",
         "_unpin_if_current_generation",
+        "_revoke_pi_tokens",
         "_run_continuing_control",
     ):
         setattr(fake, name, types.MethodType(getattr(ConversationRuntime, name), fake))

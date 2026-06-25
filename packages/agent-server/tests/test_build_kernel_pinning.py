@@ -46,6 +46,7 @@ def _runtime(store: SqliteEventStore, *, build_kernel: str = "disco") -> types.S
     fake._tasks = {}
     fake._pinned_kernels = {}
     fake._run_generation = {}
+    fake._pi_token_store = None  # C#3: revoke is None-safe when no gateway store wired
     fake.kick = MagicMock()
 
     control = MagicMock()
@@ -75,6 +76,7 @@ def _runtime(store: SqliteEventStore, *, build_kernel: str = "disco") -> types.S
         "_ensure_kernel_pinned",
         "_clear_pinned_kernel",
         "_unpin_if_current_generation",
+        "_revoke_pi_tokens",
         "_run_continuing_control",
         "start",
         "send_user_turn",
@@ -349,6 +351,7 @@ def _finalize_fake(store: SqliteEventStore):
     fake._store = store
     fake._pinned_kernels = {}
     fake._run_generation = {}
+    fake._pi_token_store = None  # C#3: revoke is None-safe when no gateway store wired
     fake._last_status = {}
     fake._nonterminal_rekicks = {}
     fake.kick = MagicMock()
@@ -364,6 +367,7 @@ def _finalize_fake(store: SqliteEventStore):
         "_finalize_clean_return",
         "_clear_pinned_kernel",
         "_unpin_if_current_generation",
+        "_revoke_pi_tokens",
     ):
         setattr(fake, name, types.MethodType(getattr(ConversationRuntime, name), fake))
     return fake
@@ -440,12 +444,14 @@ def _crash_fake(store: SqliteEventStore):
     fake._store = store
     fake._pinned_kernels = {}
     fake._run_generation = {}
+    fake._pi_token_store = None  # C#3: revoke is None-safe when no gateway store wired
     fake._emit_persistence_reminder = AsyncMock()
     fake._CONCLUDED_STATUSES = ConversationRuntime._CONCLUDED_STATUSES
     for name in (
         "_terminalize_crashed",
         "_clear_pinned_kernel",
         "_unpin_if_current_generation",
+        "_revoke_pi_tokens",
     ):
         setattr(fake, name, types.MethodType(getattr(ConversationRuntime, name), fake))
     return fake

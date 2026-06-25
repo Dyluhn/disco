@@ -95,6 +95,13 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         if runtime is not None:
             with contextlib.suppress(Exception):
                 await runtime._close_mcp_pool()
+        # EPIC C — on shutdown, revoke every live gateway token so none outlives the
+        # process (defense-in-depth; the store is in-memory and dies with the process,
+        # but the explicit sweep keeps validate→401 holding for any in-flight handler).
+        _store = getattr(_app.state, "pi_token_store", None)
+        if _store is not None:
+            with contextlib.suppress(Exception):
+                _store.revoke_all()
 
     app = FastAPI(
         title="disco agent-server", version="0.1.0", lifespan=lifespan
@@ -145,5 +152,15 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     pi_token_store = PiInferenceTokenStore()
     app.state.pi_token_store = pi_token_store
     app.include_router(make_pi_inference_router(pi_token_store))
+    # Wire the SAME store onto the runtime so the lifecycle (terminalizers / cancel /
+    # kill / delete / shutdown / startup reconcile) can revoke a conversation's tokens
+    # the moment its run ends (EPIC C finding C#3). None-safe: the non-gateway / test
+    # paths that pass runtime=None simply skip the wiring (the store is still served).
+    # `getattr` so a lightweight test-double runtime that predates the gateway hook is
+    # still accepted (the store stays served; revocation is simply inactive for it).
+    if runtime is not None:
+        attach = getattr(runtime, "attach_pi_token_store", None)
+        if attach is not None:
+            attach(pi_token_store)
 
     return app

@@ -117,6 +117,7 @@ from .control_ops import ControlOps
 from .deep_research_service import DeepResearchService
 from .lifecycle import _GATE_STATES, LifecycleManager
 from .mcp_manager import McpManager
+from .pi_inference import PiInferenceTokenStore  # noqa: E402
 from .preview_service import PreviewService
 from .resume_service import ResumeService
 from .runtime_model_probe import _do_live_model_probe, _model_label
@@ -510,8 +511,17 @@ class ConversationRuntime:
         sandbox_service: SandboxService | None = None,
         sandbox_spec: SandboxSpec | None = None,
         skill_store: SkillStore | None = None,
+        pi_token_store: PiInferenceTokenStore | None = None,
     ) -> None:
         self._store = store
+        # EPIC C — the DiscoInferenceGateway's ephemeral, run-scoped token store. The
+        # token authorizes a Pi kernel to drive the UI-selected model over the loopback
+        # gateway; it MUST be revoked the moment a run ends so a kernel can't keep
+        # calling the model after FINISHED/ERROR/STUCK/IDLE/cancel/kill/delete. Wired
+        # by `create_app` (which owns the store on app.state) via `attach_pi_token_store`
+        # — OPTIONAL/None here so tests + the non-gateway paths never depend on it. All
+        # revocation flows through `_revoke_pi_tokens` (None-safe + idempotent).
+        self._pi_token_store = pi_token_store
         # The user's reusable instruction modules (.md skills). Read per-request
         # so a skill toggled in Settings affects the next conversation without a
         # restart — same live-reload model as the config + sandbox stores.
@@ -2537,6 +2547,25 @@ class ConversationRuntime:
         — NOT on a pause / gate-park, which stay pinned for resume."""
         self._pinned_kernels.pop(conversation_id, None)
 
+    def attach_pi_token_store(self, store: PiInferenceTokenStore | None) -> None:
+        """Wire the DiscoInferenceGateway's run-scoped token store onto the runtime so
+        the terminalizers / control ops / delete / shutdown can revoke a conversation's
+        tokens when its run ends (EPIC C deferred finding C#3). `create_app` calls this
+        after it mounts the store on `app.state`. None-safe (passing None detaches)."""
+        self._pi_token_store = store
+
+    def _revoke_pi_tokens(self, conversation_id: str) -> None:
+        """Revoke EVERY DiscoInferenceGateway token bound to `conversation_id` so a Pi
+        kernel can no longer drive the model once the run has ended. None-safe (a no-op
+        when no gateway store is wired — tests + non-gateway paths) and idempotent (the
+        store skips already-revoked records and never raises). Best-effort: a revoke
+        failure must never crash a terminalizer / kill / delete / shutdown."""
+        store = self._pi_token_store
+        if store is None:
+            return
+        with contextlib.suppress(Exception):
+            store.revoke_conversation(conversation_id)
+
     def _unpin_if_current_generation(
         self, conversation_id: str, generation: int | None
     ) -> None:
@@ -2546,10 +2575,18 @@ class ConversationRuntime:
         `kick` a new run that REUSES this conversation's pin and bumps its run-generation.
         A stale finalizer must NOT then clear the pin out from under that newer run. When
         `generation` is None (the stranded-run sweep / legacy callers, which have no
-        competing newer run) clear unconditionally."""
+        competing newer run) clear unconditionally.
+
+        The gateway-token revoke is CO-LOCATED here so it shares the EXACT generation
+        guard as the pin clear (EPIC C finding C#3): a stale/old-generation terminalizer
+        that loses the guard returns WITHOUT revoking, so it can never revoke a token that
+        now belongs to a NEWER run on the same conversation. Every guarded terminal path
+        (`_finalize_clean_return` FINISHED/STUCK/IDLE, `_terminalize_crashed` ERROR, the
+        abandoned-gate sweep, and `kill`) revokes here, with the winning generation."""
         if generation is not None and self._run_generation.get(conversation_id) != generation:
-            return  # a newer run owns the pin now — leave it for that run
+            return  # a newer run owns the pin/token now — leave both for that run
         self._clear_pinned_kernel(conversation_id)
+        self._revoke_pi_tokens(conversation_id)
 
     def start(self, conversation_id: str) -> None:
         """Start/continue the conversation's run THROUGH the pinned kernel (codex
@@ -2728,6 +2765,10 @@ class ConversationRuntime:
         not fail because cleanup hit a wedged sandbox)."""
         # Stop any in-flight run first so its done-callback can't re-pin/re-kick.
         self._clear_pinned_kernel(conversation_id)
+        # The conversation is DELETED — unconditionally revoke any gateway token bound
+        # to it (no generation guard: a deleted id can never be reused by a newer run,
+        # and its rows are gone, so the token is pure leak). None-safe + idempotent.
+        self._revoke_pi_tokens(conversation_id)
         task = self._tasks.pop(conversation_id, None)
         if task is not None and not task.done():
             task.cancel()

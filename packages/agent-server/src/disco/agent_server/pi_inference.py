@@ -178,7 +178,6 @@ class PiInferenceTokenStore:
         rec.revoked = True
         return True
 
-    # TODO(epic-A/E integration): call revoke_conversation on cancel/kill/terminal-status/shutdown
     def revoke_conversation(self, conversation_id: str) -> int:
         """Revoke EVERY token bound to a conversation (called on cancel / finish /
         error so no kernel can keep driving the model after the run ends). Returns
@@ -189,6 +188,19 @@ class PiInferenceTokenStore:
         n = 0
         for rec in self._tokens.values():
             if rec.conversation_id == conversation_id and not rec.revoked:
+                rec.revoked = True
+                n += 1
+        return n
+
+    def revoke_all(self) -> int:
+        """Revoke EVERY live token in the store. Called on app shutdown so no token
+        outlives the process that could honor it (defense-in-depth — the store is
+        already in-memory and dies with the process, but an explicit sweep makes the
+        ``validate``→"revoked" contract hold for any handler still racing teardown).
+        Returns the count revoked; idempotent (already-revoked records are skipped)."""
+        n = 0
+        for rec in self._tokens.values():
+            if not rec.revoked:
                 rec.revoked = True
                 n += 1
         return n
