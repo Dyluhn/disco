@@ -18,14 +18,19 @@ from typing import TYPE_CHECKING, Literal
 from disco.core import (
     DEFAULT_OWNER_ID,
     DeliverableEvent,
-    EventSource,
-    LLMMessage,
-    MessageEvent,
     ObservationEvent,
 )
 from disco.core.store.sqlite import SqliteEventStore
 from fastapi import HTTPException
 from pydantic import BaseModel
+
+# The user/context turn constructors live in a non-route module so the kernel
+# seam need not depend on the route layer (Disco Pi campaign, finding #3). They
+# are re-exported here so the existing `routes._common` import path keeps working.
+from ..build_messages import (  # noqa: F401 — re-exported for the existing import path
+    _context_message,
+    _user_message,
+)
 
 if TYPE_CHECKING:
     from ..runtime import ConversationRuntime
@@ -122,27 +127,6 @@ class UpdateSettingsBody(BaseModel):
     # Order C: weak-model assist tier toggle. None ⇒ leave unchanged; True/False
     # ⇒ explicit per-conversation override (mirrors CreateConversationBody.assist).
     assist: bool | None = None
-
-
-def _user_message(content: str, *, steer: bool = False) -> MessageEvent:
-    return MessageEvent(
-        source=EventSource.USER,
-        message=LLMMessage(role="user", content=content),
-        meta={"steer": True} if steer else {},
-    )
-
-
-def _context_message(content: str) -> MessageEvent:
-    """R3: a hidden ENVIRONMENT message carrying large context (e.g. a full DR
-    report) that the MODEL receives but the USER doesn't see as a chat bubble.
-    EventSource.ENVIRONMENT is filtered out of the build feed (buildTrace) except
-    ⚠-prefixed / 'User uploaded:' ones, so this stays hidden — used to keep the
-    DR→slides handoff message short ("Make slides for …") instead of dumping the
-    whole report into the visible history."""
-    return MessageEvent(
-        source=EventSource.ENVIRONMENT,
-        message=LLMMessage(role="user", content=content),
-    )
 
 
 def _reject_if_imported(store: SqliteEventStore, conversation_id: str) -> None:

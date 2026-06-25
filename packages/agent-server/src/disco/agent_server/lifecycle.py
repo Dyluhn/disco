@@ -404,6 +404,18 @@ class LifecycleManager:
                         continue  # a live in-memory run/task is driving it — not abandoned
                     if self._rt._connections.get(cid, 0) > 0:
                         continue  # UI attached — not abandoned
+                    # Capture the conversation's run-generation at the sweep-DECISION
+                    # point (finding #3, SAME stale-terminalizer race as
+                    # `_terminalize_crashed`, third path). This sweep reads gate state /
+                    # liveness, then AWAITS event reads below before the terminal append.
+                    # In that window a newer run can start (a fresh user message resumes
+                    # the gate → `kick` bumps `_run_generation[cid]` and REUSES the pin).
+                    # Re-read the generation just before the terminal append and SKIP if
+                    # it changed, so the reaper never appends a STALE STUCK into the
+                    # NEWER run's log nor clears the newer run's pin. A genuinely-
+                    # abandoned gate with no in-memory run has `None` here (and still
+                    # `None` at re-read) → terminalizes + unpins as before.
+                    captured_generation = self._rt._run_generation.get(cid)
                     events = await self._rt._store.get_events(
                         cid,
                         EventFilter(after_seq=state.last_seq - 1)
@@ -417,6 +429,19 @@ class LifecycleManager:
                         last_ts = last_ts.replace(tzinfo=UTC)
                     if (now - last_ts).total_seconds() < ttl_s:
                         continue
+                    # RE-READ state AFTER the awaits above; a newer run may have started
+                    # (and re-pinned) since the gate/liveness/generation snapshot. The
+                    # guard below + the STUCK append are separated by NO `await`, so a
+                    # newer run can never slip in between the re-check and the append
+                    # (mirrors `_terminalize_crashed`). Skip if the conversation no
+                    # longer presents as an abandoned gate of the captured generation.
+                    fresh_state = await self._rt._store.get_state(cid)
+                    if (
+                        fresh_state.execution_status not in _GATE_STATES
+                        or cid in self._rt.running_conversation_ids()
+                        or self._rt._run_generation.get(cid) != captured_generation
+                    ):
+                        continue  # a newer run/generation now owns it — stale, skip
                     await self._rt._store.append(
                         cid,
                         MessageEvent(
@@ -438,6 +463,13 @@ class LifecycleManager:
                             detail="reaped: abandoned at gate past TTL",
                         ),
                     )
+                    # A gate-parked run stays PINNED (its resume must keep the same
+                    # kernel); reaping it to terminal STUCK must therefore release the
+                    # pin too (finding #3, same class), else an abandoned gated run
+                    # leaks its kernel pin forever. Generation-guarded: if a newer run
+                    # reused the pin during the appends above, leave it — that run owns
+                    # the pin now (exactly like the crash path's unpin).
+                    self._rt._unpin_if_current_generation(cid, captured_generation)
                     _LOG.info("reaped abandoned gate conversation %s", cid)
                     reaped += 1
             if len(ids) < page:

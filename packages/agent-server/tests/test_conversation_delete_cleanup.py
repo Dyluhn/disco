@@ -1,0 +1,138 @@
+"""Conversation delete must release the agent-runtime state (Build Kernel finding #5).
+
+The app-server library delete removed only the DB rows, so the agent-server process
+leaked the per-conversation runtime caches — most importantly the kernel PIN
+(`_pinned_kernels`) — until process exit. These tests cover the cleanup path:
+
+  * `ConversationRuntime.forget_conversation` drops the pin + the per-cid caches;
+  * the agent-server DELETE route runs that cleanup AND deletes the rows;
+  * the app-server delete best-effort NOTIFIES the agent-server when configured.
+"""
+
+from __future__ import annotations
+
+import httpx
+import pytest
+from disco.agent_server import ConversationRuntime, create_app
+from disco.core import (
+    ConversationStatus,
+    EventSource,
+    LLMMessage,
+    MessageEvent,
+    SqliteEventStore,
+    StatusEvent,
+)
+from disco.core.llm import DefaultLLMRouter, ModelEntry, RouterConfig
+from disco.tools import ProcessSandboxService
+
+CID = "cid-delete-cleanup"
+
+
+def _runtime(store: SqliteEventStore) -> ConversationRuntime:
+    cfg = RouterConfig(
+        models={"m": ModelEntry(model_id="m", provider="fake", context_window=8192)},
+        default_model="m",
+    )
+    router = DefaultLLMRouter(cfg, {})
+    return ConversationRuntime(store, router=router, sandbox_service=ProcessSandboxService())
+
+
+def _user(content: str) -> MessageEvent:
+    return MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content=content))
+
+
+async def test_forget_conversation_clears_pin_and_caches() -> None:
+    store = SqliteEventStore(":memory:")
+    store.create_conversation(CID, owner_id="local")
+    rt = _runtime(store)
+    # Seed per-conversation runtime state the way a live run would.
+    rt._pinned_kernels[CID] = rt._disco_kernel
+    rt._run_generation[CID] = 3
+    rt.set_surface(CID, "build")
+    rt.set_autonomous(CID, True)
+
+    await rt.forget_conversation(CID)
+
+    assert CID not in rt._pinned_kernels  # the leak the finding cites
+    assert CID not in rt._run_generation
+    assert CID not in rt._surface
+    assert CID not in rt._autonomous
+
+
+async def test_forget_conversation_is_idempotent_on_unknown_cid() -> None:
+    store = SqliteEventStore(":memory:")
+    rt = _runtime(store)
+    await rt.forget_conversation("never-existed")  # must not raise
+
+
+async def test_agent_delete_route_clears_pin_and_deletes_rows() -> None:
+    store = SqliteEventStore(":memory:")
+    store.create_conversation(CID, owner_id="local")
+    rt = _runtime(store)
+    rt._pinned_kernels[CID] = rt._disco_kernel
+    await store.append(CID, _user("build it"))
+    await store.append(CID, StatusEvent(status=ConversationStatus.FINISHED))
+
+    app = create_app(store, runtime=rt)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.delete(f"/conversations/{CID}", params={"owner_id": "local"})
+
+    assert resp.status_code == 200
+    assert resp.json()["deleted"] is True
+    assert CID not in rt._pinned_kernels  # runtime state released on delete
+    assert await store.list_conversations(owner_id="local") == []  # rows gone
+
+
+# ---- app-server best-effort notify ------------------------------------------
+
+
+async def test_app_delete_notifies_agent_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With `DISCO_AGENT_BASE` set, the app-server delete fires a best-effort DELETE at
+    the agent-server so it releases the runtime state for the deleted cid."""
+    from disco.app_server.routes import conversations as appconv
+
+    monkeypatch.setenv("DISCO_AGENT_BASE", "http://agent.test")
+    seen: dict[str, str] = {}
+
+    async def _fake_delete(self, url, *, params=None):  # noqa: ANN001
+        seen["url"] = url
+        seen["owner"] = (params or {}).get("owner_id", "")
+        return httpx.Response(200)
+
+    monkeypatch.setattr(httpx.AsyncClient, "delete", _fake_delete)
+    await appconv._notify_agent_delete(CID, "local")
+
+    assert seen["url"] == f"http://agent.test/conversations/{CID}"
+    assert seen["owner"] == "local"
+
+
+async def test_app_delete_notify_is_noop_without_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unconfigured (`DISCO_AGENT_BASE` unset) → no HTTP call, no error (graceful)."""
+    from disco.app_server.routes import conversations as appconv
+
+    monkeypatch.delenv("DISCO_AGENT_BASE", raising=False)
+    monkeypatch.delenv("PMX_AGENT_BASE", raising=False)
+    called = False
+
+    async def _boom(self, *a, **k):  # noqa: ANN001, ANN002, ANN003
+        nonlocal called
+        called = True
+        return httpx.Response(200)
+
+    monkeypatch.setattr(httpx.AsyncClient, "delete", _boom)
+    await appconv._notify_agent_delete(CID, "local")
+    assert called is False  # no agent URL → never reaches the network
+
+
+async def test_app_delete_notify_swallows_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A notify failure must NEVER propagate (the DB rows are already deleted)."""
+    from disco.app_server.routes import conversations as appconv
+
+    monkeypatch.setenv("DISCO_AGENT_BASE", "http://agent.test")
+
+    async def _raise(self, *a, **k):  # noqa: ANN001, ANN002, ANN003
+        raise httpx.ConnectError("agent down")
+
+    monkeypatch.setattr(httpx.AsyncClient, "delete", _raise)
+    await appconv._notify_agent_delete(CID, "local")  # must not raise

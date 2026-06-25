@@ -150,10 +150,14 @@ def make_conversations_router(
     async def post_message(conversation_id: str, body: SendMessageBody) -> dict:
         # Append a USER message, then KICK the loop (Stage 2): it runs in the
         # background and streams its events over the conversation's WebSocket.
+        # Routed THROUGH the conversation's pinned Build kernel (A1 finding #1):
+        # for the default `disco` kernel this is byte-identical to the inline
+        # append + kick. (No runtime ⇒ wire-only: append, no kick — unchanged.)
         _reject_if_imported(store, conversation_id)
-        stored = await store.append(conversation_id, _user_message(body.content))
         if runtime is not None:
-            runtime.kick(conversation_id)
+            stored = await runtime.send_user_turn(conversation_id, body.content)
+        else:
+            stored = await store.append(conversation_id, _user_message(body.content))
         return {"event_id": stored.id, "seq": stored.seq}
 
     @router.post("/conversations/{conversation_id}/followup")
@@ -179,8 +183,9 @@ def make_conversations_router(
                     "status": state.execution_status.value,
                 },
             )
-        stored = await store.append(conversation_id, _user_message(body.content))
-        runtime.kick(conversation_id)
+        # Routed through the pinned Build kernel (A1 finding #1); `runtime` is
+        # guaranteed non-None here (checked above). disco kernel ⇒ append + kick.
+        stored = await runtime.send_user_turn(conversation_id, body.content)
         return {"event_id": stored.id, "seq": stored.seq, "followup": True}
 
     @router.get("/conversations/{conversation_id}/events")
@@ -308,5 +313,23 @@ def make_conversations_router(
     ) -> dict:
         ids = await store.list_conversations(owner_id=owner_id, limit=limit, cursor=cursor)
         return {"conversation_ids": ids}
+
+    @router.delete("/conversations/{conversation_id}")
+    async def delete_conversation(
+        conversation_id: str,
+        owner_id: str = Query(default=DEFAULT_OWNER_ID),
+    ) -> dict:
+        """Delete a conversation AND release its agent-runtime state (finding #5).
+
+        The app-server library delete removes the DB rows but cannot reach this
+        process's per-conversation runtime caches (the kernel pin, cached loop, live
+        task, sandbox). It best-effort notifies THIS endpoint so the leak is closed in
+        the process that owns the runtime. Runtime cleanup runs FIRST (cancelling the
+        live run so its done-callback can't re-pin) and is owner-agnostic — the
+        owner-scoped DB delete is the authority on whether the row is actually removed."""
+        if runtime is not None:
+            await runtime.forget_conversation(conversation_id)
+        deleted = await store.delete_conversation(conversation_id, owner_id=owner_id)
+        return {"id": conversation_id, "deleted": deleted}
 
     return router

@@ -231,3 +231,12 @@ export interface AssignmentsPatch {
 export interface LiveBrowserConfig {
   enabled: boolean;
 }
+
+/** Build kernel selector — wire mirror of RouterConfig.build_kernel (Disco Pi
+ * Build Kernel Campaign A2). `kind` is the persisted choice; `experimentalEnabled`
+ * is read-only (reports whether the agent-server's experimental flag is on) so the
+ * UI can offer/hide `pi_experimental` instead of showing a false affordance. */
+export interface BuildKernelConfig {
+  kind: "disco" | "pi_experimental";
+  experimental_enabled: boolean;
+}

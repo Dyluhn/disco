@@ -21,7 +21,6 @@ from typing import TYPE_CHECKING, Any
 from cronsim import CronSim, CronSimError
 from disco.core import (
     EventSource,
-    LLMMessage,
     MessageEvent,
 )
 from disco.core.events import ScheduleRunEvent
@@ -284,16 +283,22 @@ class ScheduleManager:
                     coalesced=coalesced,
                 ),
             )
-            # The actual re-run trigger: a fresh USER message re-asking the
-            # original query. This is what opens loop.run()'s work-gate.
-            await self._store.append(
-                sched.conversation_id,
-                MessageEvent(
-                    source=EventSource.USER,
-                    message=LLMMessage(role="user", content=query),
-                ),
-            )
-            # Persist the audit row.
+            # The actual re-run trigger: a fresh USER message re-asking the original
+            # query (this is what opens loop.run()'s work-gate). Routed through
+            # `send_user_turn` — the SAME pinned kernel start/send path the REST/WS
+            # routes use (conversations.py/ws.py) — so a scheduled rerun PINS the
+            # kernel before the append+kick (finding #1). Appending + kicking directly
+            # would create an UNPINNED run whose later control op could re-resolve to a
+            # different kernel mid-flight. Byte-identical append for the default disco
+            # kernel (`_user_message` ⇒ the same USER MessageEvent constructed here).
+            await self._runtime.send_user_turn(sched.conversation_id, query)
+            # Persist the audit row AFTER the trigger lands (finding #6): the prior A1
+            # change moved the row BEFORE `send_user_turn`, so a failed trigger append
+            # left an ORPHAN schedule-run row (history showed a fired schedule with no
+            # trigger message) and `fired_at` was timestamped too early. Pre-A1 the row
+            # was written only after the USER message was appended — restore that: a
+            # raising `send_user_turn` now skips the row, and `fired_at` reflects the
+            # real trigger time.
             self._store.create_schedule_run(
                 ScheduleRun(
                     schedule_id=sched.schedule_id,
@@ -302,8 +307,6 @@ class ScheduleManager:
                     coalesced=coalesced,
                 ).to_store_row()
             )
-            # Kick the loop — it now has an unprocessed user message to act on.
-            self._runtime.kick(sched.conversation_id)
             _LOG.info(
                 "schedule %s re-ran cid=%s coalesced=%s",
                 sched.schedule_id,

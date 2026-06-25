@@ -697,7 +697,7 @@ async def test_resume_after_swap_composes_new_model(tmp_path, monkeypatch):
     async def _noop_run(conversation_id, loop):  # noqa: ANN001
         return None
 
-    async def _noop_finalize(conversation_id):  # noqa: ANN001
+    async def _noop_finalize(conversation_id, generation=None):  # noqa: ANN001
         return None
 
     monkeypatch.setattr(rt, "_run_with_persistence", _noop_run)

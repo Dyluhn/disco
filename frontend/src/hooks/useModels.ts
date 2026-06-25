@@ -6,6 +6,7 @@ import {
   getAssignments,
   getDataSourcesConfig,
   getEncodersConfig,
+  getBuildKernelConfig,
   getImageGenConfig,
   getLiveBrowserConfig,
   getTtsConfig,
@@ -18,6 +19,7 @@ import {
   updateAssignments,
   updateDataSourcesConfig,
   updateEncodersConfig,
+  updateBuildKernelConfig,
   updateImageGenConfig,
   updateLiveBrowserConfig,
   updateTtsConfig,
@@ -27,6 +29,7 @@ import {
 } from "@/api/models";
 import type {
   AssignmentsPatch,
+  BuildKernelConfig,
   DataSourcesConfig,
   EncodersConfig,
   ImageGenConfig,
@@ -256,5 +259,22 @@ export function useUpdateLiveBrowserConfig() {
   return useMutation({
     mutationFn: (cfg: LiveBrowserConfig) => updateLiveBrowserConfig(cfg),
     onSuccess: (next) => qc.setQueryData(LIVE_BROWSER_KEY, next),
+  });
+}
+
+const BUILD_KERNEL_KEY = ["build-kernel-config"] as const;
+
+export function useBuildKernelConfig() {
+  return useQuery<BuildKernelConfig>({
+    queryKey: BUILD_KERNEL_KEY,
+    queryFn: getBuildKernelConfig,
+  });
+}
+
+export function useUpdateBuildKernelConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (cfg: Pick<BuildKernelConfig, "kind">) => updateBuildKernelConfig(cfg),
+    onSuccess: (next) => qc.setQueryData(BUILD_KERNEL_KEY, next),
   });
 }

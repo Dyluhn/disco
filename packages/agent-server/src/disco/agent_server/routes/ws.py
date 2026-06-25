@@ -50,22 +50,29 @@ async def _handle_frame(
         # HIDDEN ENVIRONMENT message FIRST, then the short visible user message —
         # so the model receives the report while the history shows only the
         # one-line "Make slides for …" instead of the whole report dumped inline.
-        if frame.context:
-            await store.append(conversation_id, _context_message(frame.context))
-        await store.append(conversation_id, _user_message(frame.content))
+        # Routed THROUGH the conversation's pinned Build kernel (A1 finding #1):
+        # for the default `disco` kernel this is byte-identical to the inline
+        # context+user append + kick. (No runtime ⇒ append only, unchanged.)
         if runtime is not None:
-            runtime.kick(conversation_id)
+            await runtime.send_user_turn(
+                conversation_id, frame.content, context=frame.context
+            )
+        else:
+            if frame.context:
+                await store.append(conversation_id, _context_message(frame.context))
+            await store.append(conversation_id, _user_message(frame.content))
     elif frame.type == "steer" and frame.steer_text is not None:
         # D3: when a DR run is in flight for this cid, route the steer into the
         # DR queue instead of kicking the agent loop. The engine drains the queue
         # at each section boundary → the steer becomes a new gather leg.
-        # OFF-path (no DR run active): falls through to the original agent-loop kick.
+        # OFF-path (no DR run active): falls through to the original agent-loop kick,
+        # now routed through the pinned Build kernel (A1 finding #1; disco ⇒ identical).
         if runtime is not None and conversation_id in runtime._dr_steer:
             runtime._dr_steer[conversation_id].append(frame.steer_text)
+        elif runtime is not None:
+            await runtime.send_user_turn(conversation_id, frame.steer_text, steer=True)
         else:
             await store.append(conversation_id, _user_message(frame.steer_text, steer=True))
-            if runtime is not None:
-                runtime.kick(conversation_id)
     elif frame.type == "inject_source" and frame.inject_source_text is not None:
         # D3: inject a plaintext snippet into the DR run's corpus mid-run.
         # The text is converted immediately to a Passage so the engine's
