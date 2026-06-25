@@ -93,6 +93,7 @@ def _fake_runtime(store: SqliteEventStore, *, build_kernel: str = "disco") -> ty
         "_kernel_for",
         "_ensure_kernel_pinned",
         "_clear_pinned_kernel",
+        "_unpin_if_current_generation",
         "_run_continuing_control",
     ):
         setattr(fake, name, types.MethodType(getattr(ConversationRuntime, name), fake))
@@ -204,7 +205,9 @@ async def test_disco_kernel_control_ops_delegate_unchanged(store: SqliteEventSto
     await k.cancel(CID)
     rt._control.cancel.assert_awaited_once_with(CID)
     await k.kill(CID)
-    rt._control.kill.assert_awaited_once_with(CID)
+    # finding #4: the kernel-seam kill threads the captured run-generation (None here —
+    # no run task bumped it) to the control op so it terminalizes ONLY its own run.
+    rt._control.kill.assert_awaited_once_with(CID, None)
 
     await k.resume(CID)
     rt._resume.resume_conversation.assert_awaited_once_with(CID)

@@ -748,6 +748,17 @@ class ConversationRuntime:
         # AFTER a new turn already reused the pin (the async-finalize race) cannot clear
         # the pin out from under the newer run. A steer (kick early-returns over a live
         # task) does NOT bump it — same run, same generation, same pin.
+        #
+        # TERMINALIZER AUDIT — every path that appends a terminal status / clears the pin
+        # AFTER an await (where a newer run can reuse the conversation) must be guarded by
+        # this generation, re-checking it with NO await between the guard and the append:
+        #   - `_finalize_clean_return`  (clean STUCK)  — guarded [#3]
+        #   - `_terminalize_crashed`    (crash ERROR)  — guarded [#3]
+        #   - `sweep_abandoned_gates_once` (gate STUCK) — guarded [#3, lifecycle.py]
+        #   - `kill` / `ControlOps.kill` (IDLE 'killed') — guarded [#4]: captures the
+        #     generation at entry, threads it through, and skips teardown + the terminal
+        #     IDLE append (guard A after `await task`, guard B before the append) if a
+        #     newer run has taken over the conversation in the teardown-await window.
         self._run_generation: dict[str, int] = {}
 
     # The generative (text-producing) roles a model PICK drives. NLI_VERIFIER is a
@@ -2681,9 +2692,19 @@ class ConversationRuntime:
         return await self._resume.resume_conversation(conversation_id)
 
     async def kill(self, conversation_id: str) -> None:
+        # Capture the run-generation this kill is issued against (finding #4 — the LAST
+        # terminalizer path). The control-op teardown AWAITS the killed task (+ the
+        # executor/sandbox teardown), and in that window a fresh user turn can start a
+        # NEWER run (generation N+1) that REUSES this conversation's loop/executor/pin.
+        # Thread the captured generation so the kill terminalizes + tears down ONLY its
+        # own run (mirrors the crash/clean-return/abandoned-gate terminalizers).
+        generation = self._run_generation.get(conversation_id)
         # Hard kill = terminal → release the kernel pin (next run re-resolves). #1.
-        self._clear_pinned_kernel(conversation_id)
-        return await self._control.kill(conversation_id)
+        # Generation-guarded (finding #4): clear only THIS generation's pin via the same
+        # `_unpin_if_current_generation` semantics the other terminalizers use, so a
+        # newer run that re-pins during teardown keeps its own pin.
+        self._unpin_if_current_generation(conversation_id, generation)
+        return await self._control.kill(conversation_id, generation)
 
     async def forget_conversation(self, conversation_id: str) -> None:
         """Drop ALL in-memory runtime state for a conversation that is being DELETED

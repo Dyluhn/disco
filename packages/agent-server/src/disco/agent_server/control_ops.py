@@ -165,34 +165,70 @@ class ControlOps:
         if loop is not None:
             await loop.cancel()
 
-    async def kill(self, conversation_id: str) -> None:
+    def _superseded_by_newer_run(self, conversation_id: str, generation: int | None) -> bool:
+        """True when a NEWER run/generation has taken over the conversation since this
+        kill was issued against `generation` (finding #4 — the LAST terminalizer path).
+        `generation is None` (a legacy / direct caller with no competing newer run) is
+        NEVER superseded → terminalize as before. Mirrors the guard predicate of
+        `_unpin_if_current_generation` so the kill path stays consistent with the
+        clean-return / crash / abandoned-gate terminalizers."""
+        return (
+            generation is not None
+            and self._rt._run_generation.get(conversation_id) != generation
+        )
+
+    async def kill(self, conversation_id: str, generation: int | None = None) -> None:
         """The KILL SWITCH (BoD §13.6) — the ultimate stop above the three security
         layers. Halts a RUNNING loop promptly (cancel the task mid-step), revokes the
         agent's capabilities + tears down the sandbox session (executor.kill), and
-        records a terminal status so the UI reflects the stop."""
+        records a terminal status so the UI reflects the stop.
+
+        Generation-guarded (finding #4 — made symmetric with the other three
+        terminalizers). The teardown below AWAITS the killed task (and the executor /
+        sandbox teardown), and in those await windows a fresh user turn can start a NEWER
+        run (generation N+1) that REUSES this conversation's cached loop/executor/session
+        and pin. A stale kill must then neither tear down the newer run's executor nor
+        append the terminal IDLE into its log. `generation` is the run-generation the
+        kill was issued against (threaded from `ConversationRuntime.kill`); `None` keeps
+        the legacy unconditional behavior for direct/legacy callers."""
         # 1. stop the running loop task promptly — do NOT wait for the current step.
         task = self._rt._tasks.pop(conversation_id, None)
         if task is not None and not task.done():
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
+        # Generation guard A: the `await task` above YIELDS the event loop, so a fresh
+        # user turn may already have started a NEWER run that now OWNS this conversation
+        # (reusing the still-cached loop/executor). The killed run's task is cancelled —
+        # yield the conversation to the newer run: do NOT tear down its executor and do
+        # NOT terminalize its log.
+        if self._superseded_by_newer_run(conversation_id, generation):
+            return
         # 2. revoke capabilities + destroy the sandbox (the executor's kill, §6.4),
-        #    then DROP the executor + loop from the caches. Critical: a killed executor
-        #    is permanently `_killed=True` and returns "executor killed; instance
+        #    then DROP the executor + loop + session from the caches. Critical: a killed
+        #    executor is permanently `_killed=True` and returns "executor killed; instance
         #    revoked" for every call — if it stayed cached, RESUMING the conversation
         #    would reuse the dead executor and every tool call would fail forever (the
-        #    exact unrecoverable loop a build hit). Popping them forces `_loop_for` to
-        #    rebuild a FRESH executor + sandbox on the next run.
+        #    exact unrecoverable loop a build hit). POP ALL THREE caches SYNCHRONOUSLY
+        #    (no await between the pops) BEFORE awaiting their teardown, so a newer run
+        #    that starts during the teardown awaits below rebuilds a FRESH executor +
+        #    loop via `_loop_for` instead of grabbing these half-torn-down ones.
         executor = self._rt._executors.pop(conversation_id, None)
+        pending = self._rt._pending_sessions.pop(conversation_id, None)
+        self._rt._loops.pop(conversation_id, None)
         if executor is not None:
             await executor.kill()
-        pending = self._rt._pending_sessions.pop(conversation_id, None)
         if pending is not None:
             with contextlib.suppress(Exception):
                 await pending.destroy()
-        self._rt._loops.pop(conversation_id, None)
         # 3. record the stop so subscribers see it (no STOPPED status in the enum; IDLE
-        #    + a 'killed' detail is the contract's terminal-for-now shape).
+        #    + a 'killed' detail is the contract's terminal-for-now shape). Generation
+        #    guard B: a newer run may have started during the teardown awaits above —
+        #    re-check IMMEDIATELY before the append with NO await in between (like the
+        #    crash/reaper paths) so a stale terminal IDLE never lands in the newer run's
+        #    log.
+        if self._superseded_by_newer_run(conversation_id, generation):
+            return
         await self._rt._store.append(
             conversation_id,
             StatusEvent(

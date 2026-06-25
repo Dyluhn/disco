@@ -74,6 +74,7 @@ def _runtime(store: SqliteEventStore, *, build_kernel: str = "disco") -> types.S
         "_kernel_for",
         "_ensure_kernel_pinned",
         "_clear_pinned_kernel",
+        "_unpin_if_current_generation",
         "_run_continuing_control",
         "start",
         "send_user_turn",
@@ -280,7 +281,10 @@ async def test_kill_clears_pin(monkeypatch: pytest.MonkeyPatch, store: SqliteEve
     rt = _runtime(store, build_kernel="disco")
     rt.start(CID)
     await rt.kill(CID)
-    rt._control.kill.assert_awaited_once_with(CID)
+    # finding #4: the captured run-generation (None here — `kick` is mocked, so no run
+    # task ever bumped it) is threaded to the control op so the kill terminalizes ONLY
+    # its own run.
+    rt._control.kill.assert_awaited_once_with(CID, None)
     assert CID not in rt._pinned_kernels
 
 

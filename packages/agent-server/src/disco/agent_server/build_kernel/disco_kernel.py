@@ -105,7 +105,13 @@ class DiscoKernel:
         await self._rt._resume.resume_conversation(conversation_id)
 
     async def kill(self, conversation_id: str) -> None:
-        await self._rt._control.kill(conversation_id)
+        # Generation-guarded kill (finding #4) — mirror `ConversationRuntime.kill`:
+        # capture the run-generation, clear only THIS generation's pin, and thread the
+        # generation to the control op so a newer run that starts during teardown is
+        # neither terminalized nor torn down.
+        generation = self._rt._run_generation.get(conversation_id)
+        self._rt._unpin_if_current_generation(conversation_id, generation)
+        await self._rt._control.kill(conversation_id, generation)
 
     # -- events / state -------------------------------------------------------
     async def subscribe(
