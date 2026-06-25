@@ -53,6 +53,7 @@ class EvidenceManifest:
     assist: bool = False
     autonomous: bool = False
     surface: str = "build"
+    kernel: str = "disco"  # EPIC K bake-off: which Build kernel drove this run (disco | pi)
     mode: str = "fake_model"  # api | ui | fake_model
     started_at: str = ""
     finished_at: str = ""

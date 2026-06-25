@@ -356,6 +356,7 @@ def assemble_dossier(
     commit: str = "",
     seed: int | None = None,
     mode: str = "api",
+    kernel: str = "disco",
 ) -> Path:
     """Write the §5 dossier and freeze it under the §6 evidence lock. Returns the
     run-folder path. classification.json is written separately by classify_dossier."""
@@ -410,6 +411,7 @@ def assemble_dossier(
         model=model or "",
         autonomous=autonomous,
         surface="build",
+        kernel=kernel,
         mode=mode,
         started_at="",
         finished_at=datetime.now(UTC).isoformat(),
@@ -570,6 +572,7 @@ async def run_once(
     model: str | None,
     autonomous: bool,
     commit: str,
+    kernel: str = "disco",
     timeout_s: float,
     hard_cap_s: float = _DEFAULT_HARD_CAP_S,
 ) -> dict[str, Any]:
@@ -615,7 +618,8 @@ async def run_once(
             )
 
         base = assemble_dossier(
-            out_root, run_id, scenario, run, model=model, autonomous=autonomous, commit=commit
+            out_root, run_id, scenario, run,
+            model=model, autonomous=autonomous, commit=commit, kernel=kernel,
         )
         return classify_dossier(base, scenario, run, autonomous=autonomous, commit=commit)
     finally:
@@ -727,6 +731,7 @@ async def _amain(args: argparse.Namespace) -> int:
             model=model,
             autonomous=autonomous,
             commit=commit,
+            kernel=args.kernel,
             timeout_s=args.timeout,
             hard_cap_s=args.hard_cap,
         )
