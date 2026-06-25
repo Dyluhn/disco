@@ -227,11 +227,20 @@ async def test_filtered_podman_spec_uses_proxied_egress_not_sealed():
 
 async def test_limits_and_no_env_leak_in_create(monkeypatch):
     monkeypatch.setenv("PMX_FAKE_SECRET", "sk-do-not-leak")
-    svc, client, _ = _svc()
+    # EPIC H (P1): config is the MAXIMUM. cpu=2.0 is within this deployment's ceiling
+    # (default_cpu=4.0) so it flows through; above-max clamping is its own regression test.
+    fs: dict[str, bytes] = {}
+    client = FakePodmanClient(has_image=True, fs=fs)
+    cli = FakeCli(fs)
+    cfg = SandboxConfig(backend="podman", runtime="crun", default_cpu=4.0)
+    svc = PodmanSandboxService(cfg, client=client, cli_runner=cli)
     await svc.create(SandboxSpec(cpu=2.0, memory_mb=512), owner_id="o", conversation_id="c")
     kw = client.last.create_kwargs
     assert kw["mem_limit"] == "512m"  # the limit goes through the socket create
     assert kw["cpu_quota"] == 200_000 and kw["cpu_period"] == 100_000
+    # EPIC H host-protection: pids cap (cgroup pids.max) carried on the socket create.
+    assert kw["pids_limit"] == 512  # spec unset → config default
+    assert kw.get("pid_mode") != "host"  # own PID namespace, never the host's
     assert kw["environment"] == {}  # no host env into the box
 
 

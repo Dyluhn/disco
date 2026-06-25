@@ -258,14 +258,47 @@ async def test_filtered_egress_stands_up_and_tears_down_proxy_sidecar(tmp_path):
 
 async def test_resource_limits_and_workspace_mount_applied(tmp_path):
     client = FakeDockerClient()
-    svc = _svc(tmp_path, client)
+    # EPIC H (P1): the deployment config is the MAXIMUM. cpu=2.0 / memory_mb=512 are WITHIN
+    # this deployment's ceiling (default_cpu=4.0, default_memory_mb=2048), so they flow
+    # through unchanged — proving the limits reach the create call. (Above-max clamping is
+    # the separate test_spec_cannot_loosen_bounds_above_config_max regression.)
+    cfg = SandboxConfig(workspace_root=str(tmp_path), default_cpu=4.0)
+    svc = GvisorSandboxService(cfg, client=client)
     await svc.create(SandboxSpec(cpu=2.0, memory_mb=512), owner_id="o", conversation_id="c")
     kw = client.last.run_kwargs
     assert kw["mem_limit"] == "512m"
     assert kw["nano_cpus"] == 2_000_000_000
+    # EPIC H host-protection: the create call carries a pids cap (cgroup pids.max). The
+    # spec left `pids` unset → the backend's config default (512) is applied.
+    assert kw["pids_limit"] == 512
     # workspace bind-mounted rw to the container's /workspace
     (host_bind,) = kw["volumes"].keys()
     assert kw["volumes"][host_bind] == {"bind": "/workspace", "mode": "rw"}
+
+
+async def test_pids_limit_spec_override_and_config_default(tmp_path):
+    # EPIC H: a SandboxSpec MAY tighten the pids cap; otherwise the config default bites.
+    client = FakeDockerClient()
+    cfg = SandboxConfig(workspace_root=str(tmp_path), default_pids_limit=256)
+    svc = GvisorSandboxService(cfg, client=client)
+    # spec leaves pids unset → config default (256)
+    await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+    assert client.last.run_kwargs["pids_limit"] == 256
+    # spec sets pids → it overrides the config default
+    await svc.create(SandboxSpec(pids=64), owner_id="o", conversation_id="c")
+    assert client.last.run_kwargs["pids_limit"] == 64
+
+
+async def test_create_does_not_share_host_pid_namespace(tmp_path):
+    # EPIC H escape suite (§9 b): the sandbox container must NOT join the host PID
+    # namespace — it gets its OWN (Docker/runsc default when pid_mode is unset), so a
+    # `kill <pid>` inside the box can only hit the box's own processes.
+    client = FakeDockerClient()
+    svc = _svc(tmp_path, client)
+    await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+    kw = client.last.run_kwargs
+    assert kw.get("pid_mode") not in ("host",)  # never the host PID namespace
+    assert "pid_mode" not in kw  # default (private) PID namespace, explicitly unset
 
 
 async def test_no_host_env_leaks_into_the_box(tmp_path, monkeypatch):

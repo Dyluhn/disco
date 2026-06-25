@@ -20,17 +20,52 @@ from disco.tools.sandbox import (
 )
 
 
-def test_build_sandbox_service_maps_each_backend():
+def test_build_sandbox_service_maps_each_backend(monkeypatch):
     def built(backend: str):
         return build_sandbox_service(SandboxSettings(backend=backend))
 
     assert isinstance(built("local"), LocalSandboxService)
     assert isinstance(built("gvisor"), GvisorSandboxService)
     assert isinstance(built("podman"), PodmanSandboxService)
+    # EPIC H (P0): the process backend is now FAIL-CLOSED for Build/soak — building it
+    # requires the explicit dev opt-out (else ProductionValidityError; see the gate tests).
+    monkeypatch.setenv("DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV", "1")
     assert isinstance(built("process"), ProcessSandboxService)
     # connection detail flows into the built backend's config
     svc = build_sandbox_service(SandboxSettings(backend="local", image="custom:tag"))
     assert svc._cfg.image == "custom:tag"
+
+
+def test_production_gate_refuses_process_backend_by_default(monkeypatch):
+    # EPIC H (P0) FAIL-CLOSED: the Build/soak builder refuses the unisolated process (dev)
+    # backend BY DEFAULT — it shares the host PID + net namespace (the `kill <pid>` source).
+    # No env needed; protection is the default now (the inversion of the old fail-open opt-in).
+    from disco.tools.sandbox import ProductionValidityError
+
+    monkeypatch.delenv("DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV", raising=False)
+    monkeypatch.delenv("DISCO_REQUIRE_PRODUCTION_SANDBOX", raising=False)
+    with pytest.raises(ProductionValidityError, match="dev-only"):
+        build_sandbox_service(SandboxSettings(backend="process"))
+    # a container backend always passes the gate
+    assert isinstance(
+        build_sandbox_service(SandboxSettings(backend="gvisor")), GvisorSandboxService
+    )
+
+
+def test_dev_opt_out_re_enables_process_backend(monkeypatch):
+    # The ONLY way to run the process backend on the Build/soak path is the explicit
+    # dev-only opt-out. This keeps plain local dev working while staying fail-closed.
+    monkeypatch.setenv("DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV", "1")
+    assert isinstance(
+        build_sandbox_service(SandboxSettings(backend="process")), ProcessSandboxService
+    )
+    # …and the old fail-OPEN var no longer has any effect (it was replaced).
+    monkeypatch.delenv("DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV", raising=False)
+    monkeypatch.setenv("DISCO_REQUIRE_PRODUCTION_SANDBOX", "1")
+    from disco.tools.sandbox import ProductionValidityError
+
+    with pytest.raises(ProductionValidityError):
+        build_sandbox_service(SandboxSettings(backend="process"))
 
 
 def test_runtime_reads_backend_from_the_shared_store(tmp_path):

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._container import PUBLISHED_PORTS, ContainerInstance, egress_mode
+from ._container import PUBLISHED_PORTS, ContainerInstance, egress_mode, resolve_bounds
 from .base import SandboxSpec, SandboxUnavailableError
 from .config import SandboxConfig, default_local_config
 from .gvisor import GvisorSandboxService, _keepalive_command
@@ -70,8 +70,9 @@ class LocalSandboxService(GvisorSandboxService):
         self._require_image(client)  # never-pull guard, before any run
 
         vol_name = f"{self._cfg.workspace_volume_prefix}-{instance_id}"
-        mem_mb = spec.memory_mb or self._cfg.default_memory_mb
-        cpu = spec.cpu or self._cfg.default_cpu
+        # EPIC H (P1): config is the MAXIMUM — a model spec may tighten but never loosen
+        # cpu/mem/pids above it, and pids=0 resolves to the default (never "unlimited").
+        cpu, mem_mb, pids = resolve_bounds(spec, self._cfg)
         labels = {LABEL_CONV: conversation_id} if conversation_id else {}
         mode = egress_mode(spec)
         # Per-mode network config (the three-way egress posture; egress_mode docstring).
@@ -110,6 +111,7 @@ class LocalSandboxService(GvisorSandboxService):
                 # The limit goes through the LOCAL socket/daemon → it actually bites.
                 mem_limit=f"{mem_mb}m",
                 nano_cpus=int(cpu * 1_000_000_000),
+                pids_limit=pids,  # EPIC H: cgroup pids.max — fork-bomb / host-PID guard
                 volumes={vol_name: {"bind": self._cfg.container_workspace, "mode": "rw"}},
                 # NO host env beyond capability-granted values. For a filtered box
                 # that's the proxy routing vars (defense in depth atop the no-route

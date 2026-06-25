@@ -106,6 +106,7 @@ from disco.tools.sandbox import (
     SandboxConfig,
     SandboxInstance,
     SandboxUnavailableError,
+    preflight_build_sandbox_backend,
     service_from_config,
 )
 from disco.tools.sandbox._container import PREVIEW_PORT
@@ -298,7 +299,15 @@ def build_sandbox_service(settings: SandboxSettings) -> SandboxService:
     # Settings connectivity preflight (ConfigState.test_sandbox) builds the SAME
     # backend this live builder does — no parallel mapping to drift. Podman remains a
     # stub in THIS environment (see docstring); it constructs but isn't live here.
-    return service_from_config(cfg)
+    service = service_from_config(cfg)
+    # EPIC H (P0) FAIL-CLOSED production-validity preflight. This is THE Build/soak
+    # sandbox builder, so it refuses the unisolated `process` dev backend BY DEFAULT —
+    # `process` shares the host PID + network namespace and is the source of the
+    # `kill <pid>` takedown incidents. A developer running plain local dev re-permits it
+    # with DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV=1. This INVERTS the old fail-OPEN
+    # DISCO_REQUIRE_PRODUCTION_SANDBOX opt-in (which silently left soak/Build on `process`
+    # unless an operator REMEMBERED the protection var). Container backends always pass.
+    return preflight_build_sandbox_backend(service)
 
 
 # Live model-server probe: derive the ACTUALLY-SERVED model name + context window

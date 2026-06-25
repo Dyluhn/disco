@@ -49,7 +49,9 @@ _WORKSPACE_TOKEN_RE = re.compile(
     r"(?<![\w/.])/workspace(?=/|$|[\s'\";|&<>()`])(?:/[^\s'\";|&<>()`]*)?"
 )
 
-# Bug 19 (P0): host-process-SIGNAL containment for the PROCESS backend ONLY.
+# Bug 19 (P0): BEST-EFFORT, DEV-ONLY host-process-SIGNAL refusal for the PROCESS backend
+# ONLY — NOT containment (the real containment is the fail-closed production-validity gate
+# refusing this backend for prod/soak; see __init__.preflight_build_sandbox_backend).
 # This backend shares the host PID namespace (no isolation — §5.1 dev-only), so a
 # `kill <pid>` the build issues against a PID it discovered (`ss -lntp`/`pgrep`) can
 # take down the AGENT-SERVER itself (observed LIVE: MiniMax-M3 ran `kill 931479` —
@@ -94,7 +96,15 @@ def process_backend_signal_command_violation(command: str) -> str | None:
     process on the process (dev) backend, else None. BLANKET refusal of host-signal
     shapes (`kill`/`pkill`/`killall`/`fuser -k`/`… | xargs kill`); scoped to the
     process backend only (the container/isolated backend has its own PID namespace —
-    a kill there only hits sandbox processes — and is NOT routed through this check)."""
+    a kill there only hits sandbox processes — and is NOT routed through this check).
+
+    NOT CONTAINMENT (P1) — this is a BEST-EFFORT, DEV-ONLY string scan and is trivially
+    bypassable (a renamed binary, a raw `os.kill` in `python -c`, env indirection). It
+    must never be presented as real isolation. The REAL containment for prod/soak is the
+    fail-closed production-validity gate (`preflight_build_sandbox_backend`) REFUSING the
+    process backend outright, so a production/soak build is never on a shared-host box in
+    the first place and never relies on this refusal. It survives only to give a local-dev
+    build an actionable nudge instead of a silent stack takedown."""
     for pat in _HOST_SIGNAL_PATTERNS:
         if pat.search(command):
             return _HOST_SIGNAL_REFUSAL
@@ -199,10 +209,14 @@ class ProcessSandboxInstance:
         why = reserved_port_command_violation(cmd, reserved_control_ports())
         if why is not None:
             return ExecResult(exit_code=126, stdout="", stderr=why)
-        # Bug 19 (P0) — ADDITIONAL containment: blanket-refuse host-process-SIGNAL
-        # commands (`kill <pid>`/`pkill`/`killall`/`fuser -k`/`… | xargs kill`) on the
-        # shared-host process backend, so a build can't take down the agent-server (or any
-        # host process) via a raw `kill <pid>` of a PID it discovered. Runs AFTER the
+        # Bug 19 — BEST-EFFORT, DEV-ONLY refusal (NOT containment): blanket-reject host-
+        # process-SIGNAL commands (`kill <pid>`/`pkill`/`killall`/`fuser -k`/`… | xargs
+        # kill`) on the shared-host process backend, so a local-dev build gets an
+        # actionable nudge instead of silently taking down the agent-server (or any host
+        # process) via a raw `kill <pid>` of a PID it discovered. This is a string scan
+        # and is trivially bypassable (renamed binary, `os.kill` in `python -c`); the REAL
+        # containment is the production-validity gate refusing the process backend outright
+        # (see process_backend_signal_command_violation's docstring). Runs AFTER the
         # reserved-port check so a reserved-port `fuser -k 8000` keeps its port-specific
         # message. Process backend ONLY — the container/isolated backend has its own PID
         # namespace and is not routed here. Returns BEFORE the subprocess launcher.
@@ -328,6 +342,12 @@ class ProcessSandboxService:
     """[CONTRACT boundary] Creates process-backed instances (dev)."""
 
     name = "process"
+    # EPIC H (§1.4/§9.3): NOT production-valid. This backend runs builds as bare host
+    # subprocesses in the SHARED host PID + network namespace — it is the source of the
+    # isolation incidents (a build `kill <pid>` took down the agent-server). The
+    # production / Build-Soak path refuses it (`require_production_valid_backend`); it
+    # remains the convenient default for local dev only.
+    is_production_valid = False
 
     def __init__(self, root: str | None = None) -> None:
         self._root = Path(root or tempfile.mkdtemp(prefix="disco-sbx-")).resolve()

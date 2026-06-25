@@ -10,7 +10,9 @@ backend (gvisor / process / remote) reuses one config pattern, not a parallel on
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+import math
+
+from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator
 
 
 class SandboxConfig(BaseModel):
@@ -56,12 +58,60 @@ class SandboxConfig(BaseModel):
     # persists across the container). This prefix names it.
     workspace_volume_prefix: str = "disco-ws"
 
-    # default resource bounds applied on create (a SandboxSpec may tighten them).
+    # default resource bounds applied on create. EPIC H (P1): these are the deployment
+    # MAXIMUM, not a mere fallback. A SandboxSpec may TIGHTEN a bound (request LESS), but a
+    # model-influenced spec can NEVER loosen one above the configured max nor disable a
+    # limit — `resolve_bounds` (in _container.py) clamps above-max values down and rejects
+    # negatives, while the per-field 0 "unset" sentinel resolves to the default below.
     default_cpu: float = 1.0
     default_memory_mb: int = 2048
+    # EPIC H host-protection: default cgroup pids.max for a created sandbox container,
+    # so a runaway build (fork bomb, parallel-install storm) can't exhaust host PIDs and
+    # freeze the box. Used when a SandboxSpec leaves `pids` unset (0); also the hard
+    # MAXIMUM a spec can request (above-max is clamped). Overridable per deployment via
+    # the Settings layer (same hot-apply path as the other bounds).
+    default_pids_limit: int = 512
+
+    # EPIC H (P1) — resource caps for the filtered-egress PROXY SIDECAR. A "filtered" box
+    # stands up a SECOND container (the allowlisting proxy). Before this it was capped on
+    # MEMORY only (256m) and left UNBOUNDED on CPU + PIDs — so a wedged/compromised proxy
+    # could burn host CPU or fork-bomb host PIDs with no ceiling. These apply the same
+    # host-protection bounds to the sidecar; smaller than the sandbox's because the proxy
+    # is a thin stdlib server, not a build. NOT spec-influenced (the model never shapes the
+    # sidecar), so they are plain config maxima with no resolve_bounds clamp needed.
+    sidecar_cpu: float = 1.0
+    sidecar_memory_mb: int = 256
+    sidecar_pids_limit: int = 128
 
     # how long to wait for the container to stop on close, before force-remove.
     stop_timeout_s: int = 5
+
+    # EPIC H (P1 hardening) — the resource MAXIMA above are the host-protection ceiling,
+    # so a 0 / negative / NaN / inf value is not a "looser" cap, it is a DISABLED one
+    # (Docker reads `mem_limit`/`pids_limit`/`nano_cpus` of 0 as UNLIMITED, and a NaN/inf
+    # maximum makes `resolve_bounds`' clamp a no-op). A mis-set config must therefore fail
+    # LOUD at construction, never silently ship an unbounded sandbox or sidecar. Both the
+    # sandbox bounds (default_*) AND the sidecar bounds (sidecar_*) are guarded — the
+    # proxy sidecar is just as capable of burning host CPU / fork-bombing host PIDs.
+    @field_validator(
+        "default_cpu",
+        "default_memory_mb",
+        "default_pids_limit",
+        "sidecar_cpu",
+        "sidecar_memory_mb",
+        "sidecar_pids_limit",
+    )
+    @classmethod
+    def _finite_positive_bound(cls, v: float, info: ValidationInfo) -> float:
+        # `math.isfinite` rejects NaN/inf (the int fields are already non-finite-proof via
+        # pydantic's int coercion; the float fields — *_cpu — are not, so this is load-bearing).
+        if not math.isfinite(v) or v <= 0:
+            raise ValueError(
+                f"{info.field_name} must be a finite positive number (got {v!r}); a "
+                "0/negative/non-finite resource maximum would DISABLE the host-protection "
+                "cap (unlimited CPU/memory/PIDs)"
+            )
+        return v
 
     # Wedge-guard timeout for the docker/podman `reload()` client call (Dispo #25).
     # A hung or failing client must NEVER block the event loop — this is the

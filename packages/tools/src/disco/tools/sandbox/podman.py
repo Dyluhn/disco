@@ -49,10 +49,12 @@ from ._container import (
     PUBLISHED_PORTS,
     TIMEOUT_EXIT_CODES,
     ContainerInstance,
+    bounded_sidecar_cap,
     egress_mode,
     format_allow,
     proxy_env,
     proxy_run_argv,
+    resolve_bounds,
 )
 from .base import (
     ExecResult,
@@ -153,6 +155,14 @@ class PodmanSandboxInstance(ContainerInstance):
     def _exec(self, argv: list[str], timeout: float) -> tuple[int, bytes, bytes]:
         return self._runner(["podman", "--url", self._cli_url, "exec", self._name, *argv], timeout)
 
+    def _guest_run(self, argv: list[str]) -> tuple[int, bytes]:
+        """[P2] Guest exec for the symlink-resolution jail, via the CLI native remote —
+        podman-py's `exec_run` is unusable over the remote API (see the module docstring),
+        so the shared `_resolve_guest_path` (ContainerInstance) drives the guest through
+        this override, exactly as read/list/exec do."""
+        rc, out, _err = self._exec(argv, 30)
+        return rc, out
+
     def _raise_if_dead(self, rc: int, err: bytes) -> None:
         """`podman exec` against a gone/exited container fails at the container level
         (rc 125 + a 'no such container'/'not running' marker), distinct from the inner
@@ -182,7 +192,7 @@ class PodmanSandboxInstance(ContainerInstance):
 
     async def read_file(self, path: str) -> bytes:
         self._alive()
-        target = self._container_path(path)
+        target = await asyncio.to_thread(self._resolve_guest_path, path)  # lexical+symlink (P2)
         rc, out, err = await asyncio.to_thread(self._exec, ["cat", "--", target], 60)
         if rc != 0:
             self._raise_if_dead(rc, err)
@@ -196,7 +206,7 @@ class PodmanSandboxInstance(ContainerInstance):
         container is surfaced as a typed SandboxUnavailableError (→ recreate)."""
         self._alive()
         try:
-            target = self._container_path(path)
+            target = await asyncio.to_thread(self._resolve_guest_path, path)  # symlink jail (P2)
         except SandboxError:
             return False
         rc, _out, err = await asyncio.to_thread(self._exec, ["test", "-f", target], 30)
@@ -206,7 +216,7 @@ class PodmanSandboxInstance(ContainerInstance):
 
     async def list_dir(self, path: str) -> list[str]:
         self._alive()
-        target = self._container_path(path)
+        target = await asyncio.to_thread(self._resolve_guest_path, path)  # symlink jail (P2)
         rc, out, err = await asyncio.to_thread(self._exec, ["ls", "-1A", "--", target], 30)
         if rc != 0:
             self._raise_if_dead(rc, err)
@@ -217,7 +227,7 @@ class PodmanSandboxInstance(ContainerInstance):
         """Write via podman-py `put_archive` (binary-safe + works over remote); the
         parent dir is created via the CLI first."""
         self._alive()
-        target = self._container_path(path)
+        target = await asyncio.to_thread(self._resolve_guest_path, path)  # symlink jail (P2)
         parent = posixpath.dirname(target) or self._ws
         name = posixpath.basename(target)
 
@@ -241,6 +251,9 @@ class PodmanSandboxService:
     """[CONTRACT boundary] Creates Podman-backed instances over the native remote."""
 
     name = "podman"
+    # EPIC H (§1.4/§9.3): a container backend with its own PID + network namespace —
+    # production / Build-Soak valid (only the `process` dev backend is False).
+    is_production_valid = True
 
     def __init__(
         self,
@@ -293,6 +306,22 @@ class PodmanSandboxService:
             ["podman", "--url", self._cli_url, "exec", sidecar_name, *argv], timeout
         )
 
+    @staticmethod
+    def _best_effort_cleanup(*, egress_network: Any, egress_sidecar: Any) -> None:
+        """Tear down a (possibly partial) filtered-egress aux — sidecar first (it's on the
+        internal net), then the network. Both refs may be None. Best-effort: each removal
+        is independently guarded so a failure on one still attempts the other."""
+        if egress_sidecar is not None:
+            try:
+                egress_sidecar.remove(force=True)
+            except Exception:  # noqa: BLE001 — best-effort
+                pass
+        if egress_network is not None:
+            try:
+                egress_network.remove()
+            except Exception:  # noqa: BLE001 — best-effort
+                pass
+
     def _setup_filtered_egress(
         self, client: Any, spec: SandboxSpec, instance_id: str, conversation_id: str = ""
     ) -> Any:
@@ -321,77 +350,105 @@ class PodmanSandboxService:
            the fake/test path."""
         net_name = f"{EGR_NET_PREFIX}{instance_id}"
         labels = {LABEL_CONV: conversation_id} if conversation_id else {}
-        # The network carries the same label as the containers so the orphan
-        # sweep can find it — its NAME is instance-keyed, not conversation-keyed.
-        network = client.networks.create(
-            net_name, driver="bridge", internal=True, labels=labels
-        )
-        # (1) create on bridge → connect internal → start, so the sidecar's
-        # `bridge` NIC (the route to the internet, the proxy's upstream) AND its
-        # internal-net NIC BOTH exist before any sandbox traffic.
-        # [FIX6 parity — live-verified on local podman 5.8.2] PUBLISH the preview
-        # ports on the SIDECAR (it's on bridge → it CAN publish; the sandbox is
-        # internal-only and can't). The sidecar's inbound forwarder (launched after
-        # the sandbox starts, in `_start_container`) bridges each published host
-        # port to the sandbox's internal IP — host reaches the preview, the sandbox
-        # keeps zero direct egress. Ports must be declared at create() (podman can't
-        # add mappings to a running container). podman-py accepts the SAME docker-py
-        # `{"8000/tcp": None}` format AND reads it back as the same
-        # `NetworkSettings.Ports` shape (verified live), so the shared
-        # `_container._resolve_mapping` reads the binding unchanged.
-        sidecar = client.containers.create(
-            image=self._cfg.image,
-            command=["sh", "-c", "exec sleep infinity"],
-            # [FIX6 parity] dual-home the sidecar: a BRIDGE route (the proxy's
-            # upstream + the host's path to the published preview ports) AND, after
-            # `network.connect` below, the internal no-NAT net it shares with the
-            # sandbox. gVisor passes docker-py's `network="bridge"`; the rootless
-            # podman equivalent is `network_mode="bridge"` (verified live — a bare
-            # create defaults to pasta, which an internal net cannot attach to).
-            network_mode="bridge",
-            ports={f"{p}/tcp": None for p in sorted(PUBLISHED_PORTS)},  # FIX6: preview publish
-            mem_limit="256m",
-            detach=True,
-            name=net_name,
-            labels=labels,
-        )
-        network.connect(sidecar)
-        sidecar.start()
-        # (2) replace the dead embedded resolver with public DNS over the (working) route.
-        self._sidecar_cli_run(
-            sidecar.name,
-            ["sh", "-c", 'printf "nameserver 1.1.1.1\\nnameserver 8.8.8.8\\n" > /etc/resolv.conf'],
-            15,
-        )
-        # Inject the proxy script (put_archive works over the podman remote, per
-        # the backend docstring). Launch it in the background via the CLI runner
-        # — podman-py's `exec_run` is broken, the CLI is the correct path.
-        script = pathlib.Path(_egress_proxy_mod.__file__).read_bytes()
-        buf = io.BytesIO()
-        with tarfile.open(fileobj=buf, mode="w") as tar:
-            info = tarfile.TarInfo(name="egress_proxy.py")
-            info.size = len(script)
-            info.mtime = int(time.time())
-            tar.addfile(info, io.BytesIO(script))
-        if not sidecar.put_archive("/", buf.getvalue()):
-            raise SandboxUnavailableError("failed to inject egress proxy script into sidecar")
-        allow = format_allow(spec.egress_allow)
-        argv = proxy_run_argv(allow, EGRESS_PROXY_PORT)
-        self._sidecar_cli_run(
-            sidecar.name,
-            ["sh", "-c", f"{' '.join(argv)} >/var/log/egress.log 2>&1 &"],
-            10,
-        )
-        # (3) read the sidecar's IP on the internal net; the sandbox proxies by IP.
+        # EPIC H (P1) — runtime LAST GATE on the sidecar caps. SandboxConfig is hot-mutable, so
+        # a post-construction `cfg.sidecar_cpu = 0` (etc.) bypasses the @field_validator and
+        # would otherwise reach podman as UNLIMITED. Gate BEFORE creating any network/sidecar
+        # so a mutated cap is refused with nothing stranded.
+        sidecar_cpu = bounded_sidecar_cap("cpu", self._cfg.sidecar_cpu)
+        sidecar_memory_mb = int(bounded_sidecar_cap("memory_mb", self._cfg.sidecar_memory_mb))
+        sidecar_pids_limit = int(bounded_sidecar_cap("pids", self._cfg.sidecar_pids_limit))
+        # [P1 leak-guard] Setup runs BEFORE the guarded sandbox create in `_start_container`,
+        # so a partial failure here (connect/start/proxy inject) would otherwise strand the
+        # internal network + proxy sidecar. Own the cleanup: any exception after either
+        # resource exists removes whatever was created before re-raising.
+        network: Any = None
+        sidecar: Any = None
         try:
-            sidecar.reload()
-            nets = sidecar.attrs.get("NetworkSettings", {}).get("Networks", {}) or {}
-            proxy_ip = nets.get(net_name, {}).get("IPAddress", "")
-        except Exception:  # noqa: BLE001 — fake/test path or hung client
-            proxy_ip = ""
-        proxy_ip = proxy_ip or net_name  # fall back to the name (harmless for the fake/test path)
-        env = proxy_env(proxy_ip, EGRESS_PROXY_PORT)
-        return network, sidecar, env, net_name
+            # The network carries the same label as the containers so the orphan
+            # sweep can find it — its NAME is instance-keyed, not conversation-keyed.
+            network = client.networks.create(
+                net_name, driver="bridge", internal=True, labels=labels
+            )
+            # (1) create on bridge → connect internal → start, so the sidecar's
+            # `bridge` NIC (the route to the internet, the proxy's upstream) AND its
+            # internal-net NIC BOTH exist before any sandbox traffic.
+            # [FIX6 parity — live-verified on local podman 5.8.2] PUBLISH the preview
+            # ports on the SIDECAR (it's on bridge → it CAN publish; the sandbox is
+            # internal-only and can't). The sidecar's inbound forwarder (launched after
+            # the sandbox starts, in `_start_container`) bridges each published host
+            # port to the sandbox's internal IP — host reaches the preview, the sandbox
+            # keeps zero direct egress. Ports must be declared at create() (podman can't
+            # add mappings to a running container). podman-py accepts the SAME docker-py
+            # `{"8000/tcp": None}` format AND reads it back as the same
+            # `NetworkSettings.Ports` shape (verified live), so the shared
+            # `_container._resolve_mapping` reads the binding unchanged.
+            sidecar = client.containers.create(
+                image=self._cfg.image,
+                command=["sh", "-c", "exec sleep infinity"],
+                # [FIX6 parity] dual-home the sidecar: a BRIDGE route (the proxy's
+                # upstream + the host's path to the published preview ports) AND, after
+                # `network.connect` below, the internal no-NAT net it shares with the
+                # sandbox. gVisor passes docker-py's `network="bridge"`; the rootless
+                # podman equivalent is `network_mode="bridge"` (verified live — a bare
+                # create defaults to pasta, which an internal net cannot attach to).
+                network_mode="bridge",
+                ports={f"{p}/tcp": None for p in sorted(PUBLISHED_PORTS)},  # FIX6: preview publish
+                # EPIC H (P1): bound the sidecar on CPU + PIDs too, not just memory — a wedged
+                # or compromised proxy must not be able to burn host CPU or fork-bomb host PIDs.
+                # podman caps cpu via quota/period (mirrors the sandbox create path).
+                mem_limit=f"{sidecar_memory_mb}m",
+                cpu_quota=int(sidecar_cpu * _CPU_PERIOD),
+                cpu_period=_CPU_PERIOD,
+                pids_limit=sidecar_pids_limit,
+                detach=True,
+                name=net_name,
+                labels=labels,
+            )
+            network.connect(sidecar)
+            sidecar.start()
+            # (2) replace the dead embedded resolver with public DNS over the (working) route.
+            self._sidecar_cli_run(
+                sidecar.name,
+                [
+                    "sh",
+                    "-c",
+                    'printf "nameserver 1.1.1.1\\nnameserver 8.8.8.8\\n" > /etc/resolv.conf',
+                ],
+                15,
+            )
+            # Inject the proxy script (put_archive works over the podman remote, per
+            # the backend docstring). Launch it in the background via the CLI runner
+            # — podman-py's `exec_run` is broken, the CLI is the correct path.
+            script = pathlib.Path(_egress_proxy_mod.__file__).read_bytes()
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode="w") as tar:
+                info = tarfile.TarInfo(name="egress_proxy.py")
+                info.size = len(script)
+                info.mtime = int(time.time())
+                tar.addfile(info, io.BytesIO(script))
+            if not sidecar.put_archive("/", buf.getvalue()):
+                raise SandboxUnavailableError("failed to inject egress proxy script into sidecar")
+            allow = format_allow(spec.egress_allow)
+            argv = proxy_run_argv(allow, EGRESS_PROXY_PORT)
+            self._sidecar_cli_run(
+                sidecar.name,
+                ["sh", "-c", f"{' '.join(argv)} >/var/log/egress.log 2>&1 &"],
+                10,
+            )
+            # (3) read the sidecar's IP on the internal net; the sandbox proxies by IP.
+            try:
+                sidecar.reload()
+                nets = sidecar.attrs.get("NetworkSettings", {}).get("Networks", {}) or {}
+                proxy_ip = nets.get(net_name, {}).get("IPAddress", "")
+            except Exception:  # noqa: BLE001 — fake/test path or hung client
+                proxy_ip = ""
+            proxy_ip = proxy_ip or net_name  # fall back to the name (harmless for fake/test)
+            env = proxy_env(proxy_ip, EGRESS_PROXY_PORT)
+            return network, sidecar, env, net_name
+        except Exception:
+            # Partial setup must not leak: tear down whatever already exists, then re-raise.
+            self._best_effort_cleanup(egress_network=network, egress_sidecar=sidecar)
+            raise
 
     def _launch_inbound_forwarder(self, sidecar: Any, container: Any, net_name: str) -> None:
         """[FIX6 parity — port of `gvisor._launch_inbound_forwarder`] Make a FILTERED
@@ -467,8 +524,11 @@ class PodmanSandboxService:
                 "`podman load`; this backend never pulls from a registry)"
             )
 
-        mem_mb = spec.memory_mb or self._cfg.default_memory_mb
-        cpu = spec.cpu or self._cfg.default_cpu
+        # EPIC H (P1): config is the MAXIMUM, not a fallback. A model spec may tighten
+        # cpu/mem/pids but never loosen them above the configured max nor disable the pids
+        # cap (pids=0 → default, never "unlimited"). Enforced by the user@ systemd manager
+        # via the socket (same path as mem/cpu). See resolve_bounds.
+        cpu, mem_mb, pids = resolve_bounds(spec, self._cfg)
         vol_name = f"{self._cfg.workspace_volume_prefix}-{instance_id}"
         name = f"{SBX_NAME_PREFIX}{instance_id}"
 
@@ -508,6 +568,7 @@ class PodmanSandboxService:
                 mem_limit=f"{mem_mb}m",
                 cpu_quota=int(cpu * _CPU_PERIOD),
                 cpu_period=_CPU_PERIOD,
+                pids_limit=pids,  # EPIC H: cgroup pids.max — fork-bomb / host-PID guard
                 **net_kwargs,
                 volumes={vol_name: {"bind": self._cfg.container_workspace, "mode": "rw"}},
                 # NO host env leaks in. For a filtered box the proxy routing vars
@@ -537,16 +598,9 @@ class PodmanSandboxService:
                 ) from exc
             # Don't leak the egress aux if the sandbox itself failed to start
             # (E8: the parent class's teardown walks these refs).
-            if egress_sidecar is not None:
-                try:
-                    egress_sidecar.remove(force=True)
-                except Exception:  # noqa: BLE001 — best-effort
-                    pass
-            if egress_network is not None:
-                try:
-                    egress_network.remove()
-                except Exception:  # noqa: BLE001 — best-effort
-                    pass
+            self._best_effort_cleanup(
+                egress_network=egress_network, egress_sidecar=egress_sidecar
+            )
             raise SandboxUnavailableError(f"container failed to start: {exc}") from exc
 
     async def create(
@@ -656,6 +710,24 @@ class PodmanSandboxService:
                         try:
                             c.remove(force=True)
                         except Exception:  # noqa: BLE001
+                            pass
+                # [P2] Clean up the filtered-egress internal network(s) by LABEL too —
+                # mirrors the gVisor path. The network NAME is disco-egr-{instance_id}
+                # (instance-keyed, NOT conversation-keyed), so only the conversation
+                # label finds it; a crash/restart with filtered podman boxes would
+                # otherwise strand the labeled `disco-egr-*` networks forever. The
+                # containers above are already removed, so the network is detachable.
+                seen_nets: set[str] = set()
+                for key in LABEL_CONV_KEYS:
+                    for net in client.networks.list(
+                        filters={"label": f"{key}={conversation_id}"}
+                    ):
+                        if net.id in seen_nets:
+                            continue
+                        seen_nets.add(net.id)
+                        try:
+                            net.remove()
+                        except Exception:  # noqa: BLE001 — in-use or gone
                             pass
             except Exception:  # noqa: BLE001 — best-effort
                 pass

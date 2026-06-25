@@ -49,6 +49,17 @@ class SandboxUnavailableError(SandboxError):
     command failed"."""
 
 
+class ProductionValidityError(SandboxError):
+    """EPIC H (§1.4/§9.3): a NON-production-valid backend was selected for a path that
+    requires real isolation (Build-Soak / production build). The `process` backend
+    shares the host PID + network namespace — it is dev-only, and is exactly the
+    source of the isolation incidents (a build `kill <pid>` took down the
+    agent-server). Raised by `require_production_valid_backend(...)` BEFORE any work
+    runs, naming the offending backend and the valid alternatives so the operator can
+    re-select. Distinct from SandboxUnavailableError: the box isn't broken, it is the
+    WRONG KIND of box for this path."""
+
+
 class SandboxFileNotFoundError(SandboxError, FileNotFoundError):
     """W1: a workspace file/dir was MISSING on a read. Subclasses BOTH SandboxError (so the
     executor's `sandbox_error` mapping still applies) AND FileNotFoundError (so the loop's
@@ -135,6 +146,11 @@ class SandboxSpec(BaseModel):
     cpu: float = 1.0
     memory_mb: int = 2048
     disk_mb: int = 4096
+    # EPIC H host-protection: cap the container's process count (cgroup pids.max) so a
+    # runaway build (fork bomb / npm-install storm) can't exhaust host PIDs and freeze
+    # the box. 0 => unset on the spec, so the backend falls back to its configured
+    # default (`SandboxConfig.default_pids_limit`, 512). A spec MAY tighten/loosen it.
+    pids: int = 0
     timeout_s: int = 300  # default per-call ceiling
     # egress allowlist (§7); empty => deny ALL network (deny-by-default).
     egress_allow: frozenset[str] = frozenset()
@@ -217,6 +233,14 @@ class SandboxService(Protocol):
     """[CONTRACT] Creates/destroys instances from specs. Pluggable backend."""
 
     name: str  # "process" | "e2b" | "gvisor" | "remote"
+
+    # EPIC H (§1.4/§9.3): is this backend valid for a production / Build-Soak build?
+    # FALSE only for the `process` dev backend (shared host PID + net namespace — the
+    # source of the isolation incidents). TRUE for every container backend
+    # (gvisor/local/podman), each of which has its OWN PID + network namespace. The
+    # production build path consults this (`require_production_valid_backend`) and
+    # refuses a non-valid backend up front.
+    is_production_valid: bool
 
     async def create(
         self, spec: SandboxSpec, *, owner_id: str, conversation_id: str
