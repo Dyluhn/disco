@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Disco Pi Build Kernel — the inner-loop sidecar that embeds Pi with no built-in tools, in-memory auth/session, emitting a JSON line-protocol event stream over stdio (Disco Pi Build Kernel Campaign, EPIC B / PR B1).",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.19.0"
   },
   "bin": {
     "disco-pi-kernel": "./dist/index.js"

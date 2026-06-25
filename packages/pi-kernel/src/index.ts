@@ -24,8 +24,13 @@
  *        a hard force-exit deadline so a stuck teardown still terminates.
  *  - outbound writes respect backpressure (await `drain`), coalesce heartbeats
  *    under pressure, and are BOUNDED (round-2 P1 #2): when the queue reaches its
- *    cap the producer is told to back off (the inbound source is paused) instead
- *    of growing memory — but `agent_event` / `ready` are never dropped;
+ *    cap the producer is told to back off instead of growing memory — but
+ *    `agent_event` / `ready` are never dropped. NOTE (round-3 P1 #1): outbound
+ *    backpressure must NOT pause stdin — stdin carries the control channel
+ *    (cancel / EOF) which has to stay readable so teardown can always preempt a
+ *    stalled stdout. The agent_event PRODUCER is throttled directly via
+ *    `whenWritable` (see runner), so memory stays bounded without gagging
+ *    control;
  *  - producer-side backpressure for the in-flight prompt (round-3 P1): a stalled
  *    stdout cannot pause an already-running `session.prompt()`, and Pi's
  *    `subscribe` listener is synchronous, so the runner forwards each
@@ -46,7 +51,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Writable } from "node:stream";
 
-import { PiKernelRunner } from "./runner.ts";
+import { PiKernelRunner, scrubProviderCredentialEnv } from "./runner.ts";
 import {
   encodeOutbound,
   parseCommand,
@@ -158,6 +163,20 @@ export function createLineReader(
  * flush path so teardown always drains): the final `exit` and FATAL `error`s.
  */
 export const DEFAULT_MAX_OUTBOUND_QUEUE = 1024;
+
+/**
+ * Resolve the outbound queue cap: explicit override → `DISCO_PI_KERNEL_MAX_OUTBOUND_QUEUE`
+ * → default. A test seam mirroring {@link resolveMaxLineBytes}.
+ */
+export function resolveMaxOutboundQueue(override?: number): number {
+  if (override !== undefined && Number.isFinite(override) && override > 0) {
+    return Math.floor(override);
+  }
+  const raw = process.env.DISCO_PI_KERNEL_MAX_OUTBOUND_QUEUE;
+  if (raw === undefined) return DEFAULT_MAX_OUTBOUND_QUEUE;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_MAX_OUTBOUND_QUEUE;
+}
 
 export interface OutboundWriter {
   /**
@@ -469,16 +488,52 @@ export function createControlPlane(options: ControlPlaneOptions): ControlPlane {
 // Wiring
 // ---------------------------------------------------------------------------
 
-export async function main(): Promise<void> {
+/** Minimal readable-stream surface `main` needs from stdin (injectable in tests). */
+export interface ReadableLike {
+  setEncoding: (encoding: string) => unknown;
+  on: (event: string, listener: (...args: unknown[]) => void) => unknown;
+}
+
+export interface MainOptions {
+  /** Inbound command channel. Defaults to `process.stdin`. */
+  stdin?: ReadableLike;
+  /** Outbound frame channel. Defaults to `process.stdout`. */
+  stdout?: Writable;
+  /** Hard process-exit seam. Defaults to `process.exit`. */
+  exit?: (code: number) => void;
+  /** Outbound queue cap override (test seam). */
+  maxOutboundQueue?: number;
+  /** Force-exit grace for a stuck teardown (passed to the control plane). */
+  forceExitMs?: number;
+  /** Attach real SIGINT/SIGTERM handlers. Defaults to true (false in tests). */
+  attachSignals?: boolean;
+}
+
+export async function main(options: MainOptions = {}): Promise<void> {
+  const stdin = options.stdin ?? process.stdin;
+  const stdout = options.stdout ?? process.stdout;
+  const exit = options.exit ?? ((code: number) => process.exit(code));
+  const attachSignals = options.attachSignals ?? true;
+
+  // P0 (defense in depth): even though the spawner MUST launch the sidecar with
+  // a scrubbed env + gateway base URL, strip any ambient provider credentials at
+  // process startup so Pi can never read an env key to select a real provider
+  // and bypass the Disco gateway. Log the result as the startup assertion.
+  const scrubbed = scrubProviderCredentialEnv();
+  process.stderr.write(
+    scrubbed.length > 0
+      ? `[pi-kernel] startup: scrubbed ${scrubbed.length} provider credential env var(s) ` +
+          `(${scrubbed.join(", ")}); the Disco gateway is the only reachable endpoint\n`
+      : `[pi-kernel] startup: no provider credential env vars present; ` +
+          `the Disco gateway is the only reachable endpoint\n`,
+  );
+
   let exited = false;
-  const writer = createOutboundWriter(process.stdout, {
-    // Upstream backpressure: when the outbound queue saturates behind a stalled
-    // reader, pause the inbound source so no fresh command (and therefore no
-    // fresh agent turn) is pulled; resume once the queue drains below the cap.
-    onBackpressure: (active) => {
-      if (active) process.stdin.pause();
-      else process.stdin.resume();
-    },
+  // NOTE (round-3 P1 #1): no `onBackpressure` that pauses stdin. Outbound
+  // backpressure is applied to the agent_event PRODUCER via `whenWritable`
+  // below; stdin stays readable so cancel / EOF always preempt a stalled stdout.
+  const writer = createOutboundWriter(stdout, {
+    maxQueue: resolveMaxOutboundQueue(options.maxOutboundQueue),
   });
   const queue = createSerialQueue();
 
@@ -492,7 +547,7 @@ export async function main(): Promise<void> {
       exited = true;
       // Flush every queued frame (incl. the final `exit`) before tearing down.
       void writer.flushed().then(() => {
-        process.stdout.write("", () => process.exit(code));
+        stdout.write("", () => exit(code));
       });
     },
   });
@@ -507,6 +562,10 @@ export async function main(): Promise<void> {
       shutdown: (code) => (exited ? Promise.resolve() : runner.shutdown(code)),
     },
     onError: (message) => writer.write({ type: "error", message }),
+    forceExitMs: options.forceExitMs,
+    // A stuck teardown (e.g. permanently stalled stdout blocking the final flush)
+    // is force-exited through the SAME seam as a clean exit.
+    forceExit: exit,
   });
 
   function onLine(line: string): void {
@@ -540,16 +599,18 @@ export async function main(): Promise<void> {
     resolveMaxLineBytes(),
   );
 
-  process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (chunk: string) => feed(chunk));
+  stdin.setEncoding("utf8");
+  stdin.on("data", (chunk: unknown) => feed(chunk as string));
 
   // EOF on stdin → preemptive graceful teardown (bypasses the data queue).
-  process.stdin.on("end", () => control.eof());
+  stdin.on("end", () => control.eof());
 
   // SIGINT/SIGTERM → preemptive teardown with a hard force-exit deadline, so a
   // stuck prompt/teardown can never make the signal ineffective.
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.on(signal, () => control.signal());
+  if (attachSignals) {
+    for (const signal of ["SIGINT", "SIGTERM"] as const) {
+      process.on(signal, () => control.signal());
+    }
   }
 }
 

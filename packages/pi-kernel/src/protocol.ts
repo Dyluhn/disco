@@ -19,10 +19,42 @@ export const PROTOCOL_VERSION = 1 as const;
 // ---------------------------------------------------------------------------
 
 /**
- * Configuration for a kernel session. Intentionally minimal for B1: the model /
- * provider is a PLACEHOLDER wired by the Disco inference gateway in EPIC C, so
- * nothing here selects a real model yet. `conversationId` is an opaque tag the
- * process manager uses to correlate this kernel with a Disco conversation.
+ * The Disco inference gateway endpoint — the ONLY model/provider the kernel is
+ * allowed to reach (Disco Pi Build Kernel Campaign §5.1 network invariant). The
+ * spawner injects this; the kernel registers it as the sole usable provider and
+ * pins the session's model to it, so no built-in provider (and no ambient
+ * credential) can ever be selected. Omitted in B1, where no gateway is wired yet
+ * — the session then has no model (a `prompt` fails loudly) rather than falling
+ * back to any real provider.
+ */
+export interface KernelGatewayConfig {
+  /**
+   * Base URL of the loopback Disco inference gateway (e.g.
+   * `http://127.0.0.1:<port>/v1`). All model traffic routes here and nowhere
+   * else.
+   */
+  baseUrl: string;
+  /** Model id exposed by the gateway and selected for this session. */
+  model: string;
+  /**
+   * Gateway credential, injected by the spawner — NEVER read from the ambient
+   * environment (those are scrubbed at startup). Required so the gateway model
+   * is the only one with configured auth.
+   */
+  apiKey: string;
+  /**
+   * Wire dialect the gateway speaks. Defaults to `openai-completions` (the
+   * OpenAI-compatible shape Disco's gateway exposes).
+   */
+  api?: string;
+}
+
+/**
+ * Configuration for a kernel session. Intentionally minimal for B1: when no
+ * `gateway` is supplied the model / provider is a PLACEHOLDER wired by the Disco
+ * inference gateway in EPIC C, so nothing here selects a real model yet.
+ * `conversationId` is an opaque tag the process manager uses to correlate this
+ * kernel with a Disco conversation.
  */
 export interface KernelInitConfig {
   /** Opaque correlation id for the owning Disco conversation, if any. */
@@ -32,6 +64,14 @@ export interface KernelInitConfig {
    * test seam; the process manager normally relies on the default.
    */
   heartbeatMs?: number;
+  /**
+   * The Disco inference gateway — the single reachable model/provider. When
+   * present the kernel registers ONLY this provider and pins the session to it;
+   * built-in providers remain registered but are never usable (their ambient
+   * credentials are scrubbed at startup). When absent (B1 default), the session
+   * has no model.
+   */
+  gateway?: KernelGatewayConfig;
 }
 
 /** Start the Pi session. Must be the first command; sending it twice errors. */

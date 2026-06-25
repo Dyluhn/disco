@@ -350,6 +350,66 @@ describe("PiKernelRunner.forwardAgentEvent (P1 round-3: producer-side backpressu
   });
 });
 
+describe("PiKernelRunner.forwardAgentEvent (P1 round-3 #2: producer backlog is HONESTLY bounded)", () => {
+  it("a synchronous flood under permanently-stalled stdout stays bounded and terminates with a fatal error", async () => {
+    const frames: KernelOutbound[] = [];
+    const cap = 16;
+    const runner = new PiKernelRunner({
+      emit: (f) => frames.push(f),
+      // stdout is dead: writer capacity NEVER frees, so the emit chain parks.
+      whenWritable: () => new Promise<void>(() => {}),
+      maxPendingAgentEvents: cap,
+    });
+
+    // Pi's `subscribe` listener is SYNCHRONOUS and fire-and-forget (its returned
+    // promise is ignored): model a turn flooding events without awaiting.
+    for (let i = 0; i < 100_000; i++) {
+      void runner.forwardAgentEvent({ type: "tok", n: i } as unknown as AgentSessionEvent);
+    }
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Memory stays bounded: buffered agent_events never exceed the cap (the old
+    // code would have grown the promise chain to 100k closures).
+    expect(runner.getPendingAgentEventCount()).toBeLessThanOrEqual(cap);
+
+    // Nothing was silently dropped into the void: with stdout dead no agent_event
+    // escaped, and the failure mode is EXPLICIT — a single fatal error + a single
+    // terminal exit, never unbounded growth.
+    expect(frames.filter((f) => f.type === "agent_event").length).toBe(0);
+    expect(frames.some((f) => f.type === "error" && f.fatal === true)).toBe(true);
+    expect(frames.filter((f) => f.type === "exit").length).toBe(1);
+  });
+});
+
+describe("PiKernelRunner.shutdown (P1 round-3 #3: exit cannot race pending agent_events)", () => {
+  it("flushes queued agent_events before exit; exit is the LAST frame; nothing emits after it", async () => {
+    const frames: KernelOutbound[] = [];
+    // Default whenWritable is always-writable, so the chain drains promptly.
+    const runner = new PiKernelRunner({ emit: (f) => frames.push(f) });
+
+    // Several agent_events enqueued via the fire-and-forget sync path, still
+    // pending in the emit chain when shutdown is requested.
+    for (let i = 0; i < 5; i++) {
+      void runner.forwardAgentEvent({ type: "tok", n: i } as unknown as AgentSessionEvent);
+    }
+
+    await runner.shutdown(0);
+
+    const types = frames.map((f) => f.type);
+    // All five agent_events flushed, in order, BEFORE the terminal exit.
+    expect(frames.filter((f) => f.type === "agent_event").length).toBe(5);
+    expect(types[types.length - 1]).toBe("exit");
+    expect(types.filter((t) => t === "exit").length).toBe(1);
+    expect(types.lastIndexOf("agent_event")).toBeLessThan(types.indexOf("exit"));
+
+    // Post-teardown emits are suppressed: no frame can appear after exit.
+    const before = frames.length;
+    await runner.forwardAgentEvent({ type: "late" } as unknown as AgentSessionEvent);
+    expect(frames.length).toBe(before);
+  });
+});
+
 describe("createSerialQueue (P1: sequential dispatch)", () => {
   it("runs tasks strictly in order, each settling before the next starts", async () => {
     const queue = createSerialQueue();

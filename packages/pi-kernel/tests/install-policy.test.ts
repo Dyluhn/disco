@@ -57,3 +57,29 @@ describe("Pi sidecar install policy (P2 #3: sanctioned install path is the enfor
     expect(preinstall).toContain("--ignore-scripts");
   });
 });
+
+describe("Pi sidecar engines (P2 #4: declared node range matches the dependency)", () => {
+  it("engines.node is >=22.19.0 to match pi-coding-agent's requirement", () => {
+    const pkg = JSON.parse(read("package.json")) as { engines?: { node?: string } };
+    expect(pkg.engines?.node).toBe(">=22.19.0");
+  });
+
+  it("the declared node range is not LESS than the pi-coding-agent dependency requires", () => {
+    const pkg = JSON.parse(read("package.json")) as { engines?: { node?: string } };
+    const depPkg = JSON.parse(
+      read("node_modules/@earendil-works/pi-coding-agent/package.json"),
+    ) as { engines?: { node?: string } };
+
+    const parse = (range: string | undefined): [number, number, number] => {
+      const m = /(\d+)\.(\d+)\.(\d+)/.exec(range ?? "");
+      if (!m) throw new Error(`unparseable node range: ${range}`);
+      return [Number(m[1]), Number(m[2]), Number(m[3])];
+    };
+
+    const ours = parse(pkg.engines?.node);
+    const theirs = parse(depPkg.engines?.node);
+    // Our floor must be >= the dependency's floor, component-wise.
+    const cmp = ours[0] - theirs[0] || ours[1] - theirs[1] || ours[2] - theirs[2];
+    expect(cmp).toBeGreaterThanOrEqual(0);
+  });
+});
