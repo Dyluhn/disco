@@ -16,7 +16,7 @@ import logging
 import re
 from typing import TYPE_CHECKING, cast
 
-from ..dod_evaluator import DoDEvaluator
+from ..dod_evaluator import DoDEvaluator, HttpProbeResult
 from ..env import disco_env
 from ..events import (
     ActionEvent,
@@ -1123,7 +1123,45 @@ class FinishGate:
                 f"no sandbox.workspace_path on executor {type(self._loop.executor).__name__}"
             )
         from pathlib import Path
-        return DoDEvaluator(Path(workspace))
+
+        # An `http_ok` serve-check must probe from INSIDE the sandbox: a build's dev
+        # server binds the SANDBOX's localhost, not the host's. The default host-side
+        # urlopen would hit the agent-server (404 on `/`), false-failing every sandboxed
+        # serve and spinning the model into re-serve/re-verify loops. Route the probe
+        # through `exec_shell` + curl when the backend supports it; otherwise fall back
+        # to the default host probe (e.g. the process backend shares the host network).
+        http_probe = None
+        if sbx is not None and hasattr(sbx, "exec_shell"):
+            import shlex
+
+            async def _in_sandbox_http_probe(
+                url: str, expected_status: int
+            ) -> HttpProbeResult:
+                cmd = (
+                    "curl -s -o /dev/null -w '%{http_code}' --max-time 10 "
+                    + shlex.quote(url)
+                )
+                try:
+                    res = await sbx.exec_shell(cmd, timeout_s=15)
+                except Exception as exc:  # noqa: BLE001 — a probe failure is "not probed", never a crash
+                    return HttpProbeResult(
+                        status_code=None,
+                        error_message=f"sandbox http probe failed: {exc}",
+                    )
+                out = (res.stdout or "").strip()
+                if not out.isdigit() or out == "000":
+                    return HttpProbeResult(
+                        status_code=None,
+                        error_message=(
+                            f"sandbox curl produced no HTTP status "
+                            f"(got {out!r}, exit {res.exit_code})"
+                        ),
+                    )
+                return HttpProbeResult(status_code=int(out))
+
+            http_probe = _in_sandbox_http_probe
+
+        return DoDEvaluator(Path(workspace), http_probe=http_probe)
 
     def resolve_verify_command(self, args: dict) -> str:
         verify_cmd = str(args.get("verify") or "").strip()
