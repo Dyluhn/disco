@@ -288,7 +288,18 @@ def make_pi_tools_router(
             if pi_kernel is not None:
                 result = await pi_kernel.route_pi_tool(conversation_id, tool_call)
             else:
-                result = await runtime.execute_pi_tool(conversation_id, tool_call)
+                # FAIL-CLOSED: a Pi tool call with no managed PiKernel has no gate stack
+                # (the bare `runtime.execute_pi_tool` skips hard-deny/risk-confirm/K1/
+                # planning). Refuse rather than execute ungated — the safe Build path
+                # always routes through PiKernel.route_pi_tool → PiToolBridge.
+                result = ToolResult(
+                    call_id=call_id,
+                    tool_name=tool_name,
+                    success=False,
+                    content="no managed Pi kernel; refusing ungated tool execution",
+                    structured={"kind": "no_managed_kernel", "tool_name": tool_name},
+                    error="no_managed_kernel",
+                )
         except Exception as exc:  # noqa: BLE001 — the bridge/executor may raise; never propagate
             _LOG.warning(
                 "pi-tools bridge could not execute tool=%s token=%s: %s",
