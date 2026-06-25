@@ -65,18 +65,14 @@ _FRAMEWORK_COMMANDS: dict[str, str] = {
     "express": "PORT={port} npm start",
 }
 
-# Port flags a model might bake into a raw `command`. We SCRUB these so the platform
-# port can never be overridden through the command string — the platform port wins.
-_PORT_FLAG_RE = re.compile(
-    r"""(?xi)
-    (?:^|\s)
-    (?:
-        --port(?:=|\s+)\d+        # --port 3000 | --port=3000
-      | -p(?:=|\s+)\d+            # -p 3000     | -p=3000
-      | PORT=\d+                  # PORT=3000 env assignment
-    )
-    """
-)
+# Port flags a model might bake into a raw `command`. These are handled on the SHLEX'D
+# ARGV TOKENS (see `_classify_port_flag` / `_scrub_port_flag_tokens`), NOT by a regex on
+# the raw string: a regex-on-raw-string scrub loses to quoting (`--port "8000"`,
+# `--port='8000'`, `-p8000`, `PORT='8000'` all slip past `--port\s+\d+`), and after shlex
+# those forms also dodge the positional-port rejection (the value is the flag's token,
+# not a bare integer). Tokenizing first NORMALIZES every quoted/`=`-joined/joined form
+# into the same tokens, so one uniform rule scrubs/refills them all — same lesson as the
+# operator-ban: stop parsing raw shell, restrict + inspect the tokens.
 
 # P1 #1 — port-bearing forms the flag-scrub above does NOT catch: a POSITIONAL
 # `http.server <port>`, or a `host:port` / `:port` BIND argument (gunicorn `-b
@@ -126,6 +122,36 @@ def _looks_like_port(token: str) -> bool:
     a single-digit count, or a flag value (the caller excludes any token following a flag,
     so `--workers 4` / `--timeout 30` are never misread as a port)."""
     return token.isdigit() and 2 <= len(token) <= 5 and 1 <= int(token) <= 65535
+
+
+def _classify_port_flag(tok: str, nxt: str | None) -> tuple[str | None, int, str]:
+    """Classify ONE argv token (post-`shlex.split`) as a port-specifying flag.
+
+    Because shlex already stripped quotes and split on `=`, every form a model might use
+    to bake in a port — `--port 8000`, `--port "8000"`, `--port='8000'`, `-p 8000`,
+    `-p8000`, `-p=8000`, a leading `PORT='8000'` env-assignment — is NORMALIZED into one
+    or two plain tokens here, so a single rule handles them uniformly (the quoting/`=`-join
+    bypass class that beat the old raw-string regex is gone).
+
+    Returns ``(value, span, kind)``:
+      * ``value`` — the port the flag carries: the NEXT token for the space-separated
+        forms (`--port X`, `-p X`), or the inline value otherwise; ``None`` when it is not
+        a port flag, or a space-separated flag with no following token.
+      * ``span`` — tokens the flag occupies (``2`` for `--port X` / `-p X`, else ``1``).
+      * ``kind`` — ``""`` not a port flag · ``"flag"`` a CLI `--port`/`-p` flag a server
+        reads off argv · ``"env"`` a `PORT=` env-assignment the platform already injects.
+    """
+    if tok in ("--port", "-p"):
+        return (nxt, 2, "flag")  # value is the next token
+    if tok.startswith("--port="):
+        return (tok[len("--port=") :], 1, "flag")
+    if tok.startswith("-p=") and len(tok) > 3:
+        return (tok[3:], 1, "flag")
+    if tok.startswith("-p") and len(tok) > 2:  # `-p8000` (directly joined)
+        return (tok[2:], 1, "flag")
+    if tok.startswith("PORT="):
+        return (tok[len("PORT=") :], 1, "env")
+    return (None, 1, "")
 
 
 # tmux session-name prefix the ShellSessionManager writes (see shell_sessions._PREFIX).
@@ -246,21 +272,53 @@ class PreviewManager:
 
     # ---- intent → resolved command -----------------------------------------
 
-    def _reject_positional_port(self, residual: str) -> None:
-        """Parse the (operator-free, placeholder-blanked, flag-scrubbed) command with
-        `shlex.split` and reject any BARE positional port-like token — a hardcoded port the
-        platform can't override that the flag-scrub didn't catch (`http.server <port>`, or a
-        port positioned anywhere). HEURISTIC: a numeric token immediately following a flag
-        (a token starting with `-`) is treated as that flag's VALUE, not a port, so legit
-        numeric args like `--workers 4` / `--timeout 30` are not false-rejected. An
-        unparseable command (e.g. unbalanced quotes) is refused rather than silently run."""
-        try:
-            tokens = shlex.split(residual)
-        except ValueError as exc:
-            raise PreviewCommandError(
-                f"preview command could not be parsed as a single shell command ({exc}). "
-                "Provide a simple foreground command with the serve port as '{port}'."
-            ) from exc
+    def _scrub_port_flag_tokens(self, tokens: list[str]) -> list[str]:
+        """Walk the shlex'd argv and DROP every port-specifying flag that carries a
+        CONCRETE model-chosen port (in ANY normalized form — `--port 8000`, `--port "8000"`,
+        `--port='8000'`, `-p8000`, `-p 8000`, `PORT='8000'`), so the platform port can never
+        be overridden through the command. The platform owns the port and injects it via the
+        `PORT=<its port>` prefix, so a dropped flag's server still gets the right port.
+
+        A flag whose value is the literal `{port}` placeholder is the SANCTIONED way to
+        position the platform port: keep the `--port`/`-p` flag untouched (it is filled with
+        the allocated port later). A redundant `PORT={port}` is dropped (the platform already
+        injects PORT=). Everything else passes through unchanged.
+
+        This replaces the old regex-on-raw-string scrub, which lost to quoting/`=`-joining —
+        after shlex those forms are normalized tokens we handle uniformly here."""
+        out: list[str] = []
+        i = 0
+        while i < len(tokens):
+            tok = tokens[i]
+            nxt = tokens[i + 1] if i + 1 < len(tokens) else None
+            value, span, kind = _classify_port_flag(tok, nxt)
+            if kind and value is not None:
+                if value.isdigit():
+                    # Concrete port → drop the flag (+ its value token for `--port X`/`-p X`).
+                    i += span
+                    continue
+                if value == "{port}":
+                    if kind == "env":
+                        i += span  # PORT={port}: redundant with the platform PORT= prefix.
+                        continue
+                    # `--port {port}` / `--port={port}` / `-p{port}`: keep — filled later.
+                    out.append(tok)
+                    if span == 2 and nxt is not None:
+                        out.append(nxt)
+                    i += span
+                    continue
+            out.append(tok)
+            i += 1
+        return out
+
+    def _reject_positional_tokens(self, tokens: list[str]) -> None:
+        """Reject any BARE positional port-like token in the (operator-free, port-flag-scrubbed)
+        argv — a hardcoded port the platform can't override sitting as a plain positional arg
+        (`http.server <port>`, or a port positioned anywhere). HEURISTIC: a numeric token
+        immediately following a flag (a token starting with `-`) is that flag's VALUE, not a
+        port, so legit numeric args like `--workers 4` / `--timeout 30` are not false-rejected.
+        A `{port}` placeholder token is not a digit, so it is never mistaken for a hardcoded
+        port."""
         prev_was_flag = False
         for tok in tokens:
             if _looks_like_port(tok) and not prev_was_flag:
@@ -287,11 +345,12 @@ class PreviewManager:
         `framework` template > static file serving of `serve_dir` (the safe MVP default).
 
         A raw command never gets to pick the port: any `--port/-p/PORT=` the model
-        embedded is stripped and the platform port is injected via `PORT=`. A raw command
-        that ALSO binds a port through a form the scrub can't override (a positional
-        `http.server <port>`, a `host:port` bind) is REJECTED (`PreviewCommandError`) —
-        unless it uses the literal `{port}` placeholder, which the platform fills with
-        ITS port (the explicit, safe way to put the platform port at a positional slot).
+        embedded (quoted, `=`-joined, or bare) is stripped on the SHLEX'D TOKENS and the
+        platform port is injected via `PORT=`. A raw command that ALSO binds a port through
+        a form the scrub can't override (a positional `http.server <port>`, a `host:port`
+        bind) is REJECTED (`PreviewCommandError`) — unless it uses the literal `{port}`
+        placeholder, which the platform fills with ITS port (the explicit, safe way to put
+        the platform port at a positional slot).
         """
         serve = serve_dir or self._sandbox_workspace() or "."
         if command:
@@ -308,23 +367,31 @@ class PreviewManager:
                     "Use one command and put the serve port as the literal placeholder "
                     "'{port}' (e.g. 'python3 -m http.server {port} -d dist')."
                 )
-            scrubbed = _PORT_FLAG_RE.sub(" ", command).strip()
-            has_placeholder = "{port}" in scrubbed
-            # Reject ANY other hardcoded/positional port the flag-scrub can't override —
+            # Tokenize ONCE (the operator-ban above guarantees a single command). All
+            # port-flag handling happens on these tokens, not on the raw string, so the
+            # quoted/`=`-joined forms that beat a raw-string regex are normalized first.
+            try:
+                tokens = shlex.split(command)
+            except ValueError as exc:
+                raise PreviewCommandError(
+                    f"preview command could not be parsed as a single shell command ({exc}). "
+                    "Provide a simple foreground command with the serve port as '{port}'."
+                ) from exc
+            # Drop every concrete port flag (`--port/-p/PORT=`, any quoting/join); keep a
+            # `{port}` placeholder flag for the platform to fill.
+            cleaned = self._scrub_port_flag_tokens(tokens)
+            # Reject ANY other hardcoded/positional port the flag-scrub can't account for —
             # even on the `{port}`-placeholder path. The placeholder is the ONE sanctioned
             # way to put the platform port at a positional slot, but the REST of the command
             # must still be port-clean: a second, hardcoded port alongside `{port}` (e.g.
             # 'http.server {port} 9999') would bind a model-chosen port the platform doesn't
-            # own (P1 #1). Blank the placeholder out so only OTHER ports trip the check.
-            residual = scrubbed.replace("{port}", " ") if has_placeholder else scrubbed
-            # shlex-tokenize the single command and reject any BARE positional port-like
-            # token (covers `http.server [flags] <port> [more]` and a port positioned
-            # anywhere). A numeric token immediately after a flag is that flag's value, not
-            # a port, so `--workers 4` / `--timeout 30` pass. The `{port}` placeholder is the
-            # only sanctioned way to express the serve port positionally.
-            self._reject_positional_port(residual)
+            # own (P1 #1). The `{port}` token is not a digit, so it never trips this check.
+            self._reject_positional_tokens(cleaned)
             # Backstop for `host:port` / `:port` BIND forms (gunicorn `-b :8000`, `serve -l
             # 0.0.0.0:8000`) that carry a colon and so are not a bare integer token above.
+            # Run it on a residual rebuilt from the cleaned tokens with `{port}` blanked, so
+            # only a CONCRETE bind (`:8000`) trips it — never the sanctioned `:{port}`.
+            residual = " ".join(t.replace("{port}", " ") for t in cleaned)
             bound = _RAW_HARDCODED_PORT_RE.search(residual)
             if bound is not None:
                 raise PreviewCommandError(
@@ -334,15 +401,13 @@ class PreviewManager:
                     "<its port>), or put the literal placeholder '{port}' where the port "
                     "goes (e.g. 'python3 -m http.server {port} -d dist')."
                 )
-            if has_placeholder:
-                # Model explicitly delegated the port slot to the platform — fill it with
-                # OUR port (and still export PORT for env-reading servers).
-                filled = scrubbed.replace("{port}", str(port)).strip()
-                return f"PORT={port} {filled}"
-            # Inject the platform port as an env var (honored by Node/Vite/Next/CRA/
-            # Flask-via-env, …). The static template path below is used when the model
-            # gives a dir/framework instead — that bakes the port into the flag directly.
-            return f"PORT={port} {scrubbed}"
+            # Fill any `{port}` placeholder (flag value or positional slot) with OUR port,
+            # then re-join into a single safely-quoted command. Filling BEFORE the join
+            # avoids `shlex.join` quoting the `{...}` braces (which would break the served
+            # port). Inject the platform port as an env var too (honored by Node/Vite/Next/
+            # CRA/Flask-via-env, …); the static template path below handles dir/framework.
+            filled = [t.replace("{port}", str(port)) for t in cleaned]
+            return f"PORT={port} {shlex.join(filled)}"
         if framework:
             template = _FRAMEWORK_COMMANDS.get(framework.strip().lower())
             if template is not None:

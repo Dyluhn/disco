@@ -504,6 +504,82 @@ async def test_numeric_flag_value_is_not_misread_as_port() -> None:
     assert "--port 3000" in session.command  # placeholder filled with the platform port
 
 
+# ============================== P1 (re-sweep): quoted / =-joined concrete-port bypass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command",
+    [
+        'npm run dev --port "8000"',   # quoted value — old regex needed BARE digits
+        "npm run dev --port='8000'",   # =-joined + quoted — one token after shlex
+        "npm run dev -p8000",          # short flag, directly joined (no separator)
+        "npm run dev -p 8000",         # short flag, space-separated
+        "npm run dev -p='8000'",       # short flag, =-joined + quoted
+        "PORT='8000' npm run dev",     # leading PORT= env-assignment, quoted
+    ],
+)
+async def test_quoted_or_joined_concrete_port_flag_is_scrubbed_to_platform_port(
+    command: str,
+) -> None:
+    """RE-SWEEP P1: the port-flag scrub used to be a regex on the RAW string that only fired
+    on BARE digits (`--port\\s+\\d+`), so a quoted / `=`-joined / directly-joined value slipped
+    past it — AND past the positional-port rejection (after shlex the value is the flag's
+    token, not a bare integer). Handling the scrub on the shlex'd ARGV TOKENS normalizes every
+    form, so each model-chosen port is dropped and only the PLATFORM port is bound."""
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    session = await mgr.start(command=command, supervise=False)
+    assert session.port == 3000  # platform pool, NOT 8000
+    assert "8000" not in session.command  # the model's port was scrubbed in every form
+    assert "PORT=3000" in session.command  # platform port injected
+    assert session.status is PreviewStatus.RUNNING
+    assert 8000 not in sandbox._serving  # the model-chosen port was NEVER bound
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command,expect",
+    [
+        ("uvicorn app:app --port {port}", "--port 3000"),    # long flag, space-separated
+        ("uvicorn app:app --port={port}", "--port=3000"),    # long flag, =-joined
+        ("uvicorn app:app -p {port}", "-p 3000"),            # short flag, space-separated
+        ("uvicorn app:app -p{port}", "-p3000"),              # short flag, directly joined
+        ("uvicorn app:app -p={port}", "-p=3000"),            # short flag, =-joined
+    ],
+)
+async def test_port_placeholder_in_every_flag_form_is_filled_with_platform_port(
+    command: str, expect: str
+) -> None:
+    """The `{port}` placeholder is the sanctioned way to express the serve port on a flag,
+    in EVERY normalized form (space / `=`-joined / directly-joined, long or short flag): it
+    is kept and filled with the PLATFORM port, never dropped — so a server that reads the
+    port off argv (not env) still gets the platform's port."""
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    session = await mgr.start(command=command, supervise=False)
+    assert session.port == 3000
+    assert expect in session.command  # placeholder filled with the platform port
+    assert "{port}" not in session.command
+    assert session.status is PreviewStatus.RUNNING
+
+
+@pytest.mark.asyncio
+async def test_quoted_concrete_port_with_workers_keeps_workers_drops_port() -> None:
+    """A real mixed command: a quoted concrete `--port` is dropped while a legit
+    `--workers N` survives — proving the scrub is flag-specific, not a blanket digit purge."""
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    session = await mgr.start(
+        command='uvicorn app:app --port "8000" --workers 4', supervise=False
+    )
+    assert session.port == 3000
+    assert "8000" not in session.command
+    assert "--workers 4" in session.command  # non-port numeric arg untouched
+    assert "PORT=3000" in session.command
+    assert session.status is PreviewStatus.RUNNING
+
+
 # ---------------------------------------------- P1 #1/#2: post-launch port ownership
 
 
