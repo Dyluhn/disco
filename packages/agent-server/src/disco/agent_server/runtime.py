@@ -19,7 +19,7 @@ import contextlib
 import logging
 import os
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -741,6 +741,14 @@ class ConversationRuntime:
         # run reaches a terminal status (FINISHED/ERROR/STUCK) or is killed, so the
         # NEXT turn re-resolves the current selection. A pause/gate-park keeps it.
         self._pinned_kernels: dict[str, BuildKernel] = {}
+        # Per-conversation RUN-GENERATION counter (finding #3, the pin set/clear race).
+        # `kick` bumps it every time it spawns a NEW run task; the done-callback closes
+        # over the generation it was spawned under and `_finalize_clean_return` only
+        # CLEARS the pin if that generation is STILL current. So a finalizer that runs
+        # AFTER a new turn already reused the pin (the async-finalize race) cannot clear
+        # the pin out from under the newer run. A steer (kick early-returns over a live
+        # task) does NOT bump it — same run, same generation, same pin.
+        self._run_generation: dict[str, int] = {}
 
     # The generative (text-producing) roles a model PICK drives. NLI_VERIFIER is a
     # cross-encoder (entailment scorer), NOT a chat model — pointing it at a picked
@@ -1563,12 +1571,19 @@ class ConversationRuntime:
         # fresh sandbox on the new backend (best-effort destroy of the old box).
         self._evict_stale_backend(conversation_id)
         loop = self._loop_for(conversation_id)
+        # finding #3: this is a NEW run task → bump the conversation's run-generation
+        # and bind it into the done-callback, so the finalizer for THIS run can tell
+        # whether a newer run has since reused the pin (and must not clear it).
+        generation = self._run_generation.get(conversation_id, 0) + 1
+        self._run_generation[conversation_id] = generation
         task = asyncio.create_task(self._run_with_persistence(conversation_id, loop))
         # W2 supervision: the run task ALWAYS resolves to a terminal status. Without this
         # callback an exception escaping loop.run() killed the task silently and left the
         # conversation at RUNNING forever (the silent hang Dylan hit).
         task.add_done_callback(
-            lambda t, _cid=conversation_id: self._on_run_task_done(_cid, t)
+            lambda t, _cid=conversation_id, _gen=generation: self._on_run_task_done(
+                _cid, t, _gen
+            )
         )
         self._tasks[conversation_id] = task
 
@@ -1611,10 +1626,14 @@ class ConversationRuntime:
         }
     )
 
-    def _on_run_task_done(self, conversation_id: str, task: asyncio.Task[Any]) -> None:
+    def _on_run_task_done(
+        self, conversation_id: str, task: asyncio.Task[Any], generation: int | None = None
+    ) -> None:
         """W2 supervision callback. Deregister the task; on an UNHANDLED exception (NOT
         cancellation), schedule terminalization to ERROR so the conversation can never sit
-        at RUNNING forever."""
+        at RUNNING forever. `generation` (the run-generation this task was spawned under,
+        finding #3) is threaded to the clean-return finalizer so a stale finalizer can't
+        clear a pin a newer run has since reused."""
         if self._tasks.get(conversation_id) is task:
             self._tasks.pop(conversation_id, None)
         if task.cancelled():
@@ -1631,13 +1650,17 @@ class ConversationRuntime:
             # W2 only handled the exception case, so this sat at RUNNING forever
             # (the silent MiniMax-build hang). Reconcile it (re-kick once, else STUCK).
             with contextlib.suppress(RuntimeError):  # no running loop (shutdown) → skip
-                asyncio.create_task(self._finalize_clean_return(conversation_id))
+                asyncio.create_task(
+                    self._finalize_clean_return(conversation_id, generation)
+                )
             return
         # An exception escaped loop.run(). Schedule (best-effort) a terminal ERROR.
         with contextlib.suppress(RuntimeError):  # no running loop (shutdown) → skip
             asyncio.create_task(self._terminalize_crashed(conversation_id, exc))
 
-    async def _finalize_clean_return(self, conversation_id: str) -> None:
+    async def _finalize_clean_return(
+        self, conversation_id: str, generation: int | None = None
+    ) -> None:
         """W11 supervision. The run task returned WITHOUT raising. If the conversation
         already concluded, or legitimately parked (awaiting the user / a control op),
         there's nothing to do. But if it's still RUNNING the turn ended without
@@ -1662,8 +1685,11 @@ class ConversationRuntime:
             # kernel pin so the NEXT run re-resolves the current selection. A
             # gate-park (AWAITING_*) or PAUSED stays pinned — its resume/approve
             # must continue under the SAME kernel the run started on (finding #1).
+            # Generation-guarded (finding #3): a fresh turn may already have reused the
+            # pin between this task finishing and this finalizer running — don't clear
+            # it out from under that newer run.
             if status in self._KERNEL_UNPIN_STATUSES:
-                self._clear_pinned_kernel(conversation_id)
+                self._unpin_if_current_generation(conversation_id, generation)
             return
         # Still RUNNING (the loop emits RUNNING at entry and only leaves it by emitting
         # a different status): the turn ended without concluding.
@@ -1701,7 +1727,9 @@ class ConversationRuntime:
             # above (which unpins via `_KERNEL_UNPIN_STATUSES`), this path appends a
             # FRESH terminal status and must clear the pin itself, else a wedged run
             # would leak its pin forever and later gate/config flips stay ineffective.
-            self._clear_pinned_kernel(conversation_id)
+            # Generation-guarded (finding #3): if a newer run already reused the pin,
+            # leave it (the re-read above already returns on a concluded newer status).
+            self._unpin_if_current_generation(conversation_id, generation)
             await self._emit_persistence_reminder(
                 conversation_id,
                 "The run ended without completing or stopping cleanly (the model turn "
@@ -2463,6 +2491,20 @@ class ConversationRuntime:
         — NOT on a pause / gate-park, which stay pinned for resume."""
         self._pinned_kernels.pop(conversation_id, None)
 
+    def _unpin_if_current_generation(
+        self, conversation_id: str, generation: int | None
+    ) -> None:
+        """Clear the kernel pin ONLY if no NEWER run has started since the finalizing
+        task began (finding #3, the pin set/clear race). `_on_run_task_done` schedules
+        the clean-return finalizer ASYNC; before it runs, a fresh user turn can append +
+        `kick` a new run that REUSES this conversation's pin and bumps its run-generation.
+        A stale finalizer must NOT then clear the pin out from under that newer run. When
+        `generation` is None (the stranded-run sweep / legacy callers, which have no
+        competing newer run) clear unconditionally."""
+        if generation is not None and self._run_generation.get(conversation_id) != generation:
+            return  # a newer run owns the pin now — leave it for that run
+        self._clear_pinned_kernel(conversation_id)
+
     def start(self, conversation_id: str) -> None:
         """Start/continue the conversation's run THROUGH the pinned kernel (codex
         finding #1, point a). For the default `disco` kernel this is a behaviour-
@@ -2512,25 +2554,66 @@ class ConversationRuntime:
                 self._clear_pinned_kernel(conversation_id)
             raise
 
+    async def _run_continuing_control(
+        self, conversation_id: str, call: Callable[[BuildKernel], Awaitable[Any]]
+    ) -> Any:
+        """Route a RUN-CONTINUING control op (confirm/reject/approve_plan/request_plan/
+        pick_alternative) through the conversation's PINNED kernel (finding #1).
+
+        These ops continue an in-flight (or gate-parked) run, so they MUST land on the
+        SAME kernel the run started under. The previous code called `_kernel_for`
+        directly: when no in-memory pin existed (after a restart, a legacy pre-A1 gated
+        conversation, or any direct unpinned kick) it RE-RESOLVED the selection instead
+        of pinning it — so a control op could start/continue a run on a kernel different
+        from the one a later op would resolve, the exact half-disco/half-pi split #1
+        forbids. Now we `_ensure_kernel_pinned` first: an existing pin is reused; a
+        missing one is resolved + committed here. The same rollback-on-raise semantics as
+        `start`/`send_user_turn` (finding #2): a FRESHLY-created pin is rolled back if the
+        kernel call raises (so a failed op leaves no stuck pin), while a pre-existing pin
+        from the live run is preserved. Byte-identical for the default `disco` kernel —
+        the op still lands on `_control`/`_loop_for` exactly as before, just pinned."""
+        newly_pinned = conversation_id not in self._pinned_kernels
+        kernel = self._ensure_kernel_pinned(conversation_id)
+        try:
+            return await call(kernel)
+        except BaseException:
+            if newly_pinned:
+                self._clear_pinned_kernel(conversation_id)
+            raise
+
     async def confirm(self, conversation_id: str) -> None:
-        return await self._kernel_for(conversation_id).confirm(conversation_id)
+        return await self._run_continuing_control(
+            conversation_id, lambda k: k.confirm(conversation_id)
+        )
 
     async def reject(self, conversation_id: str, reason: str = "rejected by user") -> None:
-        return await self._kernel_for(conversation_id).reject(conversation_id, reason)
+        return await self._run_continuing_control(
+            conversation_id, lambda k: k.reject(conversation_id, reason)
+        )
 
     async def approve_plan(self, conversation_id: str) -> None:
-        return await self._kernel_for(conversation_id).approve_plan(conversation_id)
+        return await self._run_continuing_control(
+            conversation_id, lambda k: k.approve_plan(conversation_id)
+        )
 
     async def request_plan(self, conversation_id: str, text: str = "") -> None:
-        return await self._kernel_for(conversation_id).request_plan(conversation_id, text)
+        return await self._run_continuing_control(
+            conversation_id, lambda k: k.request_plan(conversation_id, text)
+        )
 
     async def pick_alternative(self, conversation_id: str, option_id: str) -> None:
         """Resume from AWAITING_USER_DECISION by selecting the agent's proposed
         alternative path. The loop synthesizes an ActionEvent from the option's
         ToolCall and executes it directly, then resumes.
-        Lazy-composes — see `confirm` (the post-restart silent-drop hole)."""
-        loop = self._loop_for(conversation_id)
-        await loop.pick_alternative(option_id)
+
+        Routed through the PINNED kernel (finding #1): previously this bypassed the
+        kernel entirely and called `_loop_for(...).pick_alternative` directly, so a run
+        could be continued unpinned. `DiscoKernel.pick_alternative` performs the SAME
+        `_loop_for(...).pick_alternative(option_id)` call, so the disco path is
+        byte-identical — just pinned."""
+        return await self._run_continuing_control(
+            conversation_id, lambda k: k.pick_alternative(conversation_id, option_id)
+        )
 
     async def pause(self, conversation_id: str) -> None:
         return await self._control.pause(conversation_id)
@@ -2575,6 +2658,52 @@ class ConversationRuntime:
         # Hard kill = terminal → release the kernel pin (next run re-resolves). #1.
         self._clear_pinned_kernel(conversation_id)
         return await self._control.kill(conversation_id)
+
+    async def forget_conversation(self, conversation_id: str) -> None:
+        """Drop ALL in-memory runtime state for a conversation that is being DELETED
+        (finding #5 — the `_pinned_kernels` leak). The library/delete route removes the
+        DB rows, but the agent-server process keeps per-conversation caches (the kernel
+        pin, the run-generation, the cached loop + live task, sandbox executor/session,
+        and the lightweight per-cid settings/DR caches) until process exit. A deleted
+        conversation can never be reached again, so every such entry is pure leak — and a
+        leaked pin/loop bound to a freed cid is a latent correctness hazard if the id is
+        ever reused. Best-effort + idempotent: cancels the live task, tears down the
+        sandbox executor/session, and pops every per-cid map. Never raises (a delete must
+        not fail because cleanup hit a wedged sandbox)."""
+        # Stop any in-flight run first so its done-callback can't re-pin/re-kick.
+        self._clear_pinned_kernel(conversation_id)
+        task = self._tasks.pop(conversation_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+        executor = self._executors.pop(conversation_id, None)
+        if executor is not None:
+            with contextlib.suppress(Exception):
+                await executor.kill()
+        session = self._pending_sessions.pop(conversation_id, None)
+        if session is not None:
+            with contextlib.suppress(Exception):
+                await session.destroy()
+        # Pop every remaining per-conversation cache (no-op if absent).
+        for cache in (
+            self._run_generation,
+            self._loops,
+            self._nonterminal_rekicks,
+            self._last_status,
+            self._cancel_flags,
+            self._model_override,
+            self._surface,
+            self._autonomous,
+            self._assist,
+            self._artifact_mode,
+            self._depth,
+            self._driver_preflight_ok,
+            self._dr_steer,
+            self._dr_injected_sources,
+            self._upload_passages,
+            self._last_sessions,
+            self._mcp_approval_pending,
+        ):
+            cache.pop(conversation_id, None)
 
     async def aclose(self) -> None:
         for task in self._tasks.values():

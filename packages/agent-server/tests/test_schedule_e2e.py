@@ -462,3 +462,35 @@ async def test_scheduled_rerun_routes_through_pinned_send_path():
     # The audit marker + row are still emitted exactly once.
     assert len(await _run_events(store, cid)) == 1
     assert len(store.list_schedule_runs(sched.schedule_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_failing_send_leaves_no_orphan_schedule_run_row():
+    """Finding #6 (ordering regression): the audit DB row is written AFTER the trigger
+    `send_user_turn`, not before. So if the trigger append FAILS, history must NOT show a
+    fired schedule-run row with no trigger message — `create_schedule_run` is skipped."""
+    store = _store()
+    clock: list[datetime] = [datetime(2024, 6, 1, 10, 0, tzinfo=UTC)]
+    cid = f"conv_{uuid.uuid4().hex}"
+    store.create_conversation(cid, owner_id="local")
+    await _seed_query(store, cid, text="What's new in AI?")
+
+    rt = MagicMock()
+    rt.kick = MagicMock()
+    rt.set_model_override = MagicMock()
+    rt.set_depth = MagicMock()
+    rt.send_user_turn = AsyncMock(side_effect=RuntimeError("append failed"))
+    mgr, _ = _manager(store, clock, rt=rt)
+
+    sched = mgr.create_schedule(
+        conversation_id=cid,
+        owner_id="local",
+        rrule="*/2 * * * *",
+        description="orphan-row regression",
+    )
+
+    # _execute_run swallows the failure (logs it), but must not persist an audit row.
+    await mgr._execute_run(sched, coalesced=False)
+
+    rt.send_user_turn.assert_awaited_once_with(cid, "What's new in AI?")
+    assert store.list_schedule_runs(sched.schedule_id) == []  # no orphan fired row

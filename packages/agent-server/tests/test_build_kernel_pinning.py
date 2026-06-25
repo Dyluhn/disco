@@ -45,13 +45,21 @@ def _runtime(store: SqliteEventStore, *, build_kernel: str = "disco") -> types.S
     fake._store = store
     fake._tasks = {}
     fake._pinned_kernels = {}
+    fake._run_generation = {}
     fake.kick = MagicMock()
 
     control = MagicMock()
     control.confirm = AsyncMock()
     control.approve_plan = AsyncMock()
+    control.reject = AsyncMock()
+    control.request_plan = AsyncMock()
     control.kill = AsyncMock()
     fake._control = control
+    # pick_alternative routes through DiscoKernel → runtime._loop_for(cid).pick_alternative
+    loop = MagicMock()
+    loop.pick_alternative = AsyncMock()
+    fake._loop = loop
+    fake._loop_for = MagicMock(return_value=loop)
 
     cfg = MagicMock()
     cfg.build_kernel = build_kernel
@@ -66,10 +74,14 @@ def _runtime(store: SqliteEventStore, *, build_kernel: str = "disco") -> types.S
         "_kernel_for",
         "_ensure_kernel_pinned",
         "_clear_pinned_kernel",
+        "_run_continuing_control",
         "start",
         "send_user_turn",
         "confirm",
+        "reject",
         "approve_plan",
+        "request_plan",
+        "pick_alternative",
         "kill",
     ):
         setattr(fake, name, types.MethodType(getattr(ConversationRuntime, name), fake))
@@ -144,6 +156,87 @@ async def test_midrun_steer_reuses_pin(
     assert rt._pinned_kernels[CID] is rt._disco_kernel
     msgs = [e for e in await store.get_events(CID) if hasattr(e, "message")]
     assert msgs[-1].meta == {"steer": True}
+
+
+# ---- finding #1 (deeper): control ops on an UNPINNED run must pin, not bypass --
+
+
+async def test_confirm_pins_when_no_pin_exists(
+    monkeypatch: pytest.MonkeyPatch, store: SqliteEventStore
+) -> None:
+    """A control op on a conversation with NO in-memory pin (after a restart, a legacy
+    pre-A1 gated conversation, or a direct unpinned kick) must RESOLVE + PIN the kernel
+    — not re-resolve transiently. Else a later op could land on a different kernel."""
+    monkeypatch.delenv(EXP_ENV, raising=False)
+    rt = _runtime(store, build_kernel="disco")
+    assert CID not in rt._pinned_kernels  # no pin (e.g. fresh process after a restart)
+
+    await rt.confirm(CID)
+    assert rt._pinned_kernels[CID] is rt._disco_kernel  # pinned by the control op
+    rt._control.confirm.assert_awaited_once_with(CID)
+
+
+async def test_every_control_op_pins_when_no_pin_exists(
+    monkeypatch: pytest.MonkeyPatch, store: SqliteEventStore
+) -> None:
+    """EVERY run-continuing control op (confirm/reject/approve_plan/request_plan/
+    pick_alternative) pins an unpinned conversation through the SAME seam."""
+    monkeypatch.delenv(EXP_ENV, raising=False)
+    for op, check in (
+        (lambda rt: rt.reject(CID, "no"), lambda rt: rt._control.reject),
+        (lambda rt: rt.approve_plan(CID), lambda rt: rt._control.approve_plan),
+        (lambda rt: rt.request_plan(CID, "again"), lambda rt: rt._control.request_plan),
+        (lambda rt: rt.pick_alternative(CID, "opt-1"), lambda rt: rt._loop.pick_alternative),
+    ):
+        rt = _runtime(store, build_kernel="disco")
+        assert CID not in rt._pinned_kernels
+        await op(rt)
+        assert rt._pinned_kernels[CID] is rt._disco_kernel
+        check(rt).assert_awaited_once()
+
+
+async def test_pick_alternative_routes_through_pinned_kernel(
+    monkeypatch: pytest.MonkeyPatch, store: SqliteEventStore
+) -> None:
+    """`pick_alternative` used to bypass the kernel entirely (`_loop_for` direct). It now
+    routes through the pinned DiscoKernel, which performs the SAME loop call — byte-
+    identical for disco, but pinned so the run can't be split."""
+    monkeypatch.delenv(EXP_ENV, raising=False)
+    rt = _runtime(store, build_kernel="disco")
+    await rt.send_user_turn(CID, "build it")  # pins disco
+    await rt.pick_alternative(CID, "opt-A")
+    rt._loop.pick_alternative.assert_awaited_once_with("opt-A")
+    assert rt._pinned_kernels[CID] is rt._disco_kernel
+
+
+async def test_control_op_on_pi_gated_on_rolls_back_freshly_created_pin(
+    monkeypatch: pytest.MonkeyPatch, store: SqliteEventStore
+) -> None:
+    """A control op that FRESHLY pins pi (gate on) and then raises in the stub must roll
+    the pin back (finding #2 semantics), so the conversation is re-resolvable — not stuck
+    pinned to a kernel that can't run."""
+    monkeypatch.setenv(EXP_ENV, "1")
+    rt = _runtime(store, build_kernel="pi_experimental")
+    assert CID not in rt._pinned_kernels
+    with pytest.raises(NotImplementedError):
+        await rt.confirm(CID)
+    assert CID not in rt._pinned_kernels  # rolled back — no leaked pin
+    rt._control.confirm.assert_not_awaited()
+
+
+async def test_control_op_raise_preserves_a_preexisting_pin(
+    monkeypatch: pytest.MonkeyPatch, store: SqliteEventStore
+) -> None:
+    """A raise during a control op on an ALREADY-pinned (live) run must NOT clear the pin
+    — only a freshly-created pin is rolled back."""
+    monkeypatch.delenv(EXP_ENV, raising=False)
+    rt = _runtime(store, build_kernel="disco")
+    raising = MagicMock()
+    raising.confirm = AsyncMock(side_effect=RuntimeError("boom"))
+    rt._pinned_kernels[CID] = raising  # a live run already pinned
+    with pytest.raises(RuntimeError):
+        await rt.confirm(CID)
+    assert rt._pinned_kernels[CID] is raising  # preserved across the failure
 
 
 # ---- selecting pi cannot produce a half-run; it fails cleanly ----------------
@@ -251,6 +344,7 @@ def _finalize_fake(store: SqliteEventStore):
     fake = types.SimpleNamespace()
     fake._store = store
     fake._pinned_kernels = {}
+    fake._run_generation = {}
     fake._last_status = {}
     fake._nonterminal_rekicks = {}
     fake.kick = MagicMock()
@@ -262,7 +356,11 @@ def _finalize_fake(store: SqliteEventStore):
         "_MAX_NONTERMINAL_REKICKS",
     ):
         setattr(fake, attr, getattr(ConversationRuntime, attr))
-    for name in ("_finalize_clean_return", "_clear_pinned_kernel"):
+    for name in (
+        "_finalize_clean_return",
+        "_clear_pinned_kernel",
+        "_unpin_if_current_generation",
+    ):
         setattr(fake, name, types.MethodType(getattr(ConversationRuntime, name), fake))
     return fake
 
@@ -286,6 +384,34 @@ async def test_stuck_watchdog_clears_pin(store: SqliteEventStore) -> None:
     assert state.execution_status == ConversationStatus.STUCK
     assert CID not in rt._pinned_kernels  # pin released on the STUCK terminalization
     rt._emit_persistence_reminder.assert_awaited()
+
+
+async def test_finalize_after_new_run_started_does_not_clear_the_new_runs_pin(
+    store: SqliteEventStore,
+) -> None:
+    """Finding #3 (the pin set/clear RACE): `_on_run_task_done` schedules
+    `_finalize_clean_return` ASYNC. Before it runs, a fresh user turn can reuse the pin
+    and `kick` a NEW run (bumping the run-generation). The STALE finalizer (carrying the
+    OLD generation) must NOT clear the pin out from under the newer run.
+
+    Simulated: the conversation is at a terminal FINISHED (run A), pinned, but a newer
+    run B has already started (run_generation == 2). The finalizer for generation 1 runs
+    and must LEAVE the pin (it belongs to run B now)."""
+    from disco.core import ConversationStatus, StatusEvent
+
+    await store.append(CID, StatusEvent(status=ConversationStatus.FINISHED))
+    rt = _finalize_fake(store)
+    pin = object()
+    rt._pinned_kernels[CID] = pin
+    rt._run_generation[CID] = 2  # a NEWER run (gen 2) already reused the pin
+
+    # The stale finalizer for the OLD run (generation 1) — must not clear gen-2's pin.
+    await rt._finalize_clean_return(CID, generation=1)
+    assert rt._pinned_kernels[CID] is pin  # SURVIVES — newer run keeps its pin
+
+    # The finalizer for the CURRENT generation DOES clear it (the run really ended).
+    await rt._finalize_clean_return(CID, generation=2)
+    assert CID not in rt._pinned_kernels
 
 
 def test_unpin_statuses_exclude_paused_and_gates() -> None:

@@ -314,4 +314,22 @@ def make_conversations_router(
         ids = await store.list_conversations(owner_id=owner_id, limit=limit, cursor=cursor)
         return {"conversation_ids": ids}
 
+    @router.delete("/conversations/{conversation_id}")
+    async def delete_conversation(
+        conversation_id: str,
+        owner_id: str = Query(default=DEFAULT_OWNER_ID),
+    ) -> dict:
+        """Delete a conversation AND release its agent-runtime state (finding #5).
+
+        The app-server library delete removes the DB rows but cannot reach this
+        process's per-conversation runtime caches (the kernel pin, cached loop, live
+        task, sandbox). It best-effort notifies THIS endpoint so the leak is closed in
+        the process that owns the runtime. Runtime cleanup runs FIRST (cancelling the
+        live run so its done-callback can't re-pin) and is owner-agnostic — the
+        owner-scoped DB delete is the authority on whether the row is actually removed."""
+        if runtime is not None:
+            await runtime.forget_conversation(conversation_id)
+        deleted = await store.delete_conversation(conversation_id, owner_id=owner_id)
+        return {"id": conversation_id, "deleted": deleted}
+
     return router

@@ -58,6 +58,8 @@ def _fake_runtime(store: SqliteEventStore, *, build_kernel: str = "disco") -> ty
     fake = types.SimpleNamespace()
     fake._store = store
     fake.kick = MagicMock()
+    fake._pinned_kernels = {}
+    fake._run_generation = {}
 
     control = MagicMock()
     control.confirm = AsyncMock()
@@ -87,7 +89,13 @@ def _fake_runtime(store: SqliteEventStore, *, build_kernel: str = "disco") -> ty
     fake._pi_kernel = PiKernel(fake)
 
     # Bind the REAL runtime methods so we test the shipped routing, not a copy.
-    fake._kernel_for = types.MethodType(ConversationRuntime._kernel_for, fake)
+    for name in (
+        "_kernel_for",
+        "_ensure_kernel_pinned",
+        "_clear_pinned_kernel",
+        "_run_continuing_control",
+    ):
+        setattr(fake, name, types.MethodType(getattr(ConversationRuntime, name), fake))
     return fake
 
 

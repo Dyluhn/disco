@@ -288,8 +288,38 @@ def test_stale_persisted_pi_normalizes_to_disco_on_load_when_gate_off(tmp_path):
     (tmp_path / "cfg.json").write_text(json.dumps(raw.model_dump(mode="json")))
 
     assert _kernel_store(tmp_path, gate=False).load().build_kernel == "disco"
-    # Same file, gate ON → the executor honors it.
+
+
+def test_gate_off_load_writes_through_so_a_later_gate_flip_does_not_auto_activate(tmp_path):
+    """Finding #4 (write-through): a gated-off `load()` must not just normalize in memory
+    — it must PERSIST `disco` over the stale `pi_experimental`. Otherwise the dormant
+    value stays on disk and AUTO-ACTIVATES the instant the gate later flips on, with no
+    fresh user selection (the env-split hazard). After a gate-off load: the FILE reads
+    `disco`, and a SUBSEQUENT gate-ON load returns `disco` (no auto-activation) until the
+    user explicitly re-selects."""
+    raw = default_config().model_copy(update={"build_kernel": "pi_experimental"})
+    (tmp_path / "cfg.json").write_text(json.dumps(raw.model_dump(mode="json")))
+
+    # Gate OFF: in-memory normalized AND written through to disk.
+    assert _kernel_store(tmp_path, gate=False).load().build_kernel == "disco"
+    written = json.loads((tmp_path / "cfg.json").read_text())
+    assert written["build_kernel"] == "disco"  # stale value erased on disk
+
+    # Gate flips ON later — the stale value is gone, so it does NOT reactivate.
+    assert _kernel_store(tmp_path, gate=True).load().build_kernel == "disco"
+
+
+def test_gate_on_load_honors_a_freshly_persisted_pi_without_rewriting(tmp_path):
+    """The gate-ON counterpart: a file carrying `pi_experimental` loaded in a process
+    whose gate is OPEN is honored as-is and the file is NOT rewritten (write-through is
+    only the gated-OFF migration). So an operator who deploys with the gate on gets the
+    selected experimental kernel."""
+    raw = default_config().model_copy(update={"build_kernel": "pi_experimental"})
+    (tmp_path / "cfg.json").write_text(json.dumps(raw.model_dump(mode="json")))
+
     assert _kernel_store(tmp_path, gate=True).load().build_kernel == "pi_experimental"
+    written = json.loads((tmp_path / "cfg.json").read_text())
+    assert written["build_kernel"] == "pi_experimental"  # untouched under an open gate
 
 
 def test_full_config_save_normalizes_pi_to_disco_when_gate_off(tmp_path):

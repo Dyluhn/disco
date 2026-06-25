@@ -388,5 +388,11 @@ class ResumeService:
                 StatusEvent(status=ConversationStatus.RUNNING, detail="resumed"),
             )
 
-        self._rt.kick(conversation_id)
+        # Route the resume through the PINNED start path (finding #2), NOT a raw
+        # `kick`. A bare kick starts a NEW run UNPINNED — and with `pi_experimental`
+        # selected + the gate on it would silently force the Disco loop instead of the
+        # selected kernel. `runtime.start` resolves + pins the selected kernel (reusing
+        # an existing pin from a PAUSED gate-park) and routes through it; for the default
+        # `disco` kernel `start` is a behaviour-identical pass-through to `kick`.
+        self._rt.start(conversation_id)
         return {"ok": True, "status": "RUNNING"}

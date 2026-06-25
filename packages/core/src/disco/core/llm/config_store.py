@@ -106,6 +106,24 @@ class ConfigStore:
                 cfg = base
         else:
             cfg = self._apply_overlay(base, data)  # legacy {default_model, assignments}
+        # Finding #4 — WRITE-THROUGH normalization. `_gate_build_kernel` only normalized
+        # `pi_experimental`→`disco` IN MEMORY when the gate is off, so the stale
+        # `pi_experimental` stayed PERSISTED and would auto-activate the moment the gate
+        # later flipped on — WITHOUT a fresh user selection (and an env-split between the
+        # app- and agent-server made it worse). Persist the normalized value HERE, at the
+        # read boundary, so a dormant gated-off `pi_experimental` is erased from disk the
+        # first time it is loaded under a closed gate. A later gate flip then finds
+        # `disco` and the user must re-select to activate the experimental kernel. Only a
+        # real file is migrated (never the seed), and never a legacy overlay (it carries
+        # no build_kernel, so the seed default `disco` normalizes to a no-op) — so this
+        # writes at most ONCE per stale file and is a no-op on every subsequent load. The
+        # write persists the PRE-overlay config so the runtime capability overlay
+        # (vision-probe etc.) is never baked into the file.
+        if data is not None:
+            normalized = self._normalize_build_kernel(cfg.build_kernel)
+            if normalized != cfg.build_kernel:
+                cfg = cfg.model_copy(update={"build_kernel": normalized})
+                self._write(cfg.model_dump(mode="json"))
         cfg = apply_runtime_capabilities(cfg, probe_results=self._vision_probe)
         return self._gate_build_kernel(cfg)
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from unittest.mock import MagicMock
 
 import httpx
 from disco.agent_server import ConversationRuntime, create_app
@@ -125,6 +126,51 @@ async def test_resume_from_paused_is_legal():
 
     assert result["ok"] is True
     assert result["status"] == "RUNNING"
+
+
+async def test_resume_pins_the_kernel_via_start(monkeypatch):
+    """Finding #2: a resume must route through the PINNED `start` path, not a raw
+    `kick`. Otherwise a resumed run starts UNPINNED (and would silently force the disco
+    loop even when pi_experimental is selected). Here: a PAUSED build resume pins the
+    disco kernel and triggers it via `kick` (the disco kernel's `start`)."""
+    store = SqliteEventStore(":memory:")
+    store.create_conversation(CID, owner_id="local")
+    rt = _runtime(store)
+    rt.set_surface(CID, "build")
+    await store.append(CID, _user("build it"))
+    await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
+    # Stub kick so the resume does not spawn a real run (whose finalize could clear the
+    # pin mid-assert) — we only assert the pin/trigger wiring.
+    monkeypatch.setattr(rt, "kick", MagicMock())
+
+    assert CID not in rt._pinned_kernels  # no pin before resume
+    result = await rt.resume_conversation(CID)
+
+    assert result["ok"] is True
+    assert rt._pinned_kernels[CID] is rt._disco_kernel  # resume pinned via start
+    rt.kick.assert_called_once_with(CID)  # disco kernel start → kick = the trigger
+
+
+async def test_resume_routes_to_the_pinned_selected_kernel_not_silently_disco():
+    """Finding #2: a PAUSED gate-park keeps its kernel pin, so a resume must drive the
+    trigger THROUGH that pinned (selected) kernel — proven here with a sentinel standing
+    in for the selected experimental kernel. A raw `kick` would have ignored it and run
+    the disco loop instead."""
+    store = SqliteEventStore(":memory:")
+    store.create_conversation(CID, owner_id="local")
+    rt = _runtime(store)
+    rt.set_surface(CID, "build")
+    await store.append(CID, _user("build it"))
+    await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
+    sentinel = MagicMock()  # the SELECTED kernel pinned to this paused run
+    rt._pinned_kernels[CID] = sentinel
+
+    result = await rt.resume_conversation(CID)
+    await _cancel_task(rt)
+
+    assert result["ok"] is True
+    sentinel.start.assert_called_once_with(CID)  # routed through the pinned kernel
+    assert rt._pinned_kernels[CID] is sentinel  # pin preserved across resume
 
 
 async def test_resume_from_idle_with_plan_is_legal():
