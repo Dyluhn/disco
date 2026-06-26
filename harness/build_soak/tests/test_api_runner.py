@@ -13,11 +13,13 @@ import httpx
 import pytest
 from _eventlog import action, clean_smoke_log, msg, plan, status
 
+import harness.build_soak.adapters.disco_api as _disco_mod
 from harness.build_soak.adapters.disco_api import (
     FOLLOWUP_PICKED_UP,
     FOLLOWUP_PICKUP_TIMEOUT,
     FOLLOWUP_REPLANNED,
     DiscoApiClient,
+    SnapshotNotReadyError,
 )
 from harness.build_soak.evidence import load_manifest, verify_evidence_unchanged
 from harness.build_soak.run import (
@@ -367,6 +369,483 @@ async def test_snapshot_authoritative_does_not_proxy_mask_missing_required_file(
 
     assert "index.html" not in manifest  # NOT proxy-masked → FALSE_FINISH_NO_OUTPUT preserved
     assert manifest["other.txt"]["present"] is True
+
+
+# ---- snapshot READINESS gate: settle on the AGENT-FINAL state, not a stale early read ----
+# RCA: `_maybe_snapshot` mirrors the workspace AFTER a terminal event; a multi-revision build
+# reaches a terminal per revision, so rev-1's files are presence-complete BEFORE rev-2's bytes
+# flush → the old presence-only gate settled on STALE rev-1 content (false ARTIFACT_TRUTH_MISMATCH).
+# The gate now derives each declared file's agent-final identity from the durable event log and
+# accepts the snapshot only when the on-disk bytes MATCH (sha for file_write, absence for an rm),
+# fail-fast on timeout. A fake clock makes the poll loop deterministic (no real sleeps).
+
+
+class _FakeClock:
+    """Drives `_await_ready_snapshot`'s poll loop deterministically: monotonic() returns a
+    virtual clock that only advances when the loop sleeps, and each sleep can mutate the
+    on-disk snapshot (the rev-1 → rev-2 flush) via `on_poll(step)`."""
+
+    def __init__(self, on_poll=None):
+        self.t = 1000.0
+        self.polls = 0
+        self.on_poll = on_poll
+
+    def monotonic(self):
+        return self.t
+
+    async def sleep(self, d):
+        self.t += d
+        self.polls += 1
+        if self.on_poll is not None:
+            self.on_poll(self.polls)
+
+
+def _install_clock(monkeypatch, clock):
+    from harness.build_soak.adapters import disco_api as _mod
+
+    monkeypatch.setattr(_mod.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(_mod.asyncio, "sleep", clock.sleep)
+
+
+def _file_write_log(path, content, *, call="c1", first_seq=1):
+    """A minimal user → file_write(action) → SUCCESSFUL observation → FINISHED log. The action
+    and observation share `call` so the readiness gate correlates the write as successful."""
+    return [
+        {
+            "id": "u1", "seq": first_seq, "kind": "message", "source": "user",
+            "message": {"role": "user", "content": "build it"},
+        },
+        {
+            "id": f"a{first_seq + 1}", "seq": first_seq + 1, "kind": "action", "source": "agent",
+            "tool_call": {
+                "tool_name": "file_write",
+                "arguments": {"path": path, "content": content},
+                "call_id": call,
+            },
+        },
+        {
+            "id": f"o{first_seq + 2}", "seq": first_seq + 2, "kind": "observation",
+            "source": "environment",
+            "tool_result": {"call_id": call, "tool_name": "file_write", "success": True,
+                            "content": "wrote"},
+        },
+        {
+            "id": f"s{first_seq + 3}", "seq": first_seq + 3, "kind": "status", "source": "system",
+            "status": "FINISHED",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_snapshot_waits_for_byte_change_rev1_to_rev2(tmp_path, monkeypatch):
+    # (a) The agent's LAST write is rev-2; the snapshot still holds rev-1 bytes on the first
+    # reads. The gate must NOT accept the stale rev-1 content — it waits until the on-disk
+    # sha256 matches what the agent wrote (rev-2), then accepts rev-2.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    rev1 = "<h1>Contact sales</h1>"
+    rev2 = "<h1>Book a Visit</h1>"
+    ws = _plant_snapshot(proj, _CID, {"index.html": rev1})  # snapshot starts STALE (rev-1)
+    _seed_db(db, _CID, _file_write_log("index.html", rev2))  # agent's final write = rev-2
+
+    def flush(step):
+        if step >= 2:  # rev-2 bytes land mid-flight
+            (ws / "index.html").write_text(rev2, encoding="utf-8")
+
+    clock = _FakeClock(on_poll=flush)
+    _install_clock(monkeypatch, clock)
+    transport = FakeTransport(db, states=["FINISHED"], workspace={})
+    client = DiscoApiClient(
+        transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj),
+        snapshot_wait_s=50.0,
+    )
+
+    manifest = await client.collect_workspace(_CID, ["index.html"])
+
+    assert manifest["index.html"]["content"] == rev2  # rev-2 accepted, never the stale rev-1
+    assert "Contact sales" not in manifest["index.html"]["content"]
+    assert clock.polls >= 2  # it genuinely waited for the flush
+
+
+@pytest.mark.asyncio
+async def test_snapshot_waits_for_added_file_between_polls(tmp_path, monkeypatch):
+    # (b) rev-2 CREATES a declared file absent from the early snapshot. Gate waits until it is
+    # present AND matches the agent's written bytes.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    content = "console.log('v2')\n"
+    ws = _plant_snapshot(proj, _CID, {"index.html": "<h1>x</h1>"})  # app.js not there yet
+    _seed_db(db, _CID, _file_write_log("app.js", content))
+
+    def flush(step):
+        if step >= 2:
+            (ws / "app.js").write_text(content, encoding="utf-8")
+
+    clock = _FakeClock(on_poll=flush)
+    _install_clock(monkeypatch, clock)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=50.0,
+    )
+
+    manifest = await client.collect_workspace(_CID, ["app.js"])
+
+    assert manifest["app.js"]["present"] is True
+    assert manifest["app.js"]["content"] == content
+    assert clock.polls >= 2
+
+
+@pytest.mark.asyncio
+async def test_snapshot_waits_for_removed_file_not_stale_present(tmp_path, monkeypatch):
+    # (c) The agent file_write'd then `rm`'d a declared file (final state = ABSENT). The early
+    # snapshot still HAS it; the gate must NOT accept the stale-present copy — it waits until
+    # the file is gone, then OMITS it.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    ws = _plant_snapshot(proj, _CID, {"old.html": "<h1>doomed</h1>"})  # still present early
+    log = _file_write_log("old.html", "<h1>doomed</h1>", call="w1")
+    # Append a SUCCESSFUL shell `rm old.html` AFTER the write → agent-final state is absent.
+    log += [
+        {
+            "id": "a9", "seq": 9, "kind": "action", "source": "agent",
+            "tool_call": {"tool_name": "shell", "arguments": {"command": "rm old.html"},
+                          "call_id": "r1"},
+        },
+        {
+            "id": "o10", "seq": 10, "kind": "observation", "source": "environment",
+            "tool_result": {"call_id": "r1", "tool_name": "shell", "success": True, "content": ""},
+        },
+    ]
+    _seed_db(db, _CID, log)
+
+    def flush(step):
+        if step >= 2:
+            (ws / "old.html").unlink()
+
+    clock = _FakeClock(on_poll=flush)
+    _install_clock(monkeypatch, clock)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=50.0,
+    )
+
+    manifest = await client.collect_workspace(_CID, ["old.html"])
+
+    assert "old.html" not in manifest  # stale-present NOT accepted → absent → OMITTED
+    assert clock.polls >= 2
+
+
+@pytest.mark.asyncio
+async def test_snapshot_non_declared_churn_does_not_block_declared_set(tmp_path, monkeypatch):
+    # (d) A NON-declared snapshot file keeps changing; it must not block readiness. The declared
+    # file already matches the agent's write, so the gate accepts PROMPTLY (gates only the
+    # declared set, manifest-complete).
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    content = "<h1>ready</h1>"
+    ws = _plant_snapshot(proj, _CID, {"index.html": content, "scratch.log": "0"})
+    _seed_db(db, _CID, _file_write_log("index.html", content))
+
+    def churn(step):  # would never stabilize — but it is NOT declared, so it must not matter
+        (ws / "scratch.log").write_text(str(step), encoding="utf-8")
+
+    clock = _FakeClock(on_poll=churn)
+    _install_clock(monkeypatch, clock)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=50.0,
+    )
+
+    manifest = await client.collect_workspace(_CID, ["index.html"])
+
+    assert manifest["index.html"]["content"] == content
+    assert manifest["scratch.log"]["present"] is True  # faithfully reflected, just not gated on
+    assert clock.polls == 0  # declared signal already satisfied → no needless wait
+
+
+@pytest.mark.asyncio
+async def test_snapshot_timeout_fail_fast_when_never_ready(tmp_path, monkeypatch):
+    # (e) The snapshot NEVER reaches the agent's final state (stays stale forever). The gate must
+    # FAIL-FAST with SnapshotNotReadyError (→ INVALID_RUN WORKSPACE_SNAPSHOT_NOT_READY), bounded —
+    # never a silent stale best-effort PASS, never a hang.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    _plant_snapshot(proj, _CID, {"index.html": "<h1>STALE rev-1</h1>"})  # never updated
+    _seed_db(db, _CID, _file_write_log("index.html", "<h1>final rev-2</h1>"))
+
+    clock = _FakeClock()  # no flush — disk stays stale
+    _install_clock(monkeypatch, clock)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=1.5,
+    )
+
+    with pytest.raises(SnapshotNotReadyError) as ei:
+        await client.collect_workspace(_CID, ["index.html"])
+
+    assert "index.html" in [u["path"] for u in ei.value.facts["unsatisfied"]]
+    assert clock.polls <= 6  # bounded by snapshot_wait_s / poll cadence — never hangs
+
+
+@pytest.mark.asyncio
+async def test_snapshot_already_consistent_accepts_promptly(tmp_path, monkeypatch):
+    # (f) The snapshot already holds the agent's final bytes → accept on the FIRST read with no
+    # wait, even with a large snapshot_wait budget.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    content = "<h1>Book a Visit</h1>"
+    _plant_snapshot(proj, _CID, {"index.html": content})
+    _seed_db(db, _CID, _file_write_log("index.html", content))
+
+    clock = _FakeClock()
+    _install_clock(monkeypatch, clock)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=50.0,
+    )
+
+    manifest = await client.collect_workspace(_CID, ["index.html"])
+
+    assert manifest["index.html"]["content"] == content
+    assert clock.polls == 0  # already consistent → no needless wait
+
+
+# ---- snapshot READINESS: readback-aware identity (partial-edit-last gap) -----------------
+# Residual gap: when a declared file's LAST mutation is a PARTIAL edit (file_edit/str_replace),
+# the agent's final bytes can't be reconstructed from the action — but a later FULL file_read
+# readback carries the true post-edit bytes in file_read's RENDERED view. The gate promotes such
+# a readback to a ("rendered", body) signal and accepts the snapshot only when the on-disk file,
+# rendered with file_read's OWN numberer, equals the readback (closing the stale-intermediate
+# hole). Reads that are paged/truncated or synthetic (F9 dedup) never promote; a stale readback
+# before a later edit is seq-ignored. With no qualifying readback the file is present_unproven →
+# extended content-stability (NOT bare presence, NOT fail-fast).
+
+
+def _file_read_full_content(text):
+    """The EXACT rendered content a FULL file_read returns for `text`: a `[lines 1-N of N]`
+    header then file_read's `<line-no>\\t<line>` body (mirrors FileReadTool's full-read path)."""
+    lines = text.splitlines()
+    total = len(lines)
+    width = len(str(total)) or 1
+    body = "\n".join(f"{i + 1:>{width}}\t{lines[i]}" for i in range(total))
+    return f"[lines 1-{total} of {total}]\n" + body
+
+
+def _edit_then_read_log(path, final_text, *, read_content=None, include_read=True):
+    """user → file_edit(action+obs) → [optional file_read(action+obs)] → FINISHED. The file_edit
+    is a partial mutator (no reconstructable content); the file_read (when present) is the FULL
+    readback carrying `final_text` unless `read_content` overrides it (paged/synthetic cases)."""
+    log = [
+        {
+            "id": "u1", "seq": 1, "kind": "message", "source": "user",
+            "message": {"role": "user", "content": "revise it"},
+        },
+        {
+            "id": "a2", "seq": 2, "kind": "action", "source": "agent",
+            "tool_call": {"tool_name": "file_edit", "arguments": {"path": path}, "call_id": "m1"},
+        },
+        {
+            "id": "o3", "seq": 3, "kind": "observation", "source": "environment",
+            "tool_result": {"call_id": "m1", "tool_name": "file_edit", "success": True,
+                            "content": "edited"},
+        },
+    ]
+    if include_read:
+        rc = read_content if read_content is not None else _file_read_full_content(final_text)
+        log += [
+            {
+                "id": "a4", "seq": 4, "kind": "action", "source": "agent",
+                "tool_call": {"tool_name": "file_read", "arguments": {"path": path},
+                              "call_id": "r1"},
+            },
+            {
+                "id": "o5", "seq": 5, "kind": "observation", "source": "environment",
+                "tool_result": {"call_id": "r1", "tool_name": "file_read", "success": True,
+                                "content": rc},
+            },
+        ]
+    log.append({"id": "s9", "seq": 9, "kind": "status", "source": "system", "status": "FINISHED"})
+    return log
+
+
+@pytest.mark.asyncio
+async def test_snapshot_rendered_readback_waits_for_final_bytes(tmp_path, monkeypatch):
+    # The live shape: index.html's LAST mutation is a partial file_edit; a later FULL readback
+    # carries the true final bytes ('Grand Opening'). The snapshot still holds the stale pre-edit
+    # copy → the gate must reject it and wait until the on-disk RENDERED form equals the readback.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    stale = "<h1>Contact sales</h1>\n<p>old</p>\n"
+    final = "<h1>Grand Opening</h1>\n<p>Book a Visit</p>\n"
+    ws = _plant_snapshot(proj, _CID, {"index.html": stale})  # stable but STALE intermediate
+    _seed_db(db, _CID, _edit_then_read_log("index.html", final))
+
+    def flush(step):
+        if step >= 2:
+            (ws / "index.html").write_text(final, encoding="utf-8")
+
+    clock = _FakeClock(on_poll=flush)
+    _install_clock(monkeypatch, clock)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=50.0,
+    )
+
+    manifest = await client.collect_workspace(_CID, ["index.html"])
+
+    assert manifest["index.html"]["content"] == final  # the readback-confirmed final bytes
+    assert "Contact sales" not in manifest["index.html"]["content"]  # stale never accepted
+    assert clock.polls >= 2  # it genuinely waited past the stable-but-stale intermediate
+
+
+@pytest.mark.asyncio
+async def test_snapshot_rendered_readback_fail_fast_when_never_final(tmp_path, monkeypatch):
+    # A ("rendered", …) signal is DEFINITE: if the on-disk file never matches the readback, the
+    # gate FAILs FAST (WORKSPACE_SNAPSHOT_NOT_READY), never accepting the stale-but-stable copy.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    _plant_snapshot(proj, _CID, {"index.html": "<h1>STALE forever</h1>\n"})
+    _seed_db(db, _CID, _edit_then_read_log("index.html", "<h1>Grand Opening</h1>\n"))
+
+    clock = _FakeClock()  # no flush — disk stays stale
+    _install_clock(monkeypatch, clock)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=1.5,
+    )
+
+    with pytest.raises(SnapshotNotReadyError) as ei:
+        await client.collect_workspace(_CID, ["index.html"])
+
+    assert [u["path"] for u in ei.value.facts["unsatisfied"]] == ["index.html"]
+    assert ei.value.facts["unsatisfied"][0]["expected"][0] == "rendered"
+    assert clock.polls <= 6  # bounded — never hangs
+
+
+@pytest.mark.asyncio
+async def test_snapshot_stale_readback_before_later_edit_is_ignored(tmp_path, monkeypatch):
+    # STALE-READBACK ordering: a FULL readback, THEN a later partial edit with NO subsequent
+    # readback → the old read is seq-ignored; the path is present_unproven (extended stability),
+    # NOT promoted on the stale read. We prove it does NOT fail-fast on a rendered mismatch.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    content = "<h1>read-at-seq4</h1>\n"
+    _plant_snapshot(proj, _CID, {"index.html": "<h1>different on disk</h1>\n"})
+    # readback at seq5 (content X), THEN a later file_edit at seq6 (no later readback).
+    log = _edit_then_read_log("index.html", content)  # edit@2, read@4/5
+    log = [e for e in log if e["seq"] != 9]  # drop FINISHED, re-add after the late edit
+    log += [
+        {
+            "id": "a6", "seq": 6, "kind": "action", "source": "agent",
+            "tool_call": {"tool_name": "file_edit", "arguments": {"path": "index.html"},
+                          "call_id": "m2"},
+        },
+        {
+            "id": "o7", "seq": 7, "kind": "observation", "source": "environment",
+            "tool_result": {"call_id": "m2", "tool_name": "file_edit", "success": True},
+        },
+        {"id": "s9", "seq": 9, "kind": "status", "source": "system", "status": "FINISHED"},
+    ]
+    _seed_db(db, _CID, log)
+
+    clock = _FakeClock()  # disk never changes; would FAIL-FAST if the stale read were promoted
+    _install_clock(monkeypatch, clock)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=3.0,
+    )
+
+    manifest = await client.collect_workspace(_CID, ["index.html"])  # must NOT raise
+
+    # present_unproven → accepted on extended stability (no rendered fail-fast against stale read)
+    assert manifest["index.html"]["present"] is True
+    assert clock.polls >= _disco_mod._SNAPSHOT_UNPROVEN_STABLE_POLLS - 1  # extended settle, bounded
+
+
+@pytest.mark.asyncio
+async def test_snapshot_paged_readback_not_promoted(tmp_path, monkeypatch):
+    # A PAGED read (offset/limit, or a budget/pressure-truncated header) must NOT promote to a
+    # rendered signal → present_unproven (extended stability), never a false NOT_READY.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    final = "<h1>x</h1>\n<p>y</p>\n"
+    _plant_snapshot(proj, _CID, {"index.html": final})
+    log = _edit_then_read_log("index.html", final)
+    # Make the read PAGED: args carry offset, and the header says "read more".
+    for e in log:
+        if e.get("kind") == "action" and e["tool_call"]["tool_name"] == "file_read":
+            e["tool_call"]["arguments"] = {"path": "index.html", "offset": 2}
+        if e.get("kind") == "observation" and e["tool_result"]["tool_name"] == "file_read":
+            e["tool_result"]["content"] = "[lines 2-2 of 2; read more with offset=3]\n2\t<p>y</p>"
+    _seed_db(db, _CID, log)
+
+    clock = _FakeClock()
+    _install_clock(monkeypatch, clock)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=3.0,
+    )
+
+    manifest = await client.collect_workspace(_CID, ["index.html"])  # must NOT raise NOT_READY
+
+    assert manifest["index.html"]["present"] is True  # present_unproven path, extended stability
+
+
+@pytest.mark.asyncio
+async def test_snapshot_synthetic_f9_readback_not_promoted(tmp_path, monkeypatch):
+    # An F9 read-dedup pointer ([F9 dedup: …]) carries NO real bytes and must NOT promote to a
+    # rendered signal → present_unproven (extended stability), never used as the expected identity.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    final = "<h1>real</h1>\n"
+    _plant_snapshot(proj, _CID, {"index.html": final})
+    log = _edit_then_read_log(
+        "index.html", final,
+        read_content="[F9 dedup: file_read(index.html) identical to a recent read this turn "
+                     "— see the earlier result; file_read again only if you suspect it changed]",
+    )
+    _seed_db(db, _CID, log)
+
+    clock = _FakeClock()
+    _install_clock(monkeypatch, clock)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=3.0,
+    )
+
+    manifest = await client.collect_workspace(_CID, ["index.html"])  # must NOT raise
+
+    assert manifest["index.html"]["present"] is True  # present_unproven, not promoted on synthetic
+
+
+@pytest.mark.asyncio
+async def test_snapshot_present_unproven_extended_stability_not_bare_present(tmp_path, monkeypatch):
+    # No readback at all: a partial edit with no proof of final bytes → present_unproven. The gate
+    # must NOT accept on bare presence — it requires EXTENDED consecutive-stable reads (more than
+    # the change keeps happening), and only then accepts.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    ws = _plant_snapshot(proj, _CID, {"index.html": "<h1>v0</h1>"})
+    _seed_db(db, _CID, _edit_then_read_log("index.html", "irrelevant", include_read=False))
+
+    # Keep mutating the file until the gate has polled several times — proving it does NOT accept
+    # the early (changing) bytes; it only settles once the content stops changing.
+    def churn(step):
+        if step < _disco_mod._SNAPSHOT_UNPROVEN_STABLE_POLLS:
+            (ws / "index.html").write_text(f"<h1>v{step}</h1>", encoding="utf-8")
+
+    clock = _FakeClock(on_poll=churn)
+    _install_clock(monkeypatch, clock)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=50.0,
+    )
+
+    manifest = await client.collect_workspace(_CID, ["index.html"])
+
+    assert manifest["index.html"]["present"] is True
+    # accepted only AFTER it stopped changing → needed the extended settle (not bare poll-1 present)
+    assert clock.polls >= _disco_mod._SNAPSHOT_UNPROVEN_STABLE_POLLS - 1
 
 
 # ---- Bug 10: durable PREVIEW collection (no ephemeral-proxy false-fail) ------
@@ -1404,13 +1883,13 @@ async def test_after_terminal_followups_are_serialized(tmp_path):
 
 @pytest.mark.asyncio
 async def test_followup_pickup_timeout_hard_fails_invalid_run(tmp_path, monkeypatch):
-    # (c) in the V2 plan: when the dead-window NEVER resolves (status stuck FINISHED, no
+    # (b) in the REVISED V2 plan: when the dead-window NEVER resolves (status stuck FINISHED, no
     # progress event EVER), the runner must NOT silently proceed to drive on the stale terminal
-    # — that is exactly what let follow-up 2 collapse into follow-up 1 in V1. After one bounded
-    # re-kick it HARD-FAILS as a sequencing failure → INVALID_RUN, never a (false) product PASS.
-    monkeypatch.setattr(
-        "harness.build_soak.adapters.disco_api._FOLLOWUP_PICKUP_TIMEOUT_S", 0.02
-    )
+    # — that is exactly what let follow-up 2 collapse into follow-up 1 in V1. It HARD-FAILS as a
+    # sequencing failure → INVALID_RUN, never a (false) product PASS, and critically it sends the
+    # follow-up EXACTLY ONCE (NO re-send — a second send would DUPLICATE the user turn, the live
+    # bug this revision removes) and sends NO subsequent follow-up (no pile-up). Bound via env.
+    monkeypatch.setenv("DISCO_SOAK_PICKUP_TIMEOUT_S", "0.02")
     db = tmp_path / "disco.db"
     _seed_db(db, _CID, clean_smoke_log())
     transport = FakeTransport(  # status forever FINISHED, no events ever appended → no pickup
@@ -1420,7 +1899,7 @@ async def test_followup_pickup_timeout_hard_fails_invalid_run(tmp_path, monkeypa
         preview_html="<h1>Build Smoke OK</h1>",
     )
     client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
-    scenario = load_scenarios()["revise_after_finish"]
+    scenario = load_scenarios()["revise_after_finish"]  # TWO after_terminal follow-ups
     record = await run_once(
         client,
         scenario,
@@ -1433,9 +1912,72 @@ async def test_followup_pickup_timeout_hard_fails_invalid_run(tmp_path, monkeypa
     )
     assert record["status"] == "INVALID_RUN"  # sequencing failure, NOT a silent proceed/PASS
     assert record["code"] == "RUN_INTERRUPTED"
-    # it tried the bounded RE-KICK once (two send_message frames total for the one follow-up)
+    # EXACTLY ONE send for the FIRST follow-up: no re-send (no duplicate turn) AND the run
+    # hard-failed before the SECOND follow-up was ever sent (no pile-up) — both follow-ups
+    # would be 2+ frames if either the re-send or a subsequent send had fired.
     sends = [f for f in transport.ws_frames if f.get("type") == "send_message"]
-    assert len(sends) == 2
+    assert len(sends) == 1
+
+
+@pytest.mark.asyncio
+async def test_followup_picked_up_within_bound_sends_exactly_once(tmp_path):
+    # (a) in the REVISED V2 plan: a follow-up whose pickup signal arrives LATE (the ~37s M3
+    # finalize+replan latency) but WITHIN the (default ~75s) bound → the SINGLE bounded wait
+    # succeeds and the runner drives it to terminal. send_followup must fire EXACTLY ONCE (the
+    # late-but-present pickup must NOT trigger a re-send). diag_revise has ONE after_terminal
+    # follow-up — the clean single-follow-up case. The dead-window fake holds the status at
+    # FINISHED and only reveals pickup as a higher-seq event, exactly like the live latency.
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())
+    transport = _DeadWindowTransport(db, stale_reads=3, work_reads=2)  # late pickup, within bound
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    scenario = load_scenarios()["diag_revise"]
+    assert sum(f.get("trigger") == "after_terminal" for f in scenario["followups"]) == 1
+
+    # No timeout_s override → uses the policy-driven default bound (~75s); the fake picks up
+    # well within it. poll_interval_s=0.0 keeps the test instant in wall-clock.
+    await drive_scenario(client, scenario, model="m", autonomous=False, timeout_s=5)
+
+    sends = [f for f in transport.ws_frames if f.get("type") == "send_message"]
+    assert len(sends) == 1  # EXACTLY ONCE — the late-but-present pickup did not trigger a re-send
+    assert len(transport.pickup_log) == 1
+    assert len(transport.terminal_log) == 1  # it was driven to its OWN new terminal
+
+
+def test_followup_pickup_timeout_env_override_is_honored(monkeypatch):
+    # (c) in the REVISED V2 plan: the bound is POLICY-DRIVEN, not a brittle literal — the
+    # DISCO_SOAK_PICKUP_TIMEOUT_S env var overrides the default, with a SAFE float parse (bad /
+    # blank / non-positive values fall back to the documented default, never disabling the bound).
+    from harness.build_soak.adapters.disco_api import (
+        _FOLLOWUP_PICKUP_TIMEOUT_DEFAULT_S,
+        _followup_pickup_timeout_s,
+    )
+
+    monkeypatch.delenv("DISCO_SOAK_PICKUP_TIMEOUT_S", raising=False)
+    assert _followup_pickup_timeout_s() == _FOLLOWUP_PICKUP_TIMEOUT_DEFAULT_S
+    assert _FOLLOWUP_PICKUP_TIMEOUT_DEFAULT_S >= 75.0  # covers the measured ~37s with margin
+    monkeypatch.setenv("DISCO_SOAK_PICKUP_TIMEOUT_S", "120.5")
+    assert _followup_pickup_timeout_s() == 120.5
+    for bad in ("", "not-a-number", "0", "-5"):  # all fall back safely
+        monkeypatch.setenv("DISCO_SOAK_PICKUP_TIMEOUT_S", bad)
+        assert _followup_pickup_timeout_s() == _FOLLOWUP_PICKUP_TIMEOUT_DEFAULT_S
+
+
+@pytest.mark.asyncio
+async def test_followup_pickup_env_override_bounds_the_wait(tmp_path, monkeypatch):
+    # The env override actually drives the live wait bound: a tiny override makes a never-picked-up
+    # follow-up return the timeout sentinel quickly (bounded), proving the override is consumed by
+    # wait_for_followup_pickup (resolved per-call), not just the resolver helper.
+    monkeypatch.setenv("DISCO_SOAK_PICKUP_TIMEOUT_S", "0.03")
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())
+    transport = _ScriptStateTransport(db, states=["FINISHED"])  # never leaves terminal, no events
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    baseline = await client.capture_followup_baseline(_CID)
+    result = await asyncio.wait_for(
+        client.wait_for_followup_pickup(_CID, baseline), timeout=5.0  # default bound = env (0.03s)
+    )
+    assert result == FOLLOWUP_PICKUP_TIMEOUT
 
 
 # ---- evidence lock freezes the dossier --------------------------------------

@@ -97,6 +97,14 @@ SCENARIO_CONTRACT_UNSATISFIABLE = "SCENARIO_CONTRACT_UNSATISFIABLE"
 # re-runs an INVALID_RUN instead of freezing a false product failure.
 RUN_INTERRUPTED = "RUN_INTERRUPTED"
 RUN_TIMEOUT_WHILE_PROGRESSING = "RUN_TIMEOUT_WHILE_PROGRESSING"
+# The host ProjectStore workspace snapshot never reached the build's AGENT-FINAL state
+# within the snapshot-wait budget — i.e. the snapshot's on-disk bytes for a declared file
+# never matched what the agent last wrote to it (a stale/slow flush, or a multi-revision
+# build whose later-revision bytes had not yet flushed). This is NOT a product
+# ARTIFACT_TRUTH_MISMATCH (the harness read the snapshot before it settled): the collect
+# FAILS FAST here rather than laundering a stale capture into a false product failure or a
+# silent best-effort pass, so §17 re-runs it. Bounded — never hangs.
+WORKSPACE_SNAPSHOT_NOT_READY = "WORKSPACE_SNAPSHOT_NOT_READY"
 
 HARNESS_VALIDITY_CODES = frozenset(
     {
@@ -107,6 +115,7 @@ HARNESS_VALIDITY_CODES = frozenset(
         SCENARIO_CONTRACT_UNSATISFIABLE,
         RUN_INTERRUPTED,
         RUN_TIMEOUT_WHILE_PROGRESSING,
+        WORKSPACE_SNAPSHOT_NOT_READY,
     }
 )
 

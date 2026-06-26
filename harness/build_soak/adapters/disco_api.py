@@ -43,7 +43,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
+import re
 import sqlite3
 import time
 from dataclasses import dataclass, field
@@ -64,6 +66,8 @@ _PRECREATE_INFRA_ERRORS: tuple[type[Exception], ...] = (
     OSError,
     httpx.HTTPError,
 )
+
+_LOG = logging.getLogger("build_soak.disco_api")
 
 # ---- status vocabulary (mirrors disco.core.ConversationStatus as plain strings) --
 
@@ -122,15 +126,78 @@ FOLLOWUP_PICKUP_TIMEOUT = "FOLLOWUP_PICKUP_TIMEOUT"  # no pickup within the boun
 # the very first build turn is a plain RUNNING with no detail — so this detail is a genuine
 # RE-PLAN signal, never the initial plan. Mirrors events.PLANNING_DETAIL / the product's loop.
 _PLANNING_DETAIL = "planning"
-# Default bound for the pickup wait — short (a real pickup shows within a couple seconds),
-# never a hang. On timeout the caller logs a no-op reason and proceeds to drive-to-terminal.
-_FOLLOWUP_PICKUP_TIMEOUT_S = 25.0
+# Bound for the after-terminal pickup wait — POLICY-DRIVEN (env-overridable), NOT a brittle
+# literal. The pickup signal (plan-rev bump / planning re-entry / first non-user progress past
+# the baseline seq) is detected correctly but arrives LATE on a slow driver: measured ~37s on
+# MiniMax-M3 (finalize + replan latency). The old 25s literal therefore ALWAYS timed out, which
+# (under the now-removed re-send branch) duplicated the user turn and could stall the next
+# follow-up. Default 75s covers the measured ~37s with margin; override via the env var with a
+# safe float parse. It MUST stay BELOW the build `--timeout` (the per-drive inactivity window)
+# so a genuinely stuck follow-up HARD-FAILS as a sequencing failure (INVALID_RUN) before the
+# drive's own wait would mask it. Resolved per-call so an override is honored live (testable).
+_FOLLOWUP_PICKUP_TIMEOUT_ENV = "DISCO_SOAK_PICKUP_TIMEOUT_S"
+_FOLLOWUP_PICKUP_TIMEOUT_DEFAULT_S = 75.0
+
+
+def _followup_pickup_timeout_s() -> float:
+    """The pickup-wait bound: ``$DISCO_SOAK_PICKUP_TIMEOUT_S`` (positive float seconds) else the
+    documented default. A missing/blank/non-numeric/non-positive value falls back safely so a
+    fat-fingered override never silently disables the bound."""
+    raw = os.environ.get(_FOLLOWUP_PICKUP_TIMEOUT_ENV)
+    if raw is None:
+        return _FOLLOWUP_PICKUP_TIMEOUT_DEFAULT_S
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return _FOLLOWUP_PICKUP_TIMEOUT_DEFAULT_S
+    return val if val > 0 else _FOLLOWUP_PICKUP_TIMEOUT_DEFAULT_S
 
 # Workspace-snapshot manifest bounds (Bug 9 fix): cap per-file captured content and the
 # number of files walked so a pathological workspace can't blow up the dossier.
 _WS_MANIFEST_MAX_BYTES = 5 * 1024 * 1024  # capture content for files up to 5 MiB
 _WS_MANIFEST_MAX_FILES = 2000
 _SNAPSHOT_POLL_S = 0.5  # re-read cadence while a just-finished build's snapshot flushes
+# Consecutive identical reads required before a declared file with NO content-precise signal
+# (a partial mutator with no provable post-edit content — `present_unproven` — or no event
+# signal at all — `unknown`) is treated as SETTLED. These can't be content-verified, so we
+# demand SEVERAL consecutive-stable reads (the bytes stopped changing across multiple poll
+# intervals) before accepting + log a warning, rather than fail-fast — a legitimate
+# edit-without-readback build must NOT become INVALID_RUN.
+_SNAPSHOT_UNPROVEN_STABLE_POLLS = 4
+# The agent's FINAL on-disk state per declared file is reconstructed from the durable event
+# log. file_write persists its FULL content in the action payload (`_snip_args` elides only
+# at LLM-render time — verified in core.events: "The full content stays in the event
+# payload"), so a successful file_write gives a sha-PRECISE expected identity. The partial
+# mutators rewrite only part of the file, so their post-state can't be reconstructed from a
+# single action → they fall back to content-stability.
+_FILE_WRITE_FULL_TOOLS = frozenset({"file_write"})
+_FILE_WRITE_PARTIAL_TOOLS = frozenset(
+    {"file_append", "file_edit", "file_replace_lines", "file_insert_lines", "file_str_replace"}
+)
+# A partial mutator can't be reconstructed from its action alone, but a later FULL
+# ``file_read`` readback carries the agent's TRUE post-edit bytes — in the file_read RENDERED
+# view (``<line-no>\t<line>``), NOT raw bytes (FileReadTool numbers every line). So a
+# readback-derived expected is compared in RENDERED space (see `_render_numbered`), not by
+# raw sha256. We only promote a read that is FULL and GENUINELY RENDERED:
+#   * FULL — the read header is ``[lines 1-N of N]`` with the two counts EQUAL (started at
+#     line 1, showed every line); a budget-truncated read appends ``; read more with
+#     offset=…`` and a pressure read appends ``— HEAD-ONLY under context pressure`` (counts
+#     unequal / extra text), so both fail this exact match. The read's args must also carry
+#     no offset/limit.
+#   * GENUINELY RENDERED — the content is the real file_read body, NOT a synthetic template.
+#     The F9 read-dedup pointer (``[F9 dedup: …]``, emitted for duplicate reads on assist
+#     runs) carries NO bytes and must NEVER be promoted; it is rejected by the header match.
+# A qualifying readback is used ONLY when its seq is AFTER the path's last mutation (a
+# readback before a later edit is stale → ignored).
+_FILE_READ_TOOLS = frozenset({"file_read"})
+# Matches ONLY a full read header: ``[lines 1-N of N]`` with N == N. The first capture must
+# equal the second (start==1 already pinned by the literal ``1-``).
+_FILE_READ_FULL_HEADER_RE = re.compile(r"^\[lines 1-(\d+) of (\d+)\]$")
+# An elision placeholder (e.g. "<1,234 chars elided …>") copied into a file_write content arg
+# is NOT real bytes — mirrors core.events._ELISION_MARKER_RE structurally. When matched we
+# decline the sha gate for that file and fall back to stability (defensive: a SUCCESSFUL
+# file_write already carries full bytes, so this is belt-and-suspenders).
+_ELISION_MARKER_RE = re.compile(r"<\s*\d[\d,]*\s*chars\b[^>]*?\b(?:elided|full content)\b[^>]*>")
 # Internal dirs the served-root index detection must skip — mirrors the product's
 # lifecycle._find_snapshot_index / SandboxSession._detect_serve_dir skip set exactly, so a
 # .pmx/.disco/node_modules index.html is NEVER mistaken for the build's served root.
@@ -162,13 +229,30 @@ class InconclusiveRunError(Exception):
 
 
 class FollowupPickupError(Exception):
-    """An after-terminal follow-up was SENT but the engine never PICKED IT UP within the
-    bound — no progress event past the baseline seq, status stuck at the prior terminal — even
-    after one bounded re-kick. This is a SEQUENCING failure, NOT a product verdict: proceeding
-    to drive-to-terminal on the STALE terminal is exactly what lets the NEXT follow-up collapse
-    into this unprocessed one (V1's bug → a false single plan revision). The runner records
-    INVALID_RUN (the harness could not serialize the follow-ups) rather than driving on. `facts`
-    carries the baseline evidence (status, seq, revision) for the dossier."""
+    """An after-terminal follow-up was SENT (exactly ONCE) but the engine never PICKED IT UP
+    within the policy-driven bound — no progress event past the baseline seq, status stuck at the
+    prior terminal. This is a SEQUENCING failure, NOT a product verdict. The runner does NOT
+    re-send (a second send_followup would DUPLICATE the user turn — there is no legal
+    kick-without-append on a FINISHED run) and does NOT drive on the STALE terminal (which is
+    exactly what lets the NEXT follow-up collapse into this unprocessed one → V1's false single
+    plan revision); it records INVALID_RUN instead. `facts` carries the baseline evidence
+    (status, seq, revision) for the dossier."""
+
+    def __init__(self, reason: str, facts: dict[str, Any] | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.facts = facts or {}
+
+
+class SnapshotNotReadyError(Exception):
+    """The host ProjectStore workspace SNAPSHOT never reached the build's AGENT-FINAL state
+    within `snapshot_wait_s`: for at least one declared file the snapshot's on-disk bytes
+    never matched what the agent LAST wrote to it (a slow/failed flush, or a multi-revision
+    build whose later-revision bytes hadn't flushed when the collect deadline hit). This is
+    a deterministic readiness FAILURE, NOT a product verdict — accepting the stale capture
+    would launder it into a false ARTIFACT_TRUTH_MISMATCH or a silent stale PASS. The runner
+    records INVALID_RUN (`WORKSPACE_SNAPSHOT_NOT_READY`) so §17 re-runs it. `facts` carries
+    the per-file expected/observed evidence for the dossier. Bounded — never hangs."""
 
     def __init__(self, reason: str, facts: dict[str, Any] | None = None) -> None:
         super().__init__(reason)
@@ -670,11 +754,13 @@ class DiscoApiClient:
         the append itself is not processing (that is precisely the stale-terminal red herring
         this guards against), so the raw event marker is never a pickup signal.
 
-        BOUNDED by `timeout_s` (default `_FOLLOWUP_PICKUP_TIMEOUT_S`): on timeout it RETURNS
-        FOLLOWUP_PICKUP_TIMEOUT (never hangs). The CALLER must treat that as a SEQUENCING
-        FAILURE (do NOT drive on the stale terminal) — proceeding is what V1 did wrong."""
+        BOUNDED by `timeout_s` (default = the policy-driven `_followup_pickup_timeout_s()`):
+        on timeout it RETURNS FOLLOWUP_PICKUP_TIMEOUT (never hangs). The CALLER must treat that
+        as a SEQUENCING FAILURE — HARD-FAIL the run (do NOT re-send, do NOT drive on the stale
+        terminal): re-sending duplicates the user turn (no legal kick-without-append on a
+        FINISHED run) and driving on the stale terminal collapses the next follow-up (V1's bug)."""
         if timeout_s is None:
-            timeout_s = _FOLLOWUP_PICKUP_TIMEOUT_S
+            timeout_s = _followup_pickup_timeout_s()
         base_status = str(baseline.get("status") or "")
         base_rev = int(baseline.get("plan_revision") or 0)
         base_seq = int(baseline.get("max_seq", -1))
@@ -772,22 +858,7 @@ class DiscoApiClient:
         snapshot_dir: Path | None = None
 
         if self._projects_root is not None:
-            deadline = time.monotonic() + self._snapshot_wait_s
-            while True:
-                snapshot_dir = self._snapshot_workspace_dir(conversation_id)
-                manifest = (
-                    self._read_snapshot_manifest(conversation_id, declared, snapshot_dir)
-                    if snapshot_dir is not None
-                    else {}
-                )
-                missing = [p for p in declared if p not in manifest]
-                # Stop when the snapshot exists AND is complete, or the wait budget elapsed.
-                # The wait also covers the snapshot DIR not yet existing (snapshot is written
-                # after FINISHED is appended inside loop.run()), so a not-yet-flushed run is
-                # not mistaken for "no snapshot" → proxy mask.
-                if (snapshot_dir is not None and not missing) or time.monotonic() >= deadline:
-                    break
-                await asyncio.sleep(_SNAPSHOT_POLL_S)
+            manifest, snapshot_dir = await self._await_ready_snapshot(conversation_id, declared)
 
         # The snapshot is AUTHORITATIVE: return it as-is. A declared file absent from the
         # snapshot stays OMITTED — never proxy-substituted (hole #1).
@@ -807,6 +878,105 @@ class DiscoApiClient:
                 entry["source"] = "preview_proxy"
                 manifest[path] = entry
         return manifest
+
+    async def _await_ready_snapshot(
+        self, conversation_id: str, declared: list[str]
+    ) -> tuple[dict[str, Any], Path | None]:
+        """Poll the host ProjectStore snapshot until it has SETTLED on the build's
+        AGENT-FINAL state, then return ``(manifest, snapshot_dir)``.
+
+        WHY (stale-read race): ``_maybe_snapshot`` mirrors the sandbox workspace to the
+        ProjectStore AFTER the build appends a terminal event. A multi-revision build
+        reaches a terminal per revision, so revision-1's files are already on disk
+        (presence-complete) BEFORE revision-2's bytes flush — the old presence-only gate
+        settled on STALE revision-1 content → a false ARTIFACT_TRUTH_MISMATCH. A timing
+        window can't deterministically close that gap, so we gate on a DETERMINISTIC
+        readiness signal derived from the build's own durable event log (NOT the scenario's
+        expected assertion — gating on the assertion target would mask real failures).
+
+        Per declared file the agent's FINAL state (from ``_agent_declared_expected``) is one of:
+          * sha — last op is ``file_write`` (full bytes in the payload): on-disk sha256 MATCH.
+          * rendered — a partial edit was the last mutation but a FULL ``file_read`` readback
+            after it carries the true post-edit bytes: the on-disk file RENDERED by file_read's
+            own numberer must equal the readback (closes the partial-edit-last stale gap).
+          * absent — the agent ``rm``'d it via shell: accept only when NOT on disk.
+          * present_unproven — a partial edit with no provable post-state: extended stability.
+          * unknown — no event-log signal at all: extended stability (present or absent).
+
+        Timeout = FAIL-FAST only for a CONTENT-PRECISE signal (sha / rendered / absent) still
+        unsatisfied at the ``snapshot_wait_s`` deadline → raise ``SnapshotNotReadyError`` (→
+        INVALID_RUN WORKSPACE_SNAPSHOT_NOT_READY). present_unproven / unknown files NEVER
+        fail-fast (no content proof exists, and a legit edit-without-readback build must not
+        become INVALID_RUN) — they settle on EXTENDED content-stability (+a logged warning) and
+        are accepted best-effort at the deadline, preserving the genuinely-missing → OMITTED →
+        FALSE_FINISH path. Already-consistent snapshots are accepted PROMPTLY, no needless wait."""
+        try:
+            events = self.collect_events(conversation_id)
+        except sqlite3.Error:
+            # No durable event log available (e.g. deterministic tests that don't seed the
+            # DB) → no event signals; every declared file settles on content-stability.
+            events = []
+        expected = _agent_declared_expected(events, declared)
+
+        deadline = time.monotonic() + self._snapshot_wait_s
+        prev_ident: dict[str, Any] = {}
+        stable_n: dict[str, int] = {}
+        manifest: dict[str, Any] = {}
+        snapshot_dir: Path | None = None
+        while True:
+            snapshot_dir = self._snapshot_workspace_dir(conversation_id)
+            manifest = (
+                self._read_snapshot_manifest(conversation_id, declared, snapshot_dir)
+                if snapshot_dir is not None
+                else {}
+            )
+            # Content-stability bookkeeping: count consecutive identical (present+size+sha)
+            # reads per declared file. A change resets the counter to this fresh observation.
+            for p in declared:
+                ident = _manifest_ident(manifest, p)
+                if p in prev_ident and prev_ident[p] == ident:
+                    stable_n[p] = stable_n.get(p, 1) + 1
+                else:
+                    stable_n[p] = 1
+                prev_ident[p] = ident
+            ready, blocking, unproven_ready = _evaluate_snapshot_readiness(
+                declared, expected, manifest, stable_n
+            )
+            if ready:
+                for p in unproven_ready:
+                    _LOG.warning(
+                        "snapshot %s: declared file %r accepted on EXTENDED content-stability "
+                        "(%s) — no sha/readback proof of the agent's final bytes (expected=%s)",
+                        conversation_id, p, expected.get(p, ("unknown",))[0],
+                        list(expected.get(p, ("unknown",))),
+                    )
+                break
+            if time.monotonic() >= deadline:
+                if blocking:
+                    raise SnapshotNotReadyError(
+                        "workspace snapshot never reached the agent's final state within "
+                        f"{self._snapshot_wait_s:g}s",
+                        {
+                            "conversation_id": conversation_id,
+                            "snapshot_wait_s": self._snapshot_wait_s,
+                            "snapshot_dir": str(snapshot_dir) if snapshot_dir else None,
+                            "unsatisfied": [
+                                {
+                                    "path": p,
+                                    "expected": list(expected.get(p, ("unknown",))),
+                                    "on_disk_sha256": _manifest_sha(manifest, p),
+                                    "present": _manifest_present(manifest, p),
+                                }
+                                for p in blocking
+                            ],
+                        },
+                    )
+                # No DEFINITE event signal still pending → no evidence the snapshot is behind
+                # the agent. Accept the current read best-effort (genuinely-missing files stay
+                # OMITTED → FALSE_FINISH preserved); never FAIL-FAST on an unknown file.
+                break
+            await asyncio.sleep(_SNAPSHOT_POLL_S)
+        return manifest, snapshot_dir
 
     def _read_snapshot_manifest(
         self, conversation_id: str, declared: list[str], ws: Path | None = None
@@ -1123,6 +1293,262 @@ def _last_terminal(rows: list[dict[str, Any]]) -> str | None:
         elif st == "RUNNING":
             result = None
     return result
+
+
+def _norm_rel(path: str) -> str:
+    """Canonical workspace-relative key: drop a leading ``./`` then any leading ``/`` so a
+    scenario-declared ``/index.html`` / ``./index.html`` and an event-log ``index.html``
+    compare equal."""
+    s = str(path)
+    if s.startswith("./"):
+        s = s[2:]
+    return s.lstrip("/")
+
+
+def _manifest_lookup(manifest: dict[str, Any], path: str) -> dict[str, Any] | None:
+    """The manifest entry for a declared path under either its exact key or its
+    normalized relpath (the snapshot walk keys by the leading-slash-free relpath)."""
+    entry = manifest.get(path)
+    if entry is None:
+        entry = manifest.get(_norm_rel(path))
+    return entry if isinstance(entry, dict) else None
+
+
+def _manifest_present(manifest: dict[str, Any], path: str) -> bool:
+    return _manifest_lookup(manifest, path) is not None
+
+
+def _manifest_sha(manifest: dict[str, Any], path: str) -> str | None:
+    entry = _manifest_lookup(manifest, path)
+    return entry.get("sha256") if entry else None
+
+
+def _manifest_ident(manifest: dict[str, Any], path: str) -> tuple[Any, Any] | None:
+    """A change-detection identity for content-stability: (size, sha256), or None when the
+    file is absent (absence is itself a stable-able state)."""
+    entry = _manifest_lookup(manifest, path)
+    if entry is None:
+        return None
+    return (entry.get("size"), entry.get("sha256"))
+
+
+def _shell_removes(command: str, norm_path: str) -> bool:
+    """True iff `command` is an ``rm`` that targets `norm_path` (a deterministic delete
+    signal — there is no file-delete tool; deletes go through shell). Conservative: an
+    ``rm`` token must be present and the path (full relpath or basename) appears as a
+    non-flag argument."""
+    toks = command.split()
+    if "rm" not in toks:
+        return False
+    targets = {_norm_rel(t) for t in toks if not t.startswith("-") and t != "rm"}
+    if norm_path in targets:
+        return True
+    base = norm_path.rsplit("/", 1)[-1]
+    return base in {t.rsplit("/", 1)[-1] for t in targets}
+
+
+def _full_readback_body(args: dict[str, Any], content: Any) -> str | None:
+    """Return the RENDERED body of a FULL, GENUINELY-RENDERED ``file_read`` observation, or
+    None when the read is paged / truncated / synthetic (and so cannot define the agent's
+    final bytes). The body is the readback MINUS its ``[lines 1-N of N]`` header line — i.e.
+    the ``<line-no>\\t<line>`` block, ready to compare against ``_render_numbered`` of the
+    on-disk file.
+
+    Rejections (→ None): an explicit ``offset``/``limit`` (a targeted, partial read); any
+    header that is not the exact full-read shape (a budget-truncated ``; read more…`` or a
+    pressure ``— HEAD-ONLY…`` read has unequal/extra header text); the F9 dedup pointer or
+    any other synthetic content (no ``[lines 1-N of N]`` header at all)."""
+    if args.get("offset") is not None or args.get("limit") is not None:
+        return None
+    if not isinstance(content, str):
+        return None
+    head, sep, body = content.partition("\n")
+    m = _FILE_READ_FULL_HEADER_RE.match(head)
+    if m is None or m.group(1) != m.group(2):
+        return None  # not a full read (or a synthetic [F9 dedup: …] / non-rendered payload)
+    # `sep` empty ⇒ a header-only (empty-file) read: body is "" (matches _render_numbered("")).
+    return body if sep else ""
+
+
+def _render_numbered(text: str) -> str:
+    """Render `text` EXACTLY as ``file_read`` renders a full read — 1-based, right-aligned
+    line numbers + a tab, no trailing newline — by importing the PRODUCT's own pure helper
+    (``disco.tools.builtin.files._number_lines``) so the format can never drift from the
+    readback we compare against. Imported lazily to keep the deterministic test path free of
+    the live tool deps until a readback signal actually needs rendering."""
+    from disco.tools.builtin.files import _number_lines
+
+    return _number_lines(text, 1)
+
+
+def _agent_declared_expected(
+    events: list[dict[str, Any]], declared: list[str]
+) -> dict[str, tuple[Any, ...]]:
+    """Reconstruct each DECLARED file's AGENT-FINAL state from the durable event log, keyed by
+    the original declared-path string. A mutation / read counts only when its action has a
+    SUCCESSFUL observation and no agent_error (a failed/aborted op is NOT the final state).
+
+    Priority per path (seq-ordered — the LAST mutation, plus any FULL readback after it):
+      a. last mutation is ``file_write`` (full, non-elided content) → ``("sha", <hexdigest>)``
+         over the RAW written bytes (strongest signal).
+      b. else a partial mutator (edit/append/replace/insert/str_replace, or an elided
+         file_write) is the last mutation AND a FULL, genuinely-rendered ``file_read``
+         readback exists with seq AFTER it → ``("rendered", <readback body>)`` (compared in
+         file_read's rendered space — closes the partial-edit-last stale-snapshot gap).
+      c. else last op is a shell ``rm`` of the path → ``("absent",)``.
+      d. else a partial mutator with NO qualifying post-mutation readback →
+         ``("present_unproven",)`` (content can't be proven; extended-stability + warn).
+      e. else no signal → omitted (caller treats as ``unknown``)."""
+    want = {_norm_rel(p): p for p in declared}
+    if not want:
+        return {}
+
+    obs_success: dict[str, bool] = {}
+    obs_content: dict[str, Any] = {}
+    err_call_ids: set[str] = set()
+    for e in events:
+        kind = e.get("kind")
+        if kind == "observation":
+            tr = _payload(e).get("tool_result") or {}
+            cid = tr.get("call_id")
+            if cid is not None:
+                obs_success[str(cid)] = bool(tr.get("success", True))
+                obs_content[str(cid)] = tr.get("content")
+        elif kind == "agent_error":
+            tcid = _payload(e).get("tool_call_id")
+            if tcid is not None:
+                err_call_ids.add(str(tcid))
+
+    # Per path: the LAST mutation (seq, kind, sha?) and the LAST qualifying full readback
+    # (seq, rendered body). Combined after the walk so ordering decides which wins.
+    last_mut: dict[str, tuple[int, str, str | None]] = {}  # np -> (seq, kind, write_sha)
+    last_read: dict[str, tuple[int, str]] = {}  # np -> (seq, body)
+    for e in events:  # seq order (the DB read is ORDER BY seq)
+        if e.get("kind") != "action":
+            continue
+        seq = int(e.get("seq", -1))
+        tc = _payload(e).get("tool_call") or {}
+        call_id = tc.get("call_id")
+        name = tc.get("tool_name")
+        args = tc.get("arguments") or {}
+        if call_id is None:
+            continue
+        cid = str(call_id)
+        if cid in err_call_ids or not obs_success.get(cid, False):
+            continue  # only a SUCCESSFUL, un-errored op is the agent's real state
+        if name in _FILE_WRITE_FULL_TOOLS:
+            np = _norm_rel(str(args.get("path", "")))
+            if np not in want:
+                continue
+            content = args.get("content")
+            if isinstance(content, str) and not _ELISION_MARKER_RE.search(content):
+                sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                last_mut[np] = (seq, "sha", sha)
+            else:  # elided/unknown bytes → a content-unprovable mutation
+                last_mut[np] = (seq, "present", None)
+        elif name in _FILE_WRITE_PARTIAL_TOOLS:
+            np = _norm_rel(str(args.get("path", "")))
+            if np not in want:
+                continue
+            last_mut[np] = (seq, "present", None)
+        elif name in _FILE_READ_TOOLS:
+            np = _norm_rel(str(args.get("path", "")))
+            if np not in want:
+                continue
+            body = _full_readback_body(args, obs_content.get(cid))
+            if body is not None:
+                last_read[np] = (seq, body)
+        elif name == "shell":
+            command = str(args.get("command") or args.get("cmd") or "")
+            for np in want:
+                if _shell_removes(command, np):
+                    last_mut[np] = (seq, "absent", None)
+
+    by_norm: dict[str, tuple[Any, ...]] = {}
+    for np in want:
+        mut = last_mut.get(np)
+        rd = last_read.get(np)
+        if mut is None:
+            continue  # (e) no mutation signal → unknown (omitted)
+        mseq, mkind, msha = mut
+        if mkind == "sha":
+            by_norm[np] = ("sha", msha)  # (a)
+        elif mkind == "absent":
+            by_norm[np] = ("absent",)  # (c)
+        elif rd is not None and rd[0] > mseq:
+            by_norm[np] = ("rendered", rd[1])  # (b) full readback AFTER the last partial edit
+        else:
+            by_norm[np] = ("present_unproven",)  # (d) partial edit, no provable post-state
+    return {want[np]: st for np, st in by_norm.items()}
+
+
+def _manifest_content(manifest: dict[str, Any], path: str) -> str | None:
+    """The on-disk file's decoded UTF-8 text from the manifest entry (empty for a binary /
+    oversized file), or None when the file is absent."""
+    entry = _manifest_lookup(manifest, path)
+    if entry is None:
+        return None
+    c = entry.get("content")
+    return c if isinstance(c, str) else ""
+
+
+def _evaluate_snapshot_readiness(
+    declared: list[str],
+    expected: dict[str, tuple[Any, ...]],
+    manifest: dict[str, Any],
+    stable_n: dict[str, int],
+) -> tuple[bool, list[str], list[str]]:
+    """Decide whether the snapshot has settled on the agent's final state.
+
+    Returns ``(ready, blocking, unproven_ready)``:
+      * ``ready`` — EVERY declared file's expected state is met.
+      * ``blocking`` — UNSATISFIED files carrying a DEFINITE, content-precise signal
+        (``sha`` / ``rendered`` / ``absent``). On the wait-budget deadline a non-empty
+        ``blocking`` is the FAIL-FAST trigger (the snapshot is provably behind the agent).
+      * ``unproven_ready`` — files accepted ONLY via extended content-stability
+        (``present_unproven`` / ``unknown``), i.e. with no content proof; the caller logs a
+        warning. These NEVER fail-fast (a legit edit-without-readback build must not become
+        INVALID_RUN); an unsatisfied unproven file simply keeps `ready` False and is accepted
+        best-effort at the deadline.
+
+    Content-precise gates:
+      * ``sha`` — on-disk raw sha256 == the written bytes' sha.
+      * ``rendered`` — the on-disk file RENDERED by file_read's own numberer == the readback.
+      * ``absent`` — the file is NOT on disk.
+    Stability gates (count of consecutive identical reads in ``stable_n``):
+      * ``present_unproven`` — present AND ``>= _SNAPSHOT_UNPROVEN_STABLE_POLLS`` (+warn).
+      * ``unknown`` — present-or-absent stable ``>= _SNAPSHOT_UNPROVEN_STABLE_POLLS`` (+warn)."""
+    ready = True
+    blocking: list[str] = []
+    unproven_ready: list[str] = []
+    for p in declared:
+        kind = expected.get(p, ("unknown",))[0]
+        present = _manifest_present(manifest, p)
+        n = stable_n.get(p, 0)
+        definite = False
+        if kind == "sha":
+            ok = present and _manifest_sha(manifest, p) == expected[p][1]
+            definite = True
+        elif kind == "rendered":
+            on_disk_rendered = _render_numbered(_manifest_content(manifest, p) or "")
+            ok = present and on_disk_rendered == expected[p][1]
+            definite = True
+        elif kind == "absent":
+            ok = not present
+            definite = True
+        elif kind == "present_unproven":
+            ok = present and n >= _SNAPSHOT_UNPROVEN_STABLE_POLLS
+            if ok:
+                unproven_ready.append(p)
+        else:  # unknown — settle on extended stability of whatever state (present OR absent)
+            ok = n >= _SNAPSHOT_UNPROVEN_STABLE_POLLS
+            if ok and present:
+                unproven_ready.append(p)
+        if not ok:
+            ready = False
+            if definite:
+                blocking.append(p)
+    return ready, blocking, unproven_ready
 
 
 def _classify_conn_error(exc: Exception) -> str:

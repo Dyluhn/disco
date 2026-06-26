@@ -44,6 +44,7 @@ from .adapters.disco_api import (
     FollowupPickupError,
     InconclusiveRunError,
     InfraProbeError,
+    SnapshotNotReadyError,
     Transport,
 )
 from .classify import CLASSIFICATION_NAME, classify
@@ -302,15 +303,18 @@ async def drive_scenario(
     # engine (processing only the latest unprocessed user turn) COLLAPSED the pile into a
     # SINGLE plan revision (a false PLAN_REVISION_NOT_INCREMENTED).
     #
-    # V2 (V1 failed live — status-only pickup timed out in the finalization dead-window, then
-    # PROCEEDED on the stale terminal). For EACH follow-up:
+    # V2 REVISED (single send + hard-fail; the re-send was a live bug — on a FINISHED run
+    # send_followup APPENDS the user turn again, DUPLICATING the follow-up, since there is no
+    # legal kick-without-append for FINISHED, resume being illegal there). For EACH follow-up:
     #   1. snapshot a SEQ baseline BEFORE the send;
-    #   2. send, then BLOCK on the EVENT-SEQUENCED wait_for_followup_pickup (a non-user progress
-    #      event past the baseline seq — detectable even when the status stays FINISHED);
-    #   3. on a pickup TIMEOUT do NOT drive on the stale terminal — re-kick ONCE, and if it
-    #      STILL doesn't pick up, HARD-FAIL (FollowupPickupError → INVALID_RUN). Proceeding is
-    #      precisely what let follow-up 2 collapse into follow-up 1;
-    #   4. drive to terminal with min_seq=baseline.max_seq so the drive returns on the
+    #   2. send EXACTLY ONCE, then BLOCK on the EVENT-SEQUENCED wait_for_followup_pickup (a
+    #      non-user progress event past the baseline seq — detectable even when the status stays
+    #      FINISHED) for the policy-driven bound (default ~75s, the real ~37s pickup + margin);
+    #   3. EXPLICIT decision: pickup observed → drive (success path). Pickup NOT observed within
+    #      the bound → HARD-FAIL (FollowupPickupError → INVALID_RUN); do NOT re-send (avoids the
+    #      duplicate turn) and do NOT send any later follow-up (preserves no-pile-up). Proceeding
+    #      on the stale terminal is precisely what let follow-up 2 collapse into follow-up 1;
+    #   4. on pickup, drive to terminal with min_seq=baseline.max_seq so the drive returns on the
     #      follow-up's OWN new terminal (seq > baseline), never the stale one.
     for f in after_terminal:
         baseline = await client.capture_followup_baseline(cid)
@@ -319,26 +323,19 @@ async def drive_scenario(
         timeline.append(f"sent after-terminal follow-up: {f['text']!r}")
         pickup = await client.wait_for_followup_pickup(cid, baseline)
         if pickup == FOLLOWUP_PICKUP_TIMEOUT:
-            # ONE bounded re-kick: a follow-up that landed during run finalization may need a
-            # second kick to be picked up (the engine's no-op-kick-during-finalize window).
+            # HARD-FAIL: the engine never picked the follow-up up within the bound. Do NOT
+            # re-send (a second send_followup DUPLICATES the user turn on a FINISHED run) and
+            # do NOT drive on the stale pre-follow-up terminal (that collapses the next follow-up
+            # into this one). Record a SEQUENCING failure (INVALID_RUN), never a silent proceed.
             timeline.append(
-                "follow-up pickup NOT observed within the bound — re-kicking once and re-waiting "
+                "follow-up NOT picked up within the bound — SEQUENCING FAILURE (INVALID_RUN); "
+                "not re-sending (would duplicate the turn) and not driving on the stale terminal "
                 f"(baseline status={baseline.get('status')!r}, "
                 f"plan_revision={baseline.get('plan_revision')}, seq={baseline_seq})"
             )
-            await client.send_followup(cid, str(f["text"]), kind="message")
-            pickup = await client.wait_for_followup_pickup(cid, baseline)
-        if pickup == FOLLOWUP_PICKUP_TIMEOUT:
-            # HARD-FAIL: the engine never picked the follow-up up. Do NOT drive on the stale
-            # pre-follow-up terminal — that is what collapses the next follow-up into this one.
-            # Record a SEQUENCING failure (INVALID_RUN), never a silent proceed (V1's mistake).
-            timeline.append(
-                "follow-up STILL not picked up after re-kick — SEQUENCING FAILURE (INVALID_RUN); "
-                "refusing to drive on the stale terminal"
-            )
             raise FollowupPickupError(
                 "after-terminal follow-up was not picked up by the engine within the bound "
-                "(even after one re-kick) — cannot serialize the follow-ups",
+                "— cannot serialize the follow-ups",
                 {
                     "stage": "followup_pickup",
                     "baseline_status": baseline.get("status"),
@@ -690,6 +687,21 @@ async def run_once(
                 exc.reason,
                 code=fc.RUN_INTERRUPTED,
                 first_broken_link="followup_send -> no_pickup_before_bound",
+                facts=exc.facts,
+            )
+        except SnapshotNotReadyError as exc:
+            # The host workspace snapshot never settled on the build's AGENT-FINAL state
+            # within the snapshot-wait budget (a slow/failed flush, or a multi-revision build
+            # whose later bytes hadn't flushed). FAIL-FAST → INVALID_RUN rather than launder a
+            # stale capture into a false ARTIFACT_TRUTH_MISMATCH or a silent stale PASS; §17
+            # re-runs it. Bounded — never hangs.
+            return _invalid_run_record(
+                out_root,
+                run_id,
+                scenario,
+                exc.reason,
+                code=fc.WORKSPACE_SNAPSHOT_NOT_READY,
+                first_broken_link="snapshot_flush -> snapshot_behind_agent_final_state",
                 facts=exc.facts,
             )
         except Exception as exc:  # noqa: BLE001 — surface the real reason as INVALID_RUN
