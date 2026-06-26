@@ -348,3 +348,33 @@ scenarios:
         files:
           - {path: "index.html", must_contain: ["Bean Scene", "Latte", "Cold Brew"]}
       terminal_status_in: ["FINISHED", "VERIFIED"]
+
+  # ---- ramp: THREE sequential change follow-ups (rev 1->2->3->4) -------------
+  # The hardest stress on the multi-revision path: 3 after_terminal follow-ups, each requiring a
+  # FRESH revised plan before any write (the §11.4 chain across THREE revisions); the final workspace
+  # must carry the CUMULATIVE result of all three. Exercises follow-up serialization + revision-oracle
+  # anchoring + snapshot readiness under the most revisions. Every marker is dictated verbatim.
+  - id: revise_thrice_complex
+    mode: api
+    prompt: "Create an index.html landing page for a SaaS product with a hero section and the heading 'Acme Cloud'."
+    followups:
+      - text: "Add a pricing section with three tiers labeled 'Starter', 'Pro', and 'Enterprise'."
+        requires_plan_revision: true
+        trigger: after_terminal
+      - text: "Now change every call-to-action button to say 'Get Started'."
+        requires_plan_revision: true
+        trigger: after_terminal
+      - text: "Add a footer with the exact text 'Copyright Acme Cloud 2026'."
+        requires_plan_revision: true
+        trigger: after_terminal
+    assertions:
+      event_chain: {require_user_event: true, require_plan_before_execution: true, require_action_observation_pairs: true}
+      revisions:
+        initial_plan_revision: 1
+        expected_final_plan_revision: 4
+        forbid_write_before_revision_approval: true
+      workspace:
+        files:
+          - path: "index.html"
+            must_contain: ["Acme Cloud", "Starter", "Pro", "Enterprise", "Get Started", "Copyright Acme Cloud 2026"]
+      terminal_status_in: ["FINISHED", "VERIFIED"]
