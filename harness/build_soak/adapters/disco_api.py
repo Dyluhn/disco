@@ -107,6 +107,25 @@ WAITING_FOR_CONFIRMATION = "WAITING_FOR_CONFIRMATION"
 PROGRESSING_TIMEOUT = "PROGRESSING_TIMEOUT"
 INACTIVE_TIMEOUT = "INACTIVE_TIMEOUT"
 
+# ---- after-terminal follow-up SERIALIZATION sentinels (H1) -------------------
+# The runner sends each `after_terminal` follow-up as its own re-plan→approve→terminal
+# cycle. The bug: the post-terminal poll returned IMMEDIATELY on the STALE prior FINISHED
+# status, so follow-up 2 was sent before the engine even started processing follow-up 1;
+# the engine then only processes the LATEST unprocessed user turn, COLLAPSING the piled-up
+# follow-ups into ONE plan revision (rev 2 vs an expected 3) → false PLAN_REVISION_NOT_INCREMENTED.
+# `wait_for_followup_pickup` blocks AFTER each send until the engine actually PICKS UP the
+# follow-up (relative to a baseline captured BEFORE the send) so the follow-ups are serialized.
+FOLLOWUP_PICKED_UP = "FOLLOWUP_PICKED_UP"  # the build left its prior terminal status (processing)
+FOLLOWUP_REPLANNED = "FOLLOWUP_REPLANNED"  # a re-plan signal (planning re-entry / revision bump)
+FOLLOWUP_PICKUP_TIMEOUT = "FOLLOWUP_PICKUP_TIMEOUT"  # no pickup within the bound → caller proceeds
+# enter_planning stamps this status DETAIL on a re-plan re-entry (RUNNING + detail="planning");
+# the very first build turn is a plain RUNNING with no detail — so this detail is a genuine
+# RE-PLAN signal, never the initial plan. Mirrors events.PLANNING_DETAIL / the product's loop.
+_PLANNING_DETAIL = "planning"
+# Default bound for the pickup wait — short (a real pickup shows within a couple seconds),
+# never a hang. On timeout the caller logs a no-op reason and proceeds to drive-to-terminal.
+_FOLLOWUP_PICKUP_TIMEOUT_S = 25.0
+
 # Workspace-snapshot manifest bounds (Bug 9 fix): cap per-file captured content and the
 # number of files walked so a pathological workspace can't blow up the dossier.
 _WS_MANIFEST_MAX_BYTES = 5 * 1024 * 1024  # capture content for files up to 5 MiB
@@ -135,6 +154,21 @@ class InconclusiveRunError(Exception):
     safety ceiling) and NOT pre-create INFRA_FAILURE; the runner degrades it to INVALID_RUN
     so the §17 no-fluke policy re-runs it instead of recording a false BUILD_DID_NOT_FINISH.
     `facts` carries the progress evidence (last seq seen, elapsed) for the dossier."""
+
+    def __init__(self, reason: str, facts: dict[str, Any] | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.facts = facts or {}
+
+
+class FollowupPickupError(Exception):
+    """An after-terminal follow-up was SENT but the engine never PICKED IT UP within the
+    bound — no progress event past the baseline seq, status stuck at the prior terminal — even
+    after one bounded re-kick. This is a SEQUENCING failure, NOT a product verdict: proceeding
+    to drive-to-terminal on the STALE terminal is exactly what lets the NEXT follow-up collapse
+    into this unprocessed one (V1's bug → a false single plan revision). The runner records
+    INVALID_RUN (the harness could not serialize the follow-ups) rather than driving on. `facts`
+    carries the baseline evidence (status, seq, revision) for the dossier."""
 
     def __init__(self, reason: str, facts: dict[str, Any] | None = None) -> None:
         super().__init__(reason)
@@ -382,6 +416,7 @@ class DiscoApiClient:
         stop_on_gate: bool,
         inactivity_s: float,
         hard_cap_s: float,
+        min_terminal_seq: int | None = None,
     ) -> str:
         """The shared PROGRESS-AWARE terminal wait (Bug 15). Poll GET /state until EITHER:
           (a) a genuine terminal / gate / pause status is reached → return it; OR
@@ -409,15 +444,22 @@ class DiscoApiClient:
             last = self._status_of(await self.get_state(conversation_id))
             if stop_on_gate and last in GATE_STATES:
                 return last
-            if last in _WORK_TERMINALS:
+            # A WORK terminal only ENDS the wait when it is the follow-up's OWN new terminal
+            # (`min_terminal_seq` guard): with a baseline set, a terminal whose durable event
+            # seq <= the baseline is the STALE pre-follow-up terminal — do NOT return on it,
+            # keep waiting for the follow-up's own new terminal (seq > baseline). min=None
+            # (the default, non-follow-up drive) ⇒ any terminal counts, unchanged behavior.
+            if last in _WORK_TERMINALS and self._terminal_is_new(
+                conversation_id, min_terminal_seq
+            ):
                 return last
             if last == PAUSED_STATE:
                 # a cooperative / actionless PAUSE — the driver decides (resume or stop).
                 return last
             if last == "IDLE":
-                if seen_active:
+                if seen_active and self._terminal_is_new(conversation_id, min_terminal_seq):
                     return last
-                # pre-kick / settling — keep waiting for the loop to start.
+                # pre-kick / settling (or a stale pre-follow-up terminal) — keep waiting.
             else:
                 seen_active = True  # RUNNING or any active transitional status
 
@@ -446,15 +488,20 @@ class DiscoApiClient:
         *,
         inactivity_s: float,
         hard_cap_s: float,
+        min_terminal_seq: int | None = None,
     ) -> str:
         """Progress-aware wait that ALSO stops on a GATE the runner must act on (e.g.
         AWAITING_PLAN_APPROVAL). Returns the terminal/gate/pause status, or a Bug-15
-        timeout sentinel (INACTIVE_TIMEOUT / PROGRESSING_TIMEOUT)."""
+        timeout sentinel (INACTIVE_TIMEOUT / PROGRESSING_TIMEOUT). `min_terminal_seq`
+        (H1/V2): when set, a terminal whose durable event seq <= it is the STALE
+        pre-follow-up terminal and does NOT end the wait — only the follow-up's OWN new
+        terminal (seq > min_terminal_seq) does."""
         return await self._poll_progress_aware(
             conversation_id,
             stop_on_gate=True,
             inactivity_s=inactivity_s,
             hard_cap_s=hard_cap_s,
+            min_terminal_seq=min_terminal_seq,
         )
 
     async def poll_until_terminal(
@@ -463,14 +510,18 @@ class DiscoApiClient:
         *,
         inactivity_s: float,
         hard_cap_s: float,
+        min_terminal_seq: int | None = None,
     ) -> str:
         """Progress-aware wait to a strictly TERMINAL state (no gate stop). Used after a
-        plan is approved / for autonomous runs with no interactive gate."""
+        plan is approved / for autonomous runs with no interactive gate. `min_terminal_seq`
+        (H1/V2): only a terminal whose durable event seq > it ends the wait (the follow-up's
+        OWN new terminal), never the stale pre-follow-up one."""
         return await self._poll_progress_aware(
             conversation_id,
             stop_on_gate=False,
             inactivity_s=inactivity_s,
             hard_cap_s=hard_cap_s,
+            min_terminal_seq=min_terminal_seq,
         )
 
     async def wait_until_status_leaves(
@@ -488,6 +539,162 @@ class DiscoApiClient:
                 return last
             await asyncio.sleep(self._poll)
         return last
+
+    def _latest_plan_revision(self, conversation_id: str) -> int:
+        """Highest plan-event revision in the durable log (0 when no plan exists yet).
+        Mirrors events.latest_plan_revision but reads the DB directly so the adapter
+        stays oracle-import-free. A re-plan appends a NEW PlanEvent whose `revision`
+        increments, so a bump here is hard evidence a follow-up was PICKED UP + re-planned."""
+        best = 0
+        for e in self._read_events(conversation_id):
+            if e.get("kind") != "plan":
+                continue
+            rev = _payload(e).get("revision", 1)
+            try:
+                best = max(best, int(rev))
+            except (TypeError, ValueError):
+                continue
+        return best
+
+    def _planning_reentry_since(self, conversation_id: str, after_seq: int) -> bool:
+        """True when a RE-PLAN re-entry status (detail == `planning`) appears at seq >
+        after_seq. enter_planning stamps this on a re-plan but NOT on the first build turn
+        (a plain RUNNING with no detail) — so it is a genuine pickup-of-follow-up signal,
+        not the initial plan. `after_seq` is the baseline max seq captured BEFORE the send."""
+        for e in self._read_events(conversation_id):
+            if e.get("kind") != "status" or int(e.get("seq", -1)) <= after_seq:
+                continue
+            if (_payload(e).get("detail") or None) == _PLANNING_DETAIL:
+                return True
+        return False
+
+    def _progress_event_since(self, conversation_id: str, after_seq: int) -> bool:
+        """True when the FIRST genuine NON-USER PROGRESS event appears at seq > after_seq —
+        the EVENT-SEQUENCED pickup signal (V2). The engine actually processing the follow-up
+        produces a new durable event: an action, an observation, a plan, an agent_error, an
+        AGENT/assistant message, or a RUNNING / gate / `planning` status. Detectable EVEN WHEN
+        the conversation STATUS stays at the prior terminal (FINISHED) — a follow-up appended
+        during run finalization causes NO status change, the exact dead-window V1 missed.
+
+        A bare USER-MESSAGE append (kind=message, source=user) is explicitly NOT progress: the
+        append itself bumps the event seq but is not processing — that is precisely the
+        stale-terminal red herring this guards against, so it is skipped, never a pickup."""
+        for e in self._read_events(conversation_id):
+            if int(e.get("seq", -1)) <= after_seq:
+                continue
+            kind = e.get("kind")
+            if kind == "message":
+                if (e.get("source") or "") == "user":
+                    continue  # the user-message APPEND itself is NOT pickup (the red herring)
+                return True  # an agent/assistant message = the engine produced output
+            if kind in ("action", "observation", "plan", "agent_error"):
+                return True
+            if kind == "status":
+                p = _payload(e)
+                st = p.get("status")
+                if (
+                    st == "RUNNING"
+                    or st in GATE_STATES
+                    or (p.get("detail") or None) == _PLANNING_DETAIL
+                ):
+                    return True
+        return False
+
+    def _latest_terminal_seq(self, conversation_id: str) -> int:
+        """The seq of the MOST RECENT terminal status event in the durable log (-1 when none).
+        Used to require a follow-up's OWN NEW terminal (a terminal EVENT with seq > the
+        baseline) before the drive returns — so the STALE pre-follow-up terminal can never be
+        mistaken for the follow-up's completion (the piece V1 missed)."""
+        best = -1
+        for e in self._read_events(conversation_id):
+            if e.get("kind") != "status":
+                continue
+            if _payload(e).get("status") in TERMINAL_STATES:
+                best = max(best, int(e.get("seq", -1)))
+        return best
+
+    def _terminal_is_new(self, conversation_id: str, min_terminal_seq: int | None) -> bool:
+        """Whether a terminal status reached NOW is the follow-up's OWN new terminal — its
+        durable terminal event has seq > `min_terminal_seq` — rather than the STALE
+        pre-follow-up terminal. None ⇒ no baseline guard (any terminal counts, the default)."""
+        if min_terminal_seq is None:
+            return True
+        return self._latest_terminal_seq(conversation_id) > min_terminal_seq
+
+    async def capture_followup_baseline(self, conversation_id: str) -> dict[str, Any]:
+        """Snapshot the state needed to detect REAL pickup of the NEXT follow-up (H1),
+        captured BEFORE send_followup. `max_seq` is the PRIMARY anchor (V2): pickup and the
+        follow-up's own new terminal are both measured as events at seq > max_seq.
+          * `max_seq` — the latest durable event seq; the baseline for BOTH the event-sequenced
+            pickup detector (a non-user progress event past it) AND the min_terminal_seq drive
+            guard (the follow-up's OWN new terminal must have seq > it, not the stale one);
+          * `plan_revision` — the latest plan revision so a re-plan bump is detectable;
+          * `status` — the build's current (prior-terminal) status, e.g. FINISHED (a
+            belt-and-suspenders signal only; a follow-up appended during finalization leaves
+            the status UNCHANGED, so the seq — not the status — is what V2 keys on).
+        Deliberately does NOT use a bare event-count bump as pickup — the user-message append
+        alone bumps the seq, and the append is NOT processing (that red herring is the bug)."""
+        status = self._status_of(await self.get_state(conversation_id))
+        return {
+            "status": status,
+            "plan_revision": self._latest_plan_revision(conversation_id),
+            "max_seq": self._progress_marker(conversation_id)[1],
+        }
+
+    async def wait_for_followup_pickup(
+        self,
+        conversation_id: str,
+        baseline: dict[str, Any],
+        *,
+        timeout_s: float | None = None,
+    ) -> str:
+        """SERIALIZE after-terminal follow-ups (H1): after send_followup, BLOCK until the
+        engine actually PICKS UP this follow-up — measured against `baseline` (captured
+        BEFORE the send) — so the NEXT follow-up is not piled on top of an unprocessed one
+        and collapsed into a single plan revision.
+
+        EVENT-SEQUENCED (V2 — V1 was status-only and timed out): pickup is detected from the
+        durable EVENT LOG relative to `baseline.max_seq`, NOT from a status change. A follow-up
+        appended while the prior run is FINALIZING causes NO status change (status stays
+        FINISHED) — V1 watched the status, saw nothing, timed out, and PROCEEDED, letting
+        follow-up 2 collapse into follow-up 1. V2 returns as soon as there is REAL pickup
+        evidence relative to the baseline:
+          * FOLLOWUP_REPLANNED — a re-plan: the latest plan revision bumped above baseline, OR
+            a `planning` re-entry status appeared past the baseline seq; OR
+          * FOLLOWUP_PICKED_UP — the FIRST non-user PROGRESS event (action / observation / plan
+            / agent message / RUNNING-or-gate status) appeared at seq > the baseline seq — the
+            engine began processing, EVEN IF the status is still FINISHED. (Belt-and-suspenders:
+            a genuine status change off the prior terminal also counts.)
+
+        A new event seq caused MERELY by the user-message append is NOT treated as pickup —
+        the append itself is not processing (that is precisely the stale-terminal red herring
+        this guards against), so the raw event marker is never a pickup signal.
+
+        BOUNDED by `timeout_s` (default `_FOLLOWUP_PICKUP_TIMEOUT_S`): on timeout it RETURNS
+        FOLLOWUP_PICKUP_TIMEOUT (never hangs). The CALLER must treat that as a SEQUENCING
+        FAILURE (do NOT drive on the stale terminal) — proceeding is what V1 did wrong."""
+        if timeout_s is None:
+            timeout_s = _FOLLOWUP_PICKUP_TIMEOUT_S
+        base_status = str(baseline.get("status") or "")
+        base_rev = int(baseline.get("plan_revision") or 0)
+        base_seq = int(baseline.get("max_seq", -1))
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            status = self._status_of(await self.get_state(conversation_id))
+            # (1) a re-plan signal: a revision bump OR a `planning` re-entry past the baseline.
+            if self._latest_plan_revision(conversation_id) > base_rev:
+                return FOLLOWUP_REPLANNED
+            if self._planning_reentry_since(conversation_id, base_seq):
+                return FOLLOWUP_REPLANNED
+            # (2) EVENT-SEQUENCED pickup: a non-user progress event past the baseline seq means
+            #     the engine started processing — detectable even when the status stays FINISHED.
+            if self._progress_event_since(conversation_id, base_seq):
+                return FOLLOWUP_PICKED_UP
+            # (3) belt-and-suspenders: the build left its prior terminal/resting status.
+            if base_status and status and status != base_status:
+                return FOLLOWUP_PICKED_UP
+            await asyncio.sleep(self._poll)
+        return FOLLOWUP_PICKUP_TIMEOUT
 
     async def wait_for_first_file_write(
         self, conversation_id: str, *, timeout_s: float

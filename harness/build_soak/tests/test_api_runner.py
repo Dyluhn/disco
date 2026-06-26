@@ -5,14 +5,20 @@ pre-create (codex #3), and the run-folder shape (§5)."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 
 import httpx
 import pytest
-from _eventlog import clean_smoke_log
+from _eventlog import action, clean_smoke_log, msg, plan, status
 
-from harness.build_soak.adapters.disco_api import DiscoApiClient
+from harness.build_soak.adapters.disco_api import (
+    FOLLOWUP_PICKED_UP,
+    FOLLOWUP_PICKUP_TIMEOUT,
+    FOLLOWUP_REPLANNED,
+    DiscoApiClient,
+)
 from harness.build_soak.evidence import load_manifest, verify_evidence_unchanged
 from harness.build_soak.run import (
     assemble_dossier,
@@ -1131,6 +1137,305 @@ async def test_genuinely_inactive_build_is_a_real_finding_not_inconclusive(tmp_p
     )
     assert record["status"] == "FAIL"
     assert record["code"] == "BUILD_DID_NOT_FINISH"
+
+
+# ---- H1: after-terminal follow-ups are SERIALIZED ---------------------------
+# Bug: the post-terminal wait returned IMMEDIATELY on the STALE prior FINISHED status, so
+# follow-up 2 was sent before the engine started processing follow-up 1; the engine then
+# processed only the latest unprocessed user turn, COLLAPSING the pile into ONE plan
+# revision (false PLAN_REVISION_NOT_INCREMENTED). wait_for_followup_pickup serializes them.
+
+
+def _insert_event(db_path, cid, event):
+    """Append ONE full-event dict (the _eventlog builder shape) into the durable log."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO events (conversation_id, seq, id, kind, source, created_at, payload) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (
+                cid,
+                event["seq"],
+                event.get("id", f"evt_{event['seq']}"),
+                event["kind"],
+                event["source"],
+                event.get("timestamp", ""),
+                json.dumps(event),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+class _ScriptStateTransport(FakeTransport):
+    """GET /state yields scripted statuses (clamped at last). `on_read(n)` fires on each
+    /state read (1-based) so a test can mutate the DB as the pickup wait polls — modelling
+    a re-plan that lands only after several polls."""
+
+    def __init__(self, db_path, *, states, on_read=None, **kw):
+        super().__init__(db_path, states=states, **kw)
+        self._on_read = on_read
+        self.state_reads = 0
+
+    async def get_json(self, path):
+        if path.endswith("/state"):
+            self.state_reads += 1
+            if self._on_read is not None:
+                self._on_read(self.state_reads)
+            st = self._states[min(self.state_reads - 1, len(self._states) - 1)]
+            return 200, {"execution_status": st}
+        return await super().get_json(path)
+
+
+@pytest.mark.asyncio
+async def test_wait_for_followup_pickup_detects_terminal_exit(tmp_path):
+    # Pickup #1 signal: the build LEAVES its prior terminal status. The wait must NOT return
+    # on the stale FINISHED (status == baseline) — it holds until the status actually changes.
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())
+    transport = _ScriptStateTransport(db, states=["FINISHED", "FINISHED", "RUNNING"])
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    baseline = await client.capture_followup_baseline(_CID)  # status=FINISHED (1 read)
+    assert baseline["status"] == "FINISHED"
+    result = await client.wait_for_followup_pickup(_CID, baseline, timeout_s=5.0)
+    assert result == FOLLOWUP_PICKED_UP
+    # It WAITED through the stale-FINISHED reads instead of returning on the first one.
+    assert transport.state_reads >= 3
+
+
+@pytest.mark.asyncio
+async def test_wait_for_followup_pickup_replan_bump_not_user_append(tmp_path):
+    # Pickup #2 signal: a re-plan (a NEW plan event whose revision bumps above baseline).
+    # The RED HERRING the bug rode on — a new event seq from the user-message APPEND — must
+    # NOT count as pickup: the append at read 1 bumps the seq but is not processing, so the
+    # wait keeps polling until the genuine plan-revision bump lands at read 3.
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())  # latest plan revision == 1
+
+    def on_read(n):
+        if n == 1:
+            _insert_event(db, _CID, msg(11, "user", "now revise it"))  # seq bump ONLY
+        elif n == 3:
+            _insert_event(db, _CID, plan(12, revision=2))  # the real re-plan
+
+    transport = _ScriptStateTransport(db, states=["FINISHED"], on_read=on_read)
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    baseline = {"status": "FINISHED", "plan_revision": 1, "max_seq": 10}
+    result = await client.wait_for_followup_pickup(_CID, baseline, timeout_s=5.0)
+    assert result == FOLLOWUP_REPLANNED
+    # The user-append at read 1 did NOT short-circuit it; it waited for the rev bump at read 3.
+    assert transport.state_reads >= 3
+
+
+@pytest.mark.asyncio
+async def test_wait_for_followup_pickup_fires_on_progress_event_status_stuck_finished(tmp_path):
+    # THE V2 DEAD-WINDOW (why V1 failed): a follow-up appended during run finalization causes
+    # NO status change — the status STAYS FINISHED the whole time. V1 watched only the status,
+    # saw nothing, and timed out. V2 detects pickup from the EVENT LOG: the first non-user
+    # progress event (an action here, NOT a re-plan) past the baseline seq is pickup, even
+    # though the status never leaves FINISHED. The user-message append at read 1 must NOT count.
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())  # max seq 10, no re-plan
+
+    def on_read(n):
+        if n == 1:
+            _insert_event(db, _CID, msg(11, "user", "now revise it"))  # the append — NOT pickup
+        elif n == 3:
+            _insert_event(db, _CID, action(12, "shell"))  # real progress; status STILL FINISHED
+
+    transport = _ScriptStateTransport(db, states=["FINISHED"], on_read=on_read)  # never changes
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    baseline = {"status": "FINISHED", "plan_revision": 1, "max_seq": 10}
+    result = await client.wait_for_followup_pickup(_CID, baseline, timeout_s=5.0)
+    assert result == FOLLOWUP_PICKED_UP  # detected from the event seq, not a status change
+    # It did NOT short-circuit on the bare user-append at read 1; it waited for the real
+    # progress event at read 3 — proving the append red herring is excluded.
+    assert transport.state_reads >= 3
+
+
+@pytest.mark.asyncio
+async def test_wait_for_followup_pickup_is_bounded_and_returns_on_timeout(tmp_path):
+    # No pickup ever (status frozen at the prior FINISHED, no re-plan): the wait is BOUNDED
+    # and RETURNS the timeout sentinel rather than hanging — the caller then proceeds.
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())
+    transport = _ScriptStateTransport(db, states=["FINISHED"])  # never leaves terminal
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    baseline = await client.capture_followup_baseline(_CID)
+    # asyncio.wait_for is the anti-hang guard: a real hang would raise TimeoutError here.
+    result = await asyncio.wait_for(
+        client.wait_for_followup_pickup(_CID, baseline, timeout_s=0.05), timeout=5.0
+    )
+    assert result == FOLLOWUP_PICKUP_TIMEOUT
+
+
+@pytest.mark.asyncio
+async def test_drive_does_not_return_on_stale_terminal_below_min_seq(tmp_path):
+    # THE PIECE V1 MISSED (V2 min_seq guard): the drive must NOT return on the STALE
+    # pre-follow-up terminal (its event seq <= min_seq). The status reads FINISHED the whole
+    # time and the stale terminal sits at seq 10; only when the follow-up's OWN new terminal
+    # event (seq 20 > min_seq) lands does the wait return. (a) in the V2 plan.
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())  # stale terminal: FINISHED at seq 10
+
+    def on_read(n):
+        if n == 4:
+            # the follow-up's OWN new terminal lands only at read 4, at a higher seq
+            _insert_event(db, _CID, status(20, "FINISHED"))
+
+    transport = _ScriptStateTransport(db, states=["FINISHED"], on_read=on_read)  # never changes
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    result = await client.poll_until_terminal(
+        _CID, inactivity_s=5.0, hard_cap_s=10.0, min_terminal_seq=10
+    )
+    assert result == "FINISHED"
+    # It WAITED past the stale-terminal reads (1-3, seq 10 <= min) and returned only once the
+    # follow-up's own new terminal (seq 20 > min) appeared at read 4 — never on the stale one.
+    assert transport.state_reads >= 4
+
+
+@pytest.mark.asyncio
+async def test_drive_with_no_min_seq_returns_on_first_terminal(tmp_path):
+    # The default (non-follow-up) drive is UNCHANGED: with min_terminal_seq=None any terminal
+    # ends the wait immediately — the guard only engages for after-terminal follow-ups.
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())
+    transport = _ScriptStateTransport(db, states=["FINISHED"])
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    result = await client.poll_until_terminal(_CID, inactivity_s=5.0, hard_cap_s=10.0)
+    assert result == "FINISHED"
+    assert transport.state_reads == 1  # returned on the very first terminal read
+
+
+class _DeadWindowTransport(FakeTransport):
+    """FAITHFUL model of the after-terminal FINALIZATION DEAD-WINDOW (V2 — replaces V1's
+    instant-transition fake, which bypassed the dead-window and is why the V1 unit tests
+    passed while the live run failed). The build rests at FINISHED and its STATUS NEVER
+    CHANGES. On each send_message follow-up:
+      * the next `stale_reads` /state reads STILL report FINISHED with NO new durable event —
+        the append-only dead window (status does NOT change, the exact V1 trap);
+      * then a RE-PLAN event (plan, revision bumped) is appended at a higher seq while the
+        status is STILL FINISHED — the ONLY pickup signal is the EVENT SEQ (V2's detector);
+      * then, after `work_reads` more reads, the follow-up's OWN NEW terminal (a FINISHED
+        status event) is appended at a yet-higher seq — the terminal whose seq > the baseline
+        that the min_seq drive guard requires before returning.
+    If the runner relied on the status string (V1) it would NEVER detect pickup here; if the
+    drive returned on the stale terminal it would send follow-up 2 before follow-up 1's own
+    terminal. The logs record the read counts so the test can assert strict ordering."""
+
+    def __init__(self, db_path, *, stale_reads=2, work_reads=2, start_seq=10, **kw):
+        super().__init__(db_path, states=["FINISHED"], **kw)
+        self._stale_reads = stale_reads
+        self._work_reads = work_reads
+        self._seq = start_seq
+        self._sends = 0
+        self._reads_since_send = None
+        self._total_reads = 0
+        self.send_log = []  # (send_index, total_state_reads_at_send)
+        self.pickup_log = []  # (send_index, total_state_reads_at_replan_event)
+        self.terminal_log = []  # (send_index, total_state_reads_at_new_terminal)
+
+    async def get_json(self, path):
+        if path.endswith("/state"):
+            self._total_reads += 1
+            if self._reads_since_send is not None:
+                self._reads_since_send += 1
+                r = self._reads_since_send
+                if r == self._stale_reads + 1:
+                    # dead window over: append a RE-PLAN event (status STAYS FINISHED).
+                    self._seq += 1
+                    _insert_event(
+                        self.db_path, self.cid, plan(self._seq, revision=1 + self._sends)
+                    )
+                    self.pickup_log.append((self._sends, self._total_reads))
+                elif r == self._stale_reads + 1 + self._work_reads:
+                    # the follow-up's OWN new terminal at a yet-higher seq.
+                    self._seq += 1
+                    _insert_event(self.db_path, self.cid, status(self._seq, "FINISHED"))
+                    self.terminal_log.append((self._sends, self._total_reads))
+                    self._reads_since_send = None
+            return 200, {"execution_status": "FINISHED"}  # status NEVER changes
+        return await super().get_json(path)
+
+    async def ws_control(self, conversation_id, frame):
+        await super().ws_control(conversation_id, frame)
+        if frame.get("type") == "send_message":
+            self._sends += 1
+            self._reads_since_send = 0
+            self.send_log.append((self._sends, self._total_reads))
+
+
+@pytest.mark.asyncio
+async def test_after_terminal_followups_are_serialized(tmp_path):
+    # THE H1/V2 pin: revise_after_finish has TWO after_terminal follow-ups. With the FAITHFUL
+    # dead-window fake (status stuck FINISHED; pickup + the new terminal only show as higher-seq
+    # EVENTS), the runner must (1) detect pickup of follow-up 1 from the event seq, (2) drive it
+    # to its OWN new terminal (seq > baseline), and only THEN (3) send follow-up 2 — else they
+    # pile up and collapse into a single plan revision (false PLAN_REVISION_NOT_INCREMENTED).
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())
+    transport = _DeadWindowTransport(db, stale_reads=2, work_reads=2)
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    scenario = load_scenarios()["revise_after_finish"]
+    assert sum(f.get("trigger") == "after_terminal" for f in scenario["followups"]) == 2
+
+    await drive_scenario(client, scenario, model="m", autonomous=False, timeout_s=5)
+
+    # Both follow-ups were sent, in order, exactly once each (no re-kick needed — pickup fired).
+    sends = [f for f in transport.ws_frames if f.get("type") == "send_message"]
+    assert len(sends) == 2
+    assert len(transport.send_log) == 2
+    assert len(transport.pickup_log) == 2
+    assert len(transport.terminal_log) == 2
+    send1_at = transport.send_log[0][1]
+    pickup1_at = transport.pickup_log[0][1]
+    terminal1_at = transport.terminal_log[0][1]
+    send2_at = transport.send_log[1][1]
+    # Serialization with the V2 min_seq guard: follow-up 1 was PICKED UP, then reached its OWN
+    # new terminal, BOTH strictly BEFORE follow-up 2 was sent.
+    assert send1_at < pickup1_at < terminal1_at < send2_at
+    # And the runner genuinely WAITED through the stale-FINISHED reads (didn't return on the
+    # first stale poll) — proof it never read the prior terminal as instant pickup/terminal.
+    assert pickup1_at - send1_at > 1
+    # The two re-plans were detected from distinct higher-seq plan events (revisions 2 then 3).
+    assert client._latest_plan_revision(_CID) == 3
+
+
+@pytest.mark.asyncio
+async def test_followup_pickup_timeout_hard_fails_invalid_run(tmp_path, monkeypatch):
+    # (c) in the V2 plan: when the dead-window NEVER resolves (status stuck FINISHED, no
+    # progress event EVER), the runner must NOT silently proceed to drive on the stale terminal
+    # — that is exactly what let follow-up 2 collapse into follow-up 1 in V1. After one bounded
+    # re-kick it HARD-FAILS as a sequencing failure → INVALID_RUN, never a (false) product PASS.
+    monkeypatch.setattr(
+        "harness.build_soak.adapters.disco_api._FOLLOWUP_PICKUP_TIMEOUT_S", 0.02
+    )
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())
+    transport = FakeTransport(  # status forever FINISHED, no events ever appended → no pickup
+        db,
+        states=["FINISHED"],
+        workspace={"index.html": "<h1>Build Smoke OK</h1>"},
+        preview_html="<h1>Build Smoke OK</h1>",
+    )
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    scenario = load_scenarios()["revise_after_finish"]
+    record = await run_once(
+        client,
+        scenario,
+        run_id="run_pickup_to_001",
+        out_root=tmp_path / "out",
+        model="m",
+        autonomous=False,
+        commit="abc",
+        timeout_s=2,
+    )
+    assert record["status"] == "INVALID_RUN"  # sequencing failure, NOT a silent proceed/PASS
+    assert record["code"] == "RUN_INTERRUPTED"
+    # it tried the bounded RE-KICK once (two send_message frames total for the one follow-up)
+    sends = [f for f in transport.ws_frames if f.get("type") == "send_message"]
+    assert len(sends) == 2
 
 
 # ---- evidence lock freezes the dossier --------------------------------------

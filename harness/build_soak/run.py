@@ -34,12 +34,14 @@ from . import failure_codes as fc
 from .adapters.disco_api import (
     AWAITING_PLAN_APPROVAL,
     AWAITING_USER_QUESTION,
+    FOLLOWUP_PICKUP_TIMEOUT,
     PAUSED_STATE,
     PROGRESSING_TIMEOUT,
     TERMINAL_STATES,
     WAITING_FOR_CONFIRMATION,
     CollectedRun,
     DiscoApiClient,
+    FollowupPickupError,
     InconclusiveRunError,
     InfraProbeError,
     Transport,
@@ -126,10 +128,16 @@ async def _drive_to_terminal(
     inactivity_s: float,
     hard_cap_s: float,
     clarification_answer: str | None = None,
+    min_seq: int | None = None,
 ) -> str:
     """Drive the run to a terminal state, approving each plan gate (interactive),
     answering any mid-build clarify/confirm gate (Bug 17), and injecting any mid-run
     steer follow-up concurrently. Returns the terminal status.
+
+    `min_seq` (H1/V2): when driving an after-terminal FOLLOW-UP, the drive must NOT return on
+    the STALE pre-follow-up terminal (its event seq <= min_seq) — it keeps polling until the
+    follow-up's OWN new terminal (a terminal event with seq > min_seq). This is the piece V1
+    missed: V1's drive checked only the status STRING and returned on the stale FINISHED.
 
     The wait is PROGRESS-AWARE (Bug 15): a still-actively-progressing build is never cut
     off by a wall-clock — only a genuine terminal, genuine inactivity (INACTIVE_TIMEOUT →
@@ -148,11 +156,17 @@ async def _drive_to_terminal(
         while True:
             if autonomous:
                 status = await client.poll_until_terminal(
-                    cid, inactivity_s=inactivity_s, hard_cap_s=hard_cap_s
+                    cid,
+                    inactivity_s=inactivity_s,
+                    hard_cap_s=hard_cap_s,
+                    min_terminal_seq=min_seq,
                 )
             else:
                 status = await client.poll_until_terminal_or_gate(
-                    cid, inactivity_s=inactivity_s, hard_cap_s=hard_cap_s
+                    cid,
+                    inactivity_s=inactivity_s,
+                    hard_cap_s=hard_cap_s,
+                    min_terminal_seq=min_seq,
                 )
             if status == PROGRESSING_TIMEOUT:
                 # The hard cap hit while the build was STILL emitting events — the runner
@@ -280,9 +294,60 @@ async def drive_scenario(
 
     # Phase 2: after-terminal follow-ups — each is its own re-plan→approve→terminal
     # cycle (the user types a follow-up; the PRODUCT decides to re-plan).
+    #
+    # SERIALIZED (H1/V2): these follow-ups must be sent ONE AT A TIME, each fully picked up
+    # AND driven to its OWN new terminal before the next is sent. The naive loop sent them
+    # back-to-back because the terminal wait returned IMMEDIATELY on the STALE prior FINISHED
+    # status — so follow-up 2 landed before the engine started processing follow-up 1, and the
+    # engine (processing only the latest unprocessed user turn) COLLAPSED the pile into a
+    # SINGLE plan revision (a false PLAN_REVISION_NOT_INCREMENTED).
+    #
+    # V2 (V1 failed live — status-only pickup timed out in the finalization dead-window, then
+    # PROCEEDED on the stale terminal). For EACH follow-up:
+    #   1. snapshot a SEQ baseline BEFORE the send;
+    #   2. send, then BLOCK on the EVENT-SEQUENCED wait_for_followup_pickup (a non-user progress
+    #      event past the baseline seq — detectable even when the status stays FINISHED);
+    #   3. on a pickup TIMEOUT do NOT drive on the stale terminal — re-kick ONCE, and if it
+    #      STILL doesn't pick up, HARD-FAIL (FollowupPickupError → INVALID_RUN). Proceeding is
+    #      precisely what let follow-up 2 collapse into follow-up 1;
+    #   4. drive to terminal with min_seq=baseline.max_seq so the drive returns on the
+    #      follow-up's OWN new terminal (seq > baseline), never the stale one.
     for f in after_terminal:
+        baseline = await client.capture_followup_baseline(cid)
+        baseline_seq = int(baseline.get("max_seq", -1))
         await client.send_followup(cid, str(f["text"]), kind="message")
         timeline.append(f"sent after-terminal follow-up: {f['text']!r}")
+        pickup = await client.wait_for_followup_pickup(cid, baseline)
+        if pickup == FOLLOWUP_PICKUP_TIMEOUT:
+            # ONE bounded re-kick: a follow-up that landed during run finalization may need a
+            # second kick to be picked up (the engine's no-op-kick-during-finalize window).
+            timeline.append(
+                "follow-up pickup NOT observed within the bound — re-kicking once and re-waiting "
+                f"(baseline status={baseline.get('status')!r}, "
+                f"plan_revision={baseline.get('plan_revision')}, seq={baseline_seq})"
+            )
+            await client.send_followup(cid, str(f["text"]), kind="message")
+            pickup = await client.wait_for_followup_pickup(cid, baseline)
+        if pickup == FOLLOWUP_PICKUP_TIMEOUT:
+            # HARD-FAIL: the engine never picked the follow-up up. Do NOT drive on the stale
+            # pre-follow-up terminal — that is what collapses the next follow-up into this one.
+            # Record a SEQUENCING failure (INVALID_RUN), never a silent proceed (V1's mistake).
+            timeline.append(
+                "follow-up STILL not picked up after re-kick — SEQUENCING FAILURE (INVALID_RUN); "
+                "refusing to drive on the stale terminal"
+            )
+            raise FollowupPickupError(
+                "after-terminal follow-up was not picked up by the engine within the bound "
+                "(even after one re-kick) — cannot serialize the follow-ups",
+                {
+                    "stage": "followup_pickup",
+                    "baseline_status": baseline.get("status"),
+                    "baseline_seq": baseline_seq,
+                    "baseline_plan_revision": baseline.get("plan_revision"),
+                    "followup_text": str(f["text"]),
+                },
+            )
+        timeline.append(f"follow-up picked up by the engine ({pickup}) — now serialized")
         await _drive_to_terminal(
             client,
             cid,
@@ -292,6 +357,7 @@ async def drive_scenario(
             inactivity_s=timeout_s,
             hard_cap_s=hard_cap_s,
             clarification_answer=clarification_answer,
+            min_seq=baseline_seq,
         )
 
     # Collect (post-terminal, race-free DB read for events).
@@ -610,6 +676,20 @@ async def run_once(
                 exc.reason,
                 code=fc.RUN_TIMEOUT_WHILE_PROGRESSING,
                 first_broken_link="terminal_wait -> no_terminal_before_hard_cap",
+                facts=exc.facts,
+            )
+        except FollowupPickupError as exc:
+            # H1/V2: an after-terminal follow-up was never picked up by the engine (the
+            # finalization dead-window) even after a re-kick. This is a HARNESS SEQUENCING
+            # failure, not a product verdict — INVALID_RUN so §17 re-runs it. We must NOT drive
+            # on the stale terminal (V1's silent-proceed is what collapsed the follow-ups).
+            return _invalid_run_record(
+                out_root,
+                run_id,
+                scenario,
+                exc.reason,
+                code=fc.RUN_INTERRUPTED,
+                first_broken_link="followup_send -> no_pickup_before_bound",
                 facts=exc.facts,
             )
         except Exception as exc:  # noqa: BLE001 — surface the real reason as INVALID_RUN
