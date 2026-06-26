@@ -63,6 +63,50 @@ def _followup_user_seqs(events: list[dict[str, Any]], boundary: int) -> list[int
     ]
 
 
+def _resolve_anchors(
+    events: list[dict[str, Any]],
+    boundary: int,
+    followups_spec: list[dict[str, Any]] | None,
+    meta: dict[str, Any] | None,
+) -> list[tuple[int, bool]]:
+    """The revision-anchor follow-ups as ``(user_seq, declared_requires_revision)`` pairs in
+    chronological order.
+
+    METADATA PATH (the runner supplied harness-anchor metadata — every live run): anchor ONLY
+    on the DECLARED scenario follow-ups the runner actually sent, EXCLUDING harness-INJECTED
+    auto-answers (clarification answers / decision picks). This fixes the regression where an
+    auto-answer (a user message after the boundary) was mis-anchored as a revision follow-up →
+    false NO_REPLAN_AFTER_REVISION / WRITE_BEFORE_REVISION_APPROVAL. Each declared seq carries
+    its OWN `requires_plan_revision` flag (parallel array, matched by send order — guarded to as
+    many entries as were actually sent).
+
+    FALLBACK PATH (no metadata — legacy fixtures / direct classify): the original behavior —
+    ALL user messages after the boundary, with the flag matched by spec index."""
+    if meta is not None:
+        injected = {int(s) for s in (meta.get("harness_injected_user_seqs") or [])}
+        seqs = meta.get("declared_followup_seqs") or []
+        flags = meta.get("declared_followup_requires_revision") or []
+        pairs: list[tuple[int, bool]] = []
+        for i, raw in enumerate(seqs):
+            s = int(raw)
+            if s <= boundary or s in injected:
+                continue
+            flag = bool(flags[i]) if i < len(flags) else False
+            pairs.append((s, flag))
+        pairs.sort(key=lambda p: p[0])
+        return pairs
+    # Legacy fallback: every user message after the boundary, flag by spec index.
+    out: list[tuple[int, bool]] = []
+    for i, s in enumerate(_followup_user_seqs(events, boundary)):
+        flag = (
+            bool(followups_spec[i].get("requires_plan_revision"))
+            if followups_spec and i < len(followups_spec)
+            else False
+        )
+        out.append((s, flag))
+    return out
+
+
 def _first_mutating_action_after(events: list[dict[str, Any]], after_seq: int) -> int | None:
     """Seq of the first mutating action after `after_seq` that REACHED THE EXECUTOR.
 
@@ -106,7 +150,11 @@ def _first_plan_after(events: list[dict[str, Any]], after_seq: int) -> tuple[int
 
 class RevisionOracle:
     def check(
-        self, events: list[dict[str, Any]], *, scenario: dict[str, Any] | None = None
+        self,
+        events: list[dict[str, Any]],
+        *,
+        scenario: dict[str, Any] | None = None,
+        meta: dict[str, Any] | None = None,
     ) -> list[OracleResult]:
         approvals = plan_approved_seqs(events)
         if not approvals:
@@ -114,23 +162,20 @@ class RevisionOracle:
             return [skipping(_ORACLE, reason="no initial plan approval — no revisions to judge")]
 
         boundary = approvals[0]
-        followups = _followup_user_seqs(events, boundary)
-        if not followups:
+        followups_spec = scenario.get("followups") if scenario else None
+        # Anchor on the DECLARED follow-ups (excluding harness-injected auto-answers) when the
+        # runner supplied metadata; otherwise fall back to the legacy all-user-after-boundary set.
+        anchors = _resolve_anchors(events, boundary, followups_spec, meta)
+        if not anchors:
             return [skipping(_ORACLE, reason="no follow-up user turns after the first approval")]
 
-        followups_spec = scenario.get("followups") if scenario else None
         autonomous = is_autonomous(scenario)
         awaiting = awaiting_approval_seqs(events)
         term = terminal_status(events)
 
-        for i, fseq in enumerate(followups):
+        for fseq, declared in anchors:
             rev_before = _rev_upto(events, fseq)
             mutated_seq = _first_mutating_action_after(events, fseq)
-            declared = (
-                bool(followups_spec[i].get("requires_plan_revision"))
-                if followups_spec and i < len(followups_spec)
-                else False
-            )
             requires_revision = declared or mutated_seq is not None
             if not requires_revision:
                 continue
@@ -297,7 +342,7 @@ class RevisionOracle:
             passing(
                 _ORACLE,
                 facts={
-                    "followup_count": len(followups),
+                    "followup_count": len(anchors),
                     "final_plan_revision": latest_plan_revision(events),
                 },
             )

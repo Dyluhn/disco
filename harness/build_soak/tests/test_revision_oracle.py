@@ -276,3 +276,122 @@ def test_scenario_requires_revision_even_without_write():
     results = _run(events, scenario)
     fail = next(r for r in results if r.failed)
     assert fail.code == "NO_REPLAN_AFTER_REVISION"
+
+
+# ---- revision-anchor metadata: declared follow-ups only, injected turns excluded --------
+# Regression: the AWAITING_USER_DECISION / clarification auto-answers the harness injects are
+# user messages after the approval boundary. Without anchor metadata the oracle anchored on them
+# (they didn't re-plan) → false NO_REPLAN_AFTER_REVISION / WRITE_BEFORE_REVISION_APPROVAL. The
+# fix anchors revision checks on the DECLARED follow-ups only and EXCLUDES the injected turns.
+
+
+def _real_replan_then_injected_answer():
+    """An initial build, a REAL declared follow-up (seq 8) that re-planned cleanly (rev2,
+    approved, wrote, finished), then a HARNESS-INJECTED user answer (seq 16) after which the
+    build kept mutating (seq 17) with NO new plan — the exact shape that mis-anchored live."""
+    return _initial_build() + [
+        msg(8, "user", "revise the heading"),          # REAL declared follow-up
+        status(9, "RUNNING", "planning"),
+        plan(10, revision=2),
+        awaiting(11, 10),
+        status(12, "RUNNING", "plan_approved"),
+        action(13, "file_write", args={"path": "index.html", "content": "x"}, action_id="act13"),
+        observation(14, "act13"),
+        status(15, "FINISHED"),
+        msg(16, "user", "use your best judgment and proceed"),  # HARNESS-INJECTED auto-answer
+        action(17, "file_write", args={"path": "index.html", "content": "y"}, action_id="act17"),
+        observation(18, "act17"),
+        status(19, "FINISHED"),
+    ]
+
+
+def test_injected_answer_after_real_followup_is_excluded_passes():
+    events = _real_replan_then_injected_answer()
+    # WITHOUT metadata (legacy) the injected seq-16 answer mis-anchors → false NO_REPLAN.
+    legacy = RevisionOracle().check(normalize_events(events))
+    assert any(r.failed and r.code == "NO_REPLAN_AFTER_REVISION" for r in legacy), (
+        "legacy path should reproduce the regression"
+    )
+    # WITH metadata: anchor ONLY the declared (re-planned) follow-up; exclude the injected turn.
+    meta = {
+        "declared_followup_seqs": [8],
+        "declared_followup_requires_revision": [False],
+        "harness_injected_user_seqs": [16],
+    }
+    results = RevisionOracle().check(normalize_events(events), meta=meta)
+    assert all(r.passed or r.skipped for r in results), [r.to_dict() for r in results]
+    # the surviving anchor is the declared one, NOT the injected seq
+    passed = next(r for r in results if r.passed)
+    assert passed.facts["followup_count"] == 1
+
+
+def test_only_injected_answer_no_declared_skips_not_false_fail():
+    # The live shape: the only post-boundary user turn is an INJECTED answer (the build then
+    # mutated). Legacy flags it; with metadata it is excluded → SKIP (no revision to judge),
+    # never a false NO_REPLAN.
+    events = _initial_build() + [
+        msg(8, "user", "use your best judgment and proceed"),  # injected
+        action(9, "file_write", args={"path": "x", "content": "y"}, action_id="act9"),
+        observation(10, "act9"),
+        status(11, "FINISHED"),
+    ]
+    legacy = RevisionOracle().check(normalize_events(events))
+    assert any(r.failed for r in legacy)  # legacy mis-flags it
+    meta = {
+        "declared_followup_seqs": [],
+        "declared_followup_requires_revision": [],
+        "harness_injected_user_seqs": [8],
+    }
+    results = RevisionOracle().check(normalize_events(events), meta=meta)
+    assert all(r.skipped for r in results), [r.to_dict() for r in results]
+
+
+def test_declared_followup_no_replan_still_flagged_with_metadata():
+    # No false NEGATIVE: a genuine declared revision follow-up that did NOT re-plan (free-built)
+    # is STILL flagged even on the metadata path.
+    events = _initial_build() + [
+        msg(8, "user", "also add a contact page"),
+        action(9, "file_write", args={"path": "contact.html", "content": "x"}, action_id="act9"),
+        observation(10, "act9"),
+        status(11, "FINISHED"),
+    ]
+    meta = {
+        "declared_followup_seqs": [8],
+        "declared_followup_requires_revision": [True],
+        "harness_injected_user_seqs": [],
+    }
+    results = RevisionOracle().check(normalize_events(events), meta=meta)
+    fail = next(r for r in results if r.failed)
+    assert fail.code == "NO_REPLAN_AFTER_REVISION"
+    assert fail.facts["followup_user_event_seq"] == 8
+
+
+def test_metadata_flag_matched_to_seq_by_send_order():
+    # Two declared follow-ups; the SECOND requires a revision but neither re-planned nor wrote.
+    # The flag must map to the right seq (send order) so the no-write declared revision is caught.
+    events = _initial_build() + [
+        msg(8, "user", "small note, no change needed"),   # declared, requires=False, no work
+        msg(9, "user", "now actually revise the hero"),    # declared, requires=True, no replan
+    ]
+    meta = {
+        "declared_followup_seqs": [8, 9],
+        "declared_followup_requires_revision": [False, True],
+        "harness_injected_user_seqs": [],
+    }
+    results = RevisionOracle().check(normalize_events(events), meta=meta)
+    fail = next(r for r in results if r.failed)
+    assert fail.code == "NO_REPLAN_AFTER_REVISION"
+    assert fail.facts["followup_user_event_seq"] == 9  # the requires=True one, by send order
+
+
+def test_metadata_partial_flag_list_guarded():
+    # GUARD: fewer flags than seqs (a short/partial run) must not raise — the missing flag
+    # defaults to False (and the unflagged declared turn with no work is simply not required).
+    events = _initial_build() + [msg(8, "user", "thanks")]
+    meta = {
+        "declared_followup_seqs": [8],
+        "declared_followup_requires_revision": [],  # shorter than seqs
+        "harness_injected_user_seqs": [],
+    }
+    results = RevisionOracle().check(normalize_events(events), meta=meta)
+    assert all(r.passed or r.skipped for r in results), [r.to_dict() for r in results]

@@ -108,6 +108,8 @@ async def _inject_when_writing(
     mid_run: list[dict[str, Any]],
     timeline: list[str],
     timeout_s: float,
+    declared_seqs: list[int] | None = None,
+    declared_requires: list[bool] | None = None,
 ) -> None:
     """Background: wait for the first MUTATING action, then inject the §15.4 steer
     follow-up (a real mid-run redirect). Runs concurrently with the terminal poll so
@@ -117,8 +119,18 @@ async def _inject_when_writing(
         if seq is None:
             timeline.append("mid-run steer skipped: run produced no file write to steer on")
             return
+        before_user_seq = client.latest_user_message_seq(cid)
         await client.send_followup(cid, str(f["text"]), kind="steer")
         timeline.append(f"steered after first file write (seq={seq}): {f['text']!r}")
+        # A steer IS a DECLARED follow-up (a user turn) — record its seq + flag so the
+        # RevisionOracle anchors on it (and keeps the parallel seq/flag arrays aligned).
+        if declared_seqs is not None and declared_requires is not None:
+            new = await client.wait_for_new_user_message_seq(
+                cid, after_seq=before_user_seq, timeout_s=min(timeout_s, 30.0)
+            )
+            if new is not None:
+                declared_seqs.append(new)
+                declared_requires.append(bool(f.get("requires_plan_revision")))
 
 
 async def _drive_to_terminal(
@@ -133,6 +145,9 @@ async def _drive_to_terminal(
     clarification_answer: str | None = None,
     decision_answer: str | None = None,
     decisions: list[dict[str, Any]] | None = None,
+    injected_user_seqs: list[int] | None = None,
+    declared_followup_seqs: list[int] | None = None,
+    declared_followup_requires_revision: list[bool] | None = None,
     min_seq: int | None = None,
 ) -> str:
     """Drive the run to a terminal state, approving each plan gate (interactive),
@@ -152,13 +167,29 @@ async def _drive_to_terminal(
     injector: asyncio.Task[None] | None = None
     if mid_run:
         injector = asyncio.create_task(
-            _inject_when_writing(client, cid, mid_run, timeline, hard_cap_s)
+            _inject_when_writing(
+                client, cid, mid_run, timeline, hard_cap_s,
+                declared_seqs=declared_followup_seqs,
+                declared_requires=declared_followup_requires_revision,
+            )
         )
     gates = 0
     resumes = 0
     clarifies = 0
     decisions_done = 0
     decision_sink = decisions if decisions is not None else []
+    injected_sink = injected_user_seqs if injected_user_seqs is not None else []
+
+    def _record_injected_user_turn(before_seq: int) -> None:
+        # Attribute the NEW user message the harness just injected (clarification answer /
+        # decision pick) so the RevisionOracle EXCLUDES it from revision anchors. Called AFTER
+        # the gate cleared, so any appended user turn is already durable — a SINGLE check (no
+        # wait). A control frame that appends NO user message (confirm / pick_alternative) leaves
+        # the watermark unchanged → nothing recorded, no needless wait.
+        new = client.latest_user_message_seq(cid)
+        if new > before_seq:
+            injected_sink.append(new)
+
     try:
         while True:
             if autonomous:
@@ -212,6 +243,7 @@ async def _drive_to_terminal(
                 # to a real terminal/inactivity and classified HONESTLY — never an infinite
                 # answer-loop, never a masked failure.
                 clarifies += 1
+                before_user_seq = client.latest_user_message_seq(cid)
                 if status == WAITING_FOR_CONFIRMATION:
                     await client.confirm(cid)
                     timeline.append(
@@ -229,6 +261,9 @@ async def _drive_to_terminal(
                 await client.wait_until_status_leaves(
                     cid, status, timeout_s=min(inactivity_s, 60.0)
                 )
+                # An ANSWER (send_message) appends a user turn the oracle must NOT mis-anchor as
+                # a revision follow-up; a CONFIRM appends none → nothing recorded.
+                _record_injected_user_turn(before_user_seq)
                 continue
             if status == AWAITING_USER_DECISION:
                 # The model proposed structured alternatives (a user-choice gate) after repeated
@@ -245,6 +280,7 @@ async def _drive_to_terminal(
                         "releasing to honest classification (NOT auto-finishing)"
                     )
                     return status
+                before_user_seq = client.latest_user_message_seq(cid)
                 resolved = await client.resolve_decision(
                     cid, preferred_option_id=decision_answer
                 )
@@ -268,6 +304,9 @@ async def _drive_to_terminal(
                 await client.wait_until_status_leaves(
                     cid, AWAITING_USER_DECISION, timeout_s=min(inactivity_s, 60.0)
                 )
+                # pick_alternative synthesizes an ACTION (not a user message) → normally nothing
+                # to record; the watermark check captures any injected user turn defensively.
+                _record_injected_user_turn(before_user_seq)
                 continue
             if status == PAUSED_STATE and resumes < _MAX_RESUMES:
                 # A cooperative / actionless PAUSE is RESUMABLE — the runner acts as the
@@ -329,6 +368,15 @@ async def drive_scenario(
     decision_answer = str(decision_answer) if decision_answer is not None else None
     decisions: list[dict[str, Any]] = []
 
+    # Revision-anchor metadata (harness-only): the DECLARED follow-ups the runner sends (seq +
+    # requires_plan_revision flag, parallel arrays in send order) vs the HARNESS-INJECTED
+    # auto-answers (clarification answers / decision picks). The RevisionOracle anchors revision
+    # checks on the declared follow-ups and EXCLUDES the injected turns — so an auto-answer is
+    # never mis-anchored as a revision follow-up (the false NO_REPLAN / WRITE_BEFORE regression).
+    declared_followup_seqs: list[int] = []
+    declared_followup_requires_revision: list[bool] = []
+    harness_injected_user_seqs: list[int] = []
+
     followups = scenario.get("followups") or []
     mid_run = [f for f in followups if f.get("trigger") == "after_first_file_write"]
     after_terminal = [f for f in followups if f.get("trigger") != "after_first_file_write"]
@@ -345,6 +393,9 @@ async def drive_scenario(
         clarification_answer=clarification_answer,
         decision_answer=decision_answer,
         decisions=decisions,
+        injected_user_seqs=harness_injected_user_seqs,
+        declared_followup_seqs=declared_followup_seqs,
+        declared_followup_requires_revision=declared_followup_requires_revision,
     )
 
     # Phase 2: after-terminal follow-ups — each is its own re-plan→approve→terminal
@@ -373,6 +424,7 @@ async def drive_scenario(
     for f in after_terminal:
         baseline = await client.capture_followup_baseline(cid)
         baseline_seq = int(baseline.get("max_seq", -1))
+        before_user_seq = client.latest_user_message_seq(cid)
         await client.send_followup(cid, str(f["text"]), kind="message")
         timeline.append(f"sent after-terminal follow-up: {f['text']!r}")
         pickup = await client.wait_for_followup_pickup(cid, baseline)
@@ -399,6 +451,14 @@ async def drive_scenario(
                 },
             )
         timeline.append(f"follow-up picked up by the engine ({pickup}) — now serialized")
+        # Record this DECLARED follow-up's user-message seq + its requires_plan_revision flag
+        # (parallel arrays) so the RevisionOracle anchors on it (and ONLY the declared turns).
+        # AFTER pickup the user turn is durable → a SINGLE check (no wait); a fake transport that
+        # never appended it leaves the watermark unchanged → nothing recorded.
+        new_user_seq = client.latest_user_message_seq(cid)
+        if new_user_seq > before_user_seq:
+            declared_followup_seqs.append(new_user_seq)
+            declared_followup_requires_revision.append(bool(f.get("requires_plan_revision")))
         await _drive_to_terminal(
             client,
             cid,
@@ -410,6 +470,7 @@ async def drive_scenario(
             clarification_answer=clarification_answer,
             decision_answer=decision_answer,
             decisions=decisions,
+            injected_user_seqs=harness_injected_user_seqs,
             min_seq=baseline_seq,
         )
 
@@ -428,6 +489,9 @@ async def drive_scenario(
         preview=preview,
         timeline=timeline,
         decision_resolutions=decisions,
+        declared_followup_seqs=declared_followup_seqs,
+        declared_followup_requires_revision=declared_followup_requires_revision,
+        harness_injected_user_seqs=harness_injected_user_seqs,
     )
 
 
@@ -564,6 +628,11 @@ def classify_dossier(
         workspace_manifest=run.workspace_manifest,
         preview=run.preview,
         autonomous=autonomous,
+        revision_meta={
+            "declared_followup_seqs": list(run.declared_followup_seqs),
+            "declared_followup_requires_revision": list(run.declared_followup_requires_revision),
+            "harness_injected_user_seqs": list(run.harness_injected_user_seqs),
+        },
     )
     # Part B traceability: a PASS that REQUIRED auto-resolving an AWAITING_USER_DECISION gate
     # must be DISTINGUISHABLE from a clean PASS — surface the count + the picked options so

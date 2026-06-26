@@ -77,6 +77,7 @@ def classify(
     preview: dict[str, Any] | None = None,
     tool_scope: list[dict[str, Any]] | None = None,
     autonomous: bool | None = None,
+    revision_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Classify one run from its raw event log (full-event dicts OR DB rows) plus
     optional captured evidence. Returns the §13 classification dict.
@@ -129,7 +130,7 @@ def classify(
         first_fail = _first_fail(results)
     if first_fail is None:
         # 5. revision.
-        results += RevisionOracle().check(events, scenario=scenario)
+        results += RevisionOracle().check(events, scenario=scenario, meta=revision_meta)
         first_fail = _first_fail(results)
     if first_fail is None:
         # 6. output truth.

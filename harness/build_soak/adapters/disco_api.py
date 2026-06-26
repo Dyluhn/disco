@@ -312,6 +312,14 @@ class CollectedRun:
     # is distinguishable from a clean PASS by a non-empty list (surfaced as
     # `auto_resolved_decisions` in the classification).
     decision_resolutions: list[dict[str, Any]] = field(default_factory=list)
+    # Revision-anchor metadata (harness-only): the user-message seqs of the DECLARED scenario
+    # follow-ups the runner sent (with each one's `requires_plan_revision` flag, parallel), and
+    # the seqs of HARNESS-INJECTED auto-answers (clarification answers / decision picks). The
+    # RevisionOracle anchors revision checks on the DECLARED follow-ups ONLY and EXCLUDES the
+    # injected turns, so an auto-answer is never mis-anchored as a revision follow-up.
+    declared_followup_seqs: list[int] = field(default_factory=list)
+    declared_followup_requires_revision: list[bool] = field(default_factory=list)
+    harness_injected_user_seqs: list[int] = field(default_factory=list)
 
 
 # ---- the live client --------------------------------------------------------
@@ -868,6 +876,36 @@ class DiscoApiClient:
                 return None
             await asyncio.sleep(self._poll)
         return None
+
+    def latest_user_message_seq(self, conversation_id: str) -> int:
+        """The highest seq of a USER message in the durable log, or -1 when none yet. Used to
+        snapshot the user-turn watermark BEFORE the harness sends a turn (declared follow-up or
+        injected auto-answer) so the NEW user-message seq it produces can be attributed to the
+        harness (revision-anchor metadata)."""
+        best = -1
+        try:
+            for e in self._read_events(conversation_id):
+                if e.get("kind") == "message" and e.get("source") == "user":
+                    best = max(best, int(e.get("seq", -1)))
+        except sqlite3.Error:
+            return -1
+        return best
+
+    async def wait_for_new_user_message_seq(
+        self, conversation_id: str, *, after_seq: int, timeout_s: float
+    ) -> int | None:
+        """After the harness sends a user turn, poll the durable log until a USER message with
+        seq > `after_seq` appears; return ITS seq (the turn the harness just sent), or None on
+        timeout / no new user message (e.g. a `confirm` or `pick_alternative` control frame
+        appends NO user message — nothing to attribute). Bounded — never hangs."""
+        deadline = time.monotonic() + timeout_s
+        while True:
+            seq = self.latest_user_message_seq(conversation_id)
+            if seq > after_seq:
+                return seq
+            if time.monotonic() >= deadline:
+                return None
+            await asyncio.sleep(self._poll)
 
     # -- collection (post-terminal, race-free) --------------------------------
 
