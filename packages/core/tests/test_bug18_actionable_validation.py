@@ -123,10 +123,13 @@ async def test_first_error_is_actionable_and_corrected_call_succeeds():
 
 async def test_ignored_actionable_error_still_stucks():
     """MUST-NOT-REGRESS — if the model IGNORES the actionable error and keeps
-    sending the identical malformed call, the stuck breaker still fires: an escape
-    is attempted once, then the run halts STUCK (no infinite loop). The richer
-    message is deterministic, so repeated identical calls still look identical to
-    the stuck detector."""
+    sending the identical malformed call (and does NOTHING else productive), the run
+    still halts STUCK (no infinite loop). NOTE: update_plan_progress is a NONCRITICAL
+    cosmetic bookkeeping tool, so its malformed loop is intentionally EXEMPT from the
+    fatal `repeated_action_error` pattern (signals._NONCRITICAL_FAILURE_TOOLS, mirrored
+    into stuck.py) — a cosmetic hiccup must not kill an otherwise-productive build.
+    Pure plan-tracker spam with no real work instead halts via the dedicated
+    bookkeeping gate (detail="bookkeeping_only"), which IS the intended backstop."""
     # Real executor so the genuine (now-actionable) invalid_arguments fires each turn.
     agent = ScriptedAgent(
         [action_step("update_plan_progress", {"steps": ["", "", ""]})] * 8
@@ -143,9 +146,10 @@ async def test_ignored_actionable_error_still_stucks():
     assert state.execution_status == ConversationStatus.STUCK
 
     events = await store.get_events(CID)
-    # the escape-then-halt path ran: a stuck_escape marker was dropped before STUCK.
+    # the cosmetic-tool loop halts via the BOOKKEEPING gate (not the fatal
+    # repeated_action_error escape) — update_plan_progress is exempt from pattern 2.
     assert any(
-        isinstance(e, StatusEvent) and e.detail == "stuck_escape" for e in events
+        isinstance(e, StatusEvent) and e.detail == "bookkeeping_only" for e in events
     )
     # a STUCK StatusEvent was emitted (terminal halt, not an infinite loop).
     assert any(

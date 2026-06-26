@@ -107,6 +107,43 @@ def test_repeated_identical_large_edit_is_still_stuck():
     assert d.is_stuck(events) is True
 
 
+# ---- pattern 2: NONCRITICAL bookkeeping tools are exempt from action→error ----
+#
+# A malformed `update_plan_progress` (a cosmetic, declarative plan-tracker tool —
+# signals._NONCRITICAL_FAILURE_TOOLS) repeatedly failing schema validation is NOT
+# "stuck on the task": some models (MiniMax-M3) intermittently emit steps=[""]. It
+# must NOT trip the FATAL `repeated_action_error` and kill an otherwise-productive
+# build (the dedicated bookkeeping gate is the right backstop for pure spam). Mirrors
+# the existing count_recent_failures exclusion (signals.py).
+
+
+def test_noncritical_update_plan_progress_error_loop_not_stuck():
+    d = StuckDetector(StuckThresholds(repeat_action_error=3))
+    events = []
+    for _ in range(5):  # well past the threshold
+        events += [
+            action(thought="track", tool="update_plan_progress", args={"steps": [""]}),
+            agent_error("steps.0: Input should be a valid object"),
+        ]
+    assert d.is_stuck(events) is False  # exempt — cosmetic bookkeeping, not task-stuck
+
+
+def test_mixed_noncritical_and_real_error_still_detects_real_loop():
+    # A real execution tool (file_write) erroring identically 3x IS stuck, even when
+    # interleaved with exempt update_plan_progress errors — the exemption only drops
+    # the cosmetic pairs; the real loop remains detectable.
+    d = StuckDetector(StuckThresholds(repeat_action_error=3))
+    events = []
+    for _ in range(3):
+        events += [
+            action(thought="track", tool="update_plan_progress", args={"steps": [""]}),
+            agent_error("steps.0: Input should be a valid object"),
+            action(thought="write", tool="file_write", args={"path": "a.txt", "content": "x"}),
+            agent_error("permission denied: read-only filesystem"),
+        ]
+    assert d.is_stuck(events) is True  # the real file_write error loop still fires
+
+
 # ---- pattern 3: agent monologue ---------------------------------------------
 
 

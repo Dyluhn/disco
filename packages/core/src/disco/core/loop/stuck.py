@@ -32,6 +32,7 @@ from ..events import (
     MessageEvent,
     ObservationEvent,
 )
+from .signals import _NONCRITICAL_FAILURE_TOOLS  # cosmetic bookkeeping (single source)
 
 # F6 — tools whose ActionEvents count as "patch attempts" for the per-file
 # rewrite tracker. Mirrors `_WORKSPACE_MUTATING_TOOLS` in engine.py (kept
@@ -368,8 +369,22 @@ class StuckDetector:
 
     def _repeated_action_error(self, events: list[Event]) -> bool:
         n = self.t.repeat_action_error
-        # W1: NO tool filter here — a perpetually-erroring poll IS stuck.
-        pairs = _consecutive_pairs(events, ActionEvent, AgentErrorEvent)
+        # W1: a perpetually-erroring poll/execution tool IS stuck — those stay counted.
+        # EXCEPTION: a NONCRITICAL declarative bookkeeping tool (update_plan_progress,
+        # signals._NONCRITICAL_FAILURE_TOOLS) whose calls fail SCHEMA VALIDATION is a
+        # cosmetic UI hiccup, NOT task-stuck — some models (MiniMax-M3) intermittently
+        # malform its `steps` payload. Killing an OTHERWISE-PRODUCTIVE build (real
+        # file_writes succeeding) on that loop is wrong. Mirror the existing
+        # count_recent_failures exclusion (signals.py:119) so the asymmetry is gone:
+        # drop pairs whose ACTION is a noncritical tool, judge the loop on the rest.
+        # Genuine plan-tracker-only spam still fails fast at gate_bookkeeping_streak
+        # (the dedicated bookkeeping halt). Real execution tools are NEVER filtered.
+        pairs = [
+            (a, e)
+            for (a, e) in _consecutive_pairs(events, ActionEvent, AgentErrorEvent)
+            if a.tool_call is None
+            or a.tool_call.tool_name not in _NONCRITICAL_FAILURE_TOOLS
+        ]
         if len(pairs) < n:
             return False
         last = pairs[-n:]
