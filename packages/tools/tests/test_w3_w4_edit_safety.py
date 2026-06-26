@@ -334,11 +334,18 @@ def test_w4_registry_withholds_str_replace_from_non_anchored_policy():
 
 
 def test_w4_registry_grants_str_replace_to_standard_anchored_policy():
-    """standard + anchored_edit=True: file_str_replace is in the advertised set."""
+    """standard + anchored_edit=True: file_str_replace is in the advertised set.
+
+    NOTE: advertised_tools is now a concrete set (no longer None). plan_step is RETIRED
+    from the advertised surface for EVERY tier (runthru-v2 #3, state-drift), so even the
+    standard/anchored policy narrows the surface to AGENT_TOOLS minus plan_step. None
+    ("advertise all") would have re-offered the retired tool, so the surface is now
+    explicit: file_str_replace advertised, plan_step withheld."""
     scope = agent_scope(model_policy=ModelExecutionPolicy.standard())
     assert "file_str_replace" in scope.allowed_tools
-    # advertised_tools=None means "advertise all allowed"
-    assert scope.advertised_tools is None
+    assert scope.advertised_tools is not None
+    assert "file_str_replace" in scope.advertised_tools
+    assert "plan_step" not in scope.advertised_tools
 
 
 def test_w4_file_str_replace_in_agent_tools():
@@ -347,6 +354,9 @@ def test_w4_file_str_replace_in_agent_tools():
 
 
 def test_w4_non_anchored_policy_advertised_excludes_str_replace():
-    """standard + anchored_edit=False advertises AGENT_TOOLS minus file_str_replace."""
+    """standard + anchored_edit=False advertises AGENT_TOOLS minus file_str_replace AND
+    minus plan_step. plan_step is RETIRED from the advertised surface for EVERY tier
+    (runthru-v2 #3, state-drift); the non-anchored capability additionally withholds
+    file_str_replace."""
     scope = agent_scope(model_policy=ModelExecutionPolicy(tier="standard", anchored_edit=False))
-    assert scope.advertised_tools == AGENT_TOOLS - frozenset({"file_str_replace"})
+    assert scope.advertised_tools == AGENT_TOOLS - frozenset({"file_str_replace", "plan_step"})

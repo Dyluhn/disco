@@ -5,10 +5,16 @@ also drives the advertised tool surface (executor.available_tools) and the promp
 text (DriverPrompts.system_prompt).  These tests are the acceptance gate:
 
   1. weak policy  → available_tools() EXCLUDES plan_step + update_plan_progress
-  2. standard     → available_tools() INCLUDES plan_step + update_plan_progress
-  3. standard + anchored_edit=False → withholds ONLY file_str_replace
-  4. prompt-contamination: weak-policy prompts (execution + planning) name NONE
-     of the withheld tools; standard prompts name them (positive gate).
+  2. standard     → available_tools() EXCLUDES plan_step (RETIRED for ALL tiers per
+                    runthru-v2 #3 — state-drift; declarative update_plan_progress replaced
+                    it) but still INCLUDES update_plan_progress
+  3. standard + anchored_edit=False → withholds file_str_replace (plan_step is already
+                    withheld for every tier)
+  4. prompt-contamination: NO prompt (weak OR standard, planning OR execution) names
+     `plan_step` — it is RETIRED from the advertised surface for every tier, so naming
+     it anywhere is a false affordance (unknown-tool error). Positive gate: the standard
+     execution prompt still names `update_plan_progress` (the declarative replacement);
+     the weak prompts name neither progress tool.
 """
 
 from __future__ import annotations
@@ -72,14 +78,17 @@ def test_weak_policy_still_advertises_file_str_replace_when_anchored():
 
 
 # ---------------------------------------------------------------------------
-# 2. standard — plan_step and update_plan_progress advertised
+# 2. standard — update_plan_progress advertised; plan_step RETIRED (all tiers)
 # ---------------------------------------------------------------------------
 
 
 def test_standard_policy_advertises_plan_step():
-    """Standard tier must offer plan_step in available_tools()."""
+    """Standard tier must NOT offer plan_step — it is RETIRED from the advertised
+    surface for EVERY tier (runthru-v2 #3: incremental plan_step caused plan-state
+    drift across all models; the declarative update_plan_progress replaced it). It
+    stays callable for defensive back-compat but is never advertised."""
     names = _tool_names(_STANDARD)
-    assert "plan_step" in names
+    assert "plan_step" not in names
 
 
 def test_standard_policy_advertises_update_plan_progress():
@@ -106,9 +115,11 @@ def test_non_anchored_standard_withholds_file_str_replace():
 
 
 def test_non_anchored_standard_keeps_plan_step():
-    """standard + anchored_edit=False: plan_step is NOT withheld (only file_str_replace is)."""
+    """standard + anchored_edit=False: plan_step is withheld — it is RETIRED from the
+    advertised surface for EVERY tier (runthru-v2 #3, state-drift), independent of the
+    anchored-edit capability. This variant additionally withholds file_str_replace."""
     names = _tool_names(_STANDARD_NO_ANCHORED)
-    assert "plan_step" in names
+    assert "plan_step" not in names
 
 
 def test_non_anchored_standard_keeps_update_plan_progress():
@@ -188,8 +199,30 @@ def test_standard_execution_prompt_names_update_plan_progress():
     )
 
 
-def test_standard_planning_prompt_names_plan_step():
-    """Standard (capable) planning prompt SHOULD mention plan_step in the capability block."""
+@pytest.mark.parametrize("mode", [OperatingMode.PLANNING, OperatingMode.INTERACTIVE])
+def test_standard_prompt_does_not_name_plan_step(mode: OperatingMode):
+    """Standard (capable, assist=False) prompt for PLANNING and EXECUTION must NOT
+    mention `plan_step` — it is RETIRED from the advertised tool surface for EVERY tier
+    (runthru-v2 #3, plan-state drift). Naming it is a false affordance: the model would
+    try to call a tool that is not in its tool list and get an unknown-tool error."""
+    dp = _driver()
+    prompt = dp.system_prompt(
+        model_family="qwen",
+        mode=mode,
+        role=ModelRole.AGENT_DRIVER,
+        assist=False,
+    )
+    assert "`plan_step`" not in prompt, (
+        f"standard {mode.value} prompt must not mention `plan_step` (retired for all tiers)"
+    )
+    assert "plan_step" not in prompt, (
+        f"standard {mode.value} prompt must not mention plan_step at all (retired for all tiers)"
+    )
+
+
+def test_standard_planning_prompt_keeps_other_meta_tools():
+    """Removing plan_step must not strip the rest of the meta-tool capability line —
+    the standard planning prompt still advertises preview_start / serve / server_status."""
     dp = _driver()
     prompt = dp.system_prompt(
         model_family="qwen",
@@ -197,9 +230,10 @@ def test_standard_planning_prompt_names_plan_step():
         role=ModelRole.AGENT_DRIVER,
         assist=False,
     )
-    assert "plan_step" in prompt, (
-        "standard planning prompt must mention plan_step (it is NOT withheld for capable tier)"
-    )
+    for tool in ("preview_start", "serve", "server_status"):
+        assert f"`{tool}`" in prompt, (
+            f"standard planning prompt should still advertise {tool}"
+        )
 
 
 def test_non_anchored_prompt_does_not_mention_file_str_replace():

@@ -58,6 +58,11 @@ def test_fail_safe_default_unmarked_tool_is_mutating():
 
 
 def test_readonly_subset_of_in_scope():
+    # readonly_tool_names() keys off the CALLABLE set (registry ∩ allowed_tools), not the
+    # advertised set, so it is compared against callable_tool_names() here. These now
+    # genuinely differ: plan_step is read-only and still callable (defensive back-compat)
+    # but is RETIRED from the advertised surface for every tier (runthru-v2 #3, state-drift),
+    # so it appears in readonly_tool_names()/callable_tool_names() but NOT available_tools().
     ex = _executor()
-    in_scope = {t.name for t in ex.available_tools()}
-    assert ex.readonly_tool_names() <= in_scope
+    callable_names = ex.callable_tool_names()
+    assert ex.readonly_tool_names() <= callable_names

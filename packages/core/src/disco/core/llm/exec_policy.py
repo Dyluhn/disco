@@ -48,19 +48,32 @@ class ModelExecutionPolicy:
         """The single place the advertised tool surface is narrowed for this policy —
         reconciling what used to be two independent gates:
           • no anchored-edit capability → withhold `file_str_replace` (line-anchored edit);
-          • weak tier → withhold the per-step progress bookkeeping tools (weak models get
-            the honest NL plan + done-at-finish, never a bookkeeping burden they drop).
+          • ALL tiers → withhold `plan_step` (see below);
+          • weak tier → ALSO withhold `update_plan_progress` (weak models get the honest
+            NL plan + done-at-finish, never a per-step bookkeeping burden they drop).
+
+        `plan_step` is RETIRED from the advertised surface for EVERY tier (runthru-v2 #3):
+        incremental per-step `plan_step` updates caused plan-state drift and failed across
+        ALL models (capable and small alike). The declarative `update_plan_progress`
+        replaced it. We never advertise `plan_step` to anyone — previously the capable
+        (standard) surface still offered BOTH, so a capable model like MiniMax-M3 was given
+        `plan_step` and `update_plan_progress` and picked between them inconsistently. The
+        engine still HANDLES stray `plan_step` calls defensively (backward-compat for any
+        out-of-band call), but it is no longer offered. `plan_step` stays in the security
+        allowlist (callable) — only its *advertisement* is withdrawn here.
         """
         out: set[str] = set()
         if not self.anchored_edit:
             out.add("file_str_replace")
+        # Retired for ALL tiers (state-drift); kept callable for defensive back-compat.
+        out.add("plan_step")
         if self.tier == "weak":
-            out.update({"plan_step", "update_plan_progress"})
+            out.add("update_plan_progress")
         return frozenset(out)
 
     @classmethod
     def standard(cls) -> ModelExecutionPolicy:
-        """The no-op default — a capable model with anchored edits and no compensations."""
+        """The no-compensation default — a capable model with anchored edits and no weak-model compensations (it still withholds the universally-retired `plan_step`)."""
         return cls(tier="standard", anchored_edit=True)
 
 

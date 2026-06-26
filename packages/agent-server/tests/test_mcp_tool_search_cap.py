@@ -131,9 +131,15 @@ def test_under_cap_no_tool_search():
 def test_zero_mcp_tools_noop():
     """Empty MCP tool list → executor unchanged (no-op).
 
-    For a standard-policy executor, agent_scope() returns advertised_tools=None
-    (show all allowed tools). The no-op check is that allowed_tools and the
-    advertised set are both unchanged after _apply_mcp_scope with an empty list.
+    The no-op check is that allowed_tools and the advertised set are both
+    unchanged after _apply_mcp_scope with an empty list.
+
+    Baseline note (plan_step retirement, runthru-v2 #3): a standard-policy
+    executor no longer advertises EVERYTHING (advertised_tools=None). `plan_step`
+    is retired from the advertised surface for every tier, so standard's scope
+    carries an explicit advertised set that EXCLUDES plan_step (but still includes
+    every other allowed tool, e.g. update_plan_progress). The no-op invariant is
+    unchanged: _apply_mcp_scope with [] must not touch that set.
     """
     ex = _executor()
     before_allowed = ex._scope.allowed_tools
@@ -141,8 +147,12 @@ def test_zero_mcp_tools_noop():
     _apply_mcp_scope(ex, [], _FakeCallTarget(), max_active_schemas=20)
     assert ex._scope.allowed_tools == before_allowed
     assert ex._scope.advertised_tools == before_advertised
-    # Standard policy: advertised_tools=None means all allowed tools are shown
-    assert ex._scope.advertised_tools is None
+    # Standard policy: advertised set is the full allowed set minus the retired
+    # plan_step (no longer None), and only plan_step is dropped.
+    assert ex._scope.advertised_tools is not None
+    assert "plan_step" not in ex._scope.advertised_tools
+    assert "update_plan_progress" in ex._scope.advertised_tools
+    assert ex._scope.advertised_tools == ex._scope.allowed_tools - {"plan_step"}
 
 
 # ---- readonly_tool_names planner-safety (allowed_tools, not advertised) ------

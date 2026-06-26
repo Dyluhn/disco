@@ -45,7 +45,8 @@ def weak_policy() -> ModelExecutionPolicy:
 
 @pytest.fixture
 def standard_policy() -> ModelExecutionPolicy:
-    """Standard (capable) tier — full toolset, no compensations."""
+    """Standard (capable) tier — no weak-model compensations; withholds only the
+    universally-retired plan_step (runthru-v2 #3)."""
     return ModelExecutionPolicy.standard()
 
 
@@ -185,13 +186,22 @@ def test_standard_executor_model_policy(standard_policy: ModelExecutionPolicy) -
     assert executor._model_policy.assist is False
 
 
-def test_standard_available_tools_includes_plan_step(
+def test_standard_available_tools_excludes_plan_step(
     standard_policy: ModelExecutionPolicy,
 ) -> None:
-    """Standard executor MUST advertise plan_step (capable model uses it)."""
+    """Standard executor must NOT advertise plan_step — it is RETIRED for ALL tiers.
+
+    runthru-v2 #3: incremental per-step `plan_step` caused plan-state drift and failed
+    across capable AND small models alike, so it is withheld from the advertised surface
+    for every tier (the declarative `update_plan_progress` replaced it). The engine still
+    handles stray plan_step calls defensively, but it is never advertised.
+    """
     executor = _make_executor(standard_policy)
     names = {t.name for t in executor.available_tools()}
-    assert "plan_step" in names, "standard tier must advertise plan_step"
+    assert "plan_step" not in names, (
+        "plan_step is retired from the advertised surface for ALL tiers (state-drift); "
+        "standard must not advertise it"
+    )
 
 
 def test_standard_available_tools_includes_update_plan_progress(
@@ -288,31 +298,34 @@ def test_no_contamination_weak_scope_excludes_withheld_tools(
             )
 
 
-def test_no_contamination_standard_scope_has_no_extra_withheld_tools(
+def test_no_contamination_standard_scope_withholds_exactly_plan_step(
     standard_policy: ModelExecutionPolicy,
 ) -> None:
-    """Standard policy withholds nothing for the tier gate (anchored_edit=True, tier=standard).
+    """Standard policy withholds EXACTLY {plan_step} — nothing unintended leaks in.
 
-    file_str_replace may be withheld by anchored_edit=False; plan_step and
-    update_plan_progress are ONLY withheld on the weak tier.
+    plan_step is retired for ALL tiers (runthru-v2 #3 state-drift), so even standard
+    withholds it. file_str_replace is withheld only by anchored_edit=False;
+    update_plan_progress is withheld only on the weak tier. The anti-contamination
+    intent is intact: this still fails if any UNINTENDED tool joins the withheld set.
     """
-    # Standard with anchored_edit → empty withheld_tools
-    assert standard_policy.withheld_tools == frozenset(), (
-        "standard policy (anchored_edit=True, tier=standard) must have no "
-        "withheld_tools — it's the provable no-op"
+    # Standard with anchored_edit → withheld set is exactly the retired plan_step
+    assert standard_policy.withheld_tools == frozenset({"plan_step"}), (
+        "standard policy (anchored_edit=True, tier=standard) must withhold exactly "
+        "{plan_step} (the universally-retired tool) and nothing else"
     )
 
 
-def test_no_contamination_non_anchored_standard_withholds_only_str_replace() -> None:
-    """Non-anchored standard withholds ONLY file_str_replace, not the progress tools.
+def test_no_contamination_non_anchored_standard_withholds_str_replace_and_plan_step() -> None:
+    """Non-anchored standard withholds {plan_step, file_str_replace} — not update_plan_progress.
 
-    A capable model that can't do anchored edits still gets plan_step and
-    update_plan_progress — those are gated by tier, not by anchored_edit.
+    plan_step is retired for ALL tiers (runthru-v2 #3) and file_str_replace is dropped
+    when anchored_edit=False. A capable model that can't do anchored edits still gets
+    update_plan_progress — that one is gated by tier, not by anchored_edit.
     """
     non_anchored = ModelExecutionPolicy(tier="standard", anchored_edit=False)
-    assert non_anchored.withheld_tools == frozenset({"file_str_replace"}), (
-        "non-anchored standard must withhold ONLY file_str_replace, not the "
-        "progress tools (those are tier-gated, not capability-gated)"
+    assert non_anchored.withheld_tools == frozenset({"plan_step", "file_str_replace"}), (
+        "non-anchored standard must withhold plan_step (retired for all tiers) and "
+        "file_str_replace (capability-gated), but NOT update_plan_progress (tier-gated)"
     )
 
 
@@ -515,9 +528,10 @@ async def test_runtime_threads_policy_through_to_executor_and_loop_standard(tmp_
             "executor must carry standard policy when assist=False is set"
         )
 
-        # Standard tier advertises the progress tools
+        # Standard tier advertises update_plan_progress but NOT the retired plan_step
+        # (plan_step is withheld for ALL tiers — runthru-v2 #3 state-drift).
         advertised = {t.name for t in executor.available_tools()}
-        assert "plan_step" in advertised
+        assert "plan_step" not in advertised
         assert "update_plan_progress" in advertised
 
 
