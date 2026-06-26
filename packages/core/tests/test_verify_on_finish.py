@@ -168,20 +168,48 @@ async def test_static_verify_honours_a_custom_path():
     assert "about.html" in executor.calls[0].arguments["command"]
 
 
-async def test_app_verify_translates_to_a_running_server_http_check():
+async def test_app_verify_targets_the_detected_preview_port_not_8000():
     """`verify="app"` runs a SERVER-AWARE check (GET the app, require HTTP 200 +
-    non-empty body) — the verify_app gap. Distinct from the static file check."""
+    non-empty body) — the verify_app gap. Crucially it targets the ACTUAL platform-
+    assigned preview port the live deliverable serves on, NEVER a fixed :8000 (the
+    platform chooses the port; there is no auto-served :8000 inside the sandbox)."""
     agent = _agent([_finish(verify="app")])
     executor = FakeExecutor()
     loop, _ = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    # The live preview is detected on a platform-assigned port (the same backend-aware
+    # detection the verify_web_app gate uses); the app-check must bind to THAT port.
+    async def _fake_detect() -> str:
+        return "http://127.0.0.1:54321/"
+
+    loop._finish._detect_preview_url = _fake_detect  # type: ignore[assignment]
+
     await loop.send_message("ship the app")
     state = await loop.run()
     assert state.execution_status == ConversationStatus.FINISHED
     cmd = executor.calls[0].arguments["command"]
     assert cmd.startswith("python3 -c")
     assert "urllib.request" in cmd  # it actually fetches the URL
-    assert "localhost:8000" in cmd and "code==200" in cmd
+    assert "127.0.0.1:54321" in cmd and "code==200" in cmd  # the DETECTED port
+    assert "8000" not in cmd  # never the dead fixed port
     assert "html.parser" not in cmd  # not the static check
+
+
+async def test_app_verify_without_detectable_preview_degrades_to_static_not_8000():
+    """A bare `verify="app"` no longer assumes a fixed :8000 — the platform assigns the
+    preview port. With no live preview detectable, the gate degrades to the server-free
+    static check rather than asserting :8000 (a 404 there would be a FALSE failure that
+    spins the model into re-serve/re-verify loops)."""
+    agent = _agent([_finish(verify="app")])
+    executor = FakeExecutor()  # no sandbox → no preview detectable
+    loop, _ = build_loop(agent, executor=executor, policy=NeverConfirm())
+    await loop.send_message("ship the app")
+    state = await loop.run()
+    assert state.execution_status == ConversationStatus.FINISHED
+    cmd = executor.calls[0].arguments["command"]
+    assert cmd.startswith("python3 -c")
+    assert "8000" not in cmd  # never a guessed port
+    assert "html.parser" in cmd  # degraded to the static (server-free) check
 
 
 async def test_app_verify_honours_a_custom_url():

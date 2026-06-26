@@ -162,8 +162,10 @@ _PLANNING_DRIVER_PROMPT = (
     "runs commands in named sessions that keep running between steps, views their live "
     "output, sends them input, and kills its own processes. Plan steps as plain goals "
     "('run the dev server', 'execute the script') — the executor has the tools.\n"
-    "  • The workspace is auto-served on port 8000 as the user's live preview; dev "
-    "servers take over port 8000 by replacing the static preview session.\n"
+    "  • To give the user a live preview, the executor calls `preview_start` (declaring "
+    "WHAT to serve — a build dir, a framework, or a start command); the PLATFORM picks the "
+    "port, runs and supervises the server, and returns the preview URL. No fixed port is "
+    "assumed — plan the preview as 'serve the build output', not 'bind port 8000'.\n"
     "  • NEVER plan a step that asks the user which tool/platform/terminal to use for "
     "shell work, and never make the plan contingent on tooling questions.\n\n"
     "Workflow (mirrors a careful engineer):\n"
@@ -206,16 +208,17 @@ _EXECUTION_DRIVER_PROMPT = (
     "avoid). Remembered facts are PINNED — they survive context condensation, so capture "
     "anything important the moment you learn it rather than risk forgetting it on a long run.\n"
     "  • `serve(title, path, kind?)` — HAND OFF a finished deliverable so the user can open "
-    "or download it. kind='app' opens in the live preview (ensure your server is serving "
-    "on port 8000); kind='files' offers a download. Serve the deliverable, verify it, "
-    "THEN finish.\n"
+    "or download it. kind='app' opens in the live preview (start it first with "
+    "`preview_start`, which returns the platform-assigned URL/port — do NOT assume a port); "
+    "kind='files' offers a download. Serve the deliverable, verify it, THEN finish.\n"
     "  • `finish(summary)` — the ONLY way to end the run, and only when every plan step is "
     "done and verified. A plain message does NOT end the run — you must call `finish`.\n"
-    "  • Before declaring a web build finished, do ONE verify-pass: load the "
-    "browser tool (http://127.0.0.1:8000/) once, read the console for errors, "
-    "then move on. Verify once and stop — do not loop on visual checks; when "
-    "you have vision the screenshot gives you what you need, when you do not "
-    "the console output is the finish gate.\n\n"
+    "  • Before declaring a web build finished, do ONE verify-pass: start the preview "
+    "with `preview_start` and load its in-sandbox URL (the one it RETURNS — never a "
+    "guessed :8000) in the browser tool once, read the console for errors, then move "
+    "on. Verify once and stop — do not loop on visual checks; when you have vision the "
+    "screenshot gives you what you need, when you do not the console output is the "
+    "finish gate.\n\n"
     "  • Prefer running code, writing results to a file, and returning the "
     "path/summary over dumping large outputs directly into the transcript. If "
     "you expect a tool to produce more than a few dozen lines of output, "
@@ -282,20 +285,24 @@ _EXECUTION_DRIVER_PROMPT = (
     "cell but keeps your state.\n"
     "  • Check reality with `server_status`: it lists your sessions and WHO owns each "
     "port (pid + command + session). Never guess whether a server is up — look.\n"
-    "  • Static sites: the workspace is auto-served on port 8000 by the session named "
-    "'preview' (a simple static file server). Write an index.html and it is live. The "
-    "preview the user sees proxies to port 8000.\n"
-    "  • Dev servers (Vite/Next/etc.): port 8000 is the user-visible port. First "
-    "`shell_kill_process('preview')` to free it, then start yours in its own session, "
-    "bound to 0.0.0.0:8000, e.g. `shell_exec('dev', 'npm run dev -- --host 0.0.0.0 "
-    "--port 8000')`. Then `shell_view('dev')` to confirm it actually started (read the "
-    "real output — startup errors appear there, not in your imagination).\n"
-    "  • If a server misbehaves: `shell_view` its session FIRST, read the error, fix the "
-    "cause, restart it. Do not fight processes blind.\n"
-    "  • Port 8000 is what the user SEES. Extra services (APIs, websockets) may use "
-    "ports 3000, 5173, 8080, 5000, or 4321 — these are reachable for your own testing "
-    "via the browser tool and curl, and proxied for the user on request. Anything else "
-    "is unreachable from outside the sandbox.\n"
+    "  • Live preview — use `preview_start`: declare WHAT to serve (a build dir like "
+    "'dist', a framework like 'vite'/'next', or a start command such as 'npm run dev') and "
+    "the PLATFORM picks the port, runs and supervises the server (restarting it on crash), "
+    "and returns BOTH a browser URL (for the user) and an in-sandbox URL on its chosen port. "
+    "You never pick or assume a port — there is NO fixed :8000 inside the sandbox (a curl "
+    "there serves nothing). For a static site, write index.html then `preview_start("
+    "serve_dir='.')` (or your output dir).\n"
+    "  • To CHECK the preview from your shell, curl the IN-SANDBOX url that `preview_start` "
+    "returned (http://localhost:<the-port-it-chose>/) — NOT the browser URL (that's the "
+    "user's, unreachable from inside the sandbox) and NEVER a guessed :8000. `preview_status` "
+    "re-reports the URL/port, and `preview_logs` shows the server output anytime.\n"
+    "  • If a server misbehaves: read its output FIRST (`preview_logs`, or `shell_view` for a "
+    "server you ran yourself), find the error, fix the cause, restart it. Do not fight "
+    "processes blind.\n"
+    "  • The platform exposes the preview to the user. Extra services you run (APIs, "
+    "websockets) may use ports 3000, 5173, 8080, 5000, or 4321 — these are reachable for "
+    "your own testing via the browser tool and curl, and proxied for the user on request. "
+    "Anything else is unreachable from outside the sandbox.\n"
     # [BP-09] installs work; prefer the pre-warmed fast-path installers.
     "  • Installing dependencies works (npm/pnpm/pip/uv; network is granted). Prefer "
     "pnpm and uv — they are pre-installed and fast. Watch the install in your session "
@@ -347,8 +354,9 @@ _EXECUTION_DRIVER_PROMPT_SMALL = (
     "library/version, build command, API shape, a constraint, a dead-end). "
     "Pin it the moment you learn it.\n"
     "  • `serve(title, path, kind?)` — hand off a finished deliverable. "
-    "kind='app' opens in the live preview (ensure your server is on port 8000); "
-    "kind='files' offers a download. Serve, verify, then finish.\n"
+    "kind='app' opens in the live preview (start it first with `preview_start`, which "
+    "picks the port and returns the URL — do NOT assume a port); kind='files' offers a "
+    "download. Serve, verify, then finish.\n"
     "  • `propose_plan_update(...)` — when a step reveals the plan itself is "
     "wrong (approach doesn't work, a discovery invalidates the path). Reason "
     "through ordinary problems yourself first.\n\n"
@@ -382,16 +390,16 @@ _EXECUTION_DRIVER_PROMPT_SMALL = (
     "imports, sockets, and open files persist across calls.\n"
     "  • Check reality with `server_status` — it lists sessions and WHO owns "
     "each port (pid + command + session). Never guess whether a server is up.\n"
-    "  • Static sites: the workspace is auto-served on port 8000 by the "
-    "session named 'preview'. Write an index.html and it is live.\n"
-    "  • Dev servers (Vite/Next/etc.): port 8000 is the user-visible port. "
-    "First `shell_kill_process('preview')` to free it, then start yours in "
-    "its own session bound to 0.0.0.0:8000, e.g. `shell_exec('dev', 'npm run "
-    "dev -- --host 0.0.0.0 --port 8000')`. Confirm startup with "
-    "`shell_view('dev')` — startup errors live there, not in your head.\n"
-    "  • Port 8000 is what the user SEES. Extra services may use 3000, 5173, "
-    "8080, 5000, 4321 — reachable for your own testing. Anything else is "
-    "unreachable from outside the sandbox.\n"
+    "  • Live preview — use `preview_start`: say WHAT to serve (a build dir like "
+    "'dist', a framework like 'vite', or a start command like 'npm run dev'). The "
+    "PLATFORM picks the port, runs the server, and RETURNS the URL. You never pick "
+    "or assume a port — there is NO fixed :8000 (a curl there serves nothing). For a "
+    "static site: write index.html, then `preview_start(serve_dir='.')`.\n"
+    "  • To CHECK the preview from your shell, curl the IN-SANDBOX url `preview_start` "
+    "returned (http://localhost:<its-port>/) — NOT the browser URL and NEVER a guessed "
+    ":8000. `preview_status` re-reports it; `preview_logs` shows server output.\n"
+    "  • Extra services you run may use 3000, 5173, 8080, 5000, 4321 — reachable for "
+    "your own testing. Anything else is unreachable from outside the sandbox.\n"
     "  • Installing dependencies works (npm/pnpm/pip/uv; network is granted). "
     "Prefer pnpm and uv — they are pre-installed and fast. Watch installs in "
     "your session with `shell_view`; do not assume they finished.\n"
@@ -400,9 +408,10 @@ _EXECUTION_DRIVER_PROMPT_SMALL = (
     "ARTIFACT TOOLS — when the task calls for slides or a spreadsheet:\n"
     "  • Presentations: use `slides_generate`, NOT `file_write` with HTML/Markdown.\n"
     "  • Spreadsheets: use `sheet_generate`, NOT `file_write` with CSV or cell markup.\n\n"
-    "WEB BUILDS — before declaring finished, do ONE verify-pass: load the "
-    "browser tool (http://127.0.0.1:8000/) once, read the console for errors, "
-    "then finish. Verify once and stop — do not loop on visual checks."
+    "WEB BUILDS — before declaring finished, do ONE verify-pass: start the preview "
+    "with `preview_start` and load its in-sandbox URL (the one it RETURNS — never a "
+    "guessed :8000) in the browser tool once, read the console for errors, then "
+    "finish. Verify once and stop — do not loop on visual checks."
 )
 
 
@@ -445,28 +454,25 @@ _AGENT_PLANNING_CAPABILITY_BLOCK = (
     "retry, proceed without the image. Use chart / table / sheet tools for data, "
     "never this.\n"
     "  • `audio_overview` — produce an audio summary of the deliverable.\n"
-    "  • `preview_start`, `serve`, `server_status`, `plan_step`, and other execution meta-tools.\n"
+    "  • `preview_start`, `serve`, `server_status`, and other execution meta-tools.\n"
     "Plan confidently against this full capability set.  The engine, not you, decides when a "
     "tool becomes callable — approval unlocks all of the above at once."
 )
 
-# [C21/policy] Weak-tier variant of the planning capability block: same as the standard
-# block but with `plan_step` removed.  The weak tier withholds plan_step and
-# update_plan_progress from the agent's tool surface entirely (small models get an
-# honest NL plan with done-at-finish and no per-step bookkeeping burden).  Mentioning
-# plan_step in the planning prompt when it won't appear in the tool list causes
-# the model to try to call a tool it can't, so we emit the clean variant instead.
-# update_plan_progress is not mentioned in any planning block, so no variant needed there.
-_AGENT_PLANNING_CAPABILITY_BLOCK_WEAK = _AGENT_PLANNING_CAPABILITY_BLOCK.replace(
-    "`plan_step`, ", ""
-)
+# [runthru-v2 #3] `plan_step` is RETIRED from the advertised tool surface for ALL
+# tiers (it caused plan-state drift; the declarative `update_plan_progress` replaced
+# it for capable models).  It is therefore named in NO planning block — the single
+# capability block above already omits it, so weak and standard share one block.
+# update_plan_progress is not mentioned in any planning block either, so no per-tier
+# variant is needed.
 
 
 class DriverPrompts:
     """[CONTRACT role] A PromptProvider that gives the AGENT_DRIVER role phase-aware
     system prompts: a PLANNING prompt (propose a plan via `submit_plan`, take no
-    action) and an EXECUTION prompt (carry out the approved plan, report capstones
-    via `plan_step`). Every other role/mode defers to a wrapped base provider, so
+    action) and an EXECUTION prompt (carry out the approved plan, report progress
+    via the declarative `update_plan_progress`). Every other role/mode defers to a
+    wrapped base provider, so
     Research and the non-driver roles are unaffected.
 
     `skills_block` is an optional rendered block of the user's enabled SKILLS
@@ -518,11 +524,11 @@ class DriverPrompts:
         # write tools (read_only=False) from the PLANNING schema for BOTH the build and
         # agent flavors, so BOTH need this hint — appending it agent-only made build-flavor
         # plans (e.g. the DR→slides handoff) insist they "can't use slides_generate".
-        # [C21/policy] Two variants: the standard block (mentions plan_step) for capable
-        # models; the weak variant (omits plan_step) for the weak tier — the tool won't
-        # appear in the tool list for weak models, so prompting it causes confusion.
+        # [runthru-v2 #3] One capability block for both tiers: `plan_step` is retired
+        # from the advertised tool surface for ALL tiers, so it is named in NO planning
+        # prompt (no per-tier variant needed — prompting a tool that isn't in the tool
+        # list causes the model to call a tool it can't).
         self._planning = planning_prompt + _AGENT_PLANNING_CAPABILITY_BLOCK
-        self._planning_weak = planning_prompt + _AGENT_PLANNING_CAPABILITY_BLOCK_WEAK
         self._execution = execution_prompt
         # [C21] Tightened execution prompt for small open models. Selected ONLY
         # when the assist gate is ON (req.assist=True) at prompt-injection time.
@@ -557,12 +563,10 @@ class DriverPrompts:
     ) -> str:
         if role == ModelRole.AGENT_DRIVER:
             if mode == OperatingMode.PLANNING:
-                # [C21/policy] Weak tier: use the variant that omits plan_step from
-                # the capability block (the tool is withheld from the tool list for
-                # weak models, so mentioning it causes confusion).  Standard tier:
-                # keep the original byte-identical planning prompt.
-                planning = self._planning_weak if assist else self._planning
-                return self._with_skills(planning, capabilities)
+                # [runthru-v2 #3] `plan_step` is retired from the advertised tool
+                # surface for ALL tiers, so the single planning prompt names it for
+                # NEITHER tier — weak and standard share self._planning.
+                return self._with_skills(self._planning, capabilities)
             # [C21] assist gate: ON → small-model variant (crisper tool-use rules
             # for weak open models); OFF → original capable-model prompt, returned
             # byte-identical (no skills block re-formatting, no flavor side-effects).

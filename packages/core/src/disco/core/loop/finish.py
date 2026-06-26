@@ -127,7 +127,13 @@ _APP_VERIFY_PREFIX = "app"
 
 
 def _app_verify_command(url: str) -> str:
-    u = (url or "http://localhost:8000/").strip().strip("'\"") or "http://localhost:8000/"
+    # NO hardcoded :8000 default. The platform assigns the preview port (it is NOT a fixed
+    # port — see PreviewManager), so the ACTUAL served URL must be supplied by the caller
+    # (`resolve_verify_command` resolves it from the live preview, and degrades to the
+    # server-free static check when no preview can be located). A bare `verify="app"` with
+    # no resolvable preview never reaches here with an empty url — guarding against an empty
+    # url keeps this from fabricating a wrong port.
+    u = (url or "").strip().strip("'\"")
     safe = u.replace("'", "'\\''")
     # No try/except (a `-c` one-liner can't carry the block): a connection failure
     # raises URLError → nonzero exit + a traceback the agent reads as "not serving".
@@ -430,11 +436,35 @@ def _real_web_failure_evidence(events: list[Event]) -> bool:
     return False
 
 
-def _browser_verified(events: list[Event], since_seq: int) -> tuple[bool, str | None]:
+def _url_targets_preview(url: str, target_key: tuple[str, int] | None) -> bool:
+    """Does a browser observation `url` address the CURRENT preview target?
+
+    The preview platform assigns a RANDOM port — there is NO fixed :8000 inside the
+    sandbox. When the live preview port has been resolved (`target_key`, derived from
+    `_detect_preview_url` via `_preview_key` — backend-aware: never the agent-server's
+    :8000 on the shared-host/process backend) an observation counts ONLY if its url
+    resolves to the SAME (host, port) preview key — a foreign / wrong-port observation
+    does NOT satisfy the browser gate.
+
+    When the preview is undetectable (`target_key is None` — sandbox-less / legacy
+    backend / the pure-reader unit tests) the historical :8000 acceptance is kept as a
+    safe fallback rather than asserting a wrong port (on an ISOLATED backend :8000 IS
+    the app; the resolver returns it as the target_key there, so this also matches)."""
+    if target_key is None:
+        return url.startswith("http://127.0.0.1:8000") or url.startswith(
+            "http://localhost:8000"
+        )
+    return _preview_key(url) == target_key
+
+
+def _browser_verified(
+    events: list[Event], since_seq: int, target_key: tuple[str, int] | None = None
+) -> tuple[bool, str | None]:
     """Scan the AGENT's browser observations since since_seq. Returns (ok,
     first_error_line). An observation is valid if it's from the browser tool,
-    against port 8000, and has zero console errors. If not ok, returns the first
-    error from the LATEST qualifying observation.
+    against the resolved preview target (`target_key`; :8000 when undetectable —
+    see `_url_targets_preview`), and has zero console errors. If not ok, returns
+    the first error from the LATEST qualifying observation.
 
     The finish gate's OWN driven probe (the verify-overclaim active check —
     ActionEvent tagged `verify_probe`) is EXCLUDED here: this helper answers "did
@@ -455,9 +485,7 @@ def _browser_verified(events: list[Event], since_seq: int) -> tuple[bool, str | 
             res = ev.tool_result
             if res.success and res.structured:
                 url = str(res.structured.get("url", ""))
-                if url.startswith("http://127.0.0.1:8000") or url.startswith(
-                    "http://localhost:8000"
-                ):
+                if _url_targets_preview(url, target_key):
                     valid_obs.append(res.structured)
 
     if not valid_obs:
@@ -505,11 +533,14 @@ def _browser_content_meaningful(structured: dict) -> bool:
     return False
 
 
-def _latest_browser_structured(events: list[Event]) -> dict | None:
-    """Structured payload of the LATEST successful browser observation on :8000
-    (any seq). Feeds the active finish probe's blank-render judgement — "the
-    gate's own observation". None when the agent/gate never produced a qualifying
-    :8000 browser observation."""
+def _latest_browser_structured(
+    events: list[Event], target_key: tuple[str, int] | None = None
+) -> dict | None:
+    """Structured payload of the LATEST successful browser observation on the
+    resolved preview target (`target_key`; :8000 when undetectable — see
+    `_url_targets_preview`), any seq. Feeds the active finish probe's blank-render
+    judgement — "the gate's own observation". None when the agent/gate never
+    produced a qualifying browser observation."""
     for ev in reversed(events):
         if not (isinstance(ev, ObservationEvent) and ev.tool_result.tool_name == "browser"):
             continue
@@ -517,7 +548,7 @@ def _latest_browser_structured(events: list[Event]) -> dict | None:
         if not (res.success and res.structured):
             continue
         url = str(res.structured.get("url", ""))
-        if url.startswith("http://127.0.0.1:8000") or url.startswith("http://localhost:8000"):
+        if _url_targets_preview(url, target_key):
             return res.structured
     return None
 
@@ -540,12 +571,16 @@ def _vision_mode() -> bool:
     )
 
 
-def _latest_browser_screenshot(events: list[Event]) -> str | None:
+def _latest_browser_screenshot(
+    events: list[Event], target_key: tuple[str, int] | None = None
+) -> str | None:
     """W6 — screenshot_path from the LATEST qualifying browser observation.
 
-    Searches backward through events for a successful browser observation on
-    port :8000; returns the `screenshot_path` field if present. None when the
-    agent never browsed :8000 or the daemon didn't produce a screenshot."""
+    Searches backward through events for a successful browser observation on the
+    resolved preview target (`target_key`; :8000 when undetectable — see
+    `_url_targets_preview`); returns the `screenshot_path` field if present. None
+    when the agent never browsed the preview or the daemon didn't produce a
+    screenshot."""
     for ev in reversed(events):
         if not (isinstance(ev, ObservationEvent) and ev.tool_result.tool_name == "browser"):
             continue
@@ -553,9 +588,7 @@ def _latest_browser_screenshot(events: list[Event]) -> str | None:
         if not (res.success and res.structured):
             continue
         url = str(res.structured.get("url", ""))
-        if not (
-            url.startswith("http://127.0.0.1:8000") or url.startswith("http://localhost:8000")
-        ):
+        if not _url_targets_preview(url, target_key):
             continue
         path = res.structured.get("screenshot_path")
         if path:
@@ -563,11 +596,13 @@ def _latest_browser_screenshot(events: list[Event]) -> str | None:
     return None
 
 
-def _latest_browser_error(events: list[Event]) -> str | None:
+def _latest_browser_error(
+    events: list[Event], target_key: tuple[str, int] | None = None
+) -> str | None:
     """First error-level console line of the LATEST qualifying browser observation
-    (any seq — full history). None if the agent never browsed :8000 or its last
-    look was clean. This feeds the gate's human-facing messages: the verdict is
-    scoped to since-last-edit (_browser_verified), but "last console errors"
+    (any seq — full history). None if the agent never browsed the preview or its
+    last look was clean. This feeds the gate's human-facing messages: the verdict
+    is scoped to since-last-edit (_browser_verified), but "last console errors"
     must report what was actually last SEEN — a post-browse edit moves since_seq
     past the observation and would otherwise erase a real, observed error."""
     for ev in reversed(events):
@@ -577,9 +612,7 @@ def _latest_browser_error(events: list[Event]) -> str | None:
         if not (res.success and res.structured):
             continue
         url = str(res.structured.get("url", ""))
-        if not (
-            url.startswith("http://127.0.0.1:8000") or url.startswith("http://localhost:8000")
-        ):
+        if not _url_targets_preview(url, target_key):
             continue
         errors = [
             str(c.get("text", ""))
@@ -816,10 +849,15 @@ class FinishGate:
             )
         return passed, malformed
 
-    async def _drive_finish_browser_probe(self) -> bool:
+    async def _drive_finish_browser_probe(self, target_url: str | None = None) -> bool:
         """ACTIVE finish-verify: instead of TRUSTING the agent to have browsed the
-        deliverable, the gate DRIVES a `browser navigate http://127.0.0.1:8000/`
-        itself and judges the result on ground truth. This closes the
+        deliverable, the gate DRIVES a `browser navigate <preview>` itself and
+        judges the result on ground truth. The preview platform assigns a RANDOM
+        port, so the gate navigates to the RESOLVED preview (`target_url`, from
+        `_detect_preview_url` — backend-aware, never the agent-server's :8000 on the
+        shared-host backend); only when no preview is detectable does it fall back
+        to the legacy `http://127.0.0.1:8000/` (the isolated-backend app port). This
+        closes the
         verification-overclaim hole: an agent that declares done without ever
         looking can no longer land a JS-broken/blank page as FINISHED — the gate
         looks for it.
@@ -847,12 +885,13 @@ class FinishGate:
         if "browser" not in tool_names:
             return False
 
+        nav_url = target_url or "http://127.0.0.1:8000/"
         call = ToolCall(
             tool_name="browser",
-            arguments={"action": "navigate", "url": "http://127.0.0.1:8000/"},
+            arguments={"action": "navigate", "url": nav_url},
         )
         action = ActionEvent(
-            thought="Verifying the app renders: navigating to http://127.0.0.1:8000/",
+            thought=f"Verifying the app renders: navigating to {nav_url}",
             tool_call=call,
             meta={"verify_probe": True},
         )
@@ -1166,7 +1205,7 @@ class FinishGate:
 
         return DoDEvaluator(Path(workspace), http_probe=http_probe)
 
-    def resolve_verify_command(self, args: dict) -> str:
+    async def resolve_verify_command(self, args: dict) -> str:
         verify_cmd = str(args.get("verify") or "").strip()
         # E4: a `static` directive verifies a static page WITHOUT a server
         # (files present + HTML parses) — the honest check for a page build.
@@ -1181,6 +1220,18 @@ class FinishGate:
             _APP_VERIFY_PREFIX + ":"
         ):
             _, _, _url = verify_cmd.partition(":")
+            _url = _url.strip()
+            if not _url:
+                # Bare `verify="app"` (no explicit URL). The platform assigns the preview
+                # port — there is NO fixed :8000 inside the sandbox (a curl there 404s),
+                # so resolve the URL the live deliverable ACTUALLY serves on (the same
+                # backend-aware detection the verify_web_app gate uses). If no live preview
+                # can be located, degrade to the server-free static check rather than
+                # asserting :8000 — a 404 on a guessed port is a FALSE failure that would
+                # spin the model into re-serve/re-verify loops.
+                _url = await self._detect_preview_url() or ""
+                if not _url:
+                    return _static_verify_command("index.html")
             verify_cmd = _app_verify_command(_url)
         return verify_cmd
 
@@ -1194,7 +1245,7 @@ class FinishGate:
         # failure the agent sees exactly what broke and adapts, instead
         # of declaring a broken build complete.
         assert step.tool_call is not None  # caller (engine loop) enters only on the finish tool
-        verify_cmd = self.resolve_verify_command(step.tool_call.arguments)
+        verify_cmd = await self.resolve_verify_command(step.tool_call.arguments)
         if verify_cmd:
             passed, malformed = await self.finish_verify_passed(verify_cmd)
             if passed:
@@ -1787,19 +1838,28 @@ class FinishGate:
             if self._verify_tool_available():
                 return await self._gate_verify_web_app(events)
             since_seq = _last_productive_seq(events)
-            ok, _ = _browser_verified(events, since_seq)
+            # The preview platform assigns a RANDOM port — there is NO fixed :8000
+            # inside the sandbox (a curl there 404s). Resolve the live preview the
+            # SAME backend-aware way the verify_web_app gate does and bind every
+            # browser-observation check + the driven probe + the nudge text to it.
+            # None ⇒ undetectable (sandbox-less / legacy / isolated where :8000 IS
+            # the app) ⇒ the readers fall back to the historical :8000 acceptance.
+            target_url = await self._detect_preview_url()
+            target_key = _preview_key(target_url) if target_url else None
+            ok, _ = _browser_verified(events, since_seq, target_key)
             if not ok:
                 # ACTIVE verify (verification-overclaim fix): the AGENT has NOT
-                # produced a clean :8000 browser observation since the last edit.
+                # produced a clean preview browser observation since the last edit.
                 # Rather than wait/trust it to browse (it may have overclaimed and
-                # never looked), DRIVE the browse ourselves and judge the probe on
-                # ground truth — zero console errors AND a non-blank render (a page
-                # can serve 200 with a clean console yet mount nothing). Degrades to
-                # the prior passive nudge/release on browserless backends (the probe
-                # is a no-op there). Bounded by the existing 3-refusal cap below.
-                if await self._drive_finish_browser_probe():
+                # never looked), DRIVE the browse ourselves (against the resolved
+                # preview, not a dead :8000) and judge the probe on ground truth —
+                # zero console errors AND a non-blank render (a page can serve 200
+                # with a clean console yet mount nothing). Degrades to the prior
+                # passive nudge/release on browserless backends (the probe is a
+                # no-op there). Bounded by the existing 3-refusal cap below.
+                if await self._drive_finish_browser_probe(target_url):
                     events = await self._loop._events()
-                    probe = _latest_browser_structured(events)
+                    probe = _latest_browser_structured(events, target_key)
                     if probe is not None:
                         probe_console_clean = not any(
                             c.get("level") == "error" for c in probe.get("console", [])
@@ -1807,7 +1867,7 @@ class FinishGate:
                         ok = probe_console_clean and _browser_content_meaningful(probe)
             # Messaging reads the FULL history: a post-browse edit
             # invalidates the verification but not what was seen.
-            first_error = _latest_browser_error(events)
+            first_error = _latest_browser_error(events, target_key)
             if ok:
                 self._loop._browser_verify_refusals = 0  # reset on clean pass
                 # W6 vision artifact: when the browser observation includes a
@@ -1815,7 +1875,7 @@ class FinishGate:
                 # find it (satisfies "finish-gate captures a screenshot" in the
                 # no-test UI finish-gate). Only emitted when vision mode is active.
                 if _vision_mode():
-                    shot = _latest_browser_screenshot(events)
+                    shot = _latest_browser_screenshot(events, target_key)
                     if shot:
                         await self._loop._emit(
                             StatusEvent(
@@ -1825,11 +1885,14 @@ class FinishGate:
                         )
             elif self._loop._browser_verify_refusals < 3:
                 self._loop._browser_verify_refusals += 1
+                # Point the agent at the RESOLVED preview (random platform port), not
+                # a dead :8000; fall back to :8000 only when undetectable.
+                preview_url = target_url or "http://127.0.0.1:8000/"
                 if first_error:
                     # Variant (2): quote the error
                     nudge = (
                         "Before finishing: verify your app the way a user would. "
-                        "Use the browser tool to navigate to http://127.0.0.1:8000/, "
+                        f"Use the browser tool to navigate to {preview_url}, "
                         "read the CONSOLE output, and fix any errors you see. "
                         f"The last load had errors: {first_error}"
                     )
@@ -1837,7 +1900,7 @@ class FinishGate:
                     # Variant (1): verbatim from order
                     nudge = (
                         "Before finishing: verify your app the way a user would. "
-                        "Use the browser tool to navigate to http://127.0.0.1:8000/, "
+                        f"Use the browser tool to navigate to {preview_url}, "
                         "read the CONSOLE output, and fix any errors you see. "
                         "Finish only after a clean load."
                     )

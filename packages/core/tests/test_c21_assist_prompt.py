@@ -73,10 +73,11 @@ def test_assist_on_returns_small_model_execution_prompt():
 
 
 def test_assist_on_planning_prompt_omits_withheld_tools():
-    """assist-pipeline refactor: a weak (assist-on) model must NOT see withheld tools
-    NAMED in its prompt (no-contamination). The planning capability block omits the
-    per-step progress tools (plan_step / update_plan_progress) when weak, since they're
-    withheld from its tool surface. The capable (assist-off) planning prompt is unchanged."""
+    """No planning prompt (weak assist-on OR capable assist-off) may NAME a withheld
+    tool (no-contamination). `plan_step` is RETIRED from the advertised surface for
+    EVERY tier (runthru-v2 #3), and `update_plan_progress` is not named in any planning
+    block, so the weak and capable planning prompts are now IDENTICAL — both omit the
+    per-step progress tools entirely."""
     dp = DriverPrompts()
     on = dp.system_prompt(
         model_family="qwen",
@@ -91,10 +92,12 @@ def test_assist_on_planning_prompt_omits_withheld_tools():
         assist=False,
     )
     assert "PLANNING mode" in on
-    # The weak planning prompt now DIFFERS — it omits the withheld progress tools.
-    assert on != off
+    # plan_step is retired for all tiers → both planning prompts now coincide.
+    assert on == off
     assert "plan_step" not in on
     assert "update_plan_progress" not in on
+    # And the capable (assist-off) planning prompt must equally omit plan_step.
+    assert "plan_step" not in off
 
 
 # --------------------------------------------------------------------------

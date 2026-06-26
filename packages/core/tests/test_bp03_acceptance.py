@@ -53,20 +53,26 @@ def test_new_tool_risk_levels():
     assert get_risk("shell_exec", {"command": "sudo rm -rf /"}) == SecurityRisk.HIGH
 
 def test_prompt_contract_text():
-    # Execution prompt MUST contain the new session/port 8000 contract
+    # Execution prompt MUST teach the PLATFORM-owned preview contract: the model declares
+    # intent via `preview_start` and uses the URL/port it RETURNS — there is no fixed :8000
+    # auto-served inside the sandbox (the platform chooses the port).
     assert "YOUR ENVIRONMENT — processes, ports, serving" in _EXECUTION_DRIVER_PROMPT
-    assert "shell_kill_process('preview')" in _EXECUTION_DRIVER_PROMPT
+    assert "preview_start" in _EXECUTION_DRIVER_PROMPT
     assert "server_status" in _EXECUTION_DRIVER_PROMPT
-    
-    # Execution prompt MUST NOT contain the old "NEVER kill" or stale tools
+    # The dead ":8000 auto-served" model is gone — no instruction to free/bind port 8000.
+    assert "shell_kill_process('preview')" not in _EXECUTION_DRIVER_PROMPT
+    assert "auto-served on port 8000" not in _EXECUTION_DRIVER_PROMPT
+
+    # Execution prompt MUST NOT contain the old "NEVER kill" or stale/nonexistent tools
     assert "NEVER kill" not in _EXECUTION_DRIVER_PROMPT
     assert "pkill http.server" not in _EXECUTION_DRIVER_PROMPT
     assert "run_server" not in _EXECUTION_DRIVER_PROMPT
-    assert "preview_status" not in _EXECUTION_DRIVER_PROMPT
     assert "restart_preview" not in _EXECUTION_DRIVER_PROMPT
 
 def test_planning_prompt_environment():
-    # Planning prompt MUST contain the new environment paragraph
+    # Planning prompt MUST contain the new environment paragraph + the preview_start
+    # contract (preview is a PLATFORM concern; no fixed-port assumption).
     assert "EXECUTION ENVIRONMENT" in _PLANNING_DRIVER_PROMPT
-    assert "port 8000" in _PLANNING_DRIVER_PROMPT
+    assert "preview_start" in _PLANNING_DRIVER_PROMPT
+    assert "auto-served on port 8000" not in _PLANNING_DRIVER_PROMPT
     assert "persistent shell SESSIONS" in _PLANNING_DRIVER_PROMPT

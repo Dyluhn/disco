@@ -50,16 +50,27 @@ def _render(session: Any) -> str:
     running = getattr(session.status, "value", "") == "running"
     # BAKE-OFF #7: `url` is the HOST-published browser URL — NOT reachable from inside the
     # sandbox. A model that curls it from its shell gets connection-refused (000) and wrongly
-    # concludes the build is broken. `running` already means the platform health-probed it
-    # (HTTP 200, in-sandbox) — so say it's verified and give the in-sandbox URL for any check.
-    verify = (
-        f"\n  status: ALREADY platform-health-verified (HTTP 200, probed in-sandbox) — it IS "
-        f"serving; you do NOT need to curl it.\n"
-        f"  in-sandbox url (curl THIS from your shell, NOT the browser url): "
-        f"http://localhost:{session.port}/"
-        if running
-        else ""
-    )
+    # concludes the build is broken. The IN-SANDBOX url is on the PLATFORM-assigned port
+    # (NEVER a fixed :8000 — the platform chooses it; see PreviewManager), so ALWAYS surface
+    # it: it is the one URL the model can curl from its shell. Showing it unconditionally —
+    # even before the preview is health-verified — stops the model falling back to guessing
+    # :8000 (which serves nothing) while the server is still coming up.
+    insandbox = f"http://localhost:{session.port}/"
+    if running:
+        # `running` means the platform already health-probed it (HTTP 200, in-sandbox) — so
+        # say it's verified and hand over the in-sandbox URL for any further check.
+        verify = (
+            f"\n  status: ALREADY platform-health-verified (HTTP 200, probed in-sandbox) — it IS "
+            f"serving; you do NOT need to curl it.\n"
+            f"  in-sandbox url (curl THIS from your shell, NOT the browser url): {insandbox}"
+        )
+    else:
+        # Not yet health-verified — but still give the correct in-sandbox URL so the model
+        # checks the RIGHT port once it's up, never a guessed :8000.
+        verify = (
+            f"\n  in-sandbox url (once it's up, curl THIS from your shell, NOT the browser url): "
+            f"{insandbox}"
+        )
     return (
         f"preview '{session.name}': {session.status.value}\n"
         f"  browser url: {url}  (for the USER's browser — NOT reachable from inside the sandbox)\n"

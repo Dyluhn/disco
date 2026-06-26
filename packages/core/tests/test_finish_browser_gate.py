@@ -366,6 +366,7 @@ class ConfigurableBrowserExecutor(FakeExecutor):
         elements=None,
         success=True,
         has_browser=True,
+        url="http://127.0.0.1:8000/",
     ):
         tools = [
             ToolSpec(name="file_write", description="write", parameters_schema={}),
@@ -379,6 +380,10 @@ class ConfigurableBrowserExecutor(FakeExecutor):
         self._text = text
         self._elements = elements or []
         self._browser_success = success
+        # The URL the daemon REPORTS in its observation. The platform assigns a
+        # random preview port — the finish gate must accept the observation on THAT
+        # port, not only :8000 (and reject a foreign port even when console-clean).
+        self._url = url
         self.browser_calls = 0
 
     async def execute(self, call):
@@ -389,10 +394,10 @@ class ConfigurableBrowserExecutor(FakeExecutor):
                 call_id=call.call_id,
                 tool_name="browser",
                 success=self._browser_success,
-                content="[UNTRUSTED WEB CONTENT]\nURL: http://127.0.0.1:8000/",
+                content=f"[UNTRUSTED WEB CONTENT]\nURL: {self._url}",
                 structured={
                     "ok": True,
-                    "url": "http://127.0.0.1:8000/",
+                    "url": self._url,
                     "title": self._title,
                     "console": self._console,
                     "elements": self._elements,
@@ -555,3 +560,126 @@ async def test_active_probe_not_counted_as_agent_work():
     # despite N driven probes, agent-work accounting counts only the file_write
     assert productive_actions_since_approval(events) == 1
     assert actions_since_last_resume(events) == 1
+
+
+# ---- pure-reader port binding (target_key) ----------------------------------
+#
+# The platform assigns a RANDOM preview port; the readers must accept an
+# observation on the RESOLVED preview port and REJECT a foreign one — while
+# preserving the historical :8000 fallback when the preview is undetectable
+# (target_key=None, the path the legacy/sandbox-less unit tests rely on).
+
+
+def test_url_targets_preview_binding():
+    from disco.core.loop.finish import _preview_key, _url_targets_preview
+
+    key = _preview_key("http://127.0.0.1:54321/")
+    # bound to the resolved random port → accept that port, reject others (incl 8000)
+    assert _url_targets_preview("http://127.0.0.1:54321/", key) is True
+    assert _url_targets_preview("http://localhost:54321/", key) is True  # loopback alias
+    assert _url_targets_preview("http://127.0.0.1:8000/", key) is False
+    assert _url_targets_preview("http://127.0.0.1:9999/", key) is False
+    # undetectable preview (None) → historical :8000 acceptance only
+    assert _url_targets_preview("http://127.0.0.1:8000/", None) is True
+    assert _url_targets_preview("http://localhost:8000/", None) is True
+    assert _url_targets_preview("http://127.0.0.1:54321/", None) is False
+
+
+def test_browser_readers_accept_resolved_nondefault_port():
+    from disco.core.loop.finish import (
+        _browser_verified,
+        _latest_browser_error,
+        _latest_browser_structured,
+    )
+
+    key = ("127.0.0.1", 54321)
+    errs = [{"level": "error", "text": "boom on the random port"}]
+    # clean obs on the RESOLVED random port is accepted
+    events = [browser_obs("http://127.0.0.1:54321/", [], seq=25)]
+    assert _browser_verified(events, 20, key) == (True, None)
+    assert _latest_browser_structured(events, key) is not None
+    # error obs on the resolved port is surfaced
+    events = [browser_obs("http://127.0.0.1:54321/", errs, seq=25)]
+    assert _browser_verified(events, 20, key) == (False, "boom on the random port")
+    assert _latest_browser_error(events, key) == "boom on the random port"
+    # a FOREIGN port (incl :8000) is rejected when bound to :54321
+    events = [browser_obs("http://127.0.0.1:8000/", [], seq=25)]
+    assert _browser_verified(events, 20, key) == (False, None)
+    assert _latest_browser_structured(events, key) is None
+    assert _latest_browser_error(events, key) is None
+
+
+# ---- gate end-to-end on a RANDOM (non-:8000) preview port -------------------
+
+
+def _patch_detect(loop, url: str | None):
+    async def _fake_detect() -> str | None:
+        return url
+
+    loop._finish._detect_preview_url = _fake_detect  # type: ignore[assignment]
+
+
+@pytest.mark.asyncio
+async def test_active_probe_drives_resolved_random_port_and_finishes():
+    # The preview serves on a platform-assigned random port (54321). The agent
+    # never browses; the gate must DRIVE the probe AGAINST 54321 (not a dead :8000),
+    # accept the clean+meaningful render on that port, and finish — zero nudges.
+    execu = ConfigurableBrowserExecutor(
+        console=[],
+        title="Todo App",
+        text="A fully rendered to-do application with a list of tasks",
+        url="http://127.0.0.1:54321/",
+    )
+    loop, store = _gate_loop(_never_browses_agent(), execu)
+    _patch_detect(loop, "http://127.0.0.1:54321/")
+    await loop.send_message("build me a page")
+    await loop.run()
+
+    events = await store.get_events("conv")
+    env = _env_messages(events)
+    assert not any(m.startswith("Before finishing:") for m in env), env
+    assert not any(m.startswith("⚠ finished WITHOUT") for m in env), env
+    # the gate drove the probe against the RESOLVED port, never :8000
+    from disco.core import ActionEvent
+
+    probe_urls = [
+        e.tool_call.arguments.get("url")
+        for e in events
+        if isinstance(e, ActionEvent) and e.tool_call and e.tool_call.tool_name == "browser"
+    ]
+    assert probe_urls and all(u == "http://127.0.0.1:54321/" for u in probe_urls), probe_urls
+    assert all("8000" not in str(u) for u in probe_urls)
+    statuses = [e.status.value for e in events if isinstance(e, StatusEvent)]
+    assert "FINISHED" in statuses
+
+
+@pytest.mark.asyncio
+async def test_active_probe_foreign_port_observation_is_rejected():
+    # The preview is resolved to :54321 but the browser observation comes back on a
+    # FOREIGN port (:9999) with a clean console + meaningful content. Binding to the
+    # resolved preview must REJECT it — so the gate refuses (3 nudges, pointed at the
+    # resolved :54321) then releases the valve, never landing the foreign page as done.
+    execu = ConfigurableBrowserExecutor(
+        console=[],
+        title="Unrelated",
+        text="A clean and meaningful page served on the wrong port entirely",
+        url="http://127.0.0.1:9999/",
+    )
+    loop, store = _gate_loop(_never_browses_agent(), execu)
+    _patch_detect(loop, "http://127.0.0.1:54321/")
+    await loop.send_message("build me a page")
+    await loop.run()
+
+    events = await store.get_events("conv")
+    env = _env_messages(events)
+    nudges = [
+        m
+        for m in env
+        if m.startswith("Before finishing:") and "http://127.0.0.1:54321/" in m
+    ]
+    assert len(nudges) == 3, f"foreign-port obs must be rejected + nudge at :54321: {env}"
+    assert not any("8000" in m for m in nudges)  # never the dead fixed port
+    warns = [m for m in env if m.startswith("⚠ finished WITHOUT a clean browser verification")]
+    assert len(warns) == 1
+    statuses = [e.status.value for e in events if isinstance(e, StatusEvent)]
+    assert "FINISHED" in statuses  # valve released — no deadlock
