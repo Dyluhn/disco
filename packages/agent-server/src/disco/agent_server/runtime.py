@@ -78,6 +78,7 @@ from disco.core.loop import (
     NeverConfirm,
     ResearchAgent,
     RouterAgent,
+    signals,
 )
 from disco.core.loop.context_budget import derive_context_caps  # noqa: E402
 from disco.core.security import RuleBasedAnalyzer
@@ -783,6 +784,16 @@ class ConversationRuntime:
         #     IDLE append (guard A after `await task`, guard B before the append) if a
         #     newer run has taken over the conversation in the teardown-await window.
         self._run_generation: dict[str, int] = {}
+        # Engine-rekick fix: latest USER seq that last triggered a POST-TERMINAL
+        # re-kick, per cid. A follow-up appended while a run finalizes is stranded
+        # (kick() is a no-op on the live task; the done-callback finalizers don't
+        # re-kick). `_maybe_rekick_for_stranded_followup` re-kicks at every terminal
+        # conclusion when the (now-correct) work-gate is open, and records the
+        # follow-up's seq here so it re-kicks ONCE per new follow-up: a stalled
+        # same-seq segment (no real progress) never loops, a clean no-follow-up
+        # finish never re-kicks. SEPARATE from `_nonterminal_rekicks` (the W11
+        # RUNNING-stall budget) — this guards the terminal-conclusion path only.
+        self._post_terminal_rekick_seq: dict[str, int] = {}
 
     # The generative (text-producing) roles a model PICK drives. NLI_VERIFIER is a
     # cross-encoder (entailment scorer), NOT a chat model — pointing it at a picked
@@ -1762,6 +1773,58 @@ class ConversationRuntime:
                 self._terminalize_crashed(conversation_id, exc, generation)
             )
 
+    async def _maybe_rekick_for_stranded_followup(self, conversation_id: str) -> None:
+        """Engine-rekick fix. A follow-up appended while a run is FINALIZING is
+        stranded: `kick()` is a no-op while the prior run task is still live, and the
+        done-callback finalizers (`_finalize_clean_return` / `_terminalize_crashed`)
+        terminalize but never re-kick — so nothing ever starts the new run() that
+        would process the turn. Called AFTER terminalization at every terminal
+        conclusion site; re-kicks ONLY when the (now-correct, status-markers-excluded)
+        work-gate `signals.has_unprocessed_user_message` is open for this cid.
+
+        Ordering-insensitive: the predicate fix means a terminal marker no longer
+        masks a preceding follow-up, so it doesn't matter whether this runs before or
+        after the marker append. Best-effort: never re-raises.
+
+        INFINITE-LOOP GUARD (`_post_terminal_rekick_seq`): re-kick + record ONLY if
+        the latest unprocessed USER seq is STRICTLY NEWER than the seq that last
+        triggered a post-terminal re-kick here. A new follow-up recovers once; a
+        re-kicked turn that produces NO real progress (same seq) never loops; a clean
+        no-follow-up finish never re-kicks. This is ADDITIONAL to the existing
+        generation / stale-run guards (unchanged) — it does not replace them."""
+        try:
+            events = await self._store.get_events(conversation_id)
+        except Exception:  # noqa: BLE001 — supervision is best-effort, never re-raise
+            logger.exception(
+                "post-terminal re-kick could not read events for %s", conversation_id
+            )
+            return
+        if not signals.has_unprocessed_user_message(events):
+            return  # clean finish, no stranded follow-up → nothing to recover
+        latest_user_seq = max(
+            (
+                e.seq or 0
+                for e in events
+                if isinstance(e, MessageEvent) and e.source == EventSource.USER
+            ),
+            default=None,
+        )
+        if latest_user_seq is None:
+            return
+        last = self._post_terminal_rekick_seq.get(conversation_id)
+        if last is not None and latest_user_seq <= last:
+            # Same (or older) follow-up already triggered a re-kick that made no real
+            # progress — don't loop on it.
+            return
+        self._post_terminal_rekick_seq[conversation_id] = latest_user_seq
+        logger.info(
+            "stranded follow-up on %s (user seq %s after a terminal conclusion) — "
+            "re-kicking to process it",
+            conversation_id,
+            latest_user_seq,
+        )
+        self.kick(conversation_id)
+
     async def _finalize_clean_return(
         self, conversation_id: str, generation: int | None = None
     ) -> None:
@@ -1794,6 +1857,14 @@ class ConversationRuntime:
             # it out from under that newer run.
             if status in self._KERNEL_UNPIN_STATUSES:
                 self._unpin_if_current_generation(conversation_id, generation)
+                # Engine-rekick fix: only a genuinely TERMINAL conclusion
+                # (FINISHED/ERROR/STUCK/IDLE — the unpin set) can strand a follow-up
+                # that landed during finalization. A deliberate PARK (PAUSED /
+                # AWAITING_* / WAITING_*) must NOT be auto-resumed here — its resume
+                # is the user's explicit reply via the normal kick path. The helper
+                # no-ops unless the (now-correct) work-gate is open AND the follow-up
+                # seq is strictly newer than the last post-terminal re-kick.
+                await self._maybe_rekick_for_stranded_followup(conversation_id)
             return
         # Still RUNNING (the loop emits RUNNING at entry and only leaves it by emitting
         # a different status): the turn ended without concluding.
@@ -1840,6 +1911,9 @@ class ConversationRuntime:
                 "produced no actionable response). It's been marked stuck — send a "
                 "message to steer it and continue.",
             )
+            # Engine-rekick fix: STUCK is terminal here too — recover a follow-up that
+            # landed during this wedge terminalization (guarded, so it can't loop).
+            await self._maybe_rekick_for_stranded_followup(conversation_id)
         except Exception:  # noqa: BLE001 — supervision is best-effort, never re-raise
             logger.exception("stall terminalization failed for %s", conversation_id)
 
@@ -1915,6 +1989,10 @@ class ConversationRuntime:
                 f"The run stopped on an unexpected internal error ({type(exc).__name__}). "
                 "It has been recorded as failed; you can retry or adjust the task.",
             )
+            # Engine-rekick fix: ERROR is terminal — recover a follow-up that landed
+            # during this crash terminalization (guarded against looping). Reached
+            # only when this generation still owns the conversation (the guard above).
+            await self._maybe_rekick_for_stranded_followup(conversation_id)
         except Exception:  # noqa: BLE001 — supervision is best-effort, never re-raise
             logger.exception("crash terminalization failed for %s", conversation_id)
 

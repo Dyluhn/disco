@@ -368,6 +368,7 @@ def _finalize_fake(store: SqliteEventStore):
     fake._pi_token_store = None  # C#3: revoke is None-safe when no gateway store wired
     fake._last_status = {}
     fake._nonterminal_rekicks = {}
+    fake._post_terminal_rekick_seq = {}  # engine-rekick fix: post-terminal re-kick guard
     fake.kick = MagicMock()
     fake._emit_persistence_reminder = AsyncMock()
     for attr in (
@@ -379,6 +380,7 @@ def _finalize_fake(store: SqliteEventStore):
         setattr(fake, attr, getattr(ConversationRuntime, attr))
     for name in (
         "_finalize_clean_return",
+        "_maybe_rekick_for_stranded_followup",
         "_clear_pinned_kernel",
         "_unpin_if_current_generation",
         "_revoke_pi_tokens",

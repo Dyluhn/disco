@@ -642,22 +642,27 @@ def has_unprocessed_user_message(events: list[Event]) -> bool:
     )
     if last_user is None:
         return False
-    # Progress = the agent acted, spoke, or the loop reached a run/terminal
-    # status after the message. A finish-only step leaves no action/message,
-    # so the terminal StatusEvent is what marks the goal as processed.
-    activity_statuses = {
-        ConversationStatus.RUNNING,
-        ConversationStatus.FINISHED,
-        ConversationStatus.STUCK,
-        ConversationStatus.ERROR,
-    }
+    # Progress = the agent did REAL WORK after the message: a tool call
+    # (ActionEvent), an observation (ObservationEvent), a plan change (PlanEvent),
+    # or an assistant message (AGENT MessageEvent). A pure terminal/status marker
+    # (RUNNING/FINISHED/STUCK/ERROR StatusEvent) does NOT count as processing the
+    # turn. The engine appends the terminal marker at run end, so a follow-up that
+    # lands during finalization — just before that marker — was previously MASKED
+    # as "already processed" and stranded forever (no re-kick, no re-entry). With
+    # status markers excluded, such a turn is correctly UNPROCESSED so the runtime
+    # re-kicks and run() re-enters to handle it.
+    #
+    # The basis is deliberately STRICT to avoid false negatives on synthetic no-op
+    # turns: system-reminder / F9-dedup injections carry EventSource.ENVIRONMENT or
+    # SYSTEM (only AGENT messages count here), and status events no longer count at
+    # all — neither can spuriously consume a real user turn. `latest_unprocessed_
+    # user_text` reads through this same predicate, so it stays consistent.
     last_progress = max(
         (
             e.seq or 0
             for e in events
-            if isinstance(e, ActionEvent)
+            if isinstance(e, (ActionEvent, ObservationEvent, PlanEvent))
             or (isinstance(e, MessageEvent) and e.source == EventSource.AGENT)
-            or (isinstance(e, StatusEvent) and e.status in activity_statuses)
         ),
         default=0,
     )
