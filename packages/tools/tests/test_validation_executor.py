@@ -213,6 +213,74 @@ async def test_actionable_nested_message_is_deterministic():
     assert a.content == b.content
 
 
+# ---- submit_plan tolerates the habitual `revision` field --------------------
+#
+# FRICTION FIX: the build agent frequently attaches a `revision` field to
+# submit_plan (a carry-over habit from revision builds). That key used to surface
+# in the self-correcting validation message as an "unexpected argument — not
+# accepted by this tool" red herring (and confused the model) whenever the call
+# also tripped another error. submit_plan now declares `revision` as an explicit
+# optional, ignored field so the habitual call SUCCEEDS instead of erroring.
+
+
+async def test_submit_plan_with_revision_succeeds():
+    """`submit_plan` carrying the habitual `revision` field validates + runs (the
+    field is accepted-but-ignored), with `summary`/`steps` still required."""
+    ex = _executor()
+    res = await ex.execute(
+        call(
+            "submit_plan",
+            revision=1,
+            summary="Ship the feature.",
+            steps=[{"title": "Do the thing"}],
+        )
+    )
+    assert res.success is True
+    assert res.structured is None or res.structured.get("kind") != "invalid_arguments"
+    # revision is ignored, not persisted as a plan field
+    assert "plan received" in (res.content or "")
+
+
+async def test_submit_plan_revision_never_flagged_as_unexpected():
+    """Even when the SAME call trips a real error (missing `summary`), `revision`
+    must NOT appear as an unexpected argument — it's a known, ignored field now —
+    while the genuine missing-required error is still reported."""
+    ex = _executor()
+    res = await ex.execute(
+        call("submit_plan", revision=2, steps=[{"title": "x"}])  # summary missing
+    )
+    assert res.success is False
+    assert res.structured["kind"] == "invalid_arguments"
+    seen = res.error or ""
+    # the real problem is named...
+    assert "summary" in seen and "missing required argument" in seen
+    # ...but the habitual `revision` is NOT slandered as unexpected/not-accepted:
+    # the red-herring "unexpected argument(s)" reason is absent entirely.
+    assert "unexpected argument" not in seen
+    assert "not accepted by this tool" not in seen
+    # (revision does still appear in the benign Expected-arguments surface as a
+    # known optional field — that's the point: it's accepted, not rejected.)
+    assert "revision (object | None, optional)" in seen
+
+
+async def test_submit_plan_genuinely_unknown_field_still_flagged():
+    """MUST-NOT-REGRESS: a genuinely-unknown invented key on submit_plan still
+    surfaces as an unexpected argument (the schema didn't go permissive — only
+    `revision` was explicitly whitelisted)."""
+    ex = _executor()
+    res = await ex.execute(
+        call(
+            "submit_plan",
+            bogus_field=123,
+            steps=[{"title": "x"}],  # summary still missing → invalid
+        )
+    )
+    assert res.success is False
+    assert res.structured["kind"] == "invalid_arguments"
+    seen = res.error or ""
+    assert "bogus_field" in seen and "unexpected" in seen.lower()
+
+
 # ---- §11.2 executor ↔ loop boundary -----------------------------------------
 
 

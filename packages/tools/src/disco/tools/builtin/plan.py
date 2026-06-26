@@ -25,7 +25,7 @@ from __future__ import annotations
 from typing import Literal
 
 from disco.core.dod import DoDPredicate
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 from ..anatomy import SecurityRisk, ToolContext, ToolDef, ToolOutcome
 
@@ -69,6 +69,22 @@ class SubmitPlanArgs(BaseModel):
             "the steps."
         ),
     )
+    # FRICTION FIX: the build agent habitually attaches a `revision` field (a carry-over
+    # from revision builds). The arg was harmless to pydantic (extra="ignore" by default)
+    # but the executor's `describe_validation_failure` flagged it as an "unexpected
+    # argument — not accepted by this tool" whenever the SAME call also tripped another
+    # error (e.g. a missing `summary`), polluting the self-correcting message with a red
+    # herring and wasting a turn. Declaring it as an explicit OPTIONAL, IGNORED field
+    # makes `revision` a known/valid key, so it never shows up as unexpected and the call
+    # carrying it simply succeeds. Accepted-but-ignored / deprecated: submit_plan always
+    # proposes a fresh plan, so any revision number is a no-op.
+    revision: object | None = Field(
+        default=None,
+        description=(
+            "DEPRECATED / accepted-but-ignored. submit_plan always proposes a fresh "
+            "plan, so this field has no effect — you do not need to send it."
+        ),
+    )
 
 
 class SubmitPlanTool:
@@ -101,17 +117,22 @@ class PlanStepArgs(BaseModel):
 
 
 class PlanStepTool:
+    # RETIRED (runthru-v2 #3): withheld from every tier — the declarative
+    # `update_plan_progress` replaced incremental per-step marks. Kept registered +
+    # handled for defensive back-compat (a stray out-of-band call still no-ops cleanly),
+    # but never advertised. read_only=False for the same reason as update_plan_progress:
+    # it UPDATES plan state (not read-only) and is execution-only (not planner-eligible).
     definition = ToolDef(
         name="plan_step",
         description=(
-            "Report progress on the approved plan: mark a step 'active' when you start it "
-            "and 'done' when you finish it. Purely informational — it advances the UI's "
-            "capstone tracker and takes no action in the workspace."
+            "Update the plan tracker: mark a step 'active' when you start it and 'done' "
+            "when you finish it. Updates plan state but takes no action in the workspace. "
+            "(Retired — prefer update_plan_progress, which rewrites the full step snapshot.)"
         ),
         args_model=PlanStepArgs,
         base_risk=SecurityRisk.LOW,
         runs_in="in_process",
-        read_only=True,  # informational progress signal — no environment mutation
+        read_only=False,
     )
 
     async def run(self, args: PlanStepArgs, ctx: ToolContext) -> ToolOutcome:
@@ -131,7 +152,8 @@ class PlanStepTool:
 # ALL model tiers; declarative full-rewrite is what frontier models maintain reliably.
 # Small models (assist ON) are NOT offered this — they get an honest no-bookkeeping
 # plan (NL + done-at-finish), so the burden never falls on a model that can't carry it.
-# Like plan_step: a pure CONTROL signal — read_only, in_process, never gates finish.
+# A CONTROL signal: in_process, never gates finish. It UPDATES plan state (not read-only)
+# and is execution-only (not planner-eligible) — see the read_only=False note below.
 class PlanProgressItem(BaseModel):
     index: int = Field(description="1-based index of the plan step.")
     state: Literal["pending", "active", "done"] = Field(
@@ -150,37 +172,44 @@ class UpdatePlanProgressArgs(BaseModel):
         )
     )
 
-    @field_validator("steps", mode="before")
-    @classmethod
-    def _tolerate_truncated_steps(cls, v: object) -> object:
-        # ROBUSTNESS (bake-off issue #1, harness-owns-robustness): a streamed tool-call's
-        # args can arrive TRUNCATED (e.g. `{"steps": [""]}` when an arg-delta is dropped
-        # mid-stream). Hard-failing validation makes the model retry the identical bad call
-        # → repeated_action_error → STUCK build. This tool is non-critical declarative
-        # bookkeeping (each call is the FULL snapshot, so a dropped one self-corrects next
-        # call), so DROP un-parseable items instead of failing the whole call: a partial or
-        # empty snapshot is a harmless no-op, never a wedge. NOTE: masks the symptom, not the
-        # root streaming-truncation bug (tracked separately).
-        if isinstance(v, list):
-            return [s for s in v if isinstance(s, dict | PlanProgressItem)]
-        return v
+    # NOTE: no leniency validator here on purpose. Malformed step items (empty
+    # strings, non-objects, wrong-shaped entries) must be REJECTED by pydantic so the
+    # executor's `describe_validation_failure` can hand the model an ACTIONABLE message
+    # (the expected `{index, state}` shape + state enum + a copyable example) and the
+    # model self-corrects on the next turn. We used to DROP un-parseable items here.
+    # Live diagnosis (provider-side arg dump) showed the empty `steps:[""]` payloads are
+    # MODEL-GENUINE — MiniMax-M3 intermittently streams empty placeholder strings (not a
+    # transport/assembly truncation) — so the right response is an actionable rejection,
+    # NOT a silent drop that would hide the formatting error. Because this is a non-
+    # critical bookkeeping tool, its repeated rejections are kept from escalating a build
+    # to AWAITING_USER (see signals._NONCRITICAL_FAILURE_TOOLS). A genuinely empty
+    # `steps: []` still validates fine (a no-op snapshot).
 
 
 class UpdatePlanProgressTool:
     definition = ToolDef(
         name="update_plan_progress",
         description=(
-            "Report progress on the approved plan by rewriting the FULL list of step "
-            "states (declarative snapshot). Pass EVERY step with its current state "
-            "('pending' | 'active' | 'done') — mark the step you're working on 'active' "
-            "and completed ones 'done'. Purely informational: it advances the UI's plan "
-            "tracker and takes NO action in the workspace. Call it as you make progress; "
-            "since each call is the complete picture, an occasional miss self-corrects."
+            "Update the plan tracker by rewriting the FULL list of step states (a "
+            "declarative snapshot). `steps` is a list of OBJECTS, one per plan step: "
+            "{\"index\": <1-based step number>, \"state\": \"pending\"|\"active\"|\"done\"} "
+            "— e.g. {\"steps\": [{\"index\": 1, \"state\": \"done\"}, "
+            "{\"index\": 2, \"state\": \"active\"}]}. Pass EVERY step (mark the one you're "
+            "working on 'active', completed ones 'done'). This UPDATES the live progress "
+            "UI — it changes plan state, but performs NO action in the workspace (no files, "
+            "no commands). Call it as you make progress; each call is the full picture, so "
+            "an occasional miss self-corrects on the next call."
         ),
         args_model=UpdatePlanProgressArgs,
         base_risk=SecurityRisk.LOW,
         runs_in="in_process",
-        read_only=True,  # informational progress snapshot — no environment mutation
+        # read_only is this codebase's "no WORKSPACE mutation / planner-eligible" class
+        # (read_only=True tools are offered in the PLANNING schema). update_plan_progress
+        # does NOT mutate the workspace, but it DOES update plan state, and it is an
+        # EXECUTION-only tool (you cannot report progress before a plan is approved) — so
+        # it is NOT read-only and must NOT be planner-eligible. (Confirmation is risk-based,
+        # not read_only-based, so this adds no approval prompt.)
+        read_only=False,
     )
 
     async def run(self, args: UpdatePlanProgressArgs, ctx: ToolContext) -> ToolOutcome:
