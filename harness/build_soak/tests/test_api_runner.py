@@ -14,6 +14,7 @@ import pytest
 from _eventlog import action, clean_smoke_log, msg, plan, status
 
 import harness.build_soak.adapters.disco_api as _disco_mod
+from harness.build_soak import run as _run_mod
 from harness.build_soak.adapters.disco_api import (
     FOLLOWUP_PICKED_UP,
     FOLLOWUP_PICKUP_TIMEOUT,
@@ -134,6 +135,34 @@ class FakeTransport:
 
 def _smoke_scenario():
     return load_scenarios()["static_html_minimal"]
+
+
+def _smoke_log_with_file_write(path, content):
+    """clean_smoke_log's plan→approve→execute→finish shape, but the executed action is a
+    file_write of `content` to `path` with a MATCHING observation call_id — so the snapshot
+    readiness gate records a PROVEN raw_sha capture for that file (vs clean_smoke_log's generic
+    shell action, which leaves the declared file unproven)."""
+    return [
+        msg(1, "user", "build a page"),
+        status(2, "RUNNING"),
+        plan(3, revision=1),
+        status(4, "AWAITING_PLAN_APPROVAL", "evt_3"),
+        status(5, "RUNNING", "plan_approved"),
+        status(6, "RUNNING"),
+        {
+            "id": "act7", "seq": 7, "kind": "action", "source": "agent",
+            "tool_call": {"tool_name": "file_write",
+                          "arguments": {"path": path, "content": content}, "call_id": "cw7"},
+        },
+        {
+            "id": "evt_8", "seq": 8, "kind": "observation", "source": "environment",
+            "action_id": "act7",
+            "tool_result": {"call_id": "cw7", "tool_name": "file_write", "success": True,
+                            "content": "wrote"},
+        },
+        msg(9, "agent", "done", role="assistant"),
+        status(10, "FINISHED"),
+    ]
 
 
 def _client(transport, tmp_path):
@@ -1094,7 +1123,10 @@ async def test_durable_preview_does_not_mask_wrong_content(tmp_path):
     # the point is no false PASS.)
     db = tmp_path / "disco.db"
     proj = tmp_path / "projects"
-    _seed_db(db, _CID, clean_smoke_log())
+    # The agent actually WROTE the wrong content (a file_write of "<h1>WRONG</h1>"), so the
+    # capture is PROVEN (raw_sha): a proven wrong deliverable stays a hard ARTIFACT_TRUTH_MISMATCH
+    # under the Part A proof-fold — it is NOT downgraded to an unverified-snapshot INVALID_RUN.
+    _seed_db(db, _CID, _smoke_log_with_file_write("index.html", "<h1>WRONG</h1>"))
     _plant_snapshot(proj, _CID, {"index.html": "<h1>WRONG</h1>"})  # missing the needle
     transport = _DeadPreviewTransport(
         db, states=["AWAITING_PLAN_APPROVAL", "FINISHED", "FINISHED", "FINISHED"]
@@ -1112,6 +1144,200 @@ async def test_durable_preview_does_not_mask_wrong_content(tmp_path):
     assert classification["code"] in ("ARTIFACT_TRUTH_MISMATCH", "PREVIEW_TRUTH_MISMATCH"), (
         classification
     )
+
+
+# ---- Part B: AWAITING_USER_DECISION auto-resolver ---------------------------------------
+# The model sometimes proposes structured `alternatives` (a user-choice gate → status
+# AWAITING_USER_DECISION). A non-interactive soak ACTS AS THE USER and auto-resolves it via the
+# REAL pick_alternative mechanism (state-bound to the live pending_alternatives_id), records the
+# resolution, and continues — so a build that merely asked for a choice can FINISH. Bounded by
+# _MAX_DECISION; an invalid/stale payload or the cap → a HARD signal, never a silent clean pass.
+
+
+class _DecisionTransport(FakeTransport):
+    """A FakeTransport whose /state ALSO surfaces `pending_alternatives_id` while the status is
+    AWAITING_USER_DECISION (mirrors ConversationState) so resolve_decision can state-bind."""
+
+    def __init__(self, *a, pending_alternatives_id=None, **kw):
+        super().__init__(*a, **kw)
+        self.pending_alternatives_id = pending_alternatives_id
+
+    async def get_json(self, path):
+        status, data = await super().get_json(path)
+        if path.endswith("/state") and data.get("execution_status") == "AWAITING_USER_DECISION":
+            data = {**data, "pending_alternatives_id": self.pending_alternatives_id}
+        return status, data
+
+
+def _alternatives_event(seq, alt_id, options):
+    """An AlternativesEvent (the AWAITING_USER_DECISION gate) carrying choosable options."""
+    return {
+        "id": alt_id, "seq": seq, "kind": "alternatives", "source": "agent",
+        "failed_action_id": "act_fail", "summary": "pick a recovery path", "options": options,
+    }
+
+
+@pytest.mark.asyncio
+async def test_resolve_decision_picks_recommended_and_sends_pick_alternative(tmp_path):
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, [_alternatives_event(5, "alt1", [
+        {"id": "opt_a", "title": "A"},
+        {"id": "opt_b", "title": "B", "recommended": True},
+    ])])
+    transport = _DecisionTransport(
+        db, states=["AWAITING_USER_DECISION"], pending_alternatives_id="alt1"
+    )
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+
+    resolved = await client.resolve_decision(_CID)
+
+    assert resolved == {"alternatives_id": "alt1", "option_id": "opt_b"}  # recommended wins
+    assert {"type": "pick_alternative", "option_id": "opt_b"} in transport.ws_frames
+
+
+@pytest.mark.asyncio
+async def test_resolve_decision_first_valid_when_no_recommendation(tmp_path):
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, [_alternatives_event(5, "alt1", [
+        {"id": "opt_a", "title": "A"}, {"id": "opt_b", "title": "B"},
+    ])])
+    transport = _DecisionTransport(
+        db, states=["AWAITING_USER_DECISION"], pending_alternatives_id="alt1"
+    )
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+
+    resolved = await client.resolve_decision(_CID)
+    assert resolved["option_id"] == "opt_a"  # first valid
+
+
+@pytest.mark.asyncio
+async def test_resolve_decision_scenario_override(tmp_path):
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, [_alternatives_event(5, "alt1", [
+        {"id": "opt_a", "title": "A"},
+        {"id": "opt_b", "title": "B", "recommended": True},
+    ])])
+    transport = _DecisionTransport(
+        db, states=["AWAITING_USER_DECISION"], pending_alternatives_id="alt1"
+    )
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+
+    resolved = await client.resolve_decision(_CID, preferred_option_id="opt_a")
+    assert resolved["option_id"] == "opt_a"  # the scenario override is honored over recommended
+
+
+@pytest.mark.asyncio
+async def test_resolve_decision_stale_status_returns_none(tmp_path):
+    # STATE-BIND: the gate is no longer live (status != AWAITING_USER_DECISION) → do NOT resolve.
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, [_alternatives_event(5, "alt1", [{"id": "o", "title": "x"}])])
+    transport = _DecisionTransport(db, states=["FINISHED"], pending_alternatives_id="alt1")
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+
+    assert await client.resolve_decision(_CID) is None
+    assert not any(f.get("type") == "pick_alternative" for f in transport.ws_frames)
+
+
+@pytest.mark.asyncio
+async def test_resolve_decision_no_pending_id_returns_none(tmp_path):
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, [_alternatives_event(5, "alt1", [{"id": "o", "title": "x"}])])
+    transport = _DecisionTransport(
+        db, states=["AWAITING_USER_DECISION"], pending_alternatives_id=None
+    )
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+
+    assert await client.resolve_decision(_CID) is None  # no live pending_alternatives_id
+
+
+@pytest.mark.asyncio
+async def test_resolve_decision_no_valid_options_returns_none(tmp_path):
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, [_alternatives_event(5, "alt1", [])])  # empty option list
+    transport = _DecisionTransport(
+        db, states=["AWAITING_USER_DECISION"], pending_alternatives_id="alt1"
+    )
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+
+    assert await client.resolve_decision(_CID) is None
+
+
+@pytest.mark.asyncio
+async def test_drive_auto_resolves_user_decision_and_records(tmp_path):
+    # The drive loop hits AWAITING_USER_DECISION, auto-resolves it, and the build FINISHES; the
+    # run record flags `auto_resolved_decisions: 1` + the picked option (distinguishable from a
+    # clean PASS).
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, [
+        _alternatives_event(5, "alt1", [
+            {"id": "opt_a", "title": "A"},
+            {"id": "opt_b", "title": "B", "recommended": True},
+        ]),
+        status(10, "FINISHED"),
+    ])
+    transport = _DecisionTransport(
+        db,
+        states=["RUNNING", "AWAITING_USER_DECISION", "AWAITING_USER_DECISION",
+                "FINISHED", "FINISHED", "FINISHED"],
+        pending_alternatives_id="alt1",
+    )
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    scenario = {"id": "decision", "prompt": "build it", "assertions": {}}
+
+    run = await drive_scenario(client, scenario, model="m", autonomous=False, timeout_s=5)
+
+    assert len(run.decision_resolutions) == 1
+    assert run.decision_resolutions[0] == {
+        "alternatives_id": "alt1", "option_id": "opt_b", "attempt": 1,
+    }
+    assert {"type": "pick_alternative", "option_id": "opt_b"} in transport.ws_frames
+    assert any("auto-resolved user decision" in t for t in run.timeline)
+
+    base = assemble_dossier(tmp_path / "out", "run_dec", scenario, run, model="m", autonomous=False)
+    cls = classify_dossier(base, scenario, run, autonomous=False)
+    assert cls["auto_resolved_decisions"] == 1
+    assert cls["decision_resolutions"][0]["option_id"] == "opt_b"
+
+
+@pytest.mark.asyncio
+async def test_drive_invalid_decision_payload_is_hard_not_clean_pass(tmp_path):
+    # An invalid/stale payload (no live pending_alternatives_id) → resolve_decision returns None →
+    # the drive does NOT auto-finish: it releases on the unresolved gate (a hard signal).
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, [_alternatives_event(5, "alt1", [{"id": "o", "title": "x"}])])
+    transport = _DecisionTransport(
+        db,
+        states=["RUNNING", "AWAITING_USER_DECISION", "AWAITING_USER_DECISION"],
+        pending_alternatives_id=None,  # gate present but NO live pending id → cannot resolve
+    )
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    scenario = {"id": "decision", "prompt": "build it", "assertions": {}}
+
+    run = await drive_scenario(client, scenario, model="m", autonomous=False, timeout_s=5)
+
+    assert run.decision_resolutions == []  # nothing auto-resolved
+    assert not any(f.get("type") == "pick_alternative" for f in transport.ws_frames)
+    assert any("could NOT be auto-resolved" in t for t in run.timeline)
+
+
+@pytest.mark.asyncio
+async def test_drive_decision_cap_releases_hard(tmp_path):
+    # A model that keeps re-proposing decisions is bounded: after _MAX_DECISION auto-resolutions
+    # the next gate is RELEASED hard (not auto-finished, not an infinite resolve-loop).
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, [_alternatives_event(5, "alt1", [{"id": "opt_a", "title": "A"}])])
+    # Each cycle: poll sees AWAITING, resolve reads AWAITING, wait sees RUNNING (gate left); the
+    # model re-proposes on the next poll. After _MAX_DECISION cycles the next AWAITING hits the cap.
+    cycle = ["AWAITING_USER_DECISION", "AWAITING_USER_DECISION", "RUNNING"]
+    states = ["RUNNING"] + cycle * _run_mod._MAX_DECISION + ["AWAITING_USER_DECISION"]
+    transport = _DecisionTransport(db, states=states, pending_alternatives_id="alt1")
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    scenario = {"id": "decision", "prompt": "build it", "assertions": {}}
+
+    run = await drive_scenario(client, scenario, model="m", autonomous=False, timeout_s=5)
+
+    assert len(run.decision_resolutions) == _run_mod._MAX_DECISION  # capped, not infinite
+    assert any("cap" in t.lower() and "_MAX_DECISION" in t for t in run.timeline)
 
 
 # ---- infra gate fires ONLY pre-create (codex #3) ----------------------------

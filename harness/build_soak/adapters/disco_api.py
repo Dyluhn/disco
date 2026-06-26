@@ -94,6 +94,11 @@ AWAITING_PLAN_APPROVAL = "AWAITING_PLAN_APPROVAL"
 # an interactive build proceeds instead of false-stalling into NO_PLAN.
 AWAITING_USER_QUESTION = "AWAITING_USER_QUESTION"
 WAITING_FOR_CONFIRMATION = "WAITING_FOR_CONFIRMATION"
+# The structured user-choice gate: after repeated tool failure the model proposes 2–3
+# concrete next-step alternatives (an AlternativesEvent) and the loop parks at
+# AWAITING_USER_DECISION until the user picks one (the WS `pick_alternative` frame →
+# runtime.pick_alternative). A non-interactive soak auto-resolves it (resolve_decision).
+AWAITING_USER_DECISION = "AWAITING_USER_DECISION"
 
 # ---- progress-aware terminal-wait sentinels (Bug 15) ------------------------
 # The terminal wait is PROGRESS-AWARE, not a blind wall-clock: while the conversation
@@ -302,6 +307,11 @@ class CollectedRun:
     workspace_manifest: dict[str, Any]
     preview: dict[str, Any] | None
     timeline: list[str] = field(default_factory=list)
+    # Each AWAITING_USER_DECISION gate the runner AUTO-RESOLVED (Part B): one dict per
+    # resolution {alternatives_id, option_id, attempt}. A PASS that REQUIRED auto-resolution
+    # is distinguishable from a clean PASS by a non-empty list (surfaced as
+    # `auto_resolved_decisions` in the classification).
+    decision_resolutions: list[dict[str, Any]] = field(default_factory=list)
 
 
 # ---- the live client --------------------------------------------------------
@@ -410,6 +420,62 @@ class DiscoApiClient:
         user `send_message` does NOT clear a WAITING_FOR_CONFIRMATION gate — only the dedicated
         `confirm` control frame executes the pending action and resumes the loop past the gate."""
         await self._t.ws_control(conversation_id, {"type": "confirm"})
+
+    async def resolve_decision(
+        self, conversation_id: str, *, preferred_option_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """Auto-resolve an AWAITING_USER_DECISION gate by picking one of the agent's proposed
+        alternatives — the runner ACTS AS THE USER for a non-interactive soak. Routed through
+        the REAL decision mechanism: the WS `pick_alternative` frame (routes/ws.py:108 →
+        runtime.pick_alternative), NOT approve_plan (a plan gate) — the loop synthesizes the
+        picked option's ToolCall as the next action and resumes.
+
+        STATE-BIND before selecting (never auto-resolve the wrong / a stale branch): re-read
+        the CURRENT conversation state and require it is STILL AWAITING_USER_DECISION with a
+        LIVE `pending_alternatives_id` (the state machine recomputes this from the full event
+        log every read, so it is always the live pending gate). Bind the options to THAT id by
+        reading the matching AlternativesEvent from the durable log; require a non-empty option
+        list with valid ids. Selection: the caller's `preferred_option_id` (scenario override)
+        if it names a valid option, else a recommended option (recommendation flag), else the
+        first valid option.
+
+        Returns {alternatives_id, option_id} on a successful pick, or None when the gate is no
+        longer live / the payload is invalid (no pending id, no valid options) — the caller
+        treats None as a HARD signal (never a clean pass)."""
+        state = await self.get_state(conversation_id)
+        if self._status_of(state) != AWAITING_USER_DECISION:
+            return None
+        alt_id = state.get("pending_alternatives_id")
+        if not alt_id:
+            return None
+        options = self._alternatives_options(conversation_id, str(alt_id))
+        chosen = _choose_alternative(options, preferred_option_id)
+        if chosen is None:
+            return None
+        await self._t.ws_control(
+            conversation_id, {"type": "pick_alternative", "option_id": chosen}
+        )
+        return {"alternatives_id": str(alt_id), "option_id": chosen}
+
+    def _alternatives_options(
+        self, conversation_id: str, alternatives_id: str
+    ) -> list[dict[str, Any]]:
+        """The option list of the AlternativesEvent whose id == `alternatives_id` (the live
+        pending gate), read from the durable event log. Empty when absent / malformed."""
+        try:
+            events = self._read_events(conversation_id)
+        except sqlite3.Error:
+            return []
+        for e in events:
+            if e.get("kind") != "alternatives":
+                continue
+            p = _payload(e)
+            if str(e.get("id") or p.get("id") or "") != str(alternatives_id):
+                continue
+            opts = p.get("options")
+            if isinstance(opts, list):
+                return [o for o in opts if isinstance(o, dict)]
+        return []
 
     async def resume(self, conversation_id: str) -> dict[str, Any]:
         """Resume a PAUSED (cooperative / actionless) run — the runner ACTS AS THE
@@ -976,6 +1042,15 @@ class DiscoApiClient:
                 # OMITTED → FALSE_FINISH preserved); never FAIL-FAST on an unknown file.
                 break
             await asyncio.sleep(_SNAPSHOT_POLL_S)
+        # Stamp each PRESENT declared file's acceptance PROOF LEVEL onto its manifest entry so
+        # the OutputTruthOracle can proof-gate a content mismatch (Part A): a mismatch on a
+        # non-authoritative capture (unproven_extended_stability / unknown) is unreliable and
+        # must not be a definitive product failure; a proven one (raw_sha / rendered_readback)
+        # stays hard. Absent declared files carry no entry (existence is judged separately).
+        for p in declared:
+            entry = _manifest_lookup(manifest, p)
+            if entry is not None:
+                entry["proof"] = _proof_level(expected.get(p))
         return manifest, snapshot_dir
 
     def _read_snapshot_manifest(
@@ -1303,6 +1378,45 @@ def _norm_rel(path: str) -> str:
     if s.startswith("./"):
         s = s[2:]
     return s.lstrip("/")
+
+
+def _choose_alternative(
+    options: list[dict[str, Any]], preferred_option_id: str | None
+) -> str | None:
+    """Pick an AlternativeOption id deterministically: the caller's `preferred_option_id`
+    (scenario override) when it names a valid option, else a recommended option (a
+    `recommended`/`recommendation` truthy flag, defensively — the option may not carry one),
+    else the FIRST valid option. None when there is no option with a non-empty id."""
+    valid = [o for o in options if isinstance(o, dict) and o.get("id")]
+    if not valid:
+        return None
+    if preferred_option_id is not None:
+        for o in valid:
+            if str(o["id"]) == str(preferred_option_id):
+                return str(o["id"])
+    for o in valid:
+        if o.get("recommended") or o.get("recommendation"):
+            return str(o["id"])
+    return str(valid[0]["id"])
+
+
+# Snapshot acceptance proof levels — PROVEN/authoritative vs NON-authoritative — recorded
+# per declared file so the OutputTruthOracle can proof-gate a content mismatch (a mismatch on
+# a non-authoritative capture is unreliable and must NOT be a definitive product failure).
+_PROOF_BY_EXPECTED_KIND = {
+    "sha": "raw_sha",
+    "rendered": "rendered_readback",
+    "absent": "absent",
+    "present_unproven": "unproven_extended_stability",
+    "unknown": "unknown",
+}
+
+
+def _proof_level(expected: tuple[Any, ...] | None) -> str:
+    """Map a declared file's `_agent_declared_expected` class to its acceptance proof level.
+    A file with no event signal at all (`expected` None) is `unknown` (non-authoritative)."""
+    kind = expected[0] if expected else "unknown"
+    return _PROOF_BY_EXPECTED_KIND.get(kind, "unknown")
 
 
 def _manifest_lookup(manifest: dict[str, Any], path: str) -> dict[str, Any] | None:

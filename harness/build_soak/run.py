@@ -33,6 +33,7 @@ import yaml
 from . import failure_codes as fc
 from .adapters.disco_api import (
     AWAITING_PLAN_APPROVAL,
+    AWAITING_USER_DECISION,
     AWAITING_USER_QUESTION,
     FOLLOWUP_PICKUP_TIMEOUT,
     PAUSED_STATE,
@@ -56,6 +57,7 @@ _SCENARIOS = Path(__file__).resolve().parent / "scenarios.yaml"
 _MAX_GATES = 8  # bound the approve loop so a gate flap can't spin forever
 _MAX_RESUMES = 3  # bound PAUSED-resume so an actionless-paused build can't spin forever
 _MAX_CLARIFY = 3  # bound clarify/confirm answers so an endlessly-asking model is let go (Bug 17)
+_MAX_DECISION = 3  # bound AWAITING_USER_DECISION auto-resolutions (mirror _MAX_CLARIFY)
 
 # The runner ACTS AS THE USER (§14 runner directive): when a build asks a clarifying
 # question mid-build, the runner answers it so the build proceeds — exactly what a real
@@ -129,6 +131,8 @@ async def _drive_to_terminal(
     inactivity_s: float,
     hard_cap_s: float,
     clarification_answer: str | None = None,
+    decision_answer: str | None = None,
+    decisions: list[dict[str, Any]] | None = None,
     min_seq: int | None = None,
 ) -> str:
     """Drive the run to a terminal state, approving each plan gate (interactive),
@@ -153,6 +157,8 @@ async def _drive_to_terminal(
     gates = 0
     resumes = 0
     clarifies = 0
+    decisions_done = 0
+    decision_sink = decisions if decisions is not None else []
     try:
         while True:
             if autonomous:
@@ -224,6 +230,45 @@ async def _drive_to_terminal(
                     cid, status, timeout_s=min(inactivity_s, 60.0)
                 )
                 continue
+            if status == AWAITING_USER_DECISION:
+                # The model proposed structured alternatives (a user-choice gate) after repeated
+                # tool failure. A non-interactive soak ACTS AS THE USER and auto-resolves it via
+                # the REAL pick_alternative mechanism (NOT approve_plan), so a build that merely
+                # asked for a choice can FINISH instead of false-stalling into BUILD_DID_NOT_FINISH.
+                # BOUNDED (≤ _MAX_DECISION) + TRACEABLE (every resolution recorded). On cap-hit OR
+                # an invalid/stale payload (resolve_decision returns None — state no longer
+                # AWAITING_USER_DECISION, or no valid option) we do NOT continue: fall through to
+                # the terminal/stop return so the run is judged HONESTLY (never a clean pass).
+                if decisions_done >= _MAX_DECISION:
+                    timeline.append(
+                        f"AWAITING_USER_DECISION cap (_MAX_DECISION={_MAX_DECISION}) hit — "
+                        "releasing to honest classification (NOT auto-finishing)"
+                    )
+                    return status
+                resolved = await client.resolve_decision(
+                    cid, preferred_option_id=decision_answer
+                )
+                if resolved is None:
+                    timeline.append(
+                        "AWAITING_USER_DECISION could NOT be auto-resolved (stale/invalid "
+                        "payload: gate no longer live or no valid option) — releasing to honest "
+                        "classification (NOT auto-finishing)"
+                    )
+                    return status
+                decisions_done += 1
+                record = {**resolved, "attempt": decisions_done}
+                decision_sink.append(record)
+                timeline.append(
+                    f"auto-resolved user decision (decision {decisions_done}/{_MAX_DECISION}): "
+                    f"picked option {resolved['option_id']!r} for alternatives "
+                    f"{resolved['alternatives_id']!r}"
+                )
+                # Wait for the gate to clear so the same unprocessed decision isn't re-read +
+                # re-resolved, mirroring the approval/clarify gates.
+                await client.wait_until_status_leaves(
+                    cid, AWAITING_USER_DECISION, timeout_s=min(inactivity_s, 60.0)
+                )
+                continue
             if status == PAUSED_STATE and resumes < _MAX_RESUMES:
                 # A cooperative / actionless PAUSE is RESUMABLE — the runner acts as the
                 # user who hits Resume. BOUNDED (≤ _MAX_RESUMES) so a build that just keeps
@@ -277,6 +322,13 @@ async def drive_scenario(
     clarification_answer = scenario.get("clarification_answer")
     clarification_answer = str(clarification_answer) if clarification_answer is not None else None
 
+    # Optional scenario-provided preferred option for an AWAITING_USER_DECISION gate (Part B).
+    # Absent → resolve_decision picks the recommended/first valid option. Each auto-resolution
+    # is accumulated here so the run record can flag a PASS that REQUIRED one.
+    decision_answer = scenario.get("decision_answer")
+    decision_answer = str(decision_answer) if decision_answer is not None else None
+    decisions: list[dict[str, Any]] = []
+
     followups = scenario.get("followups") or []
     mid_run = [f for f in followups if f.get("trigger") == "after_first_file_write"]
     after_terminal = [f for f in followups if f.get("trigger") != "after_first_file_write"]
@@ -291,6 +343,8 @@ async def drive_scenario(
         inactivity_s=timeout_s,
         hard_cap_s=hard_cap_s,
         clarification_answer=clarification_answer,
+        decision_answer=decision_answer,
+        decisions=decisions,
     )
 
     # Phase 2: after-terminal follow-ups — each is its own re-plan→approve→terminal
@@ -354,6 +408,8 @@ async def drive_scenario(
             inactivity_s=timeout_s,
             hard_cap_s=hard_cap_s,
             clarification_answer=clarification_answer,
+            decision_answer=decision_answer,
+            decisions=decisions,
             min_seq=baseline_seq,
         )
 
@@ -371,6 +427,7 @@ async def drive_scenario(
         workspace_manifest=workspace,
         preview=preview,
         timeline=timeline,
+        decision_resolutions=decisions,
     )
 
 
@@ -508,6 +565,12 @@ def classify_dossier(
         preview=run.preview,
         autonomous=autonomous,
     )
+    # Part B traceability: a PASS that REQUIRED auto-resolving an AWAITING_USER_DECISION gate
+    # must be DISTINGUISHABLE from a clean PASS — surface the count + the picked options so
+    # monitoring can detect "the model asked for choices unexpectedly".
+    classification["auto_resolved_decisions"] = len(run.decision_resolutions)
+    if run.decision_resolutions:
+        classification["decision_resolutions"] = list(run.decision_resolutions)
     (base / CLASSIFICATION_NAME).write_text(
         json.dumps(classification, indent=2, sort_keys=True), encoding="utf-8"
     )
