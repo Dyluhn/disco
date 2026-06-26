@@ -660,6 +660,14 @@ class OpenAIProvider:
         # tool call in the thinking channel instead of the answer channel).
         reasoning_buf: list[str] = []
         tool_buf: dict[int, dict] = {}
+        # Streaming tool-call assembly state. The OpenAI streaming contract puts
+        # an `index` on EVERY tool_call delta, but real OpenAI-COMPATIBLE servers
+        # (llama.cpp, some OpenRouter upstreams — the exact backends this adapter
+        # targets) OMIT it on argument-continuation fragments. `last_idx` and
+        # `id_to_idx` let a fragment that dropped its index still route to the
+        # right slot instead of collapsing onto slot 0 (see the loop below).
+        last_idx: int | None = None
+        id_to_idx: dict[str, int] = {}
         finish: str | None = None
         usage: dict = {}
         model_used = model
@@ -703,22 +711,50 @@ class OpenAIProvider:
                         if reasoning_piece:
                             reasoning_buf.append(reasoning_piece)
                         for tc in delta.get("tool_calls") or []:
-                            idx = tc.get("index", 0)
+                            # Resolve the accumulation slot. Defaulting a MISSING
+                            # `index` to 0 (the old behavior) mis-routes every
+                            # index-less continuation fragment onto the FIRST tool
+                            # call: later parallel calls then receive no arguments
+                            # (they parse to `{}`) and the first call is corrupted
+                            # by foreign concatenated JSON — the streaming
+                            # truncation the plan.py validator only masks. Resolve
+                            # in priority order so NO fragment is lost:
+                            #   1. explicit `index` — authoritative (compliant
+                            #      servers send it on every delta);
+                            #   2. an open slot whose `id` matches — interleaved
+                            #      continuations that re-send the id but drop index;
+                            #   3. the most-recently-touched slot — sequential
+                            #      continuations that drop both id and index (the
+                            #      common llama.cpp shape: one call's args stream to
+                            #      completion before the next call begins).
+                            raw_idx = tc.get("index")
+                            tc_id = tc.get("id")
+                            if raw_idx is not None:
+                                idx = raw_idx
+                            elif tc_id and tc_id in id_to_idx:
+                                idx = id_to_idx[tc_id]
+                            elif last_idx is not None:
+                                idx = last_idx
+                            else:
+                                idx = 0
+                            last_idx = idx
                             slot = tool_buf.setdefault(
                                 idx, {"id": None, "name": "", "args": ""}
                             )
-                            if tc.get("id"):
-                                slot["id"] = tc["id"]
+                            if tc_id:
+                                slot["id"] = tc_id
+                                id_to_idx[tc_id] = idx
                             fn = tc.get("function") or {}
                             if fn.get("name"):
                                 slot["name"] = fn["name"]
-                            if fn.get("arguments"):
-                                slot["args"] += fn["arguments"]
+                            args_frag = fn.get("arguments")
+                            if args_frag:
+                                slot["args"] += args_frag
                                 # Surface the tool-call arg fragment so consumers can
                                 # watch the file body assemble live (watch-it-write).
                                 yield StreamChunk(
                                     tool_name=slot["name"],
-                                    tool_args_delta=fn["arguments"],
+                                    tool_args_delta=args_frag,
                                     tool_index=idx,
                                 )
                         if ch.get("finish_reason"):

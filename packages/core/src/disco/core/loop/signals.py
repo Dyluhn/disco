@@ -109,14 +109,33 @@ def hard_deny_reason(action: ActionEvent) -> str | None:
     return hard_deny_reason(command)
 
 
+# Non-critical bookkeeping tools whose malformed/failed calls must NOT burn the
+# circuit-breaker streak. `update_plan_progress` UPDATES the plan tracker but performs
+# NO workspace action; some models (e.g. MiniMax-M3)
+# intermittently emit a malformed `steps` payload (empty strings instead of step
+# dicts). The schema correctly rejects it with an actionable message, but a cosmetic
+# bookkeeping hiccup is NOT "the model is stuck on the task" — counting it toward the
+# Cluster-2 breaker would escalate a trivial build to AWAITING_USER for nothing.
+_NONCRITICAL_FAILURE_TOOLS = frozenset({"update_plan_progress"})
+
+
 def count_recent_failures(events: list[Event]) -> int:
     """Consecutive AgentErrorEvents walking back from the tail. Reset by a
     successful ObservationEvent or a USER message (a fresh instruction).
     Interleaved ActionEvents and agent/env messages do NOT reset. Drives the
-    Cluster 2 circuit breaker."""
+    Cluster 2 circuit breaker. Failures from non-critical informational tools
+    (`_NONCRITICAL_FAILURE_TOOLS`) are TRANSPARENT — they neither increment nor
+    reset the streak (a real failure before them is still counted)."""
+    tool_by_action = {
+        e.id: e.tool_call.tool_name
+        for e in events
+        if isinstance(e, ActionEvent) and e.tool_call is not None
+    }
     streak = 0
     for e in reversed(events):
         if isinstance(e, AgentErrorEvent):
+            if tool_by_action.get(e.action_id) in _NONCRITICAL_FAILURE_TOOLS:
+                continue  # cosmetic bookkeeping error — transparent to the breaker
             streak += 1
         elif isinstance(e, ObservationEvent):
             break

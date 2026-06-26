@@ -247,6 +247,40 @@ async def test_no_breaker_when_failures_below_threshold():
     assert ObservationEvent
 
 
+def test_count_recent_failures_ignores_update_plan_progress():
+    """A malformed `update_plan_progress` (non-critical bookkeeping) failure is
+    TRANSPARENT to the circuit-breaker streak — it neither increments nor resets it.
+    MiniMax-M3 intermittently emits an empty `steps` payload; the schema rejects it
+    actionably, but a cosmetic plan-snapshot hiccup must NOT escalate a trivial build
+    to AWAITING_USER. A real failure before the churn is still counted; genuine real
+    failures still trip the streak (no regression)."""
+    from disco.core import ActionEvent, AgentErrorEvent, ToolCall
+
+    def _act(tool, args=None):
+        return ActionEvent(thought="t", tool_call=ToolCall(tool_name=tool, arguments=args or {}))
+
+    def _err(action, msg="failed validation"):
+        return AgentErrorEvent(error=msg, action_id=action.id)
+
+    # 4 consecutive malformed update_plan_progress failures → streak stays 0
+    upp: list = []
+    for _ in range(4):
+        a = _act("update_plan_progress", {"steps": ["", ""]})
+        upp += [a, _err(a)]
+    assert signals.count_recent_failures(upp) == 0
+
+    # a real shell failure BEFORE the upp churn is still counted (upp is transparent)
+    real = _act("shell", {"cmd": "x"})
+    assert signals.count_recent_failures([real, _err(real, "shell failed")] + upp) == 1
+
+    # genuine consecutive real failures still trip the breaker (no regression)
+    reals: list = []
+    for _ in range(3):
+        a = _act("shell", {"cmd": "y"})
+        reals += [a, _err(a, "shell failed")]
+    assert signals.count_recent_failures(reals) == 3
+
+
 # ---- BW-02: escalate a degenerate "keeps pausing" loop to STUCK --------------
 
 

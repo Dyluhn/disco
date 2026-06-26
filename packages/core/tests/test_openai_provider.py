@@ -155,6 +155,137 @@ async def test_streaming_reassembles_and_final_matches():
     assert final.usage.output_tokens == 2
 
 
+async def _collect(provider, model="m"):
+    """Drive stream_complete to exhaustion; return (delta_text, final, arg_deltas)."""
+    deltas: list[str] = []
+    arg_deltas: dict[int, str] = {}
+    final = None
+    async for ch in provider.stream_complete(_req(), model=model):
+        if ch.done:
+            final = ch.final
+        elif ch.tool_args_delta:
+            arg_deltas[ch.tool_index] = arg_deltas.get(ch.tool_index, "") + ch.tool_args_delta
+        elif ch.delta_text:
+            deltas.append(ch.delta_text)
+    return "".join(deltas), final, arg_deltas
+
+
+def _stream_provider(content: bytes) -> OpenAIProvider:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=content, headers={"content-type": "text/event-stream"})
+
+    return _provider(handler)
+
+
+async def test_streaming_tool_args_accumulate_across_many_fragments():
+    # Single tool call: name+id+empty-string arg in the first delta, then the
+    # JSON arguments streamed across 3 more deltas (incl. an empty-string
+    # fragment). The final assembled arguments must be COMPLETE and parseable.
+    content = _sse(
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "id": "c1", "type": "function",
+             "function": {"name": "update_plan_progress", "arguments": ""}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "function": {"arguments": '{"steps": ["Build '}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "function": {"arguments": ""}}]}}]},  # empty fragment, no reset
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "function": {"arguments": 'home", "Add foo'}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "function": {"arguments": 'ter"]}'}}]}}]},
+        {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+    )
+    _, final, arg_deltas = await _collect(_stream_provider(content))
+    assert final is not None and len(final.tool_calls) == 1
+    tc = final.tool_calls[0]
+    assert tc.tool_name == "update_plan_progress"
+    assert tc.arguments == {"steps": ["Build home", "Add footer"]}  # COMPLETE, no truncation
+    assert arg_deltas[0] == '{"steps": ["Build home", "Add footer"]}'  # watch-it-write intact
+
+
+async def test_streaming_continuation_fragments_omit_index():
+    # llama.cpp / OpenRouter shape: only the FIRST tool_call delta carries
+    # `index`; argument-continuation deltas omit it. The old `tc.get("index", 0)`
+    # default happened to work for a SINGLE call (0), so this is a regression guard.
+    content = _sse(
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "id": "c1", "type": "function",
+             "function": {"name": "update_plan_progress", "arguments": ""}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"function": {"arguments": '{"steps": ["a", '}}]}}]},  # no index
+        {"choices": [{"delta": {"tool_calls": [
+            {"function": {"arguments": '"b"]}'}}]}}]},  # no index
+        {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+    )
+    _, final, _ = await _collect(_stream_provider(content))
+    assert final.tool_calls[0].arguments == {"steps": ["a", "b"]}
+
+
+async def test_streaming_parallel_calls_with_index_on_every_delta():
+    # Compliant interleaved parallel calls — must stay correct after the fix.
+    content = _sse(
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "id": "a", "type": "function",
+             "function": {"name": "toolA", "arguments": ""}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 1, "id": "b", "type": "function",
+             "function": {"name": "toolB", "arguments": ""}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": '{"x": '}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"index": 1, "function": {"arguments": '{"y": '}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": '1}'}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"index": 1, "function": {"arguments": '2}'}}]}}]},
+        {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+    )
+    _, final, _ = await _collect(_stream_provider(content))
+    by_name = {tc.tool_name: tc.arguments for tc in final.tool_calls}
+    assert by_name == {"toolA": {"x": 1}, "toolB": {"y": 2}}
+
+
+async def test_streaming_parallel_calls_with_index_dropped_on_continuations():
+    # THE ROOT-CAUSE CASE. Two sequential parallel calls; each call's header
+    # delta carries `index`, but its argument-continuation deltas DROP it
+    # (llama.cpp shape). The old `tc.get("index", 0)` collapsed every continuation
+    # onto slot 0: toolA got both calls' JSON concatenated (invalid → repaired to
+    # garbage) and toolB got "" (empty args). The fix routes index-less
+    # continuations to the most-recently-touched slot.
+    content = _sse(
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "id": "a", "type": "function",
+             "function": {"name": "toolA", "arguments": ""}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"function": {"arguments": '{"x": 1}'}}]}}]},  # no index → toolA
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 1, "id": "b", "type": "function",
+             "function": {"name": "toolB", "arguments": ""}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"function": {"arguments": '{"y": 2}'}}]}}]},  # no index → toolB
+        {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+    )
+    _, final, _ = await _collect(_stream_provider(content))
+    by_name = {tc.tool_name: tc.arguments for tc in final.tool_calls}
+    # Both calls assemble COMPLETE & isolated — no cross-contamination, no empty args.
+    assert by_name == {"toolA": {"x": 1}, "toolB": {"y": 2}}
+
+
+async def test_streaming_interleaved_continuations_keyed_by_id_without_index():
+    # Hardest shape: interleaved parallel continuations that drop `index` but
+    # re-send the call `id`. Routing must follow the id, not last-touched or 0.
+    content = _sse(
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "id": "a", "type": "function",
+             "function": {"name": "toolA", "arguments": ""}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 1, "id": "b", "type": "function",
+             "function": {"name": "toolB", "arguments": ""}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"id": "a", "function": {"arguments": '{"x": '}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"id": "b", "function": {"arguments": '{"y": '}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"id": "a", "function": {"arguments": '1}'}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"id": "b", "function": {"arguments": '2}'}}]}}]},
+        {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+    )
+    _, final, _ = await _collect(_stream_provider(content))
+    by_name = {tc.tool_name: tc.arguments for tc in final.tool_calls}
+    assert by_name == {"toolA": {"x": 1}, "toolB": {"y": 2}}
+
+
 async def test_streaming_error_status_raises_typed_before_any_token():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
