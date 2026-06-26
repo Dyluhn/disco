@@ -1,0 +1,157 @@
+"""Forced-submit recovery for stuck revision re-plans (the actionless-revision fix).
+
+Root (codex-proven, ENGINE): on a revision follow-up the model narrates the revised plan
+without calling submit_plan; the actionless guard counts the prose as no-ops, submit_plan
+(when it IS called) was mis-grouped as bookkeeping so it never reset the streak, and resume
+reconstructed the same unsubmitted state → pause "actionless" → STUCK loop. Fix:
+  (1) submit_plan RESETS consecutive_noops (it's the planning→execution gate, real progress)
+      WITHOUT touching _BOOKKEEPING_TOOLS (other readers depend on it).
+  (2) after K prose-only revision-planning nudges the engine emits a durable
+      StatusEvent(detail="force_submit_plan") marker; signals.revision_force_submit reads it
+      so driver.tools_for_step narrows the offered tools to submit_plan ONLY.
+  (3) the marker is an event → survives resume (no soft-nudge loop after a pause).
+"""
+
+from disco.core import (
+    ActionEvent,
+    ConversationStatus,
+    EventSource,
+    LLMMessage,
+    MessageEvent,
+    StatusEvent,
+    ToolCall,
+)
+from disco.core.llm import OperatingMode
+from disco.core.loop import signals
+from loop_fakes import build_loop
+
+
+def _agent_msg(text="describing the revised plan..."):
+    return MessageEvent(
+        source=EventSource.AGENT, message=LLMMessage(role="assistant", content=text)
+    )
+
+
+def _action(tool):
+    return ActionEvent(thought="t", tool_call=ToolCall(tool_name=tool, arguments={}))
+
+
+# --- Fix 1: submit_plan resets the actionless streak; plan_step/etc. do not ---
+
+
+def test_consecutive_noops_submit_plan_bounds_the_streak():
+    # prose, prose, submit_plan, prose -> only the ONE prose AFTER submit_plan counts;
+    # the submission bounds the backward walk (it is real planning->execution progress).
+    events = [_agent_msg(), _agent_msg(), _action("submit_plan"), _agent_msg()]
+    assert signals.consecutive_noops(events) == 1
+
+
+def test_consecutive_noops_plan_step_still_neutral_not_a_reset():
+    # plan_step/update_plan_progress stay bookkeeping no-ops: a model shuffling plan
+    # state still racks up the streak (spam guard intact) — only submit_plan resets.
+    events = [_agent_msg(), _action("plan_step"), _agent_msg(), _action("update_plan_progress")]
+    # walk back: update_plan_progress (continue), prose (count=1), plan_step (continue),
+    # prose (count=2) -> 2. The bookkeeping tools did NOT bound the streak.
+    assert signals.consecutive_noops(events) == 2
+
+
+def test_consecutive_noops_real_action_still_breaks():
+    events = [_agent_msg(), _action("file_write"), _agent_msg(), _agent_msg()]
+    assert signals.consecutive_noops(events) == 2  # only the two trailing proses
+
+
+# --- Fix 2/3: revision_force_submit marker (revision-only, resume-durable) ---
+
+
+def _revision_planning_prefix():
+    # plan approved (seq 2) then re-entered planning (seq 6) -> in_planning_for_revision.
+    return [
+        StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved", seq=2),
+        StatusEvent(status=ConversationStatus.RUNNING, detail="planning", seq=6),
+    ]
+
+
+def test_revision_force_submit_true_after_marker():
+    events = [
+        *_revision_planning_prefix(),
+        _agent_msg(),
+        StatusEvent(status=ConversationStatus.RUNNING, detail="force_submit_plan", seq=9),
+        _agent_msg(),
+    ]
+    assert signals.in_planning_for_revision(events) is True
+    assert signals.revision_force_submit(events) is True
+
+
+def test_revision_force_submit_released_by_submission():
+    # a submit_plan AFTER the marker satisfies/releases the forced state.
+    events = [
+        *_revision_planning_prefix(),
+        StatusEvent(status=ConversationStatus.RUNNING, detail="force_submit_plan", seq=9),
+        _action("submit_plan"),
+    ]
+    assert signals.revision_force_submit(events) is False
+
+
+def test_revision_force_submit_false_without_marker():
+    events = [*_revision_planning_prefix(), _agent_msg(), _agent_msg()]
+    assert signals.revision_force_submit(events) is False
+
+
+def test_revision_force_submit_false_when_not_revision():
+    # initial planning (no prior plan_approved) — never forced, even with a stray marker.
+    events = [
+        StatusEvent(status=ConversationStatus.RUNNING, detail="planning", seq=2),
+        StatusEvent(status=ConversationStatus.RUNNING, detail="force_submit_plan", seq=4),
+    ]
+    assert signals.in_planning_for_revision(events) is True  # first plan pending counts
+    # ...but once the plan is approved + NOT re-entered, a marker is inert:
+    approved = [
+        StatusEvent(status=ConversationStatus.RUNNING, detail="planning", seq=2),
+        StatusEvent(status=ConversationStatus.RUNNING, detail="force_submit_plan", seq=3),
+        StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved", seq=4),
+    ]
+    assert signals.revision_force_submit(approved) is False
+
+
+def test_revision_force_submit_survives_resume():
+    # the marker precedes a PAUSED+resume; because it is an EVENT in the replayed log,
+    # a resumed segment still reads forced (no soft-nudge loop after the pause).
+    events = [
+        *_revision_planning_prefix(),
+        StatusEvent(status=ConversationStatus.RUNNING, detail="force_submit_plan", seq=9),
+        StatusEvent(status=ConversationStatus.PAUSED, detail="actionless", seq=10),
+        StatusEvent(status=ConversationStatus.RUNNING, detail="resumed", seq=11),
+        _agent_msg(),
+    ]
+    assert signals.revision_force_submit(events) is True
+
+
+# --- the driver narrows tools to submit_plan only when forced ---
+
+
+def test_tools_for_step_force_submit_narrows_to_plan_tool():
+    from disco.core.llm import ToolSpec
+    from loop_fakes import FakeExecutor
+
+    # submit_plan reaches the model from executor.available_tools() (the engine intercepts
+    # the call); give the fake a submit_plan tool + a read tool so the narrowing is exercised.
+    executor = FakeExecutor(
+        tools=[
+            ToolSpec(name="submit_plan", description="propose a plan", parameters_schema={}),
+            ToolSpec(name="file_read", description="read a file", parameters_schema={}),
+        ]
+    )
+    loop, _ = build_loop(
+        agent=None,
+        conversation_id="conv",
+        executor=executor,
+        mode=OperatingMode.PLANNING,
+        execution_mode=OperatingMode.LONG_HORIZON,
+    )
+    driver = loop._driver
+    plan_name = getattr(loop._plan_tool, "name", loop._plan_tool)  # "submit_plan"
+    forced = driver.tools_for_step(force_submit_only=True)
+    assert {getattr(t, "name", None) for t in forced} == {plan_name}  # ONLY submit_plan
+    # default (not forced) offers more than just the plan tool while planning.
+    normal = driver.tools_for_step()
+    assert {getattr(t, "name", None) for t in normal} != {plan_name}

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any, cast
 
@@ -195,6 +196,25 @@ _PLAN_NUDGE = (
     "advance the conversation.\n"
     "</system-reminder>"
 )
+
+# Emitted when a REVISION re-plan has been narrated >= _REVISION_FORCE_SUBMIT_K times
+# without a submit_plan call (the soft _PLAN_NUDGE was ignored). This is paired with a
+# durable StatusEvent(detail="force_submit_plan") marker so the NEXT planning step's tool
+# set is narrowed to submit_plan ONLY (driver.tools_for_step reads the marker) — the model
+# must submit the plan it has already described instead of looping in prose. The marker is
+# in the event log, so a RESUMED build replays it and stays forced (no soft-nudge loop).
+_FORCE_SUBMIT_DIRECTIVE = (
+    "<system-reminder>\n"
+    "You have already DESCRIBED the revised plan but have not SUBMITTED it. Stop "
+    "narrating: call the `submit_plan` tool NOW with the revised plan (summary, ordered "
+    "steps, and a markdown `context` block). It is the only available action — do not "
+    "reply in prose.\n"
+    "</system-reminder>"
+)
+# After this many consecutive prose-only nudges during a REVISION re-plan, escalate to the
+# forced-submit recovery (narrow tools to submit_plan). Gated default-ON; kill switch
+# DISCO_REVISION_FORCE_SUBMIT=0.
+_REVISION_FORCE_SUBMIT_K = 2
 
 # Bug 12 (§11.4) — refusal for a mutating tool that reaches the apply boundary
 # AFTER a change/revision steer landed mid-step (the in-flight write-through race).
@@ -538,6 +558,11 @@ class AgentLoop:
         self._plan_tool = plan_tool  # the structured-plan signal, intercepted
         self._execution_mode = execution_mode  # the mode an approved plan runs in
         self._plan_nudges = 0  # consecutive nudges while planning (safety cap)
+        # Forced-submit recovery for revision re-plans (default ON; kill switch).
+        self._revision_force_submit_enabled = (
+            os.environ.get("DISCO_REVISION_FORCE_SUBMIT", "1").strip().lower()
+            not in ("0", "false", "no", "off")
+        )
         self._plan_explore_reads = 0  # (B2/B6) consecutive PLANNING reads w/o a plan
         self._execution_nudges = 0  # consecutive "you must act" nudges in execution
         self._browser_verify_refusals = 0  # consecutive browser-verification refusals
@@ -904,6 +929,39 @@ class AgentLoop:
                             ),
                         )
                     )
+                # FORCED-SUBMIT RECOVERY (revision re-plan). When a REVISION re-plan
+                # has been narrated >= K times without calling submit_plan, the soft
+                # _PLAN_NUDGE is being ignored and the actionless valve would pause →
+                # STUCK, with resume re-entering the same prose loop. Escalate ONCE to a
+                # DURABLE marker (StatusEvent detail="force_submit_plan") + a hard
+                # directive: the marker lives in the event log, so driver.tools_for_step
+                # narrows the NEXT step's tools to submit_plan ONLY and a RESUMED build
+                # replays the marker and stays forced (no soft-nudge loop). This is the
+                # ENGINE recovery for the misclassified-as-actionless revision plan — not
+                # a model fix. Gated default-ON; revision-only (in_planning_for_revision)
+                # so the initial-plan / non-revision stall path is untouched.
+                if (
+                    self._revision_force_submit_enabled
+                    and signals.in_planning_for_revision(events)
+                    and self._plan_nudges >= _REVISION_FORCE_SUBMIT_K
+                    and not signals.revision_force_submit(events)  # escalate once
+                ):
+                    await self._emit(
+                        StatusEvent(
+                            status=ConversationStatus.RUNNING,
+                            detail="force_submit_plan",
+                        )
+                    )
+                    await self._emit(
+                        MessageEvent(
+                            source=EventSource.ENVIRONMENT,
+                            message=LLMMessage(
+                                role="user", content=_FORCE_SUBMIT_DIRECTIVE
+                            ),
+                        )
+                    )
+                    self._plan_nudges = 0  # fresh runway for the forced-submit step
+                    return Disp.CONTINUE
                 self._plan_nudges += 1
                 await self._emit(
                     MessageEvent(

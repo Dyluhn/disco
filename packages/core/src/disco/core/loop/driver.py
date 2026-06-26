@@ -214,7 +214,9 @@ class Driver:
         names.update({"ask_user", "clarify"})  # virtual escape hatches
         return frozenset(names)
 
-    def tools_for_step(self, *, suppress_meta_tools: bool = False) -> list:
+    def tools_for_step(
+        self, *, suppress_meta_tools: bool = False, force_submit_only: bool = False
+    ) -> list:
         """Mode-scoped tool visibility. With no planning_tools configured this is a
         pass-through (Research / default). While PLANNING the agent sees ONLY the
         planning tool(s); while executing it sees everything else.
@@ -249,6 +251,23 @@ class Driver:
 
         tools = self._loop.executor.available_tools()
         if self._loop.mode == OperatingMode.PLANNING:
+            # FORCED-SUBMIT RECOVERY (revision re-plan). When the engine has escalated a
+            # stuck revision re-plan (signals.revision_force_submit), narrow the offered
+            # tools to the plan tool ONLY so the model must submit the plan it has been
+            # narrating instead of looping in prose. Revision-only + survives resume (the
+            # caller derives the flag from the replayed event marker).
+            if force_submit_only and self._loop._plan_tool is not None:
+                plan_name = getattr(
+                    self._loop._plan_tool, "name", self._loop._plan_tool
+                )
+                narrowed = [
+                    t for t in tools if getattr(t, "name", None) == plan_name
+                ]
+                if narrowed:
+                    return narrowed
+                # Plan tool object not in the available set (shouldn't happen in the
+                # build flow) — fall through to normal planning tools rather than
+                # strand the model with zero tools.
             # The PLANNING agent is READ-ONLY (Claude-Code plan-mode parity): it
             # gathers context and proposes a plan; writes/exec are off the table
             # until approval. TWO independent, fail-safe guards:
@@ -402,6 +421,12 @@ class Driver:
             self._loop.mode != OperatingMode.PLANNING
             and signals.actions_since_last_resume(events) == 0
         )
+        # Forced-submit recovery for a stuck revision re-plan: narrow the offered tools
+        # to submit_plan only (derived from the replayed event marker, so it holds across
+        # resume). Engine emits the marker after K prose-only revision-planning nudges.
+        force_submit_only = self._loop.mode == OperatingMode.PLANNING and (
+            signals.revision_force_submit(events)
+        )
         try:
             attempts = 0
             requery_count = 0
@@ -419,7 +444,10 @@ class Driver:
 
                     step = await self._loop.agent.step(
                         current_view,
-                        self.tools_for_step(suppress_meta_tools=fresh_session),
+                        self.tools_for_step(
+                            suppress_meta_tools=fresh_session,
+                            force_submit_only=force_submit_only,
+                        ),
                         mode=self._loop.mode,
                         overflow_signal=view_render.overflow_signal(events),
                         on_stream=self.build_stream_hook(),
@@ -474,7 +502,8 @@ class Driver:
                                 f"Unknown tool {step.tool_call.tool_name}, requerying..."
                             )
                             offered_tools = self.tools_for_step(
-                                suppress_meta_tools=fresh_session
+                                suppress_meta_tools=fresh_session,
+                                force_submit_only=force_submit_only,
                             )
                             offered_names = {t.name for t in offered_tools}
                             # Mirror the assistant's turn so the next call's

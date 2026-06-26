@@ -212,6 +212,16 @@ def consecutive_noops(events: list[Event]) -> int:
             if tool == "remember":
                 count += 1  # only the duplicate path emits remember actions
                 continue
+            if tool == "submit_plan":
+                # A plan submission is the PLANNING->EXECUTION gate transition — real
+                # progress that BOUNDS the actionless streak, not neutral plan-shuffling.
+                # Without this `break` the backward walk steps past submit_plan (it was in
+                # _BOOKKEEPING_TOOLS -> `continue`) and keeps counting pre-submit planning
+                # prose, so a legit REVISION re-plan (narrate the revised plan + submit) was
+                # miscounted as one long actionless stall -> false PAUSE -> STUCK. Reset HERE
+                # only; _BOOKKEEPING_TOOLS is left intact for its other readers (codex review).
+                # Safe universally: it can only SHORTEN the streak, never manufacture a stall.
+                break
             if tool in _BOOKKEEPING_TOOLS:
                 continue  # plan shuffling: neither real work nor spam signal
             break
@@ -341,6 +351,32 @@ def in_planning_for_revision(events: list[Event]) -> bool:
         return False  # never (re-)entered planning → no pending revision
     # planning was entered; pending iff it is the most recent of the two markers
     return approved_seq is None or planning_seq > approved_seq
+
+
+def revision_force_submit(events: list[Event]) -> bool:
+    """True iff a REVISION re-plan has been ESCALATED to forced-submit and not yet
+    satisfied. The engine emits a StatusEvent(detail="force_submit_plan") marker after
+    `_REVISION_FORCE_SUBMIT_K` prose-only revision-planning nudges (the soft _PLAN_NUDGE
+    was ignored and the build would otherwise pause "actionless" → STUCK, with resume
+    re-entering the same prose loop). While this is True, `driver.tools_for_step` narrows
+    the offered planning tools to `submit_plan` ONLY, so the model must submit the plan it
+    has been narrating.
+
+    Stateless (read from the event log) so it SURVIVES resume: a resumed build replays the
+    marker and stays forced. Gated on `in_planning_for_revision` (revision-only — the
+    initial-plan / non-revision stall path never sees this). RELEASES as soon as the model
+    submits (a `submit_plan` ActionEvent more recent than the marker) or the revised plan
+    is approved (`in_planning_for_revision` flips False)."""
+    if not in_planning_for_revision(events):
+        return False
+    for e in reversed(events):
+        if isinstance(e, ActionEvent):
+            tool = e.tool_call.tool_name if e.tool_call is not None else None
+            if tool == "submit_plan":
+                return False  # a submission since the marker → escalation satisfied
+        if isinstance(e, StatusEvent) and e.detail == "force_submit_plan":
+            return True
+    return False
 
 
 def planning_turns_since_replan(events: list[Event]) -> int:
