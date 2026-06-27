@@ -1913,6 +1913,16 @@ class AgentLoop:
             isinstance(e, StatusEvent) and e.detail == "plan_approved" for e in events
         ):
             return False
+        # PRIMARY (live WS/kernel steer): a durable, sequence-stable
+        # `revision_steer_pending` marker the kernel ingress appended. Consumed
+        # UNCONDITIONALLY here, BEFORE the unprocessed-text predicate — an in-flight
+        # ActionEvent/ObservationEvent (the seq N+k write) invalidates
+        # `has_unprocessed_user_message`, so the text path below MISSES the steer (the
+        # live NO_REPLAN race). The sequence-stable marker cannot be masked that way.
+        if signals.pending_revision_steer(events):
+            await self._enter_revision_planning(signals.latest_user_text(events) or "")
+            return True
+        # FALLBACK (non-kernel / direct send_message ingress): text-based detection.
         text = signals.latest_unprocessed_user_text(events)
         if text is None:
             return False

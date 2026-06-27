@@ -475,3 +475,59 @@ async def test_steer_ingest_then_stale_write_is_refused_end_to_end():
     )
     await loop.run()
     assert "contact.html" in executor.world
+
+
+# --------------------------------------------------------------------------- #
+# Test 6 — THE LIVE RACE fix1 missed (codex RCA2): the kernel appends a durable  #
+# `revision_steer_pending` marker; the loop must re-enter PLANNING off it EVEN   #
+# WHEN in-flight agent activity has MASKED latest_unprocessed_user_text (the     #
+# predicate the old polling guards relied on). This is the exact live           #
+# steer_while_running failure (steer seq N, masked, write would land on seq N+k).#
+# --------------------------------------------------------------------------- #
+async def test_live_steer_marker_reenters_planning_when_unprocessed_text_masked():
+    from disco.core import ConversationStatus
+    from disco.core.loop import signals
+
+    cid = "noreplan-marker-race"
+    agent = ScriptedAgent([_submit_plan_step("first")])
+    loop, store = build_plan_loop(agent, conversation_id=cid)
+    await loop.send_message("Create a two-page static site with Home and About.")
+    await loop.run()
+    await loop.approve_plan()
+    assert loop.mode != OperatingMode.PLANNING
+
+    # LIVE kernel steer sequence: user(steer) msg → an in-flight AGENT message (masks
+    # has_unprocessed_user_message → latest_unprocessed_user_text becomes None) → the
+    # durable revision_steer_pending marker the DiscoKernel ingress appends.
+    await store.append(
+        cid,
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="Also add a Contact page and update nav."),
+            meta={"steer": True},
+        ),
+    )
+    await store.append(
+        cid,
+        MessageEvent(
+            source=EventSource.AGENT,
+            message=LLMMessage(role="assistant", content="Working on it."),
+        ),
+    )
+    await store.append(
+        cid, StatusEvent(status=ConversationStatus.RUNNING, detail="revision_steer_pending")
+    )
+
+    events = await store.get_events(cid)
+    # Precondition that PROVES we exercise the race: the text predicate is masked.
+    assert signals.latest_unprocessed_user_text(events) is None
+    assert signals.pending_revision_steer(events) is True
+
+    # The marker path must re-enter PLANNING despite the masked text predicate.
+    reentered = await loop._maybe_reenter_planning_for_followup(events)
+    assert reentered is True
+    assert loop.mode == OperatingMode.PLANNING
+
+    # …and consuming it is idempotent: pending is now False (a `planning` was emitted).
+    events2 = await store.get_events(cid)
+    assert signals.pending_revision_steer(events2) is False

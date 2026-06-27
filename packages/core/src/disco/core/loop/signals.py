@@ -379,6 +379,44 @@ def revision_force_submit(events: list[Event]) -> bool:
     return False
 
 
+def pending_revision_steer(events: list[Event]) -> bool:
+    """True iff a LIVE revision STEER marker is UNCONSUMED. The disco kernel ingress
+    (`DiscoKernel.send_user_turn`) appends a `StatusEvent(detail="revision_steer_pending")`
+    for every steer whose text is a revision intent — a SEQUENCE-STABLE signal that
+    in-flight ActionEvent/ObservationEvent CANNOT mask (unlike `latest_unprocessed_user_text`,
+    whose unprocessed semantics an in-flight assistant turn invalidates — the live
+    NO_REPLAN_AFTER_REVISION race: a steer at seq N followed by an in-flight write at seq N+k
+    made `has_unprocessed_user_message` False so the polling guards no-op'd).
+
+    The SOLE consumer is `_maybe_reenter_planning_for_followup` (run-entry AND mid-step), which
+    re-enters PLANNING and emits the `planning` marker — consuming this. So this is True only
+    while the latest `revision_steer_pending` is MORE RECENT than the latest `planning` /
+    `plan_approved` marker. Idempotent across multiple steers in one turn; stateless (survives
+    resume)."""
+    for e in reversed(events):
+        if isinstance(e, StatusEvent):
+            if e.detail in ("planning", "plan_approved"):
+                return False  # consumed by a (re-)plan since the marker
+            if e.detail == "revision_steer_pending":
+                return True
+    return False
+
+
+def latest_user_text(events: list[Event]) -> str | None:
+    """The most recent USER MessageEvent content — NOT gated on "unprocessed". Supplies the
+    re-plan framing text for the marker-driven path (`pending_revision_steer`), where
+    `latest_unprocessed_user_text` returns None because an in-flight assistant turn already
+    invalidated the unprocessed predicate."""
+    latest: MessageEvent | None = None
+    for e in events:
+        if isinstance(e, MessageEvent) and e.source == EventSource.USER:
+            if latest is None or (e.seq or 0) >= (latest.seq or 0):
+                latest = e
+    if latest is None:
+        return None
+    return (latest.message.content or "").strip() or None
+
+
 def planning_turns_since_replan(events: list[Event]) -> int:
     """BW-01 follow-up 2 — count tool-less PLANNING turns spent since the build
     most recently (re-)entered planning (StatusEvent detail=="planning"), as long

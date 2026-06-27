@@ -26,7 +26,12 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
-from disco.core import ConversationState, MessageEvent
+from disco.core import (
+    ConversationState,
+    ConversationStatus,
+    MessageEvent,
+    StatusEvent,
+)
 
 from ..build_messages import _context_message, _user_message
 from .base import KernelEvent
@@ -66,6 +71,24 @@ class DiscoKernel:
         stored = await self._rt._store.append(
             conversation_id, _user_message(text, steer=steer)
         )
+        # DURABLE NO_REPLAN fix (codex RCA2): a live revision STEER must re-enter
+        # PLANNING, but `kick()` is a no-op during an active run AND the loop's
+        # unprocessed-text re-plan guards get masked by in-flight Action/Observation
+        # events (the seq N+k write). Append a SEQUENCE-STABLE marker the loop consumes
+        # UNCONDITIONALLY (signals.pending_revision_steer → _maybe_reenter_planning_for_followup).
+        # Gated on is_revision_intent so a pure Q&A steer does NOT force a re-plan; the
+        # loop-side consumer additionally requires a prior plan_approved.
+        if steer:
+            from disco.core.loop import signals as _signals
+
+            if _signals.is_revision_intent(text):
+                await self._rt._store.append(
+                    conversation_id,
+                    StatusEvent(
+                        status=ConversationStatus.RUNNING,
+                        detail="revision_steer_pending",
+                    ),
+                )
         self._rt.kick(conversation_id)
         return cast("MessageEvent", stored)
 
