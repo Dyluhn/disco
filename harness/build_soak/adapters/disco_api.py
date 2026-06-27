@@ -1046,7 +1046,16 @@ class DiscoApiClient:
             ready, blocking, unproven_ready = _evaluate_snapshot_readiness(
                 declared, expected, manifest, stable_n
             )
-            if ready:
+            # PROVEN-ready entries (raw_sha / rendered_readback / absent) are safe to accept
+            # the instant they're ready. But an entry accepted PURELY on content-stability
+            # (unproven_ready) can still be STALE: a multi-revision build's FINAL edit (e.g.
+            # the late "Get Started" CTA change in revise_twice_complex) can flush AFTER the
+            # brief stability window, so short-circuiting here captured the pre-edit bytes and
+            # mislabeled a DELIVERED build WORKSPACE_SNAPSHOT_UNVERIFIED (the authoritative
+            # ProjectStore had the change). So when readiness rests on unproven stability, do
+            # NOT break early — keep polling to the full snapshot_wait_s deadline so a late
+            # flush re-resets stability and is captured. Proven captures stay fast (no wait).
+            if ready and (not unproven_ready or time.monotonic() >= deadline):
                 for p in unproven_ready:
                     _LOG.warning(
                         "snapshot %s: declared file %r accepted on EXTENDED content-stability "
