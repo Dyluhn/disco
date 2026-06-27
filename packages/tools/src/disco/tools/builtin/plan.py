@@ -42,15 +42,19 @@ class PlanStepInput(BaseModel):
     done_condition: DoDPredicate | None = Field(
         default=None,
         description=(
-            "Optional machine-checkable predicate. When the agent marks this "
-            "step done via plan_step(idx, 'done'), the engine evaluates this "
-            "advisory predicate and emits a visible pass/fail note in the trace. "
-            "ADVISORY ONLY: a failure does NOT block the run, does NOT nudge the "
-            "agent, and does NOT duplicate the C1c finish gate. Use the same "
-            "shape as `disco.core.dod.DoDPredicate` "
-            "(`{'kind': 'file_exists', 'path': ...}` | "
-            "`{'kind': 'command', 'cmd': ..., 'expect_exit': 0}` | "
-            "`{'kind': 'http_ok', 'url': ..., 'expect_status': 200}`)."
+            "STRONGLY RECOMMENDED — a machine-checkable proof this step is done. "
+            "For any step that CREATES a file, attach "
+            "`{'kind': 'file_exists', 'path': '<the file this step produces>'}` "
+            "naming that exact deliverable. These `file_exists` conditions are "
+            "checked at FINISH: the build is not complete until the files you "
+            "declared actually exist, so finish is refused until you have created "
+            "them (this is how the system confirms you built what was asked — "
+            "declaring a file you never create will block finish, not pass it). "
+            "Other shapes (`{'kind': 'command', 'cmd': ..., 'expect_exit': 0}` | "
+            "`{'kind': 'http_ok', 'url': ..., 'expect_status': 200}`) are also "
+            "evaluated when you mark the step done and shown in the trace; today "
+            "only `file_exists` gates finish. Same discriminated union as "
+            "`disco.core.dod.DoDPredicate`."
         ),
     )
 
@@ -94,7 +98,10 @@ class SubmitPlanTool:
             "Propose a plan for approval. EXPLORE FIRST: use file_list/file_read to "
             "understand the workspace and search/extract for any web context, THEN call "
             "submit_plan with a short summary, ordered concrete steps, and a markdown "
-            "`context` block explaining what you found and why this plan. Do not take any "
+            "`context` block explaining what you found and why this plan. For every step "
+            "that creates a file, attach a `done_condition` of "
+            "`{'kind': 'file_exists', 'path': '<that file>'}` — this is how the system "
+            "verifies, at finish, that you actually built what was asked. Do not take any "
             "state-changing action until the plan is approved."
         ),
         args_model=SubmitPlanArgs,
