@@ -76,6 +76,30 @@ def test_gate_consumes_the_factory_selection():
     assert require_production_valid_backend(gvisor_svc) is gvisor_svc
 
 
+def test_local_podman_socket_routes_to_cli_native_service():
+    """DURABLE #3 FIX: a LOCAL backend on a PODMAN socket must select the libpod-native
+    PodmanSandboxService (podman CLI), NOT the docker-py LocalSandboxService whose /v1.44
+    docker-compat exec endpoint 404s for live containers under concurrent load. A real local
+    DOCKER socket stays on LocalSandboxService."""
+    podman_local = service_from_config(
+        SandboxConfig(
+            backend="local",
+            runtime="crun",
+            docker_socket="unix:///run/user/1000/podman/podman.sock",
+        )
+    )
+    assert isinstance(podman_local, PodmanSandboxService)
+    # routed config points the podman client/CLI at the SAME local socket (copy, not mutation)
+    assert podman_local._cfg.podman_url == "unix:///run/user/1000/podman/podman.sock"
+
+    docker_local = service_from_config(
+        SandboxConfig(
+            backend="local", runtime="runc", docker_socket="unix:///var/run/docker.sock"
+        )
+    )
+    assert isinstance(docker_local, LocalSandboxService)  # real docker → docker-py path, unchanged
+
+
 # ---------------------------------------------------------------------------
 # P0 — the FAIL-CLOSED Build/soak preflight (the inversion of the old fail-open opt-in)
 # ---------------------------------------------------------------------------

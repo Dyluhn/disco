@@ -34,6 +34,21 @@ def service_from_config(cfg: SandboxConfig) -> SandboxService:
     if cfg.backend == "gvisor":
         return GvisorSandboxService(cfg)
     if cfg.backend == "local":
+        # DURABLE #3 FIX (codex-RCA'd, load-bearing): a local PODMAN socket must use the
+        # libpod-native podman CLI path (PodmanSandboxService, `podman --url unix:// exec`),
+        # NOT docker-py's /v1.44 docker-COMPAT API. Under concurrent build load the compat
+        # `/containers/<id>/exec` endpoint returns spurious 404s for LIVE containers, which the
+        # engine misreads as container death → needless sandbox recreate → builds churn/derail.
+        # The CLI path removes that endpoint class entirely. Discriminate by the socket identity
+        # (a podman socket); a real local DOCKER daemon (/var/run/docker.sock) stays on the
+        # docker-py LocalSandboxService unchanged. Copy the config (no mutation): map it to a
+        # podman config pointed at the SAME local socket.
+        if "podman" in (cfg.docker_socket or "").lower():
+            return PodmanSandboxService(
+                cfg.model_copy(
+                    update={"backend": "podman", "podman_url": cfg.docker_socket}
+                )
+            )
         return LocalSandboxService(cfg)
     if cfg.backend == "podman":
         return PodmanSandboxService(cfg)
