@@ -112,6 +112,43 @@ def _recover_elided_file_write_content(
         return content
     return None
 
+
+def _has_confirmed_prior_append(
+    events: list[Event], path: str, *, before_id: str | None
+) -> bool:
+    """K1 (file_append): True iff a prior `file_append` to the SAME `path` was CONFIRMED
+    executed (an ActionEvent + a SUCCESSFUL ObservationEvent for its call_id + no
+    AgentErrorEvent for it) — i.e. the content the model is now copying back AS an elision
+    placeholder was ALREADY appended. Unlike `file_write` (idempotent overwrite), re-running
+    a recovered `file_append` would DOUBLE-append, and the marker carries no provenance for a
+    safe exact recovery — so a confirmed prior append means this is a CONFUSED copy-back to
+    REDIRECT (not replay). `before_id` excludes the current action. Pure + deterministic."""
+    if not path:
+        return False
+    confirmed: set[str] = set()
+    failed: set[str] = set()
+    for e in events:
+        if isinstance(e, ObservationEvent) and e.tool_result.success:
+            confirmed.add(e.tool_result.call_id)
+        elif isinstance(e, AgentErrorEvent) and e.tool_call_id is not None:
+            failed.add(e.tool_call_id)
+    seen_current = before_id is None
+    for e in reversed(events):
+        if not isinstance(e, ActionEvent) or e.tool_call is None:
+            continue
+        if not seen_current:
+            if e.id == before_id:
+                seen_current = True
+            continue
+        if e.tool_call.tool_name != "file_append":
+            continue
+        if e.tool_call.arguments.get("path") != path:
+            continue
+        cid = e.tool_call.call_id
+        if cid in confirmed and cid not in failed:
+            return True
+    return False
+
 # The helper's input is the driver's `question` + `context` joined into one
 # prompt. Bound the size of each so a driver cannot grow the helper's input
 # unboundedly within a single segment — the result is folded back into the
@@ -372,6 +409,55 @@ class Observer:
                         action.tool_call.arguments["content"] = _orig
                         _ground_read(self._loop, _wpath)
                         _k1_bad = []  # recovered → fall through to normal execution below
+            # K1 (file_append) — codex-approved REDIRECT-not-replay. file_append is
+            # ADDITIVE: re-expanding + re-executing a recovered body would DOUBLE-append
+            # (file_write above is idempotent overwrite; append is not), and the marker
+            # carries NO provenance for a safe exact recovery. So when `content` is PURELY
+            # the copied-back marker AND a CONFIRMED prior file_append to the SAME path
+            # already landed, this is a CONFUSED copy-back of an ALREADY-APPLIED append:
+            # REDIRECT the model and RETURN WITHOUT emitting the (ActionEvent,
+            # AgentErrorEvent) pair — so it does NOT accrue repeated_action_error →
+            # stuck_escape → STUCK (stuck.py:370-393). A model that ignores the redirect is
+            # still bounded by _pure_repeat. No confirmed prior append (it never landed) →
+            # fall through to the normal rejection so the model re-authors.
+            if (
+                _k1_bad == ["content"]
+                and action.tool_call.tool_name == "file_append"
+                and value_is_only_elision_marker(action.tool_call.arguments.get("content"))
+            ):
+                _apath = action.tool_call.arguments.get("path")
+                if (
+                    isinstance(_apath, str)
+                    and _apath
+                    and _has_confirmed_prior_append(
+                        await self._loop._events(), _apath, before_id=action.id
+                    )
+                ):
+                    _LOG.info(
+                        "K1 redirect: file_append elision copy-back to %s of an already-"
+                        "applied append — redirect, no re-execute (call_id=%s)",
+                        _apath,
+                        action.tool_call.call_id,
+                    )
+                    await self._loop._emit(
+                        MessageEvent(
+                            source=EventSource.ENVIRONMENT,
+                            message=LLMMessage(
+                                role="user",
+                                content=(
+                                    "<system-reminder>\nYour last file_append `content` was"
+                                    " the engine's internal elision placeholder (a"
+                                    " context-saving stand-in), NOT real text — and that"
+                                    f" content was ALREADY appended to {_apath} earlier. Do"
+                                    " NOT re-issue it; re-appending would DUPLICATE it."
+                                    " Continue with the next step of your plan (file_read"
+                                    " the path first if you need to confirm its current"
+                                    " content).\n</system-reminder>"
+                                ),
+                            ),
+                        )
+                    )
+                    return  # NO (action, error) pair → breaks repeated_action_error → STUCK
             if _k1_bad:
                 _LOG.info(
                     "K1 guard: rejected %s — arg(s) %s carry an elision placeholder "

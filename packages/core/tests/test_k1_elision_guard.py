@@ -46,7 +46,10 @@ from __future__ import annotations
 from disco.core import (
     ActionEvent,
     AgentErrorEvent,
+    EventSource,
     Event,
+    LLMMessage,
+    MessageEvent,
     ObservationEvent,
     SqliteEventStore,
     ToolCall,
@@ -419,3 +422,74 @@ def test_snip_args_rewords_to_snapshot_pointer_and_round_trips():
     short = _snip_args({"content": "small"})
     assert short["content"] == "small"
     assert find_elided_arg_markers(short) == []
+
+
+# ---------------------------------------------------------------------------
+# (6) file_append elision copy-back — codex-approved REDIRECT-not-replay.
+# A file_append whose content is PURELY the marker, when a CONFIRMED prior
+# append to the SAME path already landed, is a CONFUSED copy-back of an
+# already-applied append: REDIRECT (no re-execute → no double-append) and emit
+# NO (action,error) pair so it can't accrue repeated_action_error→STUCK.
+# ---------------------------------------------------------------------------
+
+
+def _append_action(call_id: str, *, path: str, content: str) -> ActionEvent:
+    return ActionEvent(
+        thought="appending to the file",
+        tool_call=ToolCall(
+            tool_name="file_append",
+            call_id=call_id,
+            arguments={"path": path, "content": content},
+        ),
+    )
+
+
+async def test_file_append_marker_copyback_of_confirmed_append_redirects():
+    loop = _make_loop()
+    # A prior CONFIRMED file_append to styles.css (action + SUCCESS observation, no error).
+    prior = _append_action("call_a1", path="styles.css", content="body{color:red}")
+    await loop.store.append(CID, prior)
+    await loop.store.append(
+        CID,
+        ObservationEvent(
+            tool_result=ToolResult(
+                call_id="call_a1", tool_name="file_append", success=True, content="ok"
+            ),
+            action_id=prior.id,
+        ),
+    )
+    # The copy-back: file_append to the SAME path whose content is PURELY the marker.
+    marker = _snip_args({"content": "body{color:red}\n" * 400})["content"]
+    copyback = _append_action("call_a2", path="styles.css", content=marker)
+    events = await _drive_execute(loop, copyback)
+
+    # REDIRECT, not rejection: NO (action,error) pair for the copy-back (would feed
+    # repeated_action_error → stuck_escape → STUCK).
+    assert not [
+        e for e in events if isinstance(e, AgentErrorEvent) and e.tool_call_id == "call_a2"
+    ], "redirect must NOT emit an AgentErrorEvent for the copy-back"
+    # The executor was NEVER called for the copy-back — no double-append.
+    assert len(loop.executor.calls) == 0
+    # A redirect ENVIRONMENT message told the model it was already appended.
+    redirects = [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and "already" in (e.message.content or "").lower()
+        and "append" in (e.message.content or "").lower()
+    ]
+    assert redirects, "expected a redirect ENVIRONMENT message"
+
+
+async def test_file_append_marker_without_confirmed_prior_is_still_rejected():
+    # No prior append landed → the marker copy-back has nothing to redirect to, so it
+    # falls through to the normal K1 rejection (the model must re-author the content).
+    loop = _make_loop()
+    marker = _snip_args({"content": "x" * 5000})["content"]
+    copyback = _append_action("call_a3", path="never_written.css", content=marker)
+    events = await _drive_execute(loop, copyback)
+    errs = [e for e in events if isinstance(e, AgentErrorEvent)]
+    assert len(errs) == 1, "no confirmed prior append → normal rejection stands"
+    assert errs[0].tool_call_id == "call_a3"
+    assert len(loop.executor.calls) == 0
