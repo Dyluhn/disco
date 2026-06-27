@@ -172,6 +172,13 @@ class DoDPredicateResult(BaseModel):
     predicate: DoDPredicate
     passed: bool
     reason: str
+    # INFRA-vs-TASK channel (DoD v2.1): True iff this predicate FAILED for a reason that is
+    # NOT a task verdict — the check could not be RUN (a hard-denied command, an
+    # unreachable/timed-out http probe, egress denied, a missing judge). The finish gate
+    # treats unverifiable-only failures as a RELEASE (don't trap a build on infra noise),
+    # while a real task failure (a command that ran and exited wrong; a server that served
+    # the wrong status) still blocks. Always False on a pass and on file_exists (deterministic).
+    unverifiable: bool = False
     # Kind-specific structured evidence (exit_code, status_code, file size,
     # observed predicate field, ...). The verdict carries the FULL record so
     # a human reviewer can re-derive the judgment without re-running.
@@ -694,6 +701,11 @@ class DoDEvaluator:
         return DoDPredicateResult(
             predicate=predicate,
             passed=False,
+            # INFRA if the command could not RUN (denied / executor error / no exit code);
+            # a TASK failure only when it ran and exited with the wrong code.
+            unverifiable=bool(
+                result.denied or result.error_message or result.exit_code is None
+            ),
             reason=reason,
             details={
                 "kind": "command",
@@ -745,6 +757,14 @@ class DoDEvaluator:
         return DoDPredicateResult(
             predicate=predicate,
             passed=False,
+            # INFRA if the URL could not be PROBED (egress denied / probe error / no status,
+            # e.g. the server isn't up at finish); a TASK failure only when it served the
+            # wrong status.
+            unverifiable=bool(
+                result.egress_denied
+                or result.error_message
+                or result.status_code is None
+            ),
             reason=reason,
             details={
                 "kind": "http_ok",

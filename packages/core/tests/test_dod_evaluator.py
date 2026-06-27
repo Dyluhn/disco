@@ -587,6 +587,32 @@ async def test_file_exists_rejects_empty_and_directory(tmp_path: Path) -> None:
     assert v_ok.passed is True
 
 
+@pytest.mark.asyncio
+async def test_command_infra_vs_task_unverifiable_channel(tmp_path: Path) -> None:
+    """DoD v2.1 infra-vs-task channel: a command that could NOT RUN (denied) is marked
+    `unverifiable` (infra — the gate releases on it); a command that RAN and exited wrong
+    is a real TASK failure (`unverifiable=False` — the gate blocks)."""
+    from disco.core.dod import CommandExitPredicate
+
+    spec = DoDSpec(predicates=[CommandExitPredicate(cmd="make", expect_exit=0)])
+
+    # denied → infra (unverifiable)
+    ev_denied = DoDEvaluator(
+        tmp_path, command_runner=_denied_command_runner, http_probe=_passing_http_probe
+    )
+    v_denied = await ev_denied.evaluate(spec)
+    assert v_denied.passed is False
+    assert v_denied.results[0].unverifiable is True
+
+    # ran + wrong exit → TASK failure (verifiable)
+    ev_failed = DoDEvaluator(
+        tmp_path, command_runner=_failing_command_runner, http_probe=_passing_http_probe
+    )
+    v_failed = await ev_failed.evaluate(spec)
+    assert v_failed.passed is False
+    assert v_failed.results[0].unverifiable is False
+
+
 def test_resolve_under_workspace_rejects_escape(tmp_path: Path) -> None:
     """The path-resolution helper itself rejects escapes. Direct unit test
     on the helper so the discipline is also visible at the seam."""

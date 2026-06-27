@@ -265,19 +265,21 @@ async def test_revision_monotonically_extends_the_dod(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_command_only_plan_does_not_arm_in_v1(tmp_path):
-    """v1 ships file_exists ONLY. A plan whose only done_condition is a `command`
-    (infra-false-block ambiguity) must NOT arm a spec yet — deferred to a later
-    slice that adds an infra-vs-task channel."""
+async def test_command_predicate_arms_in_v2(tmp_path):
+    """v2.1: a `command` done_condition NOW arms the gate (the evaluator's infra-vs-task
+    channel makes it safe — a denied/unrunnable command releases, only a ran-and-failed
+    command blocks). The predicate uses the real `cmd` field."""
     ws = tmp_path / "ws"
     ws.mkdir()
     sbx = _FakeSandbox(str(ws))
     agent = ScriptedAgent([
         action_step("submit_plan", {"summary": "p", "steps": [
-            _plan_step("run the build", {"kind": "command", "command": "make", "expect_exit": 0}),
+            _plan_step("run the build", {"kind": "command", "cmd": "make", "expect_exit": 0}),
         ]}),
         action_step("shell", {"command": "echo build"}),
         _finish_call(),
     ])
     _events, store = await _run(agent, sbx)
-    assert await store.get_dod_spec(CID) is None, "command predicates are excluded from the v1 auto-spec"
+    spec = await store.get_dod_spec(CID)
+    assert spec is not None, "command predicates now arm the gate (v2.1)"
+    assert [getattr(p, "kind", None) for p in spec.predicates] == ["command"]

@@ -1693,11 +1693,17 @@ class AgentLoop:
         plan = _latest_plan(events)
         if plan is None or not getattr(plan, "steps", None):
             return
+        # v1 armed file_exists only; v2.1 includes command + http_ok now that the evaluator
+        # has an infra-vs-task channel (a denied command / unprobeable server RELEASES the
+        # gate instead of false-blocking — only a command that RAN-and-failed or a server
+        # that SERVED-the-wrong-status blocks). file_exists stays the deterministic anchor;
+        # command/http_ok add real build/test + runtime-serve verification.
+        _GATEABLE_KINDS = ("file_exists", "command", "http_ok")
         file_preds: list[DoDPredicate] = [
             s.done_condition
             for s in plan.steps
             if getattr(s, "done_condition", None) is not None
-            and getattr(s.done_condition, "kind", None) == "file_exists"
+            and getattr(s.done_condition, "kind", None) in _GATEABLE_KINDS
         ]
         if not file_preds:
             return

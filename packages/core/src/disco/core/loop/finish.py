@@ -1078,6 +1078,23 @@ class FinishGate:
         if verdict.passed:
             self._loop._dod_refusals = 0  # clean pass → reset the streak (mirror verify)
             return True
+        # INFRA-vs-TASK release (DoD v2.1): if EVERY unmet predicate is UNVERIFIABLE — the
+        # check could not be RUN (a hard-denied command, an unprobeable/not-yet-serving URL,
+        # egress denied) — do NOT block the finish on infra noise. Only a real TASK failure
+        # (a command that RAN and exited wrong; a server that SERVED the wrong status) is a
+        # genuine "not done". This is what lets `command`/`http_ok` predicates gate safely.
+        failed = [r for r in verdict.results if not r.passed]
+        task_failures = [r for r in failed if not getattr(r, "unverifiable", False)]
+        if not task_failures:
+            _LOG.info(
+                "DoD for %s: %d unmet predicate(s), ALL unverifiable (infra, not a task "
+                "verdict) — releasing the finish gate rather than blocking on a check that "
+                "could not run.",
+                self._loop.conversation_id,
+                len(failed),
+            )
+            self._loop._dod_refusals = 0
+            return True
         # Cap the refusal streak (mirror _FINISH_VERIFY_CAP): after N consecutive
         # DoD refusals, RELEASE the gate so an agent that cannot satisfy the
         # external DoD is not trapped in an unbounded refuse-and-continue loop
@@ -1099,7 +1116,11 @@ class FinishGate:
         self._loop._dod_refusals += 1  # bounded by _DOD_REFUSAL_CAP (see above)
         unmet_lines: list[str] = []
         for result in verdict.results:
-            if result.passed:
+            if result.passed or result.unverifiable:
+                # Skip passes AND unverifiable (infra) failures — name only the actionable
+                # TASK failures the agent can actually fix (we only reach here BECAUSE there
+                # is at least one). An infra failure named here would mislead the model into
+                # "fixing" something that simply could not be checked.
                 continue
             # The frozen predicate's repr names kind + fields. Pair with
             # the verdict's reason (the human explanation).
