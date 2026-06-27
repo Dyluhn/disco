@@ -1521,8 +1521,35 @@ class AgentLoop:
 
                 action_to_execute = action
 
-            # (j) EXECUTE outside the lock (long-running; lock only guards state)
+            # (j) EXECUTE outside the lock (long-running; lock only guards state).
+            # Bug 12 (§11.4) POST-LOCK recheck — a revision steer can flip mode to
+            # PLANNING via `send_message` AFTER the in-lock gates passed but BEFORE we
+            # execute here (the lock is dropped for the long-running execute). Re-acquire
+            # the lock + re-check: a MUTATING action selected on the now-stale plan must
+            # NOT run. Closes the ingest→execute window the top-of-loop + mid-step gates
+            # miss. A planning-allowed read/think/explore proceeds (harmless).
+            async with self._lock:
+                steer_refused = (
+                    self.mode == OperatingMode.PLANNING
+                    and action_to_execute.tool_call is not None
+                    and action_to_execute.tool_call.tool_name
+                    not in self._driver.planning_allowed_tool_names()
+                )
             await self._emit(action_to_execute)
+            if steer_refused and action_to_execute.tool_call is not None:
+                # Paired refusal (mirrors _gate_midstep_steer_replan): action_id +
+                # tool_call_id keep the assistant tool_call PAIRED with a tool-role
+                # result the View keeps, so the refusal is recoverable, not orphaned.
+                await self._emit(
+                    AgentErrorEvent(
+                        error=_MIDSTEP_STEER_REFUSAL.format(
+                            tool=action_to_execute.tool_call.tool_name
+                        ),
+                        action_id=action_to_execute.id,
+                        tool_call_id=action_to_execute.tool_call.call_id,
+                    )
+                )
+                continue
             await self._execute_and_observe(action_to_execute)
             # loop continues
 
@@ -1549,6 +1576,32 @@ class AgentLoop:
                 ConversationStatus.STUCK,
             ):
                 await self._emit(StatusEvent(status=ConversationStatus.IDLE))
+            # DURABLE NO_REPLAN fix — deterministic re-plan at steer INGEST. A
+            # scope-adding/revision steer on an APPROVED plan must re-enter PLANNING the
+            # MOMENT it arrives, so the next write is gated by `_gate_planning_mode` until
+            # a revised plan is approved (Manus-UX: a mid-run scope change surfaces a
+            # VISIBLE re-plan boundary, not a silent build on the stale plan). The two
+            # polling guards (`_maybe_reenter_planning_for_followup` + the mid-step gate)
+            # are POLLING-based and RACE with an in-flight turn whose response buries the
+            # unprocessed-user marker; doing it at ingest is race-free. SKIP while a
+            # confirmation / plan-approval is pending (those control-pending states are
+            # owned by confirm/reject/approve). Q&A is exempt (`is_revision_intent`).
+            if (
+                steer
+                and self.mode != OperatingMode.PLANNING
+                and state.execution_status
+                not in (
+                    ConversationStatus.WAITING_FOR_CONFIRMATION,
+                    ConversationStatus.AWAITING_PLAN_APPROVAL,
+                )
+                and signals.is_revision_intent(text)
+            ):
+                evs = await self._events()
+                if any(
+                    isinstance(e, StatusEvent) and e.detail == "plan_approved"
+                    for e in evs
+                ):
+                    await self._enter_revision_planning(text)
         return await self.get_state()
 
     async def steer(self, text: str) -> ConversationState:
@@ -1865,13 +1918,20 @@ class AgentLoop:
             return False
         if not signals.is_revision_intent(text):
             return False  # pure Q&A — answerable without a forced re-plan
+        await self._enter_revision_planning(text)
+        return True
+
+    async def _enter_revision_planning(self, text: str) -> None:
+        """Shared re-plan transition (lock-free; caller holds self._lock): flip to
+        PLANNING + reset the planning segment + emit the `planning` marker + revision
+        framing. ONE transition shared by the steer-INGEST path (send_message), the
+        top-of-loop follow-up check, and the mid-step gate — so they cannot diverge."""
         self.mode = OperatingMode.PLANNING
         self._plan_explore_reads = 0  # (B2/B6) fresh planning segment
         await self._emit(
             StatusEvent(status=ConversationStatus.RUNNING, detail="planning")
         )
         await self._planner.emit_replan_framing_if_revision(text)
-        return True
 
     async def _gate_midstep_steer_replan(self, step: AgentStep) -> Disp:
         """Bug 12 (§11.4) — close the IN-FLIGHT steer write-through race. The

@@ -413,3 +413,65 @@ async def test_question_followup_after_finish_does_not_force_replan():
     final = (await loop.get_state()).execution_status
     assert final != ConversationStatus.AWAITING_PLAN_APPROVAL
     assert final not in (ConversationStatus.RUNNING,)
+
+
+# --------------------------------------------------------------------------- #
+# Test 5 — DURABLE NO_REPLAN fix: deterministic re-plan at steer INGEST.        #
+# The two guards above are POLLING-based (store-append path) and race with an   #
+# in-flight turn. A steer via the PRODUCT steer() path re-enters PLANNING the    #
+# MOMENT it arrives — BEFORE the loop drives a single step — so it cannot race.  #
+# --------------------------------------------------------------------------- #
+async def test_steer_ingest_immediately_reenters_planning_before_any_drive():
+    cid = "noreplan-ingest"
+    loop, store = await _finished_first_build(cid)
+    assert loop.mode != OperatingMode.PLANNING
+
+    # The scope-adding revision steer via the PRODUCT path. NO run() yet.
+    await loop.steer("Also add a Contact page and update the nav links.")
+
+    # PLANNING entered AT INGEST — deterministic, before any drive step.
+    assert loop.mode == OperatingMode.PLANNING
+    events = await store.get_events(cid)
+    followup_seq = _seq_of_user(events, "Contact page")
+    assert any(
+        isinstance(e, StatusEvent)
+        and e.detail == "planning"
+        and (e.seq or 0) > followup_seq
+        for e in events
+    ), "ingest steer did not re-enter PLANNING immediately"
+
+
+async def test_qa_steer_ingest_does_not_reenter_planning():
+    """A pure Q&A steer at ingest must NOT force a re-plan (is_revision_intent exempts)."""
+    cid = "noreplan-ingest-qa"
+    loop, _store = await _finished_first_build(cid)
+    await loop.steer("What font did you use?")
+    assert loop.mode != OperatingMode.PLANNING
+
+
+async def test_steer_ingest_then_stale_write_is_refused_end_to_end():
+    """After an ingest steer flips PLANNING, a model that still tries the stale-plan
+    write is refused; only an approved rev 2 lets it land (full chain via ingest path)."""
+    cid = "noreplan-ingest-e2e"
+    loop, store = await _finished_first_build(cid)
+    executor: BuildExecutor = loop.executor  # type: ignore[assignment]
+
+    await loop.steer("Also add a Contact page and update the nav links.")
+    assert loop.mode == OperatingMode.PLANNING
+    # The model tries a write first (stale plan) then submits the revised plan.
+    loop.agent = ScriptedAgent(
+        [_write_step("<h1>Contact</h1>", path="contact.html"), _submit_plan_step("second")]
+    )
+    await loop.run()  # -> AWAITING_PLAN_APPROVAL; the stale write deferred
+    assert "contact.html" not in executor.world
+    events = await store.get_events(cid)
+    plans = [e for e in events if isinstance(e, PlanEvent)]
+    assert [p.revision for p in plans] == [1, 2]
+    assert (await loop.get_state()).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+
+    await loop.approve_plan()
+    loop.agent = ScriptedAgent(
+        [_write_step("<h1>Contact</h1>", path="contact.html"), finish_step()]
+    )
+    await loop.run()
+    assert "contact.html" in executor.world
