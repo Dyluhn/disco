@@ -603,15 +603,41 @@ class DoDEvaluator:
         exists = resolved.exists()
         if exists:
             stat = resolved.stat()
+            # ANTI-GAMING (codex P2): a DECLARED deliverable must be a REGULAR, NON-EMPTY
+            # file. Path.exists() alone is satisfied by a directory named like the file, or
+            # by an empty `touch`ed placeholder — both let a model pass a file_exists gate
+            # without producing real content (the exact form-without-substance reward-hack
+            # the gate exists to stop). A genuinely-empty marker (e.g. __init__.py) that
+            # trips this refuses at most _DOD_REFUSAL_CAP times then releases, so the
+            # check never traps a build — it only forces content where content was promised.
+            is_file = resolved.is_file()
+            if is_file and stat.st_size > 0:
+                return DoDPredicateResult(
+                    predicate=predicate,
+                    passed=True,
+                    reason=f"file exists at {resolved} ({stat.st_size} bytes)",
+                    details={
+                        "kind": "file_exists",
+                        "path": predicate.path,
+                        "resolved": str(resolved),
+                        "size_bytes": stat.st_size,
+                    },
+                )
+            why = "is a directory" if not is_file else "is empty (0 bytes)"
             return DoDPredicateResult(
                 predicate=predicate,
-                passed=True,
-                reason=f"file exists at {resolved}",
+                passed=False,
+                reason=(
+                    f"path exists but {why}: {predicate.path} — a declared deliverable "
+                    f"must be a non-empty regular file (write its real content)"
+                ),
                 details={
                     "kind": "file_exists",
                     "path": predicate.path,
                     "resolved": str(resolved),
                     "size_bytes": stat.st_size,
+                    "is_file": is_file,
+                    "empty_or_dir": True,
                 },
             )
         return DoDPredicateResult(

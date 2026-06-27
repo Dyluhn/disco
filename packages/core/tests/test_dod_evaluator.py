@@ -559,6 +559,34 @@ async def test_file_exists_outside_workspace_is_a_hard_fail(
     assert verdict.results[0].details.get("escape") is True
 
 
+@pytest.mark.asyncio
+async def test_file_exists_rejects_empty_and_directory(tmp_path: Path) -> None:
+    """ANTI-GAMING (codex P2): file_exists requires a REGULAR, NON-EMPTY file.
+    An empty `touch`ed placeholder and a directory both satisfy Path.exists()
+    but are not the deliverable the step promised — they must FAIL, else a model
+    passes the gate without producing real content."""
+    (tmp_path / "empty.html").write_text("")  # 0 bytes
+    (tmp_path / "asdir").mkdir()  # a directory named like a file
+    (tmp_path / "real.html").write_text("<h1>content</h1>")  # the honest case
+    ev = DoDEvaluator(
+        tmp_path,
+        command_runner=_passing_command_runner,
+        http_probe=_passing_http_probe,
+    )
+    # empty file → FAIL with an "empty" reason
+    v_empty = await ev.evaluate(DoDSpec(predicates=[FileExistsPredicate(path="empty.html")]))
+    assert v_empty.passed is False
+    assert "empty" in v_empty.results[0].reason.lower()
+    assert v_empty.results[0].details.get("empty_or_dir") is True
+    # directory → FAIL with a "directory" reason
+    v_dir = await ev.evaluate(DoDSpec(predicates=[FileExistsPredicate(path="asdir")]))
+    assert v_dir.passed is False
+    assert "directory" in v_dir.results[0].reason.lower()
+    # a real non-empty file still PASSES (no false-block on the honest deliverable)
+    v_ok = await ev.evaluate(DoDSpec(predicates=[FileExistsPredicate(path="real.html")]))
+    assert v_ok.passed is True
+
+
 def test_resolve_under_workspace_rejects_escape(tmp_path: Path) -> None:
     """The path-resolution helper itself rejects escapes. Direct unit test
     on the helper so the discipline is also visible at the seam."""
