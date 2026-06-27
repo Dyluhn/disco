@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from ..security import RiskAssessment
     from .boundaries import StreamHook
 
-from ..dod import DoDPredicate
+from ..dod import DoDPredicate, DoDSpec, DoDSpecAlreadySet
 from ..dod_evaluator import DoDEvaluator
 from ..events import (
     ActionEvent,
@@ -900,6 +900,7 @@ class AgentLoop:
                             status=ConversationStatus.RUNNING, detail="plan_approved"
                         )
                     )
+                    await self._arm_dod_from_plan()
                     return Disp.CONTINUE
                 await self._emit(
                     StatusEvent(
@@ -1660,6 +1661,50 @@ class AgentLoop:
             await self._emit(StatusEvent(status=ConversationStatus.RUNNING))
         return await self.get_state()
 
+    async def _arm_dod_from_plan(self) -> None:
+        """C1c WIRING — on plan approval, arm the (previously dark) Definition-of-Done
+        finish gate from the plan's OWN committed, machine-checkable `file_exists`
+        done_conditions, so `finish` is blocked until the deliverables the model said it
+        would create actually exist. This closes "declare a step then skip it" by
+        construction (the strongest anti-gaming the agentic-builder literature found that
+        needs no human — Devin/Kiro/Terminal-Bench all anchor 'done' to externally-checkable
+        state, never to the model's free-text self-assessment).
+
+        Scoped deliberately for a SAFE first slice:
+          * file_exists ONLY. command/http_ok carry infra-false-block ambiguity (a gated
+            command or a probe timeout reads as FAIL) — deferred until the evaluator grows an
+            explicit infra-vs-task channel.
+          * Empty-guard: no file_exists predicate ⇒ DO NOT set a spec. An empty spec makes the
+            evaluator return passed=False (a deterministic block loop), so a plan that declared
+            no checkable deliverable must leave the gate dark, not armed-and-failing.
+          * Write-once (by store design): the FIRST approved plan captures the DoD; a later
+            revision's re-arm raises DoDSpecAlreadySet and is swallowed. Extending the DoD with
+            steer-added scope is a separate MONOTONIC slice (may only ADD predicates, never
+            weaken) — not done here, so we never let a revision relax its own acceptance gate.
+        Only the build loop reaches this (PLANNING + submit_plan); research/chat loops never
+        approve a plan, so the gate stays inert for them."""
+        preds = self._plan_step_predicates
+        if not preds:
+            return
+        latest_rev = max(rev for (rev, _idx) in preds)
+        file_preds: list[DoDPredicate] = [
+            p
+            for (rev, _idx), p in preds.items()
+            if rev == latest_rev and getattr(p, "kind", None) == "file_exists"
+        ]
+        if not file_preds:
+            return
+        try:
+            await self.store.set_dod_spec(
+                self.conversation_id,
+                DoDSpec(predicates=file_preds),
+                set_by="system:plan_approval",
+            )
+        except DoDSpecAlreadySet:
+            # A revision keeps the first plan's DoD (write-once). The steer-scope
+            # extension is a deliberate monotonic-replace slice, not this one.
+            pass
+
     async def approve_plan(self) -> ConversationState:
         """Approve the pending plan: flip into execution mode (full tools restored)
         and resume to RUNNING. The caller then re-runs the loop. The per-action
@@ -1672,6 +1717,7 @@ class AgentLoop:
             await self._emit(
                 StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
             )
+            await self._arm_dod_from_plan()
         return await self.get_state()
 
     async def pick_alternative(self, option_id: str) -> ConversationState:
