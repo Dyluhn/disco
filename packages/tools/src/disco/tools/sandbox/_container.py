@@ -36,9 +36,12 @@ if TYPE_CHECKING:
 
 _LOG = logging.getLogger(__name__)
 
-# Backoff between the bounded re-verify probes that confirm a container is REALLY dead
-# (vs a transient docker/podman API 404) before accepting a death verdict + recreating.
-_DEATH_REVERIFY_BACKOFF_S = 0.12
+# Re-verify cadence/window for confirming a container is REALLY dead (vs a transient
+# docker/podman API 404 burst, which under concurrent load can last ~1s) before accepting a
+# death verdict + recreating. The window must OUTLAST a typical burst so a fresh probe can read
+# the container running again; it is fully async (asyncio.sleep) so the event loop never blocks.
+_DEATH_REVERIFY_BACKOFF_S = 0.25
+_DEATH_REVERIFY_WINDOW_S = 2.0
 
 
 # EPIC H (P1) — the deployment config is the MAXIMUM, not a fallback ---------------
@@ -369,14 +372,17 @@ class ContainerInstance:
         return SandboxError(f"sandbox op failed in {self.id}: {exc}")
 
     async def _confidently_alive(self) -> bool:
-        """STRICT liveness re-verify for a death verdict: up to 2 FRESH probes with a short
-        async backoff. Returns True ONLY when a probe reads status=="running" (exactly what
-        `_safe_reload` returns). ANY ambiguity — a raise, non-running, or the box dying
-        mid-window — returns False ⇒ the death stands. We only override a death to "transient"
-        when we POSITIVELY CONFIRM the container is running, because a real death misclassified
-        as transient surfaces as repeated op failures (worse than a clean recreate). Off-loads
-        each probe to a thread; sleeps are async so the event loop is never blocked."""
-        for _ in range(2):
+        """STRICT liveness re-verify for a death verdict: FRESH probes across a bounded
+        ~`_DEATH_REVERIFY_WINDOW_S` window (long enough to OUTLAST a transient docker/podman
+        404 burst, ~1s under concurrent load). Returns True ONLY when a probe reads
+        status=="running" (exactly what `_safe_reload` returns). ANY ambiguity — a raise,
+        non-running, or the box dying for the whole window — returns False ⇒ the death stands.
+        We override a death to "transient" only when we POSITIVELY CONFIRM running, because a
+        real death misclassified as transient surfaces as repeated op failures (worse than a
+        clean recreate). Off-loads each probe to a thread; sleeps are async so the event loop is
+        never blocked (a real death just takes up to the window to confirm + recreate)."""
+        deadline = time.monotonic() + _DEATH_REVERIFY_WINDOW_S
+        while time.monotonic() < deadline:
             await asyncio.sleep(_DEATH_REVERIFY_BACKOFF_S)
             try:
                 if await asyncio.to_thread(self._safe_reload):

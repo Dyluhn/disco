@@ -208,6 +208,13 @@ class GvisorSandboxService:
                 kwargs: dict[str, Any] = {
                     "base_url": base_url,
                     "timeout": self._cfg.client_timeout_s,
+                    # This DockerClient is CACHED + SHARED across all concurrent sandboxes,
+                    # and every op runs via asyncio.to_thread (many threads hit one client).
+                    # docker-py's default urllib3 pool (max_pool_size=10) is too small for
+                    # N concurrent builds × ops → connection contention surfaced as spurious
+                    # 404 bursts on /containers/<id>/exec (misread as container death → needless
+                    # recreate). Size the pool well above the build concurrency.
+                    "max_pool_size": 64,
                 }
                 if base_url.startswith("ssh://"):
                     # Docker-over-SSH: use the SYSTEM ssh client so the host's auth
