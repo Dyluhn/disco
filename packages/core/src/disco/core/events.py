@@ -20,6 +20,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
+from .dod import DoDPredicate
+
 # Bump on a *breaking* change to any event shape. Adding an optional field with
 # a default is backward-compatible and does NOT require a bump (§4 rule 2).
 SCHEMA_VERSION = 1
@@ -153,6 +155,11 @@ class PlanStep(BaseModel):
     model_config = ConfigDict(frozen=True)
     title: str  # short, plain-language capstone ("Scaffold the page + styles")
     detail: str | None = None  # optional elaboration
+    # C18 / C1c — the step's optional machine-checkable done_condition, PERSISTED on the
+    # event so it survives resume (the in-memory `_plan_step_predicates` map is lost on a
+    # restart between submit_plan and approval; reading the predicate back off the durable
+    # PlanEvent is what lets the C1c DoD gate re-arm after a crash).
+    done_condition: DoDPredicate | None = None
 
 
 class ReportSection(BaseModel):

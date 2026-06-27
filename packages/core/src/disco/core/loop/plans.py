@@ -164,8 +164,18 @@ class Planner:
             if isinstance(s, dict):
                 title = _strip_plan_tags(s.get("title") or s.get("step") or s.get("name"))
                 detail = _strip_plan_tags(s.get("detail") or s.get("description")) or None
+                # Parse the optional done_condition ONTO the PlanStep so it persists on the
+                # PlanEvent (resume-durable). A malformed predicate degrades to None exactly
+                # like the C18 harvest below — advisory, never a plan-parse failure.
+                cond = s.get("done_condition")
+                dc = None
+                if isinstance(cond, dict):
+                    try:
+                        dc = predicate_from_obj(cond)
+                    except Exception:  # noqa: BLE001 — malformed predicate is advisory-only
+                        dc = None
                 if title:
-                    steps.append(PlanStep(title=title, detail=detail))
+                    steps.append(PlanStep(title=title, detail=detail, done_condition=dc))
             elif isinstance(s, str):
                 title = _strip_plan_tags(s)
                 if title:

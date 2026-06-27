@@ -1683,14 +1683,21 @@ class AgentLoop:
             weaken) — not done here, so we never let a revision relax its own acceptance gate.
         Only the build loop reaches this (PLANNING + submit_plan); research/chat loops never
         approve a plan, so the gate stays inert for them."""
-        preds = self._plan_step_predicates
-        if not preds:
+        # Read the predicates off the PERSISTED PlanEvent (resume-durable), NOT the
+        # in-memory `_plan_step_predicates` map: a restart between submit_plan and approval
+        # loses the map, but the PlanEvent — with `done_condition` now persisted on each
+        # step — survives, so the gate still arms after a crash (codex backstop P1).
+        from ..view import _latest_plan
+
+        events = await self._events()
+        plan = _latest_plan(events)
+        if plan is None or not getattr(plan, "steps", None):
             return
-        latest_rev = max(rev for (rev, _idx) in preds)
         file_preds: list[DoDPredicate] = [
-            p
-            for (rev, _idx), p in preds.items()
-            if rev == latest_rev and getattr(p, "kind", None) == "file_exists"
+            s.done_condition
+            for s in plan.steps
+            if getattr(s, "done_condition", None) is not None
+            and getattr(s.done_condition, "kind", None) == "file_exists"
         ]
         if not file_preds:
             return

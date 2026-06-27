@@ -190,6 +190,41 @@ async def test_empty_guard_no_predicate_leaves_gate_dark(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_arms_after_restart_from_persisted_plan_event(tmp_path):
+    """RESUME DURABILITY (codex P1): a process restart between submit_plan and
+    approval loses the in-memory `_plan_step_predicates` map. Because the
+    done_condition is now persisted ON the PlanEvent, a FRESH loop rebuilt from
+    the same store still arms the gate at approval — read off the durable event,
+    not the lost map."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "index.html").write_text("<h1>home</h1>")
+    sbx = _FakeSandbox(str(ws))
+    # loop 1: submit a plan (persists the PlanEvent), but do NOT approve.
+    agent1 = ScriptedAgent([
+        action_step("submit_plan", {"summary": "p", "steps": [
+            _plan_step("create index.html", {"kind": "file_exists", "path": "index.html"}),
+        ]}),
+    ])
+    loop1, store = build_loop(agent1, executor=_SandboxExecutor(sbx), conversation_id=CID)
+    loop1.mode = OperatingMode.PLANNING
+    loop1._planning_tools = frozenset(["file_read"])
+    await loop1.send_message("go")
+    await loop1.run()  # lands AWAITING_PLAN_APPROVAL; _plan_step_predicates lives only here
+
+    # loop 2: a BRAND-NEW loop over the SAME store (simulates the restart — its
+    # _plan_step_predicates is empty). Approving must still arm from the PlanEvent.
+    loop2, _store2 = build_loop(
+        ScriptedAgent([]), store=store, executor=_SandboxExecutor(sbx), conversation_id=CID
+    )
+    assert loop2._plan_step_predicates == {}  # the in-memory map is genuinely gone
+    await loop2.approve_plan()
+    spec = await store.get_dod_spec(CID)
+    assert spec is not None, "the gate must re-arm from the persisted PlanEvent after restart"
+    assert [p.path for p in spec.predicates] == ["index.html"]
+
+
+@pytest.mark.asyncio
 async def test_command_only_plan_does_not_arm_in_v1(tmp_path):
     """v1 ships file_exists ONLY. A plan whose only done_condition is a `command`
     (infra-false-block ambiguity) must NOT arm a spec yet — deferred to a later
