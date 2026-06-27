@@ -132,7 +132,10 @@ def _replan_reminders(events: list) -> list[MessageEvent]:
         for e in events
         if isinstance(e, MessageEvent)
         and e.source == EventSource.ENVIRONMENT
-        and e.message.content == _REPLAN_FRAMING
+        # _REPLAN_FRAMING is now a TEMPLATE (current plan + instruction threaded in), so
+        # match its stable lead-in rather than exact equality with the unformatted constant.
+        and "RE-PLANNING: the user added a new instruction"
+        in (e.message.content or "")
     ]
 
 
@@ -389,3 +392,57 @@ async def test_first_plan_is_unchanged_no_replan_reminder_rev_one():
     plans = _plan_events(events)
     assert len(plans) == 1
     assert plans[0].revision == 1, "a first plan must be revision 1"
+
+
+def test_replan_framing_threads_current_plan_and_forbids_prose():
+    """The enriched re-plan framing (the narrate-without-submit fix): the CURRENT plan's
+    steps are echoed INLINE + the new instruction + an explicit 'prose does NOT register —
+    call submit_plan' rule, so the model revises the actual plan via the tool instead of
+    narrating it. Full plan shown (no aggressive truncation)."""
+    from disco.core.loop.messages import (
+        _REPLAN_FRAMING,
+        _render_replan_plan_digest,
+    )
+
+    class _Step:
+        def __init__(self, title):
+            self.title = title
+
+    class _Plan:
+        revision = 1
+        summary = "Two-page static site with Home and About"
+        steps = [_Step("Create index.html"), _Step("Create about.html"), _Step("Add nav links")]
+
+    out = _REPLAN_FRAMING.format(
+        current_plan=_render_replan_plan_digest(_Plan()),
+        instruction="Also add a Contact page and update nav links.",
+    )
+    # current plan steps are present INLINE
+    assert "Create index.html" in out and "Create about.html" in out and "Add nav links" in out
+    # the new instruction is present
+    assert "Also add a Contact page" in out
+    # explicit submit-required / prose-doesn't-count rule
+    assert "submit_plan" in out
+    assert "does NOT register" in out
+
+
+def test_replan_digest_shows_full_plan_no_aggressive_truncation():
+    """A normal-sized plan is shown IN FULL — truncating would risk the model dropping the
+    unseen steps (defeats the purpose). Only a pathological plan (> ceiling) truncates, and
+    then it says so explicitly."""
+    from disco.core.loop.messages import _REPLAN_DIGEST_MAX_STEPS, _render_replan_plan_digest
+
+    class _Step:
+        def __init__(self, title):
+            self.title = title
+
+    class _Plan:
+        revision = 2
+        summary = "x"
+        steps = [_Step(f"step {i}") for i in range(20)]  # 20 < ceiling → all shown
+
+    dig = _render_replan_plan_digest(_Plan())
+    for i in range(20):
+        assert f"step {i}" in dig
+    assert "more existing steps" not in dig  # no truncation note for a normal plan
+    assert _REPLAN_DIGEST_MAX_STEPS >= 40  # ceiling is a high last-resort guardrail

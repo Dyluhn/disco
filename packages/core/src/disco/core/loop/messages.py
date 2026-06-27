@@ -50,11 +50,51 @@ _PLAN_EXPLORE_FORCE = (
 # revised plan instead of free-building against the old plan.
 _REPLAN_FRAMING = (
     "<system-reminder>\n"
-    "RE-PLANNING: the user added a new instruction to an existing build. Produce "
-    "a REVISED plan by calling `submit_plan` — do NOT start editing files yet. "
-    "The plan revision number will increment.\n"
+    "RE-PLANNING: the user added a new instruction to an existing, already-approved "
+    "build.\n\n"
+    "Your CURRENT approved plan:\n"
+    "{current_plan}\n\n"
+    "The user's new instruction:\n"
+    "  {instruction}\n\n"
+    "Produce a REVISED plan that folds the new instruction into the steps above by "
+    "CALLING the `submit_plan` tool with the FULL revised step list — e.g. "
+    'submit_plan(summary="…", steps=[…]). Keep the steps you have already completed '
+    "and add/adjust steps for the new instruction. Do NOT start editing files yet. A "
+    "prose description of the plan does NOT register — ONLY a `submit_plan` tool call "
+    "does; if you only describe it in text the build stays stuck in planning. The plan "
+    "revision number will increment.\n"
     "</system-reminder>"
 )
+
+# Ceiling on inline step titles in the re-plan framing — a LAST-RESORT guardrail against a
+# pathological plan, NOT default truncation: the whole point is to show the FULL plan so the
+# model revises it completely (truncating risks the model DROPPING unseen steps). Titles are
+# cheap (one short line each), so this is set high; if it ever trips, the model is told the
+# omitted steps must be preserved.
+_REPLAN_DIGEST_MAX_STEPS = 80
+_REPLAN_DIGEST_TITLE_CAP = 200
+
+
+def _render_replan_plan_digest(plan: object) -> str:
+    """Compact inline digest of the CURRENT plan for the re-plan framing — summary + the
+    FULL list of step titles — so the model revises the actual approved plan instead of
+    reconstructing it from a long post-build history (and narrating it in prose). Titles
+    only (no per-step detail/bodies — that's the real bloat lever). Only a pathological
+    plan (> `_REPLAN_DIGEST_MAX_STEPS`) is truncated, and then EXPLICITLY so the model
+    preserves the omitted steps."""
+    steps = getattr(plan, "steps", None) or []
+    rev = getattr(plan, "revision", 1)
+    summary = (getattr(plan, "summary", "") or "(no summary)").strip()
+    lines = [f"  Plan (revision {rev}): {summary}"]
+    for i, s in enumerate(steps[:_REPLAN_DIGEST_MAX_STEPS], start=1):
+        title = (getattr(s, "title", "") or "").strip()[:_REPLAN_DIGEST_TITLE_CAP]
+        lines.append(f"    {i}. {title}")
+    if len(steps) > _REPLAN_DIGEST_MAX_STEPS:
+        lines.append(
+            f"    … (+{len(steps) - _REPLAN_DIGEST_MAX_STEPS} more existing steps not "
+            "shown here — PRESERVE them in your revised plan)"
+        )
+    return "\n".join(lines)
 
 
 def _latest_user_instruction(events: list[Event]) -> str | None:

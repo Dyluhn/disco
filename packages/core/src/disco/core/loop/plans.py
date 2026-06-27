@@ -30,8 +30,10 @@ from .messages import (
     _PLAN_EXPLORE_FORCE,
     _PLAN_EXPLORE_READ_CAP,
     _REPLAN_FRAMING,
+    _render_replan_plan_digest,
 )
 from .turn_control import _CONTINUE_OPTION_ID
+from ..view import _latest_plan
 
 if TYPE_CHECKING:
     from .engine import AgentLoop
@@ -115,15 +117,28 @@ class Planner:
         check is identical whether computed before or after them."""
         if not text.strip():
             return
+        events = await self._loop._events()
         is_revision = any(
-            isinstance(e, StatusEvent) and e.detail == "plan_approved"
-            for e in await self._loop._events()
+            isinstance(e, StatusEvent) and e.detail == "plan_approved" for e in events
         )
         if is_revision:
+            # Thread the CURRENT approved plan + the new instruction INLINE into the
+            # framing so the model revises the actual plan (and emits submit_plan) instead
+            # of reconstructing it from a long post-build history and narrating it in prose
+            # (the intermittent NO_REPLAN narrate-without-submit residual).
+            plan = _latest_plan(events)
+            digest = (
+                _render_replan_plan_digest(plan)
+                if plan is not None and getattr(plan, "steps", None)
+                else "  (the prior plan's steps are not on record — restate the full plan)"
+            )
+            content = _REPLAN_FRAMING.format(
+                current_plan=digest, instruction=text.strip()
+            )
             await self._loop._emit(
                 MessageEvent(
                     source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(role="user", content=_REPLAN_FRAMING),
+                    message=LLMMessage(role="user", content=content),
                 )
             )
 
