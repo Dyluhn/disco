@@ -77,6 +77,13 @@ from .naming import (
 # `podman exec` stderr markers that mean the CONTAINER is gone (not the inner command
 # failing) — used to type a mid-session death as SandboxUnavailableError.
 _PODMAN_DEAD_MARKERS = ("no such container", "no container with", "is not running", "improper")
+# Re-verify inspect retry: under concurrent build load `podman inspect` is ITSELF
+# intermittently refused, and a single failed inspect would conservatively type a
+# LIVE container dead → a needless recreate (the inspect-unavailable recreate residual).
+# A real death (a successful inspect with a terminal status) returns immediately; only
+# the UNVERIFIABLE case (rc!=0 / exception) is retried.
+_INSPECT_RETRIES = 3
+_INSPECT_BACKOFF_S = 0.15
 
 _CPU_PERIOD = 100_000  # cgroup CPU period (100ms); quota/period = cpus
 
@@ -168,27 +175,39 @@ class PodmanSandboxInstance(ContainerInstance):
         ("running" / "exited" / "" if unverifiable); `reason` attributes a death
         (OOMKilled / exit / runtime error). A dead-but-not-yet-removed container still has
         its record, so this usually resolves. NEVER raises — runs on an already-failing
-        path and must not mask the original error."""
-        try:
-            rc, out, _e = self._runner(
-                [
-                    "podman", "--url", self._cli_url, "inspect", "--format",
-                    "status={{.State.Status}} OOMKilled={{.State.OOMKilled}} "
-                    "exit={{.State.ExitCode}} reason={{.State.Error}}",
-                    self._name,
-                ],
-                10,
-            )
-            if rc == 0:
-                text = out.decode("utf-8", "replace").strip()
-                status = ""
-                for tok in text.split():
-                    if tok.startswith("status="):
-                        status = tok[len("status="):]
-                        break
-                return status, (text or "state-empty")
-        except Exception:  # noqa: BLE001 — diagnostic only, must never mask the error
-            pass
+        path and must not mask the original error.
+
+        RETRIES the inspect a few times when the COMMAND itself fails (rc!=0 / exception):
+        under concurrent load `podman inspect` is itself intermittently refused, and a
+        single failed inspect would conservatively type a LIVE container dead (the
+        inspect-unavailable recreate residual). A successful inspect — even one reporting a
+        terminal status like `exited` — is a REAL answer and returns immediately; only the
+        unverifiable case is retried."""
+        for attempt in range(_INSPECT_RETRIES):
+            try:
+                rc, out, _e = self._runner(
+                    [
+                        "podman", "--url", self._cli_url, "inspect", "--format",
+                        "status={{.State.Status}} OOMKilled={{.State.OOMKilled}} "
+                        "exit={{.State.ExitCode}} reason={{.State.Error}}",
+                        self._name,
+                    ],
+                    10,
+                )
+                if rc == 0:
+                    text = out.decode("utf-8", "replace").strip()
+                    status = ""
+                    for tok in text.split():
+                        if tok.startswith("status="):
+                            status = tok[len("status="):]
+                            break
+                    return status, (text or "state-empty")
+                # rc != 0 → the inspect command itself failed (not a container verdict).
+                # Retry — this is the transient case the residual was about.
+            except Exception:  # noqa: BLE001 — diagnostic only, must never mask the error
+                pass
+            if attempt < _INSPECT_RETRIES - 1:
+                time.sleep(_INSPECT_BACKOFF_S)
         return "", "reason-unavailable"
 
     def _raise_if_dead(self, rc: int, err: bytes) -> None:

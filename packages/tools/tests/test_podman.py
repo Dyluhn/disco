@@ -277,6 +277,60 @@ def test_config_is_podman_and_crun_and_cli_url():
     assert svc._cli_url.startswith("ssh://") and not svc._cli_url.startswith("http+")
 
 
+def test_inspect_state_retries_transient_inspect_failure(monkeypatch):
+    """The re-verify inspect RETRIES when the inspect COMMAND itself fails (rc!=0):
+    under concurrent load `podman inspect` is intermittently refused, and a single
+    failed inspect would conservatively type a LIVE container dead → a needless
+    recreate. A retry that then succeeds recovers the real (running) verdict."""
+    import disco.tools.sandbox.podman as pod
+
+    monkeypatch.setattr(pod.time, "sleep", lambda _s: None)  # no real backoff in tests
+    calls = {"n": 0}
+
+    def flaky(_args, _timeout):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return (125, b"", b"connection refused")  # the inspect command fails
+        return (0, b"status=running OOMKilled=false exit=0 reason=", b"")
+
+    inst = pod.PodmanSandboxInstance.__new__(pod.PodmanSandboxInstance)
+    inst._runner, inst._name, inst._cli_url = flaky, "c-flaky", "ssh://x"
+    status, _reason = inst._inspect_state()
+    assert status == "running", "the retry must recover the live verdict"
+    assert calls["n"] == 3  # retried until the inspect succeeded
+
+
+def test_inspect_state_gives_up_after_retry_budget(monkeypatch):
+    """If the inspect keeps failing, it gives up as 'reason-unavailable' after the
+    bounded retry budget — never an unbounded loop. A SUCCESSFUL inspect reporting a
+    terminal status returns immediately (a real verdict is not retried)."""
+    import disco.tools.sandbox.podman as pod
+
+    monkeypatch.setattr(pod.time, "sleep", lambda _s: None)
+    calls = {"n": 0}
+
+    def always_fail(_args, _timeout):
+        calls["n"] += 1
+        return (125, b"", b"refused")
+
+    inst = pod.PodmanSandboxInstance.__new__(pod.PodmanSandboxInstance)
+    inst._runner, inst._name, inst._cli_url = always_fail, "c-dead", "ssh://x"
+    status, reason = inst._inspect_state()
+    assert status == "" and reason == "reason-unavailable"
+    assert calls["n"] == pod._INSPECT_RETRIES  # exactly the budget, no more
+
+    one = {"n": 0}
+
+    def exited(_args, _timeout):
+        one["n"] += 1
+        return (0, b"status=exited OOMKilled=false exit=1 reason=boom", b"")
+
+    inst2 = pod.PodmanSandboxInstance.__new__(pod.PodmanSandboxInstance)
+    inst2._runner, inst2._name, inst2._cli_url = exited, "c-exited", "ssh://x"
+    status2, _r2 = inst2._inspect_state()
+    assert status2 == "exited" and one["n"] == 1  # a real verdict is NOT retried
+
+
 # ---------------------------------------------------------------------------
 # P-B — FIX6 parity: inbound sidecar preview forwarder + inherited expose_port.
 # Mirrors the gVisor FIX6 unit proofs (test_fix6_inbound_forward.py) for podman.
