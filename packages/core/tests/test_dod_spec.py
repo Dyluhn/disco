@@ -159,6 +159,57 @@ async def test_replace_on_fresh_conversation_equals_set(store: SqliteEventStore)
 # ---- Why "the agent's tool surface" cannot mutate this ---------------------
 
 
+async def test_replace_dod_spec_monotonic_extend_and_reject(store: SqliteEventStore) -> None:
+    """v2 MONOTONIC replacement: a revision may EXTEND the DoD (add a steered
+    deliverable) but never WEAKEN it. The store enforces the invariant so no
+    caller can route around it."""
+    cid = "conv_dod_monotonic"
+    base = DoDSpec(predicates=[FileExistsPredicate(path="index.html")])
+    await store.set_dod_spec(cid, base, set_by="first")
+
+    # EXTEND: add contact.html (the steer scenario) → accepted, spec grows.
+    extended = DoDSpec(predicates=[
+        FileExistsPredicate(path="index.html"),
+        FileExistsPredicate(path="contact.html"),
+    ])
+    await store.replace_dod_spec(cid, extended, actor="system:plan_revision")
+    read = await store.get_dod_spec(cid)
+    assert {p.path for p in read.predicates} == {"index.html", "contact.html"}
+
+    # IDEMPOTENT: replacing with the same set is a no-op success.
+    await store.replace_dod_spec(cid, extended, actor="again")
+    assert {p.path for p in (await store.get_dod_spec(cid)).predicates} == {
+        "index.html", "contact.html"
+    }
+
+    # RENAME (tied): index.html → home.html via renamed_from → accepted.
+    renamed = DoDSpec(predicates=[
+        FileExistsPredicate(path="home.html", renamed_from="index.html"),
+        FileExistsPredicate(path="contact.html"),
+    ])
+    await store.replace_dod_spec(cid, renamed, actor="rename")
+    assert {p.path for p in (await store.get_dod_spec(cid)).predicates} == {
+        "home.html", "contact.html"
+    }
+
+    # WEAKEN: drop contact.html (no rename tie) → REJECTED, prior spec preserved.
+    weaker = DoDSpec(predicates=[FileExistsPredicate(path="home.html")])
+    with pytest.raises(DoDSpecAlreadySet):
+        await store.replace_dod_spec(cid, weaker, actor="would-drop")
+    assert {p.path for p in (await store.get_dod_spec(cid)).predicates} == {
+        "home.html", "contact.html"
+    }
+
+    # FORGED RENAME: claim a rename from a path that was never committed → REJECTED.
+    forged = DoDSpec(predicates=[
+        FileExistsPredicate(path="home.html"),
+        FileExistsPredicate(path="evil.html", renamed_from="contact.html"),
+        FileExistsPredicate(path="x.html", renamed_from="never_existed.html"),
+    ])
+    with pytest.raises(DoDSpecAlreadySet):
+        await store.replace_dod_spec(cid, forged, actor="forge")
+
+
 def test_no_agent_tool_can_reach_the_dod_spec_store() -> None:
     """The immutability argument depends on there being NO tool in the agent's
     surface that writes to the `dod_specs` table. This test enumerates the

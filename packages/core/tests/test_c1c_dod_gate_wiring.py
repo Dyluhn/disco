@@ -225,6 +225,46 @@ async def test_arms_after_restart_from_persisted_plan_event(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_revision_monotonically_extends_the_dod(tmp_path):
+    """v2: a mid-build steer that ADDS scope (a revised plan with a new
+    file-producing step) EXTENDS the armed DoD to require the new deliverable —
+    the gate now enforces the STEERED scope, not just the first plan's. The
+    extension is monotonic (the original deliverable stays required)."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    sbx = _FakeSandbox(str(ws))
+    loop, store = build_loop(
+        ScriptedAgent([]), executor=_SandboxExecutor(sbx), conversation_id=CID
+    )
+    # First plan → arms {index.html}.
+    p1 = loop._plan_from_args(
+        {"summary": "v1", "steps": [
+            {"title": "create index.html", "done_condition": {"kind": "file_exists", "path": "index.html"}},
+        ]},
+        [],
+    )
+    await loop._emit(p1)
+    await loop._arm_dod_from_plan()
+    assert {p.path for p in (await store.get_dod_spec(CID)).predicates} == {"index.html"}
+
+    # Revision (the steer "also add a Contact page") → EXTENDS to require contact.html.
+    events = await store.get_events(CID)
+    p2 = loop._plan_from_args(
+        {"summary": "v2", "steps": [
+            {"title": "index", "done_condition": {"kind": "file_exists", "path": "index.html"}},
+            {"title": "contact", "done_condition": {"kind": "file_exists", "path": "contact.html"}},
+        ]},
+        events,
+    )
+    await loop._emit(p2)
+    await loop._arm_dod_from_plan()
+    assert {p.path for p in (await store.get_dod_spec(CID)).predicates} == {
+        "index.html",
+        "contact.html",
+    }, "the steered deliverable (contact.html) must now be required at finish"
+
+
+@pytest.mark.asyncio
 async def test_command_only_plan_does_not_arm_in_v1(tmp_path):
     """v1 ships file_exists ONLY. A plan whose only done_condition is a `command`
     (infra-false-block ambiguity) must NOT arm a spec yet — deferred to a later

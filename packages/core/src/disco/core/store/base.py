@@ -128,14 +128,20 @@ class EventStore(Protocol):
     async def replace_dod_spec(
         self, conversation_id: str, spec: Any, *, actor: str = "system"
     ) -> Any:
-        """Named, always-raise hook for "weaken the spec" affordances. The
-        spec is write-once; this method exists so a future caller (a
-        server-side endpoint, a debug tool) can FAIL LOUDLY instead of
-        silently mutating. The current contract: raises
-        `DoDSpecAlreadySet` unconditionally if a spec exists. If no spec
-        exists, this is equivalent to `set_dod_spec` (kept for symmetry so
-        callers cannot route around the immutability gate by choosing the
-        "replace" verb)."""
+        """Write-once BOOTSTRAP + MONOTONIC replacement. The spec may be
+        EXTENDED (a mid-build steer that adds acceptance scope) but never
+        WEAKENED. Contract:
+          * no spec exists → bootstrap (equivalent to `set_dod_spec`);
+          * spec exists AND the new spec is a monotonic extension of it
+            (`dod.is_monotonic_extension` — only adds predicates, or renames a
+            committed deliverable via an explicit `renamed_from`, never drops
+            one) → update in place;
+          * spec exists AND the new spec would WEAKEN it → raise
+            `DoDSpecAlreadySet` (original preserved).
+        `actor` is audited as `set_by` on an accepted update but cannot buy a
+        weakening — the security property the write-once design protected is
+        preserved as monotonicity (the agent can only tighten, never relax, its
+        own acceptance bar)."""
         ...
 
     async def conversation_exists(self, conversation_id: str) -> bool: ...

@@ -1702,15 +1702,25 @@ class AgentLoop:
         if not file_preds:
             return
         try:
-            await self.store.set_dod_spec(
+            # replace_dod_spec = write-once BOOTSTRAP on the first arm + MONOTONIC
+            # extension on a revision: a steer that ADDS scope (e.g. "also add a
+            # Contact page") tightens the bar to require contact.html; a revision that
+            # would DROP a committed deliverable (without an explicit rename) is
+            # rejected store-side and the existing, stronger bar holds.
+            await self.store.replace_dod_spec(
                 self.conversation_id,
                 DoDSpec(predicates=file_preds),
-                set_by="system:plan_approval",
+                actor="system:plan_approval",
             )
         except DoDSpecAlreadySet:
-            # A revision keeps the first plan's DoD (write-once). The steer-scope
-            # extension is a deliberate monotonic-replace slice, not this one.
-            pass
+            # The revised plan would WEAKEN the DoD (a committed deliverable was
+            # dropped without an explicit rename). Keep the stronger existing bar —
+            # the model cannot relax its own acceptance criteria mid-build.
+            _LOG.warning(
+                "DoD revision for %s rejected as a weakening; existing acceptance "
+                "bar preserved.",
+                self.conversation_id,
+            )
 
     async def approve_plan(self) -> ConversationState:
         """Approve the pending plan: flip into execution mode (full tools restored)

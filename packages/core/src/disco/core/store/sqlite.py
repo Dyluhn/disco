@@ -368,34 +368,61 @@ class SqliteEventStore:
     async def replace_dod_spec(
         self, conversation_id: str, spec: DoDSpec, *, actor: str = "system"
     ) -> DoDSpec:
-        """Named, always-raise hook for "weaken the spec" affordances. The
-        spec is write-once; this method exists so a future caller (a
-        server-side endpoint, a debug tool) fails LOUDLY instead of silently
-        mutating. The contract:
+        """Write-once BOOTSTRAP + MONOTONIC replacement (v2). The spec can be
+        EXTENDED (a mid-build steer that adds scope) but never WEAKENED — the
+        monotonic guard (`is_monotonic_extension`) is enforced HERE, in the
+        store, so no caller can route around it. The contract:
 
-          * If a spec exists → raise `DoDSpecAlreadySet` (original preserved).
-          * If no spec exists → equivalent to `set_dod_spec` (kept for
-            symmetry; without it a caller could pick the "replace" verb to
-            route around the write-once gate, which is exactly the kind of
-            footgun this method exists to prevent).
+          * No spec exists → bootstrap (same as `set_dod_spec`).
+          * Spec exists AND `new` is a monotonic extension (only adds / renames
+            within, never drops a committed deliverable) → UPDATE in place.
+          * Spec exists AND `new` would WEAKEN it → raise `DoDSpecAlreadySet`
+            (original preserved). A revision can tighten its own acceptance bar,
+            never relax it — that is the security property write-once protected,
+            now preserved as monotonicity instead of pure immutability.
 
-        We do NOT take `actor` into the immutability decision: even a
-        well-meaning human operator cannot "weaken" via this method. The
-        user-facing relax path is to capture a new conversation (and the
-        user can see the original spec in the audit fields)."""
-        from ..dod import DoDSpec, DoDSpecAlreadySet
+        `actor` is recorded as `set_by` on an accepted update (audit), but does
+        NOT buy a weakening: even a human operator cannot drop a committed bar
+        via this method (the user-facing relax path is a new conversation)."""
+        from ..dod import DoDSpec, DoDSpecAlreadySet, is_monotonic_extension
         if not isinstance(spec, DoDSpec):
             raise TypeError(
                 f"replace_dod_spec expects a DoDSpec, got {type(spec).__name__}"
             )
-        existing = await self.get_dod_spec(conversation_id)
-        if existing is not None:
-            raise DoDSpecAlreadySet(
-                f"DoD spec for {conversation_id!r} is already set; replace "
-                "is a no-throw-no-mutate hook. Capture a new conversation "
-                "if the acceptance criteria changed."
-            )
-        return await self.set_dod_spec(conversation_id, spec, set_by=actor)
+        payload = spec.to_json_dict()
+        now = datetime.now(UTC).isoformat()
+        async with self._write_lock:
+            with self._conn:
+                row = self._conn.execute(
+                    "SELECT spec FROM dod_specs WHERE conversation_id = ?",
+                    (conversation_id,),
+                ).fetchone()
+                if row is None:
+                    # Bootstrap inside the same txn (mirrors set_dod_spec).
+                    self._conn.execute(
+                        "INSERT OR IGNORE INTO conversations "
+                        "(conversation_id, owner_id, created_at) VALUES (?, ?, ?)",
+                        (conversation_id, DEFAULT_OWNER_ID, datetime.now().isoformat()),
+                    )
+                    self._conn.execute(
+                        "INSERT INTO dod_specs "
+                        "(conversation_id, spec, set_at, set_by) VALUES (?, ?, ?, ?)",
+                        (conversation_id, json.dumps(payload), now, actor),
+                    )
+                    return spec
+                existing = DoDSpec.from_json_dict(json.loads(row[0]))
+                if not is_monotonic_extension(existing, spec):
+                    raise DoDSpecAlreadySet(
+                        f"DoD spec for {conversation_id!r} cannot be replaced: the new "
+                        "spec would WEAKEN it (a committed deliverable was dropped without "
+                        "an explicit rename). The acceptance bar can only be EXTENDED."
+                    )
+                self._conn.execute(
+                    "UPDATE dod_specs SET spec = ?, set_at = ?, set_by = ? "
+                    "WHERE conversation_id = ?",
+                    (json.dumps(payload), now, actor, conversation_id),
+                )
+        return spec
 
     # ---- writes --------------------------------------------------------------
 

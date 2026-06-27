@@ -99,6 +99,14 @@ class FileExistsPredicate(BaseModel):
 
     kind: Literal["file_exists"] = "file_exists"
     path: str = Field(min_length=1)
+    # MONOTONIC-RENAME support (v2): when a revision MOVES a previously-required
+    # deliverable to a new path, the new predicate sets `renamed_from` to the OLD
+    # path. This lets the monotonic DoD extension allow a genuine rename
+    # (old→new) WITHOUT allowing the model to silently DROP a committed
+    # deliverable: an old path that simply vanishes (neither still required nor
+    # explicitly renamed-from) is a weakening and is rejected. Comparison-ONLY —
+    # the evaluator ignores it (it only checks `path`).
+    renamed_from: str | None = Field(default=None)
 
 
 class CommandExitPredicate(BaseModel):
@@ -193,3 +201,45 @@ class DoDSpec(BaseModel):
         """Validate a plain dict against the spec. Rejects unknown fields and
         invalid predicate shapes."""
         return cls.model_validate(obj)
+
+
+def is_monotonic_extension(old: DoDSpec, new: DoDSpec) -> bool:
+    """True iff `new` only ADDS to / RENAMES within `old` — never WEAKENS it.
+
+    This is the v2 monotonic guard that lets a mid-build steer EXTEND the
+    Definition-of-Done (e.g. "also add a Contact page" → require contact.html)
+    while preserving the security property the write-once design protects: the
+    agent can never DROP or relax an acceptance bar it already committed to.
+
+    Rules (codex-reviewed, identity-based — NOT a naive path superset):
+      * Every NON-file_exists predicate in `old` must appear verbatim in `new`
+        (command/http_ok bars cannot be silently removed).
+      * Every `old` file_exists `path` must be covered in `new` by EITHER
+        a file_exists at the same `path` (unchanged), OR a file_exists whose
+        `renamed_from` equals that path (an explicit, audited rename). An old
+        path that simply vanishes is a WEAKENING → not monotonic.
+      * Every `renamed_from` claimed in `new` MUST reference a real `old` path —
+        a rename-from-nothing is a forged tie used to drop scope → rejected.
+    Additions (new file_exists paths with no `old` counterpart) are always fine.
+    """
+    old_fe = {p.path for p in old.predicates if isinstance(p, FileExistsPredicate)}
+    new_paths = {p.path for p in new.predicates if isinstance(p, FileExistsPredicate)}
+    new_renames = {
+        p.renamed_from
+        for p in new.predicates
+        if isinstance(p, FileExistsPredicate) and p.renamed_from
+    }
+    # A claimed rename must reference an actual prior deliverable.
+    if any(rf not in old_fe for rf in new_renames):
+        return False
+    # Every old deliverable must still be required, or explicitly renamed away.
+    for op in old_fe:
+        if op not in new_paths and op not in new_renames:
+            return False
+    # Non-file_exists bars cannot be dropped.
+    old_other = [p for p in old.predicates if not isinstance(p, FileExistsPredicate)]
+    new_other = [p for p in new.predicates if not isinstance(p, FileExistsPredicate)]
+    for p in old_other:
+        if p not in new_other:
+            return False
+    return True
