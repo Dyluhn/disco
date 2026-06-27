@@ -72,9 +72,14 @@ def _plan_scenario():
     return {"id": "sim", "assertions": {"event_chain": {"require_plan_before_execution": True}}}
 
 
-async def test_wrong_tool_in_planning_is_classified():
-    """A scripted write in PLANNING executes today (product bug); the classifier
-    codes it WRITE_TOOL_ATTEMPTED_IN_PLANNING from the real event log."""
+async def test_wrong_tool_in_planning_is_gated():
+    """REGRESSION (was ..._is_classified, which asserted the oracle CATCHES the bug): the
+    engine's planning gate now PREVENTS a write attempted in PLANNING from executing, so the
+    simulated product bug no longer occurs. Assert the FIX: the write does NOT execute and the
+    oracle does NOT code WRITE_TOOL_ATTEMPTED_IN_PLANNING. (Oracle catch-capability for OTHER
+    transcripts is covered by captured real-failure fixtures.)"""
+    from disco.core import ObservationEvent
+
     cid = "sim-wrong-tool"
     agent = ScriptedAgent(_steps(wrong_tool_in_planning()))
     loop, store = build_loop(
@@ -88,14 +93,26 @@ async def test_wrong_tool_in_planning_is_classified():
     await loop.send_message("create index.html")
     await loop.run()
 
+    events = await store.get_events(cid)
+    # The write in PLANNING was REJECTED by the gate — no SUCCESSFUL file_write observation.
+    assert not [
+        e
+        for e in events
+        if isinstance(e, ObservationEvent)
+        and e.tool_result.tool_name == "file_write"
+        and e.tool_result.success
+    ], "the planning gate must reject a write attempted in PLANNING (the fix)"
     c = classify(await _dump(store, cid), scenario=_plan_scenario())
-    assert c["status"] == "FAIL"
-    assert c["code"] == "WRITE_TOOL_ATTEMPTED_IN_PLANNING"
-    assert c["severity"] == "P0"
+    assert c["code"] != "WRITE_TOOL_ATTEMPTED_IN_PLANNING"
 
 
-async def test_no_replan_after_followup_is_classified():
-    """A follow-up that free-builds without re-planning -> NO_REPLAN_AFTER_REVISION."""
+async def test_revision_followup_reenters_planning():
+    """REGRESSION (was ..._is_classified): a revision follow-up via send_message now RE-ENTERS
+    PLANNING (the ingest re-plan + marker fix 33a0cc43/77491570), so the loop no longer
+    free-builds on the stale plan. Assert the FIX: a `planning` marker is emitted after the
+    follow-up and no NO_REPLAN_AFTER_REVISION is produced."""
+    from disco.core import EventSource, MessageEvent, StatusEvent
+
     cid = "sim-no-replan"
     agent = ScriptedAgent(_steps(plan_then_build()))
     loop, store = build_loop(
@@ -111,14 +128,28 @@ async def test_no_replan_after_followup_is_classified():
     await loop.approve_plan()
     await loop.run()  # execute + finish the first build
 
-    # Follow-up WITHOUT request_plan: a plain steer that free-builds (the B6 shape).
+    def _seq_of_user(events, needle):
+        return next(
+            e.seq
+            for e in events
+            if isinstance(e, MessageEvent)
+            and e.source == EventSource.USER
+            and needle in (e.message.content or "")
+        )
+
     loop.agent = ScriptedAgent(_steps(no_replan_followup()))
-    await loop.send_message("also add a contact page")
+    await loop.send_message("also add a contact page")  # revision intent → ingest re-plan
     await loop.run()
 
+    events = await store.get_events(cid)
+    fseq = _seq_of_user(events, "contact page")
+    # Re-entered PLANNING after the follow-up (the durable fix), so the stale free-build is gated.
+    assert any(
+        isinstance(e, StatusEvent) and e.detail == "planning" and (e.seq or 0) > fseq
+        for e in events
+    ), "a revision follow-up must re-enter PLANNING (the fix), not free-build"
     c = classify(await _dump(store, cid))
-    assert c["status"] == "FAIL"
-    assert c["code"] == "NO_REPLAN_AFTER_REVISION"
+    assert c["code"] != "NO_REPLAN_AFTER_REVISION"
 
 
 async def test_clean_run_passes_classifier():

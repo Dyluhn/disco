@@ -209,10 +209,14 @@ class PodmanSandboxInstance(ContainerInstance):
         if not any(m in msg.lower() for m in _PODMAN_DEAD_MARKERS):
             return
         status, reason = self._inspect_state()
-        if status == "running":
+        # "running" = a TRANSIENT exec refusal on a live box (no recreate). Also treat the
+        # TEARDOWN states {stopping, removing, paused} as transient: an exec racing the
+        # NORMAL end-of-build container teardown is NOT a mid-session death — recreating
+        # (or WARN-logging "died") there is harmless noise on an already-finishing build.
+        if status in ("running", "stopping", "removing", "paused"):
             _LOG.info(
-                "sandbox container %s: transient podman exec error, container RUNNING (%s): %s",
-                self._name, reason, msg.strip(),
+                "sandbox container %s: transient podman exec error, container %s (%s): %s",
+                self._name, status or "alive", reason, msg.strip(),
             )
             raise SandboxError(
                 f"transient sandbox exec error in {self._name}: {msg.strip()}"

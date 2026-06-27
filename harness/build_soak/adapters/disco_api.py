@@ -1701,9 +1701,15 @@ def _evaluate_snapshot_readiness(
             ok = present and n >= _SNAPSHOT_UNPROVEN_STABLE_POLLS
             if ok:
                 unproven_ready.append(p)
-        else:  # unknown — settle on extended stability of whatever state (present OR absent)
-            ok = n >= _SNAPSHOT_UNPROVEN_STABLE_POLLS
-            if ok and present:
+        else:  # unknown — require PRESENT + extended stability (NOT stable-absent).
+            # Settling on a STABLE-ABSENT declared file accepted a PARTIAL snapshot (only the
+            # .pmx/ live-browser scaffolding had flushed) as final, before the real output
+            # (e.g. index.html) appeared → a FALSE_FINISH_NO_OUTPUT false-negative on a build
+            # that actually succeeded. Requiring `present` makes a not-yet-flushed file keep
+            # the snapshot un-ready; a file that is GENUINELY never created waits the full
+            # window and the run's own timeout flags it (correct), instead of premature ready.
+            ok = present and n >= _SNAPSHOT_UNPROVEN_STABLE_POLLS
+            if ok:
                 unproven_ready.append(p)
         if not ok:
             ready = False
