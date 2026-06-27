@@ -273,8 +273,10 @@ async def test_assist_on_failed_write_does_not_shrink():
     assert "written to" not in off_content
     assert "file_read to recover" not in off_content
     # Both tiers still elide the long content to the K1 placeholder (F8 didn't fire).
+    # assist-ON keeps the workspace-block marker ("do not copy this placeholder");
+    # assist-OFF uses the de-temptified neutral marker ("do not copy or re-send").
     assert "chars" in content and "do not copy this placeholder" in content
-    assert "chars" in off_content and "do not copy this placeholder" in off_content
+    assert "chars" in off_content and "do not copy or re-send" in off_content
 
 
 async def test_assist_on_failed_write_keeps_full_content_for_retry():
@@ -300,7 +302,9 @@ async def test_assist_on_failed_write_keeps_full_content_for_retry():
     for c in (on_content, off_content):
         assert "written to" not in c
         assert "file_read to recover" not in c
-        assert "do not copy this placeholder" in c  # the long content is still elided
+        # the long content is still elided; both tier markers carry the anti-copy phrase
+        # ("do not copy this placeholder" assist-ON, "do not copy or re-send" assist-OFF).
+        assert "do not copy" in c
 
 
 # ---------------------------------------------------------------------------
@@ -333,7 +337,7 @@ async def test_assist_off_byte_identical_even_for_confirmed_write():
     # placeholder. K1 reworded it to point at the CURRENT WORKSPACE snapshot
     # (away from "use file_read", which invited the read loop); the structural
     # signature is "<N chars … full content …>".
-    assert "chars" in content and "full content" in content
+    assert "chars" in content and "elided" in content and "do not copy or re-send" in content
 
 
 async def test_assist_off_renders_full_short_content_unchanged():

@@ -343,7 +343,11 @@ _ELISION_PARAPHRASE_RE = re.compile(
     r"<"
     r"(?=[^>]*\b(?:elided|full content|placeholder)\b)"
     r"[^>]*"
-    r"(?:re-issue the call or file_read the path|do not copy this placeholder)"
+    # signature TAIL phrases — kept in lockstep with `_arg_snip_marker_neutral`. Legacy
+    # phrases stay (back-compat for any in-flight marker); the de-temptified wording adds
+    # "do not copy or re-send" + "already applied to the workspace".
+    r"(?:re-issue the call or file_read the path|do not copy this placeholder"
+    r"|do not copy or re-send|already applied to the workspace)"
     r"[^>]*>"
 )
 
@@ -371,9 +375,15 @@ def _arg_snip_marker_below(n: int) -> str:
 # so the model needs no pointer to it anyway.) Kept angle-bracketed + "elided"/"full
 # content" so the K1 execution guard (`_ELISION_MARKER_RE`) still detects a copy-back.
 def _arg_snip_marker_neutral(n: int) -> str:
+    # DE-TEMPTIFIED (elision redesign slice 1): the old wording told the model to
+    # "re-issue the call" — which M3 took LITERALLY, copying this marker back into a new
+    # tool call → K1 reject → re-issue → STUCK. The body is ALREADY applied; nothing to
+    # re-issue. Render as inert metadata. KEEP the "<N chars … elided …>" grammar so the K1
+    # guard (`_ELISION_MARKER_RE`) + `_ELISION_PARAPHRASE_RE` still detect a copy-back.
     return (
-        f"<{n:,} chars elided — re-issue the call or file_read the path for the "
-        "full content; do not copy this placeholder into a tool argument>"
+        f"<{n:,} chars elided — body already applied to the workspace; this is a history "
+        "placeholder, NOT a tool argument: do not copy or re-send it. file_read the path "
+        "if you need the content again>"
     )
 
 

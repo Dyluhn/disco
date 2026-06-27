@@ -145,8 +145,8 @@ def test_retarget_uses_neutral_marker_for_pinned_and_unpinned_alike():
     # carry it even for the pinned path).
     assert "CURRENT WORKSPACE block" not in pinned
     assert "CURRENT WORKSPACE block" not in unpinned
-    assert "re-issue the call or file_read the path" in pinned
-    assert "re-issue the call or file_read the path" in unpinned
+    assert "do not copy or re-send" in pinned
+    assert "do not copy or re-send" in unpinned
     # Both stay detectable by the K1 copy-back execution guard.
     assert find_elided_arg_markers({"content": pinned}) == ["content"]
     assert find_elided_arg_markers({"content": unpinned}) == ["content"]
@@ -165,7 +165,7 @@ def test_retarget_argument_without_a_path_uses_nondangling_marker():
     out = retarget_elided_arg_markers([msg])
     marker = out[0].tool_calls[0]["arguments"]["command"]
     assert "CURRENT WORKSPACE block" not in marker
-    assert "re-issue the call or file_read the path" in marker
+    assert "do not copy or re-send" in marker
 
 
 def test_assist_off_build_marks_every_elided_arg_nondangling():
@@ -185,8 +185,12 @@ def test_assist_off_build_marks_every_elided_arg_nondangling():
     # NEITHER arg marker claims the content is in the block (pinned or not).
     assert "CURRENT WORKSPACE block" not in small_marker
     assert "CURRENT WORKSPACE block" not in big_marker
-    assert "re-issue the call or file_read the path" in small_marker
-    assert "re-issue the call or file_read the path" in big_marker
+    # De-temptified neutral marker: an elided-arg placeholder with the anti-copy
+    # instruction, and crucially NO "re-issue the call" affordance (the copy-back bait).
+    for marker in (small_marker, big_marker):
+        assert "elided" in marker
+        assert "do not copy or re-send" in marker
+        assert "re-issue the call" not in marker
 
 
 # ---------------------------------------------------------------------------

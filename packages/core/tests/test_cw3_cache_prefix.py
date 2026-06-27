@@ -310,4 +310,4 @@ def test_no_directional_words_in_recovery_markers():
     snipped = out[0].tool_calls[0]["arguments"]["content"]
     assert _DIRECTIONAL.search(snipped) is None, snipped
     assert "CURRENT WORKSPACE block" not in snipped  # neutral — no dangling block claim
-    assert "re-issue the call or file_read the path" in snipped
+    assert "do not copy or re-send" in snipped

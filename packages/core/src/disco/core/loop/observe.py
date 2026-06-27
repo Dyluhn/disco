@@ -485,8 +485,8 @@ class Observer:
                         error=(
                             f"Argument(s) {_k1_bad} contain an internal elision "
                             "placeholder (e.g. text inside angle brackets saying the "
-                            "content was elided / to re-issue the call or file_read the "
-                            "path for the full content), not real content. That marker "
+                            "content was elided / that the body was already applied), "
+                            "not real content. That marker "
                             "is a context-saving stand-in for content you ALREADY wrote "
                             "— it is NOT the content itself, and it was NOT executed. Do "
                             "not copy the placeholder into a tool call. Read the "
