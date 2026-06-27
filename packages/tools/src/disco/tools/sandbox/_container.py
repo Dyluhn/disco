@@ -36,6 +36,10 @@ if TYPE_CHECKING:
 
 _LOG = logging.getLogger(__name__)
 
+# Backoff between the bounded re-verify probes that confirm a container is REALLY dead
+# (vs a transient docker/podman API 404) before accepting a death verdict + recreating.
+_DEATH_REVERIFY_BACKOFF_S = 0.12
+
 
 # EPIC H (P1) — the deployment config is the MAXIMUM, not a fallback ---------------
 #
@@ -348,36 +352,65 @@ class ContainerInstance:
             )
         return result["status"] == "running"
 
-    def _classify_failure(self, exc: Exception) -> SandboxError:
-        """A container op threw. If the container is no longer running (OOM-killed,
-        exited, removed — the VM 202 'OOM kills the WHOLE box' finding), the box is
-        gone → SandboxUnavailableError, which the session layer catches to RE-CREATE.
-        Otherwise it's a generic per-op SandboxError. Typing death distinctly is what
-        lets a backend-agnostic session tell a dead box from a normal op error.
-
-        The `reload()` call goes through `_safe_reload` — a HUNG or RAISING client
-        raises a typed `SandboxUnavailableError` within `_reload_timeout_s`. We
-        catch it here and type the box as dead: the event loop NEVER blocks on
-        the probe. (Dispo #25 wedge-guard.)"""
+    def _classify_failure_sync(self, exc: Exception) -> SandboxError:
+        """Sync classify: a container op threw. If the box is no longer running (a SINGLE
+        `_safe_reload` miss), type it dead (SandboxUnavailableError → session RE-CREATES);
+        else a per-op SandboxError. Runs OFF the event loop (via to_thread from the async
+        wrapper). Does NOT log the death warning — `_classify_failure_async` logs it ONLY
+        after re-verify CONFIRMS death, so a TRANSIENT API 404 never emits a false death
+        diagnostic. (Dispo #25 wedge-guard bounds the probe.)"""
         alive = False
         try:
             alive = self._safe_reload()
         except SandboxUnavailableError:
-            # Hung or raised reload — same typed signal as "the box is gone".
-            # The session layer catches SandboxUnavailableError to RE-CREATE.
             alive = False
         if not alive:
-            # Attribute the death (OOMKilled vs plain exit vs runtime error) from the
-            # container's State, which _safe_reload() just refreshed — CALL-LOCAL, no stored
-            # state. Best-effort so a mid-session recreate is no longer opaque.
-            reason = self._death_reason_from_attrs()
-            _LOG.warning(
-                "sandbox container %s died mid-session (%s): %s", self.id, reason, exc
-            )
-            return SandboxUnavailableError(
-                f"sandbox container died mid-session ({reason}): {exc}"
-            )
+            return SandboxUnavailableError(f"sandbox container died mid-session: {exc}")
         return SandboxError(f"sandbox op failed in {self.id}: {exc}")
+
+    async def _confidently_alive(self) -> bool:
+        """STRICT liveness re-verify for a death verdict: up to 2 FRESH probes with a short
+        async backoff. Returns True ONLY when a probe reads status=="running" (exactly what
+        `_safe_reload` returns). ANY ambiguity — a raise, non-running, or the box dying
+        mid-window — returns False ⇒ the death stands. We only override a death to "transient"
+        when we POSITIVELY CONFIRM the container is running, because a real death misclassified
+        as transient surfaces as repeated op failures (worse than a clean recreate). Off-loads
+        each probe to a thread; sleeps are async so the event loop is never blocked."""
+        for _ in range(2):
+            await asyncio.sleep(_DEATH_REVERIFY_BACKOFF_S)
+            try:
+                if await asyncio.to_thread(self._safe_reload):
+                    return True
+            except SandboxUnavailableError:
+                pass
+        return False
+
+    async def _classify_failure_async(self, exc: Exception) -> SandboxError:
+        """Classify a raw op throw, RE-VERIFYING before accepting a death verdict. A transient
+        docker/podman API 404 (a simultaneous burst under concurrent load) momentarily fails the
+        reload on a container that is actually ALIVE — declaring death there triggers a needless
+        sandbox RECREATE that derails the build (live-captured: 4 deaths, 0 OOM, all exit=0). So
+        when the sync classify says death, re-probe; ONLY downgrade to a retryable per-op error if
+        `_confidently_alive()` CONFIRMS running. Else the death stands + is logged with its
+        attributed reason. Used by BOTH op paths (`_guarded`, `exec_shell`)."""
+        base = await asyncio.to_thread(self._classify_failure_sync, exc)
+        if not isinstance(base, SandboxUnavailableError):
+            return base
+        if await self._confidently_alive():
+            _LOG.info(
+                "sandbox container %s: transient API error, container running on re-verify: %s",
+                self.id, exc,
+            )
+            return SandboxError(f"transient sandbox API error in {self.id}: {exc}")
+        # Death CONFIRMED across the re-verify window — attribute it (OOMKilled/exit) in BOTH
+        # the WARNING log and the returned error so a recreate is no longer opaque.
+        reason = self._death_reason_from_attrs()
+        _LOG.warning(
+            "sandbox container %s died mid-session (%s): %s", self.id, reason, exc
+        )
+        return SandboxUnavailableError(
+            f"sandbox container died mid-session ({reason}): {exc}"
+        )
 
     def _death_reason_from_attrs(self) -> str:
         """Best-effort read of the container's State (refreshed by _safe_reload) for
@@ -400,7 +433,7 @@ class ContainerInstance:
         except SandboxError:
             raise  # explicit, correctly-typed already
         except Exception as exc:  # noqa: BLE001
-            raise self._classify_failure(exc) from exc
+            raise await self._classify_failure_async(exc) from exc
 
     @property
     def workspace_path(self) -> str | None:
@@ -498,7 +531,7 @@ class ContainerInstance:
                 timed_out=True,
             )
         except Exception as exc:  # noqa: BLE001 — classify: dead box vs per-op failure
-            raise self._classify_failure(exc) from exc
+            raise await self._classify_failure_async(exc) from exc
 
         exit_code = res[0] if res[0] is not None else -1
         out, err = res[1] if res[1] is not None else (None, None)

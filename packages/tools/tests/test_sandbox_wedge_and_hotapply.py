@@ -22,12 +22,14 @@ can die cleanly.
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 
 from disco.tools.sandbox import (
     GvisorSandboxService,
     SandboxConfig,
+    SandboxError,
     SandboxSpec,
     SandboxUnavailableError,
 )
@@ -161,7 +163,7 @@ def test_wedge_guard_typed_error_for_raising_reload():
     # The guard raises; `_classify_failure` catches that and returns a
     # typed `SandboxUnavailableError` (the session re-creates from this).
     fake_op_error = RuntimeError("op itself failed before the reload")
-    classified = inst._classify_failure(fake_op_error)
+    classified = inst._classify_failure_sync(fake_op_error)
     assert isinstance(classified, SandboxUnavailableError)
     assert "died mid-session" in str(classified)
     # The fake `reload()` was actually called once.
@@ -179,15 +181,51 @@ class DeadOOMContainer(_FakeContainerBase):
         self.attrs = {"State": {"OOMKilled": True, "ExitCode": 137, "Error": ""}}
 
 
+class TransientThenAliveContainer(_FakeContainerBase):
+    """`reload()` reports the box NON-running on the FIRST probe (the sync classify, mimicking
+    a transient docker-API 404), then RUNNING on the re-verify probes — i.e. the container was
+    alive all along and the 404 was a momentary blip (#3 real root)."""
+
+    def reload(self) -> None:
+        with self.reload_lock:
+            self.reload_call_count += 1
+        # 1st probe = the transient miss; subsequent re-verify probes see it running again.
+        self.status = "exited" if self.reload_call_count == 1 else "running"
+        self.attrs = {"State": {"OOMKilled": False, "ExitCode": 0, "Error": ""}}
+
+
 def test_classify_failure_attributes_oom_death():
-    """A container that died OOM-killed must surface the REASON (OOMKilled/exit) in the
-    typed SandboxUnavailableError — so a mid-session recreate is no longer opaque (#3)."""
+    """A genuinely OOM-killed container: the async classifier re-verifies (stays non-running),
+    CONFIRMS death, and surfaces the REASON (OOMKilled/exit) — recreate, not opaque (#3)."""
     inst = _make_inst(DeadOOMContainer(), reload_timeout_s=0.5)
-    classified = inst._classify_failure(RuntimeError("exec failed: container not running"))
+    classified = asyncio.run(
+        inst._classify_failure_async(RuntimeError("exec failed: container not running"))
+    )
     assert isinstance(classified, SandboxUnavailableError)
     msg = str(classified)
     assert "died mid-session" in msg
     assert "OOMKilled=True" in msg and "exit=137" in msg  # the death reason is attributed
+
+
+def test_transient_404_recovers_not_death():
+    """The #3 fix: a transient API 404 (box non-running on the first probe, RUNNING on
+    re-verify) must NOT be typed as death — it becomes a retryable per-op SandboxError, so the
+    session does NOT needlessly recreate the (alive) sandbox mid-build."""
+    inst = _make_inst(TransientThenAliveContainer(), reload_timeout_s=0.5)
+    classified = asyncio.run(
+        inst._classify_failure_async(RuntimeError("404 Client Error: not running"))
+    )
+    assert isinstance(classified, SandboxError)
+    assert not isinstance(classified, SandboxUnavailableError)  # NOT a death → no recreate
+    assert "transient" in str(classified).lower()
+
+
+def test_real_death_persists_through_reverify():
+    """A box that stays dead across the re-verify window is STILL typed unavailable (recreate)
+    — the conservative bias (ambiguity/persistent-non-running ⇒ death) is preserved."""
+    inst = _make_inst(DeadOOMContainer(), reload_timeout_s=0.5)
+    classified = asyncio.run(inst._classify_failure_async(RuntimeError("boom")))
+    assert isinstance(classified, SandboxUnavailableError)
 
 
 def test_death_reason_helper_never_raises_on_bad_attrs():

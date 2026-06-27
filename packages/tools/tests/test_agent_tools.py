@@ -282,13 +282,13 @@ def _instance(container) -> ContainerInstance:
 def test_dead_box_is_typed_unavailable_live_box_is_not():
     # a stopped/removed container → SandboxUnavailableError (session re-creates)
     assert isinstance(
-        _instance(_Container("exited"))._classify_failure(Exception("boom")),
+        _instance(_Container("exited"))._classify_failure_sync(Exception("boom")),
         SandboxUnavailableError,
     )
     assert isinstance(
-        _instance(_Container("gone"))._classify_failure(Exception("boom")),
+        _instance(_Container("gone"))._classify_failure_sync(Exception("boom")),
         SandboxUnavailableError,
     )
     # a still-running container → a generic SandboxError (a per-op failure, NOT a death)
-    err = _instance(_Container("running"))._classify_failure(Exception("boom"))
+    err = _instance(_Container("running"))._classify_failure_sync(Exception("boom"))
     assert isinstance(err, SandboxError) and not isinstance(err, SandboxUnavailableError)
