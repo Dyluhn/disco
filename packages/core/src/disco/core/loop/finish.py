@@ -1093,6 +1093,30 @@ class FinishGate:
                 self._loop.conversation_id,
                 len(failed),
             )
+            if failed:
+                # HONEST-INCOMPLETE surface (the research's UNVERIFIED third state): we are
+                # allowing finish, but the run did NOT verify these acceptance checks. Record
+                # an ADVISORY note (visible, non-blocking, NOT a refusal) so the user/audit
+                # sees "finished, but couldn't confirm X" instead of a silent clean pass.
+                unverified = "\n".join(
+                    f"  - {r.predicate!r}\n      could not verify: {r.reason}" for r in failed
+                )
+                await self._loop._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                f"<note>\nFinished, but {len(failed)} acceptance check(s) "
+                                "could NOT be verified (the check could not run — e.g. a "
+                                "denied command or a server that was not serving). These are "
+                                "NOT failures, but they were NOT confirmed either:\n\n"
+                                f"{unverified}\n</note>"
+                            ),
+                        ),
+                        meta={"advisory": "dod_unverified_at_finish"},
+                    )
+                )
             self._loop._dod_refusals = 0
             return True
         # Cap the refusal streak (mirror _FINISH_VERIFY_CAP): after N consecutive

@@ -265,6 +265,40 @@ async def test_revision_monotonically_extends_the_dod(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_infra_release_emits_unverified_advisory(tmp_path):
+    """v2.1 + honest-incomplete: when the gate RELEASES on an infra-only failure (a denied
+    command), it allows finish BUT records a visible ADVISORY note naming what could not be
+    verified — not a silent clean pass."""
+    from disco.core.dod import CommandExitPredicate, DoDSpec
+    from disco.core.dod_evaluator import DoDEvaluator
+    import sys
+    sys.path.insert(0, "packages/core/tests")
+    from test_dod_evaluator import _denied_command_runner, _passing_http_probe
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    loop, store = build_loop(
+        ScriptedAgent([]),
+        conversation_id=CID,
+        dod_evaluator_factory=lambda: DoDEvaluator(
+            ws, command_runner=_denied_command_runner, http_probe=_passing_http_probe
+        ),
+    )
+    await store.set_dod_spec(CID, DoDSpec(predicates=[CommandExitPredicate(cmd="make", expect_exit=0)]))
+    passed = await loop._finish.finish_dod_gate_passed()
+    assert passed is True  # released on infra
+    events = await store.get_events(CID)
+    advisories = [
+        e for e in events
+        if isinstance(e, MessageEvent)
+        and isinstance(e.meta, dict)
+        and e.meta.get("advisory") == "dod_unverified_at_finish"
+    ]
+    assert len(advisories) == 1
+    assert "could NOT be verified" in advisories[0].message.content
+
+
+@pytest.mark.asyncio
 async def test_command_predicate_arms_in_v2(tmp_path):
     """v2.1: a `command` done_condition NOW arms the gate (the evaluator's infra-vs-task
     channel makes it safe — a denied/unrunnable command releases, only a ran-and-failed
