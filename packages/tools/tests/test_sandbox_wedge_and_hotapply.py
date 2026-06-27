@@ -168,6 +168,34 @@ def test_wedge_guard_typed_error_for_raising_reload():
     assert raising.reload_call_count == 1
 
 
+class DeadOOMContainer(_FakeContainerBase):
+    """`reload()` succeeds but the container is EXITED with an OOM kill recorded in
+    `.attrs['State']` — the #3 death-attribution case (container OOM-killed mid-build)."""
+
+    def reload(self) -> None:
+        with self.reload_lock:
+            self.reload_call_count += 1
+        self.status = "exited"
+        self.attrs = {"State": {"OOMKilled": True, "ExitCode": 137, "Error": ""}}
+
+
+def test_classify_failure_attributes_oom_death():
+    """A container that died OOM-killed must surface the REASON (OOMKilled/exit) in the
+    typed SandboxUnavailableError — so a mid-session recreate is no longer opaque (#3)."""
+    inst = _make_inst(DeadOOMContainer(), reload_timeout_s=0.5)
+    classified = inst._classify_failure(RuntimeError("exec failed: container not running"))
+    assert isinstance(classified, SandboxUnavailableError)
+    msg = str(classified)
+    assert "died mid-session" in msg
+    assert "OOMKilled=True" in msg and "exit=137" in msg  # the death reason is attributed
+
+
+def test_death_reason_helper_never_raises_on_bad_attrs():
+    inst = _make_inst(_FakeContainerBase())
+    inst._container.attrs = None  # type: ignore[assignment]  — pathological
+    assert inst._death_reason_from_attrs() in ("reason-unavailable", "OOMKilled=None exit=None reason=")
+
+
 def test_wedge_guard_does_not_slow_healthy_clients():
     """The wedge-guard must not add measurable latency to a HEALTHY client.
     A healthy `reload()` is sub-ms; the guard is `Event.wait(timeout=0.5s)`

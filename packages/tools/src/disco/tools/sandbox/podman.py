@@ -163,17 +163,49 @@ class PodmanSandboxInstance(ContainerInstance):
         rc, out, _err = self._exec(argv, 30)
         return rc, out
 
+    def _inspect_death_reason(self) -> str:
+        """Best-effort `podman inspect` of the (dead/exited) container to ATTRIBUTE the
+        death — OOMKilled vs a plain nonzero exit vs a runtime error. A dead-but-not-yet-
+        removed container still has its record, so this usually resolves; if inspect itself
+        fails (container fully gone, client wedged), return a sentinel. NEVER raises — runs on
+        an already-failing path and must not mask the original death. Turns opaque mid-session
+        recreates into a known cause (OOM cap too tight, process crash, etc.)."""
+        try:
+            rc, out, _e = self._runner(
+                [
+                    "podman", "--url", self._cli_url, "inspect", "--format",
+                    "OOMKilled={{.State.OOMKilled}} exit={{.State.ExitCode}} "
+                    "reason={{.State.Error}}",
+                    self._name,
+                ],
+                10,
+            )
+            if rc == 0:
+                return out.decode("utf-8", "replace").strip() or "state-empty"
+        except Exception:  # noqa: BLE001 — diagnostic only, must never mask the death
+            pass
+        return "reason-unavailable"
+
     def _raise_if_dead(self, rc: int, err: bytes) -> None:
         """`podman exec` against a gone/exited container fails at the container level
         (rc 125 + a 'no such container'/'not running' marker), distinct from the inner
         command's own nonzero exit. Type that as SandboxUnavailableError so the session
         re-creates (carried lesson #1). NOTE: not live-re-verifiable (VM 202 destroyed);
-        best-effort, mirrors the docker-py path's `_classify_failure`."""
+        best-effort, mirrors the docker-py path's `_classify_failure`. Enriched with a
+        best-effort death-reason inspect (OOMKilled/exit) so a mid-session recreate is no
+        longer opaque — logged at WARNING with the container name."""
         if rc == 0:
             return
         msg = err.decode("utf-8", "replace")
         if any(m in msg.lower() for m in _PODMAN_DEAD_MARKERS):
-            raise SandboxUnavailableError(f"sandbox container died mid-session: {msg.strip()}")
+            reason = self._inspect_death_reason()
+            _LOG.warning(
+                "sandbox container %s died mid-session (%s): %s",
+                self._name, reason, msg.strip(),
+            )
+            raise SandboxUnavailableError(
+                f"sandbox container died mid-session ({reason}): {msg.strip()}"
+            )
 
     async def exec_shell(self, cmd: str, *, timeout_s: int) -> ExecResult:
         """Run `cmd` via the CLI native remote — the timeout is enforced in-container

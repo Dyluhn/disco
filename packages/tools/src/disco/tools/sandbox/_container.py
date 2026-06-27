@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import math
 import posixpath
 import tarfile
@@ -32,6 +33,8 @@ from .base import (
 
 if TYPE_CHECKING:
     from .config import SandboxConfig
+
+_LOG = logging.getLogger(__name__)
 
 
 # EPIC H (P1) — the deployment config is the MAXIMUM, not a fallback ---------------
@@ -364,8 +367,29 @@ class ContainerInstance:
             # The session layer catches SandboxUnavailableError to RE-CREATE.
             alive = False
         if not alive:
-            return SandboxUnavailableError(f"sandbox container died mid-session: {exc}")
+            # Attribute the death (OOMKilled vs plain exit vs runtime error) from the
+            # container's State, which _safe_reload() just refreshed — CALL-LOCAL, no stored
+            # state. Best-effort so a mid-session recreate is no longer opaque.
+            reason = self._death_reason_from_attrs()
+            _LOG.warning(
+                "sandbox container %s died mid-session (%s): %s", self.id, reason, exc
+            )
+            return SandboxUnavailableError(
+                f"sandbox container died mid-session ({reason}): {exc}"
+            )
         return SandboxError(f"sandbox op failed in {self.id}: {exc}")
+
+    def _death_reason_from_attrs(self) -> str:
+        """Best-effort read of the container's State (refreshed by _safe_reload) for
+        OOMKilled / ExitCode / Error. NEVER raises (diagnostic on a failing path)."""
+        try:
+            state = (getattr(self._container, "attrs", {}) or {}).get("State", {}) or {}
+            return (
+                f"OOMKilled={state.get('OOMKilled')} exit={state.get('ExitCode')} "
+                f"reason={state.get('Error') or ''}".strip()
+            )
+        except Exception:  # noqa: BLE001 — diagnostic only
+            return "reason-unavailable"
 
     async def _guarded(self, fn: Any) -> Any:
         """Run a blocking container op in a thread; let already-typed SandboxErrors
