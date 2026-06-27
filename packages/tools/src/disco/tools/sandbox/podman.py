@@ -163,49 +163,67 @@ class PodmanSandboxInstance(ContainerInstance):
         rc, out, _err = self._exec(argv, 30)
         return rc, out
 
-    def _inspect_death_reason(self) -> str:
-        """Best-effort `podman inspect` of the (dead/exited) container to ATTRIBUTE the
-        death — OOMKilled vs a plain nonzero exit vs a runtime error. A dead-but-not-yet-
-        removed container still has its record, so this usually resolves; if inspect itself
-        fails (container fully gone, client wedged), return a sentinel. NEVER raises — runs on
-        an already-failing path and must not mask the original death. Turns opaque mid-session
-        recreates into a known cause (OOM cap too tight, process crash, etc.)."""
+    def _inspect_state(self) -> tuple[str, str]:
+        """Best-effort `podman inspect` → (status, reason). `status` is `State.Status`
+        ("running" / "exited" / "" if unverifiable); `reason` attributes a death
+        (OOMKilled / exit / runtime error). A dead-but-not-yet-removed container still has
+        its record, so this usually resolves. NEVER raises — runs on an already-failing
+        path and must not mask the original error."""
         try:
             rc, out, _e = self._runner(
                 [
                     "podman", "--url", self._cli_url, "inspect", "--format",
-                    "OOMKilled={{.State.OOMKilled}} exit={{.State.ExitCode}} "
-                    "reason={{.State.Error}}",
+                    "status={{.State.Status}} OOMKilled={{.State.OOMKilled}} "
+                    "exit={{.State.ExitCode}} reason={{.State.Error}}",
                     self._name,
                 ],
                 10,
             )
             if rc == 0:
-                return out.decode("utf-8", "replace").strip() or "state-empty"
-        except Exception:  # noqa: BLE001 — diagnostic only, must never mask the death
+                text = out.decode("utf-8", "replace").strip()
+                status = ""
+                for tok in text.split():
+                    if tok.startswith("status="):
+                        status = tok[len("status="):]
+                        break
+                return status, (text or "state-empty")
+        except Exception:  # noqa: BLE001 — diagnostic only, must never mask the error
             pass
-        return "reason-unavailable"
+        return "", "reason-unavailable"
 
     def _raise_if_dead(self, rc: int, err: bytes) -> None:
-        """`podman exec` against a gone/exited container fails at the container level
-        (rc 125 + a 'no such container'/'not running' marker), distinct from the inner
-        command's own nonzero exit. Type that as SandboxUnavailableError so the session
-        re-creates (carried lesson #1). NOTE: not live-re-verifiable (VM 202 destroyed);
-        best-effort, mirrors the docker-py path's `_classify_failure`. Enriched with a
-        best-effort death-reason inspect (OOMKilled/exit) so a mid-session recreate is no
-        longer opaque — logged at WARNING with the container name."""
+        """A `podman exec` failing at the CONTAINER level (rc 125 + a dead marker) is usually
+        a gone/exited box → SandboxUnavailableError so the session RE-CREATES. BUT under
+        concurrent build load podman intermittently refuses an exec on a LIVE container
+        ("can only create exec sessions on running containers … improper"), and the broad
+        "improper" marker would misread that as death → a needless recreate that derails the
+        build. So RE-VERIFY via `podman inspect`: if State.Status=="running" the container is
+        ALIVE → this is a TRANSIENT exec error, raise a retryable per-op SandboxError (NO
+        recreate). Only a NOT-running / unverifiable container is typed dead. The inspect API
+        is reliable here (it's the EXEC that's transiently refused, not inspect), so this
+        re-verify is load-bearing under sustained concurrency. Mirrors the docker-py path's
+        re-verify (`_confidently_alive`)."""
         if rc == 0:
             return
         msg = err.decode("utf-8", "replace")
-        if any(m in msg.lower() for m in _PODMAN_DEAD_MARKERS):
-            reason = self._inspect_death_reason()
-            _LOG.warning(
-                "sandbox container %s died mid-session (%s): %s",
+        if not any(m in msg.lower() for m in _PODMAN_DEAD_MARKERS):
+            return
+        status, reason = self._inspect_state()
+        if status == "running":
+            _LOG.info(
+                "sandbox container %s: transient podman exec error, container RUNNING (%s): %s",
                 self._name, reason, msg.strip(),
             )
-            raise SandboxUnavailableError(
-                f"sandbox container died mid-session ({reason}): {msg.strip()}"
+            raise SandboxError(
+                f"transient sandbox exec error in {self._name}: {msg.strip()}"
             )
+        _LOG.warning(
+            "sandbox container %s died mid-session (%s): %s",
+            self._name, reason, msg.strip(),
+        )
+        raise SandboxUnavailableError(
+            f"sandbox container died mid-session ({reason}): {msg.strip()}"
+        )
 
     async def exec_shell(self, cmd: str, *, timeout_s: int) -> ExecResult:
         """Run `cmd` via the CLI native remote — the timeout is enforced in-container

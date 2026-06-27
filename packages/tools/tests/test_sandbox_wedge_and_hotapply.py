@@ -407,3 +407,54 @@ def test_client_timeout_is_hot_applicable():
     cfg = SandboxConfig()
     cfg.client_timeout_s = 12  # must not raise (mutable-by-construction, Dispo #25)
     assert cfg.client_timeout_s == 12
+
+
+# --- podman path: re-verify a transient exec error vs a real death (#3 closing fix) ---
+
+
+def _podman_inst(cli_runner):
+    from disco.tools.sandbox import SandboxSpec
+    from disco.tools.sandbox.podman import PodmanSandboxInstance
+
+    return PodmanSandboxInstance(
+        id="sbx", owner_id="o", conversation_id="c", spec=SandboxSpec(),
+        container=object(), container_workspace="/workspace", stop_timeout_s=5,
+        cli_url="unix:///run/podman.sock", container_name="disco-sbx-x", cli_runner=cli_runner,
+    )
+
+
+def test_podman_raise_if_dead_running_container_is_transient_not_death():
+    """Under concurrent load podman intermittently refuses an exec on a LIVE container
+    ('can only create exec sessions on running containers … improper'). The re-verify inspect
+    shows status=running → it is a TRANSIENT per-op error (retryable SandboxError), NOT a death
+    → the session must NOT recreate (#3 closing fix)."""
+    import pytest
+
+    def runner(argv, timeout):
+        if "inspect" in argv:
+            return (0, b"status=running OOMKilled=false exit=0 reason=", b"")
+        return (0, b"", b"")
+
+    inst = _podman_inst(runner)
+    with pytest.raises(SandboxError) as ei:
+        inst._raise_if_dead(
+            125,
+            b"Error: can only create exec sessions on running containers: container state improper",
+        )
+    assert not isinstance(ei.value, SandboxUnavailableError)  # NOT death → no recreate
+    assert "transient" in str(ei.value).lower()
+
+
+def test_podman_raise_if_dead_exited_container_is_death():
+    """A genuinely not-running container (inspect status != running) is STILL typed dead →
+    SandboxUnavailableError → recreate. The conservative bias holds."""
+    import pytest
+
+    def runner(argv, timeout):
+        if "inspect" in argv:
+            return (0, b"status=exited OOMKilled=false exit=0 reason=", b"")
+        return (0, b"", b"")
+
+    inst = _podman_inst(runner)
+    with pytest.raises(SandboxUnavailableError):
+        inst._raise_if_dead(125, b"Error: no such container: disco-sbx-x")
