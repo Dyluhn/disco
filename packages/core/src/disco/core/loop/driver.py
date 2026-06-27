@@ -38,7 +38,15 @@ from . import signals, view_render
 from .boundaries import AgentStep
 from .control import Disp
 from .fc_kit import _nearest_tool_name
-from .messages import _describe_llm_error
+from .messages import _PLAN_EXPLORE_READ_CAP, _describe_llm_error
+
+# FORCED-SUBMIT read grace: how many ADDITIONAL grounding reads a model may make AFTER
+# force_submit fired (at _PLAN_EXPLORE_READ_CAP) before the offered tools collapse to
+# submit_plan only. ~30% of revision re-plans want to file_read the current files to ground
+# the diff BEFORE submitting; narrowing to submit-only stranded them (file_read rejected →
+# actionless → killed). A few grounding reads then submit-only bounds a runaway (the
+# actionless valve already catches tool-LESS prose turns; this bounds tool-CALL read loops).
+_FORCE_SUBMIT_READ_GRACE = 3
 from .stream_extract import extract_partial_string_field
 from .tool_specs import (
     _ask_user_tool_singleton,
@@ -253,15 +261,36 @@ class Driver:
         if self._loop.mode == OperatingMode.PLANNING:
             # FORCED-SUBMIT RECOVERY (revision re-plan). When the engine has escalated a
             # stuck revision re-plan (signals.revision_force_submit), narrow the offered
-            # tools to the plan tool ONLY so the model must submit the plan it has been
-            # narrating instead of looping in prose. Revision-only + survives resume (the
-            # caller derives the flag from the replayed event marker).
+            # tools to submit_plan + READ tools (file_read/file_list) — NOT submit-only.
+            # ROOT (proven live, ~30% reproduction): a model re-planning a revision often
+            # wants to file_read the current files to ground the diff BEFORE submitting
+            # ("let me re-read the existing files, then submit"). Narrowing to submit_plan
+            # ONLY left that model no legal move (its file_read was rejected → no progress →
+            # actionless valve → killed). Keep reads so it can ground, then submit. A few
+            # grounding reads are bounded by the read grace below; the prose-narration case
+            # force_submit also targets is a TOOL-LESS turn, still caught by the valve.
             if force_submit_only and self._loop._plan_tool is not None:
                 plan_name = getattr(
                     self._loop._plan_tool, "name", self._loop._plan_tool
                 )
+                # Read grace: allow grounding reads until the read counter exceeds the cap
+                # by _FORCE_SUBMIT_READ_GRACE, THEN collapse to submit-only so a read loop
+                # can't run to the iteration hard cap.
+                reads_allowed = self._loop._plan_explore_reads < (
+                    _PLAN_EXPLORE_READ_CAP + _FORCE_SUBMIT_READ_GRACE
+                )
+                readonly = self.readonly_tool_names() or frozenset()
+                if self._loop._planning_tools:
+                    # Keep allowlist semantics; never widen beyond read-only tools.
+                    readonly = readonly & self._loop._planning_tools
+
+                def _force_keep(name: str | None) -> bool:
+                    if name == plan_name:
+                        return True
+                    return reads_allowed and name in readonly
+
                 narrowed = [
-                    t for t in tools if getattr(t, "name", None) == plan_name
+                    t for t in tools if _force_keep(getattr(t, "name", None))
                 ]
                 if narrowed:
                     return narrowed

@@ -359,8 +359,9 @@ def revision_force_submit(events: list[Event]) -> bool:
     `_REVISION_FORCE_SUBMIT_K` prose-only revision-planning nudges (the soft _PLAN_NUDGE
     was ignored and the build would otherwise pause "actionless" → STUCK, with resume
     re-entering the same prose loop). While this is True, `driver.tools_for_step` narrows
-    the offered planning tools to `submit_plan` ONLY, so the model must submit the plan it
-    has been narrating.
+    the offered planning tools to `submit_plan` + READ tools (within a read grace), so the
+    model can file_read the current files to ground its revised plan and then submit — the
+    prose-narration case is still caught by the actionless valve (a tool-less turn).
 
     Stateless (read from the event log) so it SURVIVES resume: a resumed build replays the
     marker and stays forced. Gated on `in_planning_for_revision` (revision-only — the

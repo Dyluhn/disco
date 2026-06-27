@@ -148,10 +148,30 @@ def test_tools_for_step_force_submit_narrows_to_plan_tool():
         mode=OperatingMode.PLANNING,
         execution_mode=OperatingMode.LONG_HORIZON,
     )
+    # The driver identifies read tools via executor.readonly_tool_names() (the capability
+    # backstop). Give the fake one so the read-inclusion under force_submit is exercised.
+    executor.readonly_tool_names = lambda: frozenset({"file_read"})  # type: ignore[attr-defined]
+
     driver = loop._driver
     plan_name = getattr(loop._plan_tool, "name", loop._plan_tool)  # "submit_plan"
+
+    # Under force_submit, the model keeps submit_plan + READ tools (within the read grace):
+    # a model re-planning a revision often wants to file_read the current files to ground its
+    # diff BEFORE submitting (~30% of the time — narrowing to submit-only stranded it →
+    # actionless → killed). _plan_explore_reads starts at 0 → reads allowed.
+    loop._plan_explore_reads = 0
     forced = driver.tools_for_step(force_submit_only=True)
-    assert {getattr(t, "name", None) for t in forced} == {plan_name}  # ONLY submit_plan
+    assert {getattr(t, "name", None) for t in forced} == {plan_name, "file_read"}
+
+    # …but once the read grace is exhausted (reads > cap + grace) it COLLAPSES to
+    # submit_plan only, so a read loop can't run to the iteration hard cap.
+    from disco.core.loop.driver import _FORCE_SUBMIT_READ_GRACE
+    from disco.core.loop.messages import _PLAN_EXPLORE_READ_CAP
+
+    loop._plan_explore_reads = _PLAN_EXPLORE_READ_CAP + _FORCE_SUBMIT_READ_GRACE
+    forced_after = driver.tools_for_step(force_submit_only=True)
+    assert {getattr(t, "name", None) for t in forced_after} == {plan_name}
+
     # default (not forced) offers more than just the plan tool while planning.
     normal = driver.tools_for_step()
     assert {getattr(t, "name", None) for t in normal} != {plan_name}
