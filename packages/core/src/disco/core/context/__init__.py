@@ -22,20 +22,32 @@ from .ledger import (
 )
 from .pack import ContextPack
 from .source_priority import SourceKind, SourcePriority
+from .store import (
+    ArtifactMemoryStore,
+    ContextRecoveryError,
+    ReconstructResult,
+    RecoveryNote,
+    WorkspaceFS,
+)
 
 __all__ = [
     "ArtifactMemoryKind",
     "ArtifactMemoryRef",
+    "ArtifactMemoryStore",
     "CompactionPolicy",
     "ContextLedger",
     "ContextPack",
+    "ContextRecoveryError",
     "DirectEditKind",
     "DirectEditRef",
     "HandoffRef",
+    "ReconstructResult",
+    "RecoveryNote",
     "ResolvedContextRange",
     "ResourceRef",
     "Severity",
     "SourceKind",
     "SourcePriority",
     "VerifierFailureRef",
+    "WorkspaceFS",
 ]

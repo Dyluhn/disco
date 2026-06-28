@@ -13,6 +13,7 @@ from ..registry import ToolRegistry
 from ._deck_patch import DeckPatchTool
 from .audio_overview import AudioOverviewTool
 from .browser import BrowserTool
+from .context_memory import ContextMemoryTool
 from .files import (
     FileAppendTool,
     FileEditTool,
@@ -51,6 +52,7 @@ __all__ = [
     "AudioOverviewTool",
     "BrowserTool",
     "CodeExecTool",
+    "ContextMemoryTool",
     "DeckPatchTool",
     "DelegateExploreTool",  # C20: read-only Explore/Plan helper dispatch+join (intercepted by loop)
     "ExtractTool",
@@ -124,6 +126,7 @@ def build_default_registry() -> ToolRegistry:
         SlidesTool(),  # slides_generate: Marp-rendered slide decks (HTML/PDF/PPTX)
         DeckPatchTool(),  # deck_patch: C-EDIT-4 RFC-6902 JSON Patch + re-render
         ThinkTool(),  # think: NO-OP reasoning scratchpad (avoids prose-into-action degeneration)
+        ContextMemoryTool(),  # CXT-2: durable .disco/context/* read + narrative write
         # image_generate: keyless/local image synthesis (PIL procedural; configurable
         # via Settings to use OpenAI-compatible or ComfyUI backends). No backend pinned
         # here — the tool re-reads the saved provider per call (config honored live).

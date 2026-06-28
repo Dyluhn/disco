@@ -104,6 +104,8 @@ AGENT_TOOLS = frozenset(
         # capable models report progress via this instead. Prompt-gated, never gates finish.
         "update_plan_progress",
         "think",  # NO-OP reasoning scratchpad — let a small model "say" things without side effects
+        # CXT-2: durable .disco/context/* working memory (read any kind; write narrative kinds).
+        "context_memory",
         "sheet_generate",
         "slides_generate",
         "audio_overview",
@@ -147,6 +149,8 @@ ARTIFACT_TOOLS: frozenset[str] = frozenset(
         "image_generate",
         "audio_overview",
         "think",
+        # CXT-2: durable context memory is safe in artifact scope (workspace FS only)
+        "context_memory",
         # C-EDIT-4: deck editing is safe in artifact scope (no shell/browser)
         "deck_patch",
     }
